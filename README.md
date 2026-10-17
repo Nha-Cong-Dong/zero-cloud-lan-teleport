@@ -53,15 +53,15 @@ Teleport gửi file **thẳng từ máy này sang máy kia** qua mạng nội b�
 
 ## Lộ trình
 
-| Phiên bản | Nội dung | Trạng thái |
-|---|---|---|
-| — | Khung dự án, CI, mã hóa TLS và danh tính thiết bị | ✅ Xong |
-| — | Khám phá thiết bị, ghép đôi | ⏳ Đang làm |
-| `v0.1.0-alpha` | Gửi file lớn qua dòng lệnh | |
-| `v0.2.0-alpha` | Kiểm tra toàn vẹn, tự nối lại | |
-| `v0.3.0-beta` | Giao diện radar, khay hệ thống, Tiếng Việt / English | |
-| `v0.4.0-beta` | Đồng bộ clipboard | |
-| `v1.0.0` | Bộ cài cho Windows, macOS, Linux | |
+| Phiên bản | Nội dung |
+|---|---|
+| `v0.1.0-alpha` | Khám phá thiết bị, ghép đôi, gửi file lớn qua dòng lệnh |
+| `v0.2.0-alpha` | Kiểm tra toàn vẹn, tự nối lại |
+| `v0.3.0-beta` | Giao diện radar, khay hệ thống, Tiếng Việt / English |
+| `v0.4.0-beta` | Đồng bộ clipboard |
+| `v1.0.0` | Bộ cài cho Windows, macOS, Linux |
+
+Trạng thái từng module: [docs/architecture.md](docs/architecture.md#3-bản-đồ-module).
 
 ## Dành cho nhà phát triển
 
@@ -73,7 +73,7 @@ cd zero-cloud-lan-teleport
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1      # macOS/Linux: source .venv/bin/activate
 pip install -e ".[dev]"
-pytest
+pytest                             # toàn bộ test; nhanh hơn: pytest -m "not integration"
 teleport identity                  # tạo / xem danh tính thiết bị của máy này
 ```
 
@@ -85,15 +85,18 @@ Muốn chạy nhiều node trên cùng một máy, cho mỗi node một thư m�
 
 ```
 src/teleport/
-  core/          # giao thức thuần, không phụ thuộc mạng
-  net/           # danh tính, TLS, (sắp tới) khám phá, ghép đôi, gửi/nhận
-  paths.py       # thư mục cấu hình theo hệ điều hành
+  core/          # giao thức thuần, sans-IO: framing, (sắp tới) message, Merkle, máy trạng thái
+  trust/         # danh tính thiết bị, (sắp tới) kho thiết bị tin cậy
+  net/           # I/O mạng: TLS + mTLS, đọc/ghi message, (sắp tới) khám phá, kết nối
+  app/           # (sắp tới) dịch vụ: Node, ghép đôi, quản lý lượt truyền, clipboard
+  ui/            # (sắp tới) giao diện PySide6
   cli.py         # lệnh `teleport`
-tests/           # pytest, gồm cả test kiểm tra quy tắc phân tầng
+  paths.py       # thư mục cấu hình theo hệ điều hành
+tests/           # chia theo tầng: core/, trust/, net/ + test quy tắc phân tầng
 docs/            # toàn bộ tài liệu, mục lục ở docs/README.md
 ```
 
-Tầng dưới không bao giờ import tầng trên (`core ← net ← clipboard ← ui/cli`). Chi tiết ở [docs/architecture.md](docs/architecture.md).
+Phân tầng `core ← trust ← net ← app ← ui / cli`: tầng dưới không bao giờ import tầng trên, `core` không làm I/O. Quy tắc được test tự động; chi tiết ở [docs/architecture.md](docs/architecture.md).
 
 ### Đóng góp
 

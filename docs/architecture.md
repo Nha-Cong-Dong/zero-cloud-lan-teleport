@@ -1,74 +1,107 @@
 # Kiến trúc
 
-## Phân tầng
+Tài liệu này là **nguồn duy nhất** về trạng thái từng module. README chỉ nêu tầm nhìn và lộ trình phiên bản.
+
+## 1. Phân tầng
 
 ```
-            ┌──────────────┐   ┌──────────┐
-            │  ui (PySide6) │   │   cli    │      tầng giao tiếp người dùng
-            └──────┬───────┘   └────┬─────┘
-                   ▼                ▼
-            ┌──────────────────────────────┐
-            │          clipboard           │      đồng bộ clipboard
-            └──────────────┬───────────────┘
-                           ▼
-            ┌──────────────────────────────┐
-            │             net              │      danh tính, TLS, khám phá,
-            │                              │      ghép đôi, gửi / nhận
-            └──────────────┬───────────────┘
-                           ▼
-            ┌──────────────────────────────┐
-            │             core             │      giao thức thuần: framing,
-            │                              │      message, Merkle, bitfield, state
-            └──────────────────────────────┘
-     paths.py — thư mục cấu hình theo hệ điều hành, tầng nào cũng dùng được
+        ┌──────────────────────┐   ┌──────────────────────┐
+        │   ui  (PySide6)      │   │   cli                │   lớp mỏng: hiển thị, nhận lệnh
+        └──────────┬───────────┘   └──────────┬───────────┘
+                   └────────────┬─────────────┘
+                                ▼
+        ┌─────────────────────────────────────────────────┐
+        │   app — dịch vụ ứng dụng                          │   Node, DeviceRegistry, PairingService,
+        │                                                 │   TransferManager, ClipboardSync
+        └────────────────────────┬────────────────────────┘
+                                 ▼
+        ┌─────────────────────────────────────────────────┐
+        │   net — I/O mạng                                 │   TLS, đọc/ghi message, khám phá mDNS,
+        │                                                 │   mở/nhận kết nối
+        └────────────────────────┬────────────────────────┘
+                                 ▼
+        ┌─────────────────────────────────────────────────┐
+        │   trust — niềm tin                               │   danh tính máy này, kho thiết bị tin cậy
+        └────────────────────────┬────────────────────────┘
+                                 ▼
+        ┌─────────────────────────────────────────────────┐
+        │   core — giao thức thuần (sans-IO)               │   framing, message, Merkle, bitfield,
+        │                                                 │   máy trạng thái truyền file, mã ghép đôi
+        └─────────────────────────────────────────────────┘
+   paths.py — thư mục cấu hình theo hệ điều hành; tầng nào cũng dùng được (trừ core)
 ```
 
-**Quy tắc:** tầng dưới không bao giờ import tầng trên. `core` không biết gì về socket; `net` không biết gì về Qt. Quy tắc này được kiểm tra tự động bởi `tests/test_architecture.py`.
+**Quy tắc**, được `tests/test_architecture.py` kiểm tra tự động:
+1. Mỗi tầng chỉ import các tầng **bên dưới**. `ui` và `cli` không import lẫn nhau.
+2. `core` là **sans-IO**: không import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `PySide6`, `teleport.paths`, hay bất kỳ tầng nào khác.
+3. Mọi module/gói ở cấp `teleport.*` phải thuộc một tầng. Tạo gói mới thì phải xếp nó vào sơ đồ.
 
-Lợi ích:
-- `core` test được hoàn toàn bằng dữ liệu trong bộ nhớ, không cần mạng.
-- `net` chạy được không cần giao diện, nên CLI và test tích hợp dùng chung một lõi với app.
-- Giao diện chỉ là một lớp mỏng phía trên; thay hoặc bỏ giao diện không ảnh hưởng lõi.
+### Vì sao chia như vậy
 
-## Bản đồ module
+- **core sans-IO:** logic khó nhất là chọn khối nào gửi lại, xử lý `resume`/`corrupt`, quyết định hủy khi file nguồn đổi. Phần này được viết thành **máy trạng thái thuần**: nhận sự kiện (message tới, khối tới), trả về hành động (gửi message, ghi khối, báo lỗi). Khi đó test ngẫu nhiên hàng nghìn kịch bản ngắt kết nối bằng `hypothesis` chạy trong vài mili giây, không cần socket.
+- **trust tách khỏi net:** danh tính và danh sách thiết bị tin cậy là mật mã cộng lưu trữ, không phải mạng. Tách ra thì giữ chúng nhỏ và dễ kiểm toán.
+- **net chỉ là đường ống:** `net` đọc bytes, đưa cho `core` xử lý, rồi thực hiện hành động `core` trả về. Không có quyết định nghiệp vụ nào trong `net`.
+- **app là nơi điều phối duy nhất:** CLI và giao diện gọi cùng các dịch vụ, nên không viết logic hai lần.
+- **clipboard là tính năng, không phải tầng:** `ClipboardSync` thuộc `app`. Nó đọc/ghi clipboard qua một interface `ClipboardBackend`; `ui` cung cấp bản dùng Qt, test dùng bản giả. Nhờ vậy CLI không phải kéo theo Qt.
+
+## 2. Mô hình tiến trình
+
+Mỗi thư mục cấu hình (tức mỗi danh tính) chỉ có **một node** chạy tại một thời điểm.
+
+| Giai đoạn | Cách làm |
+|---|---|
+| `v0.1`–`v0.2` (chỉ có CLI) | Mỗi lệnh CLI tự chạy một node. Node giữ **file khóa** `<config_dir>/node.lock`; tiến trình thứ hai cùng thư mục cấu hình sẽ báo “Teleport đang chạy” rồi thoát. |
+| Từ `v0.3` (có giao diện) | Giao diện chạy node nền ở khay hệ thống. CLI phát hiện node đang chạy thì gửi lệnh cho nó qua **IPC cục bộ** (socket trên `127.0.0.1` kèm token trong thư mục cấu hình), không tự chạy node thứ hai. |
+
+Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi node một thư mục cấu hình riêng bằng `TELEPORT_HOME` hoặc `--config-dir`.
+
+## 3. Bản đồ module
 
 ✅ đã có · ⏳ giai đoạn tiếp theo · ⬜ chưa làm
 
-| Module | Trách nhiệm | Trạng thái |
-|---|---|---|
-| `paths.py` | Thư mục cấu hình theo hệ điều hành; `TELEPORT_HOME` ghi đè | ✅ |
-| `cli.py`, `__main__.py` | Lệnh `teleport` / `python -m teleport` | ✅ (`identity`) |
-| `core/framing.py` | Khung message điều khiển `[uint32 độ dài][JSON]` | ✅ |
-| `core/messages.py` | Định nghĩa và kiểm tra hợp lệ từng loại message | ⬜ |
-| `core/protocol.py` | Khung dữ liệu nhị phân, hằng số giao thức | ⬜ |
-| `core/merkle.py` | Cây băm SHA-256, Merkle root | ⬜ |
-| `core/bitfield.py` | Bảng các khối đã nhận | ⬜ |
-| `core/state.py` | Đọc/ghi file `.part.state` để nối lại | ⬜ |
-| `net/identity.py` | Khóa ECDSA P-256, chứng chỉ tự ký, fingerprint | ✅ |
-| `net/tls.py` | `SSLContext` TLS 1.3, đọc fingerprint, ghim | ✅ |
-| `net/discovery.py` | Quảng bá & tìm `_teleport._tcp.local.` (zeroconf) | ⏳ |
-| `net/pairing.py` | Mã xác minh 6 số, `trusted.json` | ⏳ |
-| `net/connection.py` | Mở/nhận kết nối, `HELLO`, mTLS với thiết bị tin cậy | ⏳ |
-| `net/sender.py`, `net/receiver.py` | Gửi/nhận theo khối, backpressure, an toàn khi nhận | ⬜ |
-| `clipboard/sync.py` | Theo dõi clipboard, chống vòng lặp | ⬜ |
-| `ui/` | Radar, transfer, ghép đôi, khay hệ thống | ⬜ |
+| Tầng | Module | Trách nhiệm | Trạng thái |
+|---|---|---|---|
+| — | `paths.py` | Thư mục cấu hình theo hệ điều hành; `TELEPORT_HOME` ghi đè | ✅ |
+| core | `framing.py` | Mã hóa/giải mã khung `[uint32 độ dài][JSON]` | ✅ |
+| core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message | ⏳ |
+| core | `pairing_code.py` | Tính mã 6 số từ hai fingerprint | ⏳ |
+| core | `blocks.py` | Khung dữ liệu nhị phân, chia khối | ⬜ |
+| core | `merkle.py`, `bitfield.py` | Cây băm SHA-256; bảng khối đã nhận | ⬜ |
+| core | `transfer.py` | Máy trạng thái gửi/nhận, nối lại, gửi lại khối lỗi | ⬜ |
+| trust | `identity.py` | Khóa ECDSA P-256, chứng chỉ tự ký, fingerprint | ✅ |
+| trust | `store.py` | `trusted.json`: thiết bị đã ghép đôi | ⏳ |
+| net | `tls.py` | `SSLContext` TLS 1.3, ghim fingerprint, mTLS | ✅ |
+| net | `stream.py` | Đọc/ghi message trên `asyncio` stream | ✅ |
+| net | `discovery.py` | Quảng bá & tìm `_teleport._tcp.local.` (zeroconf) | ⏳ |
+| net | `connection.py` | Mở/nhận kết nối, trao đổi `hello` | ⏳ |
+| net | `lock.py` | File khóa một node cho mỗi thư mục cấu hình | ⏳ |
+| app | `node.py` | Ghép các thành phần lại: lắng nghe, khám phá, điều phối | ⏳ |
+| app | `pairing.py`, `transfers.py`, `clipboard.py` | Dịch vụ ghép đôi, quản lý lượt truyền, đồng bộ clipboard | ⬜ |
+| cli | `cli.py`, `__main__.py` | Lệnh `teleport` / `python -m teleport` | ✅ (`identity`) |
+| ui | `ui/` | Radar, transfer, ghép đôi, khay hệ thống | ⬜ |
 
 Module chỉ được tạo khi có code thật, không tạo file rỗng trước.
 
-## Dữ liệu trên đĩa
+## 4. Dữ liệu trên đĩa
 
 | Đường dẫn | Nội dung |
 |---|---|
-| `<config_dir>/device.crt`, `device.key` | Danh tính thiết bị (tạo ở lần chạy đầu) |
-| `<config_dir>/trusted.json` | Fingerprint các thiết bị đã ghép đôi ⏳ |
+| `<config_dir>/device.crt`, `device.key` | Danh tính thiết bị, tạo ở lần chạy đầu ✅ |
+| `<config_dir>/trusted.json` | Chứng chỉ + tên các thiết bị đã ghép đôi ⏳ |
+| `<config_dir>/node.lock` | Khóa: chỉ một node mỗi thư mục cấu hình ⏳ |
 | `<config_dir>/settings.json` | Cài đặt người dùng ⬜ |
 | `<thư mục nhận>/<tên>.part` | File đang nhận ⬜ |
 | `<thư mục nhận>/<tên>.part.state` | Trạng thái nối lại: manifest, bitfield, hash ⬜ |
 
 `config_dir` mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Library/Application Support/Teleport`, Linux `$XDG_CONFIG_HOME/teleport` (hoặc `~/.config/teleport`).
 
-## Mô hình bất đồng bộ
+## 5. Bất đồng bộ
 
-Toàn bộ mạng chạy trên **một event loop `asyncio`**. Giao diện Qt sẽ dùng chung event loop đó qua `qasync`. Việc chặn (ghi đĩa lớn, băm) được đẩy sang thread bằng `asyncio.to_thread`, để event loop không bao giờ bị đứng.
+Toàn bộ mạng chạy trên **một event loop `asyncio`**; giao diện Qt dùng chung event loop đó qua `qasync`. Việc chặn (ghi đĩa lớn, băm) được đẩy sang thread bằng `asyncio.to_thread`, để event loop không bao giờ bị đứng.
+
+## 6. Kiểm thử
+
+- `tests/` chia thư mục theo tầng: `core/`, `trust/`, `net/`… Test ở thư mục gốc `tests/` dành cho `paths`, `cli` và quy tắc phân tầng.
+- Test cần socket thật được đánh dấu `@pytest.mark.integration`. Chạy nhanh phần còn lại bằng `pytest -m "not integration"`.
 
 Giao thức trên dây: xem [protocol.md](protocol.md).

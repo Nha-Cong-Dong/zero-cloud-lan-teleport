@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 from teleport import __version__
-from teleport.net.identity import format_fingerprint, load_or_create_identity
 from teleport.paths import ENV_HOME, config_dir
+from teleport.trust.identity import format_fingerprint, load_or_create_identity
 
 
 def cmd_identity(args: argparse.Namespace) -> int:

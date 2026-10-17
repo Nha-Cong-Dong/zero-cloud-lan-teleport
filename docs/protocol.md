@@ -14,8 +14,10 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 ## 2. Tầng vận chuyển ✅
 
 - TCP + **TLS 1.3**. Phiên bản thấp hơn bị từ chối.
-- Không kiểm tra theo CA hay hostname. Thay vào đó, sau khi bắt tay, mỗi bên so fingerprint chứng chỉ của bên kia với giá trị đã ghim.
-- 📝 Xác thực hai chiều: server nạp chứng chỉ của các thiết bị tin cậy làm CA và yêu cầu client gửi chứng chỉ (mTLS). Lần ghép đôi đầu tiên được xác thực ở tầng ứng dụng bằng mã 6 số (mục 5).
+- **Client kiểm tra server:** không dùng CA hay hostname. Sau khi bắt tay, client so fingerprint chứng chỉ server với giá trị đã ghim.
+- **Server kiểm tra client (mTLS) ✅:** server nạp chứng chỉ của các thiết bị tin cậy làm trust anchor, bật `CERT_REQUIRED` và kiểm tra X.509 nghiêm ngặt. Client lạ, hoặc client không gửi chứng chỉ, bị từ chối ngay trong lúc bắt tay. Kiểm chứng bởi `tests/net/test_tls.py` (OpenSSL 3.0).
+- Với TLS 1.3, client bị từ chối vẫn thấy kết nối mở thành công; lỗi chỉ lộ ra ở lần đọc đầu tiên. Vì vậy client chỉ coi là đã kết nối khi **đọc được `hello` của server**.
+- 📝 Kết nối ghép đôi (khi hai bên chưa biết nhau) dùng một listener riêng không yêu cầu chứng chỉ client. Danh tính được xác thực ở tầng ứng dụng bằng mã 6 số (mục 5).
 
 ## 3. Kênh điều khiển ✅ (khung) · 📝 (message)
 

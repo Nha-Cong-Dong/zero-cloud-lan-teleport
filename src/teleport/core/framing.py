@@ -1,6 +1,7 @@
 """Khung message điều khiển: [4 byte độ dài, big-endian][JSON UTF-8].
 
-Đây là định dạng của kết nối điều khiển, đặc tả ở docs/protocol.md mục 3.
+Đặc tả ở docs/protocol.md mục 3. Module này chỉ mã hóa và giải mã bytes (sans-IO);
+việc đọc/ghi trên socket nằm ở `teleport.net.stream`.
 
 TCP là một *dòng byte* chứ không phải dòng message: một lần `write()` 100 byte
 có thể đến nơi thành hai lần đọc 60 + 40 byte, hoặc dính liền với message sau.
@@ -9,7 +10,6 @@ Tiền tố độ dài cho bên nhận biết chính xác một message kết th
 
 from __future__ import annotations
 
-import asyncio
 import json
 import struct
 
@@ -31,28 +31,15 @@ def encode_message(msg: dict) -> bytes:
     return HEADER.pack(len(body)) + body
 
 
-async def read_message(reader: asyncio.StreamReader) -> dict | None:
-    """Đọc một message.
-
-    Trả về None nếu bên kia đóng kết nối đúng ở ranh giới giữa hai message
-    (đóng gọn gàng). Đóng giữa chừng một message thì raise FramingError.
-    """
-    try:
-        header = await reader.readexactly(HEADER.size)
-    except asyncio.IncompleteReadError as e:
-        if not e.partial:
-            return None
-        raise FramingError("kết nối bị cắt giữa header") from e
-
+def decode_header(header: bytes) -> int:
+    """Trả về độ dài thân message; raise FramingError nếu vượt giới hạn."""
     (length,) = HEADER.unpack(header)
     if length > MAX_MESSAGE_SIZE:
         raise FramingError(f"message quá lớn: {length} byte")
+    return length
 
-    try:
-        body = await reader.readexactly(length)
-    except asyncio.IncompleteReadError as e:
-        raise FramingError(f"kết nối bị cắt: mới nhận {len(e.partial)}/{length} byte") from e
 
+def decode_body(body: bytes) -> dict:
     try:
         msg = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
@@ -60,9 +47,3 @@ async def read_message(reader: asyncio.StreamReader) -> dict | None:
     if not isinstance(msg, dict):
         raise FramingError("message phải là một JSON object")
     return msg
-
-
-async def write_message(writer: asyncio.StreamWriter, msg: dict) -> None:
-    writer.write(encode_message(msg))
-    # drain() chờ khi bộ đệm gửi vượt ngưỡng: đây là backpressure ở mức nhỏ nhất.
-    await writer.drain()

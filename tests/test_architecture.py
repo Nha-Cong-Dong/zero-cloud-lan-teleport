@@ -1,7 +1,9 @@
 """Giữ đúng quy tắc phân tầng trong docs/architecture.md.
 
-core  ←  net  ←  clipboard  ←  ui / cli
-Tầng dưới không bao giờ import tầng trên.
+    core  ←  trust  ←  net  ←  app  ←  ui / cli
+
+- Mỗi tầng chỉ được import các tầng **bên dưới** nó (và `teleport.paths`).
+- `core` là sans-IO: không import thư viện mạng/bất đồng bộ, không import tầng nào khác.
 """
 
 import ast
@@ -11,11 +13,29 @@ import pytest
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "teleport"
 
-FORBIDDEN = {
-    "core": ("teleport.net", "teleport.clipboard", "teleport.ui", "teleport.cli"),
-    "net": ("teleport.clipboard", "teleport.ui", "teleport.cli"),
-    "clipboard": ("teleport.ui", "teleport.cli"),
-}
+# Thứ tự từ dưới lên. `ui` và `cli` ngang hàng ở trên cùng.
+LAYERS = ["core", "trust", "net", "app", "ui", "cli"]
+TOP = {"ui", "cli"}
+
+SANS_IO_FORBIDDEN = ("asyncio", "socket", "ssl", "selectors", "threading", "zeroconf", "PySide6")
+
+
+def layer_of(module: str) -> str | None:
+    parts = module.split(".")
+    if parts[0] != "teleport" or len(parts) < 2:
+        return None
+    return parts[1] if parts[1] in LAYERS else None
+
+
+def allowed_layers(layer: str) -> set[str]:
+    below = LAYERS[: LAYERS.index(layer)]
+    return {*below, layer} - (TOP - {layer})
+
+
+def source_files(layer: str) -> list[Path]:
+    if layer == "cli":
+        return [PACKAGE / "cli.py", PACKAGE / "__main__.py"]
+    return sorted((PACKAGE / layer).rglob("*.py"))
 
 
 def imported_modules(path: Path) -> set[str]:
@@ -34,11 +54,33 @@ def imported_modules(path: Path) -> set[str]:
     return names
 
 
-@pytest.mark.parametrize("layer", sorted(FORBIDDEN))
-def test_lower_layers_do_not_import_upper_layers(layer):
+def test_every_top_level_module_belongs_to_a_layer():
+    known = {*LAYERS, "__init__", "__main__", "paths"}
+    found = {p.stem for p in PACKAGE.iterdir() if p.suffix == ".py" or (p / "__init__.py").exists()}
+    assert found <= known, f"module/gói chưa được xếp tầng: {sorted(found - known)}"
+
+
+@pytest.mark.parametrize("layer", LAYERS)
+def test_layer_imports_only_lower_layers(layer):
+    allowed = allowed_layers(layer)
     violations = []
-    for path in (PACKAGE / layer).rglob("*.py"):
+    for path in source_files(layer):
         for name in imported_modules(path):
-            if name.startswith(FORBIDDEN[layer]):
+            target = layer_of(name)
+            if target is not None and target not in allowed:
                 violations.append(f"{path.relative_to(PACKAGE)} import {name}")
     assert not violations, "\n".join(violations)
+
+
+def test_core_is_sans_io():
+    violations = []
+    for path in source_files("core"):
+        for name in imported_modules(path):
+            if name.split(".")[0] in SANS_IO_FORBIDDEN or name == "teleport.paths":
+                violations.append(f"{path.relative_to(PACKAGE)} import {name}")
+    assert not violations, "\n".join(violations)
+
+
+def test_paths_imports_no_layer():
+    names = imported_modules(PACKAGE / "paths.py")
+    assert not [n for n in names if layer_of(n)], names

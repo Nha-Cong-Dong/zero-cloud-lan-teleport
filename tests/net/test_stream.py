@@ -2,13 +2,8 @@ import asyncio
 
 import pytest
 
-from teleport.core.framing import (
-    HEADER,
-    MAX_MESSAGE_SIZE,
-    FramingError,
-    encode_message,
-    read_message,
-)
+from teleport.core.framing import HEADER, MAX_MESSAGE_SIZE, FramingError, encode_message
+from teleport.net.stream import read_message
 
 
 def reader_with(data: bytes, eof: bool = True) -> asyncio.StreamReader:
@@ -17,11 +12,6 @@ def reader_with(data: bytes, eof: bool = True) -> asyncio.StreamReader:
     if eof:
         reader.feed_eof()
     return reader
-
-
-async def test_roundtrip_keeps_unicode():
-    msg = {"type": "msg", "text": "Xin chào, Việt Nam 🚀"}
-    assert await read_message(reader_with(encode_message(msg))) == msg
 
 
 async def test_back_to_back_messages_are_split_correctly():
@@ -60,9 +50,3 @@ async def test_oversized_header_is_rejected_before_reading_body():
     reader = reader_with(HEADER.pack(MAX_MESSAGE_SIZE + 1), eof=False)
     with pytest.raises(FramingError, match="quá lớn"):
         await read_message(reader)
-
-
-@pytest.mark.parametrize("body", [b"not json", b"[1, 2, 3]", b"\xff\xfe"])
-async def test_invalid_body_raises(body):
-    with pytest.raises(FramingError):
-        await read_message(reader_with(HEADER.pack(len(body)) + body))

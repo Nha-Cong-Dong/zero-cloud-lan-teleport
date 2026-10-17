@@ -1,7 +1,7 @@
 """Danh tính thiết bị: một khóa ECDSA P-256 và chứng chỉ tự ký.
 
 Fingerprint = SHA-256 của chứng chỉ ở dạng DER. Đây là "số căn cước" của máy:
-ghép đôi ở Giai đoạn 1 thực chất là hai máy lưu fingerprint của nhau.
+ghép đôi thực chất là hai máy lưu chứng chỉ (và fingerprint) của nhau.
 """
 
 from __future__ import annotations
@@ -34,6 +34,10 @@ class Identity:
     def short_fingerprint(self) -> str:
         """8 byte đầu, dạng "AB:CD:...": đủ ngắn để đọc và so bằng mắt."""
         return format_fingerprint(self.fingerprint[:16])
+
+    def cert_pem(self) -> str:
+        """Chứng chỉ dạng PEM: thứ được trao cho thiết bị khác khi ghép đôi."""
+        return self.cert_path.read_text(encoding="ascii")
 
 
 def fingerprint_of_der(der: bytes) -> str:
