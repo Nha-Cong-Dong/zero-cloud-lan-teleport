@@ -24,14 +24,19 @@ ruff format .
 pytest
 ```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) chạy đúng 3 lệnh trên, trên Windows, macOS và Linux.
+CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy đúng 3 lệnh trên, trên Windows, macOS và Linux.
 
 ## Phát hành
 1. Chuyển mục `[Unreleased]` trong `CHANGELOG.md` thành `[X.Y.Z] - YYYY-MM-DD`.
-2. Cập nhật `version` trong `pyproject.toml` và `__version__` trong `src/teleport/__init__.py`.
+2. Cập nhật `__version__` trong `src/teleport/__init__.py`. Đây là nguồn duy nhất của số phiên bản; `pyproject.toml` tự đọc từ đó.
 3. Gắn tag `vX.Y.Z` lên `main` rồi push tag.
 
 Đánh số theo [SemVer](https://semver.org/lang/vi/). Phiên bản giao thức mạng đánh số riêng, độc lập với phiên bản app.
 
+## Thay đổi giao thức
+Mọi thay đổi định dạng trên dây phải cập nhật [protocol.md](protocol.md) trong cùng Pull Request. Thay đổi không tương thích thì tăng số phiên bản giao thức.
+
 ## Bảo mật
+Báo lỗ hổng: xem [SECURITY.md](SECURITY.md).
+
 Mọi dữ liệu nhận từ máy khác đều coi là không tin cậy: kiểm tra kiểu, độ dài và giá trị của từng trường trước khi dùng. Tên file nhận được phải được làm sạch trước khi ghi ra đĩa.

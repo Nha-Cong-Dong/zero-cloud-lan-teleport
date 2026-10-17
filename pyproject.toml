@@ -3,8 +3,9 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "teleport"
-version = "0.0.1"
+# Tên bản phân phối khác tên import (`teleport`) để không trùng gói "teleport" sẵn có trên PyPI.
+name = "zero-cloud-lan-teleport"
+dynamic = ["version"]
 description = "Zero-Cloud LAN Teleport — chuyển file và clipboard trực tiếp trong mạng LAN"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,6 +20,18 @@ dev = [
     "ruff>=0.6",
 ]
 
+[project.scripts]
+teleport = "teleport.cli:main"
+
+[project.urls]
+Repository = "https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport"
+
+[tool.setuptools.dynamic]
+version = { attr = "teleport.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
 line-length = 110
 target-version = "py312"
@@ -27,9 +40,6 @@ target-version = "py312"
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 # RUF001-003: cho phép ký tự Unicode tiếng Việt trong chuỗi, comment và docstring.
 ignore = ["RUF001", "RUF002", "RUF003"]
-
-[tool.setuptools.packages.find]
-where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

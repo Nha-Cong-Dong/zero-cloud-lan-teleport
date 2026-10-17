@@ -1,7 +1,6 @@
 """Khung message điều khiển: [4 byte độ dài, big-endian][JSON UTF-8].
 
-Đây là định dạng của kết nối điều khiển (ke_hoach.md mục 3.4). Bài tập chat ở
-Giai đoạn 0 dùng lại nó để làm quen trước khi viết giao thức thật.
+Đây là định dạng của kết nối điều khiển, đặc tả ở docs/protocol.md mục 3.
 
 TCP là một *dòng byte* chứ không phải dòng message: một lần `write()` 100 byte
 có thể đến nơi thành hai lần đọc 60 + 40 byte, hoặc dính liền với message sau.
