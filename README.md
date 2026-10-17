@@ -1,69 +1,156 @@
-# Teleport — Zero-Cloud LAN Teleport
+<div align="center">
 
-**Chuyển file nặng hàng chục GB và đồng bộ clipboard giữa các máy tính trong cùng mạng Wi-Fi/LAN.
-Không cloud. Không tài khoản. Rớt mạng vẫn gửi tiếp.**
+# 🛰️ Teleport
+
+### Zero-Cloud LAN Teleport
+
+**Chuyển file nặng hàng chục GB và đồng bộ clipboard giữa các máy tính trong cùng mạng Wi-Fi/LAN.**
+**Không cloud · Không tài khoản · Rớt mạng vẫn gửi tiếp.**
 
 [![CI](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml/badge.svg)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
+![Nền tảng](https://img.shields.io/badge/n%E1%BB%81n%20t%E1%BA%A3ng-Windows%20%7C%20macOS%20%7C%20Linux-555)
+![Trạng thái](https://img.shields.io/badge/tr%E1%BA%A1ng%20th%C3%A1i-%C4%91ang%20ph%C3%A1t%20tri%E1%BB%83n-orange)
 
-> 🚧 **Đang phát triển**, chưa có bản phát hành. Lịch sử thay đổi xem ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
+</div>
+
+> [!NOTE]
+> **Teleport đang được phát triển và chưa có bản phát hành.**
+> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khung message điều khiển, lệnh `teleport identity`.
+> - **Chưa có:** khám phá thiết bị, ghép đôi, gửi file, nối lại, clipboard, giao diện.
+>
+> Các tính năng bên dưới là **mục tiêu của v1.0**. Tiến độ xem ở [Lộ trình](#lộ-trình); lịch sử thay đổi ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
+
+## Mục lục
+
+- [Vì sao có Teleport?](#vì-sao-có-teleport)
+- [Tính năng](#tính-năng)
+- [Trải nghiệm sử dụng](#trải-nghiệm-sử-dụng)
+- [Cách hoạt động](#cách-hoạt-động)
+- [Bảo mật & quyền riêng tư](#bảo-mật--quyền-riêng-tư)
+- [Yêu cầu hệ thống & mạng](#yêu-cầu-hệ-thống--mạng)
+- [Lộ trình](#lộ-trình)
+- [Dành cho nhà phát triển](#dành-cho-nhà-phát-triển)
+- [Kiến trúc](#kiến-trúc)
+- [Tài liệu](#tài-liệu)
+- [Câu hỏi thường gặp](#câu-hỏi-thường-gặp)
+- [Đóng góp · Bảo mật · Giấy phép](#đóng-góp--bảo-mật--giấy-phép)
 
 ---
 
 ## Vì sao có Teleport?
 
-Hai máy tính đặt cạnh nhau, dùng chung một cục Wi-Fi, vậy mà muốn chuyển một file 5GB vẫn phải:
+Hai máy tính đặt cạnh nhau, dùng chung một cục Wi-Fi, vậy mà muốn chuyển một file 5GB vẫn phải đi đường vòng:
 
-- **Gửi qua Zalo/Messenger:** ảnh bị nén, file lớn bị chặn, phải đăng nhập tài khoản cá nhân lên máy lạ.
-- **Tải lên Google Drive rồi tải về:** tốn gấp đôi thời gian và băng thông, dù hai máy chỉ cách nhau 20cm.
-- **Đi tìm USB:** cắm, copy, rút, cắm sang máy kia.
+| Cách thường dùng | Vấn đề |
+|---|---|
+| **Zalo / Messenger** | Ảnh bị nén, file lớn bị chặn, phải đăng nhập tài khoản cá nhân lên máy lạ |
+| **Google Drive** | Tải lên rồi tải về: tốn gấp đôi thời gian và băng thông, dù hai máy cách nhau 20cm |
+| **USB** | Phải có USB, cắm, copy, rút, cắm sang máy kia |
+| **Chia sẻ thư mục Windows** | Cấu hình quyền phức tạp; rớt mạng là phải copy lại từ đầu |
 
-Teleport gửi file **thẳng từ máy này sang máy kia** qua mạng nội bộ, với tốc độ tối đa của mạng.
+**Teleport gửi file thẳng từ máy này sang máy kia** qua mạng nội bộ, với tốc độ tối đa của mạng. Dữ liệu không đi qua bất kỳ máy chủ nào.
+
+### Ba nguyên tắc “Zero”
+
+| | Nguyên tắc | Nghĩa là |
+|---|---|---|
+| 🚪 | **Zero-Friction** | Không tài khoản, không gõ IP. Cài xong, máy kia tự hiện ra |
+| ☁️ | **Zero-Cloud** | Dữ liệu chỉ đi trong mạng nội bộ, được mã hóa. App không gửi gì ra Internet |
+| 🧠 | **Zero-RAM-Overflow** | File 50GB vẫn được ghi thẳng ra đĩa; RAM không tăng theo kích thước file |
 
 ## Tính năng
 
 | | Tính năng | Mô tả |
 |---|---|---|
-| 📡 | **Radar tự tìm thiết bị** | Mở app là thấy các máy khác trong cùng mạng, không cần gõ IP |
-| 📦 | **Gửi file cực lớn** | Kéo thả file vào thiết bị. Dữ liệu được ghi thẳng ra đĩa nên RAM không tăng theo kích thước file |
-| 🔁 | **Tự nối lại** | Rớt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi tiếp 15% còn thiếu, kể cả khi đã tắt app |
-| 🧩 | **Kiểm tra toàn vẹn** | Mỗi khối 1 MiB được kiểm tra bằng SHA-256; cả file được đối chiếu bằng cây băm Merkle |
-| 📋 | **Đồng bộ clipboard** | Ctrl+C văn bản hoặc ảnh chụp màn hình trên máy này, Ctrl+V trên máy kia |
-| 🔒 | **Bảo mật** | Mã hóa TLS 1.3; ghép đôi bằng mã xác minh 6 số để chống giả mạo |
-| 🕶️ | **Riêng tư** | Không tài khoản, không telemetry, không gửi dữ liệu ra Internet |
+| 📡 | **Radar tự tìm thiết bị** | Mở app là thấy các máy khác đang chạy Teleport trong cùng mạng. Mạng chặn tự tìm thì vẫn nhập IP được |
+| 🤝 | **Ghép đôi một lần** | Lần đầu, hai máy hiện cùng một mã 6 số để bạn xác nhận. Các lần sau tự nhận ra nhau |
+| 📦 | **Gửi file cực lớn** | Kéo thả một hoặc nhiều file vào thiết bị trên radar. Người nhận được hỏi trước khi nhận |
+| 🔁 | **Tự nối lại** | Rớt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi tiếp 15% còn thiếu, kể cả khi đã tắt app hay khởi động lại máy |
+| 🧩 | **Kiểm tra toàn vẹn** | Mỗi khối 1 MiB được kiểm tra bằng SHA-256; cả file được đối chiếu bằng cây băm Merkle. Khối hỏng được gửi lại tự động |
+| 📋 | **Đồng bộ clipboard** | Ctrl+C văn bản hoặc ảnh chụp màn hình trên máy này, Ctrl+V trên máy kia. Bật riêng cho từng thiết bị, mặc định tắt |
+| 🔒 | **Bảo mật** | TLS 1.3; chỉ thiết bị đã ghép đôi mới kết nối được, theo cả hai chiều |
+| 🕶️ | **Riêng tư** | Không tài khoản, không telemetry, không máy chủ |
+| 🖥️ | **Chạy nền** | Thu xuống khay hệ thống, luôn sẵn sàng nhận |
+| 🌐 | **Hai ngôn ngữ** | Tiếng Việt và English |
+| ⌨️ | **Dòng lệnh** | Lệnh `teleport` cho người dùng nâng cao và viết script |
 
-**Nền tảng:** Windows 10/11, macOS 12+, Ubuntu 22.04+.
+## Trải nghiệm sử dụng
+
+```
+1. Mở Teleport trên hai máy  ──►  máy kia hiện trên radar sau vài giây
+2. Kéo video.mp4 (8 GB) thả vào “PC-Nha”
+3. Lần đầu: hai máy cùng hiện mã  4 8 2  9 1 3  ──►  bấm “Trùng khớp” ở cả hai máy
+4. PC-Nha: “Laptop-Minh muốn gửi video.mp4 (8,0 GB)”  ──►  Nhận
+5. Thanh tiến độ, tốc độ, thời gian còn lại  ──►  Wi-Fi rớt?  “Đang nối lại…”  ──►  gửi tiếp phần thiếu
+6. “Đã nhận video.mp4 ✔ đã kiểm tra toàn vẹn”  ──►  bấm để mở thư mục
+```
 
 ## Cách hoạt động
 
 ```
-   Máy A                                              Máy B
-┌──────────┐  1. Tìm nhau qua mDNS (multicast LAN)  ┌──────────┐
-│ Teleport │ ◄────────────────────────────────────► │ Teleport │
-│          │  2. Ghép đôi lần đầu: so mã 6 số        │          │
-│          │  3. Kết nối TLS 1.3, ghim chứng chỉ    │          │
-│  file ───┼──► 4. Gửi theo khối 1 MiB + SHA-256 ──►┼──► đĩa   │
-└──────────┘     (backpressure: không tràn RAM)     └──────────┘
-          Không máy chủ trung gian · Không Internet
+   Máy A                                                  Máy B
+┌──────────┐  ① Tìm nhau qua mDNS (multicast trong LAN)  ┌──────────┐
+│ Teleport │ ◄─────────────────────────────────────────► │ Teleport │
+│          │  ② Ghép đôi lần đầu: so mã 6 số             │          │
+│          │  ③ TLS 1.3, hai bên xác thực chứng chỉ      │          │
+│  file ───┼──► ④ Khối 1 MiB + SHA-256, có backpressure ─┼──► đĩa   │
+│          │  ⑤ Rớt mạng → so bitfield → gửi phần thiếu  │          │
+└──────────┘                                             └──────────┘
+             Không máy chủ trung gian · Không cần Internet
 ```
 
-- **Khám phá:** mỗi máy quảng bá dịch vụ `_teleport._tcp.local.` qua mDNS.
-- **Danh tính:** mỗi máy tự tạo một chứng chỉ riêng. Ghép đôi là bước hai máy xác nhận và lưu lại chứng chỉ của nhau.
-- **Truyền tải:** kênh điều khiển dùng message `[4 byte độ dài][JSON]`; kênh dữ liệu dùng khung nhị phân gọn. Bên gửi tự chờ khi mạng hoặc ổ đĩa bên nhận chậm hơn.
-- **Nối lại:** bên nhận lưu bảng các khối đã nhận (bitfield). Kết nối lại thì chỉ những khối còn thiếu được gửi tiếp.
+1. **Khám phá:** mỗi máy quảng bá dịch vụ `_teleport._tcp.local.` qua mDNS, kèm tên, cổng và fingerprint rút gọn.
+2. **Danh tính & ghép đôi:** lần chạy đầu, mỗi máy tự tạo một khóa ECDSA P-256 và chứng chỉ tự ký. Fingerprint SHA-256 của chứng chỉ là định danh của máy. Khi ghép đôi, hai máy tính cùng một mã 6 số từ fingerprint của cả hai. Người dùng xác nhận mã trùng thì hai bên lưu chứng chỉ của nhau.
+3. **Kết nối:** TLS 1.3. Client ghim fingerprint của server; server chỉ chấp nhận client có chứng chỉ nằm trong danh sách tin cậy (mTLS). Thiết bị lạ bị từ chối ngay trong lúc bắt tay.
+4. **Truyền tải:** kênh điều khiển dùng message `[4 byte độ dài][JSON]`; dữ liệu đi trên kênh riêng theo khung nhị phân gọn. Bên gửi tự chờ khi mạng hoặc ổ đĩa bên nhận chậm hơn (backpressure), nên bộ nhớ không phình ra.
+5. **Toàn vẹn & nối lại:** bên nhận băm từng khối, lưu bảng các khối đã nhận (bitfield) vào file `.part.state`. Kết nối lại thì chỉ những khối còn thiếu được gửi tiếp. File chỉ mang tên thật sau khi Merkle root khớp.
+6. **Clipboard:** gửi văn bản/ảnh tới các thiết bị đã bật đồng bộ; nhớ hash nội dung vừa nhận để không gửi vòng lại.
+
+Đặc tả chi tiết: [docs/protocol.md](docs/protocol.md).
+
+## Bảo mật & quyền riêng tư
+
+| Mối đe dọa | Cách Teleport xử lý |
+|---|---|
+| Người cùng Wi-Fi nghe lén | Toàn bộ dữ liệu mã hóa TLS 1.3 |
+| Kẻ xấu giả làm máy của bạn (MITM) | Ghép đôi bằng mã 6 số; sau đó chỉ chấp nhận đúng chứng chỉ đã lưu |
+| Thiết bị lạ gửi file rác | Máy chưa ghép đôi không kết nối được; luôn hỏi trước khi nhận |
+| File độc hại cố ghi đè hệ thống (`..\..\Windows\…`) | Làm sạch tên file, chỉ ghi trong thư mục nhận, không bao giờ ghi đè |
+| Lộ mật khẩu qua clipboard | Đồng bộ clipboard mặc định tắt; bỏ qua nội dung mà trình quản lý mật khẩu đánh dấu nhạy cảm |
+| Thu thập dữ liệu người dùng | Không telemetry, không tài khoản, không máy chủ. Kiểm tra cập nhật là tùy chọn, mặc định tắt |
+
+Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
+
+## Yêu cầu hệ thống & mạng
+
+| | Yêu cầu |
+|---|---|
+| **Hệ điều hành** | Windows 10 (22H2) / 11 · macOS 12+ · Ubuntu 22.04+ (các hệ điều hành gửi/nhận qua lại được với nhau) |
+| **Mạng** | Các máy cùng một mạng Wi-Fi/LAN; không cần Internet |
+| **Tường lửa** | Cho phép Teleport trên mạng **Private**. Bộ cài sẽ tự tạo rule |
+
+> [!TIP]
+> Wi-Fi ở quán cà phê, khách sạn hay văn phòng thường bật **cô lập thiết bị** (client isolation): các máy thấy nhau nhưng không kết nối được. Khi đó hãy phát hotspot từ điện thoại và cho hai máy cùng vào.
 
 ## Lộ trình
 
 | Phiên bản | Nội dung |
 |---|---|
+| — | ✅ Nền tảng: khung dự án, CI 3 hệ điều hành, danh tính thiết bị, TLS 1.3 + mTLS |
 | `v0.1.0-alpha` | Khám phá thiết bị, ghép đôi, gửi file lớn qua dòng lệnh |
 | `v0.2.0-alpha` | Kiểm tra toàn vẹn, tự nối lại |
 | `v0.3.0-beta` | Giao diện radar, khay hệ thống, Tiếng Việt / English |
 | `v0.4.0-beta` | Đồng bộ clipboard |
-| `v1.0.0` | Bộ cài cho Windows, macOS, Linux |
+| `v1.0.0` | Bộ cài cho Windows, macOS, Linux; tài liệu người dùng |
 
-Trạng thái từng module: [docs/architecture.md](docs/architecture.md#3-bản-đồ-module).
+**Sau v1.0:** app Android, chế độ khách qua trình duyệt cho điện thoại, gửi tới nhiều thiết bị cùng lúc, đồng bộ thư mục.
+
+Trạng thái chi tiết từng module: [docs/architecture.md](docs/architecture.md#3-bản-đồ-module).
 
 ## Dành cho nhà phát triển
+
+### Cài đặt
 
 Cần **Python 3.12+**.
 
@@ -71,41 +158,116 @@ Cần **Python 3.12+**.
 git clone git@github.com:Nha-Cong-Dong/zero-cloud-lan-teleport.git
 cd zero-cloud-lan-teleport
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1      # macOS/Linux: source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1          # macOS/Linux: source .venv/bin/activate
 pip install -e ".[dev]"
-pytest                             # toàn bộ test; nhanh hơn: pytest -m "not integration"
-teleport identity                  # tạo / xem danh tính thiết bị của máy này
 ```
 
 Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` một lần.
 
-Muốn chạy nhiều node trên cùng một máy, cho mỗi node một thư mục cấu hình riêng bằng biến môi trường `TELEPORT_HOME` hoặc tùy chọn `--config-dir`.
+### Lệnh thường dùng
 
-### Cấu trúc mã nguồn
+| Lệnh | Tác dụng |
+|---|---|
+| `pytest` | Chạy toàn bộ test |
+| `pytest -m "not integration"` | Bỏ qua test mở socket thật (nhanh hơn) |
+| `pytest tests/net/test_tls.py::test_verify_pin_rejects_mismatch` | Chạy một test |
+| `ruff check .` · `ruff format .` | Kiểm tra và định dạng code (CI chạy `ruff check`, `ruff format --check`, `pytest`) |
+| `teleport identity` | Tạo / xem danh tính thiết bị của máy này (hoặc `python -m teleport identity`) |
+| `teleport --version` | Xem phiên bản |
+
+### Chạy nhiều node trên một máy
+
+Mỗi node cần một danh tính riêng. Hãy cho mỗi node một thư mục cấu hình bằng `TELEPORT_HOME` hoặc `--config-dir`:
+
+```powershell
+$env:TELEPORT_HOME = ".teleport-a"; teleport identity
+$env:TELEPORT_HOME = ".teleport-b"; teleport identity
+```
+
+Thư mục cấu hình mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Library/Application Support/Teleport`, Linux `~/.config/teleport`.
+
+## Kiến trúc
+
+```
+   ui (PySide6)  ·  cli          lớp mỏng: hiển thị, nhận lệnh
+        │
+       app                       dịch vụ: Node, ghép đôi, quản lý lượt truyền, clipboard
+        │
+       net                       I/O mạng: TLS + mTLS, đọc/ghi message, mDNS, kết nối
+        │
+      trust                      danh tính thiết bị, kho thiết bị tin cậy
+        │
+      core                       giao thức thuần (sans-IO): framing, message, Merkle,
+                                 máy trạng thái truyền file và nối lại
+```
+
+- **Tầng dưới không bao giờ import tầng trên**; `ui` và `cli` không import lẫn nhau.
+- **`core` không làm I/O**: không socket, không asyncio, không Qt. Logic khó nhất (chọn khối gửi lại, nối lại) được viết thành máy trạng thái thuần, nên test được hàng nghìn kịch bản ngắt mạng ngẫu nhiên trong vài mili giây.
+- Các quy tắc trên được **kiểm tra tự động** bởi `tests/test_architecture.py`.
+- Mỗi thư mục cấu hình chỉ có **một node** chạy tại một thời điểm.
 
 ```
 src/teleport/
-  core/          # giao thức thuần, sans-IO: framing, (sắp tới) message, Merkle, máy trạng thái
-  trust/         # danh tính thiết bị, (sắp tới) kho thiết bị tin cậy
-  net/           # I/O mạng: TLS + mTLS, đọc/ghi message, (sắp tới) khám phá, kết nối
-  app/           # (sắp tới) dịch vụ: Node, ghép đôi, quản lý lượt truyền, clipboard
-  ui/            # (sắp tới) giao diện PySide6
-  cli.py         # lệnh `teleport`
-  paths.py       # thư mục cấu hình theo hệ điều hành
-tests/           # chia theo tầng: core/, trust/, net/ + test quy tắc phân tầng
-docs/            # toàn bộ tài liệu, mục lục ở docs/README.md
+  core/  trust/  net/      # các tầng đã có code
+  app/   ui/               # sẽ được thêm khi có code thật
+  cli.py  __main__.py      # lệnh `teleport`
+  paths.py                 # thư mục cấu hình theo hệ điều hành
+tests/                     # chia theo tầng: core/, trust/, net/ + test phân tầng
+docs/                      # toàn bộ tài liệu
 ```
 
-Phân tầng `core ← trust ← net ← app ← ui / cli`: tầng dưới không bao giờ import tầng trên, `core` không làm I/O. Quy tắc được test tự động; chi tiết ở [docs/architecture.md](docs/architecture.md).
+Chi tiết: [docs/architecture.md](docs/architecture.md).
 
-### Đóng góp
+## Tài liệu
 
-Quy trình nhánh, commit, kiểm tra trước khi mở Pull Request và phát hành: xem [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+| Tài liệu | Nội dung |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Phân tầng, mô hình tiến trình, bản đồ module và trạng thái, dữ liệu trên đĩa |
+| [docs/protocol.md](docs/protocol.md) | Đặc tả giao thức trên dây (phiên bản 1, dự thảo) |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Nhánh, commit, kiểm tra trước Pull Request, phát hành |
+| [docs/SECURITY.md](docs/SECURITY.md) | Cách báo lỗ hổng bảo mật |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Lịch sử thay đổi |
 
-### Bảo mật
+## Câu hỏi thường gặp
 
-Báo lỗ hổng theo hướng dẫn ở [docs/SECURITY.md](docs/SECURITY.md), không mở issue công khai.
+<details>
+<summary><b>Có cần Internet không?</b></summary>
 
-## Giấy phép
+Không. Teleport chỉ cần các máy cùng một mạng Wi-Fi/LAN. Bạn có thể rút dây Internet của router mà việc gửi file vẫn chạy.
+</details>
 
-Chưa chọn giấy phép. Cho tới khi có giấy phép chính thức, mọi quyền đối với mã nguồn được bảo lưu.
+<details>
+<summary><b>Có giới hạn dung lượng file không?</b></summary>
+
+Không có giới hạn từ phía Teleport; giới hạn duy nhất là dung lượng trống của ổ nhận. Dữ liệu được ghi thẳng ra đĩa theo từng khối, nên file 50GB cũng không làm tăng RAM.
+</details>
+
+<details>
+<summary><b>Có cần cài Teleport trên cả hai máy không?</b></summary>
+
+Có, ở v1.0. Chế độ khách qua trình duyệt (cho điện thoại không cài app) nằm trong lộ trình sau v1.0.
+</details>
+
+<details>
+<summary><b>Hai máy cùng Wi-Fi mà không thấy nhau?</b></summary>
+
+Thường gặp ở Wi-Fi công cộng bật cô lập thiết bị, hoặc khi tường lửa chặn. Hãy kiểm tra tường lửa đã cho phép Teleport trên mạng Private, thử nhập IP thủ công, hoặc dùng hotspot điện thoại.
+</details>
+
+<details>
+<summary><b>Nếu tôi tắt máy giữa chừng thì sao?</b></summary>
+
+Phần đã nhận vẫn nằm an toàn trên đĩa. Mở lại Teleport ở cả hai máy, lượt truyền tự tiếp tục từ chỗ còn thiếu. Nếu file gốc đã bị sửa trong lúc đó, Teleport sẽ báo và yêu cầu gửi lại.
+</details>
+
+<details>
+<summary><b>Khác gì LocalSend, KDE Connect hay Nearby Share?</b></summary>
+
+Teleport tập trung vào **file cực lớn và đường truyền chập chờn**: nối lại theo từng khối kể cả sau khi tắt app, kiểm tra toàn vẹn bằng cây Merkle. Thêm vào đó là đồng bộ clipboard giữa máy tính với nhau và xác thực hai chiều bằng chứng chỉ.
+</details>
+
+## Đóng góp · Bảo mật · Giấy phép
+
+- **Đóng góp:** quy trình nhánh, commit (Conventional Commits) và phát hành ở [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+- **Bảo mật:** báo lỗ hổng theo [docs/SECURITY.md](docs/SECURITY.md), **không** mở issue công khai.
+- **Giấy phép:** chưa chọn. Cho tới khi có giấy phép chính thức, mọi quyền đối với mã nguồn được bảo lưu.
