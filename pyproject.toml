@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "teleport"
+version = "0.0.1"
+description = "Zero-Cloud LAN Teleport — chuyển file và clipboard trực tiếp trong mạng LAN"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+# RUF001-003: cho phép ký tự Unicode tiếng Việt trong chuỗi, comment và docstring.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

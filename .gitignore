@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# File tạm khi nhận và trạng thái nối lại
+*.part
+*.part.state
+
+# Danh tính thiết bị khi chạy thử trong thư mục dự án
+.teleport*/
+
+# Hệ điều hành và editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Cấu hình Claude Code trên máy cá nhân
+.claude/settings.local.json
