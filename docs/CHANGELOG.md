@@ -6,6 +6,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ## [Unreleased]
 
 ### Added
+- Giấy phép GPL-3.0-or-later (`LICENSE`), khai báo trong `pyproject.toml`.
 - Khung dự án Python, CI chạy ruff + pytest trên Windows, macOS, Linux.
 - `teleport.core.framing`: mã hóa/giải mã khung message điều khiển `[4 byte độ dài][JSON]` (sans-IO).
 - `teleport.net.stream`: đọc/ghi message điều khiển trên kết nối asyncio.
@@ -26,6 +27,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `docs/protocol.md` mục 5 (dự thảo, chưa phát hành): mã ghép đôi dùng nonce cam kết thay vì chỉ hai fingerprint; bên khởi xướng gửi chứng chỉ trong `pair_request` thay vì trong bắt tay TLS.
 - `docs/protocol.md` mục 4 và 6 (dự thảo): `block_hashes` gửi theo lô 64 khối; bit trong bitfield chỉ bật khi khối đã ghi xuống đĩa và khớp hash; lượng gửi lại khi nối lại tối đa là phần chưa nhận cộng một lô.
 - README: thêm giá trị “Không sợ rớt mạng” và mục “Nguyên tắc sản phẩm”; mô tả ghép đôi theo nonce cam kết; cập nhật hiện trạng và lộ trình.
+- `docs/protocol.md` mục 4 và 6 (dự thảo): lô `block_hashes` cố định 64 khối; bên nhận không đọc lô kế tiếp khi lô trước chưa xác minh (hai kết nối không có thứ tự với nhau); `fsync` `.part` trước khi ghi state; dữ liệu `clipboard` gốc ≤ 10 MiB.
 - Tài liệu sản phẩm và kế hoạch đưa vào repo: `docs/y_tuong.md` (ý tưởng, nguyên tắc, tầm nhìn), `docs/mvp.md` (phạm vi, tính năng F1–F12, yêu cầu N1–N12), `docs/ke_hoach.md` (thiết kế, lộ trình, trạng thái). `docs/README.md` thành mục lục chung kèm thuật ngữ và quy tắc đồng bộ.
 
 ### Security

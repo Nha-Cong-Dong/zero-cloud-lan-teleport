@@ -46,10 +46,14 @@
 
 ## 3. Giá trị cốt lõi
 
-1. **Zero-Friction** — Không tài khoản, không gõ IP. Cài xong, máy kia tự hiện ra.
-2. **Zero-Cloud** — Dữ liệu chỉ đi trong mạng nội bộ, mã hóa TLS 1.3. App không gửi bất cứ thứ gì ra Internet.
-3. **Zero-RAM-Overflow** — File 50GB vẫn được ghi thẳng ra đĩa; RAM không tăng theo kích thước file.
-4. **Không sợ rớt mạng** — Ngắt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi phần còn thiếu, và mọi khối đều được kiểm tra bằng SHA-256.
+Ý nghĩa từng giá trị: [y_tuong.md](y_tuong.md) mục 3. MVP đo từng giá trị bằng các tính năng và yêu cầu sau:
+
+| Giá trị | Tính năng | Yêu cầu đo được |
+|---|---|---|
+| **Zero-Friction** | F1, F2, F3 | N1, N11, mục 9.1 |
+| **Zero-Cloud** | F8, F10 | N8, N9 |
+| **Zero-RAM-Overflow** | F4 | N3 |
+| **Không sợ rớt mạng** | F6, F7 | N4, N5 |
 
 ---
 
@@ -356,11 +360,11 @@ Báo lỗ hổng bảo mật theo [SECURITY.md](SECURITY.md) (đã có từ Giai
 - [ ] Mọi yêu cầu phi chức năng N1–N12 đều đạt, có số liệu trong `benchmark.md`.
 - [ ] Đạt các chỉ số thử nghiệm người dùng ở mục 9.1.
 - [ ] CI xanh trên Windows, macOS, Linux.
-- [ ] Bộ cài cho 3 hệ điều hành được build tự động khi gắn tag `v1.0.0` (nếu trễ tiến độ, bộ cài macOS/Linux có thể hoãn theo mục 14; khi đó ghi rõ ở đây).
+- [ ] Bộ cài cho 3 hệ điều hành được build tự động khi gắn tag `v1.0.0` (nếu trễ tiến độ, bộ cài macOS/Linux có thể hoãn theo mục 14; khi đó ghi rõ ở đây); bộ cài kèm `LICENSE`, giấy phép các thư viện bên thứ ba và chỉ dẫn lấy mã nguồn.
 - [ ] Test soak 100 lượt truyền đạt.
 - [ ] Tài liệu người dùng: cài đặt, ghép đôi, khắc phục sự cố (tường lửa, Wi-Fi chặn thiết bị).
 - [ ] `SECURITY.md`, chính sách quyền riêng tư, `CHANGELOG.md` cho v1.0.0.
-- [ ] Đã chốt giấy phép phần mềm.
+- [x] Đã chốt giấy phép phần mềm: GPL-3.0-or-later.
 - [ ] Không còn lỗi nghiêm trọng đang mở.
 
 ---
@@ -396,4 +400,4 @@ Rủi ro kỹ thuật và thực thi: [ke_hoach.md](ke_hoach.md) mục 8.
 ## 15. Lộ trình & việc cần chốt
 
 - Lộ trình, các bản phát hành và **trạng thái hiện tại**: [ke_hoach.md](ke_hoach.md) mục 5.
-- Các câu hỏi còn mở (giấy phép, tên thương mại, ngân sách ký mã, chế độ khách cho điện thoại): [ke_hoach.md](ke_hoach.md) mục 9.
+- Các câu hỏi còn mở (tên thương mại, ngân sách ký mã, chế độ khách cho điện thoại, App Store và CLA): [ke_hoach.md](ke_hoach.md) mục 9.

@@ -92,7 +92,7 @@ Module chỉ được tạo khi có code thật, không tạo file rỗng trư�
 | `<config_dir>/node.lock` | Khóa: chỉ một node mỗi thư mục cấu hình ✅ |
 | `<config_dir>/settings.json` | Cài đặt người dùng ⬜ |
 | `<thư mục nhận>/<tên>.part` | File đang nhận ⬜ |
-| `<thư mục nhận>/<tên>.part.state` | Trạng thái nối lại: manifest, bitfield các khối đã xác minh, hash; ghi nguyên tử sau mỗi lô `block_hashes` được xác minh ⬜ |
+| `<thư mục nhận>/<tên>.part.state` | Trạng thái nối lại: manifest, bitfield các khối đã xác minh, hash; sau mỗi lô được xác minh: `fsync` `.part` rồi mới ghi state nguyên tử ([protocol.md](protocol.md) mục 6) ⬜ |
 
 `config_dir` mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Library/Application Support/Teleport`, Linux `$XDG_CONFIG_HOME/teleport` (hoặc `~/.config/teleport`).
 

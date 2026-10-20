@@ -28,6 +28,7 @@ Mọi tài liệu của dự án nằm trong thư mục này. Giới thiệu d�
 
 - Mỗi thông tin chỉ ghi đầy đủ ở **một** tài liệu theo bảng trên; nơi khác tham chiếu tới (ví dụ “mvp N4”, “ke_hoach mục 3.4”) thay vì chép lại con số hay đoạn văn.
 - y_tuong viết ở mức ý tưởng, không ghi con số yêu cầu hay chi tiết kỹ thuật.
+- [README.md](../README.md) ở gốc repo là phần giới thiệu công khai: được tóm tắt lại giá trị, tính năng và lộ trình, nhưng phải khớp với các tài liệu nguồn ở trên.
 - Khi lệch nhau: `protocol.md` và `architecture.md` đúng về giao thức và module; mvp đúng về yêu cầu; ke_hoach đúng về thiết kế và tiến độ; y_tuong đúng về định hướng.
 - Đổi một con số trong mvp thì rà các chỗ tham chiếu tới mã đó. Xong một module thì cập nhật cả `architecture.md` (module) và, khi xong cả giai đoạn, ke_hoach mục 5.1.
 - Cập nhật dòng “Cập nhật:” ở đầu y_tuong, mvp, ke_hoach khi sửa nội dung.

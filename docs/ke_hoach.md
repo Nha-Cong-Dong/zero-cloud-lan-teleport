@@ -16,7 +16,9 @@
 | Nền tảng v1.0 | **Desktop ↔ desktop**: Windows là chính; macOS và Linux được CI build/test và có bộ cài |
 | Ngôn ngữ chính | **Python 3.12+** cho toàn bộ ứng dụng |
 | Ngôn ngữ bổ trợ | **C/C++** và **Java** cho công cụ phụ trợ (mục 4.2), không nằm trên đường găng của v1.0 |
-| Giấy phép | Chưa quyết → repo để **Private**; chỉ dùng thư viện MIT/BSD/Apache/LGPL cho phần chạy/đóng gói (công cụ chỉ dùng khi phát triển được phép khác, ví dụ `hypothesis` MPL-2.0); **phải chốt trước khi công khai** |
+| Repo | **Public** trên GitHub `Nha-Cong-Dong/zero-cloud-lan-teleport`: mã nguồn và mọi tài liệu trong `docs/` đều công khai |
+| Giấy phép | **GPL-3.0-or-later** (file `LICENSE`). Mọi bản phân phối đã sửa đổi phải mở mã theo GPL. Thư viện chạy/đóng gói phải tương thích GPLv3: chỉ dùng MIT/BSD/Apache-2.0/LGPL; ngoại lệ là PyInstaller (GPL kèm bootloader exception). Công cụ chỉ dùng khi phát triển được phép khác (ví dụ `hypothesis` MPL-2.0) |
+| Ưu tiên | **Hoàn thành MVP v1.0 trước** (desktop ↔ desktop); điện thoại và các việc “Sau v1.0” chưa làm |
 | Nguồn lực | Làm một mình |
 | Thời hạn | Không có hạn cố định → kiểm soát bằng các bản phát hành (mục 5), mốc tham khảo ~15 tuần tới v1.0 |
 | Ngôn ngữ giao diện | Tiếng Việt và English |
@@ -80,7 +82,7 @@
       writer.write(frame_header(idx, len(block)) + block)
       await writer.drain()  # ← backpressure: chờ khi bộ đệm đầy
   ```
-- **Bên nhận:** đọc từng khung → băm khối và giữ lại hash vừa tính → đẩy vào `asyncio.Queue(maxsize=8)` → luồng ghi đĩa (`asyncio.to_thread`) ghi vào `<tên>.part` đúng vị trí `idx × BLOCK_SIZE`. Ổ đĩa chậm → hàng đợi đầy → ngừng đọc socket → TCP báo bên gửi chậm lại. Kết quả: RAM tối đa khoảng 8–10 khối, bất kể file lớn cỡ nào.
+- **Bên nhận:** đọc từng khung → băm khối và giữ lại hash vừa tính → đẩy vào `asyncio.Queue(maxsize=8)` → luồng ghi đĩa (`asyncio.to_thread`) ghi vào `<tên>.part` đúng vị trí `idx × BLOCK_SIZE`. Ổ đĩa chậm → hàng đợi đầy → ngừng đọc socket → TCP báo bên gửi chậm lại. Bên nhận cũng ngừng đọc khi đã nhận hết một lô mà lô đó chưa xác minh xong (mục 3.4). Kết quả: RAM tối đa khoảng 8–10 khối, bất kể file lớn cỡ nào.
 - Hash của bên gửi tới sau theo lô, nên việc **đối chiếu** diễn ra khi lô `block_hashes` tương ứng tới (mục 3.4), không phải ngay lúc đọc khung.
 - **Giới hạn tốc độ gửi** (tùy chọn trong cài đặt): bên gửi chờ thêm giữa các khối theo kiểu token bucket.
 - **Hoàn tất:** so khớp Merkle root → `fsync` → đổi tên `.part` → tên thật.
@@ -96,10 +98,11 @@
 ### 3.4. Toàn vẹn & nối lại
 *(mvp F6, F7, N4, N5)*
 - Bên gửi băm từng khối **trong khi gửi**, gửi `block_hashes` theo lô **64 khối** trên kênh điều khiển, và `complete{merkle_root}` ở cuối. Nhờ vậy không phải băm cả file 10GB trước khi bắt đầu.
-- Bên nhận băm lại khối khi nhận; khi lô `block_hashes` tới thì đối chiếu: khớp và đã ghi xuống đĩa → bật bit trong bitfield (bitfield chỉ chứa khối **đã xác minh**); sai → báo trong `corrupt` để gửi lại.
-- Sau mỗi lô được xác minh, lưu `<tên>.part.state` (JSON: manifest, bitfield dạng base64, các hash đã xác minh) bằng ghi nguyên tử.
+- Bên nhận băm lại khối khi nhận; khi `block_hashes` của lô tới thì đối chiếu. Khối sai → báo trong `corrupt` để gửi lại.
+- Xác minh xong một lô: `fsync` file `.part` → bật bit các khối của lô (bitfield chỉ chứa khối **đã xác minh và đã nằm trên đĩa**) → ghi `<tên>.part.state` (JSON: manifest, bitfield dạng base64, các hash đã xác minh) bằng ghi nguyên tử. Mỗi lô 64 MiB một lần `fsync`, chi phí nhỏ so với thời gian truyền.
+- **Kiểm soát luồng theo lô:** kết nối điều khiển và kết nối dữ liệu là hai kết nối TCP riêng, không có thứ tự với nhau, nên khối của lô sau có thể tới trước hash của lô trước. Vì vậy bên nhận không đọc khung nào của lô `k + 1` cho tới khi lô `k` xác minh xong; lúc nào cũng chỉ có tối đa một lô đã nhận mà chưa xác minh. (Phương án gửi hash trước dữ liệu bị loại vì bên gửi phải đọc file hai lần hoặc giữ 64 MiB trong RAM, trái mvp N3.)
 - **Nối lại:** mất kết nối → tự thử lại (1s, 2s, 4s… tối đa 30s một lần, trong tối đa 24 giờ) → bên nhận gửi `resume{bitfield}` → bên gửi chỉ gửi những khối có bit = 0.
-- **Giới hạn dữ liệu gửi lại:** khối đã nhận nhưng chưa kịp xác minh (lô hash chưa tới) có bit = 0 nên sẽ được gửi lại. Vì vậy lượng gửi lại ≤ **phần chưa nhận + 64 khối (64 MiB)**, cả khi rớt mạng lẫn khi tắt hẳn app nhận. Với file 10GB rớt ở 85%: ≤ 1,5GB + 64 MiB. Muốn giới hạn chặt hơn thì giảm cỡ lô hoặc lưu cả hash bên nhận tự tính (phải sửa `protocol.md` mục 6).
+- **Giới hạn dữ liệu gửi lại:** khối đã nhận nhưng chưa xác minh có bit = 0 nên sẽ được gửi lại. Nhờ kiểm soát luồng theo lô, số khối đó không quá một lô, nên thiết kế này đạt mvp N4 cả khi rớt mạng lẫn khi tắt hẳn app nhận. Muốn giới hạn chặt hơn thì giảm cỡ lô (phải sửa `protocol.md` mục 4 và mvp N4).
 - File nguồn thay đổi (kích thước/mtime khác manifest) → bên gửi gửi `cancel`, báo người dùng.
 - File `.part` bị bỏ dở quá 7 ngày thì tự dọn (chỉnh được trong cài đặt).
 - **Merkle root:** tính từ danh sách hash các khối (lá) theo cây nhị phân; lẻ nút thì nút cuối được đẩy thẳng lên tầng trên.
@@ -122,7 +125,7 @@ Hai bên gửi `hello` ngay sau bắt tay TLS; khác phiên bản giao thức th
 | `complete` | gửi → nhận | `transfer_id`, `file_index`, `merkle_root` |
 | `verified` / `corrupt` | nhận → gửi | kết quả, các khối lỗi |
 | `cancel` | ↔ | `transfer_id` |
-| `clipboard` | ↔ | `kind` (`text` / `image/png`), `sha256`, dữ liệu (văn bản hoặc base64, ≤ 10MB) |
+| `clipboard` | ↔ | `kind` (`text` / `image/png`), `sha256`, dữ liệu (văn bản hoặc base64; dữ liệu gốc ≤ 10 MiB) |
 | `ping` / `pong` | ↔ | giữ kết nối |
 
 **Khung dữ liệu nhị phân** (rút gọn từ bảng gói tin trong bản ý tưởng ban đầu), đóng gói bằng `struct.pack("!BII", ...)`:
@@ -165,7 +168,7 @@ Hai bên gửi `hello` ngay sau bắt tay TLS; khác phiên bản giao thức th
 | Lint & format | `ruff` | MIT |
 | Kiểm tra kiểu | `mypy` (từ Giai đoạn 2) | MIT |
 | CI / phát hành | GitHub Actions | — |
-| Đóng gói | `PyInstaller` → Inno Setup (Windows), `.dmg` (macOS), AppImage (Linux) | GPL có ngoại lệ / tùy công cụ |
+| Đóng gói | `PyInstaller` chế độ `--onedir` → Inno Setup (Windows), `.dmg` (macOS), AppImage (Linux) | GPL kèm bootloader exception / tùy công cụ |
 
 ### 4.2. Vai trò của C/C++ và Java
 Giao thức chỉ gồm JSON và khung nhị phân `struct`, không phụ thuộc Python, nên ngôn ngữ khác nói chuyện được với app. Ba hướng bổ trợ, đều **tùy chọn** và làm sau khi phần lõi Python đã chạy:
@@ -179,10 +182,10 @@ Giao thức chỉ gồm JSON và khung nhị phân `struct`, không phụ thuộ
 Ghi chú: `hashlib` và `ssl` của Python vốn đã chạy bằng C (OpenSSL), nên nhiều khả năng **không cần** module C++. Đo trước rồi mới tối ưu.
 
 ### 4.3. Cấu trúc repo
-Repo Git: GitHub `Nha-Cong-Dong/zero-cloud-lan-teleport` (private). Mọi tài liệu, kể cả y_tuong, mvp và ke_hoach, nằm trong `docs/`.
+Repo Git: GitHub `Nha-Cong-Dong/zero-cloud-lan-teleport` (public, GPL-3.0-or-later). Mọi tài liệu, kể cả y_tuong, mvp và ke_hoach, nằm trong `docs/`.
 ```
 teleport/                      # ← gốc repo
-  README.md  pyproject.toml    # gốc repo chỉ có 2 file này (ngoài .gitignore)
+  README.md  LICENSE  pyproject.toml   # gốc repo chỉ có 3 file này (ngoài .gitignore)
   .claude/CLAUDE.md            # hướng dẫn cho Claude Code
   .claude/agents/              # đội subagent: truong-nhom, hoi-lai, lap-trinh, viet-test, review, tom-tat
   .github/workflows/ci.yml
@@ -274,7 +277,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Benchmark công bố ở `docs/benchmark.md` (file mới): tốc độ (so với SMB và Google Drive), RAM theo thời gian, thời gian phát hiện, lượng dữ liệu gửi lại khi nối lại. (Tùy chọn) so sánh với bộ nhận C++.
 - Tài liệu người dùng: cài đặt, ghép đôi, khắc phục sự cố (tường lửa, cô lập Wi-Fi). `SECURITY.md`, chính sách quyền riêng tư.
 - Thử nghiệm với người dùng thật (mvp mục 9.1), sửa lỗi; test soak (N7).
-- Chốt giấy phép trước khi công khai repo.
+- Tuân thủ giấy phép khi đóng gói: dùng PyInstaller `--onedir` (không `--onefile`) để người dùng thay được thư viện LGPL (Qt/PySide6, zeroconf); bộ cài kèm `LICENSE` (GPL-3.0), văn bản giấy phép các thư viện bên thứ ba, và chỉ dẫn lấy mã nguồn đúng phiên bản.
 - **Xong khi:** đạt toàn bộ tiêu chí phát hành ở mvp mục 12. → **`v1.0.0`**.
 
 ### 5.3. Sau v1.0
@@ -323,6 +326,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | Trộn Qt với asyncio phức tạp | Dùng `qasync`; lõi không phụ thuộc Qt nên test riêng được |
 | Python chậm hơn mong đợi (N2) | Đo sớm ở Giai đoạn 2; tăng kích thước khối hoặc bộ đệm socket; module C++ nếu thật sự cần |
 | Python + Qt khó đạt RAM rảnh < 150MB (N3) | Đo sớm từ `v0.3.0-beta`; tối ưu, hoặc nới yêu cầu có lý do và sửa N3 trong mvp.md |
+| Vi phạm điều kiện LGPL/GPL khi đóng gói | Đóng gói `--onedir`, không sửa mã thư viện LGPL, kèm văn bản giấy phép và chỉ dẫn lấy mã nguồn; kiểm lại trong Giai đoạn 6 |
 | Bộ cài PyInstaller nặng (N11) hoặc bị antivirus báo nhầm | Build thử từ Giai đoạn 2; gửi mẫu cho các hãng antivirus nếu bị báo nhầm |
 | Windows Firewall chặn | Bộ cài tạo rule; app phát hiện và hướng dẫn khi bị chặn |
 | Lỗ hổng bảo mật (path traversal, dữ liệu độc hại từ máy khác) | Kiểm tra hợp lệ mọi trường nhận được; fuzz test; `SECURITY.md` để nhận báo lỗi |
@@ -335,8 +339,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 
 Đây là danh sách câu hỏi mở duy nhất của dự án.
 
-1. **Giấy phép** (trước khi công khai repo): MIT/Apache-2.0 nếu muốn cộng đồng dùng rộng rãi; GPL-3.0 nếu muốn bản phái sinh cũng phải mở mã; đóng nếu định thương mại hóa.
-   Công khai repo thì cả `docs/y_tuong.md`, `docs/mvp.md`, `docs/ke_hoach.md` cũng công khai: rà lại nội dung không muốn chia sẻ (ngân sách, kế hoạch thương mại) trước khi đổi sang Public.
-2. **Tên thương mại** và biểu tượng app (hiện dùng tên tạm “Teleport”). Cần kiểm tra trùng tên với sản phẩm khác.
-3. **Ngân sách ký mã** cho Windows/macOS.
-4. **Chế độ khách cho điện thoại** (qua trình duyệt) có làm ngay sau v1.0, trước app Android, hay không.
+1. **Tên thương mại** và biểu tượng app (hiện dùng tên tạm “Teleport”). Đã có sản phẩm mã nguồn mở nổi tiếng tên Teleport (Gravitational, goteleport.com) và gói `teleport` trên PyPI; repo đã public nên cần chốt trước `v1.0.0`.
+2. **Ngân sách ký mã** cho Windows/macOS.
+3. **Chế độ khách cho điện thoại** (qua trình duyệt) có làm ngay sau v1.0, trước app Android, hay không.
+4. **App iOS và CLA** (sau v1.0): điều khoản App Store xung đột với GPL. Muốn đưa app lên App Store thì chủ bản quyền phải cấp thêm giấy phép riêng, nên cần người đóng góp ký thỏa thuận chuyển quyền (CLA) **trước khi** nhận code của họ. Chưa có người đóng góp ngoài nên chưa cần; cần quyết trước khi nhận Pull Request đầu tiên từ bên ngoài.
