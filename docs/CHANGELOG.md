@@ -25,6 +25,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `hello` có thêm trường `os` (`windows`, `macos`, `linux`) để hiện biểu tượng hệ điều hành.
 - `teleport.net.tls.verify_fingerprint`: client so **toàn bộ** fingerprint của server.
 - Giới hạn message 16 KiB cho kết nối ghép đôi (`MAX_PAIRING_MESSAGE_SIZE`, `read_message(..., max_size)`).
+- `teleport.core.pairing`: máy trạng thái ghép đôi sans-IO cho bên khởi xướng (`InitiatorSession`) và bên trả lời (`ResponderSession`): thứ tự message `pair_*`, hết giờ (10 s mỗi message, 60 s chờ người dùng xác nhận), lý do hủy, không ghép đôi đè danh tính khác; `PairingGate` chống làm phiền: một phiên ghép đôi tại một thời điểm, chờ tăng dần theo IP (10 s → 10 phút), phân xử khi hai bên cùng chủ động ghép đôi.
 
 ### Changed
 - `docs/protocol.md` (dự thảo, chưa phát hành): mọi kết nối đi vào **một cổng** (mặc định 47474) với `CERT_OPTIONAL`; ba loại kết nối ghép đôi / điều khiển / dữ liệu, client khai báo loại bằng `pair_request` / `control_open` / `data_open` ngay sau `hello`; kết nối dữ liệu đi cùng chiều với kết nối điều khiển (qua được tường lửa một chiều); giới hạn kích thước, thời gian chờ, keepalive; chống làm phiền khi ghép đôi (chờ tăng dần theo IP); không ghép đôi đè danh tính khác; một kết nối điều khiển cho mỗi cặp máy; mDNS TTL 60 s; hủy ghép đôi có hiệu lực ngay; quy tắc tăng số phiên bản giao thức từ `v0.1.0-alpha`.
@@ -32,6 +33,9 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `docs/protocol.md` (dự thảo): IPv4, thử song song mọi địa chỉ được quảng bá, cổng dự phòng lưu lại; tên instance mDNS là `device_id`, TXT `name` ≤ 200 byte; quy tắc trường `ping`/`pong`/`seq`; `seq` có phạm vi một kết nối điều khiển; trạng thái mức lượt truyền `transfer.json`; chính sách nối lại khi không có lượt truyền và khi bị từ chối; `teleport pair` nhận `ip[:cổng]`.
 - `teleport.net.tls.server_context(identity, trusted_certs, *, allow_anonymous=False)`: bỏ chế độ `trusted_certs=None` (không xác thực client); `allow_anonymous=True` cho cổng chung.
 - `docs/protocol.md` mục 5 (dự thảo, chưa phát hành): mã ghép đôi dùng nonce cam kết thay vì chỉ hai fingerprint; bên khởi xướng gửi chứng chỉ trong `pair_request` thay vì trong bắt tay TLS.
+- `docs/protocol.md` mục 2.3 (dự thảo, chưa phát hành): máy đã gửi `pair_confirm` chờ thêm 10 s (`CONFIRM_GRACE`, tới 70 s kể từ lúc hiện mã) để nhận `pair_confirm` của máy kia; quyết định tới sau hạn chót vẫn là hết giờ.
+- `docs/protocol.md` mục 5.1 (dự thảo): bên khởi xướng phát hiện lỗi trước khi gửi `pair_request` (CN không khớp `hello`, tự ghép với chính mình, trùng danh tính) thì chỉ đóng kết nối, không gửi gì; `hello` thứ hai, message có `type` chưa biết và `pair_confirm` nhận lần hai trên kết nối ghép đôi đều là `pair_abort{invalid}`.
+- `docs/protocol.md` mục 5.3 (dự thảo): chi tiết chờ tăng dần theo IP: chỉ tính phiên mà máy này là bên trả lời; mất kết nối và trùng danh tính tính là thất bại, phiên do node tự hủy thì không; `pair_abort{busy}` lúc đang chờ không kéo dài thời gian chờ; quên IP sau 10 phút yên lặng, theo dõi tối đa 1024 IP, bộ đếm chỉ nằm trong bộ nhớ. Luật nhường khi hai bên cùng chủ động: bên có `device_id` lớn hơn hủy phiên khởi xướng của mình và trả lời phiên của bên kia, bên nhỏ hơn trả `pair_abort{busy}`; luật này xét trước việc node có đang nhận ghép đôi không và trước thời gian chờ của IP.
 - README: thêm giá trị “Không sợ rớt mạng” và mục “Nguyên tắc sản phẩm”; mô tả ghép đôi theo nonce cam kết; cập nhật hiện trạng và lộ trình.
 - Tài liệu sản phẩm và kế hoạch đưa vào repo: `docs/y_tuong.md` (ý tưởng, nguyên tắc, tầm nhìn), `docs/mvp.md` (phạm vi, tính năng F1–F12, yêu cầu N1–N12), `docs/ke_hoach.md` (thiết kế, lộ trình, trạng thái). `docs/README.md` thành mục lục chung kèm thuật ngữ và quy tắc đồng bộ.
 
@@ -50,3 +54,4 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Mã ghép đôi có nonce cam kết: kẻ đứng giữa không thể sinh khóa offline cho tới khi trùng mã.
 - `teleport.core.framing`: JSON có số nguyên quá dài hoặc lồng quá sâu báo `FramingError` thay vì lỗi không kiểm soát.
 - `trusted.json` hỏng thì cả file bị từ chối, và không bao giờ bị tự xóa hay ghi đè.
+- `teleport.core.pairing` chỉ lưu thiết bị khi máy này đã gửi **và** đã nhận `pair_confirm`; cam kết nonce sai, chứng chỉ không khớp `hello` hay tự ghép với chính mình đều hủy phiên trước khi hiện mã.

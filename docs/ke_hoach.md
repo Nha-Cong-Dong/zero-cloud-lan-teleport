@@ -256,7 +256,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - ✅ mTLS với chứng chỉ tự ký được kiểm chứng (`net/tls.py`).
 - ✅ Nền ghép đôi không mạng (PR #1): `core/messages.py` (`hello`, `pair_*`), `core/pairing_code.py` (nonce cam kết), `trust/identity.py` (kiểm tra chứng chỉ máy khác), `trust/store.py` (`trusted.json`), `lock.py` (một node mỗi thư mục cấu hình).
 - ✅ Chốt đặc tả kết nối (`protocol.md` mục 2, 5–9): một cổng `CERT_OPTIONAL` (đã kiểm chứng bằng test), ba loại kết nối, giới hạn và thời gian chờ, chống làm phiền khi ghép đôi, hủy ghép đôi, `hello.os`. Danh tính hỏng hoặc thiếu một nửa báo lỗi thay vì tự tạo lại.
-- `core/pairing.py`: máy trạng thái ghép đôi sans-IO (mục 3.1), test bằng `hypothesis`.
+- ✅ `core/pairing.py`: máy trạng thái ghép đôi sans-IO (mục 3.1), test bằng `hypothesis`.
 - `net/discovery.py` (zeroconf), `net/connection.py` (listener một cổng, phân loại kết nối, trao `hello`, keepalive, thay `SSLContext` khi danh sách tin cậy đổi).
 - `app/node.py` + `app/pairing.py`: ghép các thành phần, giữ kết nối điều khiển tới thiết bị tin cậy, luồng ghép đôi, hủy ghép đôi.
 - CLI: `teleport list`, `teleport listen`, `teleport pair <thiết bị>`, `teleport unpair <thiết bị>`; `<thiết bị>` là tên hoặc tiền tố `device_id`; `pair` nhận thêm `ip[:cổng]` để ghép đôi khi mạng chặn mDNS (mvp F12).
