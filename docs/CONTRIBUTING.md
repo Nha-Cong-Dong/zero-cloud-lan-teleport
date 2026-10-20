@@ -36,6 +36,9 @@ CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check 
 ## Thay đổi giao thức
 Mọi thay đổi định dạng trên dây phải cập nhật [protocol.md](protocol.md) trong cùng Pull Request. Thay đổi không tương thích thì tăng số phiên bản giao thức.
 
+## Giấy phép
+Dự án theo giấy phép [GPL-3.0-or-later](../LICENSE). Gửi Pull Request nghĩa là bạn đồng ý đóng góp của mình được phát hành theo cùng giấy phép đó. Chỉ thêm thư viện có giấy phép tương thích GPLv3 (MIT, BSD, Apache-2.0, LGPL).
+
 ## Bảo mật
 Báo lỗ hổng: xem [SECURITY.md](SECURITY.md).
 

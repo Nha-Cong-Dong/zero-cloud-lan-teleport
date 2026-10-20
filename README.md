@@ -10,6 +10,7 @@
 [![CI](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml/badge.svg)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![Nền tảng](https://img.shields.io/badge/n%E1%BB%81n%20t%E1%BA%A3ng-Windows%20%7C%20macOS%20%7C%20Linux-555)
+![Giấy phép](https://img.shields.io/badge/gi%E1%BA%A5y%20ph%C3%A9p-GPL--3.0-blue)
 ![Trạng thái](https://img.shields.io/badge/tr%E1%BA%A1ng%20th%C3%A1i-%C4%91ang%20ph%C3%A1t%20tri%E1%BB%83n-orange)
 
 </div>
@@ -283,4 +284,4 @@ Teleport tập trung vào **file cực lớn và đường truyền chập chờ
 
 - **Đóng góp:** quy trình nhánh, commit (Conventional Commits) và phát hành ở [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 - **Bảo mật:** báo lỗ hổng theo [docs/SECURITY.md](docs/SECURITY.md), **không** mở issue công khai.
-- **Giấy phép:** chưa chọn. Cho tới khi có giấy phép chính thức, mọi quyền đối với mã nguồn được bảo lưu.
+- **Giấy phép:** [GPL-3.0-or-later](LICENSE). Bạn được dùng, sửa và phân phối lại Teleport; bản phân phối đã sửa đổi phải mở mã theo cùng giấy phép.
