@@ -19,6 +19,12 @@ HEADER = struct.Struct("!I")  # "!" = thứ tự byte mạng (big-endian), "I" =
 # một header hỏng (hoặc độc hại) bắt ta cấp phát hàng GB bộ nhớ.
 MAX_MESSAGE_SIZE = 16 * 1024 * 1024
 
+# Độ sâu lồng tối đa của JSON (object ngoài cùng tính là 1). Message thật chỉ sâu
+# vài cấp; giới hạn rõ ràng để không phụ thuộc vào việc bộ giải mã có gặp
+# RecursionError hay không — trên Python 3.14 Linux/macOS, JSON lồng 100.000 cấp
+# vẫn giải mã được bình thường.
+MAX_JSON_DEPTH = 64
+
 
 class FramingError(Exception):
     """Khung nhận được không hợp lệ: quá lớn, bị cắt giữa chừng hoặc không phải JSON object."""
@@ -48,8 +54,23 @@ def decode_body(body: bytes) -> dict:
         # Số nguyên quá dài (> 4300 chữ số): Python từ chối đổi sang int.
         raise FramingError("JSON chứa số nguyên quá dài") from e
     except RecursionError as e:
-        # JSON lồng quá sâu, ví dụ "[[[[…": bộ giải mã vượt giới hạn đệ quy.
+        # Trên một số nền tảng, bộ giải mã vượt giới hạn đệ quy trước khi tới _depth_exceeds.
         raise FramingError("JSON lồng quá sâu") from e
     if not isinstance(msg, dict):
         raise FramingError("message phải là một JSON object")
+    # Số dấu "[" và "{" là cận trên của độ sâu: ít hơn giới hạn thì khỏi duyệt cây.
+    if body.count(b"[") + body.count(b"{") > MAX_JSON_DEPTH and _depth_exceeds(msg, MAX_JSON_DEPTH):
+        raise FramingError(f"JSON lồng quá {MAX_JSON_DEPTH} cấp")
     return msg
+
+
+def _depth_exceeds(value: object, limit: int) -> bool:
+    """Duyệt bằng ngăn xếp (không đệ quy) để chính việc kiểm tra không tràn stack."""
+    stack: list[tuple[object, int]] = [(value, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            return True
+        children = node.values() if isinstance(node, dict) else node
+        stack.extend((child, depth + 1) for child in children if isinstance(child, dict | list))
+    return False

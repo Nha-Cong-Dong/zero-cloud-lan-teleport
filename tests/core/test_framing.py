@@ -6,6 +6,7 @@ from hypothesis import strategies as st
 
 from teleport.core.framing import (
     HEADER,
+    MAX_JSON_DEPTH,
     MAX_MESSAGE_SIZE,
     FramingError,
     decode_body,
@@ -91,6 +92,41 @@ def test_moderately_nested_json_still_decodes():
         value = value[0]
         depth += 1
     assert depth == 49
+
+
+def nested(depth: int) -> bytes:
+    """Object ngoài cùng (cấp 1) chứa list lồng nhau, tổng cộng đúng `depth` cấp."""
+    inner = depth - 1
+    return b'{"a":' + b"[" * inner + b"]" * inner + b"}"
+
+
+def test_depth_exactly_at_limit_is_accepted():
+    assert isinstance(decode_body(nested(MAX_JSON_DEPTH)), dict)
+
+
+@pytest.mark.parametrize("depth", [MAX_JSON_DEPTH + 1, 1_000])
+def test_depth_over_limit_is_rejected_on_every_platform(depth):
+    with pytest.raises(FramingError, match="lồng"):
+        decode_body(nested(depth))
+
+
+def test_depth_limit_counts_objects_too():
+    def objects(depth: int) -> bytes:
+        return b'{"a":' * depth + b"1" + b"}" * depth
+
+    assert isinstance(decode_body(objects(MAX_JSON_DEPTH)), dict)
+    with pytest.raises(FramingError):
+        decode_body(objects(MAX_JSON_DEPTH + 1))
+
+
+def test_brackets_inside_strings_do_not_count_as_nesting():
+    body = json.dumps({"text": "[{" * 500, "list": [1, 2, 3]}).encode()
+    assert decode_body(body)["text"] == "[{" * 500
+
+
+def test_wide_but_shallow_json_is_accepted():
+    body = json.dumps({"hashes": [[i] for i in range(10_000)]}).encode()
+    assert len(decode_body(body)["hashes"]) == 10_000
 
 
 # --- Fuzz decode_body (phụ lục điểm 18) --------------------------------------------------------

@@ -31,7 +31,7 @@ Mỗi message:
 
 - Độ dài tối đa: **16 MiB**. Header lớn hơn thì đóng kết nối ngay, không đọc thân.
 - Thân phải là một **JSON object**. Mảng, số hay chuỗi ở cấp ngoài cùng đều bị coi là lỗi.
-- JSON có số nguyên quá dài (hơn 4300 chữ số) hoặc lồng quá sâu cũng là lỗi khung.
+- JSON có số nguyên quá dài (hơn 4300 chữ số) hoặc lồng sâu hơn **64 cấp** (object ngoài cùng tính là cấp 1) cũng là lỗi khung.
 - Đóng kết nối đúng ở ranh giới giữa hai message là kết thúc bình thường. Đóng giữa chừng một message là lỗi.
 - Mọi message có trường `"type"`. Trường không biết thì bỏ qua (để mở rộng về sau); thiếu trường bắt buộc thì là lỗi.
 
