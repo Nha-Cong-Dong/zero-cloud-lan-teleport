@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Teleport (Zero-Cloud LAN Teleport) is a desktop app, written in Python 3.12+, for sending very large files and syncing the clipboard between computers on the same LAN. There is no cloud, no accounts and no telemetry. It is built as a release-quality product. The current stage is phase 1, discovery and pairing. Done so far: framing, device identity, TLS 1.3 + mTLS, the offline pairing foundation (`hello`/`pair_*` messages, the commitment-based 6-digit code, the trust store), the sans-IO pairing state machine with its anti-spam gate (`core/pairing.py`) and the node lock. Discovery, network pairing, transfer, resume, clipboard and the UI are not written yet.
+Teleport (Zero-Cloud LAN Teleport) is a desktop app, written in Python 3.12+, for sending very large files and syncing the clipboard between computers on the same LAN. There is no cloud, no accounts and no telemetry. It is built as a release-quality product. The current stage is phase 1, discovery and pairing. Done so far: framing, device identity, TLS 1.3 + mTLS, the control-connection messages (`control_open`, `ping`, `pong`), the offline pairing foundation (`hello`/`pair_*` messages, the commitment-based 6-digit code, the trust store), the sans-IO pairing state machine with its anti-spam gate (`core/pairing.py`) and the node lock. Discovery, network pairing, transfer, resume, clipboard and the UI are not written yet.
 
 The parent folder of `.claude/` is the git repo root (`git@github.com:Nha-Cong-Dong/zero-cloud-lan-teleport.git`, public). The repo root holds only `README.md`, `LICENSE` and `pyproject.toml`. Every other Markdown doc lives in `docs/`. Keep the root that tidy.
 

@@ -257,13 +257,14 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - ✅ Nền ghép đôi không mạng (PR #1): `core/messages.py` (`hello`, `pair_*`), `core/pairing_code.py` (nonce cam kết), `trust/identity.py` (kiểm tra chứng chỉ máy khác), `trust/store.py` (`trusted.json`), `lock.py` (một node mỗi thư mục cấu hình).
 - ✅ Chốt đặc tả kết nối (`protocol.md` mục 2, 5–9): một cổng `CERT_OPTIONAL` (đã kiểm chứng bằng test), ba loại kết nối, giới hạn và thời gian chờ, chống làm phiền khi ghép đôi, hủy ghép đôi, `hello.os`. Danh tính hỏng hoặc thiếu một nửa báo lỗi thay vì tự tạo lại.
 - ✅ `core/pairing.py`: máy trạng thái ghép đôi sans-IO (mục 3.1), test bằng `hypothesis`.
+- ✅ `core/messages.py`: `control_open`, `ping`, `pong`.
 - `net/discovery.py` (zeroconf), `net/connection.py` (listener một cổng, phân loại kết nối, trao `hello`, keepalive, thay `SSLContext` khi danh sách tin cậy đổi).
 - `app/node.py` + `app/pairing.py`: ghép các thành phần, giữ kết nối điều khiển tới thiết bị tin cậy, luồng ghép đôi, hủy ghép đôi.
 - CLI: `teleport list`, `teleport listen`, `teleport pair <thiết bị>`, `teleport unpair <thiết bị>`; `<thiết bị>` là tên hoặc tiền tố `device_id`; `pair` nhận thêm `ip[:cổng]` để ghép đôi khi mạng chặn mDNS (mvp F12).
 - **Xong khi:** đạt N1 trên 2 máy thật; ghép đôi xong thì tự nhận ra nhau sau khi khởi động lại; máy chưa ghép đôi không mở được kết nối điều khiển hay dữ liệu theo cả hai chiều (chỉ mở được kết nối ghép đôi).
 
 #### Giai đoạn 2 — Truyền file, backpressure, an toàn khi nhận
-- `core/blocks.py`: khung khối nhị phân kèm hash; `core/messages.py`: thêm `control_open`, `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
+- `core/blocks.py`: khung khối nhị phân kèm hash; `core/messages.py`: thêm `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
 - `core/transfer.py`: máy trạng thái gửi/nhận (`offer`/`accept`, nhiều file, hủy), không I/O.
 - `app/transfers.py`: chạy máy trạng thái trên kết nối thật, đọc/ghi `.part` theo khối.
 - An toàn khi nhận (mục 3.3): làm sạch tên, file tạm trong `.teleport/`, đổi tên không ghi đè; hủy ở cả hai bên (máy nhận xóa file tạm); giới hạn tốc độ gửi.

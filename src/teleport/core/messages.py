@@ -21,6 +21,9 @@ PROTOCOL_VERSION = 1
 MAX_NAME_LEN = 64
 MAX_APP_VERSION_LEN = 32
 MAX_CERT_PEM_LEN = 8192
+# Số nguyên lớn nhất mà JSON trao đổi an toàn giữa mọi bộ giải mã (số thực 64 bit
+# biểu diễn chính xác). Cận trên của `t` (ping/pong), sau này của seq/resume_seq.
+MAX_SAFE_INTEGER = 2**53 - 1
 
 CERT_PEM_HEADER = "-----BEGIN CERTIFICATE-----"
 
@@ -82,6 +85,19 @@ def _validate_text(value: object, field: str, max_len: int) -> str:
     for ch in value:
         if ch in _FORBIDDEN_CHARS or unicodedata.category(ch) in _FORBIDDEN_CATEGORIES:
             raise MessageError(f"{field} chứa ký tự không được phép: U+{ord(ch):04X}")
+    return value
+
+
+def _validate_int(value: object, field: str, lo: int, hi: int) -> int:
+    """Số nguyên JSON trong đoạn `lo`…`hi`.
+
+    Dùng `type(...) is int`: bool là lớp con của int, còn float 1.0 bằng 1; cả hai
+    (và mọi lớp con khác của int) đều bị từ chối.
+    """
+    if type(value) is not int:
+        raise MessageError(f"{field} phải là số nguyên")
+    if not lo <= value <= hi:
+        raise MessageError(f"{field} phải là số nguyên {lo}…{hi}")
     return value
 
 
@@ -200,10 +216,54 @@ class PairAbort:
             object.__setattr__(self, "reason", str.__str__(self.reason))
 
 
-Message = Hello | PairRequest | PairChallenge | PairReveal | PairConfirm | PairAbort
+@dataclass(frozen=True, slots=True)
+class ControlOpen:
+    """Client mở đầu kết nối điều khiển (protocol.md mục 2.1). Không có trường."""
+
+    TYPE: ClassVar[str] = "control_open"
+
+
+@dataclass(frozen=True, slots=True)
+class Ping:
+    """Giữ kết nối điều khiển sống. `t`: mili giây theo đồng hồ bên gửi, bên nhận không diễn giải."""
+
+    TYPE: ClassVar[str] = "ping"
+
+    t: int
+
+    def __post_init__(self) -> None:
+        _validate_int(self.t, "t", 0, MAX_SAFE_INTEGER)
+
+
+@dataclass(frozen=True, slots=True)
+class Pong:
+    """Trả lời `ping` với đúng `t` của nó; `pong` không cần trả lời."""
+
+    TYPE: ClassVar[str] = "pong"
+
+    t: int
+
+    def __post_init__(self) -> None:
+        _validate_int(self.t, "t", 0, MAX_SAFE_INTEGER)
+
+
+Message = (
+    Hello | PairRequest | PairChallenge | PairReveal | PairConfirm | PairAbort | ControlOpen | Ping | Pong
+)
 
 _MESSAGE_TYPES: dict[str, type[Message]] = {
-    cls.TYPE: cls for cls in (Hello, PairRequest, PairChallenge, PairReveal, PairConfirm, PairAbort)
+    cls.TYPE: cls
+    for cls in (
+        Hello,
+        PairRequest,
+        PairChallenge,
+        PairReveal,
+        PairConfirm,
+        PairAbort,
+        ControlOpen,
+        Ping,
+        Pong,
+    )
 }
 
 

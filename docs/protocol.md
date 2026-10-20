@@ -51,7 +51,7 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 - Header vượt giới hạn → đóng kết nối ngay, không đọc thân (`read_message(reader, max_size)`) ✅.
 - `read_message` không tự đặt thời gian chờ; tầng gọi nó bọc trong `asyncio.timeout`.
 - **Xác nhận ghép đôi** ✅ (`teleport.core.pairing`): mỗi máy tính 60 s từ lúc hiện mã; người dùng máy này phải quyết trong 60 s đó. Máy đã gửi `pair_confirm` mà chưa nhận `pair_confirm` của máy kia thì chờ thêm 10 s (`CONFIRM_GRACE`, tới 70 s kể từ lúc hiện mã), vì người dùng máy kia có thể bấm sát giây thứ 60 và message còn phải đi qua mạng. Hết giờ → `pair_abort{timeout}`; quyết định tới sau hạn chót vẫn là hết giờ.
-- **Keepalive** trên kết nối điều khiển: bên nào không gửi gì trong 10 s thì gửi `ping`; không nhận được byte nào trong 30 s → coi là mất kết nối (mục 6.2).
+- 📝 **Keepalive** trên kết nối điều khiển: bên nào không gửi gì trong 10 s thì gửi `ping`; không nhận được byte nào trong 30 s → coi là mất kết nối (mục 6.2). Nhận `ping` thì bắt buộc trả `pong` với đúng `t` đó; `pong` không cần trả lời.
 
 ## 3. Kênh điều khiển
 
@@ -73,7 +73,7 @@ Mỗi message:
 
 ### 3.2. Các loại message
 
-`hello` và các message `pair_*` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅; chưa được gửi trên mạng 📝. Các message còn lại là dự thảo 📝.
+`hello`, các message `pair_*`, `control_open`, `ping` và `pong` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅; chưa được gửi trên mạng 📝. Các message còn lại là dự thảo 📝.
 
 | `type` | Hướng | Kết nối | Trường |
 |---|---|---|---|
@@ -93,7 +93,7 @@ Mỗi message:
 | `verified` | nhận → gửi | điều khiển | `transfer_id`, `file_index`; gửi lại được (mục 6.3) |
 | `cancel` | ↔ | điều khiển | `transfer_id`, `reason`: `user` · `source_changed` · `unknown_transfer` · `error` |
 | `clipboard` | ↔ | điều khiển | `kind`: `text` · `image/png`, `sha256`, `data` (văn bản UTF-8 hoặc base64; dữ liệu gốc trước base64 ≤ 10 MiB) |
-| `ping` / `pong` | ↔ | điều khiển | `t` (timestamp) |
+| `ping` / `pong` | ↔ | điều khiển | `t` (số nguyên, mili giây, 0 … 2⁵³ − 1) |
 
 Hai bên gửi `hello` ngay sau khi bắt tay TLS, trên mọi loại kết nối. Khác `protocol` thì đóng kết nối và báo người dùng cập nhật app.
 
@@ -113,8 +113,8 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 - **`reason`** (`pair_abort`): 1–32 ký tự `[a-z_]`. Giá trị chuẩn: `user` (người dùng từ chối), `busy` (đang có phiên ghép đôi khác hoặc node không nhận ghép đôi lúc này), `timeout` (hết giờ), `invalid` (message hoặc cam kết sai). Giá trị lạ đúng dạng vẫn được nhận, để bản mới thêm lý do được.
 - Kiểm tra hex, chữ số, `os` và `reason` chỉ dùng lớp ký tự ASCII trên **toàn bộ** chuỗi: `"user\n"` hay chữ số toàn chiều rộng đều sai.
 - `type` là chuỗi nhưng chưa biết thì bên nhận phân biệt được với message hỏng (để bản cũ bỏ qua message mới).
-- Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức.
-- 📝 **`t`** (`ping`/`pong`): số nguyên JSON ≥ 0, mili giây theo đồng hồ của bên gửi `ping` (chỉ để đo độ trễ, không so giữa hai máy). Nhận `ping` thì bắt buộc trả `pong` với đúng `t` đó; `pong` không cần trả lời. `control_open` không có trường.
+- 📝 Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức.
+- **`t`** (`ping`/`pong`): số nguyên JSON 0 … 2⁵³ − 1; không nhận `true`/`false` hay số thực (kể cả `1.0`, `1e3`). Mili giây theo đồng hồ của bên gửi `ping` (chỉ để đo độ trễ, không so giữa hai máy). Trả lời `ping`: mục 2.3.
 - 📝 **`seq`**, **`resume_seq`**: số nguyên JSON 1 … 2⁵³ − 1; không nhận `true`/`false` hay số thực. Phạm vi của `seq`: mục 4.1.
 - 📝 Quy tắc cho message truyền file (chốt khi cài đặt ở Giai đoạn 2): `transfer_id` đúng 32 hex thường; `file_index` < số file trong `offer`; `size` và `mtime` là số nguyên ≥ 0, `size` ≤ 2⁵²; `name` qua bộ làm sạch tên file (mục 4.4); `bitfield` dài đúng ⌈số khối / 8⌉ byte, các bit thừa ở cuối bằng 0.
 

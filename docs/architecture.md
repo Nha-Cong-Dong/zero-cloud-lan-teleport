@@ -64,7 +64,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | — | `paths.py` | Thư mục cấu hình theo hệ điều hành; `TELEPORT_HOME` ghi đè | ✅ |
 | — | `lock.py` | Khóa file của hệ điều hành: `node.lock` (một node cho mỗi thư mục cấu hình), `identity.lock` (khi tạo danh tính) | ✅ |
 | core | `framing.py` | Mã hóa/giải mã khung `[uint32 độ dài][JSON]`; giới hạn 16 MiB, riêng kết nối ghép đôi 16 KiB | ✅ |
-| core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*`) | ✅ |
+| core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*`, `control_open`, `ping`/`pong`) | ✅ |
 | core | `pairing_code.py` | Cam kết nonce và mã ghép đôi 6 số từ hai fingerprint + hai nonce | ✅ |
 | core | `pairing.py` | Máy trạng thái ghép đôi sans-IO: thứ tự `pair_*`, hết giờ, lý do hủy (`InitiatorSession`, `ResponderSession`); chống làm phiền: một phiên tại một thời điểm, chờ tăng dần theo IP, hai bên cùng chủ động (`PairingGate`) | ✅ |
 | core | `blocks.py` | Khung khối nhị phân kèm SHA-256, chia khối | ⬜ |

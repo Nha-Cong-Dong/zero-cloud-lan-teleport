@@ -21,12 +21,15 @@ from teleport.core.messages import (
     CERT_PEM_HEADER,
     MAX_CERT_PEM_LEN,
     AbortReason,
+    ControlOpen,
     Hello,
     PairAbort,
     PairChallenge,
     PairConfirm,
     PairRequest,
     PairReveal,
+    Ping,
+    Pong,
 )
 from teleport.core.pairing import (
     CONFIRM_GRACE,
@@ -925,6 +928,21 @@ def test_bad_message_aborts_invalid(build):
     actions = s.handle(BadMessage("JSON sai"), now + 1)
     assert actions[:-1] == [ABORT_INVALID]
     assert_closed(actions, Outcome.PROTOCOL_ERROR)
+
+
+# Message của kết nối điều khiển (protocol.md §2.1, §3.2) không thuộc kết nối ghép đôi:
+# message không phải pair_* giữa phiên → pair_abort{invalid} (kế hoạch PR2).
+CONTROL_MESSAGES = [ControlOpen(), Ping(t=1), Pong(t=1)]
+
+
+@active_builders
+@pytest.mark.parametrize("msg", CONTROL_MESSAGES, ids=lambda m: type(m).__name__)
+def test_control_channel_message_during_pairing_aborts_invalid(build, msg):
+    s, now = build()
+    actions = s.handle(MessageReceived(msg), now + 1)
+    assert actions[:-1] == [ABORT_INVALID]
+    assert_closed(actions, Outcome.PROTOCOL_ERROR)
+    assert_done(s, Outcome.PROTOCOL_ERROR)
 
 
 # --- R3: nhận pair_abort ------------------------------------------------------------------------
