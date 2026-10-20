@@ -16,14 +16,16 @@
 
 > [!NOTE]
 > **Teleport đang được phát triển và chưa có bản phát hành.**
-> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khung message điều khiển, lệnh `teleport identity`.
-> - **Chưa có:** khám phá thiết bị, ghép đôi, gửi file, nối lại, clipboard, giao diện.
+> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khung message điều khiển, nền ghép đôi (message `hello`/`pair_*`, mã 6 số có nonce cam kết, kho thiết bị tin cậy), khóa một node mỗi thư mục cấu hình, lệnh `teleport identity`.
+> - **Đang làm:** khám phá thiết bị qua mDNS và ghép đôi qua mạng.
+> - **Chưa có:** gửi file, nối lại, clipboard, giao diện.
 >
 > Các tính năng bên dưới là **mục tiêu của v1.0**. Tiến độ xem ở [Lộ trình](#lộ-trình); lịch sử thay đổi ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
 ## Mục lục
 
 - [Vì sao có Teleport?](#vì-sao-có-teleport)
+- [Nguyên tắc sản phẩm](#nguyên-tắc-sản-phẩm)
 - [Tính năng](#tính-năng)
 - [Trải nghiệm sử dụng](#trải-nghiệm-sử-dụng)
 - [Cách hoạt động](#cách-hoạt-động)
@@ -51,13 +53,18 @@ Hai máy tính đặt cạnh nhau, dùng chung một cục Wi-Fi, vậy mà mu�
 
 **Teleport gửi file thẳng từ máy này sang máy kia** qua mạng nội bộ, với tốc độ tối đa của mạng. Dữ liệu không đi qua bất kỳ máy chủ nào.
 
-### Ba nguyên tắc “Zero”
+### Giá trị cốt lõi
 
-| | Nguyên tắc | Nghĩa là |
+| | Giá trị | Nghĩa là |
 |---|---|---|
 | 🚪 | **Zero-Friction** | Không tài khoản, không gõ IP. Cài xong, máy kia tự hiện ra |
 | ☁️ | **Zero-Cloud** | Dữ liệu chỉ đi trong mạng nội bộ, được mã hóa. App không gửi gì ra Internet |
-| 🧠 | **Zero-RAM-Overflow** | File 50GB vẫn được ghi thẳng ra đĩa; RAM không tăng theo kích thước file |
+| 🧠 | **Zero-RAM-Overflow** | File 50GB vẫn đi thẳng từ ổ đĩa máy gửi sang ổ đĩa máy nhận; RAM không tăng theo kích thước file |
+| 🔁 | **Không sợ rớt mạng** | Wi-Fi chập chờn hay gập laptop giữa chừng thì tự nối lại và chỉ gửi phần còn thiếu; mọi khối đều được kiểm tra toàn vẹn |
+
+## Nguyên tắc sản phẩm
+
+Mọi quyết định đều dựa trên sáu nguyên tắc: **riêng tư tuyệt đối**, **an toàn theo mặc định**, **không bao giờ mất hay hỏng dữ liệu**, **nói ngôn ngữ người dùng**, **lõi trước, giao diện sau**, **làm ít mà chắc**. Giải thích từng nguyên tắc: [docs/y_tuong.md](docs/y_tuong.md) mục 6.
 
 ## Tính năng
 
@@ -65,8 +72,8 @@ Hai máy tính đặt cạnh nhau, dùng chung một cục Wi-Fi, vậy mà mu�
 |---|---|---|
 | 📡 | **Radar tự tìm thiết bị** | Mở app là thấy các máy khác đang chạy Teleport trong cùng mạng. Mạng chặn tự tìm thì vẫn nhập IP được |
 | 🤝 | **Ghép đôi một lần** | Lần đầu, hai máy hiện cùng một mã 6 số để bạn xác nhận. Các lần sau tự nhận ra nhau |
-| 📦 | **Gửi file cực lớn** | Kéo thả một hoặc nhiều file vào thiết bị trên radar. Người nhận được hỏi trước khi nhận |
-| 🔁 | **Tự nối lại** | Rớt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi tiếp 15% còn thiếu, kể cả khi đã tắt app hay khởi động lại máy |
+| 📦 | **Gửi file cực lớn** | Kéo thả một hoặc nhiều file vào thiết bị trên radar. Người nhận được hỏi trước khi nhận (tắt được cho từng thiết bị tin cậy) |
+| 🔁 | **Tự nối lại** | Rớt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi tiếp phần còn thiếu, kể cả khi đã tắt app hay khởi động lại máy |
 | 🧩 | **Kiểm tra toàn vẹn** | Mỗi khối 1 MiB được kiểm tra bằng SHA-256; cả file được đối chiếu bằng cây băm Merkle. Khối hỏng được gửi lại tự động |
 | 📋 | **Đồng bộ clipboard** | Ctrl+C văn bản hoặc ảnh chụp màn hình trên máy này, Ctrl+V trên máy kia. Bật riêng cho từng thiết bị, mặc định tắt |
 | 🔒 | **Bảo mật** | TLS 1.3; chỉ thiết bị đã ghép đôi mới kết nối được, theo cả hai chiều |
@@ -101,10 +108,10 @@ Hai máy tính đặt cạnh nhau, dùng chung một cục Wi-Fi, vậy mà mu�
 ```
 
 1. **Khám phá:** mỗi máy quảng bá dịch vụ `_teleport._tcp.local.` qua mDNS, kèm tên, cổng và fingerprint rút gọn.
-2. **Danh tính & ghép đôi:** lần chạy đầu, mỗi máy tự tạo một khóa ECDSA P-256 và chứng chỉ tự ký. Fingerprint SHA-256 của chứng chỉ là định danh của máy. Khi ghép đôi, hai máy tính cùng một mã 6 số từ fingerprint của cả hai. Người dùng xác nhận mã trùng thì hai bên lưu chứng chỉ của nhau.
+2. **Danh tính & ghép đôi:** lần chạy đầu, mỗi máy tự tạo một khóa ECDSA P-256 và chứng chỉ tự ký. Fingerprint SHA-256 của chứng chỉ là định danh của máy. Khi ghép đôi, hai máy trao nhau nonce ngẫu nhiên (bên khởi xướng cam kết nonce của mình trước khi thấy nonce bên kia), rồi cùng tính một mã 6 số từ hai fingerprint và hai nonce. Nhờ cam kết, kẻ đứng giữa không thể dò trước khóa cho ra mã trùng. Người dùng xác nhận mã trùng ở cả hai máy thì hai bên lưu chứng chỉ của nhau.
 3. **Kết nối:** TLS 1.3. Client ghim fingerprint của server; server chỉ chấp nhận client có chứng chỉ nằm trong danh sách tin cậy (mTLS). Thiết bị lạ bị từ chối ngay trong lúc bắt tay.
 4. **Truyền tải:** kênh điều khiển dùng message `[4 byte độ dài][JSON]`; dữ liệu đi trên kênh riêng theo khung nhị phân gọn. Bên gửi tự chờ khi mạng hoặc ổ đĩa bên nhận chậm hơn (backpressure), nên bộ nhớ không phình ra.
-5. **Toàn vẹn & nối lại:** bên nhận băm từng khối, lưu bảng các khối đã nhận (bitfield) vào file `.part.state`. Kết nối lại thì chỉ những khối còn thiếu được gửi tiếp. File chỉ mang tên thật sau khi Merkle root khớp.
+5. **Toàn vẹn & nối lại:** bên nhận băm từng khối, đối chiếu với hash bên gửi gửi theo lô, rồi lưu bảng các khối đã xác minh (bitfield) vào file `.part.state`. Kết nối lại thì chỉ những khối còn thiếu được gửi tiếp. File chỉ mang tên thật sau khi Merkle root khớp.
 6. **Clipboard:** gửi văn bản/ảnh tới các thiết bị đã bật đồng bộ; nhớ hash nội dung vừa nhận để không gửi vòng lại.
 
 Đặc tả chi tiết: [docs/protocol.md](docs/protocol.md).
@@ -114,8 +121,8 @@ Hai máy tính đặt cạnh nhau, dùng chung một cục Wi-Fi, vậy mà mu�
 | Mối đe dọa | Cách Teleport xử lý |
 |---|---|
 | Người cùng Wi-Fi nghe lén | Toàn bộ dữ liệu mã hóa TLS 1.3 |
-| Kẻ xấu giả làm máy của bạn (MITM) | Ghép đôi bằng mã 6 số; sau đó chỉ chấp nhận đúng chứng chỉ đã lưu |
-| Thiết bị lạ gửi file rác | Máy chưa ghép đôi không kết nối được; luôn hỏi trước khi nhận |
+| Kẻ xấu giả làm máy của bạn (MITM) | Ghép đôi bằng mã 6 số có nonce cam kết; sau đó chỉ chấp nhận đúng chứng chỉ đã lưu |
+| Thiết bị lạ gửi file rác | Máy chưa ghép đôi không kết nối được; mặc định hỏi trước khi nhận |
 | File độc hại cố ghi đè hệ thống (`..\..\Windows\…`) | Làm sạch tên file, chỉ ghi trong thư mục nhận, không bao giờ ghi đè |
 | Lộ mật khẩu qua clipboard | Đồng bộ clipboard mặc định tắt; bỏ qua nội dung mà trình quản lý mật khẩu đánh dấu nhạy cảm |
 | Thu thập dữ liệu người dùng | Không telemetry, không tài khoản, không máy chủ. Kiểm tra cập nhật là tùy chọn, mặc định tắt |
@@ -138,15 +145,16 @@ Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 | Phiên bản | Nội dung |
 |---|---|
 | — | ✅ Nền tảng: khung dự án, CI 3 hệ điều hành, danh tính thiết bị, TLS 1.3 + mTLS |
-| `v0.1.0-alpha` | Khám phá thiết bị, ghép đôi, gửi file lớn qua dòng lệnh |
+| — | ⏳ Khám phá thiết bị & ghép đôi (đã có nền ghép đôi không mạng) |
+| `v0.1.0-alpha` | Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi |
 | `v0.2.0-alpha` | Kiểm tra toàn vẹn, tự nối lại |
 | `v0.3.0-beta` | Giao diện radar, khay hệ thống, Tiếng Việt / English |
 | `v0.4.0-beta` | Đồng bộ clipboard |
 | `v1.0.0` | Bộ cài cho Windows, macOS, Linux; tài liệu người dùng |
 
-**Sau v1.0:** app Android, chế độ khách qua trình duyệt cho điện thoại, gửi tới nhiều thiết bị cùng lúc, đồng bộ thư mục.
+**Sau v1.0:** app Android, chế độ khách qua trình duyệt cho điện thoại, gửi tới nhiều thiết bị cùng lúc, gửi và đồng bộ thư mục, app iOS.
 
-Trạng thái chi tiết từng module: [docs/architecture.md](docs/architecture.md#3-bản-đồ-module).
+Lộ trình chi tiết theo tuần: [docs/ke_hoach.md](docs/ke_hoach.md) mục 5. Trạng thái chi tiết từng module: [docs/architecture.md](docs/architecture.md#3-bản-đồ-module).
 
 ## Dành cho nhà phát triển
 
@@ -220,8 +228,13 @@ Chi tiết: [docs/architecture.md](docs/architecture.md).
 
 ## Tài liệu
 
+Mục lục, thuật ngữ và quy tắc đồng bộ tài liệu: [docs/README.md](docs/README.md).
+
 | Tài liệu | Nội dung |
 |---|---|
+| [docs/y_tuong.md](docs/y_tuong.md) | Vì sao làm: nỗi đau, giá trị cốt lõi, nguyên tắc sản phẩm, tầm nhìn |
+| [docs/mvp.md](docs/mvp.md) | Làm gì: phạm vi v1.0, tính năng F1–F12 kèm tiêu chí chấp nhận, yêu cầu N1–N12 |
+| [docs/ke_hoach.md](docs/ke_hoach.md) | Làm thế nào, khi nào: thiết kế kỹ thuật, lộ trình và trạng thái, kiểm thử, rủi ro |
 | [docs/architecture.md](docs/architecture.md) | Phân tầng, mô hình tiến trình, bản đồ module và trạng thái, dữ liệu trên đĩa |
 | [docs/protocol.md](docs/protocol.md) | Đặc tả giao thức trên dây (phiên bản 1, dự thảo) |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Nhánh, commit, kiểm tra trước Pull Request, phát hành |

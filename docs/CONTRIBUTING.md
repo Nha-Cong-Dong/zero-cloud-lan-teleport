@@ -24,7 +24,7 @@ ruff format .
 pytest
 ```
 
-CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy đúng 3 lệnh trên, trên Windows, macOS và Linux.
+CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check .`, `ruff format --check .` và `pytest` trên Windows, macOS, Linux × Python 3.12 và 3.14. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
 
 ## Phát hành
 1. Chuyển mục `[Unreleased]` trong `CHANGELOG.md` thành `[X.Y.Z] - YYYY-MM-DD`.

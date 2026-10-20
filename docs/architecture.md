@@ -1,6 +1,6 @@
 # Kiến trúc
 
-Tài liệu này là **nguồn duy nhất** về trạng thái từng module. README chỉ nêu tầm nhìn và lộ trình phiên bản.
+Tài liệu này là **nguồn duy nhất** về trạng thái từng module. Trạng thái từng giai đoạn nằm ở [ke_hoach.md](ke_hoach.md) mục 5.1; thiết kế kỹ thuật tổng thể ở [ke_hoach.md](ke_hoach.md) mục 3.
 
 ## 1. Phân tầng
 
@@ -57,7 +57,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 
 ## 3. Bản đồ module
 
-✅ đã có · ⏳ giai đoạn tiếp theo · ⬜ chưa làm
+✅ đã có · ⏳ đang làm (giai đoạn hiện tại) · ⬜ chưa làm
 
 | Tầng | Module | Trách nhiệm | Trạng thái |
 |---|---|---|---|
@@ -66,7 +66,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello`, `pair_*`) | ✅ |
 | core | `pairing_code.py` | Cam kết nonce và mã ghép đôi 6 số từ hai fingerprint + hai nonce | ✅ |
 | core | `blocks.py` | Khung dữ liệu nhị phân, chia khối | ⬜ |
-| core | `merkle.py`, `bitfield.py` | Cây băm SHA-256; bảng khối đã nhận | ⬜ |
+| core | `merkle.py`, `bitfield.py` | Cây băm SHA-256; bảng khối đã nhận và đã xác minh | ⬜ |
 | core | `transfer.py` | Máy trạng thái gửi/nhận, nối lại, gửi lại khối lỗi | ⬜ |
 | trust | `identity.py` | Khóa ECDSA P-256, chứng chỉ tự ký, fingerprint; kiểm tra chứng chỉ của máy khác (`PeerCert`) | ✅ |
 | trust | `store.py` | `trusted.json`: thiết bị đã ghép đôi | ✅ |
@@ -76,9 +76,10 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | net | `connection.py` | Mở/nhận kết nối, trao đổi `hello` | ⏳ |
 | net | `lock.py` | File khóa `node.lock`: một node cho mỗi thư mục cấu hình | ✅ |
 | app | `node.py` | Ghép các thành phần lại: lắng nghe, khám phá, điều phối | ⏳ |
-| app | `pairing.py`, `transfers.py`, `clipboard.py` | Dịch vụ ghép đôi, quản lý lượt truyền, đồng bộ clipboard | ⬜ |
-| cli | `cli.py`, `__main__.py` | Lệnh `teleport` / `python -m teleport` | ✅ (`identity`) |
-| ui | `ui/` | Radar, transfer, ghép đôi, khay hệ thống | ⬜ |
+| app | `pairing.py` | Dịch vụ ghép đôi: sinh nonce, chạy luồng `pair_*`, lưu thiết bị tin cậy, hủy ghép đôi | ⏳ |
+| app | `transfers.py`, `clipboard.py` | Quản lý lượt truyền, đồng bộ clipboard | ⬜ |
+| cli | `cli.py`, `__main__.py` | Lệnh `teleport` / `python -m teleport` | ✅ `identity` · ⏳ `list`, `listen`, `pair`, `unpair` |
+| ui | `ui/` | Radar, lượt truyền, ghép đôi, cài đặt, khay hệ thống | ⬜ |
 
 Module chỉ được tạo khi có code thật, không tạo file rỗng trước.
 
@@ -91,7 +92,7 @@ Module chỉ được tạo khi có code thật, không tạo file rỗng trư�
 | `<config_dir>/node.lock` | Khóa: chỉ một node mỗi thư mục cấu hình ✅ |
 | `<config_dir>/settings.json` | Cài đặt người dùng ⬜ |
 | `<thư mục nhận>/<tên>.part` | File đang nhận ⬜ |
-| `<thư mục nhận>/<tên>.part.state` | Trạng thái nối lại: manifest, bitfield, hash ⬜ |
+| `<thư mục nhận>/<tên>.part.state` | Trạng thái nối lại: manifest, bitfield các khối đã xác minh, hash; ghi nguyên tử sau mỗi lô `block_hashes` được xác minh ⬜ |
 
 `config_dir` mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Library/Application Support/Teleport`, Linux `$XDG_CONFIG_HOME/teleport` (hoặc `~/.config/teleport`).
 

@@ -97,7 +97,8 @@ Sau đó là các khung khối:
 
 - Kích thước khối mặc định **1 MiB**. Khối cuối có thể ngắn hơn.
 - Khối `i` nằm ở vị trí `i × block_size` trong file.
-- Bên nhận băm SHA-256 từng khối và so với `block_hashes`. Khối sai được báo trong `corrupt` và gửi lại.
+- Bên gửi băm từng khối trong khi gửi và gửi `block_hashes` trên kênh điều khiển theo lô (mặc định **64 khối**), nên hash có thể tới sau khối.
+- Bên nhận băm SHA-256 từng khối khi nhận, giữ lại hash vừa tính, rồi so khi lô `block_hashes` tương ứng tới. Khối sai được báo trong `corrupt` và gửi lại.
 
 ## 5. Ghép đôi 📝
 
@@ -158,7 +159,8 @@ Mỗi bên lưu `device_id`, tên, fingerprint và chứng chỉ PEM của bên 
 
 ## 6. Nối lại 📝
 
-- Bên nhận lưu `<tên>.part.state` gồm: manifest từ `offer`, bitfield các khối đã xác minh, hash của các khối đó.
+- Bên nhận lưu `<tên>.part.state` gồm: manifest từ `offer`, bitfield các khối đã xác minh, hash của các khối đó. Một bit chỉ được bật khi khối đã ghi xuống đĩa **và** khớp hash trong `block_hashes`. State được ghi lại (nguyên tử) sau mỗi lô được xác minh.
 - Kết nối lại → bên nhận gửi `resume` cho từng file dở dang → bên gửi chỉ gửi các khối có bit = 0.
+- Khối đã nhận nhưng chưa kịp xác minh có bit = 0 nên được gửi lại. Vì vậy lượng gửi lại ≤ phần chưa nhận + một lô (64 khối), kể cả khi bên nhận bị tắt hẳn.
 - File nguồn đổi `size` hoặc `mtime` so với manifest → bên gửi gửi `cancel`.
 - Merkle root được tính từ danh sách hash các khối (lá) theo cây nhị phân. Lẻ nút thì nút cuối được đẩy thẳng lên tầng trên.
