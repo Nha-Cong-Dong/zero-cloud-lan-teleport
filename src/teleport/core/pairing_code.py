@@ -1,0 +1,79 @@
+"""Mã ghép đôi 6 số có nonce cam kết (kiểu Bluetooth numeric comparison).
+
+Đặc tả ở docs/protocol.md mục 5. Nếu mã chỉ tính từ hai fingerprint, kẻ đứng giữa
+(MITM) có thể sinh khóa offline tới khi ra mã trùng. Ở đây bên khởi xướng cam kết
+nonce n_A *trước* khi biết n_B, rồi mới tiết lộ n_A; mã phụ thuộc cả hai nonce, nên
+mỗi lần thử MITM chỉ thành công với xác suất 10⁻⁶.
+
+Module chỉ tính toán (sans-IO); sinh nonce bằng `secrets.token_bytes(NONCE_SIZE)`
+là việc của tầng app.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import re
+
+NONCE_SIZE = 32
+CODE_DIGITS = 6
+
+_COMMIT_LABEL = b"teleport-commit-v1"
+_PAIR_LABEL = b"teleport-pair-v1"
+
+_FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
+_CODE_RE = re.compile(r"[0-9]{6}")
+
+
+def _fingerprint_bytes(fp: object, field: str) -> bytes:
+    if not isinstance(fp, str) or not _FINGERPRINT_RE.fullmatch(fp):
+        raise ValueError(f"{field} phải là đúng 64 ký tự hex thường")
+    return bytes.fromhex(fp)
+
+
+def _check_nonce(nonce: object, field: str) -> bytes:
+    if not isinstance(nonce, bytes) or len(nonce) != NONCE_SIZE:
+        raise ValueError(f"{field} phải là đúng {NONCE_SIZE} byte")
+    return nonce
+
+
+def make_commitment(fp_initiator: str, nonce: bytes) -> str:
+    """`SHA-256(b"teleport-commit-v1" ‖ fp_khởi_xướng ‖ n_A)`, dạng 64 ký tự hex thường."""
+    fp = _fingerprint_bytes(fp_initiator, "fp_initiator")
+    n = _check_nonce(nonce, "nonce")
+    return hashlib.sha256(_COMMIT_LABEL + fp + n).hexdigest()
+
+
+def check_commitment(fp_initiator: str, nonce: bytes, commitment: str) -> bool:
+    """True nếu `commitment` đúng là cam kết của (`fp_initiator`, `nonce`).
+
+    `commitment` sai định dạng thì trả False (không raise); fp/nonce sai thì ValueError.
+    """
+    expected = make_commitment(fp_initiator, nonce)
+    if not isinstance(commitment, str) or not _FINGERPRINT_RE.fullmatch(commitment):
+        return False
+    # compare_digest so sánh trong thời gian không đổi.
+    return hmac.compare_digest(expected, commitment)
+
+
+def pairing_code(fp_initiator: str, fp_responder: str, nonce_initiator: bytes, nonce_responder: bytes) -> str:
+    """Mã 6 chữ số, ví dụ "048213".
+
+    `digest = SHA-256(b"teleport-pair-v1" ‖ fp_khởi_xướng ‖ fp_trả_lời ‖ n_A ‖ n_B)`,
+    mã = 4 byte đầu của digest (big-endian) mod 10⁶. Thứ tự cố định theo vai trò.
+    """
+    fp_a = _fingerprint_bytes(fp_initiator, "fp_initiator")
+    fp_b = _fingerprint_bytes(fp_responder, "fp_responder")
+    if fp_a == fp_b:
+        raise ValueError("hai fingerprint giống nhau: không thể ghép đôi một máy với chính nó")
+    n_a = _check_nonce(nonce_initiator, "nonce_initiator")
+    n_b = _check_nonce(nonce_responder, "nonce_responder")
+    digest = hashlib.sha256(_PAIR_LABEL + fp_a + fp_b + n_a + n_b).digest()
+    return f"{int.from_bytes(digest[:4], 'big') % 10**CODE_DIGITS:0{CODE_DIGITS}d}"
+
+
+def format_code(code: str) -> str:
+    """Tách mã thành hai nhóm cho dễ đọc: "048213" → "048 213"."""
+    if not isinstance(code, str) or not _CODE_RE.fullmatch(code):
+        raise ValueError(f"mã phải là đúng {CODE_DIGITS} chữ số 0-9")
+    return f"{code[:3]} {code[3:]}"
