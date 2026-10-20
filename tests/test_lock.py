@@ -1,15 +1,16 @@
-"""Test `teleport.net.lock` theo kế hoạch §2.5 và phụ lục điểm 14."""
+"""Test `teleport.lock` theo kế hoạch §2.5 và phụ lục điểm 14."""
 
 import os
 import subprocess
 import sys
 import textwrap
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
-from teleport.net.lock import LOCK_FILE, NodeLock, NodeLockedError
+from teleport.lock import LOCK_FILE, NodeLock, NodeLockedError
 
 CHILD_TIMEOUT = 30
 
@@ -20,7 +21,7 @@ CHILD_HOLDER = textwrap.dedent(
     """
     import os, sys, time
     from pathlib import Path
-    from teleport.net.lock import NodeLock
+    from teleport.lock import NodeLock
     lock = NodeLock(Path(sys.argv[1]))
     lock.acquire()
     print("ready", flush=True)
@@ -36,7 +37,7 @@ CHILD_TRY = textwrap.dedent(
     """
     import sys
     from pathlib import Path
-    from teleport.net.lock import NodeLock, NodeLockedError
+    from teleport.lock import NodeLock, NodeLockedError
     lock = NodeLock(Path(sys.argv[1]))
     try:
         lock.acquire()
@@ -108,6 +109,38 @@ def test_acquire_creates_dir_and_file(tmp_path):
     finally:
         lock.release()
     assert lock.held is False
+
+
+def test_acquire_with_timeout_waits_for_release(tmp_path):
+    holder = NodeLock(tmp_path)
+    holder.acquire()
+    timer = threading.Timer(0.3, holder.release)
+    timer.start()
+    try:
+        lock = NodeLock(tmp_path)
+        started = time.monotonic()
+        lock.acquire(timeout=CHILD_TIMEOUT)
+        assert lock.held is True
+        assert time.monotonic() - started >= 0.2
+        lock.release()
+    finally:
+        timer.join()
+
+
+def test_acquire_with_timeout_gives_up_when_still_held(tmp_path):
+    with NodeLock(tmp_path):
+        lock = NodeLock(tmp_path)
+        started = time.monotonic()
+        with pytest.raises(NodeLockedError):
+            lock.acquire(timeout=0.3)
+        assert time.monotonic() - started >= 0.3
+        assert lock.held is False
+
+
+def test_custom_lock_name_is_independent_of_node_lock(tmp_path):
+    with NodeLock(tmp_path), NodeLock(tmp_path, "identity.lock") as other:
+        assert other.path == tmp_path / "identity.lock"
+        assert other.held is True
 
 
 def test_constructor_does_not_touch_disk(tmp_path):
@@ -304,7 +337,8 @@ def test_child_holding_lock_blocks_parent_then_exit_releases(holder):
     proc.stdin.write("exit\n")
     proc.stdin.flush()
     assert proc.wait(CHILD_TIMEOUT) == 0
-    lock.acquire()  # HĐH tự nhả khi tiến trình thoát (con không gọi release)
+    # HĐH tự nhả khi tiến trình thoát (con không gọi release); Windows nhả không đồng bộ.
+    lock.acquire(timeout=CHILD_TIMEOUT)
     assert lock.held is True
     lock.release()
 
@@ -317,8 +351,14 @@ def test_killed_child_releases_lock(holder):
         NodeLock(cfg).acquire()
     proc.kill()
     proc.wait(CHILD_TIMEOUT)
-    with NodeLock(cfg) as lock:
+    # Windows nhả khóa vùng byte của tiến trình đã chết không đồng bộ (tài liệu LockFileEx:
+    # thời gian phụ thuộc tải hệ thống), nên chờ thay vì đòi lấy được ngay.
+    lock = NodeLock(cfg)
+    lock.acquire(timeout=CHILD_TIMEOUT)
+    try:
         assert lock.held is True
+    finally:
+        lock.release()
 
 
 def test_parent_holding_lock_blocks_child(tmp_path):

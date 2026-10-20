@@ -20,17 +20,30 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport.core.pairing_code`: mã ghép đôi 6 số tính từ hai fingerprint và hai nonce; bên khởi xướng cam kết nonce trước khi thấy nonce của bên kia.
 - `teleport.trust.identity`: `PeerCert`, `peer_cert_from_pem` và `peer_cert_from_der` để kiểm tra chứng chỉ của máy khác.
 - `teleport.trust.store`: kho thiết bị đã ghép đôi `trusted.json`, ghi nguyên tử.
-- `teleport.net.lock`: `NodeLock` giữ `node.lock`, bảo đảm một node cho mỗi thư mục cấu hình (Windows và POSIX).
+- `teleport.lock`: `NodeLock` giữ `node.lock`, bảo đảm một node cho mỗi thư mục cấu hình (Windows và POSIX). Là tiện ích dùng chung như `paths`, vì `trust` cũng dùng nó khi tạo danh tính. `acquire(timeout=...)` chờ khóa được nhả (Windows nhả khóa của tiến trình bị kill không đồng bộ).
 - Phụ thuộc phát triển `hypothesis` (MPL-2.0) cho test thuộc tính.
+- `hello` có thêm trường `os` (`windows`, `macos`, `linux`) để hiện biểu tượng hệ điều hành.
+- `teleport.net.tls.verify_fingerprint`: client so **toàn bộ** fingerprint của server.
+- Giới hạn message 16 KiB cho kết nối ghép đôi (`MAX_PAIRING_MESSAGE_SIZE`, `read_message(..., max_size)`).
 
 ### Changed
+- `docs/protocol.md` (dự thảo, chưa phát hành): mọi kết nối đi vào **một cổng** (mặc định 47474) với `CERT_OPTIONAL`; ba loại kết nối ghép đôi / điều khiển / dữ liệu, client khai báo loại bằng `pair_request` / `control_open` / `data_open` ngay sau `hello`; kết nối dữ liệu đi cùng chiều với kết nối điều khiển (qua được tường lửa một chiều); giới hạn kích thước, thời gian chờ, keepalive; chống làm phiền khi ghép đôi (chờ tăng dần theo IP); không ghép đôi đè danh tính khác; một kết nối điều khiển cho mỗi cặp máy; mDNS TTL 60 s; hủy ghép đôi có hiệu lực ngay; quy tắc tăng số phiên bản giao thức từ `v0.1.0-alpha`.
+- `docs/protocol.md` mục 4 (dự thảo): hash SHA-256 của mỗi khối nằm trong header khung khối, thay cho `block_hashes` theo lô 64 khối trên kênh điều khiển; `fsync` mỗi 16 khối; `resume{seq}` là cơ chế gửi lại duy nhất (bỏ `corrupt`), mỗi kết nối dữ liệu phục vụ đúng một `resume`; mọi message của lượt truyền gửi lại được và hai bên đồng bộ lại sau mỗi kết nối điều khiển mới; mỗi chiều giữa hai máy chạy một lượt truyền; bên nhận đọc lại toàn bộ file từ đĩa trước khi đổi tên (phát hiện byte bị sửa lúc tạm dừng); đổi tên không ghi đè trên mọi hệ file; file tạm nằm trong `.teleport/<transfer_id>/`.
+- `docs/protocol.md` (dự thảo): IPv4, thử song song mọi địa chỉ được quảng bá, cổng dự phòng lưu lại; tên instance mDNS là `device_id`, TXT `name` ≤ 200 byte; quy tắc trường `ping`/`pong`/`seq`; `seq` có phạm vi một kết nối điều khiển; trạng thái mức lượt truyền `transfer.json`; chính sách nối lại khi không có lượt truyền và khi bị từ chối; `teleport pair` nhận `ip[:cổng]`.
+- `teleport.net.tls.server_context(identity, trusted_certs, *, allow_anonymous=False)`: bỏ chế độ `trusted_certs=None` (không xác thực client); `allow_anonymous=True` cho cổng chung.
 - `docs/protocol.md` mục 5 (dự thảo, chưa phát hành): mã ghép đôi dùng nonce cam kết thay vì chỉ hai fingerprint; bên khởi xướng gửi chứng chỉ trong `pair_request` thay vì trong bắt tay TLS.
-- `docs/protocol.md` mục 4 và 6 (dự thảo): `block_hashes` gửi theo lô 64 khối; bit trong bitfield chỉ bật khi khối đã ghi xuống đĩa và khớp hash; lượng gửi lại khi nối lại tối đa là phần chưa nhận cộng một lô.
 - README: thêm giá trị “Không sợ rớt mạng” và mục “Nguyên tắc sản phẩm”; mô tả ghép đôi theo nonce cam kết; cập nhật hiện trạng và lộ trình.
-- `docs/protocol.md` mục 4 và 6 (dự thảo): lô `block_hashes` cố định 64 khối; bên nhận không đọc lô kế tiếp khi lô trước chưa xác minh (hai kết nối không có thứ tự với nhau); `fsync` `.part` trước khi ghi state; dữ liệu `clipboard` gốc ≤ 10 MiB.
 - Tài liệu sản phẩm và kế hoạch đưa vào repo: `docs/y_tuong.md` (ý tưởng, nguyên tắc, tầm nhìn), `docs/mvp.md` (phạm vi, tính năng F1–F12, yêu cầu N1–N12), `docs/ke_hoach.md` (thiết kế, lộ trình, trạng thái). `docs/README.md` thành mục lục chung kèm thuật ngữ và quy tắc đồng bộ.
 
+### Removed
+- `teleport.net.tls.verify_pin`, `normalize_pin`, `MIN_PIN_HEX`: không tính năng nào xác thực bằng tiền tố fingerprint; pin ngắn chỉ còn để hiển thị.
+
 ### Security
+- Danh tính thiếu một nửa, hỏng hoặc khóa không khớp chứng chỉ báo `IdentityError` (CLI thoát mã 1, không in traceback) thay vì âm thầm tạo danh tính mới làm mất mọi ghép đôi.
+- Khóa riêng được tạo với quyền `0o600` ngay từ đầu (trước đây có một khoảnh khắc người khác đọc được trên Linux/macOS); danh tính được tạo qua file tạm và đổi tên không ghi đè.
+- Chứng chỉ thiết bị có hiệu lực từ 2000-01-01 tới 9999-12-31: không ngày nào phụ thuộc đồng hồ của máy tạo, nên máy lệch đồng hồ vẫn bắt tay mTLS được và danh tính không hết hạn.
+- Tạo danh tính trong khi giữ `identity.lock`: nhiều tiến trình chạy lần đầu cùng lúc nhận cùng một danh tính. Mất danh tính mà `trusted.json` còn thiết bị (hoặc không đọc được) thì báo lỗi thay vì tạo mới; danh sách rỗng thì được tạo mới.
+- Server TLS không cấp session ticket, để máy đã bị hủy ghép đôi không dùng lại session cũ mà vào được.
 - `teleport.trust.identity`: chứng chỉ từ máy khác có trường version sai (ví dụ “v6”) bị từ chối bằng `InvalidCertificate`, thay vì làm văng lỗi `InvalidVersion` không kiểm soát (với `cryptography` bản mới, lỗi này bật ra ngay lúc đọc chứng chỉ).
 - Từ chối mọi chứng chỉ có dấu hiệu CA (BasicConstraints CA=true, KeyUsage keyCertSign/cRLSign, Netscape Cert Type), vì chứng chỉ tin cậy được dùng làm trust anchor cho mTLS.
 - Tên thiết bị và phiên bản app nhận từ máy khác không được chứa ký tự điều khiển, ký tự vô hình hay ký tự đổi hướng chữ, để không giả mạo được tên hiển thị.

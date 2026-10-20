@@ -77,7 +77,7 @@ Mọi quyết định đều dựa trên sáu nguyên tắc: **riêng tư tuyệ
 | 🔁 | **Tự nối lại** | Rớt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi tiếp phần còn thiếu, kể cả khi đã tắt app hay khởi động lại máy |
 | 🧩 | **Kiểm tra toàn vẹn** | Mỗi khối 1 MiB được kiểm tra bằng SHA-256; cả file được đối chiếu bằng cây băm Merkle. Khối hỏng được gửi lại tự động |
 | 📋 | **Đồng bộ clipboard** | Ctrl+C văn bản hoặc ảnh chụp màn hình trên máy này, Ctrl+V trên máy kia. Bật riêng cho từng thiết bị, mặc định tắt |
-| 🔒 | **Bảo mật** | TLS 1.3; chỉ thiết bị đã ghép đôi mới kết nối được, theo cả hai chiều |
+| 🔒 | **Bảo mật** | TLS 1.3; chỉ thiết bị đã ghép đôi mới gửi được file hay clipboard, theo cả hai chiều |
 | 🕶️ | **Riêng tư** | Không tài khoản, không telemetry, không máy chủ |
 | 🖥️ | **Chạy nền** | Thu xuống khay hệ thống, luôn sẵn sàng nhận |
 | 🌐 | **Hai ngôn ngữ** | Tiếng Việt và English |
@@ -108,11 +108,11 @@ Mọi quyết định đều dựa trên sáu nguyên tắc: **riêng tư tuyệ
              Không máy chủ trung gian · Không cần Internet
 ```
 
-1. **Khám phá:** mỗi máy quảng bá dịch vụ `_teleport._tcp.local.` qua mDNS, kèm tên, cổng và fingerprint rút gọn.
+1. **Khám phá:** mỗi máy quảng bá dịch vụ `_teleport._tcp.local.` qua mDNS, kèm mã thiết bị, tên, hệ điều hành và phiên bản giao thức. Mọi kết nối đi vào một cổng duy nhất.
 2. **Danh tính & ghép đôi:** lần chạy đầu, mỗi máy tự tạo một khóa ECDSA P-256 và chứng chỉ tự ký. Fingerprint SHA-256 của chứng chỉ là định danh của máy. Khi ghép đôi, hai máy trao nhau nonce ngẫu nhiên (bên khởi xướng cam kết nonce của mình trước khi thấy nonce bên kia), rồi cùng tính một mã 6 số từ hai fingerprint và hai nonce. Nhờ cam kết, kẻ đứng giữa không thể dò trước khóa cho ra mã trùng. Người dùng xác nhận mã trùng ở cả hai máy thì hai bên lưu chứng chỉ của nhau.
-3. **Kết nối:** TLS 1.3. Client ghim fingerprint của server; server chỉ chấp nhận client có chứng chỉ nằm trong danh sách tin cậy (mTLS). Thiết bị lạ bị từ chối ngay trong lúc bắt tay.
+3. **Kết nối:** TLS 1.3. Client so toàn bộ fingerprint của server với fingerprint đã lưu; server chỉ chấp nhận client có chứng chỉ nằm trong danh sách tin cậy (mTLS). Thiết bị gửi chứng chỉ lạ bị từ chối ngay trong lúc bắt tay; thiết bị không gửi chứng chỉ chỉ được ghép đôi.
 4. **Truyền tải:** kênh điều khiển dùng message `[4 byte độ dài][JSON]`; dữ liệu đi trên kênh riêng theo khung nhị phân gọn. Bên gửi tự chờ khi mạng hoặc ổ đĩa bên nhận chậm hơn (backpressure), nên bộ nhớ không phình ra.
-5. **Toàn vẹn & nối lại:** bên nhận băm từng khối, đối chiếu với hash bên gửi gửi theo lô, rồi lưu bảng các khối đã xác minh (bitfield) vào file `.part.state`. Kết nối lại thì chỉ những khối còn thiếu được gửi tiếp. File chỉ mang tên thật sau khi Merkle root khớp.
+5. **Toàn vẹn & nối lại:** mỗi khối mang hash SHA-256 của chính nó; bên nhận băm lại và so ngay, ghi khối xuống đĩa rồi lưu bảng các khối đã xác minh (bitfield). Kết nối lại thì chỉ những khối còn thiếu được gửi tiếp. Cuối cùng bên nhận đọc lại cả file từ đĩa, so từng khối và Merkle root rồi mới đổi sang tên thật.
 6. **Clipboard:** gửi văn bản/ảnh tới các thiết bị đã bật đồng bộ; nhớ hash nội dung vừa nhận để không gửi vòng lại.
 
 Đặc tả chi tiết: [docs/protocol.md](docs/protocol.md).
@@ -179,7 +179,7 @@ Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope Curre
 |---|---|
 | `pytest` | Chạy toàn bộ test |
 | `pytest -m "not integration"` | Bỏ qua test mở socket thật (nhanh hơn) |
-| `pytest tests/net/test_tls.py::test_verify_pin_rejects_mismatch` | Chạy một test |
+| `pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal` | Chạy một test |
 | `ruff check .` · `ruff format .` | Kiểm tra và định dạng code (CI chạy `ruff check`, `ruff format --check`, `pytest`) |
 | `teleport identity` | Tạo / xem danh tính thiết bị của máy này (hoặc `python -m teleport identity`) |
 | `teleport --version` | Xem phiên bản |

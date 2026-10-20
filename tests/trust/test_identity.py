@@ -1,7 +1,12 @@
 import base64
 import dataclasses
+import datetime
+import os
 import re
 import ssl
+import subprocess
+import sys
+import textwrap
 
 import pytest
 from cryptography import x509
@@ -10,7 +15,12 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from teleport.trust import store
 from teleport.trust.identity import (
+    CERT_FILE,
+    IDENTITY_LOCK,
+    KEY_FILE,
+    IdentityError,
     InvalidCertificate,
     PeerCert,
     fingerprint_of_der,
@@ -68,6 +78,170 @@ def test_cert_pem_matches_fingerprint(tmp_path):
     pem = identity.cert_pem()
     assert pem.startswith("-----BEGIN CERTIFICATE-----")
     assert fingerprint_of_der(ssl.PEM_cert_to_DER_cert(pem)) == identity.fingerprint
+
+
+# --- Danh tính của chính máy này: không bao giờ âm thầm tạo lại -------------------------------------
+
+
+def test_cert_validity_does_not_depend_on_local_clock(tmp_path):
+    """Máy lệch đồng hồ vẫn tạo được chứng chỉ mà máy khác chấp nhận, và không bao giờ hết hạn."""
+    identity = load_or_create_identity(tmp_path)
+    cert = x509.load_pem_x509_certificate(identity.cert_path.read_bytes())
+    assert cert.not_valid_before_utc == datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+    assert cert.not_valid_after_utc == datetime.datetime(9999, 12, 31, 23, 59, 59, tzinfo=datetime.UTC)
+
+
+def test_no_tmp_files_left_after_create(tmp_path):
+    load_or_create_identity(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted([CERT_FILE, KEY_FILE, IDENTITY_LOCK])
+
+
+@pytest.mark.skipif(os.name != "posix", reason="quyền file kiểu POSIX")
+def test_key_file_is_owner_only_and_cert_is_public(tmp_path):
+    identity = load_or_create_identity(tmp_path)
+    assert identity.key_path.stat().st_mode & 0o777 == 0o600
+    assert identity.cert_path.stat().st_mode & 0o777 == 0o644
+
+
+@pytest.mark.parametrize("missing", [CERT_FILE, KEY_FILE])
+def test_half_missing_identity_is_error_not_regenerated(tmp_path, missing):
+    load_or_create_identity(tmp_path)
+    (tmp_path / missing).unlink()
+    with pytest.raises(IdentityError, match=missing):
+        load_or_create_identity(tmp_path)
+    assert not (tmp_path / missing).exists()
+
+
+@pytest.mark.parametrize(
+    ("victim", "content"),
+    [
+        (CERT_FILE, b"garbage"),
+        (CERT_FILE, b""),
+        (KEY_FILE, b"garbage"),
+        (KEY_FILE, bytes([0xFF, 0xFE])),
+    ],
+)
+def test_corrupt_identity_file_is_error(tmp_path, victim, content):
+    load_or_create_identity(tmp_path)
+    (tmp_path / victim).write_bytes(content)
+    with pytest.raises(IdentityError, match=victim):
+        load_or_create_identity(tmp_path)
+
+
+def test_key_not_matching_cert_is_error(tmp_path):
+    load_or_create_identity(tmp_path / "a")
+    load_or_create_identity(tmp_path / "b")
+    (tmp_path / "a" / KEY_FILE).write_bytes((tmp_path / "b" / KEY_FILE).read_bytes())
+    with pytest.raises(IdentityError, match="không khớp"):
+        load_or_create_identity(tmp_path / "a")
+
+
+def test_non_p256_key_is_error(tmp_path):
+    load_or_create_identity(tmp_path)
+    other = ec.generate_private_key(ec.SECP384R1())
+    (tmp_path / KEY_FILE).write_bytes(
+        other.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+    with pytest.raises(IdentityError, match="P-256"):
+        load_or_create_identity(tmp_path)
+
+
+def test_interrupted_create_is_completed(tmp_path):
+    """Bị ngắt sau khi đổi tên khóa, trước khi đổi tên chứng chỉ: lần sau làm nốt."""
+    original = load_or_create_identity(tmp_path)
+    (tmp_path / CERT_FILE).rename(tmp_path / (CERT_FILE + ".tmp"))
+    assert load_or_create_identity(tmp_path) == original
+    assert not (tmp_path / (CERT_FILE + ".tmp")).exists()
+
+
+def test_cert_with_only_key_tmp_is_error_not_completed(tmp_path):
+    """Chỉ có chứng chỉ (khóa còn ở .tmp) không bao giờ xảy ra khi tạo bình thường: báo lỗi."""
+    load_or_create_identity(tmp_path)
+    (tmp_path / KEY_FILE).rename(tmp_path / (KEY_FILE + ".tmp"))
+    with pytest.raises(IdentityError, match=KEY_FILE):
+        load_or_create_identity(tmp_path)
+
+
+def _wipe_identity(cfg):
+    (cfg / CERT_FILE).unlink()
+    (cfg / KEY_FILE).unlink()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"version": 1, "devices": [{"device_id": "x"}]}',  # còn thiết bị (không cần hợp lệ)
+        "không phải JSON",  # hỏng: không chắc là rỗng, nên không đánh liều
+        '{"version": 1}',
+        '["devices"]',
+    ],
+)
+def test_missing_identity_with_possible_pairings_is_error(tmp_path, content):
+    """Mất cả hai file nhưng trusted.json có thể còn thiết bị: tạo mới sẽ làm hỏng ghép đôi."""
+    load_or_create_identity(tmp_path)
+    (tmp_path / store.TRUSTED_FILE).write_text(content, encoding="utf-8")
+    _wipe_identity(tmp_path)
+    with pytest.raises(IdentityError, match=store.TRUSTED_FILE):
+        load_or_create_identity(tmp_path)
+    assert not (tmp_path / CERT_FILE).exists()
+
+
+@pytest.mark.parametrize("bom", ["", "\ufeff"])
+def test_missing_identity_with_empty_trust_store_creates_new(tmp_path, bom):
+    """Đã hủy ghép đôi hết (trusted.json còn nhưng rỗng): không có gì để mất, được tạo mới."""
+    old = load_or_create_identity(tmp_path)
+    (tmp_path / store.TRUSTED_FILE).write_text(bom + '{"version": 1, "devices": []}', encoding="utf-8")
+    _wipe_identity(tmp_path)
+    assert load_or_create_identity(tmp_path).fingerprint != old.fingerprint
+
+
+# Tiến trình con import xong thì báo "ready" rồi chờ file "go", để mọi tiến trình
+# cùng gọi load_or_create_identity gần như một lúc (khởi động Python lâu hơn nhiều so
+# với việc tạo danh tính, nên không có rào chắn này thì chúng chạy lần lượt).
+CHILD_CREATE = textwrap.dedent(
+    """
+    import sys, time
+    from pathlib import Path
+    from teleport.trust.identity import load_or_create_identity
+    go = Path(sys.argv[2])
+    print("ready", flush=True)
+    while not go.exists():
+        time.sleep(0.001)
+    print(load_or_create_identity(Path(sys.argv[1])).fingerprint, flush=True)
+    """
+)
+
+
+def test_concurrent_first_run_yields_one_identity(tmp_path):
+    """Nhiều tiến trình chạy lần đầu cùng lúc đều nhận cùng một danh tính hợp lệ."""
+    cfg = tmp_path / "cfg"
+    go = tmp_path / "go"
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", CHILD_CREATE, str(cfg), str(go)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(6)
+    ]
+    for p in procs:
+        assert p.stdout.readline().strip() == "ready", p.stderr.read()
+    go.touch()
+    results = [p.communicate(timeout=60) for p in procs]
+    assert all(p.returncode == 0 for p in procs), [err for _, err in results]
+    fingerprints = {out.strip() for out, _ in results}
+    assert fingerprints == {load_or_create_identity(cfg).fingerprint}
+
+
+def test_stale_tmp_files_do_not_block_first_create(tmp_path):
+    """Bị ngắt trước bước đổi tên nào: chỉ còn .tmp, coi như chưa có danh tính."""
+    (tmp_path / (KEY_FILE + ".tmp")).write_bytes(b"old")
+    (tmp_path / (CERT_FILE + ".tmp")).write_bytes(b"old")
+    identity = load_or_create_identity(tmp_path)
+    assert load_or_create_identity(tmp_path) == identity
 
 
 # --- PeerCert: chứng chỉ hợp lệ ----------------------------------------------------------------

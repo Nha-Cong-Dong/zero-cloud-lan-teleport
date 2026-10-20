@@ -31,3 +31,12 @@ def test_identity_uses_teleport_home(tmp_path, monkeypatch, capsys):
     assert main(["identity"]) == 0
     assert str(tmp_path) in capsys.readouterr().out
     assert (tmp_path / "device.crt").exists()
+
+
+def test_corrupt_identity_exits_1_with_message_not_traceback(tmp_path, capsys):
+    assert main(["--config-dir", str(tmp_path), "identity"]) == 0
+    (tmp_path / "device.crt").write_bytes(b"garbage")
+    assert main(["--config-dir", str(tmp_path), "identity"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("Lỗi: Danh tính thiết bị")
+    assert "Traceback" not in err

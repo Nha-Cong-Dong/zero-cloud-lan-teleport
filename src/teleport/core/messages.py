@@ -29,6 +29,7 @@ CERT_PEM_HEADER = "-----BEGIN CERTIFICATE-----"
 _DEVICE_ID_RE = re.compile(r"[0-9a-f]{32}")
 _HEX32_BYTES_RE = re.compile(r"[0-9a-f]{64}")
 _REASON_RE = re.compile(r"[a-z_]{1,32}")
+_OS_RE = re.compile(r"[a-z0-9_]{1,16}")
 
 # Ký tự cấm trong tên hiển thị, ngoài nhóm Cc (điều khiển) và Cs (surrogate lẻ):
 # xuống dòng Unicode, ký tự vô hình và ký tự điều khiển hướng chữ (dùng để giả
@@ -51,6 +52,14 @@ class MessageError(ValueError):
 
 class UnknownMessageType(MessageError):
     """Trường `type` là chuỗi hợp lệ nhưng chưa biết (có thể do bên kia dùng bản mới hơn)."""
+
+
+class OsName(StrEnum):
+    """Hệ điều hành chuẩn trong `hello.os`. Chỉ dùng để so sánh: `Hello.os` luôn là `str`."""
+
+    WINDOWS = "windows"
+    MACOS = "macos"
+    LINUX = "linux"
 
 
 class AbortReason(StrEnum):
@@ -108,6 +117,7 @@ class Hello:
     device_id: str
     name: str
     app_version: str
+    os: str  # "windows" · "macos" · "linux"; giá trị lạ đúng dạng vẫn được nhận
 
     def __post_init__(self) -> None:
         # bool là lớp con của int, float 1.0 bằng 1: cả hai đều bị từ chối.
@@ -116,6 +126,11 @@ class Hello:
         validate_device_id(self.device_id)
         validate_device_name(self.name)
         _validate_text(self.app_version, "app_version", MAX_APP_VERSION_LEN)
+        if not isinstance(self.os, str) or not _OS_RE.fullmatch(self.os):
+            raise MessageError("os phải gồm 1–16 ký tự a-z, 0-9 hoặc _")
+        if type(self.os) is not str:
+            # Ví dụ OsName.WINDOWS: đổi về str thuần để so sánh và mã hóa nhất quán.
+            object.__setattr__(self, "os", str.__str__(self.os))
 
 
 @dataclass(frozen=True, slots=True)

@@ -85,7 +85,7 @@ Hệ thống gồm 4 khối việc, đều chạy độc lập với Internet:
 
 1. **Khám phá & ghép đôi.** Mỗi máy tự quảng bá sự có mặt của mình trong mạng nội bộ bằng mDNS, không cần máy chủ trung tâm. Lần đầu nói chuyện, hai máy ghép đôi bằng mã 6 số do người dùng so bằng mắt; mã được thiết kế để kẻ đứng giữa không thể chuẩn bị trước cho trùng.
 2. **Truyền tải & kiểm soát luồng.** Không bao giờ đọc cả file vào bộ nhớ: file được cắt thành các khối, bộ nhớ chỉ giữ vài khối cùng lúc. Khi mạng hoặc ổ đĩa bên nhận chậm hơn, bên gửi tự động chờ, nên bộ nhớ không phình ra dù file lớn cỡ nào.
-3. **Toàn vẹn & nối lại.** Mỗi khối có mã băm SHA-256, cả file có một Merkle root. Bên nhận ghi lại khối nào đã nhận và đã kiểm tra; khi nối lại, hai bên so bảng này và chỉ gửi phần còn thiếu hoặc bị lỗi. File đang nhận mang đuôi `.part` và chỉ đổi sang tên thật khi đã khớp hoàn toàn.
+3. **Toàn vẹn & nối lại.** Mỗi khối có mã băm SHA-256, cả file có một Merkle root. Bên nhận ghi lại khối nào đã nhận và đã kiểm tra; khi nối lại, hai bên so bảng này và chỉ gửi phần còn thiếu hoặc bị lỗi. File đang nhận nằm trong thư mục tạm và chỉ đổi sang tên thật khi đã đọc lại từ đĩa và khớp hoàn toàn.
 4. **Bảo mật.** Mọi dữ liệu, cả file lẫn clipboard, đều được mã hóa. Sau khi ghép đôi, mỗi máy chỉ chấp nhận đúng chứng chỉ đã ghim của máy kia, nên ngồi chung Wi-Fi công cộng cũng không ai đọc trộm hay giả mạo được.
 
 Thiết kế chi tiết, giao thức và lựa chọn công nghệ (Python, PySide6, asyncio): [ke_hoach.md](ke_hoach.md) mục 2–4.
@@ -138,7 +138,7 @@ Bản ý tưởng đầu tiên đã được điều chỉnh khi lập kế ho�
 | Laptop ↔ điện thoại là tình huống chính | Desktop ↔ desktop ở v1.0; điện thoại sau v1.0 | Làm một mình; app điện thoại là sản phẩm riêng, dùng lại cùng giao thức |
 | Trang web nội bộ hoặc app nhẹ | Ứng dụng desktop cài đặt, có khay hệ thống | Cần đọc/ghi thẳng ổ đĩa, chạy nền và theo dõi clipboard |
 | WebRTC DataChannel, DTLS | TCP + TLS 1.3 | Trong mạng nội bộ không cần vượt NAT; nhanh và dễ bảo trì hơn |
-| Mảnh 64–256KB, mỗi mảnh kèm hash trong header | Khối lớn hơn, hash gửi theo lô | Ít chi phí mỗi khối, bitfield nhỏ |
+| Mảnh 64–256KB, mỗi mảnh kèm hash trong header | Khối 1 MiB, vẫn kèm hash SHA-256 trong header | Ít chi phí mỗi khối, bitfield nhỏ |
 | Ghép đôi chỉ nhắc cho clipboard | Bắt buộc ghép đôi cho mọi thứ | Chống giả mạo và chống máy lạ gửi rác |
 | RAM < 100MB tuyệt đối | RAM không tăng theo kích thước file | Bản thân giao diện đã chiếm một phần bộ nhớ cố định |
 

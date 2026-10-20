@@ -12,6 +12,10 @@ from pathlib import Path
 
 ENV_HOME = "TELEPORT_HOME"
 
+# Kho thiết bị đã ghép đôi trong thư mục cấu hình. Đặt ở đây vì cả `trust.store` (đọc/ghi)
+# lẫn `trust.identity` (không tạo danh tính mới khi còn ghép đôi) đều cần tên này.
+TRUSTED_FILE = "trusted.json"
+
 
 def config_dir() -> Path:
     """Nơi lưu danh tính thiết bị, danh sách thiết bị tin cậy và cài đặt."""

@@ -11,7 +11,7 @@ from teleport.net.tls import (
     client_context,
     peer_fingerprint,
     server_context,
-    verify_pin,
+    verify_fingerprint,
 )
 from teleport.trust.identity import load_or_create_identity
 
@@ -53,7 +53,7 @@ async def round_trip(port: int, ctx: ssl.SSLContext) -> dict | None:
 
 @pytest.mark.integration
 async def test_tls13_connection_exposes_server_fingerprint(identity):
-    server, port = await start_echo_server(server_context(identity))
+    server, port = await start_echo_server(server_context(identity, [], allow_anonymous=True))
     async with server:
         reader, writer = await asyncio.open_connection("127.0.0.1", port, ssl=client_context())
         try:
@@ -70,12 +70,12 @@ async def test_tls13_connection_exposes_server_fingerprint(identity):
 @pytest.mark.integration
 async def test_client_detects_wrong_server(identity, tmp_path):
     impostor = load_or_create_identity(tmp_path / "impostor")
-    server, port = await start_echo_server(server_context(impostor))
+    server, port = await start_echo_server(server_context(impostor, [], allow_anonymous=True))
     async with server:
         _, writer = await asyncio.open_connection("127.0.0.1", port, ssl=client_context())
         try:
             with pytest.raises(FingerprintMismatch):
-                verify_pin(peer_fingerprint(writer), identity.short_fingerprint)
+                verify_fingerprint(peer_fingerprint(writer), identity.fingerprint)
         finally:
             writer.close()
             await writer.wait_closed()
@@ -110,20 +110,67 @@ async def test_mtls_with_empty_trust_list_rejects_everyone(identity, tmp_path):
         assert await round_trip(port, client_context(someone)) is None
 
 
+@pytest.mark.integration
+async def test_single_port_accepts_trusted_and_anonymous_clients(identity, tmp_path):
+    """Một cổng (protocol.md mục 2): client tin cậy có fingerprint, client ẩn danh thì không."""
+    trusted = load_or_create_identity(tmp_path / "trusted")
+    ctx = server_context(identity, [trusted.cert_pem()], allow_anonymous=True)
+    server, port = await start_echo_server(ctx)
+    async with server:
+        trusted_reply = await round_trip(port, client_context(trusted))
+        anonymous_reply = await round_trip(port, client_context())
+    assert trusted_reply is not None
+    assert trusted_reply["client_fp"] == trusted.fingerprint
+    assert anonymous_reply is not None
+    assert anonymous_reply["client_fp"] is None
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("trusted_list", ["one", "empty"])
+async def test_single_port_still_rejects_client_with_unknown_cert(identity, tmp_path, trusted_list):
+    """Gửi chứng chỉ lạ thì bị từ chối khi bắt tay, dù cổng cho phép kết nối ẩn danh."""
+    trusted = load_or_create_identity(tmp_path / "trusted")
+    stranger = load_or_create_identity(tmp_path / "stranger")
+    certs = [trusted.cert_pem()] if trusted_list == "one" else []
+    server, port = await start_echo_server(server_context(identity, certs, allow_anonymous=True))
+    async with server:
+        assert await round_trip(port, client_context(stranger)) is None
+
+
+@pytest.mark.integration
+async def test_server_issues_no_session_ticket(identity, tmp_path):
+    """Không có ticket thì không dùng lại được session để né kiểm tra sau khi bị hủy ghép đôi."""
+    trusted = load_or_create_identity(tmp_path / "trusted")
+    ctx = server_context(identity, [trusted.cert_pem()], allow_anonymous=True)
+    assert ctx.num_tickets == 0
+    server, port = await start_echo_server(ctx)
+    async with server:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port, ssl=client_context(trusted))
+        try:
+            await write_message(writer, {"text": "xin chào"})
+            assert await asyncio.wait_for(read_message(reader), 5) is not None
+            session = writer.get_extra_info("ssl_object").session
+            assert session is None or not session.has_ticket
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
 FP = "ab" * 32
 
 
-@pytest.mark.parametrize("pin", [FP, FP[:16], "AB:AB:AB:AB:AB:AB:AB:AB", " abab abab abab abab "])
-def test_verify_pin_accepts_matching_prefix(pin):
-    verify_pin(FP, pin)
+def test_verify_fingerprint_accepts_equal():
+    verify_fingerprint(FP, FP)
 
 
-def test_verify_pin_rejects_mismatch():
+@pytest.mark.parametrize(
+    "other",
+    ["ab" * 31 + "ac", FP[:16], FP + "ab", "", FP.upper(), "đ" * 64, "\uff41" * 64, None, b"ab" * 32],
+    ids=repr,
+)
+def test_verify_fingerprint_rejects_anything_else(other):
+    """Kể cả giá trị sai dạng hay không phải ASCII: chỉ một loại lỗi cho bên gọi bắt."""
     with pytest.raises(FingerprintMismatch):
-        verify_pin(FP, "ab" * 7 + "ac")
-
-
-@pytest.mark.parametrize("pin", ["abab", "zz" * 8, "đ" * 16])
-def test_verify_pin_rejects_short_or_non_hex(pin):
-    with pytest.raises(ValueError):
-        verify_pin(FP, pin)
+        verify_fingerprint(FP, other)
+    with pytest.raises(FingerprintMismatch):
+        verify_fingerprint(other, FP)

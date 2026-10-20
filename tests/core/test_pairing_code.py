@@ -282,7 +282,7 @@ PROTOCOL_MD = Path(__file__).resolve().parents[2] / "docs" / "protocol.md"
 
 def _doc_vector() -> dict[str, str]:
     text = PROTOCOL_MD.read_text(encoding="utf-8")
-    section = text[text.index("### Test vector") :]
+    section = text[re.search(r"^### (?:[0-9.]+ )?Test vector", text, re.MULTILINE).start() :]
     rows = dict(re.findall(r"^\|\s*\**`?([^`|*]+?)`?\**\s*\|\s*\**`([0-9a-f]+)`", section, flags=re.M))
     return rows
 

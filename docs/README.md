@@ -42,16 +42,17 @@ Mọi tài liệu của dự án nằm trong thư mục này. Giới thiệu d�
 | **Ghép đôi** (pairing) | Bước xác nhận mã 6 số ở cả hai máy để hai máy tin nhau. |
 | **Thiết bị tin cậy** | Thiết bị đã ghép đôi, lưu trong `trusted.json`. |
 | **Fingerprint** | SHA-256 của chứng chỉ thiết bị; là định danh được tin cậy (tên thiết bị chỉ để hiển thị). |
-| **Bitfield** | Bảng bit đánh dấu khối đã nhận **và đã xác minh**. |
+| **Bitfield** | Bảng bit đánh dấu khối đã nhận, **đã khớp hash và đã ghi bền xuống đĩa**. |
 | **Merkle root** | Hash đại diện cho cả file, tính từ hash các khối. |
-| **`.part` / `.part.state`** | File đang nhận / trạng thái nối lại của nó. |
+| **File tạm** | `.part` (dữ liệu đang nhận) và `.state` (trạng thái nối lại), nằm trong `<thư mục nhận>/.teleport/<transfer_id>/`. |
+| **Kết nối ghép đôi / điều khiển / dữ liệu** | Ba loại kết nối trên cùng một cổng (`protocol.md` mục 2). |
 | **Node** | Một tiến trình Teleport đang chạy, gắn với một thư mục cấu hình. |
 | **Cô lập thiết bị** (AP isolation) | Wi-Fi chặn các máy trong mạng nói chuyện với nhau. |
 
 ## 4. Quy ước viết
 
 - Viết tiếng Việt; tên định danh, lệnh, tên message giữ nguyên tiếng Anh trong `code`.
-- Tên message giao thức viết thường như trong `protocol.md`: `hello`, `offer`, `block_hashes`…
+- Tên message giao thức viết thường như trong `protocol.md`: `hello`, `offer`, `data_open`…
 - Đơn vị: `MiB` cho kích thước kỹ thuật (khối, giới hạn message); `MB`/`GB` cho con số hướng tới người dùng.
 - Phiên bản app: `v0.1.0-alpha`, `v1.0.0` (SemVer); phiên bản giao thức đánh số riêng.
 - Tham chiếu chéo: `mvp F6`, `mvp N4`, `mvp mục 8`, `ke_hoach mục 3.4`.

@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import asyncio
 
-from teleport.core.framing import HEADER, FramingError, decode_body, decode_header, encode_message
+from teleport.core.framing import (
+    HEADER,
+    MAX_MESSAGE_SIZE,
+    FramingError,
+    decode_body,
+    decode_header,
+    encode_message,
+)
 
 
-async def read_message(reader: asyncio.StreamReader) -> dict | None:
-    """Đọc một message.
+async def read_message(reader: asyncio.StreamReader, max_size: int = MAX_MESSAGE_SIZE) -> dict | None:
+    """Đọc một message dài tối đa `max_size` byte (header lớn hơn → FramingError, không đọc thân).
 
     Trả về None nếu bên kia đóng kết nối đúng ở ranh giới giữa hai message
     (đóng gọn gàng). Đóng giữa chừng một message thì raise FramingError.
+    Không tự đặt timeout: bên gọi bọc trong `asyncio.timeout` (protocol.md mục 2).
     """
     try:
         header = await reader.readexactly(HEADER.size)
@@ -20,7 +28,7 @@ async def read_message(reader: asyncio.StreamReader) -> dict | None:
             return None
         raise FramingError("kết nối bị cắt giữa header") from e
 
-    length = decode_header(header)
+    length = decode_header(header, max_size)
     try:
         body = await reader.readexactly(length)
     except asyncio.IncompleteReadError as e:

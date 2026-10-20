@@ -30,7 +30,7 @@ python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"                          # cryptography + pytest, pytest-asyncio, hypothesis, ruff
 pytest                                           # all tests
 pytest -m "not integration"                      # skip tests that open real sockets on 127.0.0.1
-pytest tests/net/test_tls.py::test_verify_pin_rejects_mismatch   # single test
+pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal   # single test
 ruff check . ; ruff format --check .             # CI runs exactly: ruff check, ruff format --check, pytest
 teleport identity                                # CLI entry point (also: python -m teleport)
 ```
@@ -43,27 +43,28 @@ The distribution name is `zero-cloud-lan-teleport` and the import name is `telep
 
 Layering: `core ← trust ← net ← app ← ui / cli`. `tests/test_architecture.py` parses every import, relative ones included, and enforces these rules:
 - A layer imports only the layers below it. `ui` and `cli` never import each other.
-- `core` is **sans-IO**. It must not import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `PySide6`, `teleport.paths` or any other layer.
-- Every top-level `teleport.*` module belongs to a layer. A new package must be added to `LAYERS` in that test and to `docs/architecture.md`.
+- `core` is **sans-IO**. It must not import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `PySide6`, `teleport.paths`, `teleport.lock` or any other layer.
+- Every top-level `teleport.*` module belongs to a layer or is a shared utility in `SHARED` (`paths`, `lock`). A new package must be added to `LAYERS` (or `SHARED`) in that test and to `docs/architecture.md`.
 
-`paths.py` is a shared utility that any layer except `core` may use. `docs/architecture.md` is the **single source** for module status and the process model. `docs/protocol.md` is the wire spec (protocol v1, draft), and any wire-format change must update it in the same PR. Create a module only when there is real code for it; don't add empty placeholder files.
+`paths.py` and `lock.py` are shared utilities that any layer except `core` may use. `lock.py`: `NodeLock(config_dir, name="node.lock")` is an OS file lock (`msvcrt` on Windows, `flock` on POSIX), giving one node per config dir; `trust.identity` also uses it as `identity.lock` while creating an identity. Windows releases a killed process's lock asynchronously, so use `acquire(timeout=...)` wherever the holder may have just died (e.g. node start after a crash). `paths.TRUSTED_FILE` is the one name for `trusted.json`. `docs/architecture.md` is the **single source** for module status and the process model. `docs/protocol.md` is the wire spec (protocol v1, draft), and any wire-format change must update it in the same PR. Create a module only when there is real code for it; don't add empty placeholder files.
 
 What lives where:
-- **core**: pure functions and state machines. `framing.py` encodes and decodes control frames: `[uint32 BE length][UTF-8 JSON object]`, capped at 16 MiB.
+- **core**: pure functions and state machines. `framing.py` encodes and decodes control frames: `[uint32 BE length][UTF-8 JSON object]`, capped at 16 MiB (`MAX_MESSAGE_SIZE`), or 16 KiB on unauthenticated pairing connections (`MAX_PAIRING_MESSAGE_SIZE`).
   - `messages.py` holds frozen dataclasses for each message type. Validation runs in `__post_init__`, and `parse_message` and `to_dict` sit on top. This is the single place where untrusted peer fields are checked, using ASCII-only `re.fullmatch` checks.
   - `pairing_code.py` computes the 6-digit code from a commitment plus two nonces (`docs/protocol.md` §5). Nonce generation lives in `app`, not here.
+  - The pairing flow itself (message order, timeouts, abort reasons, anti-spam) is planned as a sans-IO state machine in `core/pairing.py`; `app/pairing.py` only generates nonces and wires it to a connection.
   - Transfer and resume logic goes here as sans-IO state machines: events in, actions out. That keeps the hard logic testable with hypothesis and no sockets.
   - Transfer logic does **not** belong in `net`.
 - **trust**: `identity.py` holds the device's ECDSA P-256 key and self-signed cert. The fingerprint is the SHA-256 of the DER cert, and the device id is the CN without its `teleport-` prefix.
+  - `load_or_create_identity` creates an identity only when both files are missing and `trusted.json` holds no devices, while holding `identity.lock`. The cert is valid 2000-01-01 to 9999-12-31, so no date depends on the local clock. A half-missing, corrupt or mismatched identity raises `IdentityError` and is never regenerated, because a new identity silently drops every pairing. The CLI prints the message and exits 1.
   - `peer_cert_from_pem` and `peer_cert_from_der` strictly validate a peer's cert, because every trusted cert becomes an mTLS trust anchor. Anything that could act as a CA is rejected.
   - `store.py` is the `TrustStore` for `trusted.json`. Writes are atomic, and a corrupt file raises `TrustStoreError` and is never rewritten. Build it with `TrustStore.load()` only.
   - Pairing exchanges and stores the peer's cert PEM (`Identity.cert_pem()`).
 - **net**: only I/O, no business decisions.
-  - `lock.py`: `NodeLock` holds `node.lock` (`msvcrt` on Windows, `flock` on POSIX), giving one node per config dir.
   - `stream.py` reads and writes frames on asyncio streams. `read_message` returns `None` on a clean EOF at a frame boundary.
-  - `tls.py`: the client pins the server's fingerprint (`CERT_NONE` + `verify_pin`).
-  - Server-side mTLS comes from `server_context(identity, trusted_certs=[pem…])`, which sets `CERT_REQUIRED` and loads the trusted certs as anchors. Unknown clients fail the handshake; this is verified in `tests/net/test_tls.py`.
-  - `trusted_certs=None` means no client auth, and is used only by the pairing listener.
+  - `tls.py`: the client checks the **full** server fingerprint against the stored one (`CERT_NONE` + `verify_fingerprint`); there is no prefix/short-pin verification.
+  - A node listens on **one port** (default 47474). `server_context(identity, trusted_certs, allow_anonymous=True)` sets `CERT_OPTIONAL`, disables session tickets (`num_tickets = 0`, so an unpaired peer cannot resume an old session) and loads the trusted certs as anchors: a client sending an unknown cert fails the handshake (even with an empty list), a client sending no cert gets an anonymous connection that may only pair. Verified in `tests/net/test_tls.py`.
+  - Connection kinds on that port (`docs/protocol.md` §2): the client's first message after `hello` declares it: `pair_request` (no client cert), `control_open` or `data_open` (trusted client cert). Data connections are opened in the same direction as the current control connection.
   - Under TLS 1.3 a rejected client still sees the connect succeed and only fails on its first read. So a connection counts as established only after the server's `hello` has been read.
 - **app** (planned): `Node` plus the services (pairing, transfers, clipboard). This is the only orchestration layer, shared by the CLI and the UI.
   - Clipboard is a feature here, not a layer. It works through a `ClipboardBackend` interface; the UI supplies the Qt version.
@@ -71,8 +72,8 @@ What lives where:
 Process model: one node per config dir. Up to `v0.2`, each CLI run is its own node and holds `node.lock`. From `v0.3`, the GUI hosts the node and the CLI talks to it over local IPC.
 
 Planned design invariants from the roadmap:
-- Transfer works in 1 MiB blocks. Each block is verified with SHA-256 and the file with a Merkle root.
-- Resume uses a bitfield stored in a `.part.state` file. Incoming data is written to `.part` and renamed only after verification.
+- Transfer works in 1 MiB blocks. Each block frame carries the SHA-256 of its payload in its header (no separate hash batches), and the file is checked with a Merkle root.
+- Resume uses a bitfield stored in a `.state` file; a bit is set only after the block matched its hash and was fsynced (every 16 blocks). `resume{seq, bitfield}` is the only resend mechanism and may be sent at any time; each data connection serves exactly one `resume` (`data_open.resume_seq`; `seq` restarts at 1 on every control connection and is never persisted). Every transfer message is idempotent and re-sendable, and each new control connection starts with a resync (`docs/protocol.md` §6.3), so a lost control message never stalls a transfer. Temp files live in `<receive dir>/.teleport/<transfer_id>/`, never next to final names. Before the final rename the receiver re-reads the whole `.part` from disk and re-checks every block. The rename never overwrites: reserve the final name with `O_CREAT | O_EXCL`, then `os.replace` onto that placeholder (works on FAT/exFAT; never a bare POSIX `os.rename`, never `os.link`).
 - Backpressure comes from `await writer.drain()` on the sender and a bounded write queue on the receiver, so RAM must not grow with file size.
 - All peer input is untrusted. Received filenames must be sanitized (no `..`, no absolute paths, no Windows reserved names), and a received file never overwrites an existing one.
 
