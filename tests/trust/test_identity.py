@@ -1,3 +1,4 @@
+import base64
 import dataclasses
 import re
 import ssl
@@ -414,6 +415,23 @@ def test_large_but_within_limit_cert_accepted(make_cert):
     cert = make_cert(san_dns=[f"h{i}.example" for i in range(300)])
     assert len(pem_of(cert)) <= MAX_PEM
     assert peer_cert_from_der(der_of(cert)).pem == pem_of(cert)
+
+
+def test_invalid_x509_version_rejected_from_pem_and_der(identity):
+    # Trường version của X.509 v3 mã hóa là [0] INTEGER 2. Đổi thành 5 (tức "v6"):
+    # `cryptography` ném InvalidVersion (không phải ValueError), có bản ném ngay lúc load.
+    der = x509.load_pem_x509_certificate(identity.cert_pem().encode()).public_bytes(
+        serialization.Encoding.DER
+    )
+    v3_field = b"\xa0\x03\x02\x01\x02"
+    assert der.count(v3_field) == 1
+    bad_der = der.replace(v3_field, b"\xa0\x03\x02\x01\x05")
+    b64 = base64.encodebytes(bad_der).decode("ascii")
+    bad_pem = f"-----BEGIN CERTIFICATE-----\n{b64}-----END CERTIFICATE-----\n"
+    with pytest.raises(InvalidCertificate):
+        peer_cert_from_der(bad_der)
+    with pytest.raises(InvalidCertificate):
+        peer_cert_from_pem(bad_pem)
 
 
 # --- Fuzz --------------------------------------------------------------------------------------
