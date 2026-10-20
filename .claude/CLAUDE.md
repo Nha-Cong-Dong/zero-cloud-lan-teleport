@@ -48,12 +48,16 @@ Layering: `core ← trust ← net ← app ← ui / cli`. `tests/test_architectur
 
 What lives where:
 - **core**: pure functions and state machines. `framing.py` encodes and decodes control frames: `[uint32 BE length][UTF-8 JSON object]`, capped at 16 MiB.
+  - `messages.py` holds frozen dataclasses for each message type. Validation runs in `__post_init__`, and `parse_message` and `to_dict` sit on top. This is the single place where untrusted peer fields are checked, using ASCII-only `re.fullmatch` checks.
+  - `pairing_code.py` computes the 6-digit code from a commitment plus two nonces (`docs/protocol.md` §5). Nonce generation lives in `app`, not here.
   - Transfer and resume logic goes here as sans-IO state machines: events in, actions out. That keeps the hard logic testable with hypothesis and no sockets.
   - Transfer logic does **not** belong in `net`.
 - **trust**: `identity.py` holds the device's ECDSA P-256 key and self-signed cert. The fingerprint is the SHA-256 of the DER cert, and the device id is the CN without its `teleport-` prefix.
-  - `store.py` (planned) is the paired-device store.
+  - `peer_cert_from_pem` and `peer_cert_from_der` strictly validate a peer's cert, because every trusted cert becomes an mTLS trust anchor. Anything that could act as a CA is rejected.
+  - `store.py` is the `TrustStore` for `trusted.json`. Writes are atomic, and a corrupt file raises `TrustStoreError` and is never rewritten. Build it with `TrustStore.load()` only.
   - Pairing exchanges and stores the peer's cert PEM (`Identity.cert_pem()`).
 - **net**: only I/O, no business decisions.
+  - `lock.py`: `NodeLock` holds `node.lock` (`msvcrt` on Windows, `flock` on POSIX), giving one node per config dir.
   - `stream.py` reads and writes frames on asyncio streams. `read_message` returns `None` on a clean EOF at a frame boundary.
   - `tls.py`: the client pins the server's fingerprint (`CERT_NONE` + `verify_pin`).
   - Server-side mTLS comes from `server_context(identity, trusted_certs=[pem…])`, which sets `CERT_REQUIRED` and loads the trusted certs as anchors. Unknown clients fail the handshake; this is verified in `tests/net/test_tls.py`.
@@ -70,8 +74,31 @@ Planned design invariants from the roadmap:
 - Backpressure comes from `await writer.drain()` on the sender and a bounded write queue on the receiver, so RAM must not grow with file size.
 - All peer input is untrusted. Received filenames must be sanitized (no `..`, no absolute paths, no Windows reserved names), and a received file never overwrites an existing one.
 
+## Team of subagents
+
+`.claude/agents/` defines six project subagents. Their prompts are in Vietnamese.
+
+| Agent | Role | Edits files? |
+|---|---|---|
+| `truong-nhom` | Lead. Plans the work (design, task table, done criteria), then gives the final ĐẠT / CHƯA ĐẠT verdict | No |
+| `hoi-lai` | Clarifier. Finds ambiguity, conflicts and risks, and drafts questions for the user with suggested defaults | No |
+| `lap-trinh` | Coder. Implements one assigned task in `src/` and runs ruff + pytest. Never commits | Yes |
+| `viet-test` | Test writer. Writes tests in `tests/` from the spec, not from the code; never edits `src/` | Yes, `tests/` only |
+| `review` | Reviewer. Reviews the uncommitted diff for correctness, security, layering and docs, with severity levels | No |
+| `tom-tat` | Summarizer. Summarizes verified changes and drafts the CHANGELOG entry and commit message | No |
+
+Subagents cannot call each other, so **the main session orchestrates**. For any non-trivial feature, run this pipeline:
+1. `truong-nhom` makes the plan.
+2. If the plan has open questions, run `hoi-lai`, then ask the user the blocking questions.
+3. Run `lap-trinh` and `viet-test` in parallel, from the plan's API and done criteria.
+4. Loop `review` and fixes until no **nghiêm trọng** or **cao** issues remain.
+5. `truong-nhom` gives the verdict, fed with the review and test results.
+6. `tom-tat` writes the summary and commit message.
+
+Commit and push only after the user approves. Small fixes of a few lines can skip the pipeline.
+
 ## Conventions
 
 - Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`). Changes users will notice go under `[Unreleased]` in `docs/CHANGELOG.md`.
 - The app version lives only in `src/teleport/__init__.py`. The network protocol is versioned separately, in `docs/protocol.md`.
-- Pick only dependencies under MIT/BSD/Apache/LGPL licenses. The project license is not decided yet.
+- Runtime or bundled dependencies must be MIT/BSD/Apache/LGPL. Dev-only tools may use other licenses: `hypothesis` (MPL-2.0) is approved. The project license is not decided yet.
