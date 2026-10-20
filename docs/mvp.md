@@ -92,7 +92,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **US-02:** Tôi muốn thấy các máy đang mở Teleport trong cùng mạng mà không phải gõ IP.
 - **US-03:** Khi mạng chặn mDNS, tôi vẫn muốn kết nối bằng cách nhập IP.
 - **AC:**
-  - Thiết bị mới xuất hiện trên radar trong < 3 giây; thiết bị tắt app biến mất trong < 10 giây.
+  - Thiết bị mới xuất hiện trên radar trong < 3 giây; thiết bị thoát app biến mất trong < 10 giây; thiết bị mất mạng đột ngột hoặc ngủ biến mất trong < 2 phút.
   - Mỗi thiết bị hiển thị tên, biểu tượng hệ điều hành, trạng thái (đã ghép đôi / chưa ghép đôi / đang bận).
   - Nút “Nhập IP thủ công” luôn có trên màn hình radar.
   - Thấy thiết bị qua mDNS mà không kết nối được → báo lỗi “Wi-Fi chặn thiết bị” (mục 8).
@@ -106,7 +106,10 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Sau khi ghép đôi, hai máy tự nhận ra nhau sau khi khởi động lại, không hỏi lại.
   - Máy chưa ghép đôi không thể gửi file hay clipboard tới máy này, theo cả hai chiều.
   - Chứng chỉ của một thiết bị đã ghép đôi bị thay đổi → chặn kết nối và cảnh báo (mục 8).
-  - Có danh sách “Thiết bị tin cậy” trong cài đặt, có nút hủy ghép đôi.
+  - Có danh sách “Thiết bị tin cậy” trong cài đặt, có nút hủy ghép đôi. Hủy ghép đôi có hiệu lực ngay: kết nối đang mở với máy đó bị đóng; máy đó thấy thông báo “từ chối kết nối từ máy này” (mục 8).
+  - Máy đã ghép đôi cài lại Teleport hiện như một thiết bị mới chưa ghép đôi; app gợi ý ghép đôi lại và đề nghị xóa mục cũ trùng tên (mục 8).
+  - Hạn chế máy lạ làm phiền: chỉ một phiên ghép đôi tại một thời điểm; sau mỗi lần từ chối hay hết giờ, máy đó phải chờ lâu dần (10 giây, 20 giây… tối đa 10 phút) mới gửi được yêu cầu mới. Đây là mức tốt nhất có thể trong LAN, không chống được máy cố tình đổi địa chỉ liên tục; ghép đôi vẫn an toàn vì cần xác nhận mã ở cả hai máy.
+  - Không ghép đôi đè lên một thiết bị tin cậy có cùng mã thiết bị nhưng danh tính khác; phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa.
 
 ### F4. Gửi file
 - **US-06:** Tôi muốn kéo một hoặc nhiều file thả vào thiết bị trên radar để gửi.
@@ -114,16 +117,16 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **AC:**
   - Kéo thả, hoặc bấm chuột phải vào thiết bị → “Gửi file…”, đều được; hỗ trợ chọn nhiều file.
   - Máy nhận hiện hộp thoại: tên người gửi, danh sách file, tổng dung lượng, nút **Nhận** / **Từ chối**. Có tùy chọn “Luôn nhận từ thiết bị này” (tương đương tắt “Hỏi trước khi nhận” của thiết bị đó trong cài đặt).
-  - Không đủ dung lượng trống → từ chối ngay, báo cần bao nhiêu và còn bao nhiêu.
+  - Không đủ dung lượng trống → máy nhận tự từ chối ngay, máy gửi được báo cần bao nhiêu và còn bao nhiêu.
   - Trùng tên file → tự đặt `ten (1).ext`, không bao giờ ghi đè.
   - Tên file chứa `..`, đường dẫn tuyệt đối, ký tự cấm hay tên thiết bị đặc biệt của Windows (`CON`, `NUL`…) → được làm sạch, file luôn nằm trong thư mục nhận.
-  - File chỉ xuất hiện với tên thật **sau khi** đã kiểm tra toàn vẹn xong; trong lúc nhận có đuôi `.part`.
+  - File chỉ xuất hiện với tên thật **sau khi** đã kiểm tra toàn vẹn xong; trong lúc nhận, dữ liệu nằm trong thư mục tạm ẩn `.teleport` bên trong thư mục nhận.
 
 ### F5. Theo dõi & quản lý lượt truyền
 - **US-08:** Tôi muốn biết đang gửi tới đâu, còn bao lâu, và hủy được khi cần.
 - **AC:**
-  - Mỗi lượt truyền hiển thị: % hoàn thành, tốc độ hiện tại, thời gian còn lại, trạng thái (đang chờ chấp nhận / đang gửi / đang nối lại / đang kiểm tra / xong / lỗi / đã hủy).
-  - Nút **Hủy** ở cả hai bên; hủy thì máy nhận xóa file `.part`.
+  - Mỗi lượt truyền hiển thị: % hoàn thành, tốc độ hiện tại, thời gian còn lại, trạng thái (đang xếp hàng / đang chờ chấp nhận / đang gửi / đang nối lại / đang kiểm tra / xong / lỗi / đã hủy). Mỗi chiều giữa hai máy chạy một lượt truyền tại một thời điểm; lượt khác xếp hàng.
+  - Nút **Hủy** ở cả hai bên; hủy thì máy nhận xóa file tạm.
   - Nhận xong có thông báo hệ thống; bấm vào thông báo mở thư mục chứa file.
   - Lịch sử 100 lượt truyền gần nhất, lưu trên máy, xóa được.
 
@@ -133,17 +136,18 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Mất kết nối → trạng thái chuyển “Đang nối lại…”, tự thử lại liên tục (1s, 2s, 4s… tối đa 30s một lần) trong 24 giờ.
   - Có mạng lại → tiếp tục từ khối còn thiếu. Lượng dữ liệu gửi lại ≤ phần chưa nhận + 64 MiB.
   - Tắt hẳn app nhận (hoặc khởi động lại máy) rồi mở lại → vẫn nối lại được, cùng giới hạn gửi lại như trên.
-  - File nguồn bị sửa trong lúc gián đoạn → hủy lượt truyền, báo rõ lý do.
-  - File `.part` bỏ dở quá 7 ngày được tự dọn (chỉnh được trong cài đặt).
+  - File nguồn bị sửa trong lúc gián đoạn hoặc trong lúc gửi → hủy lượt truyền, báo rõ lý do.
+  - Tắt app **gửi** thì lượt truyền không nối lại được: máy nhận báo “máy gửi đã hủy” và dọn file tạm.
+  - File tạm bỏ dở quá 7 ngày được tự dọn (chỉnh được trong cài đặt).
 
-> Vì sao là 64 MiB: khối đã nhận nhưng chưa kịp đối chiếu hash (hash được gửi theo lô 64 khối) phải gửi lại. Xem [ke_hoach.md](ke_hoach.md) mục 3.4.
+> Vì sao là 64 MiB: khối đã nhận nhưng chưa kịp ghi bền xuống đĩa (máy nhận `fsync` mỗi 16 khối 1 MiB, cộng hàng đợi ghi và bộ đệm mạng) phải gửi lại. Xem [ke_hoach.md](ke_hoach.md) mục 3.4.
 
 ### F7. Kiểm tra toàn vẹn
 - **US-10:** Tôi muốn chắc chắn file nhận được giống hệt file gốc.
 - **AC:**
   - Mỗi khối 1 MiB được kiểm tra SHA-256; khối sai được gửi lại tự động.
-  - Cuối lượt truyền so khớp Merkle root; khớp thì mới đổi tên `.part` → tên thật.
-  - Test: sửa 1 byte bất kỳ trong `.part` khi đang tạm dừng → phát hiện và gửi lại đúng khối đó.
+  - Cuối lượt truyền, máy nhận **đọc lại toàn bộ file từ đĩa** và so từng khối, rồi so khớp Merkle root; khớp thì mới đổi sang tên thật.
+  - Test: sửa 1 byte bất kỳ trong file tạm khi đang tạm dừng → phát hiện và gửi lại đúng khối đó.
 
 ### F8. Đồng bộ clipboard
 - **US-11:** Tôi muốn copy đoạn văn hoặc ảnh chụp màn hình trên máy này rồi dán ngay trên máy kia.
@@ -175,7 +179,8 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 ### F12. Dòng lệnh (CLI)
 - **US-13:** Là người dùng nâng cao, tôi muốn gửi file bằng script.
 - **AC:**
-  - Các lệnh: `teleport list`, `teleport listen` (chờ máy khác ghép đôi), `teleport pair <tên>`, `teleport unpair <tên>`, `teleport send <file...> --to <tên>`, `teleport receive`.
+  - Các lệnh: `teleport list`, `teleport listen` (chờ máy khác ghép đôi), `teleport pair <thiết bị>`, `teleport unpair <thiết bị>`, `teleport send <file...> --to <thiết bị>`, `teleport receive`.
+  - `<thiết bị>` là tên hoặc tiền tố `device_id` (ít nhất 4 ký tự, như `teleport list` hiện). Khớp nhiều thiết bị → báo lỗi kèm danh sách để chọn, không tự đoán. Riêng `teleport pair` còn nhận `ip` hoặc `ip:cổng`, để ghép đôi được khi mạng chặn mDNS.
   - Mã thoát khác 0 khi lỗi; có `--json` cho đầu ra máy đọc được.
 
 ---
@@ -272,13 +277,18 @@ Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì
 |---|---|---|
 | Không thấy thiết bị nào | “Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia và kiểm tra hai máy dùng chung một mạng Wi-Fi.” | Nút “Nhập IP thủ công” |
 | Thấy nhưng không kết nối được (cô lập thiết bị) | “Thấy *PC-Nha* nhưng không kết nối được. Mạng Wi-Fi này có thể đang chặn các thiết bị nói chuyện với nhau (hay gặp ở quán cà phê, khách sạn).” | Gợi ý dùng hotspot điện thoại |
-| Tường lửa chặn | “Tường lửa của Windows đang chặn Teleport nhận kết nối.” | Nút “Mở hướng dẫn” |
+| Tường lửa chặn | “Tường lửa của Windows đang chặn Teleport nhận kết nối.” (máy bị chặn tự phát hiện và hiện; nếu chiều ngược lại vẫn kết nối được thì Teleport vẫn chạy, chỉ hiện gợi ý) | Nút “Mở hướng dẫn” |
+| macOS chưa cho quyền mạng cục bộ | “Teleport chưa được phép dùng mạng cục bộ nên không thấy máy khác.” | Nút “Mở Cài đặt hệ thống” |
 | Không đủ dung lượng | “Không đủ chỗ trống: cần 12,4 GB, ổ D: còn 8,1 GB.” | Nút “Đổi thư mục nhận” |
-| Danh tính thiết bị thay đổi | “Danh tính của *PC-Nha* đã thay đổi. Có thể máy đó đã cài lại Teleport, hoặc có người đang giả mạo. Kết nối đã bị chặn.” | Nút “Ghép đôi lại” |
+| Danh tính thiết bị thay đổi (cùng mã thiết bị, khác chứng chỉ) | “*PC-Nha* đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. Kết nối đã bị chặn.” | Không cho ghép đôi đè; nút “Hủy ghép đôi *PC-Nha*” (kèm cảnh báo), sau đó mới ghép đôi lại được |
+| Máy đã ghép đôi cài lại Teleport | “Có một *PC-Nha* mới chưa ghép đôi. Nếu máy đó vừa cài lại Teleport, hãy ghép đôi lại.” | Nút “Ghép đôi”; ghép xong thì hỏi xóa mục *PC-Nha* cũ |
+| Máy kia từ chối máy này | “*PC-Nha* từ chối kết nối từ máy này. Có thể máy đó đã hủy ghép đôi.” | Nút “Ghép đôi lại” |
+| Danh tính của chính máy này bị hỏng | “Không đọc được danh tính của máy này. Teleport sẽ không tự tạo danh tính mới để khỏi mất các ghép đôi.” | Nút “Tạo danh tính mới” (cảnh báo phải ghép đôi lại) |
 | Mã ghép đôi không trùng / hết giờ | “Ghép đôi với *MacBook* chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo.” | Nút “Thử lại” |
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |
 | File nguồn bị sửa khi đang gián đoạn | “*video.mp4* đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại.” | Nút “Gửi lại” |
 | Người nhận từ chối | “*PC-Nha* đã từ chối nhận file.” | — |
+| Máy gửi đã tắt app khi đang gián đoạn | “*Laptop-Minh* đã hủy lượt gửi *video.mp4*. Hãy nhờ gửi lại.” | — |
 | Mất mạng | “Đang nối lại…” (không phải lỗi) | Tự xử lý |
 
 ---
@@ -289,7 +299,7 @@ Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì
 
 | Mã | Nhóm | Yêu cầu | Cách đo |
 |---|---|---|---|
-| N1 | Khám phá | Thiết bị mới xuất hiện < 3 giây; tắt app thì biến mất < 10 giây | Log thời điểm mDNS |
+| N1 | Khám phá | Thiết bị mới xuất hiện < 3 giây; thoát app thì biến mất < 10 giây; mất mạng đột ngột hoặc ngủ thì biến mất < 2 phút | Log thời điểm mDNS |
 | N2 | Hiệu năng | ≥ 70% tốc độ copy qua chia sẻ thư mục Windows (SMB) trên cùng mạng | Benchmark mỗi bản phát hành, công bố ở `benchmark.md` (sẽ có trong `docs/`) |
 | N3 | Bộ nhớ | Khi truyền: RSS tăng < 50MB so với lúc rảnh với file 1GB, 5GB, 10GB (đường RAM phẳng). Khi rảnh: RAM < 150MB, CPU ~0% | `psutil` + biểu đồ RSS, mỗi bản phát hành |
 | N4 | Nối lại | Rớt mạng hoặc tắt app nhận ở bất kỳ điểm nào → gửi lại ≤ phần chưa nhận + 64 MiB (ở 85%: ≤ 15% + 64 MiB) | Test tự động, đếm byte gửi lại |
@@ -391,7 +401,7 @@ Rủi ro kỹ thuật và thực thi: [ke_hoach.md](ke_hoach.md) mục 8.
 | Rủi ro | Ảnh hưởng | Hướng xử lý |
 |---|---|---|
 | Wi-Fi công cộng/văn phòng chặn thiết bị nói chuyện với nhau | Không dùng được ở quán cà phê, khách sạn | Phát hiện và báo rõ; gợi ý hotspot |
-| SmartScreen / antivirus cảnh báo app chưa ký | Người dùng sợ, không cài | Ký mã nếu có ngân sách; hướng dẫn rõ |
+| SmartScreen / antivirus cảnh báo app chưa ký; macOS Gatekeeper chặn app chưa ký (macOS 15 phải mở Cài đặt hệ thống mới chạy được) | Người dùng sợ, không cài; khó đạt mục 9.1 (≥ 90% tự cài được) | Ký mã nếu có ngân sách (ke_hoach mục 9); hướng dẫn rõ từng bước |
 | Cạnh tranh: LocalSend, KDE Connect, Nearby Share | Khó nổi bật | Tập trung vào nối lại theo khối, file cực lớn, clipboard |
 | Trễ tiến độ (làm một mình) | v1.0 kéo dài | Hoãn sang sau v1.0 theo thứ tự: công cụ C++/Java → bộ cài macOS/Linux → clipboard ảnh. Không cắt nối lại/toàn vẹn (F6, F7) và an toàn khi nhận (F4). Hoãn mục nào thì sửa mục 4 và mục 12 tương ứng |
 
