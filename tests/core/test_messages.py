@@ -17,6 +17,7 @@ from teleport.core.messages import (
     AbortReason,
     Hello,
     MessageError,
+    OsName,
     PairAbort,
     PairChallenge,
     PairConfirm,
@@ -47,6 +48,7 @@ def valid_dicts() -> dict[str, dict]:
             "device_id": DEVICE_ID,
             "name": "PC-Nha",
             "app_version": "0.1.0",
+            "os": "windows",
         },
         "pair_request": {"type": "pair_request", "cert": CERT, "commitment": HEX64},
         "pair_challenge": {"type": "pair_challenge", "nonce": HEX64},
@@ -57,8 +59,8 @@ def valid_dicts() -> dict[str, dict]:
 
 
 VALID_MESSAGES = [
-    Hello(protocol=1, device_id=DEVICE_ID, name="PC-Nha", app_version="0.1.0"),
-    Hello(protocol=7, device_id=DEVICE_ID, name="Máy của Minh 🚀", app_version="1.2.3-dev+abc"),
+    Hello(protocol=1, device_id=DEVICE_ID, name="PC-Nha", app_version="0.1.0", os="windows"),
+    Hello(protocol=7, device_id=DEVICE_ID, name="Máy của Minh 🚀", app_version="1.2.3-dev+abc", os="windows"),
     PairRequest(cert=CERT, commitment=HEX64),
     PairChallenge(nonce=HEX64),
     PairReveal(nonce=HEX64_B),
@@ -144,7 +146,7 @@ def test_wire_dict_parses_and_serializes_back_exactly(type_name):
 
 def test_parse_returns_expected_dataclass():
     assert parse_message(valid_dicts()["hello"]) == Hello(
-        protocol=1, device_id=DEVICE_ID, name="PC-Nha", app_version="0.1.0"
+        protocol=1, device_id=DEVICE_ID, name="PC-Nha", app_version="0.1.0", os="windows"
     )
     assert parse_message({"type": "pair_confirm"}) == PairConfirm()
     assert to_dict(PairConfirm()) == {"type": "pair_confirm"}
@@ -251,6 +253,9 @@ def test_missing_field_raises(type_name, field):
         ("hello", "device_id", DEVICE_ID.encode()),
         ("hello", "app_version", 1),
         ("hello", "app_version", None),
+        ("hello", "os", None),
+        ("hello", "os", 1),
+        ("hello", "os", ["windows"]),
         ("pair_request", "cert", None),
         ("pair_request", "cert", CERT.encode()),
         ("pair_request", "cert", [CERT]),
@@ -397,7 +402,7 @@ def test_valid_name_returned_unchanged(value):
 
 @pytest.mark.parametrize("value", VALID_NAMES, ids=repr)
 def test_valid_name_roundtrips_in_hello(value):
-    msg = Hello(protocol=1, device_id=DEVICE_ID, name=value, app_version="1")
+    msg = Hello(protocol=1, device_id=DEVICE_ID, name=value, app_version="1", os="windows")
     assert parse_message(to_dict(msg)).name == value
 
 
@@ -541,21 +546,43 @@ def test_invalid_reason(reason):
         parse_message({"type": "pair_abort", "reason": reason})
 
 
+@pytest.mark.parametrize("value", ["windows", "macos", "linux", "freebsd", "x", "a" * 16, "os_2"])
+def test_valid_os(value):
+    assert parse_message({**valid_dicts()["hello"], "os": value}).os == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "Windows", "a" * 17, "mac os", "linux\n", "\uff57\uff49\uff4e", "win-11", "macos\u200b"],
+    ids=repr,
+)
+def test_invalid_os(value):
+    with pytest.raises(MessageError):
+        parse_message({**valid_dicts()["hello"], "os": value})
+
+
+def test_os_enum_becomes_plain_str():
+    msg = Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="1", os=OsName.MACOS)
+    assert type(msg.os) is str
+    assert to_dict(msg)["os"] == "macos"
+
+
 # --- Tạo tay dataclass với giá trị sai ---------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "factory",
     [
-        lambda: Hello(protocol=0, device_id=DEVICE_ID, name="PC", app_version="1"),
-        lambda: Hello(protocol=True, device_id=DEVICE_ID, name="PC", app_version="1"),
-        lambda: Hello(protocol="1", device_id=DEVICE_ID, name="PC", app_version="1"),
-        lambda: Hello(protocol=1.0, device_id=DEVICE_ID, name="PC", app_version="1"),
-        lambda: Hello(protocol=1, device_id=DEVICE_ID.upper(), name="PC", app_version="1"),
-        lambda: Hello(protocol=1, device_id=DEVICE_ID, name=" PC", app_version="1"),
-        lambda: Hello(protocol=1, device_id=DEVICE_ID, name="x" * 65, app_version="1"),
-        lambda: Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version=""),
-        lambda: Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="v" * 33),
+        lambda: Hello(protocol=0, device_id=DEVICE_ID, name="PC", app_version="1", os="windows"),
+        lambda: Hello(protocol=True, device_id=DEVICE_ID, name="PC", app_version="1", os="windows"),
+        lambda: Hello(protocol="1", device_id=DEVICE_ID, name="PC", app_version="1", os="windows"),
+        lambda: Hello(protocol=1.0, device_id=DEVICE_ID, name="PC", app_version="1", os="windows"),
+        lambda: Hello(protocol=1, device_id=DEVICE_ID.upper(), name="PC", app_version="1", os="windows"),
+        lambda: Hello(protocol=1, device_id=DEVICE_ID, name=" PC", app_version="1", os="windows"),
+        lambda: Hello(protocol=1, device_id=DEVICE_ID, name="x" * 65, app_version="1", os="windows"),
+        lambda: Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="", os="windows"),
+        lambda: Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="v" * 33, os="windows"),
+        lambda: Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="1", os="Windows"),
         lambda: PairRequest(cert="không phải PEM", commitment=HEX64),
         lambda: PairRequest(cert=_cert_of_length(8193), commitment=HEX64),
         lambda: PairRequest(cert=CERT, commitment=HEX64.upper()),

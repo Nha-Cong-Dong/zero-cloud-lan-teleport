@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from teleport.core.messages import MessageError, validate_device_id, validate_device_name
+from teleport.paths import TRUSTED_FILE
 from teleport.trust.identity import InvalidCertificate, PeerCert, peer_cert_from_pem
 
-TRUSTED_FILE = "trusted.json"
 STORE_VERSION = 1
 
 

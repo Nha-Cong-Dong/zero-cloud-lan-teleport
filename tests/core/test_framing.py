@@ -8,6 +8,7 @@ from teleport.core.framing import (
     HEADER,
     MAX_JSON_DEPTH,
     MAX_MESSAGE_SIZE,
+    MAX_PAIRING_MESSAGE_SIZE,
     FramingError,
     decode_body,
     decode_header,
@@ -38,6 +39,12 @@ def test_header_at_limit_is_accepted():
 def test_oversized_header_is_rejected():
     with pytest.raises(FramingError, match="quá lớn"):
         decode_header(HEADER.pack(MAX_MESSAGE_SIZE + 1))
+
+
+def test_custom_limit_for_pairing_connections():
+    assert decode_header(HEADER.pack(MAX_PAIRING_MESSAGE_SIZE), MAX_PAIRING_MESSAGE_SIZE) == 16 * 1024
+    with pytest.raises(FramingError):
+        decode_header(HEADER.pack(MAX_PAIRING_MESSAGE_SIZE + 1), MAX_PAIRING_MESSAGE_SIZE)
 
 
 def test_oversized_message_cannot_be_encoded():

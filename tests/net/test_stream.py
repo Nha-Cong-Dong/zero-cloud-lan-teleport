@@ -2,7 +2,13 @@ import asyncio
 
 import pytest
 
-from teleport.core.framing import HEADER, MAX_MESSAGE_SIZE, FramingError, encode_message
+from teleport.core.framing import (
+    HEADER,
+    MAX_MESSAGE_SIZE,
+    MAX_PAIRING_MESSAGE_SIZE,
+    FramingError,
+    encode_message,
+)
 from teleport.net.stream import read_message
 
 
@@ -50,3 +56,17 @@ async def test_oversized_header_is_rejected_before_reading_body():
     reader = reader_with(HEADER.pack(MAX_MESSAGE_SIZE + 1), eof=False)
     with pytest.raises(FramingError, match="quá lớn"):
         await read_message(reader)
+
+
+async def test_pairing_limit_rejects_large_header_without_reading_body():
+    """Kết nối ghép đôi: header > 16 KiB bị từ chối ngay, không chờ thân message."""
+    reader = reader_with(HEADER.pack(MAX_PAIRING_MESSAGE_SIZE + 1), eof=False)
+    with pytest.raises(FramingError, match="quá lớn"):
+        await asyncio.wait_for(read_message(reader, MAX_PAIRING_MESSAGE_SIZE), 1)
+
+
+async def test_pairing_limit_accepts_message_at_limit():
+    body_len = MAX_PAIRING_MESSAGE_SIZE - len(encode_message({"x": ""})) + HEADER.size
+    msg = {"x": "a" * body_len}
+    assert len(encode_message(msg)) == HEADER.size + MAX_PAIRING_MESSAGE_SIZE
+    assert await read_message(reader_with(encode_message(msg)), MAX_PAIRING_MESSAGE_SIZE) == msg

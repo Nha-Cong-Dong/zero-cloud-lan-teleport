@@ -19,6 +19,11 @@ HEADER = struct.Struct("!I")  # "!" = thứ tự byte mạng (big-endian), "I" =
 # một header hỏng (hoặc độc hại) bắt ta cấp phát hàng GB bộ nhớ.
 MAX_MESSAGE_SIZE = 16 * 1024 * 1024
 
+# Kết nối ghép đôi chưa xác thực ai cả (docs/protocol.md mục 5): message `pair_*` lớn
+# nhất (`pair_request` kèm chứng chỉ ≤ 8192 ký tự) chỉ khoảng 8,3 KiB, nên giới hạn
+# chặt hơn hẳn để máy lạ không bắt ta cấp phát 16 MiB cho mỗi kết nối.
+MAX_PAIRING_MESSAGE_SIZE = 16 * 1024
+
 # Độ sâu lồng tối đa của JSON (object ngoài cùng tính là 1). Message thật chỉ sâu
 # vài cấp; giới hạn rõ ràng để không phụ thuộc vào việc bộ giải mã có gặp
 # RecursionError hay không — trên Python 3.14 Linux/macOS, JSON lồng 100.000 cấp
@@ -37,10 +42,10 @@ def encode_message(msg: dict) -> bytes:
     return HEADER.pack(len(body)) + body
 
 
-def decode_header(header: bytes) -> int:
-    """Trả về độ dài thân message; raise FramingError nếu vượt giới hạn."""
+def decode_header(header: bytes, max_size: int = MAX_MESSAGE_SIZE) -> int:
+    """Trả về độ dài thân message; raise FramingError nếu vượt `max_size`."""
     (length,) = HEADER.unpack(header)
-    if length > MAX_MESSAGE_SIZE:
+    if length > max_size:
         raise FramingError(f"message quá lớn: {length} byte")
     return length
 

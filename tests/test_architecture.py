@@ -2,7 +2,8 @@
 
     core  ←  trust  ←  net  ←  app  ←  ui / cli
 
-- Mỗi tầng chỉ được import các tầng **bên dưới** nó (và `teleport.paths`).
+- Mỗi tầng chỉ được import các tầng **bên dưới** nó (và tiện ích dùng chung `teleport.paths`,
+  `teleport.lock`).
 - `core` là sans-IO: không import thư viện mạng/bất đồng bộ, không import tầng nào khác.
 """
 
@@ -16,6 +17,9 @@ PACKAGE = Path(__file__).resolve().parents[1] / "src" / "teleport"
 # Thứ tự từ dưới lên. `ui` và `cli` ngang hàng ở trên cùng.
 LAYERS = ["core", "trust", "net", "app", "ui", "cli"]
 TOP = {"ui", "cli"}
+
+# Tiện ích dùng chung: tầng nào cũng import được (trừ core), và chúng không import tầng nào.
+SHARED = ("paths", "lock")
 
 SANS_IO_FORBIDDEN = ("asyncio", "socket", "ssl", "selectors", "threading", "zeroconf", "PySide6")
 
@@ -55,7 +59,7 @@ def imported_modules(path: Path) -> set[str]:
 
 
 def test_every_top_level_module_belongs_to_a_layer():
-    known = {*LAYERS, "__init__", "__main__", "paths"}
+    known = {*LAYERS, "__init__", "__main__", *SHARED}
     found = {p.stem for p in PACKAGE.iterdir() if p.suffix == ".py" or (p / "__init__.py").exists()}
     assert found <= known, f"module/gói chưa được xếp tầng: {sorted(found - known)}"
 
@@ -76,11 +80,12 @@ def test_core_is_sans_io():
     violations = []
     for path in source_files("core"):
         for name in imported_modules(path):
-            if name.split(".")[0] in SANS_IO_FORBIDDEN or name == "teleport.paths":
+            if name.split(".")[0] in SANS_IO_FORBIDDEN or name in {f"teleport.{m}" for m in SHARED}:
                 violations.append(f"{path.relative_to(PACKAGE)} import {name}")
     assert not violations, "\n".join(violations)
 
 
-def test_paths_imports_no_layer():
-    names = imported_modules(PACKAGE / "paths.py")
+@pytest.mark.parametrize("module", SHARED)
+def test_shared_utility_imports_no_layer(module):
+    names = imported_modules(PACKAGE / f"{module}.py")
     assert not [n for n in names if layer_of(n)], names

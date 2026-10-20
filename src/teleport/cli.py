@@ -12,7 +12,7 @@ from pathlib import Path
 
 from teleport import __version__
 from teleport.paths import ENV_HOME, config_dir
-from teleport.trust.identity import format_fingerprint, load_or_create_identity
+from teleport.trust.identity import IdentityError, format_fingerprint, load_or_create_identity
 
 
 def cmd_identity(args: argparse.Namespace) -> int:
@@ -49,4 +49,9 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(argv)
-    return args.handler(args)
+    try:
+        return args.handler(args)
+    except IdentityError as e:
+        # Lỗi người dùng tự xử lý được: in thông báo, không in traceback.
+        print(f"Lỗi: {e}", file=sys.stderr)
+        return 1
