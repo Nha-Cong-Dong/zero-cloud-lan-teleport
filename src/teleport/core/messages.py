@@ -123,6 +123,17 @@ def validate_device_name(value: object) -> str:
     return _validate_text(value, "name", MAX_NAME_LEN)
 
 
+def validate_os(value: object) -> str:
+    """Tên hệ điều hành: 1–16 ký tự a-z, 0-9 hoặc _; giá trị lạ đúng dạng vẫn hợp lệ.
+
+    Trả về `str` thuần (ví dụ `OsName.WINDOWS` → "windows"); sai thì raise MessageError.
+    """
+    if not isinstance(value, str) or not _OS_RE.fullmatch(value):
+        raise MessageError("os phải gồm 1–16 ký tự a-z, 0-9 hoặc _")
+    # Lớp con của str (ví dụ OsName) đổi về str thuần để so sánh và mã hóa nhất quán.
+    return value if type(value) is str else str.__str__(value)
+
+
 @dataclass(frozen=True, slots=True)
 class Hello:
     """Gửi ngay sau khi bắt tay TLS, cả hai chiều."""
@@ -142,11 +153,10 @@ class Hello:
         validate_device_id(self.device_id)
         validate_device_name(self.name)
         _validate_text(self.app_version, "app_version", MAX_APP_VERSION_LEN)
-        if not isinstance(self.os, str) or not _OS_RE.fullmatch(self.os):
-            raise MessageError("os phải gồm 1–16 ký tự a-z, 0-9 hoặc _")
-        if type(self.os) is not str:
+        os_name = validate_os(self.os)
+        if os_name is not self.os:
             # Ví dụ OsName.WINDOWS: đổi về str thuần để so sánh và mã hóa nhất quán.
-            object.__setattr__(self, "os", str.__str__(self.os))
+            object.__setattr__(self, "os", os_name)
 
 
 @dataclass(frozen=True, slots=True)

@@ -26,6 +26,8 @@ pytest
 
 CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check .`, `ruff format --check .` và `pytest` trên Windows, macOS, Linux × Python 3.12 và 3.14. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
 
+Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (`tests/net/test_discovery.py`).
+
 ## Phát hành
 1. Chuyển mục `[Unreleased]` trong `CHANGELOG.md` thành `[X.Y.Z] - YYYY-MM-DD`.
 2. Cập nhật `__version__` trong `src/teleport/__init__.py`. Đây là nguồn duy nhất của số phiên bản; `pyproject.toml` tự đọc từ đó.

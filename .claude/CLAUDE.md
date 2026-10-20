@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Teleport (Zero-Cloud LAN Teleport) is a desktop app, written in Python 3.12+, for sending very large files and syncing the clipboard between computers on the same LAN. There is no cloud, no accounts and no telemetry. It is built as a release-quality product. The current stage is phase 1, discovery and pairing. Done so far: framing, device identity, TLS 1.3 + mTLS, the control-connection messages (`control_open`, `ping`, `pong`), the offline pairing foundation (`hello`/`pair_*` messages, the commitment-based 6-digit code, the trust store), the sans-IO pairing state machine with its anti-spam gate (`core/pairing.py`) and the node lock. Discovery, network pairing, transfer, resume, clipboard and the UI are not written yet.
+Teleport (Zero-Cloud LAN Teleport) is a desktop app, written in Python 3.12+, for sending very large files and syncing the clipboard between computers on the same LAN. There is no cloud, no accounts and no telemetry. It is built as a release-quality product. The current stage is phase 1, discovery and pairing. Done so far: framing, device identity, TLS 1.3 + mTLS, the control-connection messages (`control_open`, `ping`, `pong`), the offline pairing foundation (`hello`/`pair_*` messages, the commitment-based 6-digit code, the trust store), the sans-IO pairing state machine with its anti-spam gate (`core/pairing.py`), the node lock and mDNS discovery (`core/discovery.py` + `net/discovery.py`). Not written yet: the connection listener, the node/app layer, CLI `pair`/`list`, transfer, resume, clipboard and the UI.
 
 The parent folder of `.claude/` is the git repo root (`git@github.com:Nha-Cong-Dong/zero-cloud-lan-teleport.git`, public). The repo root holds only `README.md`, `LICENSE` and `pyproject.toml`. Every other Markdown doc lives in `docs/`. Keep the root that tidy.
 
@@ -27,7 +27,7 @@ Run from this folder on Windows/PowerShell. The venv lives at `.venv/`.
 
 ```powershell
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"                          # cryptography + pytest, pytest-asyncio, hypothesis, ruff
+pip install -e ".[dev]"                          # cryptography, zeroconf, ifaddr + pytest, pytest-asyncio, hypothesis, ruff
 pytest                                           # all tests
 pytest -m "not integration"                      # skip tests that open real sockets on 127.0.0.1
 pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal   # single test
@@ -43,7 +43,7 @@ The distribution name is `zero-cloud-lan-teleport` and the import name is `telep
 
 Layering: `core ← trust ← net ← app ← ui / cli`. `tests/test_architecture.py` parses every import, relative ones included, and enforces these rules:
 - A layer imports only the layers below it. `ui` and `cli` never import each other.
-- `core` is **sans-IO**. It must not import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `PySide6`, `teleport.paths`, `teleport.lock` or any other layer.
+- `core` is **sans-IO**. It must not import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `ifaddr`, `PySide6`, `teleport.paths`, `teleport.lock` or any other layer.
 - Every top-level `teleport.*` module belongs to a layer or is a shared utility in `SHARED` (`paths`, `lock`). A new package must be added to `LAYERS` (or `SHARED`) in that test and to `docs/architecture.md`.
 
 `paths.py` and `lock.py` are shared utilities that any layer except `core` may use. `lock.py`: `NodeLock(config_dir, name="node.lock")` is an OS file lock (`msvcrt` on Windows, `flock` on POSIX), giving one node per config dir; `trust.identity` also uses it as `identity.lock` while creating an identity. Windows releases a killed process's lock asynchronously, so use `acquire(timeout=...)` wherever the holder may have just died (e.g. node start after a crash). `paths.TRUSTED_FILE` is the one name for `trusted.json`. `docs/architecture.md` is the **single source** for module status and the process model. `docs/protocol.md` is the wire spec (protocol v1, draft), and any wire-format change must update it in the same PR. Create a module only when there is real code for it; don't add empty placeholder files.
@@ -53,6 +53,7 @@ What lives where:
   - `messages.py` holds frozen dataclasses for each message type. Validation runs in `__post_init__`, and `parse_message` and `to_dict` sit on top. This is the single place where untrusted peer fields are checked, using ASCII-only `re.fullmatch` checks.
   - `pairing_code.py` computes the 6-digit code from a commitment plus two nonces (`docs/protocol.md` §5). Nonce generation lives in `app`, not here.
   - `pairing.py` is the pairing flow as a sans-IO state machine: `InitiatorSession` / `ResponderSession` take events (`Start`, `MessageReceived`, `BadMessage`, `UserDecision`, `Tick`, `ConnectionLost`, `Cancel`) plus a monotonic `now` and return actions (`SendMessage`, `ShowCode`, `SavePeer`, `Close`). `SavePeer` is emitted only after this side has sent **and** received `pair_confirm`. `PairingGate` holds the anti-spam rules (one session at a time, per-IP backoff, tie-break when both sides initiate). The peer cert is parsed in `app` (via `trust`) and passed in as `DeviceCert`; `app/pairing.py` (planned) generates nonces and wires the session to a connection.
+  - `discovery.py` builds and validates mDNS records (TXT, addresses, virtual-NIC filtering) and holds `DiscoveryTracker`, a sans-IO state machine fed zeroconf's Added/Removed plus resolve results and a monotonic `now`; it returns device events and resolve/probe requests (liveness probes, slower backoff for vanished devices). Paired devices (`set_priority`) are always tracked and don't count toward the 256 limit; services seen while full go to a FIFO overflow list (≤ 1024) and are admitted when a slot frees (`docs/protocol.md` §8).
   - Transfer and resume logic goes here as sans-IO state machines: events in, actions out. That keeps the hard logic testable with hypothesis and no sockets.
   - Transfer logic does **not** belong in `net`.
 - **trust**: `identity.py` holds the device's ECDSA P-256 key and self-signed cert. The fingerprint is the SHA-256 of the DER cert, and the device id is the CN without its `teleport-` prefix.
@@ -62,6 +63,7 @@ What lives where:
   - Pairing exchanges and stores the peer's cert PEM (`Identity.cert_pem()`).
 - **net**: only I/O, no business decisions.
   - `stream.py` reads and writes frames on asyncio streams. `read_message` returns `None` on a clean EOF at a frame boundary.
+  - `discovery.py`: `MdnsDiscovery` wraps zeroconf (advertise/update/goodbye, browse, resolve what the tracker asks for, read NICs via ifaddr). It makes no decisions; mDNS results are hints only, identity is trusted solely via the TLS fingerprint.
   - `tls.py`: the client checks the **full** server fingerprint against the stored one (`CERT_NONE` + `verify_fingerprint`); there is no prefix/short-pin verification.
   - A node listens on **one port** (default 47474). `server_context(identity, trusted_certs, allow_anonymous=True)` sets `CERT_OPTIONAL`, disables session tickets (`num_tickets = 0`, so an unpaired peer cannot resume an old session) and loads the trusted certs as anchors: a client sending an unknown cert fails the handshake (even with an empty list), a client sending no cert gets an anonymous connection that may only pair. Verified in `tests/net/test_tls.py`.
   - Connection kinds on that port (`docs/protocol.md` §2): the client's first message after `hello` declares it: `pair_request` (no client cert), `control_open` or `data_open` (trusted client cert). Data connections are opened in the same direction as the current control connection.
@@ -79,7 +81,7 @@ Planned design invariants from the roadmap:
 
 ## Team of subagents
 
-`.claude/agents/` defines six project subagents. Their prompts are in Vietnamese.
+`.claude/agents/` defines seven project subagents. Their prompts are in Vietnamese. They load only when Claude Code is started in this folder (the repo root), not in a parent folder.
 
 | Agent | Role | Edits files? |
 |---|---|---|
@@ -88,13 +90,14 @@ Planned design invariants from the roadmap:
 | `lap-trinh` | Coder. Implements one assigned task in `src/` and runs ruff + pytest. Never commits | Yes |
 | `viet-test` | Test writer. Writes tests in `tests/` from the spec, not from the code; never edits `src/` | Yes, `tests/` only |
 | `review` | Reviewer. Reviews the uncommitted diff for correctness, security, layering and docs, with severity levels | No |
+| `tan-cong` | Attack tester. For code that takes input from other machines, writes and runs real attack scripts against a node on 127.0.0.1 (floods, starvation, slow peers, malformed or oversized data, spoofing, filesystem tricks) and reports only what it reproduced, with measurements | Scripts in the scratchpad only; never `src/` or `tests/` |
 | `tom-tat` | Summarizer. Summarizes verified changes and drafts the CHANGELOG entry and commit message | No |
 
 Subagents cannot call each other, so **the main session orchestrates**. For any non-trivial feature, run this pipeline:
 1. `truong-nhom` makes the plan.
 2. If the plan has open questions, run `hoi-lai`, then ask the user the blocking questions.
 3. Run `lap-trinh` and `viet-test` in parallel, from the plan's API and done criteria.
-4. Loop `review` and fixes until no **nghiêm trọng** or **cao** issues remain.
+4. Loop `review` and fixes until no **nghiêm trọng** or **cao** issues remain. When the change takes input from other machines (`net`, pairing, discovery, receiving files), run `tan-cong` in parallel with `review`; its reproduced findings count the same as review findings.
 5. `truong-nhom` gives the verdict, fed with the review and test results.
 6. `tom-tat` writes the summary and commit message.
 

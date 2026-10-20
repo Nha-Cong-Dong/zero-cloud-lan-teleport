@@ -33,7 +33,7 @@ Tài liệu này là **nguồn duy nhất** về trạng thái từng module. Tr
 
 **Quy tắc**, được `tests/test_architecture.py` kiểm tra tự động:
 1. Mỗi tầng chỉ import các tầng **bên dưới**. `ui` và `cli` không import lẫn nhau.
-2. `core` là **sans-IO**: không import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `PySide6`, `teleport.paths`, `teleport.lock`, hay bất kỳ tầng nào khác.
+2. `core` là **sans-IO**: không import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `ifaddr`, `PySide6`, `teleport.paths`, `teleport.lock`, hay bất kỳ tầng nào khác.
 3. Mọi module/gói ở cấp `teleport.*` phải thuộc một tầng, hoặc là tiện ích dùng chung (`paths`, `lock`) không import tầng nào. Tạo gói mới thì phải xếp nó vào sơ đồ.
 
 ### Vì sao chia như vậy
@@ -67,6 +67,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*`, `control_open`, `ping`/`pong`) | ✅ |
 | core | `pairing_code.py` | Cam kết nonce và mã ghép đôi 6 số từ hai fingerprint + hai nonce | ✅ |
 | core | `pairing.py` | Máy trạng thái ghép đôi sans-IO: thứ tự `pair_*`, hết giờ, lý do hủy (`InitiatorSession`, `ResponderSession`); chống làm phiền: một phiên tại một thời điểm, chờ tăng dần theo IP, hai bên cùng chủ động (`PairingGate`) | ✅ |
+| core | `discovery.py` | Khám phá sans-IO: dựng/kiểm bản ghi TXT, cắt tên ≤ 200 byte, lọc địa chỉ, nhận ra card ảo, chọn địa chỉ quảng bá; máy trạng thái `DiscoveryTracker` (thiết bị thêm/sửa/xóa, kiểm còn sống và probe thưa dần cho thiết bị đã biến mất, ưu tiên thiết bị đã ghép đôi, danh sách tràn khi đã đủ 256; protocol mục 8) | ✅ |
 | core | `blocks.py` | Khung khối nhị phân kèm SHA-256, chia khối | ⬜ |
 | core | `merkle.py`, `bitfield.py` | Cây băm SHA-256; bảng khối đã nhận và đã xác minh | ⬜ |
 | core | `transfer.py` | Máy trạng thái gửi/nhận, nối lại, gửi lại khối lỗi | ⬜ |
@@ -74,7 +75,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | trust | `store.py` | `trusted.json`: thiết bị đã ghép đôi | ✅ |
 | net | `tls.py` | `SSLContext` TLS 1.3; server một cổng (`CERT_OPTIONAL` + thiết bị tin cậy làm trust anchor); client so toàn bộ fingerprint | ✅ |
 | net | `stream.py` | Đọc/ghi message trên `asyncio` stream | ✅ |
-| net | `discovery.py` | Quảng bá & tìm `_teleport._tcp.local.` (zeroconf) | ⏳ |
+| net | `discovery.py` | Quảng bá & tìm `_teleport._tcp.local.` (zeroconf, `MdnsDiscovery`): đăng ký/cập nhật/goodbye, duyệt và resolve theo `core.discovery`, đặt tập thiết bị ưu tiên (`set_priority`), đọc card mạng (ifaddr) và địa chỉ nguồn ưu tiên | ✅ |
 | net | `connection.py` | Listener một cổng; phân loại kết nối ghép đôi / điều khiển / dữ liệu; trao `hello`; giới hạn, thời gian chờ, keepalive; thay `SSLContext` khi danh sách tin cậy đổi | ⏳ |
 | app | `node.py` | Ghép các thành phần lại: lắng nghe, khám phá, giữ một kết nối điều khiển tới mỗi thiết bị tin cậy (chống trùng, nối lại), điều phối | ⏳ |
 | app | `pairing.py` | Dịch vụ ghép đôi: sinh nonce, chạy máy trạng thái `core.pairing` trên kết nối thật, lưu thiết bị tin cậy, hủy ghép đôi | ⏳ |

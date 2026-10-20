@@ -36,6 +36,7 @@ from teleport.core.messages import (
     to_dict,
     validate_device_id,
     validate_device_name,
+    validate_os,
 )
 
 DEVICE_ID = "3f2a" + "0123456789abcdef" * 1 + "0" * 12
@@ -583,6 +584,67 @@ def test_os_enum_becomes_plain_str():
     msg = Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="1", os=OsName.MACOS)
     assert type(msg.os) is str
     assert to_dict(msg)["os"] == "macos"
+
+
+# --- validate_os (PR3 mục 2.1: cùng quy tắc với `hello.os`, dùng lại cho TXT `os`) ---------------
+
+VALID_OS = ["windows", "macos", "linux", "freebsd", "x", "a" * 16, "os_2", "0", "_", "win11"]
+INVALID_OS = [
+    "",
+    "Windows",
+    "WINDOWS",
+    "a" * 17,
+    "mac os",
+    "linux\n",
+    "\nlinux",
+    " linux",
+    "ｗｉｎ",  # "win" toàn chiều rộng
+    "win-11",
+    "win.11",
+    "macos​",
+    "linuх",  # chữ x Kirin
+    "٣",  # chữ số Ả Rập: `\d` nhận, ASCII thì không
+    None,
+    1,
+    b"windows",
+    ["windows"],
+]
+
+
+@pytest.mark.parametrize("value", VALID_OS)
+def test_validate_os_returns_valid_value_unchanged(value):
+    result = validate_os(value)
+    assert result == value
+    assert isinstance(result, str)
+
+
+@pytest.mark.parametrize("value", INVALID_OS, ids=repr)
+def test_validate_os_rejects_invalid_value(value):
+    with pytest.raises(MessageError):
+        validate_os(value)
+
+
+def test_validate_os_accepts_os_name_enum():
+    assert validate_os(OsName.LINUX) == "linux"
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.text(max_size=20) | st.text(alphabet="abcxyz019_ABC-\n ", max_size=18))
+def test_property_validate_os_agrees_with_hello_os(value):
+    expected_ok = 1 <= len(value) <= 16 and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in value)
+    try:
+        assert validate_os(value) == value
+    except MessageError:
+        assert not expected_ok, f"os hợp lệ bị từ chối: {value!r}"
+    else:
+        assert expected_ok, f"os sai đặc tả lại được chấp nhận: {value!r}"
+    # Hello dùng cùng quy tắc: kết quả nhận/từ chối phải trùng.
+    try:
+        parse_message({**valid_dicts()["hello"], "os": value})
+    except MessageError:
+        assert not expected_ok
+    else:
+        assert expected_ok
 
 
 # --- Tạo tay dataclass với giá trị sai ---------------------------------------------------------

@@ -21,7 +21,16 @@ TOP = {"ui", "cli"}
 # Tiện ích dùng chung: tầng nào cũng import được (trừ core), và chúng không import tầng nào.
 SHARED = ("paths", "lock")
 
-SANS_IO_FORBIDDEN = ("asyncio", "socket", "ssl", "selectors", "threading", "zeroconf", "PySide6")
+SANS_IO_FORBIDDEN = (
+    "asyncio",
+    "socket",
+    "ssl",
+    "selectors",
+    "threading",
+    "zeroconf",
+    "ifaddr",
+    "PySide6",
+)
 
 
 def layer_of(module: str) -> str | None:
