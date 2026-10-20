@@ -1,7 +1,7 @@
 """Giao diện dòng lệnh: `teleport <lệnh>`.
 
 Mỗi lệnh là một hàm `cmd_<tên>(args) -> int` (mã thoát). Lệnh mới được thêm
-theo từng giai đoạn: `list`, `pair`, `send`, `receive`…
+theo từng giai đoạn: `list`, `listen`, `pair`, `unpair`, `send`, `receive`.
 """
 
 from __future__ import annotations

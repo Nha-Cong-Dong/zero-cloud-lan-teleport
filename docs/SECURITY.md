@@ -24,4 +24,4 @@ Bạn sẽ nhận được phản hồi trong vòng 7 ngày.
 - Lộ nội dung file hoặc clipboard cho thiết bị chưa ghép đôi.
 - Bất kỳ kết nối nào ra Internet mà người dùng không bật.
 
-Thiết kế bảo mật: [protocol.md](protocol.md).
+Mô hình mối đe dọa và biện pháp: [mvp.md](mvp.md) mục 11. Thiết kế bảo mật trên dây: [protocol.md](protocol.md).

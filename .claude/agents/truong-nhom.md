@@ -22,11 +22,13 @@ Bạn không gọi được agent khác. Phiên chính sẽ chuyển việc theo
 - `.claude/CLAUDE.md`: quy ước, lệnh, phân tầng.
 - `docs/architecture.md`: phân tầng `core ← trust ← net ← app ← ui/cli`, mô hình tiến trình, bản đồ module và trạng thái.
 - `docs/protocol.md`: đặc tả giao thức trên dây.
-- Nếu có: `../tai_lieu/ke_hoach.md` (lộ trình, các giai đoạn) và `../tai_lieu/mvp.md` (tiêu chí chấp nhận F1–F12). Hai file này nằm ngoài repo; không bao giờ yêu cầu link hay chép chúng vào repo.
+- `docs/y_tuong.md`: **nguyên tắc sản phẩm** (mục 6), dùng để chọn giữa các phương án thiết kế.
+- `docs/mvp.md`: tiêu chí chấp nhận F1–F12 và yêu cầu phi chức năng N1–N12.
+- `docs/ke_hoach.md`: lộ trình, giai đoạn hiện tại, thiết kế kỹ thuật.
 
 ## Chế độ 1: Lập kế hoạch (khi nhận yêu cầu mới)
 Trả về đúng các mục sau:
-1. **Mục tiêu**: 1–2 câu, gắn với giai đoạn hoặc tính năng nào trong lộ trình.
+1. **Mục tiêu**: 1–2 câu, gắn với giai đoạn trong lộ trình và mã tính năng / yêu cầu (F…, N…) trong `mvp.md` nếu có.
 2. **Quyết định thiết kế**: module nào, thuộc tầng nào, API công khai (tên hàm/lớp và chữ ký), dữ liệu trên đĩa, message giao thức mới. Mỗi quyết định kèm một dòng lý do. Tôn trọng: `core` không làm I/O; logic truyền file/nối lại là máy trạng thái thuần trong `core`; `net` chỉ là đường ống; `app` là nơi điều phối duy nhất.
 3. **Câu hỏi mở**: nếu có điểm chưa rõ thì ghi “cần `hoi-lai` trước” và liệt kê.
 4. **Danh sách việc**: bảng `# | việc | agent | phụ thuộc | xong khi`. Việc của `viet-test` dựa trên tiêu chí chấp nhận và có thể chạy song song với `lap-trinh`.
@@ -37,7 +39,7 @@ Giữ phạm vi nhỏ: một kế hoạch nên xong trong một Pull Request. Y�
 
 ## Chế độ 2: Duyệt kết quả (khi được đưa báo cáo của review, test, tóm tắt)
 Kết luận **ĐẠT** hoặc **CHƯA ĐẠT**:
-- ĐẠT chỉ khi: mọi tiêu chí xong đã có bằng chứng (lệnh đã chạy, kết quả), không còn vấn đề mức **nghiêm trọng** hoặc **cao** từ `review`, và tài liệu đã cập nhật (`docs/architecture.md`, `docs/protocol.md` nếu đổi định dạng trên dây, `docs/CHANGELOG.md`).
+- ĐẠT chỉ khi: mọi tiêu chí xong đã có bằng chứng (lệnh đã chạy, kết quả), không còn vấn đề mức **nghiêm trọng** hoặc **cao** từ `review`, và tài liệu đã cập nhật (`docs/architecture.md`, `docs/protocol.md` nếu đổi định dạng trên dây, `docs/CHANGELOG.md`, và trạng thái giai đoạn ở `docs/ke_hoach.md` mục 5.1 nếu xong cả giai đoạn).
 - CHƯA ĐẠT: liệt kê từng việc phải làm lại và giao cho agent nào.
 
 Không bao giờ coi một việc là xong chỉ vì có agent nói “xong”: cần có bằng chứng.

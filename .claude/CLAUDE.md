@@ -4,16 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Teleport (Zero-Cloud LAN Teleport) is a desktop app, written in Python 3.12+, for sending very large files and syncing the clipboard between computers on the same LAN. There is no cloud, no accounts and no telemetry. It is built as a release-quality product. The current stage is early core work: framing, device identity and TLS. Discovery, pairing, transfer and the UI are not written yet.
+Teleport (Zero-Cloud LAN Teleport) is a desktop app, written in Python 3.12+, for sending very large files and syncing the clipboard between computers on the same LAN. There is no cloud, no accounts and no telemetry. It is built as a release-quality product. The current stage is phase 1, discovery and pairing. Done so far: framing, device identity, TLS 1.3 + mTLS, the offline pairing foundation (`hello`/`pair_*` messages, the commitment-based 6-digit code, the trust store) and the node lock. Discovery, network pairing, transfer, resume, clipboard and the UI are not written yet.
 
-The parent folder of `.claude/` is the git repo root (`git@github.com:Nha-Cong-Dong/zero-cloud-lan-teleport.git`, private). The repo root holds only `README.md` and `pyproject.toml`. Every other Markdown doc lives in `docs/`: `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `architecture.md`, `protocol.md`, plus `docs/README.md` as an index. Keep the root that tidy.
+The parent folder of `.claude/` is the git repo root (`git@github.com:Nha-Cong-Dong/zero-cloud-lan-teleport.git`, public). The repo root holds only `README.md`, `LICENSE` and `pyproject.toml`. Every other Markdown doc lives in `docs/`. Keep the root that tidy.
 
-The internal design documents sit **outside the repo**, in `../tai_lieu/`:
-- `ke_hoach.md`: architecture, protocol and roadmap.
-- `mvp.md`: MVP feature spec with acceptance criteria.
-- `y_tuong.md`: original idea.
+`docs/README.md` is the index. It says which doc owns which information, and holds the glossary and writing conventions. The product and planning docs, read in this order:
+- `docs/y_tuong.md`: the why. Pain points, core values, target experience, **product principles** (use them to settle trade-offs) and the post-v1.0 vision.
+- `docs/mvp.md`: the what. Scope, features F1–F12 with acceptance criteria, non-functional requirements N1–N12 (the only source of quality numbers), error messages, release criteria.
+- `docs/ke_hoach.md`: the how and when. Technical design, roadmap and **current phase status**, testing, technical risks, open decisions.
 
-Read them for design intent when they exist, but never link to them or copy them into repo files.
+The technical docs are `architecture.md` (layers, process model, **module status**), `protocol.md` (wire format), `CONTRIBUTING.md`, `SECURITY.md` and `CHANGELOG.md`.
+
+Each fact is written in full in exactly one doc; other docs refer to it by code (`mvp N4`, `ke_hoach mục 3.4`) instead of copying numbers or text. When docs disagree, `protocol.md` and `architecture.md` win on the wire format and module status, `mvp.md` wins on requirements, `ke_hoach.md` on design and schedule. When a phase finishes, update its status in `ke_hoach.md` §5.1 as well as `architecture.md`.
 
 ## Language
 
@@ -25,7 +27,7 @@ Run from this folder on Windows/PowerShell. The venv lives at `.venv/`.
 
 ```powershell
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"                          # cryptography + pytest, pytest-asyncio, ruff
+pip install -e ".[dev]"                          # cryptography + pytest, pytest-asyncio, hypothesis, ruff
 pytest                                           # all tests
 pytest -m "not integration"                      # skip tests that open real sockets on 127.0.0.1
 pytest tests/net/test_tls.py::test_verify_pin_rejects_mismatch   # single test
@@ -101,4 +103,4 @@ Commit and push only after the user approves. Small fixes of a few lines can ski
 
 - Commits follow Conventional Commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`). Changes users will notice go under `[Unreleased]` in `docs/CHANGELOG.md`.
 - The app version lives only in `src/teleport/__init__.py`. The network protocol is versioned separately, in `docs/protocol.md`.
-- Runtime or bundled dependencies must be MIT/BSD/Apache/LGPL. Dev-only tools may use other licenses: `hypothesis` (MPL-2.0) is approved. The project license is not decided yet.
+- The project is licensed GPL-3.0-or-later. Runtime or bundled dependencies must be GPLv3-compatible: MIT/BSD/Apache-2.0/LGPL. The one exception is PyInstaller (GPL with a bootloader exception); package with `--onedir` so users can replace the LGPL libraries. Dev-only tools may use other licenses: `hypothesis` (MPL-2.0) is approved.

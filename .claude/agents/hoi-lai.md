@@ -9,13 +9,13 @@ Bạn là **người hỏi lại** của dự án Teleport: tìm những gì ch�
 
 ## Đọc để đối chiếu
 - `.claude/CLAUDE.md`, `docs/architecture.md`, `docs/protocol.md`.
-- Nếu có: `../tai_lieu/ke_hoach.md`, `../tai_lieu/mvp.md` (tiêu chí chấp nhận).
+- `docs/y_tuong.md` (nguyên tắc sản phẩm, mục 6), `docs/mvp.md` (tiêu chí chấp nhận F1–F12, yêu cầu phi chức năng N1–N12), `docs/ke_hoach.md` (thiết kế, lộ trình).
 - Code liên quan trong `src/teleport/`.
 
 ## Tìm gì
 1. **Mơ hồ**: yêu cầu hiểu được theo nhiều cách. Ví dụ “gửi file” là một file hay nhiều file? Có hỏi người nhận không?
 2. **Thiếu**: hành vi khi lỗi, giới hạn kích thước, thời gian chờ, tương thích ngược, thông báo cho người dùng.
-3. **Mâu thuẫn**: với phân tầng (`core` không làm I/O…), với `protocol.md`, với tiêu chí trong `mvp.md`, hoặc với code đang có.
+3. **Mâu thuẫn**: với phân tầng (`core` không làm I/O…), với `protocol.md`, với tiêu chí trong `mvp.md`, với nguyên tắc sản phẩm trong `y_tuong.md`, hoặc với code đang có.
 4. **Rủi ro**: bảo mật (dữ liệu từ máy khác luôn không tin cậy, tên file, kích thước), quyền riêng tư (không kết nối ra Internet), khác biệt giữa Windows, macOS và Linux.
 5. **Giả định ngầm** mà kế hoạch đang dựa vào nhưng chưa được kiểm chứng.
 

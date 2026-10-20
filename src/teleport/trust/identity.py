@@ -35,6 +35,18 @@ _NETSCAPE_CERT_TYPE = x509.ObjectIdentifier("2.16.840.1.113730.1.1")
 
 _CN_RE = re.compile(re.escape(CN_PREFIX) + r"[0-9a-f]{32}")
 
+# Lỗi `cryptography` có thể ném khi đọc một chứng chỉ hỏng. Tùy phiên bản, lỗi như
+# InvalidVersion (không phải ValueError) bật ra ngay lúc load hoặc lúc đọc thuộc tính,
+# nên cả hai chỗ đều phải bắt cùng một bộ.
+_CERT_ERRORS = (
+    ValueError,
+    TypeError,
+    InvalidSignature,
+    UnsupportedAlgorithm,
+    x509.InvalidVersion,
+    x509.DuplicateExtension,
+)
+
 
 @dataclass(frozen=True)
 class Identity:
@@ -97,7 +109,7 @@ def peer_cert_from_pem(pem: str) -> PeerCert:
         raise InvalidCertificate("cần đúng một khối CERTIFICATE, ngoài khối chỉ được có khoảng trắng")
     try:
         cert = x509.load_pem_x509_certificate(body.encode("ascii"))
-    except ValueError as e:
+    except _CERT_ERRORS as e:
         raise InvalidCertificate("không phân tích được chứng chỉ PEM") from e
     return _peer_cert(cert)
 
@@ -110,7 +122,7 @@ def peer_cert_from_der(der: bytes) -> PeerCert:
         raise InvalidCertificate(f"chứng chỉ DER dài quá {MAX_PEM_LEN} byte")
     try:
         cert = x509.load_der_x509_certificate(der)
-    except ValueError as e:
+    except _CERT_ERRORS as e:
         raise InvalidCertificate("không phân tích được chứng chỉ DER") from e
     return _peer_cert(cert)
 
@@ -170,14 +182,7 @@ def _peer_cert(cert: x509.Certificate) -> PeerCert:
         pem = cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
     except InvalidCertificate:
         raise
-    except (
-        ValueError,
-        TypeError,
-        InvalidSignature,
-        UnsupportedAlgorithm,
-        x509.InvalidVersion,
-        x509.DuplicateExtension,
-    ) as e:
+    except _CERT_ERRORS as e:
         raise InvalidCertificate("chứng chỉ không hợp lệ hoặc chữ ký tự ký sai") from e
     if len(pem) > MAX_PEM_LEN:
         raise InvalidCertificate(f"chứng chỉ PEM dài quá {MAX_PEM_LEN} ký tự")

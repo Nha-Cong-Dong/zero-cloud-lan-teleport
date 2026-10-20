@@ -56,7 +56,7 @@ Mỗi message:
 | `verified` | nhận → gửi | `transfer_id`, `file_index` |
 | `corrupt` | nhận → gửi | `transfer_id`, `file_index`, `blocks`: danh sách chỉ số khối lỗi |
 | `cancel` | ↔ | `transfer_id` |
-| `clipboard` | ↔ | `kind`: `"text"` · `"image/png"`, `sha256`, `data` (văn bản hoặc base64, ≤ 10 MB) |
+| `clipboard` | ↔ | `kind`: `"text"` · `"image/png"`, `sha256`, `data` (văn bản UTF-8 hoặc base64; dữ liệu gốc trước base64 ≤ 10 MiB) |
 | `ping` / `pong` | ↔ | `t` (timestamp) |
 
 Hai bên gửi `hello` ngay sau khi bắt tay TLS. Khác `protocol` thì đóng kết nối và báo người dùng cập nhật app.
@@ -97,7 +97,10 @@ Sau đó là các khung khối:
 
 - Kích thước khối mặc định **1 MiB**. Khối cuối có thể ngắn hơn.
 - Khối `i` nằm ở vị trí `i × block_size` trong file.
-- Bên nhận băm SHA-256 từng khối và so với `block_hashes`. Khối sai được báo trong `corrupt` và gửi lại.
+- **Lô:** lô `k` gồm các khối `64k` … `64k + 63` (lô cuối có thể ngắn hơn). Mỗi `block_hashes` mô tả đúng một lô: `start_block` là bội của 64, `hashes` có từ 1 tới 64 phần tử và đủ mọi khối của lô.
+- Bên gửi băm từng khối trong khi gửi và gửi `block_hashes` của một lô trên kênh điều khiển ngay sau khối cuối của lô đó, nên hash tới sau khối. Khi nối lại, bên gửi gửi lại `block_hashes` cho mọi lô còn khối có bit = 0.
+- Bên nhận băm SHA-256 từng khối khi nhận, giữ lại hash vừa tính, rồi so khi `block_hashes` của lô đó tới. Khối sai được báo trong `corrupt` và gửi lại.
+- **Kiểm soát luồng theo lô:** kết nối điều khiển và kết nối dữ liệu không có thứ tự với nhau, nên bên nhận **không đọc khung nào của lô `k + 1`** cho tới khi lô `k` đã xác minh xong (mục 6). Nhờ vậy tại mọi thời điểm có tối đa một lô đã nhận mà chưa xác minh.
 
 ## 5. Ghép đôi 📝
 
@@ -158,7 +161,8 @@ Mỗi bên lưu `device_id`, tên, fingerprint và chứng chỉ PEM của bên 
 
 ## 6. Nối lại 📝
 
-- Bên nhận lưu `<tên>.part.state` gồm: manifest từ `offer`, bitfield các khối đã xác minh, hash của các khối đó.
+- Bên nhận lưu `<tên>.part.state` gồm: manifest từ `offer`, bitfield các khối đã xác minh, hash của các khối đó. Một bit chỉ được bật khi khối đã ghi bền xuống đĩa **và** khớp hash trong `block_hashes`. Thứ tự sau mỗi lô: mọi khối của lô khớp hash → `fsync` file `.part` → bật bit → ghi `.part.state` nguyên tử (file tạm, `fsync`, đổi tên). Mất điện ở bước nào thì state cũng không đánh dấu khối chưa nằm trên đĩa.
 - Kết nối lại → bên nhận gửi `resume` cho từng file dở dang → bên gửi chỉ gửi các khối có bit = 0.
+- Khối đã nhận nhưng chưa kịp xác minh có bit = 0 nên được gửi lại. Nhờ kiểm soát luồng theo lô (mục 4), lượng gửi lại ≤ phần chưa nhận + một lô (64 khối), kể cả khi bên nhận bị tắt hẳn.
 - File nguồn đổi `size` hoặc `mtime` so với manifest → bên gửi gửi `cancel`.
 - Merkle root được tính từ danh sách hash các khối (lá) theo cây nhị phân. Lẻ nút thì nút cuối được đẩy thẳng lên tầng trên.

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,8 @@ name = "zero-cloud-lan-teleport"
 dynamic = ["version"]
 description = "Zero-Cloud LAN Teleport — chuyển file và clipboard trực tiếp trong mạng LAN"
 readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "cryptography>=42",

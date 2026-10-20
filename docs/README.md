@@ -1,11 +1,58 @@
 # Tài liệu
 
-| Tài liệu | Dành cho | Nội dung |
-|---|---|---|
-| [architecture.md](architecture.md) | Nhà phát triển | Phân tầng, bản đồ module và trạng thái, dữ liệu trên đĩa |
-| [protocol.md](protocol.md) | Nhà phát triển | Đặc tả giao thức trên dây (phiên bản 1, dự thảo) |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Người đóng góp | Nhánh, commit, kiểm tra trước Pull Request, phát hành |
-| [SECURITY.md](SECURITY.md) | Mọi người | Cách báo lỗ hổng bảo mật, phạm vi |
-| [CHANGELOG.md](CHANGELOG.md) | Mọi người | Lịch sử thay đổi theo phiên bản |
+Mọi tài liệu của dự án nằm trong thư mục này. Giới thiệu dự án và cách cài môi trường phát triển: [README.md](../README.md) ở gốc repo.
 
-Giới thiệu dự án và cách cài môi trường phát triển: [README.md](../README.md) ở gốc repo.
+## 1. Bản đồ tài liệu
+
+### Sản phẩm & kế hoạch
+
+Đọc theo thứ tự **y_tuong → mvp → ke_hoach**: đi từ “vì sao” tới “cái gì” rồi “thế nào”.
+
+| Tài liệu | Trả lời câu hỏi | Nguồn duy nhất cho | Cập nhật khi |
+|---|---|---|---|
+| [y_tuong.md](y_tuong.md) | **Vì sao** làm, cho ai, hướng tới đâu? | Nỗi đau, giá trị cốt lõi, trải nghiệm mong muốn, **nguyên tắc sản phẩm**, tầm nhìn sau v1.0 | Đổi định hướng sản phẩm |
+| [mvp.md](mvp.md) | Làm **cái gì**, đạt chuẩn nào? | Phạm vi; tính năng & tiêu chí chấp nhận **F1–F12**; yêu cầu phi chức năng **N1–N12**; thông báo lỗi; tiêu chí phát hành | Đổi phạm vi, tính năng hoặc con số chất lượng |
+| [ke_hoach.md](ke_hoach.md) | Làm **thế nào**, **khi nào**, đang tới đâu? | Quyết định đã chốt; thiết kế kỹ thuật; lộ trình và **trạng thái giai đoạn**; kiểm thử; rủi ro kỹ thuật; việc cần chốt | Đổi thiết kế, xong một giai đoạn, chốt một câu hỏi |
+
+### Kỹ thuật & quy trình
+
+| Tài liệu | Trả lời câu hỏi | Nguồn duy nhất cho | Cập nhật khi |
+|---|---|---|---|
+| [architecture.md](architecture.md) | Code chia thế nào, module nào đã có? | Phân tầng, mô hình tiến trình, **trạng thái từng module**, dữ liệu trên đĩa | Thêm hoặc xong một module |
+| [protocol.md](protocol.md) | Byte nào đi trên dây? | Đặc tả giao thức (phiên bản 1, dự thảo) | Mọi thay đổi định dạng trên dây, trong cùng Pull Request |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Làm việc với repo thế nào? | Nhánh, commit, kiểm tra trước Pull Request, phát hành | Đổi quy trình |
+| [SECURITY.md](SECURITY.md) | Báo lỗ hổng ở đâu? | Cách báo lỗ hổng, phạm vi | Đổi chính sách |
+| [CHANGELOG.md](CHANGELOG.md) | Đã thay đổi gì? | Lịch sử thay đổi theo phiên bản | Mỗi thay đổi người dùng nhận thấy |
+
+## 2. Quy tắc đồng bộ
+
+- Mỗi thông tin chỉ ghi đầy đủ ở **một** tài liệu theo bảng trên; nơi khác tham chiếu tới (ví dụ “mvp N4”, “ke_hoach mục 3.4”) thay vì chép lại con số hay đoạn văn.
+- y_tuong viết ở mức ý tưởng, không ghi con số yêu cầu hay chi tiết kỹ thuật.
+- [README.md](../README.md) ở gốc repo là phần giới thiệu công khai: được tóm tắt lại giá trị, tính năng và lộ trình, nhưng phải khớp với các tài liệu nguồn ở trên.
+- Khi lệch nhau: `protocol.md` và `architecture.md` đúng về giao thức và module; mvp đúng về yêu cầu; ke_hoach đúng về thiết kế và tiến độ; y_tuong đúng về định hướng.
+- Đổi một con số trong mvp thì rà các chỗ tham chiếu tới mã đó. Xong một module thì cập nhật cả `architecture.md` (module) và, khi xong cả giai đoạn, ke_hoach mục 5.1.
+- Cập nhật dòng “Cập nhật:” ở đầu y_tuong, mvp, ke_hoach khi sửa nội dung.
+
+## 3. Thuật ngữ
+
+| Thuật ngữ | Nghĩa |
+|---|---|
+| **Khối** (block) | Đơn vị chia file: 1 MiB. Là đơn vị băm, nối lại và ghi bitfield. |
+| **Lượt truyền** (transfer) | Một lần gửi một hoặc nhiều file, có `transfer_id` riêng. |
+| **Ghép đôi** (pairing) | Bước xác nhận mã 6 số ở cả hai máy để hai máy tin nhau. |
+| **Thiết bị tin cậy** | Thiết bị đã ghép đôi, lưu trong `trusted.json`. |
+| **Fingerprint** | SHA-256 của chứng chỉ thiết bị; là định danh được tin cậy (tên thiết bị chỉ để hiển thị). |
+| **Bitfield** | Bảng bit đánh dấu khối đã nhận **và đã xác minh**. |
+| **Merkle root** | Hash đại diện cho cả file, tính từ hash các khối. |
+| **`.part` / `.part.state`** | File đang nhận / trạng thái nối lại của nó. |
+| **Node** | Một tiến trình Teleport đang chạy, gắn với một thư mục cấu hình. |
+| **Cô lập thiết bị** (AP isolation) | Wi-Fi chặn các máy trong mạng nói chuyện với nhau. |
+
+## 4. Quy ước viết
+
+- Viết tiếng Việt; tên định danh, lệnh, tên message giữ nguyên tiếng Anh trong `code`.
+- Tên message giao thức viết thường như trong `protocol.md`: `hello`, `offer`, `block_hashes`…
+- Đơn vị: `MiB` cho kích thước kỹ thuật (khối, giới hạn message); `MB`/`GB` cho con số hướng tới người dùng.
+- Phiên bản app: `v0.1.0-alpha`, `v1.0.0` (SemVer); phiên bản giao thức đánh số riêng.
+- Tham chiếu chéo: `mvp F6`, `mvp N4`, `mvp mục 8`, `ke_hoach mục 3.4`.
+- Trạng thái: ✅ đã xong · ⏳ đang làm · ⬜ chưa làm.
