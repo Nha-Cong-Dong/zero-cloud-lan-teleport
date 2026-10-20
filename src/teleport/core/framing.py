@@ -44,6 +44,12 @@ def decode_body(body: bytes) -> dict:
         msg = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         raise FramingError("nội dung không phải JSON UTF-8 hợp lệ") from e
+    except ValueError as e:
+        # Số nguyên quá dài (> 4300 chữ số): Python từ chối đổi sang int.
+        raise FramingError("JSON chứa số nguyên quá dài") from e
+    except RecursionError as e:
+        # JSON lồng quá sâu, ví dụ "[[[[…": bộ giải mã vượt giới hạn đệ quy.
+        raise FramingError("JSON lồng quá sâu") from e
     if not isinstance(msg, dict):
         raise FramingError("message phải là một JSON object")
     return msg

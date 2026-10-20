@@ -1,4 +1,8 @@
+import json
+
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from teleport.core.framing import (
     HEADER,
@@ -44,3 +48,79 @@ def test_oversized_message_cannot_be_encoded():
 def test_invalid_body_raises(body):
     with pytest.raises(FramingError):
         decode_body(body)
+
+
+# --- Phụ lục điểm 15: số nguyên quá dài, JSON lồng quá sâu → FramingError --------------------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"a":' + b"1" * 5000 + b"}",
+        b'{"a":-' + b"9" * 4301 + b"}",
+        b'{"a":[' + b"7" * 100_000 + b"]}",
+    ],
+    ids=["5000-chu-so", "4301-chu-so-am", "100k-chu-so-trong-list"],
+)
+def test_huge_integer_raises_framing_error(body):
+    with pytest.raises(FramingError):
+        decode_body(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"[" * 100_000,
+        b"[" * 100_000 + b"]" * 100_000,
+        b'{"a":' * 100_000 + b"1" + b"}" * 100_000,
+        b'{"a":' + b"[" * 50_000 + b"]" * 50_000 + b"}",
+    ],
+    ids=["mo-ngoac-100k", "list-long-100k", "object-long-100k", "trong-object"],
+)
+def test_deeply_nested_json_raises_framing_error(body):
+    with pytest.raises(FramingError):
+        decode_body(body)
+
+
+def test_moderately_nested_json_still_decodes():
+    body = b'{"a":' + b"[" * 50 + b"]" * 50 + b"}"
+    value = decode_body(body)["a"]
+    depth = 0
+    while value != []:
+        assert isinstance(value, list) and len(value) == 1
+        value = value[0]
+        depth += 1
+    assert depth == 49
+
+
+# --- Fuzz decode_body (phụ lục điểm 18) --------------------------------------------------------
+
+json_like = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats() | st.text(max_size=20),
+    lambda c: st.lists(c, max_size=4) | st.dictionaries(st.text(max_size=8), c, max_size=4),
+    max_leaves=20,
+)
+
+
+@settings(max_examples=500, deadline=None)
+@given(
+    st.binary(max_size=400)
+    | json_like.map(lambda v: json.dumps(v).encode())
+    | st.text(alphabet='{}[]":,0123456789-+.eE nultrfasNI\\u', max_size=200).map(str.encode)
+)
+def test_fuzz_decode_body_returns_dict_or_framing_error(body):
+    try:
+        msg = decode_body(body)
+    except FramingError:
+        return
+    assert isinstance(msg, dict)
+
+
+@settings(max_examples=200, deadline=None)
+@given(st.dictionaries(st.text(max_size=10), json_like, max_size=5))
+def test_fuzz_encode_decode_roundtrip_of_objects(obj):
+    frame = encode_message(obj)
+    length, body = split(frame)
+    assert length == len(body)
+    # NaN != NaN nên so sánh qua dạng JSON chuẩn.
+    assert json.dumps(decode_body(body), sort_keys=True) == json.dumps(obj, sort_keys=True)
