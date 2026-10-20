@@ -1,0 +1,649 @@
+"""Test `PairingGate`: chống làm phiền theo IP và phân xử hai bên cùng chủ động.
+
+Viết từ đặc tả (kế hoạch PR 1 mục 2.9, câu hỏi 4–5; docs/protocol.md §5.3), không từ code.
+"""
+
+from __future__ import annotations
+
+import pytest
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
+
+from teleport.core.pairing import (
+    BACKOFF_BASE,
+    BACKOFF_FORGET_AFTER,
+    BACKOFF_MAX,
+    MAX_TRACKED_IPS,
+    Admission,
+    Decision,
+    Outcome,
+    PairingGate,
+    Role,
+    Slot,
+)
+
+OWN = "8" * 32
+LOWER = "1" * 32  # device_id nhỏ hơn OWN
+HIGHER = "f" * 32  # device_id lớn hơn OWN
+PEER = LOWER
+IP = "192.168.1.20"
+IP2 = "192.168.1.21"
+
+# Mọi outcome tính là thất bại (trừ PAIRED xóa đếm và CANCELLED giữ nguyên).
+FAILURE_OUTCOMES = [o for o in Outcome if o not in (Outcome.PAIRED, Outcome.CANCELLED)]
+
+
+def gate(accepting: bool = True) -> PairingGate:
+    return PairingGate(OWN, accepting=accepting)
+
+
+def assert_busy(adm: Admission) -> None:
+    assert adm.decision == Decision.BUSY
+    assert adm.slot is None
+    assert adm.cancel_outgoing is None
+
+
+def assert_accept(adm: Admission, ip: str) -> Slot:
+    assert adm.decision == Decision.ACCEPT
+    assert isinstance(adm.slot, Slot)
+    assert adm.slot.role == Role.RESPONDER
+    assert adm.slot.ip == ip
+    return adm.slot
+
+
+def fail_once(g: PairingGate, ip: str, now: float, outcome: Outcome = Outcome.TIMEOUT) -> None:
+    slot = assert_accept(g.admit(ip, PEER, now), ip)
+    g.finish(slot, outcome, now)
+
+
+# --- Hằng số, mặc định -------------------------------------------------------------------------
+
+
+def test_constants():
+    assert BACKOFF_BASE == 10.0
+    assert BACKOFF_MAX == 600.0
+    assert BACKOFF_FORGET_AFTER == 600.0
+    assert MAX_TRACKED_IPS == 1024
+
+
+def test_decision_values():
+    assert Decision.ACCEPT == "accept"
+    assert Decision.BUSY == "busy"
+
+
+def test_admission_defaults():
+    adm = Admission(Decision.BUSY)
+    assert adm.slot is None
+    assert adm.cancel_outgoing is None
+
+
+def test_new_gate_defaults():
+    g = PairingGate(OWN)
+    assert g.accepting is False
+    assert g.active is None
+    assert g.failures(IP) == 0
+    assert g.blocked_until(IP) is None
+
+
+def test_accepting_is_writable():
+    g = PairingGate(OWN)
+    assert_busy(g.admit(IP, PEER, 0.0))
+    g.accepting = True
+    assert g.accepting is True
+    assert_accept(g.admit(IP, PEER, 0.0), IP)
+
+
+# --- Luật 1–6 của admit -------------------------------------------------------------------------
+
+
+def test_rule1_own_device_id_is_busy():
+    g = gate()
+    assert_busy(g.admit(IP, OWN, 0.0))
+    assert g.active is None
+
+
+def test_rule1_own_device_id_beats_tie_break():
+    g = gate()
+    out = g.begin_outgoing(IP)
+    assert_busy(g.admit(IP, OWN, 0.0))
+    assert g.active == out
+
+
+def test_rule3_not_accepting_is_busy():
+    g = gate(accepting=False)
+    assert_busy(g.admit(IP, PEER, 0.0))
+    assert g.active is None
+
+
+def test_rule4_active_responder_session_makes_others_busy():
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    assert_busy(g.admit(IP2, HIGHER, 1.0))
+    assert_busy(g.admit(IP, PEER, 1.0))
+    assert g.active == slot
+
+
+def test_rule4_outgoing_to_other_ip_makes_request_busy():
+    # Luật 2 chỉ áp khi yêu cầu tới từ ĐÚNG IP mình đang kết nối tới.
+    g = gate()
+    out = g.begin_outgoing(IP)
+    assert_busy(g.admit(IP2, LOWER, 0.0))
+    assert g.active == out
+
+
+def test_rule4_busy_does_not_count_as_failure():
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    assert_busy(g.admit(IP2, PEER, 1.0))
+    assert g.failures(IP2) == 0
+    assert g.blocked_until(IP2) is None
+    g.finish(slot, Outcome.PAIRED, 2.0)
+
+
+def test_rule5_blocked_ip_is_busy():
+    g = gate()
+    fail_once(g, IP, 0.0)
+    assert g.blocked_until(IP) == 10.0
+    assert_busy(g.admit(IP, PEER, 9.999))
+    assert g.active is None
+
+
+def test_rule5_busy_while_blocked_does_not_extend_or_count():
+    g = gate()
+    fail_once(g, IP, 0.0)
+    for t in (1.0, 5.0, 9.0, 9.999):
+        assert_busy(g.admit(IP, PEER, t))
+    assert g.failures(IP) == 1
+    assert g.blocked_until(IP) == 10.0
+    assert_accept(g.admit(IP, PEER, 10.0), IP)
+
+
+def test_rule6_accept_creates_responder_slot_and_becomes_active():
+    g = gate()
+    adm = g.admit(IP, PEER, 0.0)
+    slot = assert_accept(adm, IP)
+    assert adm.cancel_outgoing is None
+    assert g.active == slot
+
+
+def test_slot_ids_increase():
+    g = gate()
+    s1 = g.begin_outgoing(IP)
+    g.finish(s1, Outcome.PAIRED, 0.0)
+    s2 = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    g.finish(s2, Outcome.PAIRED, 0.0)
+    s3 = g.begin_outgoing(IP2)
+    assert s1.id < s2.id < s3.id
+
+
+# --- begin_outgoing -----------------------------------------------------------------------------
+
+
+def test_begin_outgoing_creates_initiator_slot():
+    g = gate()
+    slot = g.begin_outgoing(IP)
+    assert isinstance(slot, Slot)
+    assert slot.role == Role.INITIATOR
+    assert slot.ip == IP
+    assert g.active == slot
+
+
+def test_begin_outgoing_ignores_accepting():
+    g = gate(accepting=False)
+    assert g.begin_outgoing(IP) is not None
+
+
+def test_begin_outgoing_none_when_session_active():
+    g = gate()
+    first = g.begin_outgoing(IP)
+    assert g.begin_outgoing(IP2) is None
+    assert g.active == first
+    g.finish(first, Outcome.TIMEOUT, 0.0)
+    responder = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    assert g.begin_outgoing(IP2) is None
+    assert g.active == responder
+
+
+def test_begin_outgoing_ignores_backoff():
+    # Chờ tăng dần chỉ chặn yêu cầu đến, không chặn máy này chủ động.
+    g = gate()
+    fail_once(g, IP, 0.0)
+    assert g.begin_outgoing(IP) is not None
+
+
+# --- Luật 2: hai bên cùng chủ động --------------------------------------------------------------
+
+
+def test_tie_break_larger_own_id_yields_outgoing():
+    g = gate()
+    out = g.begin_outgoing(IP)
+    adm = g.admit(IP, LOWER, 0.0)
+    slot = assert_accept(adm, IP)
+    assert adm.cancel_outgoing == out
+    assert slot != out
+    assert g.active == slot
+
+
+def test_tie_break_smaller_own_id_keeps_outgoing():
+    g = gate()
+    out = g.begin_outgoing(IP)
+    assert_busy(g.admit(IP, HIGHER, 0.0))
+    assert g.active == out
+
+
+def test_tie_break_compares_strings_not_numbers():
+    # "9…" > "10…" khi so chuỗi (ngược với so số).
+    g = PairingGate("9" + "0" * 31, accepting=True)
+    out = g.begin_outgoing(IP)
+    adm = g.admit(IP, "1" + "0" * 31, 0.0)
+    assert adm.decision == Decision.ACCEPT
+    assert adm.cancel_outgoing == out
+
+
+def test_tie_break_stands_above_not_accepting():
+    g = gate(accepting=False)
+    out = g.begin_outgoing(IP)
+    adm = g.admit(IP, LOWER, 0.0)
+    assert_accept(adm, IP)
+    assert adm.cancel_outgoing == out
+
+
+def test_tie_break_stands_above_backoff():
+    g = gate()
+    fail_once(g, IP, 0.0)
+    out = g.begin_outgoing(IP)
+    adm = g.admit(IP, LOWER, 1.0)  # IP đang bị chặn tới 10.0
+    assert_accept(adm, IP)
+    assert adm.cancel_outgoing == out
+
+
+def test_tie_break_lower_own_id_busy_even_when_accepting_and_unblocked():
+    g = gate(accepting=True)
+    out = g.begin_outgoing(IP)
+    assert_busy(g.admit(IP, HIGHER, 0.0))
+    assert g.active == out
+    assert g.failures(IP) == 0
+
+
+def test_finish_of_yielded_outgoing_slot_is_ignored():
+    g = gate()
+    out = g.begin_outgoing(IP)
+    adm = g.admit(IP, LOWER, 0.0)
+    new = assert_accept(adm, IP)
+    # App gửi Cancel(BUSY) cho phiên khởi xướng rồi báo finish với slot cũ.
+    g.finish(out, Outcome.CANCELLED, 0.5)
+    assert g.active == new
+    g.finish(out, Outcome.TIMEOUT, 0.6)
+    assert g.active == new
+    assert g.failures(IP) == 0
+
+
+@settings(max_examples=300, deadline=None)
+@given(
+    id_a=st.text(alphabet="0123456789abcdef", min_size=32, max_size=32),
+    id_b=st.text(alphabet="0123456789abcdef", min_size=32, max_size=32),
+    acc_a=st.booleans(),
+    acc_b=st.booleans(),
+    a_first=st.booleans(),
+)
+def test_property_exactly_one_side_yields(id_a, id_b, acc_a, acc_b, a_first):
+    assume(id_a != id_b)
+    ip_a, ip_b = "10.0.0.1", "10.0.0.2"
+    ga = PairingGate(id_a, accepting=acc_a)
+    gb = PairingGate(id_b, accepting=acc_b)
+    out_a = ga.begin_outgoing(ip_b)
+    out_b = gb.begin_outgoing(ip_a)
+    if a_first:
+        ra = ga.admit(ip_b, id_b, 1.0)
+        rb = gb.admit(ip_a, id_a, 1.0)
+    else:
+        rb = gb.admit(ip_a, id_a, 1.0)
+        ra = ga.admit(ip_b, id_b, 1.0)
+    accepted = [r.decision == Decision.ACCEPT for r in (ra, rb)]
+    assert accepted.count(True) == 1, "đúng một bên nhường"
+    if id_a > id_b:
+        assert ra.cancel_outgoing == out_a
+        assert ga.active == ra.slot
+        assert ra.slot.role == Role.RESPONDER
+        assert_busy(rb)
+        assert gb.active == out_b
+    else:
+        assert rb.cancel_outgoing == out_b
+        assert gb.active == rb.slot
+        assert rb.slot.role == Role.RESPONDER
+        assert_busy(ra)
+        assert ga.active == out_a
+
+
+# --- finish ------------------------------------------------------------------------------------
+
+
+def test_finish_releases_active():
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    g.finish(slot, Outcome.PAIRED, 1.0)
+    assert g.active is None
+
+
+def test_finish_when_nothing_active_is_ignored():
+    g = gate()
+    g.finish(Slot(id=999, role=Role.RESPONDER, ip=IP), Outcome.TIMEOUT, 0.0)
+    assert g.active is None
+    assert g.failures(IP) == 0
+
+
+def test_finish_with_stale_slot_is_ignored():
+    g = gate()
+    old = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    g.finish(old, Outcome.CANCELLED, 0.0)
+    current = assert_accept(g.admit(IP2, PEER, 1.0), IP2)
+    g.finish(old, Outcome.TIMEOUT, 2.0)
+    assert g.active == current
+    assert g.failures(IP) == 0
+
+
+def test_finish_twice_counts_once():
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    g.finish(slot, Outcome.TIMEOUT, 1.0)
+    g.finish(slot, Outcome.TIMEOUT, 1.0)
+    assert g.failures(IP) == 1
+
+
+@pytest.mark.parametrize("outcome", FAILURE_OUTCOMES, ids=str)
+def test_initiator_session_never_counts(outcome):
+    # Chỉ tính phiên mà máy này là bên trả lời (câu 4).
+    g = gate()
+    slot = g.begin_outgoing(IP)
+    g.finish(slot, outcome, 0.0)
+    assert g.active is None
+    assert g.failures(IP) == 0
+    assert g.blocked_until(IP) is None
+
+
+def test_initiator_paired_does_not_clear_responder_failures():
+    # PAIRED chỉ xóa bộ đếm khi slot là RESPONDER.
+    g = gate()
+    fail_once(g, IP, 0.0)
+    slot = g.begin_outgoing(IP)
+    g.finish(slot, Outcome.PAIRED, 1.0)
+    assert g.failures(IP) == 1
+    assert g.blocked_until(IP) == 10.0
+
+
+@pytest.mark.parametrize("outcome", FAILURE_OUTCOMES, ids=str)
+def test_every_non_paired_non_cancelled_outcome_counts(outcome):
+    # Gồm cả CONNECTION_LOST và IDENTITY_CONFLICT (câu 4).
+    g = gate()
+    fail_once(g, IP, 5.0, outcome)
+    assert g.failures(IP) == 1
+    assert g.blocked_until(IP) == 15.0
+
+
+def test_cancelled_keeps_counter_unchanged():
+    g = gate()
+    fail_once(g, IP, 0.0)
+    fail_once(g, IP, 10.0)
+    assert (g.failures(IP), g.blocked_until(IP)) == (2, 30.0)
+    slot = assert_accept(g.admit(IP, PEER, 30.0), IP)
+    g.finish(slot, Outcome.CANCELLED, 35.0)
+    assert (g.failures(IP), g.blocked_until(IP)) == (2, 30.0)
+
+
+def test_cancelled_on_fresh_ip_creates_no_block():
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    g.finish(slot, Outcome.CANCELLED, 1.0)
+    assert g.failures(IP) == 0
+    assert g.blocked_until(IP) is None
+
+
+# --- Dãy chờ tăng dần --------------------------------------------------------------------------
+
+
+def test_backoff_sequence_10_to_600():
+    g = gate()
+    expected = [10, 20, 40, 80, 160, 320, 600, 600, 600]
+    t = 1000.0
+    for k, wait in enumerate(expected, start=1):
+        slot = assert_accept(g.admit(IP, PEER, t), IP)
+        g.finish(slot, Outcome.USER_REJECTED, t + 1)
+        assert g.failures(IP) == k
+        assert g.blocked_until(IP) == t + 1 + wait, f"lần thất bại thứ {k}"
+        assert_busy(g.admit(IP, PEER, t + 1 + wait - 0.001))
+        t = t + 1 + wait  # đúng lúc hết chờ thì được nhận lại
+
+
+def test_backoff_measured_from_finish_time():
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    g.finish(slot, Outcome.TIMEOUT, 75.0)
+    assert g.blocked_until(IP) == 85.0
+
+
+def test_paired_clears_counter():
+    g = gate()
+    t = 0.0
+    for _ in range(4):
+        fail_once(g, IP, t)
+        t = g.blocked_until(IP)
+    assert g.failures(IP) == 4
+    slot = assert_accept(g.admit(IP, PEER, t), IP)
+    g.finish(slot, Outcome.PAIRED, t + 1)
+    assert g.failures(IP) == 0
+    assert g.blocked_until(IP) is None
+    # Thất bại kế tiếp bắt đầu lại từ 10 s.
+    fail_once(g, IP, t + 2)
+    assert g.blocked_until(IP) == t + 2 + 10
+
+
+def test_other_ip_not_affected():
+    g = gate()
+    fail_once(g, IP, 0.0)
+    fail_once(g, IP, 10.0)
+    assert g.failures(IP2) == 0
+    assert g.blocked_until(IP2) is None
+    assert_accept(g.admit(IP2, PEER, 11.0), IP2)
+
+
+def test_ipv6_and_ipv4_tracked_separately():
+    g = gate()
+    fail_once(g, "fe80::1", 0.0)
+    assert g.failures("fe80::1") == 1
+    assert_accept(g.admit("192.168.1.1", PEER, 1.0), "192.168.1.1")
+
+
+# --- Quên sau 600 s và giới hạn 1024 IP --------------------------------------------------------
+
+
+def test_entry_kept_until_600s_after_block_ends():
+    g = gate()
+    fail_once(g, IP, 0.0)  # blocked_until = 10
+    slot = assert_accept(g.admit(IP, PEER, 609.999), IP)
+    assert g.failures(IP) == 1
+    g.finish(slot, Outcome.CANCELLED, 609.999)
+    assert g.failures(IP) == 1
+
+
+def test_entry_forgotten_600s_after_block_ends():
+    g = gate()
+    fail_once(g, IP, 0.0)
+    fail_once(g, IP, 10.0)  # blocked_until = 30
+    slot = assert_accept(g.admit(IP, PEER, 630.0), IP)
+    assert g.failures(IP) == 0
+    assert g.blocked_until(IP) is None
+    g.finish(slot, Outcome.TIMEOUT, 630.0)
+    # Đếm lại từ đầu: chờ 10 s, không phải 40 s.
+    assert g.failures(IP) == 1
+    assert g.blocked_until(IP) == 640.0
+
+
+def test_forget_happens_on_admit_from_other_ip():
+    g = gate()
+    fail_once(g, IP, 0.0)
+    slot = assert_accept(g.admit(IP2, PEER, 610.0), IP2)
+    g.finish(slot, Outcome.CANCELLED, 610.0)
+    assert g.failures(IP) == 0
+    assert g.blocked_until(IP) is None
+
+
+def test_forget_happens_on_finish():
+    g = gate()
+    fail_once(g, IP, 0.0)
+    out = g.begin_outgoing(IP2)
+    g.finish(out, Outcome.TIMEOUT, 610.0)
+    assert g.failures(IP) == 0
+
+
+def test_tracks_at_most_1024_ips_evicting_earliest_block():
+    g = gate()
+    ips = [f"10.{i // 65536}.{(i // 256) % 256}.{i % 256}" for i in range(MAX_TRACKED_IPS + 1)]
+    for i, ip in enumerate(ips):
+        fail_once(g, ip, i * 0.01)  # blocked_until tăng dần theo i
+    # Một lời gọi admit nữa để chắc chắn đã dọn (dọn khi admit hoặc finish).
+    extra = assert_accept(g.admit("172.16.0.1", PEER, 20.0), "172.16.0.1")
+    g.finish(extra, Outcome.CANCELLED, 20.0)
+    tracked = [ip for ip in ips if g.failures(ip) > 0]
+    assert len(tracked) == MAX_TRACKED_IPS
+    assert ips[0] not in tracked, "phải xóa mục có blocked_until nhỏ nhất"
+    assert g.failures(ips[-1]) == 1
+    assert g.failures(ips[1]) == 1
+
+
+def test_1024_ips_are_all_kept():
+    g = gate()
+    ips = [f"10.1.{i // 256}.{i % 256}" for i in range(MAX_TRACKED_IPS)]
+    for i, ip in enumerate(ips):
+        fail_once(g, ip, i * 0.01)
+    extra = assert_accept(g.admit("172.16.0.1", PEER, 20.0), "172.16.0.1")
+    g.finish(extra, Outcome.CANCELLED, 20.0)
+    assert all(g.failures(ip) == 1 for ip in ips)
+
+
+def test_ip_with_active_responder_session_is_not_forgotten():
+    # Mục của IP đang có phiên trả lời không được dọn, dù đã quá blocked_until + 600.
+    g = gate()
+    fail_once(g, IP, 0.0)  # chặn tới 10
+    slot = assert_accept(g.admit(IP, PEER, 609.0), IP)
+    assert_busy(g.admit(IP2, PEER, 700.0))  # lời gọi này có dọn bộ nhớ
+    g.finish(slot, Outcome.TIMEOUT, 700.0)
+    assert g.failures(IP) == 2
+    assert g.blocked_until(IP) == 720.0
+
+
+def test_just_failed_ip_is_never_evicted_when_over_limit():
+    g = gate()
+    ips = [f"10.2.{i // 256}.{i % 256}" for i in range(MAX_TRACKED_IPS)]
+    for ip in ips:
+        fail_once(g, ip, 0.0)  # chặn tới 10
+    for ip in ips:
+        fail_once(g, ip, 10.0)  # lần hai: chặn tới 30
+    assert all(g.blocked_until(ip) == 30.0 for ip in ips)
+    newcomer = "172.16.5.5"
+    fail_once(g, newcomer, 11.0)  # blocked_until 21: nhỏ nhất, nhưng là IP vừa thất bại
+    assert g.failures(newcomer) == 1
+    assert g.blocked_until(newcomer) == 21.0
+    assert_busy(g.admit(newcomer, PEER, 12.0))
+    assert g.failures(newcomer) == 1
+    # Mục bị xóa phải là một trong các IP cũ (blocked_until nhỏ nhất trong số còn lại).
+    tracked_old = [ip for ip in ips if g.failures(ip) > 0]
+    assert len(tracked_old) == MAX_TRACKED_IPS - 1
+
+
+def test_backoff_stays_600_after_1100_failures():
+    g = gate()
+    t = 0.0
+    for _ in range(1100):
+        fail_once(g, IP, t)
+        t = g.blocked_until(IP)
+    assert g.failures(IP) == 1100
+    slot = assert_accept(g.admit(IP, PEER, t), IP)
+    g.finish(slot, Outcome.TIMEOUT, t)
+    assert g.failures(IP) == 1101
+    assert g.blocked_until(IP) == t + 600.0
+
+
+# --- Đầu vào sai --------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("own", ["xyz", "", "A" * 32, "0" * 31, None, 1], ids=repr)
+def test_gate_rejects_bad_own_device_id(own):
+    with pytest.raises(ValueError):
+        PairingGate(own)
+
+
+@pytest.mark.parametrize("value", [1, 0, "yes", None], ids=repr)
+def test_accepting_assignment_requires_bool(value):
+    g = gate()
+    with pytest.raises(ValueError):
+        g.accepting = value
+
+
+@pytest.mark.parametrize("bad_now", [float("nan"), float("inf"), float("-inf")], ids=repr)
+def test_admit_rejects_non_finite_now(bad_now):
+    with pytest.raises(ValueError):
+        gate().admit(IP, PEER, bad_now)
+
+
+@pytest.mark.parametrize("bad_now", [True, "1", None], ids=repr)
+def test_admit_rejects_non_number_now(bad_now):
+    with pytest.raises(TypeError):
+        gate().admit(IP, PEER, bad_now)
+
+
+def test_admit_rejects_time_going_backwards():
+    g = gate()
+    fail_once(g, IP, 50.0)
+    with pytest.raises(ValueError):
+        g.admit(IP2, PEER, 49.0)
+
+
+@pytest.mark.parametrize("bad_now", [float("nan"), float("inf"), float("-inf")], ids=repr)
+def test_finish_rejects_non_finite_now(bad_now):
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    with pytest.raises(ValueError):
+        g.finish(slot, Outcome.TIMEOUT, bad_now)
+
+
+@pytest.mark.parametrize("bad_now", [True, "1", None], ids=repr)
+def test_finish_rejects_non_number_now(bad_now):
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    with pytest.raises(TypeError):
+        g.finish(slot, Outcome.TIMEOUT, bad_now)
+
+
+def test_finish_rejects_time_going_backwards():
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 10.0), IP)
+    with pytest.raises(ValueError):
+        g.finish(slot, Outcome.TIMEOUT, 9.0)
+
+
+@pytest.mark.parametrize("ip", ["", None, 1, b"192.168.1.1"], ids=repr)
+def test_admit_rejects_bad_ip(ip):
+    with pytest.raises(ValueError):
+        gate().admit(ip, PEER, 0.0)
+
+
+@pytest.mark.parametrize("peer_id", ["", "xyz", "A" * 32, "0" * 31, "0" * 33, None, 1], ids=repr)
+def test_admit_rejects_bad_peer_device_id(peer_id):
+    with pytest.raises(ValueError):
+        gate().admit(IP, peer_id, 0.0)
+
+
+@pytest.mark.parametrize("slot", [None, 1, "slot", (1, Role.RESPONDER, IP)], ids=repr)
+def test_finish_rejects_non_slot(slot):
+    g = gate()
+    assert_accept(g.admit(IP, PEER, 0.0), IP)
+    with pytest.raises(ValueError):
+        g.finish(slot, Outcome.TIMEOUT, 1.0)
+
+
+@pytest.mark.parametrize("outcome", [None, "xyz", 1, Decision.BUSY], ids=repr)
+def test_finish_rejects_unknown_outcome(outcome):
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    with pytest.raises(ValueError):
+        g.finish(slot, outcome, 1.0)
