@@ -18,7 +18,7 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 ### 2.1. Một cổng, ba loại kết nối
 
 - TCP + **TLS 1.3** ✅. Phiên bản thấp hơn bị từ chối.
-- Mỗi node lắng nghe trên **một cổng TCP**, mặc định **47474** (listener ✅ `teleport.net.connection`). 📝 Cổng mặc định bận thì node để hệ điều hành chọn một cổng trống, lưu vào `settings.json` để lần chạy sau dùng lại, và hiện cổng đó trong `teleport identity` / `teleport list`; cổng thật luôn được quảng bá qua mDNS (mục 8). Nhập IP thủ công nhận `ip` (dùng cổng mặc định) hoặc `ip:cổng`.
+- Mỗi node lắng nghe trên **một cổng TCP**, mặc định **47474** (listener ✅ `teleport.net.connection`). Cổng mặc định (hoặc cổng đã lưu) không mở được thì node để hệ điều hành chọn một cổng trống và lưu vào `settings.json` để lần chạy sau dùng lại ✅ (`teleport.app.node`); 📝 hiện cổng đó trong `teleport identity` / `teleport list`, và cổng thật luôn được quảng bá qua mDNS (mục 8). Nhập IP thủ công nhận `ip` (dùng cổng mặc định) hoặc `ip:cổng` ✅ (`teleport pair`).
 - Node nhận **TCP trần** trên `0.0.0.0` rồi bắt đầu TLS cho từng kết nối bằng `SSLContext` **hiện tại** ✅, nên đổi danh sách tin cậy không phải mở lại cổng (mục 7).
 - **Địa chỉ:** v1.0 chỉ dùng IPv4. Node lắng nghe trên mọi địa chỉ IPv4 (`0.0.0.0`) và quảng bá qua mDNS các địa chỉ IPv4 của máy (tối đa 16, mục 8; chưa lọc theo trạng thái bật/tắt của card), bỏ loopback, link-local `169.254.0.0/16` và các card ảo nhận ra được ✅. Card ảo nhận ra theo tên card (tiền tố như `docker`, `veth`, `vEthernet`, `tun`, `wg`, `utun`, hoặc chứa `virtual`, `hyper-v`, `wsl`, `vpn`…; danh sách đầy đủ ở `teleport.core.discovery`). Hai ngoại lệ: luôn giữ **địa chỉ nguồn ưu tiên** dù card đó trông như card ảo — đó là địa chỉ nguồn hệ điều hành chọn cho tuyến tới nhóm multicast mDNS, hoặc, nếu địa chỉ đó là loopback (Windows thường chọn `127.0.0.1` cho tuyến multicast), địa chỉ nguồn của tuyến mặc định; địa chỉ này đứng đầu danh sách quảng bá; và nếu mọi địa chỉ đều nằm trên card ảo thì quảng bá tất cả thay vì không quảng bá gì. Client thử **song song** mọi địa chỉ được quảng bá của một thiết bị và giữ kết nối thành công đầu tiên, nên một địa chỉ chết không làm chậm việc kết nối (mvp F2, N1). Mỗi lần thử chỉ đi tới khi đã đọc và kiểm `hello` của server; message mở đầu (bảng bên dưới) chỉ được gửi trên kết nối thắng, sau khi các lần thử khác đã bị đóng, nên server không nhận kết nối điều khiển thừa ✅.
 - Server dùng `CERT_OPTIONAL` ✅ và nạp chứng chỉ của mọi thiết bị tin cậy làm trust anchor, kèm kiểm tra X.509 nghiêm ngặt (`teleport.net.tls.server_context(..., allow_anonymous=True)`):
@@ -51,7 +51,7 @@ Phần ở tầng mạng đã cài ở `teleport.net.connection` ✅; những ch
 | Bắt tay TLS + `hello` + message mở đầu | 10 s ✅ | 10 s ✅ | 10 s 📝 |
 | Kích thước message tối đa | **16 KiB** (`MAX_PAIRING_MESSAGE_SIZE`) ✅ | 16 MiB (`MAX_MESSAGE_SIZE`) ✅; `hello` và `control_open` 16 KiB ✅ | 16 KiB cho `hello`/`data_open`; khung khối theo mục 4 📝 |
 | Sau khi mở đầu | Chờ mỗi message 10 s; riêng lúc chờ người dùng xác nhận: 60 s, cộng 10 s chờ `pair_confirm` của máy kia (bên dưới) | Keepalive (bên dưới) ✅; một đoạn gửi không xong (`drain()`) trong 30 s → đóng ✅ | Bên nhận file: không nhận được byte nào trong 30 s → đóng. Bên gửi file: `drain()` không xong trong 30 s, hoặc mất kết nối điều khiển với máy đó → đóng 📝 |
-| Số kết nối đồng thời | 1 phiên ghép đôi (`PairingGate` ✅, nối vào node 📝); kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng ✅ (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) 📝 | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác xếp hàng 📝 |
+| Số kết nối đồng thời | 1 phiên ghép đôi ✅ (`PairingGate`, nối vào node ở `teleport.app.pairing`); yêu cầu bị từ chối nhận `pair_abort{busy}` rồi bị đóng, tổng cộng tối đa 1 s ✅; phiên kết thúc mà không ghép đôi được cũng gửi `pair_abort` (nếu có) rồi đóng trong tổng cộng tối đa 1 s, nên máy kia không đọc cũng không giữ được phiên lâu hơn ✅; kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng ✅ (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) 📝 | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác xếp hàng 📝 |
 
 - **Kết nối đang mở đầu** (từ lúc nhận TCP tới khi xác định loại): tối đa **4 mỗi IP, 64 tổng**; quá thì đóng ngay, trước cả bắt tay TLS ✅. Kết nối đã xác định loại không còn tính vào giới hạn này.
 - Kết nối ẩn danh vượt 1 mỗi IP hoặc 8 tổng bị đóng ngay sau bắt tay TLS, không nhận `hello` ✅. Kết nối ẩn danh thôi tính khi đã gửi `pair_request` (lúc đó node quyết định ngay có nhận phiên hay không, mục 5.3) hoặc khi đóng.
@@ -82,7 +82,7 @@ Mỗi message:
 
 ### 3.2. Các loại message
 
-`hello`, các message `pair_*`, `control_open`, `ping` và `pong` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅. `hello`, `control_open`, `ping` và `pong` đã được gửi trên mạng (`teleport.net.connection`) ✅; `pair_*` trên mạng còn 📝 (luồng ghép đôi ở tầng node). Các message còn lại là dự thảo 📝.
+`hello`, các message `pair_*`, `control_open`, `ping` và `pong` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅. `hello`, `control_open`, `ping` và `pong` đã được gửi trên mạng (`teleport.net.connection`) ✅; `pair_*` trên mạng ✅ (`teleport.app.pairing`). Các message còn lại là dự thảo 📝.
 
 | `type` | Hướng | Kết nối | Trường |
 |---|---|---|---|
@@ -187,9 +187,9 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 
 **Tên file nhận được** được làm sạch trước khi dùng (chi tiết: [ke_hoach.md](ke_hoach.md) mục 3.3). Hai file trùng tên trong cùng `offer`, hoặc trùng với file đã có (không phân biệt hoa thường), đều được đặt tên ` (1)`, ` (2)`…
 
-## 5. Ghép đôi 📝
+## 5. Ghép đôi
 
-Ghép đôi theo kiểu *numeric comparison* của Bluetooth: hai bên trao nonce ngẫu nhiên, bên khởi xướng **cam kết** nonce của mình trước khi thấy nonce bên kia, rồi cả hai hiện cùng một mã 6 số cho người dùng so. Nếu mã chỉ tính từ hai fingerprint, kẻ đứng giữa có thể sinh khóa offline tới khi ra mã trùng; với nonce cam kết, mỗi lần thử chỉ thành công với xác suất 10⁻⁶. Công thức đã cài đặt ở `teleport.core.pairing_code` ✅; máy trạng thái ghép đôi và chống làm phiền ở `teleport.core.pairing` ✅ (thứ tự message, hết giờ, lý do hủy, mục 5.1 và 5.3); trao đổi trên mạng chưa cài đặt 📝.
+Ghép đôi theo kiểu *numeric comparison* của Bluetooth: hai bên trao nonce ngẫu nhiên, bên khởi xướng **cam kết** nonce của mình trước khi thấy nonce bên kia, rồi cả hai hiện cùng một mã 6 số cho người dùng so. Nếu mã chỉ tính từ hai fingerprint, kẻ đứng giữa có thể sinh khóa offline tới khi ra mã trùng; với nonce cam kết, mỗi lần thử chỉ thành công với xác suất 10⁻⁶. Công thức đã cài đặt ở `teleport.core.pairing_code` ✅; máy trạng thái ghép đôi và chống làm phiền ở `teleport.core.pairing` ✅ (thứ tự message, hết giờ, lý do hủy, mục 5.1 và 5.3); trao đổi trên mạng ✅ (`teleport.app.pairing`).
 
 ### 5.1. Luồng
 
@@ -238,9 +238,9 @@ Kết nối ghép đôi không cần chứng chỉ, nên bất kỳ máy nào tr
   - Chỉ tính phiên mà máy này là **bên trả lời**. Phiên do node tự hủy (tắt node, Ctrl+C, nhường khi hai bên cùng chủ động) không tính (hủy sau khi đã hết giờ thì tính là hết giờ).
   - `pair_abort{busy}` gửi trong lúc IP đang bị chờ **không** kéo dài thời gian chờ.
   - IP yên lặng 10 phút kể từ khi hết thời gian chờ thì được quên (đếm lại từ đầu). Theo dõi tối đa 1024 IP; quá thì quên IP có thời gian chờ hết sớm nhất. Bộ đếm chỉ nằm trong bộ nhớ, mất khi khởi động lại node.
-- **Hai bên cùng chủ động ghép đôi với nhau** (máy này đang có phiên khởi xướng tới đúng IP mà yêu cầu tới từ đó): bên có `device_id` **lớn hơn** hủy phiên khởi xướng của mình và trả lời phiên của bên kia; bên nhỏ hơn trả `pair_abort{busy}`. Luật này xét trước việc node có đang nhận ghép đôi không (gạch cuối) và trước thời gian chờ của IP. Phiên khởi xướng bị nhường gửi `pair_abort{busy}` nếu đã gửi `pair_request`, chưa gửi thì chỉ đóng. `device_id` trên kết nối ẩn danh chưa được xác thực, nên cần IP khớp; kẻ giả mạo vẫn có thể làm phiên tự hủy (chỉ gây phiền, không ghép đôi được).
-- **Giới hạn của các biện pháp trên:** đây là chống làm phiền ở mức tốt nhất có thể, không chống được tấn công từ chối dịch vụ trong LAN. Một máy đổi IP liên tục (IPv6 tạm thời, xin DHCP mới) vẫn có thể làm hiện hộp thoại nhiều lần hoặc giữ phiên ghép đôi. Ghép đôi vẫn an toàn vì cần người dùng xác nhận mã ở cả hai máy.
-- Khi nào node nhận yêu cầu ghép đôi: giao diện luôn nhận (hiện hộp thoại, mvp F3); CLI chỉ nhận khi đang chạy `teleport listen`. Ngoài các trường hợp đó → `pair_abort{busy}`.
+- **Hai bên cùng chủ động ghép đôi với nhau** (máy này đang có phiên khởi xướng tới đúng IP mà yêu cầu tới từ đó): bên có `device_id` **lớn hơn** hủy phiên khởi xướng của mình và trả lời phiên của bên kia; bên nhỏ hơn trả `pair_abort{busy}`. Luật này xét trước việc node có đang nhận ghép đôi không (gạch cuối) và trước thời gian chờ của IP. Phiên khởi xướng bị nhường gửi `pair_abort{busy}` nếu đã gửi `pair_request`, chưa gửi thì chỉ đóng. `device_id` trên kết nối ẩn danh chưa được xác thực, nên cần IP khớp; kẻ giả mạo vẫn có thể làm phiên tự hủy (chỉ gây phiền, không ghép đôi được). Bên nhường trả kết quả của phiên trả lời thay thế cho người dùng (lệnh `teleport pair` vẫn có đúng một kết quả).
+- **Giới hạn của các biện pháp trên:** đây là chống làm phiền ở mức tốt nhất có thể, không chống được tấn công từ chối dịch vụ trong LAN. Một máy đổi IP liên tục (IPv6 tạm thời, xin DHCP mới) vẫn có thể làm hiện hộp thoại nhiều lần hoặc giữ phiên ghép đôi. Ngay cả một máy ẩn danh duy nhất, gửi và đọc thật chậm (sát hạn ở mỗi bước), cũng giữ được phiên duy nhất tới khoảng 10 s cho mỗi bước trao message cộng 60 s chờ người dùng xác nhận (cỡ 70 s hoặc hơn chút); trong lúc đó mọi yêu cầu khác nhận `pair_abort{busy}`. Việc này chỉ ảnh hưởng khi node đang nhận yêu cầu ghép đôi (gạch cuối; với CLI là trong lúc `teleport listen` đang chạy). Ghép đôi vẫn an toàn vì cần người dùng xác nhận mã ở cả hai máy.
+- Khi nào node nhận yêu cầu ghép đôi: giao diện luôn nhận (hiện hộp thoại, mvp F3) 📝; CLI chỉ nhận khi đang chạy `teleport listen` ✅. Ngoài các trường hợp đó → `pair_abort{busy}`.
 
 ### 5.4. Test vector
 
@@ -300,10 +300,11 @@ Message điều khiển có thể mất khi kết nối đứt hoặc bị thay 
 
 - **Hủy ghép đôi** chỉ xóa mục ở máy bấm hủy, cùng cài đặt theo thiết bị đó (“Hỏi trước khi nhận”, “Đồng bộ clipboard”), và có hiệu lực ngay. Không có message báo cho máy kia.
   - Listener nhận TCP trần và bắt đầu TLS cho từng kết nối với `SSLContext` **hiện tại** (mục 2.1). Khi danh sách tin cậy đổi, node dựng context mới; từ đó mọi kết nối mới dùng context mới, listener không đóng hay mở lại ✅ (`Listener.update_trusted`).
-  - Đóng kết nối đang mở với máy bị hủy (các kết nối khác giữ nguyên) là việc của node 📝.
+  - Đóng kết nối đang mở với máy bị hủy (các kết nối khác giữ nguyên) ✅ (`Node.unpair`: xóa khỏi kho, đổi context, đóng kết nối điều khiển của máy đó, không có `await` xen giữa).
+  - Khi không có node nào chạy, `teleport unpair` chỉ sửa `trusted.json` ✅.
 - Kết nối đã bắt đầu bắt tay bằng context cũ vẫn bắt tay xong với context đó. Vì vậy khi nhận `control_open` (✅) hay `data_open` (📝), node còn kiểm fingerprint của client có trong danh sách tin cậy **hiện tại** không; không có thì đóng.
 - **Máy kia từ chối máy này** (đã hủy ghép đôi, hoặc ghép đôi một phía): lần kết nối sau nhận EOF hoặc lỗi SSL trước `hello` (mục 2.2) → báo “*X* từ chối kết nối từ máy này” và gợi ý ghép đôi lại. Không đoán lý do, vì client không phân biệt được.
-- **Cùng `device_id`, khác fingerprint** (mDNS, `hello` hay `pair_request` báo `device_id` của một máy tin cậy nhưng chứng chỉ khác): không có lý do hợp lệ, vì danh tính mới luôn có `device_id` mới (mục 1). Chặn kết nối, không cho ghép đôi đè (mục 5.1), cảnh báo có thể có giả mạo. Muốn ghép đôi lại thì người dùng phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa, nên máy giả không thừa hưởng “Luôn nhận” hay “Đồng bộ clipboard”.
+- **Cùng `device_id`, khác fingerprint** (mDNS, `hello` hay `pair_request` báo `device_id` của một máy tin cậy nhưng chứng chỉ khác): không có lý do hợp lệ, vì danh tính mới luôn có `device_id` mới (mục 1). Chặn kết nối, không cho ghép đôi đè (mục 5.1), cảnh báo có thể có giả mạo. Phần ghép đôi ✅ (từ chối trước khi hiện mã); phần kết nối điều khiển và mDNS 📝. Muốn ghép đôi lại thì người dùng phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa, nên máy giả không thừa hưởng “Luôn nhận” hay “Đồng bộ clipboard”.
 - **Máy tin cậy xóa thư mục cấu hình** (cài lại sạch): xuất hiện như một thiết bị mới chưa ghép đôi, có thể trùng tên với mục cũ. App gợi ý ghép đôi lại; ghép đôi xong thì đề nghị xóa mục cũ cùng tên (mục cũ không bao giờ kết nối lại được).
 
 ## 8. Khám phá (mDNS) ✅

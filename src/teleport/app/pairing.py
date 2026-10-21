@@ -1,0 +1,738 @@
+"""Dịch vụ ghép đôi: chạy máy trạng thái `core.pairing` trên một `Connection` thật.
+
+Đặc tả ở docs/protocol.md mục 5. Logic (thứ tự `pair_*`, hết giờ, chống làm phiền)
+nằm ở `teleport.core.pairing`; module này chỉ:
+
+- sinh nonce (`secrets.token_bytes`), phân tích chứng chỉ máy kia (qua `trust`);
+- mở kết nối ghép đôi (bên khởi xướng) hoặc nhận kết nối từ `Listener` (bên trả lời);
+- đưa sự kiện vào phiên (message, hết giờ, quyết định của người dùng, lệnh hủy) và
+  thực hiện các hành động nó trả về (gửi, hiện mã, lưu thiết bị, đóng);
+- giữ `PairingGate` (một phiên tại một thời điểm, chờ tăng dần theo IP, nhường phiên
+  khi hai bên cùng chủ động).
+
+Mỗi phiên chỉ có tối đa **một** `conn.receive()` đang chờ: message kế tiếp chỉ được đọc
+khi message trước đã xử lý xong, nên máy kia gửi dồn cũng không làm phình RAM.
+
+Câu chữ cho người dùng không nằm ở đây: `app` chỉ trả mã kết quả (`PairingOutcome`).
+Không bao giờ ghi mã 6 số, nonce, PEM hay nội dung message vào log (mvp N9).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import ipaddress
+import logging
+import secrets
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+
+from teleport.core.framing import FramingError
+from teleport.core.messages import AbortReason, Hello, MessageError, PairAbort, PairRequest
+from teleport.core.pairing import (
+    Action,
+    BadMessage,
+    Cancel,
+    Close,
+    ConnectionLost,
+    DeviceCert,
+    Event,
+    InitiatorSession,
+    MessageReceived,
+    Outcome,
+    PairingGate,
+    PairingSession,
+    ResponderSession,
+    Role,
+    SavePeer,
+    SendMessage,
+    ShowCode,
+    Slot,
+    Start,
+    State,
+    Tick,
+    UserDecision,
+)
+from teleport.core.pairing_code import NONCE_SIZE
+from teleport.net.connection import (
+    Connection,
+    ConnectionLostError,
+    IdentityMismatch,
+    Rejected,
+    Unreachable,
+    VersionMismatch,
+    open_pairing,
+)
+from teleport.trust.identity import Identity, InvalidCertificate, PeerCert, peer_cert_from_pem
+from teleport.trust.store import TrustedDevice, TrustStore, TrustStoreError
+
+# Thời gian tính bằng giây; đọc lúc dùng để test rút ngắn được bằng monkeypatch.
+SEND_TIMEOUT = 10.0  # mỗi lần gửi một message của phiên
+BUSY_REPLY_TIMEOUT = 1.0  # gửi pair_abort{busy} + đóng, tổng cộng
+ABORT_ON_CANCEL_TIMEOUT = 1.0  # bị hủy cứng: gửi pair_abort{user} + đóng, tổng cộng
+FAILED_CLOSE_TIMEOUT = 1.0  # phiên kết thúc mà không ghép đôi: gửi pair_abort (nếu có) + đóng, tổng cộng
+CLOSE_SESSIONS_TIMEOUT = 2.0  # cancel_all/close chờ các phiên tự kết thúc
+_MIN_WAIT = 0.01  # chờ tối thiểu khi chưa tới hạn chót (tránh vòng lặp bận)
+
+_MAX_ADDRESSES = 16  # như net.connection: số địa chỉ tối đa cho một lần mở kết nối
+_BROADCAST = ipaddress.IPv4Address("255.255.255.255")
+_TASK_NAME = "teleport.pairing"
+
+log = logging.getLogger(__name__)
+
+
+class PairingOutcome(StrEnum):
+    """Kết quả một lần ghép đôi, như `app` báo cho giao diện."""
+
+    # Trùng giá trị với core.pairing.Outcome:
+    PAIRED = "paired"
+    USER_REJECTED = "user_rejected"
+    TIMEOUT = "timeout"
+    PROTOCOL_ERROR = "protocol_error"
+    IDENTITY_CONFLICT = "identity_conflict"
+    PEER_REJECTED = "peer_rejected"
+    PEER_BUSY = "peer_busy"
+    PEER_TIMEOUT = "peer_timeout"
+    PEER_INVALID = "peer_invalid"
+    PEER_ABORTED = "peer_aborted"
+    CONNECTION_LOST = "connection_lost"
+    CANCELLED = "cancelled"
+    # Chỉ ở app:
+    UNREACHABLE = "unreachable"  # net.Unreachable
+    REJECTED = "rejected"  # net.Rejected
+    IDENTITY_MISMATCH = "identity_mismatch"  # net.IdentityMismatch
+    VERSION_MISMATCH = "version_mismatch"  # net.VersionMismatch
+    BUSY = "busy"  # máy này đang có phiên khác (begin_outgoing → None)
+    SELF = "self"  # máy kia chính là máy này
+    SAVE_FAILED = "save_failed"  # hai bên đã xác nhận nhưng store.add lỗi
+
+
+_CONFIRMED = frozenset({PairingOutcome.PAIRED, PairingOutcome.SAVE_FAILED})  # hai bên đã xác nhận
+
+_CONNECT_OUTCOMES: tuple[tuple[type[Exception], PairingOutcome], ...] = (
+    (Unreachable, PairingOutcome.UNREACHABLE),
+    (Rejected, PairingOutcome.REJECTED),
+    (IdentityMismatch, PairingOutcome.IDENTITY_MISMATCH),
+    (VersionMismatch, PairingOutcome.VERSION_MISMATCH),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PairingPrompt:
+    """Lời hỏi người dùng: so mã trên hai máy rồi gọi `PairingService.decide`."""
+
+    session_id: int  # Slot.id
+    role: Role
+    address: str  # IPv4 máy kia
+    peer_name: str  # hello.name của máy kia (đã kiểm)
+    peer_device_id: str
+    code: str  # 6 chữ số thô; giao diện tự gọi format_code
+    expires_at: float  # loop.time(): hạn người dùng phải quyết (= session.deadline ngay sau ShowCode)
+
+
+@dataclass(frozen=True, slots=True)
+class PairingFinished:
+    """Kết quả cuối của một phiên (hoặc một lời gọi `pair_with` chưa tới được phiên)."""
+
+    session_id: int | None  # None khi chưa có slot (BUSY)
+    role: Role
+    outcome: PairingOutcome
+    address: str  # IPv4 máy kia; bên khởi xướng chưa kết nối được thì là địa chỉ đầu tiên
+    port: int | None  # cổng máy kia (bên khởi xướng); None ở bên trả lời
+    peer_name: str | None  # None nếu chưa có hello
+    peer_device_id: str | None
+    peer_reason: str | None  # reason của pair_abort nhận được (Close.peer_reason)
+    device: TrustedDevice | None  # mục vừa lưu, chỉ khi PAIRED
+    known_name: str | None  # tên đã lưu trong trusted.json cho peer_device_id (IDENTITY_CONFLICT cần)
+
+
+class _Run:
+    """Trạng thái của một phiên đang chạy (một slot của gate)."""
+
+    def __init__(self, slot: Slot, address: str, port: int | None) -> None:
+        self.slot = slot
+        self.address = address
+        self.port = port
+        self.queue: asyncio.Queue[Event] = asyncio.Queue()  # chỉ UserDecision (1 lần) và Cancel (1 lần)
+        self.task = asyncio.current_task()  # task chạy phiên: cancel_all hủy cứng task này
+        self.done = asyncio.Event()  # đặt sau on_finished; `result` đã có
+        self.session: PairingSession | None = None
+        self.peer_name: str | None = None
+        self.peer_device_id: str | None = None
+        self.known_name: str | None = None
+        self.peer_reason: str | None = None
+        self.outcome: PairingOutcome | None = None  # có giá trị khi phiên đã ra kết quả
+        self.decided = False
+        self.cancelled = False
+        self.save_failed = False
+        self.device: TrustedDevice | None = None
+        self.replaced_by: _Run | None = None  # phiên trả lời thay phiên khởi xướng này
+        self.result: PairingFinished | None = None
+
+    def cancel(self, reason: str) -> None:
+        """Đưa `Cancel(reason)` vào hàng đợi, tối đa một lần."""
+        if not self.cancelled and not self.done.is_set():
+            self.cancelled = True
+            self.queue.put_nowait(Cancel(reason))
+
+
+def _check_addresses(addresses: object) -> list[str]:
+    """1–16 IPv4 dạng chấm viết chuẩn, không phải 0.0.0.0, multicast hay broadcast."""
+    if isinstance(addresses, str | bytes) or not isinstance(addresses, Sequence):
+        raise ValueError("addresses phải là một dãy địa chỉ, không phải một chuỗi")
+    items = list(addresses)
+    if not 1 <= len(items) <= _MAX_ADDRESSES:
+        raise ValueError(f"addresses phải có 1–{_MAX_ADDRESSES} địa chỉ")
+    for value in items:
+        if not isinstance(value, str):
+            raise ValueError("địa chỉ phải là chuỗi IPv4 dạng chấm")
+        try:
+            ip = ipaddress.IPv4Address(value)
+        except ValueError as e:
+            raise ValueError(f"địa chỉ phải là IPv4 dạng chấm: {value!r}") from e
+        if str(ip) != value:
+            raise ValueError(f"địa chỉ phải là IPv4 dạng chấm: {value!r}")
+        if ip.is_unspecified or ip.is_multicast or ip == _BROADCAST:
+            raise ValueError(f"{value} không phải địa chỉ của một máy")
+    return items
+
+
+def _device_cert(peer: PeerCert) -> DeviceCert:
+    """PeerCert (trust) → DeviceCert (core); PEM quá dài sau khi chuẩn hóa → ValueError."""
+    return DeviceCert(peer.device_id, peer.fingerprint, peer.pem)
+
+
+async def _send_and_close(conn: Connection, msg: PairAbort | None, budget: float) -> None:
+    """Gửi `msg` (nếu có) rồi đóng, tổng cộng tối đa `budget` giây; không raise trừ khi bị hủy.
+
+    Hết giờ khi đang đóng thì `close()` tự abort, nên socket không bị giữ quá `budget`.
+    """
+    deadline = asyncio.get_running_loop().time() + budget
+    if msg is not None:
+        try:
+            async with asyncio.timeout_at(deadline):
+                await conn.send(msg)
+        except (ConnectionLostError, TimeoutError):
+            pass
+    try:
+        async with asyncio.timeout_at(deadline):
+            await conn.close()
+    except TimeoutError:
+        pass
+
+
+class PairingService:
+    """Ghép đôi của một node: khởi xướng (`pair_with`) và trả lời (`handle_incoming`).
+
+    Mọi phương thức phải gọi trên thread của event loop. Callback được gọi đồng bộ trên
+    loop; callback raise thì ghi log, phiên vẫn chạy tiếp.
+    """
+
+    def __init__(
+        self,
+        *,
+        identity: Identity,
+        hello: Hello,
+        store: TrustStore,
+        on_prompt: Callable[[PairingPrompt], None],
+        on_finished: Callable[[PairingFinished], None],
+        on_trust_changed: Callable[[], None],
+        accepting: bool = False,
+    ) -> None:
+        """`hello.device_id` khác danh tính → ValueError."""
+        if not isinstance(hello, Hello):
+            raise ValueError("hello phải là Hello")
+        if hello.device_id != identity.device_id:
+            raise ValueError("hello.device_id phải là device_id của danh tính này")
+        own = peer_cert_from_pem(identity.cert_pem())  # PEM đã chuẩn hóa, giống bản máy kia nhận
+        self._local = _device_cert(own)
+        self._identity = identity
+        self._hello = hello
+        self._store = store
+        self._on_prompt = on_prompt
+        self._on_finished = on_finished
+        self._on_trust_changed = on_trust_changed
+        self._gate = PairingGate(identity.device_id, accepting=accepting)
+        self._runs: dict[int, _Run] = {}  # slot.id → phiên đang chạy
+        self._closed = False
+
+    @property
+    def gate(self) -> PairingGate:
+        """Cửa vào của các phiên (chẩn đoán, test)."""
+        return self._gate
+
+    @property
+    def accepting(self) -> bool:
+        """Có nhận yêu cầu ghép đôi tới không (= `gate.accepting`)."""
+        return self._gate.accepting
+
+    @accepting.setter
+    def accepting(self, value: bool) -> None:
+        self._gate.accepting = value
+
+    # ---- Bên khởi xướng --------------------------------------------------------------------
+
+    async def pair_with(self, addresses: Sequence[str], port: int) -> PairingFinished:
+        """Ghép đôi với máy ở `addresses:port` (máy này khởi xướng); trả kết quả cuối.
+
+        Tham số sai → ValueError (trước mọi I/O, không gọi `on_finished`). `on_finished`
+        được gọi đúng một lần với cùng kết quả, trừ khi phiên bị nhường cho phiên trả lời
+        của cùng máy kia (hai bên cùng chủ động): khi đó trả kết quả của phiên thay thế.
+        Bị hủy (task bị `cancel()`) → gửi `pair_abort{user}`, đóng, `on_finished(CANCELLED)`
+        rồi để CancelledError bay ra; đang chờ phiên thay thế thì hủy phiên đó
+        (`pair_abort{user}`), và chính phiên đó gọi `on_finished`.
+        """
+        addrs = _check_addresses(addresses)
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError("port phải là số nguyên 1–65535")
+        ip = addrs[0]
+        if self._closed:
+            return self._report_early(PairingOutcome.CANCELLED, ip, port)
+        slot = self._gate.begin_outgoing(ip)
+        if slot is None:
+            return self._report_early(PairingOutcome.BUSY, ip, port)
+
+        run = self._register(slot, ip, port)
+        try:
+            run.outcome = await self._initiate(run, addrs, port)
+        finally:
+            outcome = run.outcome or PairingOutcome.CANCELLED
+            # Phiên bị nhường thường nhận pair_abort{busy} của máy kia trước lệnh hủy cục bộ
+            # (→ PEER_BUSY), nên mọi kết quả chưa ghép đôi đều tính là đã nhường.
+            yielded = run.replaced_by is not None and outcome not in _CONFIRMED
+            self._end(run, outcome, report=not yielded)
+        if yielded:
+            replacement = run.replaced_by
+            assert replacement is not None
+            try:
+                await replacement.done.wait()
+            except asyncio.CancelledError:
+                # Hủy pair_with thì hủy luôn phiên đã thay nó; phiên đó tự báo on_finished.
+                replacement.cancel(AbortReason.USER)
+                raise
+            assert replacement.result is not None
+            return replacement.result
+        assert run.result is not None
+        return run.result
+
+    async def _initiate(self, run: _Run, addrs: list[str], port: int) -> PairingOutcome:
+        """Mở kết nối rồi chạy phiên khởi xướng; trả kết quả (chưa gọi finish/on_finished)."""
+        opener = asyncio.create_task(open_pairing(addrs, port, self._hello), name=f"{_TASK_NAME}.open")
+        local = asyncio.create_task(run.queue.get(), name=f"{_TASK_NAME}.local")
+        waited = False
+        try:
+            await asyncio.wait({opener, local}, return_when=asyncio.FIRST_COMPLETED)
+            waited = True
+        finally:
+            local.cancel()
+            if not opener.done():
+                opener.cancel()  # PR-2 bảo đảm hủy giữa chừng không để lại socket
+            await asyncio.wait({opener, local})
+            if not waited and not opener.cancelled() and opener.exception() is None:
+                # Bị hủy đúng lúc kết nối vừa mở xong: không để lại socket.
+                await _send_and_close(opener.result(), None, ABORT_ON_CANCEL_TIMEOUT)
+
+        if opener.cancelled():
+            return PairingOutcome.CANCELLED
+        error = opener.exception()
+        if error is not None:
+            for cls, outcome in _CONNECT_OUTCOMES:
+                if isinstance(error, cls):
+                    log.debug(
+                        "ghép đôi: không mở được kết nối tới %s:%d: %s",
+                        run.address,
+                        port,
+                        type(error).__name__,
+                    )
+                    return outcome
+            raise error  # lỗi lập trình: không che đi
+        conn = opener.result()
+        if local.done() and not local.cancelled():
+            # Lệnh hủy tới cùng lúc với kết nối: chưa gửi gì cho máy kia nên chỉ đóng.
+            await conn.close()
+            return PairingOutcome.CANCELLED
+
+        try:
+            return await self._initiate_on(run, conn)
+        finally:
+            if not conn.closed:
+                await conn.close()
+
+    async def _initiate_on(self, run: _Run, conn: Connection) -> PairingOutcome:
+        peer = conn.peer
+        assert peer.cert is not None  # phía client luôn có chứng chỉ server
+        run.address = peer.address
+        run.peer_name = peer.hello.name
+        run.peer_device_id = peer.hello.device_id
+        if (
+            peer.cert.fingerprint == self._identity.fingerprint
+            or peer.hello.device_id == self._identity.device_id
+        ):
+            # Đóng trước message mở đầu: listener của chính máy này thấy EOF, không tạo phiên.
+            await conn.close()
+            return PairingOutcome.SELF
+        known = self._store.get(peer.cert.device_id)
+        run.known_name = known.name if known is not None else None
+        try:
+            remote = _device_cert(peer.cert)
+        except ValueError:
+            log.debug("ghép đôi: chứng chỉ của %s không dùng được", peer.address)
+            await conn.close()
+            return PairingOutcome.PROTOCOL_ERROR
+        session = InitiatorSession(
+            local=self._local,
+            peer=remote,
+            peer_hello=peer.hello,
+            nonce=secrets.token_bytes(NONCE_SIZE),
+            known_fingerprint=known.fingerprint if known is not None else None,
+        )
+        return await self._drive(run, conn, session)
+
+    # ---- Bên trả lời -----------------------------------------------------------------------
+
+    async def handle_incoming(self, conn: Connection) -> None:
+        """Trả lời một kết nối ghép đôi `Listener` vừa nhận (`conn.opening` là `PairRequest`).
+
+        Không nhận (đang có phiên, IP đang bị chờ, không ở chế độ chờ ghép đôi, đã đóng)
+        → gửi `pair_abort{busy}` rồi đóng trong tối đa BUSY_REPLY_TIMEOUT, không callback.
+        """
+        loop = asyncio.get_running_loop()
+        ip = conn.peer.address
+        hello = conn.peer.hello
+        request = conn.opening
+        if not isinstance(request, PairRequest):
+            raise ValueError("handle_incoming chỉ nhận kết nối ghép đôi")
+        adm = None if self._closed else self._gate.admit(ip, hello.device_id, loop.time())
+        if adm is None or adm.slot is None:
+            log.debug("ghép đôi: từ chối (bận) yêu cầu từ %s", ip)
+            await _send_and_close(conn, PairAbort(AbortReason.BUSY), BUSY_REPLY_TIMEOUT)
+            return
+
+        run = self._register(adm.slot, ip, None)
+        run.peer_name = hello.name
+        run.peer_device_id = hello.device_id
+        if adm.cancel_outgoing is not None:
+            outgoing = self._runs.get(adm.cancel_outgoing.id)
+            if outgoing is not None:
+                log.debug("ghép đôi: hai bên cùng chủ động với %s, nhường phiên khởi xướng", ip)
+                outgoing.replaced_by = run
+                outgoing.cancel(AbortReason.BUSY)
+
+        try:
+            try:
+                remote: DeviceCert | None = _device_cert(peer_cert_from_pem(request.cert))
+            except (InvalidCertificate, ValueError):
+                remote = None  # phiên gửi pair_abort{invalid} khi Start
+            known = self._store.get(remote.device_id) if remote is not None else None
+            run.known_name = known.name if known is not None else None
+            session = ResponderSession(
+                local=self._local,
+                peer=remote,
+                peer_hello=hello,
+                request=request,
+                nonce=secrets.token_bytes(NONCE_SIZE),
+                known_fingerprint=known.fingerprint if known is not None else None,
+            )
+            run.outcome = await self._drive(run, conn, session)
+        finally:
+            try:
+                if not conn.closed:
+                    await _send_and_close(conn, None, ABORT_ON_CANCEL_TIMEOUT)
+            finally:
+                # Bị hủy thêm lần nữa khi đang đóng: vẫn nhả gate và báo kết quả.
+                self._end(run, run.outcome or PairingOutcome.CANCELLED, report=True)
+
+    # ---- Quyết định, hủy, đóng -------------------------------------------------------------
+
+    def decide(self, session_id: int, accepted: bool) -> bool:
+        """Chuyển quyết định của người dùng (`True` = mã trùng) vào phiên `session_id`.
+
+        `accepted` không phải bool → ValueError. Trả True khi đã chuyển; False khi id lạ,
+        phiên đã xong, chưa tới lúc hỏi, hoặc đã quyết rồi.
+        """
+        if type(accepted) is not bool:
+            raise ValueError("accepted phải là bool")
+        if type(session_id) is not int:
+            return False
+        run = self._runs.get(session_id)
+        if run is None or run.done.is_set() or run.decided:
+            return False
+        session = run.session
+        if session is None or session.state is not State.CONFIRMING or session.local_confirmed:
+            return False
+        run.decided = True
+        run.queue.put_nowait(UserDecision(accepted))
+        return True
+
+    async def cancel_all(self) -> None:
+        """Hủy mọi phiên đang chạy (`pair_abort{user}`) và chờ chúng kết thúc; không raise.
+
+        Chờ tối đa CLOSE_SESSIONS_TIMEOUT; phiên còn lại thì hủy cứng task của nó và chờ
+        thêm tối đa ABORT_ON_CANCEL_TIMEOUT + 1 giây.
+        """
+        runs = list(self._runs.values())
+        for run in runs:
+            run.cancel(AbortReason.USER)
+        left = await self._wait_done(runs, CLOSE_SESSIONS_TIMEOUT)
+        if not left:
+            return
+        for run in left:
+            if run.task is not None and not run.task.done():
+                log.warning("ghép đôi: phiên %d không dừng sau khi hủy, hủy cứng", run.slot.id)
+                run.task.cancel()
+        left = await self._wait_done(left, ABORT_ON_CANCEL_TIMEOUT + 1)
+        for run in left:
+            log.warning("ghép đôi: phiên %d vẫn chưa dừng", run.slot.id)
+
+    async def close(self) -> None:
+        """Ngừng nhận yêu cầu mới và hủy mọi phiên; gọi nhiều lần không lỗi."""
+        self._closed = True
+        self._gate.accepting = False
+        await self.cancel_all()
+
+    @staticmethod
+    async def _wait_done(runs: list[_Run], timeout: float) -> list[_Run]:
+        """Chờ `done` của các phiên tối đa `timeout`; trả các phiên chưa xong."""
+        waiters = {
+            asyncio.create_task(run.done.wait(), name=f"{_TASK_NAME}.wait"): run
+            for run in runs
+            if not run.done.is_set()
+        }
+        if not waiters:
+            return []
+        try:
+            await asyncio.wait(set(waiters), timeout=timeout)
+        finally:
+            for waiter in waiters:
+                waiter.cancel()
+            await asyncio.wait(set(waiters))
+        return [run for run in waiters.values() if not run.done.is_set()]
+
+    # ---- Vòng sự kiện của một phiên --------------------------------------------------------
+
+    async def _drive(self, run: _Run, conn: Connection, session: PairingSession) -> PairingOutcome:
+        """Chạy phiên tới khi nó trả `Close`; kết nối luôn đã đóng khi hàm trả về.
+
+        Bị hủy cứng khi phiên chưa xong → `Cancel(user)`, thực hiện các hành động trong
+        ABORT_ON_CANCEL_TIMEOUT, rồi để CancelledError bay ra.
+        """
+        loop = asyncio.get_running_loop()
+        run.session = session
+        recv: asyncio.Task | None = None  # conn.receive() đang chờ (tối đa MỘT)
+        local: asyncio.Task | None = None  # run.queue.get()
+        reading = True
+        try:
+            actions = session.handle(Start(), loop.time())
+            while True:
+                # Phiên kết thúc mà không ghép đôi: gửi pair_abort rồi đóng trong tổng cộng
+                # FAILED_CLOSE_TIMEOUT, để máy kia không đọc cũng không giữ được gate lâu hơn.
+                deadline = loop.time() + FAILED_CLOSE_TIMEOUT if _ends_unpaired(actions) else None
+                close = await self._perform(run, conn, actions, deadline)
+                if close is not None:
+                    run.outcome = self._outcome_of(run, close)
+                    recv = await _stop(recv)
+                    if deadline is None:
+                        await conn.close()  # đóng gọn để pair_confirm cuối kịp tới máy kia
+                    else:
+                        try:
+                            async with asyncio.timeout_at(deadline):
+                                await conn.close()  # hết giờ thì close() tự abort
+                        except TimeoutError:
+                            pass
+                    return run.outcome
+                if reading and recv is None:
+                    recv = asyncio.create_task(conn.receive(), name=f"{_TASK_NAME}.recv")
+                if local is None:
+                    local = asyncio.create_task(run.queue.get(), name=f"{_TASK_NAME}.local")
+                assert session.deadline is not None
+                wait = max(session.deadline - loop.time(), _MIN_WAIT)
+                pending = {t for t in (recv, local) if t is not None}
+                done, _ = await asyncio.wait(pending, timeout=wait, return_when=asyncio.FIRST_COMPLETED)
+                event: Event
+                if recv is not None and recv in done:  # ưu tiên message mạng
+                    event, reading = _map_receive(recv)
+                    recv = None
+                elif local in done:
+                    event = local.result()
+                    local = None
+                else:
+                    event = Tick()
+                actions = session.handle(event, loop.time())
+        except asyncio.CancelledError:
+            if session.state is not State.DONE:
+                log.debug("ghép đôi: phiên %d bị hủy cứng", run.slot.id)
+                try:
+                    async with asyncio.timeout(ABORT_ON_CANCEL_TIMEOUT):
+                        await self._perform(run, conn, session.handle(Cancel(), loop.time()))
+                        recv = await _stop(recv)
+                        await conn.close()  # bị hủy vì hết giờ thì close() tự abort
+                except TimeoutError:
+                    pass
+            raise
+        finally:
+            # Không await gì khác trước khi hủy hai task con; bị hủy thêm lần nữa thì task
+            # con thứ hai vẫn được dừng.
+            try:
+                await _stop(local)
+            finally:
+                await _stop(recv)
+
+    async def _perform(
+        self, run: _Run, conn: Connection, actions: list[Action], deadline: float | None = None
+    ) -> Close | None:
+        """Thực hiện hành động đúng thứ tự; trả `Close` nếu có (luôn là hành động cuối).
+
+        Mỗi lần gửi chờ tối đa SEND_TIMEOUT, và không quá `deadline` (`loop.time()`) nếu có.
+        """
+        loop = asyncio.get_running_loop()
+        for action in actions:
+            if isinstance(action, SendMessage):
+                send_deadline = loop.time() + SEND_TIMEOUT
+                if deadline is not None:
+                    send_deadline = min(send_deadline, deadline)
+                try:
+                    async with asyncio.timeout_at(send_deadline):
+                        await conn.send(action.message)
+                except (ConnectionLostError, TimeoutError) as e:
+                    # Lần receive kế tiếp sẽ ra ConnectionLost; vẫn làm tiếp các hành động sau.
+                    log.debug("ghép đôi: gửi %s thất bại (%s)", action.message.TYPE, type(e).__name__)
+            elif isinstance(action, ShowCode):
+                session = run.session
+                assert session is not None and session.deadline is not None
+                prompt = PairingPrompt(
+                    session_id=run.slot.id,
+                    role=run.slot.role,
+                    address=run.address,
+                    peer_name=conn.peer.hello.name,
+                    peer_device_id=conn.peer.hello.device_id,
+                    code=action.code,
+                    expires_at=session.deadline,
+                )
+                self._call(self._on_prompt, prompt)
+            elif isinstance(action, SavePeer):
+                self._save(run, action)
+            elif isinstance(action, Close):
+                return action
+        return None
+
+    def _save(self, run: _Run, action: SavePeer) -> None:
+        peer = action.peer
+        try:
+            run.device = self._store.add(PeerCert(peer.device_id, peer.fingerprint, peer.pem), action.name)
+        except (TrustStoreError, ValueError) as e:
+            log.error("ghép đôi: không lưu được thiết bị %s: %s", peer.device_id[:8], type(e).__name__)
+            run.save_failed = True
+            return
+        try:
+            self._on_trust_changed()
+        except Exception:
+            log.exception("on_trust_changed raise")
+
+    @staticmethod
+    def _outcome_of(run: _Run, close: Close) -> PairingOutcome:
+        run.peer_reason = close.peer_reason
+        if run.save_failed:
+            return PairingOutcome.SAVE_FAILED
+        return PairingOutcome(close.outcome.value)
+
+    # ---- Đăng ký, kết thúc -----------------------------------------------------------------
+
+    def _register(self, slot: Slot, address: str, port: int | None) -> _Run:
+        run = _Run(slot, address, port)
+        self._runs[slot.id] = run
+        return run
+
+    def _end(self, run: _Run, outcome: PairingOutcome, *, report: bool) -> None:
+        """Nhả slot của gate, dựng kết quả, gọi `on_finished` (nếu `report`), đặt `done`.
+
+        Kết nối đã đóng trước bước này (thứ tự: kết nối đóng → gate.finish → on_finished).
+        """
+        loop = asyncio.get_running_loop()
+        session = run.session
+        if session is not None and session.outcome is not None:
+            core_outcome = session.outcome  # PAIRED kể cả khi lưu lỗi: giao thức đã thành công
+        elif run.slot.role is Role.INITIATOR:
+            core_outcome = Outcome.CONNECTION_LOST  # chỉ để nhả slot (khởi xướng không tính bộ đếm)
+        else:
+            core_outcome = Outcome.CANCELLED
+        try:
+            self._gate.finish(run.slot, core_outcome, loop.time())
+        finally:
+            self._runs.pop(run.slot.id, None)
+            run.result = PairingFinished(
+                session_id=run.slot.id,
+                role=run.slot.role,
+                outcome=outcome,
+                address=run.address,
+                port=run.port,
+                peer_name=run.peer_name,
+                peer_device_id=run.peer_device_id,
+                peer_reason=run.peer_reason,
+                device=run.device if outcome is PairingOutcome.PAIRED else None,
+                known_name=run.known_name,
+            )
+            log.info(
+                "ghép đôi kết thúc: vai %s, %s, thiết bị %s, kết quả %s",
+                run.slot.role.value,
+                run.address,
+                (run.peer_device_id or "?")[:8],
+                outcome.value,
+            )
+            if report:
+                self._call(self._on_finished, run.result)
+            run.done.set()
+
+    def _report_early(self, outcome: PairingOutcome, ip: str, port: int) -> PairingFinished:
+        """Kết quả của `pair_with` chưa giữ được slot (đã đóng, hoặc đang có phiên khác)."""
+        result = PairingFinished(
+            session_id=None,
+            role=Role.INITIATOR,
+            outcome=outcome,
+            address=ip,
+            port=port,
+            peer_name=None,
+            peer_device_id=None,
+            peer_reason=None,
+            device=None,
+            known_name=None,
+        )
+        log.info("ghép đôi tới %s: %s", ip, outcome.value)
+        self._call(self._on_finished, result)
+        return result
+
+    @staticmethod
+    def _call(callback: Callable, arg: object) -> None:
+        try:
+            callback(arg)
+        except Exception:
+            log.exception("callback ghép đôi raise")
+
+
+def _ends_unpaired(actions: list[Action]) -> bool:
+    """Lô hành động kết thúc phiên (`Close` cuối) với kết quả khác `paired`."""
+    return bool(actions) and isinstance(actions[-1], Close) and actions[-1].outcome is not Outcome.PAIRED
+
+
+def _map_receive(task: asyncio.Task) -> tuple[Event, bool]:
+    """Kết quả của `conn.receive()` → (sự kiện, còn đọc tiếp không). `detail` chỉ là tên lớp lỗi."""
+    try:
+        msg = task.result()
+    except ConnectionLostError:
+        return ConnectionLost(), False
+    except (FramingError, MessageError) as e:  # gồm UnknownMessageType, WrongConnectionKind
+        return BadMessage(type(e).__name__), False
+    if msg is None:
+        return ConnectionLost(), False
+    return MessageReceived(msg), True
+
+
+async def _stop(task: asyncio.Task | None) -> None:
+    """Hủy `task` (nếu còn chạy) và chờ nó kết thúc; không raise lỗi của task."""
+    if task is None:
+        return None
+    if not task.done():
+        task.cancel()
+    await asyncio.wait({task})
+    if not task.cancelled():
+        task.exception()  # đánh dấu đã xem lỗi, tránh cảnh báo "never retrieved"
+    return None

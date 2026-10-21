@@ -235,7 +235,7 @@ Nguyên tắc: **làm bằng dòng lệnh (CLI) trước, giao diện sau.** Ph�
 | # | Giai đoạn | Thời lượng | Hết tuần | Bản phát hành | Tính năng (mvp) | Người dùng làm được gì | Trạng thái |
 |---|---|---|---|---|---|---|---|
 | 0 | Nền tảng, repo, CI | 1 tuần | 1 | — | — | — | ✅ Đã xong |
-| 1 | Khám phá & ghép đôi | 2 tuần | 3 | — | F2, F3 (lõi + CLI), F12 một phần | Thấy máy khác và ghép đôi qua CLI | ⏳ Đang làm (nền ghép đôi, khám phá mDNS, kết nối một cổng đã merge) |
+| 1 | Khám phá & ghép đôi | 2 tuần | 3 | — | F2, F3 (lõi + CLI), F12 một phần | Thấy máy khác và ghép đôi qua CLI | ⏳ Đang làm (nền ghép đôi, khám phá mDNS, kết nối một cổng, ghép đôi qua CLI bằng IP) |
 | 2 | Truyền file, backpressure, an toàn khi nhận | 3 tuần | 6 | `v0.1.0-alpha` | F4, F5 (CLI), F12 | Gửi file lớn qua CLI giữa 2 máy đã ghép đôi | ⬜ Chưa làm |
 | 3 | Merkle & tự nối lại | 3 tuần | 9 | `v0.2.0-alpha` | F6, F7 | Rớt mạng vẫn tự nối lại, chỉ gửi phần còn thiếu. **Bản CLI đầu tiên đáng cho người dùng kỹ thuật dùng thử** | ⬜ Chưa làm |
 | 4 | Giao diện, khay hệ thống, đa ngôn ngữ | 2 tuần | 11 | `v0.3.0-beta` | F2–F5 (giao diện), F9, F10, F11 | Dùng hoàn toàn bằng giao diện: radar, kéo thả, ghép đôi | ⬜ Chưa làm |
@@ -260,8 +260,10 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - ✅ `core/messages.py`: `control_open`, `ping`, `pong`.
 - ✅ Khám phá mDNS: `core/discovery.py` (bản ghi TXT, lọc địa chỉ, nhận ra card ảo, máy trạng thái `DiscoveryTracker` tự kiểm còn sống) và `net/discovery.py` (zeroconf: quảng bá, cập nhật, goodbye, duyệt) — `protocol.md` mục 8.
 - ✅ `net/connection.py` (listener một cổng, phân loại kết nối, trao `hello`, giới hạn và thời gian chờ, keepalive, thay `SSLContext` khi danh sách tin cậy đổi), `core/keepalive.py` (keepalive sans-IO) và bảng loại kết nối trong `core/messages.py` (`ConnectionKind`, `allowed_types`, `opening_kind`).
-- `app/node.py` + `app/pairing.py`: ghép các thành phần, giữ kết nối điều khiển tới thiết bị tin cậy, luồng ghép đôi, hủy ghép đôi; quảng bá lại (`advertise`) khi card mạng/địa chỉ đổi hoặc máy thức dậy, để máy khác thấy lại ngay (`protocol.md` mục 8).
-- CLI: `teleport list`, `teleport listen`, `teleport pair <thiết bị>`, `teleport unpair <thiết bị>`; `<thiết bị>` là tên hoặc tiền tố `device_id`; `pair` nhận thêm `ip[:cổng]` để ghép đôi khi mạng chặn mDNS (mvp F12).
+- ✅ `app/pairing.py` (luồng ghép đôi trên mạng, chống làm phiền, nhường phiên khi hai bên cùng chủ động), `app/node.py` (lắng nghe, cổng dự phòng, nhận kết nối điều khiển, hủy ghép đôi đóng kết nối ngay), `app/settings.py` (`settings.json`), `app/devices.py` (địa chỉ nhập tay, tìm thiết bị theo tên / tiền tố mã), `atomic.py` (ghi file nguyên tử dùng chung).
+- `app/node.py` phần còn lại: giữ kết nối điều khiển tới thiết bị tin cậy, mDNS trong node; quảng bá lại (`advertise`) khi card mạng/địa chỉ đổi hoặc máy thức dậy, để máy khác thấy lại ngay (`protocol.md` mục 8).
+- ✅ CLI: `teleport listen`, `teleport pair <ip[:cổng]>`, `teleport unpair <thiết bị>`; `--json`; mã thoát 0/1/2.
+- CLI còn lại: `teleport list`, `teleport pair <thiết bị>`; `<thiết bị>` là tên hoặc tiền tố `device_id` (mvp F12).
 - **Xong khi:** đạt N1 trên 2 máy thật; ghép đôi xong thì tự nhận ra nhau sau khi khởi động lại; máy chưa ghép đôi không mở được kết nối điều khiển hay dữ liệu theo cả hai chiều (chỉ mở được kết nối ghép đôi).
 
 #### Giai đoạn 2 — Truyền file, backpressure, an toàn khi nhận
@@ -284,6 +286,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Hộp thoại ghép đôi; màn hình cài đặt đủ các mục F10.
 - Các thông báo lỗi theo mvp mục 8.
 - Khay hệ thống, chạy nền (F9); chuyển node sang tiến trình giao diện, CLI nói chuyện qua IPC cục bộ.
+  - Lưu ý khi làm IPC: tới `v0.2`, CLI in ra stdout đồng bộ ngay trên event loop của node, nên terminal ngừng đọc (ví dụ đang tạm dừng cuộn) có thể làm cả node đứng chờ. Máy khác trong LAN không gây ra được việc này. Khi node chạy trong tiến trình giao diện, việc in hay gửi sự kiện cho CLI qua IPC không được chặn event loop của node.
 - Tiếng Việt và English bằng Qt Linguist (F11); dùng được bằng bàn phím, theo chế độ sáng/tối (N12).
 - Đo RAM khi rảnh (N3) ngay ở bản này.
 - **Xong khi:** dùng trọn vẹn không cần dòng lệnh; đạt AC giao diện của F2–F5, F9–F11. → **`v0.3.0-beta`**.

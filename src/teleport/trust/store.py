@@ -3,34 +3,26 @@
 Định dạng file ở docs/architecture.md mục 4. Mỗi mục lưu chứng chỉ PEM của máy
 kia; listener mTLS nạp các chứng chỉ này làm trust anchor (`cert_pems()`).
 
-File được ghi nguyên tử (`trusted.json.tmp` → fsync → `os.replace`), nên người
-đọc không bao giờ thấy file ghi dở. Khi đọc, mọi mục được kiểm tra lại từ đầu;
-chỉ một chỗ sai là cả file bị từ chối (`TrustStoreError`). File hỏng **không bao
-giờ** bị tự xóa hay tạo lại: người dùng phải tự quyết định.
+File được ghi nguyên tử bằng `teleport.atomic.write_atomic` (`trusted.json.tmp` →
+fsync → `os.replace`), nên người đọc không bao giờ thấy file ghi dở. Khi đọc, mọi
+mục được kiểm tra lại từ đầu; chỉ một chỗ sai là cả file bị từ chối
+(`TrustStoreError`). File hỏng **không bao giờ** bị tự xóa hay tạo lại: người dùng
+phải tự quyết định.
 """
 
 from __future__ import annotations
 
-import contextlib
 import datetime
 import json
-import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from teleport.atomic import write_atomic
 from teleport.core.messages import MessageError, validate_device_id, validate_device_name
 from teleport.paths import TRUSTED_FILE
 from teleport.trust.identity import InvalidCertificate, PeerCert, peer_cert_from_pem
 
 STORE_VERSION = 1
-
-
-# os.replace có thể báo PermissionError nếu tiến trình khác (trình diệt virus, người
-# đọc file) đang mở file đích, hay gặp nhất trên Windows. Áp dụng cho mọi HĐH: tối
-# đa 5 lần thử, cách nhau 50 ms, rồi mới bỏ cuộc.
-_REPLACE_ATTEMPTS = 5
-_REPLACE_DELAY = 0.05
 
 
 class TrustStoreError(Exception):
@@ -163,56 +155,16 @@ class TrustStore:
             ],
         }
         text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
-        _write_atomic(self.path, text.encode("utf-8"))
+        try:
+            write_atomic(self.path, text.encode("utf-8"))
+        except OSError as e:
+            raise TrustStoreError(f"không ghi được {self.path}: {e}") from e
         self._devices = dict(devices)
 
 
 def _format_time(moment: datetime.datetime) -> str:
     """Thời điểm UTC dạng `YYYY-MM-DDTHH:MM:SSZ`."""
     return moment.astimezone(datetime.UTC).isoformat(timespec="seconds").removesuffix("+00:00") + "Z"
-
-
-def _write_atomic(path: Path, content: bytes) -> None:
-    """Ghi `path.tmp` → flush + fsync → os.replace (tối đa 5 lần thử, cách nhau 50 ms).
-
-    Lỗi thì xóa `.tmp` và raise TrustStoreError.
-    """
-    tmp = path.with_name(path.name + ".tmp")
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # 0o600: chỉ chủ sở hữu đọc/ghi (có tác dụng trên POSIX).
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
-        with os.fdopen(fd, "wb") as f:
-            if os.name == "posix":
-                os.fchmod(f.fileno(), 0o600)  # .tmp còn sót từ lần trước có thể mang quyền khác
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        for attempt in range(_REPLACE_ATTEMPTS):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                if attempt == _REPLACE_ATTEMPTS - 1:
-                    raise
-                time.sleep(_REPLACE_DELAY)
-        _fsync_dir(path.parent)
-    except OSError as e:
-        with contextlib.suppress(OSError):
-            tmp.unlink(missing_ok=True)
-        raise TrustStoreError(f"không ghi được {path}: {e}") from e
-
-
-def _fsync_dir(directory: Path) -> None:
-    """POSIX: fsync thư mục để việc đổi tên đã ghi xuống đĩa. Windows không hỗ trợ; lỗi bỏ qua."""
-    if os.name != "posix":
-        return
-    with contextlib.suppress(OSError):
-        fd = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
 
 
 def _parse_store(data: object) -> dict[str, TrustedDevice]:
