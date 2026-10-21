@@ -137,7 +137,8 @@ def test_replace_waits_between_attempts(tmp_path, monkeypatch):
     stamps = []
 
     def flaky(src, dst, *args, **kwargs):
-        stamps.append(time.monotonic())
+        # perf_counter: monotonic trên Windows/3.12 chỉ chính xác 15,6 ms, đo hụt ngưỡng.
+        stamps.append(time.perf_counter())
         if len(stamps) <= 2:
             raise PermissionError(13, "khóa")
         return real_replace(src, dst, *args, **kwargs)
