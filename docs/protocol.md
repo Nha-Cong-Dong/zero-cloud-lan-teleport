@@ -18,12 +18,15 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 ### 2.1. Một cổng, ba loại kết nối
 
 - TCP + **TLS 1.3** ✅. Phiên bản thấp hơn bị từ chối.
-- Mỗi node lắng nghe trên **một cổng TCP**, mặc định **47474** 📝. Cổng mặc định bận thì node để hệ điều hành chọn một cổng trống, lưu vào `settings.json` để lần chạy sau dùng lại, và hiện cổng đó trong `teleport identity` / `teleport list`; cổng thật luôn được quảng bá qua mDNS (mục 8). Nhập IP thủ công nhận `ip` (dùng cổng mặc định) hoặc `ip:cổng`.
-- **Địa chỉ:** v1.0 chỉ dùng IPv4. Node lắng nghe trên mọi địa chỉ IPv4 (`0.0.0.0`) và quảng bá qua mDNS các địa chỉ IPv4 của máy (tối đa 16, mục 8; chưa lọc theo trạng thái bật/tắt của card), bỏ loopback, link-local `169.254.0.0/16` và các card ảo nhận ra được ✅. Card ảo nhận ra theo tên card (tiền tố như `docker`, `veth`, `vEthernet`, `tun`, `wg`, `utun`, hoặc chứa `virtual`, `hyper-v`, `wsl`, `vpn`…; danh sách đầy đủ ở `teleport.core.discovery`). Hai ngoại lệ: luôn giữ **địa chỉ nguồn ưu tiên** dù card đó trông như card ảo — đó là địa chỉ nguồn hệ điều hành chọn cho tuyến tới nhóm multicast mDNS, hoặc, nếu địa chỉ đó là loopback (Windows thường chọn `127.0.0.1` cho tuyến multicast), địa chỉ nguồn của tuyến mặc định; địa chỉ này đứng đầu danh sách quảng bá; và nếu mọi địa chỉ đều nằm trên card ảo thì quảng bá tất cả thay vì không quảng bá gì. Client thử **song song** mọi địa chỉ được quảng bá của một thiết bị và giữ kết nối thành công đầu tiên, nên một địa chỉ chết không làm chậm việc kết nối (mvp F2, N1).
+- Mỗi node lắng nghe trên **một cổng TCP**, mặc định **47474** (listener ✅ `teleport.net.connection`). 📝 Cổng mặc định bận thì node để hệ điều hành chọn một cổng trống, lưu vào `settings.json` để lần chạy sau dùng lại, và hiện cổng đó trong `teleport identity` / `teleport list`; cổng thật luôn được quảng bá qua mDNS (mục 8). Nhập IP thủ công nhận `ip` (dùng cổng mặc định) hoặc `ip:cổng`.
+- Node nhận **TCP trần** trên `0.0.0.0` rồi bắt đầu TLS cho từng kết nối bằng `SSLContext` **hiện tại** ✅, nên đổi danh sách tin cậy không phải mở lại cổng (mục 7).
+- **Địa chỉ:** v1.0 chỉ dùng IPv4. Node lắng nghe trên mọi địa chỉ IPv4 (`0.0.0.0`) và quảng bá qua mDNS các địa chỉ IPv4 của máy (tối đa 16, mục 8; chưa lọc theo trạng thái bật/tắt của card), bỏ loopback, link-local `169.254.0.0/16` và các card ảo nhận ra được ✅. Card ảo nhận ra theo tên card (tiền tố như `docker`, `veth`, `vEthernet`, `tun`, `wg`, `utun`, hoặc chứa `virtual`, `hyper-v`, `wsl`, `vpn`…; danh sách đầy đủ ở `teleport.core.discovery`). Hai ngoại lệ: luôn giữ **địa chỉ nguồn ưu tiên** dù card đó trông như card ảo — đó là địa chỉ nguồn hệ điều hành chọn cho tuyến tới nhóm multicast mDNS, hoặc, nếu địa chỉ đó là loopback (Windows thường chọn `127.0.0.1` cho tuyến multicast), địa chỉ nguồn của tuyến mặc định; địa chỉ này đứng đầu danh sách quảng bá; và nếu mọi địa chỉ đều nằm trên card ảo thì quảng bá tất cả thay vì không quảng bá gì. Client thử **song song** mọi địa chỉ được quảng bá của một thiết bị và giữ kết nối thành công đầu tiên, nên một địa chỉ chết không làm chậm việc kết nối (mvp F2, N1). Mỗi lần thử chỉ đi tới khi đã đọc và kiểm `hello` của server; message mở đầu (bảng bên dưới) chỉ được gửi trên kết nối thắng, sau khi các lần thử khác đã bị đóng, nên server không nhận kết nối điều khiển thừa ✅.
 - Server dùng `CERT_OPTIONAL` ✅ và nạp chứng chỉ của mọi thiết bị tin cậy làm trust anchor, kèm kiểm tra X.509 nghiêm ngặt (`teleport.net.tls.server_context(..., allow_anonymous=True)`):
   - Client **gửi chứng chỉ** → chứng chỉ phải nằm trong danh sách tin cậy, nếu không bắt tay thất bại (kể cả khi danh sách rỗng). Kiểm chứng bởi `tests/net/test_tls.py`.
   - Client **không gửi chứng chỉ** → kết nối ẩn danh, chỉ được dùng để ghép đôi.
-- Ngay sau bắt tay, hai bên gửi `hello`. Rồi **client khai báo loại kết nối bằng message đầu tiên của nó**. Trước khi đọc được message này, server không gửi gì ngoài `hello`. Server đọc nó với giới hạn 16 KiB và chờ tối đa 10 s; sai loại hoặc quá giờ → đóng.
+- Ngay sau bắt tay, hai bên gửi `hello`. Rồi **client khai báo loại kết nối bằng message đầu tiên của nó**. Trước khi đọc được message này, server không gửi gì ngoài `hello`. Sai loại hoặc quá giờ → đóng. Thứ tự ✅:
+  - Server gửi `hello` ngay sau bắt tay, rồi đọc `hello` của client, rồi đọc message mở đầu. Cả hai được đọc với giới hạn 16 KiB, trong **cùng một hạn 10 s cho cả chuỗi** (tính từ lúc nhận TCP, gồm cả bắt tay TLS), không gia hạn khi có byte tới.
+  - Client của kết nối điều khiển so fingerprint của server **trước khi gửi bất kỳ byte nào** (kể cả `hello`).
 
 | Loại kết nối | Client gửi chứng chỉ? | Message đầu tiên của client sau `hello` | Dùng cho |
 |---|---|---|---|
@@ -33,25 +36,31 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 
 ### 2.2. Xác thực hai chiều
 
-- **Client kiểm tra server:** không dùng CA hay hostname (`CERT_NONE`). Sau khi bắt tay, client so **toàn bộ** fingerprint chứng chỉ server với fingerprint đã lưu trong `trusted.json` (`verify_fingerprint`) ✅, và kiểm `CN` khớp `hello.device_id` của server. Không khớp → đóng kết nối, báo người dùng (mvp mục 8, “Danh tính thiết bị thay đổi”).
-- **Server kiểm tra client:** OpenSSL đã kiểm chứng chỉ trong lúc bắt tay; server còn kiểm `CN` khớp `hello.device_id` của client.
+- **Client kiểm tra server:** không dùng CA hay hostname (`CERT_NONE`). Sau khi bắt tay, client so **toàn bộ** fingerprint chứng chỉ server với fingerprint đã lưu trong `trusted.json` (`verify_fingerprint`) ✅, và kiểm `CN` khớp `hello.device_id` của server ✅. Không khớp → đóng kết nối, báo người dùng (mvp mục 8, “Danh tính thiết bị thay đổi”).
+- **Server kiểm tra client:** OpenSSL đã kiểm chứng chỉ trong lúc bắt tay; server còn kiểm `CN` khớp `hello.device_id` của client ✅.
 - **Không có session ticket** ✅ (`num_tickets = 0`): kết nối dùng lại session sẽ bỏ qua bước kiểm chứng chỉ client, nên máy vừa bị hủy ghép đôi có thể vào lại bằng session cũ. Mỗi kết nối đều bắt tay đầy đủ với danh sách tin cậy hiện tại.
 - Ghép đôi (kết nối ẩn danh): client lấy chứng chỉ server từ bắt tay TLS; server nhận chứng chỉ client trong `pair_request` (mục 5).
-- **Lưu ý TLS 1.3:** client bị từ chối vẫn thấy kết nối mở thành công; lỗi chỉ lộ ra ở lần đọc đầu tiên. Vì vậy client chỉ coi là đã kết nối khi **đọc được `hello` của server**, trên **mọi** loại kết nối. Nhận EOF hoặc lỗi SSL trước `hello` → máy kia từ chối máy này. Trên thực tế client thường chỉ thấy EOF, không thấy loại cảnh báo TLS, nên **không phân biệt được lý do** (bị hủy ghép đôi, ghép đôi một phía…); thông báo cho người dùng phải chung chung (mục 7).
+- **Lưu ý TLS 1.3:** client bị từ chối vẫn thấy kết nối mở thành công; lỗi chỉ lộ ra ở lần đọc đầu tiên. Vì vậy client chỉ coi là đã kết nối khi **đọc được `hello` của server**, trên **mọi** loại kết nối ✅. Nhận EOF, lỗi SSL hoặc reset trước `hello` → máy kia từ chối máy này. “Bị từ chối” chỉ tính khi lỗi tới **sau khi bắt tay TLS xong**; lỗi trong lúc TCP/TLS là “không kết nối được”, vì server đóng ngay các kết nối vượt giới hạn trước cả TLS (mục 2.3), và nếu coi đó là bị từ chối thì một máy làm lũ kết nối sẽ khiến node ngừng tự nối lại (mục 6.2). Trên thực tế client thường chỉ thấy EOF, không thấy loại cảnh báo TLS, nên **không phân biệt được lý do** (bị hủy ghép đôi, ghép đôi một phía…); thông báo cho người dùng phải chung chung (mục 7).
 
-### 2.3. Giới hạn và thời gian chờ 📝
+### 2.3. Giới hạn và thời gian chờ
+
+Phần ở tầng mạng đã cài ở `teleport.net.connection` ✅; những chỗ đánh 📝 (kết nối dữ liệu, các luật do node áp) chưa cài.
 
 | | Kết nối ghép đôi | Kết nối điều khiển | Kết nối dữ liệu |
 |---|---|---|---|
-| Bắt tay TLS + `hello` + message mở đầu | 10 s | 10 s | 10 s |
-| Kích thước message tối đa | **16 KiB** (`MAX_PAIRING_MESSAGE_SIZE`) ✅ | 16 MiB (`MAX_MESSAGE_SIZE`) ✅ | 16 KiB cho `hello`/`data_open`; khung khối theo mục 4 |
-| Sau khi mở đầu | Chờ mỗi message 10 s; riêng lúc chờ người dùng xác nhận: 60 s, cộng 10 s chờ `pair_confirm` của máy kia (bên dưới) | Keepalive (bên dưới) | Bên nhận file: không nhận được byte nào trong 30 s → đóng. Bên gửi file: `drain()` không xong trong 30 s, hoặc mất kết nối điều khiển với máy đó → đóng |
-| Số kết nối đồng thời | 1 phiên ghép đôi; kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng, quá thì đóng ngay (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác xếp hàng |
+| Bắt tay TLS + `hello` + message mở đầu | 10 s ✅ | 10 s ✅ | 10 s 📝 |
+| Kích thước message tối đa | **16 KiB** (`MAX_PAIRING_MESSAGE_SIZE`) ✅ | 16 MiB (`MAX_MESSAGE_SIZE`) ✅; `hello` và `control_open` 16 KiB ✅ | 16 KiB cho `hello`/`data_open`; khung khối theo mục 4 📝 |
+| Sau khi mở đầu | Chờ mỗi message 10 s; riêng lúc chờ người dùng xác nhận: 60 s, cộng 10 s chờ `pair_confirm` của máy kia (bên dưới) | Keepalive (bên dưới) ✅; một đoạn gửi không xong (`drain()`) trong 30 s → đóng ✅ | Bên nhận file: không nhận được byte nào trong 30 s → đóng. Bên gửi file: `drain()` không xong trong 30 s, hoặc mất kết nối điều khiển với máy đó → đóng 📝 |
+| Số kết nối đồng thời | 1 phiên ghép đôi (`PairingGate` ✅, nối vào node 📝); kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng ✅ (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) 📝 | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác xếp hàng 📝 |
 
+- **Kết nối đang mở đầu** (từ lúc nhận TCP tới khi xác định loại): tối đa **4 mỗi IP, 64 tổng**; quá thì đóng ngay, trước cả bắt tay TLS ✅. Kết nối đã xác định loại không còn tính vào giới hạn này.
+- Kết nối ẩn danh vượt 1 mỗi IP hoặc 8 tổng bị đóng ngay sau bắt tay TLS, không nhận `hello` ✅. Kết nối ẩn danh thôi tính khi đã gửi `pair_request` (lúc đó node quyết định ngay có nhận phiên hay không, mục 5.3) hoặc khi đóng.
+- Từ chối trong lúc mở đầu luôn là đóng ngay (TCP reset), không đóng gọn, để máy không đọc dữ liệu không giữ được socket.
 - Header vượt giới hạn → đóng kết nối ngay, không đọc thân (`read_message(reader, max_size)`) ✅.
 - `read_message` không tự đặt thời gian chờ; tầng gọi nó bọc trong `asyncio.timeout`.
 - **Xác nhận ghép đôi** ✅ (`teleport.core.pairing`): mỗi máy tính 60 s từ lúc hiện mã; người dùng máy này phải quyết trong 60 s đó. Máy đã gửi `pair_confirm` mà chưa nhận `pair_confirm` của máy kia thì chờ thêm 10 s (`CONFIRM_GRACE`, tới 70 s kể từ lúc hiện mã), vì người dùng máy kia có thể bấm sát giây thứ 60 và message còn phải đi qua mạng. Hết giờ → `pair_abort{timeout}`; quyết định tới sau hạn chót vẫn là hết giờ.
-- 📝 **Keepalive** trên kết nối điều khiển: bên nào không gửi gì trong 10 s thì gửi `ping`; không nhận được byte nào trong 30 s → coi là mất kết nối (mục 6.2). Nhận `ping` thì bắt buộc trả `pong` với đúng `t` đó; `pong` không cần trả lời.
+- **Keepalive** trên kết nối điều khiển ✅ (`teleport.core.keepalive`, `teleport.net.connection.ControlChannel`): bên nào không gửi gì trong 10 s (mọi message đều tính, kể cả `pong`) thì gửi `ping`; không nhận được byte nào trong 30 s → coi là mất kết nối (mục 6.2). Tính theo **byte**: đọc được một phần message cũng là “nhận”, nên message lớn đi chậm trên mạng yếu không bị coi là mất kết nối. Nhận `ping` thì bắt buộc trả `pong` với đúng `t` đó; `pong` không cần trả lời.
+- **Gửi không tiến triển** trên kết nối điều khiển ✅: message được ghi theo đoạn 64 KiB; một đoạn không gửi xong (`drain()`) trong 30 s → đóng kết nối. Nếu không, máy kia chỉ gửi mà không bao giờ đọc sẽ làm bên gửi treo mãi, vì keepalive vẫn thấy có byte tới.
 
 ## 3. Kênh điều khiển
 
@@ -73,7 +82,7 @@ Mỗi message:
 
 ### 3.2. Các loại message
 
-`hello`, các message `pair_*`, `control_open`, `ping` và `pong` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅; chưa được gửi trên mạng 📝. Các message còn lại là dự thảo 📝.
+`hello`, các message `pair_*`, `control_open`, `ping` và `pong` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅. `hello`, `control_open`, `ping` và `pong` đã được gửi trên mạng (`teleport.net.connection`) ✅; `pair_*` trên mạng còn 📝 (luồng ghép đôi ở tầng node). Các message còn lại là dự thảo 📝.
 
 | `type` | Hướng | Kết nối | Trường |
 |---|---|---|---|
@@ -113,7 +122,8 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 - **`reason`** (`pair_abort`): 1–32 ký tự `[a-z_]`. Giá trị chuẩn: `user` (người dùng từ chối), `busy` (đang có phiên ghép đôi khác hoặc node không nhận ghép đôi lúc này), `timeout` (hết giờ), `invalid` (message hoặc cam kết sai). Giá trị lạ đúng dạng vẫn được nhận, để bản mới thêm lý do được.
 - Kiểm tra hex, chữ số, `os` và `reason` chỉ dùng lớp ký tự ASCII trên **toàn bộ** chuỗi: `"user\n"` hay chữ số toàn chiều rộng đều sai.
 - `type` là chuỗi nhưng chưa biết thì bên nhận phân biệt được với message hỏng (để bản cũ bỏ qua message mới).
-- 📝 Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức.
+- Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức ✅ (`teleport.core.messages.allowed_types`).
+- Trên kết nối điều khiển ✅: `type` chưa biết thì bỏ qua; khung sai, message sai trường, hoặc message sai loại kết nối → đóng kết nối điều khiển (nối lại theo mục 6.2).
 - **`t`** (`ping`/`pong`): số nguyên JSON 0 … 2⁵³ − 1; không nhận `true`/`false` hay số thực (kể cả `1.0`, `1e3`). Mili giây theo đồng hồ của bên gửi `ping` (chỉ để đo độ trễ, không so giữa hai máy). Trả lời `ping`: mục 2.3.
 - 📝 **`seq`**, **`resume_seq`**: số nguyên JSON 1 … 2⁵³ − 1; không nhận `true`/`false` hay số thực. Phạm vi của `seq`: mục 4.1.
 - 📝 Quy tắc cho message truyền file (chốt khi cài đặt ở Giai đoạn 2): `transfer_id` đúng 32 hex thường; `file_index` < số file trong `offer`; `size` và `mtime` là số nguyên ≥ 0, `size` ≤ 2⁵²; `name` qua bộ làm sạch tên file (mục 4.4); `bitfield` dài đúng ⌈số khối / 8⌉ byte, các bit thừa ở cuối bằng 0.
@@ -223,7 +233,7 @@ Mã hiển thị thành hai nhóm 3 chữ số, ví dụ `048 213`. Hai fingerpr
 
 Kết nối ghép đôi không cần chứng chỉ, nên bất kỳ máy nào trong mạng cũng mở được. Bên trả lời:
 
-- Chỉ chạy **một phiên ghép đôi** tại một thời điểm; yêu cầu khác trong lúc đó nhận `pair_abort{busy}`. Kết nối ẩn danh đang bắt tay hoặc chờ vào phiên: tối đa 1 mỗi IP và 8 tổng cộng; quá thì đóng ngay. Thời gian chờ ở mục 2.3.
+- Chỉ chạy **một phiên ghép đôi** tại một thời điểm; yêu cầu khác trong lúc đó nhận `pair_abort{busy}`. Kết nối ẩn danh đã bắt tay xong mà chưa gửi `pair_request`: tối đa 1 mỗi IP và 8 tổng cộng; quá thì đóng ngay sau bắt tay, không gửi `hello` (mục 2.3). Trong lúc bắt tay, kết nối thuộc giới hạn kết nối đang mở đầu (mục 2.3). Thời gian chờ ở mục 2.3.
 - **Chờ tăng dần theo từng địa chỉ IP:** một phiên từ một IP kết thúc mà không ghép đôi được (người dùng từ chối, hết giờ, `invalid`, trùng danh tính, mất kết nối, bên kia tự hủy) → IP đó nhận `pair_abort{busy}` trong 10 s, rồi 20 s, 40 s… tối đa 10 phút; ghép đôi thành công thì xóa đếm. IP khác không bị ảnh hưởng. Chi tiết ✅ (`teleport.core.pairing.PairingGate`):
   - Chỉ tính phiên mà máy này là **bên trả lời**. Phiên do node tự hủy (tắt node, Ctrl+C, nhường khi hai bên cùng chủ động) không tính (hủy sau khi đã hết giờ thì tính là hết giờ).
   - `pair_abort{busy}` gửi trong lúc IP đang bị chờ **không** kéo dài thời gian chờ.
@@ -266,7 +276,7 @@ Mỗi bên lưu `device_id`, tên, fingerprint và chứng chỉ PEM của bên 
 
 - Mất kết nối điều khiển (lỗi socket hoặc keepalive hết 30 s) → mọi lượt truyền với máy đó chuyển sang “Đang nối lại…”. Bên nào còn lượt truyền dở dang thì thử kết nối lại theo lịch 1 s, 2 s, 4 s… tối đa 30 s một lần, trong tối đa 24 giờ; địa chỉ lấy lại từ mDNS vì IP có thể đã đổi.
 - **Không có lượt truyền nào** (chỉ giữ kết nối điều khiển, như ở Giai đoạn 1): mất kết nối mà mDNS vẫn thấy máy kia → thử lại theo cùng lịch, cho tới khi mDNS báo máy đó đã đi. mDNS báo máy xuất hiện lại hoặc đổi địa chỉ → thử ngay.
-- **Bị từ chối** (EOF hoặc lỗi SSL trước `hello`, mục 2.2) → không tự thử lại theo lịch; chỉ thử lại khi mDNS báo sự kiện mới về máy đó hoặc khi người dùng thao tác. Nhờ vậy máy đã hủy ghép đôi không bị gọi liên tục.
+- **Bị từ chối** (EOF hoặc lỗi SSL trước `hello`, sau khi bắt tay TLS xong, mục 2.2) → không tự thử lại theo lịch; chỉ thử lại khi mDNS báo sự kiện mới về máy đó hoặc khi người dùng thao tác. Nhờ vậy máy đã hủy ghép đôi không bị gọi liên tục.
 - Kết nối điều khiển có lại → hai bên đồng bộ lại (mục 6.3); bên gửi chỉ gửi các khối có bit = 0, trên kết nối dữ liệu mới (mục 4.1).
 - Bên gửi kiểm `size` và `mtime` của file nguồn trước khi gửi tiếp; khác manifest → `cancel{source_changed}`.
 - **Tắt app nhận** (hoặc khởi động lại máy): trạng thái nối lại nằm trên đĩa, nên bên nhận gửi `resume` khi mở lại app. Lượng gửi lại vẫn theo mục 4.3.
@@ -288,8 +298,10 @@ Message điều khiển có thể mất khi kết nối đứt hoặc bị thay 
 
 ## 7. Hủy ghép đôi & danh tính đổi 📝
 
-- **Hủy ghép đôi** chỉ xóa mục ở máy bấm hủy, cùng cài đặt theo thiết bị đó (“Hỏi trước khi nhận”, “Đồng bộ clipboard”), và có hiệu lực ngay. Node tạo `SSLContext` mới từ danh sách tin cậy mới và **mở lại listener** trên cùng cổng với context đó; kết nối đang mở với máy bị hủy bị đóng, các kết nối khác giữ nguyên. Không có message báo cho máy kia.
-- Kết nối mà listener cũ đã nhận nhưng chưa bắt tay xong vẫn bắt tay bằng context cũ. Vì vậy khi nhận `control_open` hay `data_open`, node còn kiểm fingerprint của client có trong danh sách tin cậy **hiện tại** không; không có thì đóng.
+- **Hủy ghép đôi** chỉ xóa mục ở máy bấm hủy, cùng cài đặt theo thiết bị đó (“Hỏi trước khi nhận”, “Đồng bộ clipboard”), và có hiệu lực ngay. Không có message báo cho máy kia.
+  - Listener nhận TCP trần và bắt đầu TLS cho từng kết nối với `SSLContext` **hiện tại** (mục 2.1). Khi danh sách tin cậy đổi, node dựng context mới; từ đó mọi kết nối mới dùng context mới, listener không đóng hay mở lại ✅ (`Listener.update_trusted`).
+  - Đóng kết nối đang mở với máy bị hủy (các kết nối khác giữ nguyên) là việc của node 📝.
+- Kết nối đã bắt đầu bắt tay bằng context cũ vẫn bắt tay xong với context đó. Vì vậy khi nhận `control_open` (✅) hay `data_open` (📝), node còn kiểm fingerprint của client có trong danh sách tin cậy **hiện tại** không; không có thì đóng.
 - **Máy kia từ chối máy này** (đã hủy ghép đôi, hoặc ghép đôi một phía): lần kết nối sau nhận EOF hoặc lỗi SSL trước `hello` (mục 2.2) → báo “*X* từ chối kết nối từ máy này” và gợi ý ghép đôi lại. Không đoán lý do, vì client không phân biệt được.
 - **Cùng `device_id`, khác fingerprint** (mDNS, `hello` hay `pair_request` báo `device_id` của một máy tin cậy nhưng chứng chỉ khác): không có lý do hợp lệ, vì danh tính mới luôn có `device_id` mới (mục 1). Chặn kết nối, không cho ghép đôi đè (mục 5.1), cảnh báo có thể có giả mạo. Muốn ghép đôi lại thì người dùng phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa, nên máy giả không thừa hưởng “Luôn nhận” hay “Đồng bộ clipboard”.
 - **Máy tin cậy xóa thư mục cấu hình** (cài lại sạch): xuất hiện như một thiết bị mới chưa ghép đôi, có thể trùng tên với mục cũ. App gợi ý ghép đôi lại; ghép đôi xong thì đề nghị xóa mục cũ cùng tên (mục cũ không bao giờ kết nối lại được).
