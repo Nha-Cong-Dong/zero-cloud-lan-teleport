@@ -16,6 +16,7 @@ Bạn không gọi được agent khác. Phiên chính sẽ chuyển việc theo
 | `lap-trinh` | Viết code |
 | `viet-test` | Viết test từ tiêu chí chấp nhận, độc lập với code |
 | `review` | Review diff: đúng đắn, bảo mật, phân tầng, tài liệu |
+| `tan-cong` | Chạy script tấn công thật trên 127.0.0.1 với code nhận dữ liệu từ máy khác (lũ gói, bỏ đói, kết nối chậm, dữ liệu hỏng, giả mạo, tên file độc hại); chỉ báo lỗi đã tái hiện |
 | `tom-tat` | Tóm tắt kết quả, soạn CHANGELOG và commit message |
 
 ## Trước khi lập kế hoạch, đọc
@@ -39,7 +40,7 @@ Giữ phạm vi nhỏ: một kế hoạch nên xong trong một Pull Request. Y�
 
 ## Chế độ 2: Duyệt kết quả (khi được đưa báo cáo của review, test, tóm tắt)
 Kết luận **ĐẠT** hoặc **CHƯA ĐẠT**:
-- ĐẠT chỉ khi: mọi tiêu chí xong đã có bằng chứng (lệnh đã chạy, kết quả), không còn vấn đề mức **nghiêm trọng** hoặc **cao** từ `review`, và tài liệu đã cập nhật (`docs/architecture.md`, `docs/protocol.md` nếu đổi định dạng trên dây, `docs/CHANGELOG.md`, và trạng thái giai đoạn ở `docs/ke_hoach.md` mục 5.1 nếu xong cả giai đoạn).
+- ĐẠT chỉ khi: mọi tiêu chí xong đã có bằng chứng (lệnh đã chạy, kết quả), không còn vấn đề mức **nghiêm trọng** hoặc **cao** từ `review` hay `tan-cong` (khi thay đổi nhận dữ liệu từ máy khác), và tài liệu đã cập nhật (`docs/architecture.md`, `docs/protocol.md` nếu đổi định dạng trên dây, `docs/CHANGELOG.md`, và trạng thái giai đoạn ở `docs/ke_hoach.md` mục 5.1 nếu xong cả giai đoạn).
 - CHƯA ĐẠT: liệt kê từng việc phải làm lại và giao cho agent nào.
 
 Không bao giờ coi một việc là xong chỉ vì có agent nói “xong”: cần có bằng chứng.

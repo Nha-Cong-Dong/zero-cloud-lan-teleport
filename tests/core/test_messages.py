@@ -1,6 +1,10 @@
-"""Test `teleport.core.messages` theo đặc tả PR1 (kế hoạch §2.3, §2.5 và phụ lục điểm 1–5, 7, 18)."""
+"""Test `teleport.core.messages` theo đặc tả PR1 (kế hoạch §2.3, §2.5 và phụ lục điểm 1–5, 7, 18).
+
+PR2 thêm `control_open`, `ping`, `pong` (docs/protocol.md §3.2–3.3, kế hoạch PR2 mục Test).
+"""
 
 import dataclasses
+import enum
 import json
 import unicodedata
 
@@ -13,8 +17,10 @@ from teleport.core.messages import (
     MAX_APP_VERSION_LEN,
     MAX_CERT_PEM_LEN,
     MAX_NAME_LEN,
+    MAX_SAFE_INTEGER,
     PROTOCOL_VERSION,
     AbortReason,
+    ControlOpen,
     Hello,
     MessageError,
     OsName,
@@ -23,11 +29,14 @@ from teleport.core.messages import (
     PairConfirm,
     PairRequest,
     PairReveal,
+    Ping,
+    Pong,
     UnknownMessageType,
     parse_message,
     to_dict,
     validate_device_id,
     validate_device_name,
+    validate_os,
 )
 
 DEVICE_ID = "3f2a" + "0123456789abcdef" * 1 + "0" * 12
@@ -55,6 +64,9 @@ def valid_dicts() -> dict[str, dict]:
         "pair_reveal": {"type": "pair_reveal", "nonce": HEX64_B},
         "pair_confirm": {"type": "pair_confirm"},
         "pair_abort": {"type": "pair_abort", "reason": "user"},
+        "control_open": {"type": "control_open"},
+        "ping": {"type": "ping", "t": 123456},
+        "pong": {"type": "pong", "t": 123456},
     }
 
 
@@ -67,6 +79,10 @@ VALID_MESSAGES = [
     PairConfirm(),
     PairAbort(reason="user"),
     PairAbort(reason="new_reason"),
+    ControlOpen(),
+    Ping(t=0),
+    Ping(t=2**53 - 1),
+    Pong(t=5),
 ]
 
 EXPECTED_TYPE = {
@@ -76,6 +92,9 @@ EXPECTED_TYPE = {
     PairReveal: "pair_reveal",
     PairConfirm: "pair_confirm",
     PairAbort: "pair_abort",
+    ControlOpen: "control_open",
+    Ping: "ping",
+    Pong: "pong",
 }
 
 # Ký tự cấm trong name/app_version ngoài nhóm Cc/Cs (phụ lục điểm 2).
@@ -567,6 +586,67 @@ def test_os_enum_becomes_plain_str():
     assert to_dict(msg)["os"] == "macos"
 
 
+# --- validate_os (PR3 mục 2.1: cùng quy tắc với `hello.os`, dùng lại cho TXT `os`) ---------------
+
+VALID_OS = ["windows", "macos", "linux", "freebsd", "x", "a" * 16, "os_2", "0", "_", "win11"]
+INVALID_OS = [
+    "",
+    "Windows",
+    "WINDOWS",
+    "a" * 17,
+    "mac os",
+    "linux\n",
+    "\nlinux",
+    " linux",
+    "ｗｉｎ",  # "win" toàn chiều rộng
+    "win-11",
+    "win.11",
+    "macos​",
+    "linuх",  # chữ x Kirin
+    "٣",  # chữ số Ả Rập: `\d` nhận, ASCII thì không
+    None,
+    1,
+    b"windows",
+    ["windows"],
+]
+
+
+@pytest.mark.parametrize("value", VALID_OS)
+def test_validate_os_returns_valid_value_unchanged(value):
+    result = validate_os(value)
+    assert result == value
+    assert isinstance(result, str)
+
+
+@pytest.mark.parametrize("value", INVALID_OS, ids=repr)
+def test_validate_os_rejects_invalid_value(value):
+    with pytest.raises(MessageError):
+        validate_os(value)
+
+
+def test_validate_os_accepts_os_name_enum():
+    assert validate_os(OsName.LINUX) == "linux"
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.text(max_size=20) | st.text(alphabet="abcxyz019_ABC-\n ", max_size=18))
+def test_property_validate_os_agrees_with_hello_os(value):
+    expected_ok = 1 <= len(value) <= 16 and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in value)
+    try:
+        assert validate_os(value) == value
+    except MessageError:
+        assert not expected_ok, f"os hợp lệ bị từ chối: {value!r}"
+    else:
+        assert expected_ok, f"os sai đặc tả lại được chấp nhận: {value!r}"
+    # Hello dùng cùng quy tắc: kết quả nhận/từ chối phải trùng.
+    try:
+        parse_message({**valid_dicts()["hello"], "os": value})
+    except MessageError:
+        assert not expected_ok
+    else:
+        assert expected_ok
+
+
 # --- Tạo tay dataclass với giá trị sai ---------------------------------------------------------
 
 
@@ -597,6 +677,168 @@ def test_os_enum_becomes_plain_str():
 def test_constructing_dataclass_with_bad_value_raises(factory):
     with pytest.raises(MessageError):
         factory()
+
+
+# --- control_open / ping / pong (PR2, protocol.md §3.2–3.3) -----------------------------------
+
+TIMED = [Ping, Pong]
+timed_classes = pytest.mark.parametrize("cls", TIMED, ids=lambda c: EXPECTED_TYPE[c])
+
+BAD_T = [
+    -1,
+    -(2**53),
+    True,
+    False,
+    1.0,
+    0.0,
+    -0.0,
+    1e3,
+    float("nan"),
+    float("inf"),
+    "1",
+    "0",
+    "",
+    None,
+    [],
+    [1],
+    {},
+    {"t": 1},
+    b"1",
+    2**53,
+    2**53 + 1,
+    10**100,
+]
+
+
+def test_max_safe_integer_is_2_pow_53_minus_1():
+    assert MAX_SAFE_INTEGER == 2**53 - 1
+    assert type(MAX_SAFE_INTEGER) is int
+
+
+@timed_classes
+@pytest.mark.parametrize("value", BAD_T, ids=repr)
+def test_bad_t_in_wire_dict_raises_message_error(cls, value):
+    with pytest.raises(MessageError) as exc:
+        parse_message({"type": EXPECTED_TYPE[cls], "t": value})
+    # type đã biết: lỗi là message hỏng, không phải type lạ.
+    assert not isinstance(exc.value, UnknownMessageType)
+
+
+@timed_classes
+@pytest.mark.parametrize("value", [0, 1, 123456, 2**53 - 1])
+def test_valid_t_roundtrips(cls, value):
+    msg = parse_message({"type": EXPECTED_TYPE[cls], "t": value})
+    assert msg == cls(t=value)
+    assert msg.t == value
+    assert type(msg.t) is int
+    assert to_dict(msg) == {"type": EXPECTED_TYPE[cls], "t": value}
+    frame = encode_message(to_dict(msg))
+    assert parse_message(decode_body(frame[4:])) == msg
+
+
+@timed_classes
+def test_json_negative_zero_is_valid_t_zero(cls):
+    # JSON `-0` là số nguyên 0, khác `-0.0` (số thực, bị từ chối).
+    msg = parse_message(decode_body(f'{{"type":"{EXPECTED_TYPE[cls]}","t":-0}}'.encode()))
+    assert msg == cls(t=0)
+    assert type(msg.t) is int
+
+
+@timed_classes
+@pytest.mark.parametrize(
+    "literal", ["1e3", "1.0", "0.0", "-0.0", "1E0", "true", "null", '"5"', "9007199254740992"]
+)
+def test_t_non_integer_or_out_of_range_from_json_raises(cls, literal):
+    body = f'{{"type":"{EXPECTED_TYPE[cls]}","t":{literal}}}'.encode()
+    with pytest.raises(MessageError):
+        parse_message(decode_body(body))
+
+
+@timed_classes
+def test_missing_t_raises(cls):
+    with pytest.raises(MessageError) as exc:
+        parse_message({"type": EXPECTED_TYPE[cls]})
+    assert not isinstance(exc.value, UnknownMessageType)
+
+
+@timed_classes
+def test_unknown_fields_ignored_next_to_t(cls):
+    assert parse_message({"type": EXPECTED_TYPE[cls], "t": 7, "x": 1, "T": "khác"}) == cls(t=7)
+
+
+def test_control_open_ignores_unknown_fields():
+    assert parse_message({"type": "control_open", "x": 1}) == ControlOpen()
+    assert parse_message({"type": "control_open", "t": "không phải số"}) == ControlOpen()
+
+
+def test_to_dict_of_new_messages():
+    assert to_dict(ControlOpen()) == {"type": "control_open"}
+    assert to_dict(Ping(t=7)) == {"type": "ping", "t": 7}
+    assert to_dict(Pong(t=9)) == {"type": "pong", "t": 9}
+
+
+def test_ping_and_pong_with_same_t_are_different_messages():
+    assert Ping(t=5) != Pong(t=5)
+    assert to_dict(Ping(t=5)) != to_dict(Pong(t=5))
+    assert parse_message({"type": "pong", "t": 5}) == Pong(t=5)
+    assert type(parse_message({"type": "ping", "t": 5})) is Ping
+
+
+def test_control_open_instances_are_equal():
+    assert ControlOpen() == ControlOpen()
+    assert ControlOpen() != PairConfirm()
+
+
+@timed_classes
+def test_timed_messages_are_frozen(cls):
+    msg = cls(t=1)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        msg.t = 2  # type: ignore[misc]
+
+
+class _IntSubclass(enum.IntEnum):
+    ONE = 1
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: Ping(t=-1),
+        lambda: Ping(t=True),
+        lambda: Ping(t=False),
+        lambda: Ping(t=2**53),
+        lambda: Ping(t="1"),
+        lambda: Ping(t=None),
+        lambda: Pong(t=1.0),
+        lambda: Pong(t=2**53),
+        lambda: Pong(t=-1),
+        lambda: Pong(t=True),
+        lambda: Ping(t=_IntSubclass.ONE),  # lớp con của int ngoài bool cũng bị từ chối
+    ],
+)
+def test_constructing_ping_pong_with_bad_t_raises(factory):
+    with pytest.raises(MessageError):
+        factory()
+
+
+@settings(max_examples=300, deadline=None)
+@given(
+    st.integers(min_value=-(2**60), max_value=2**60)
+    | st.floats(allow_nan=True, allow_infinity=True)
+    | st.booleans()
+    | st.none()
+    | st.text(max_size=5)
+)
+def test_property_t_accepted_iff_int_in_safe_range(value):
+    expected_ok = type(value) is int and 0 <= value <= MAX_SAFE_INTEGER
+    for cls in TIMED:
+        try:
+            msg = parse_message({"type": EXPECTED_TYPE[cls], "t": value})
+        except MessageError:
+            assert not expected_ok, f"t hợp lệ bị từ chối: {value!r}"
+            continue
+        assert expected_ok, f"t sai đặc tả lại được chấp nhận: {value!r}"
+        assert msg == cls(t=value)
 
 
 # --- Fuzz bằng hypothesis (phụ lục điểm 18) ----------------------------------------------------
@@ -658,6 +900,7 @@ field_values = (
     | st.just(CERT)
     | st.sampled_from(["user", "busy", "PC-Nha", "0.1.0"])
     | st.integers(-3, 3)
+    | st.sampled_from([MAX_SAFE_INTEGER, MAX_SAFE_INTEGER + 1, 1.0, 1e3, -0.0])
     | tricky_text
     | json_values
 )
@@ -666,7 +909,18 @@ near_valid_messages = st.builds(
     st.sampled_from(list(valid_dicts())),
     st.dictionaries(
         st.sampled_from(
-            ["protocol", "device_id", "name", "app_version", "cert", "commitment", "nonce", "reason", "x"]
+            [
+                "protocol",
+                "device_id",
+                "name",
+                "app_version",
+                "cert",
+                "commitment",
+                "nonce",
+                "reason",
+                "t",
+                "x",
+            ]
         ),
         field_values,
         max_size=3,
@@ -674,7 +928,17 @@ near_valid_messages = st.builds(
 )
 any_message_input = json_values | near_valid_messages | st.builds(lambda t: {"type": t}, json_values)
 
-MESSAGE_CLASSES = (Hello, PairRequest, PairChallenge, PairReveal, PairConfirm, PairAbort)
+MESSAGE_CLASSES = (
+    Hello,
+    PairRequest,
+    PairChallenge,
+    PairReveal,
+    PairConfirm,
+    PairAbort,
+    ControlOpen,
+    Ping,
+    Pong,
+)
 
 
 @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])

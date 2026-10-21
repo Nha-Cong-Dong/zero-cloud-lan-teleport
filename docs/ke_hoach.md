@@ -66,7 +66,7 @@
 ### 3.1. Khám phá, kết nối & ghép đôi
 *(mvp F2, F3)*
 - **Một cổng TCP** cho mọi kết nối (mặc định 47474; bận thì lấy cổng khác và quảng bá qua mDNS). Một cổng thì rule tường lửa của bộ cài, nhập IP thủ công và mDNS đều đơn giản. Ba loại kết nối trên cùng cổng, client khai báo loại bằng message đầu tiên sau `hello`: ghép đôi (`pair_request`, client không gửi chứng chỉ), điều khiển (`control_open`) và dữ liệu (`data_open`), hai loại sau cần chứng chỉ đã tin cậy — `protocol.md` mục 2.
-- Thư viện `zeroconf` quảng bá dịch vụ `_teleport._tcp.local.` với thuộc tính `id`, `name`, `os`, `proto`; không quảng bá fingerprint. Mọi bản ghi có TTL 60 s (mặc định của mDNS là 75 phút) để máy mất mạng đột ngột biến mất khỏi radar trong < 2 phút. Tên instance là `device_id`; TXT `name` được cắt cho vừa giới hạn 255 byte. Chỉ dùng IPv4, bỏ card ảo; client thử song song mọi địa chỉ được quảng bá (`protocol.md` mục 2.1, 8). Dự phòng: nhập IP thủ công (`ip` hoặc `ip:cổng`).
+- Thư viện `zeroconf` quảng bá dịch vụ `_teleport._tcp.local.` với thuộc tính `id`, `name`, `os`, `proto`; không quảng bá fingerprint. Mọi bản ghi có TTL ngắn thay cho mặc định 75 phút của mDNS, và bên nhận tự resolve lại theo chu kỳ (zeroconf giữ PTR nhận được rất lâu), để máy mất mạng đột ngột biến mất khỏi radar trong thời hạn mvp N1 (`protocol.md` mục 8). Tên instance là `device_id`; TXT `name` được cắt ≤ 200 byte (`protocol.md` mục 8). Chỉ dùng IPv4, bỏ card ảo; client thử song song mọi địa chỉ được quảng bá (`protocol.md` mục 2.1, 8). Dự phòng: nhập IP thủ công (`ip` hoặc `ip:cổng`).
 - **Danh tính:** mỗi máy có khóa ECDSA P-256 và chứng chỉ X.509 tự ký; fingerprint = SHA-256 của chứng chỉ (DER). Tên thiết bị chỉ để hiển thị. Danh tính gắn với thư mục cấu hình: xóa thư mục cấu hình (cài lại sạch) là một thiết bị mới (`protocol.md` mục 1, 7).
 - **Ghép đôi lần đầu** (kiểu *numeric comparison* của Bluetooth): bên khởi xướng gửi chứng chỉ kèm **cam kết** cho nonce của mình, bên trả lời gửi nonce, bên khởi xướng mới lộ nonce. Mã 6 số tính từ hai fingerprint **và hai nonce**. Nếu mã chỉ tính từ hai fingerprint, kẻ đứng giữa có thể sinh khóa offline tới khi ra mã trùng; có nonce cam kết thì mỗi lần thử chỉ trúng với xác suất 10⁻⁶. Công thức, luồng message `pair_*`, chống làm phiền và test vector: `protocol.md` mục 5.
 - Luồng ghép đôi là **máy trạng thái sans-IO** ở `core/pairing.py` (sự kiện vào: message tới, người dùng xác nhận/từ chối, hết giờ; hành động ra: gửi message, hiện mã, lưu thiết bị, đóng). `app/pairing.py` chỉ sinh nonce và nối máy trạng thái với kết nối thật. Nhờ vậy test được bằng `hypothesis` mọi thứ tự message, message trùng, message sai lúc.
@@ -178,7 +178,7 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 |---|---|---|
 | Quản lý môi trường & gói | `venv` + `pip` (có thể chuyển sang `uv`) | — |
 | Mạng bất đồng bộ, TLS | `asyncio`, `ssl` (có sẵn) | PSF |
-| mDNS | `zeroconf` | LGPL |
+| mDNS, đọc card mạng | `zeroconf` (≥ 0.148, < 0.152), `ifaddr` | LGPL-2.1-or-later / MIT |
 | Tạo chứng chỉ | `cryptography` | Apache/BSD |
 | Giao diện | `PySide6` + `qasync` | LGPL / BSD |
 | Đo RAM | `psutil` | BSD |
@@ -205,18 +205,18 @@ Repo Git: GitHub `Nha-Cong-Dong/zero-cloud-lan-teleport` (public, GPL-3.0-or-lat
 teleport/                      # ← gốc repo
   README.md  LICENSE  pyproject.toml   # gốc repo chỉ có 3 file này (ngoài .gitignore)
   .claude/CLAUDE.md            # hướng dẫn cho Claude Code
-  .claude/agents/              # đội subagent: truong-nhom, hoi-lai, lap-trinh, viet-test, review, tom-tat
+  .claude/agents/              # đội subagent: truong-nhom, hoi-lai, lap-trinh, viet-test, review, tan-cong, tom-tat
   .github/workflows/ci.yml
   docs/                        # mọi tài liệu .md: README (mục lục, thuật ngữ), y_tuong, mvp, ke_hoach,
                                #   architecture, protocol, CONTRIBUTING, SECURITY, CHANGELOG,
                                #   (sau này) benchmark, hướng dẫn người dùng
   src/teleport/
-    core/      framing.py messages.py pairing_code.py pairing.py blocks.py merkle.py bitfield.py transfer.py
+    core/      framing.py messages.py pairing_code.py pairing.py discovery.py blocks.py merkle.py bitfield.py transfer.py
     trust/     identity.py store.py
-    net/       tls.py stream.py discovery.py connection.py lock.py
+    net/       tls.py stream.py discovery.py connection.py
     app/       node.py pairing.py transfers.py clipboard.py
     ui/        app.py radar_widget.py transfer_panel.py pairing_dialog.py
-    paths.py   cli.py  __main__.py
+    paths.py   lock.py  cli.py  __main__.py
   tests/       # core/, trust/, net/, … theo tầng
   tools/       # (tùy chọn) cpp-receiver/, java-client/
 ```
@@ -257,13 +257,15 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - ✅ Nền ghép đôi không mạng (PR #1): `core/messages.py` (`hello`, `pair_*`), `core/pairing_code.py` (nonce cam kết), `trust/identity.py` (kiểm tra chứng chỉ máy khác), `trust/store.py` (`trusted.json`), `lock.py` (một node mỗi thư mục cấu hình).
 - ✅ Chốt đặc tả kết nối (`protocol.md` mục 2, 5–9): một cổng `CERT_OPTIONAL` (đã kiểm chứng bằng test), ba loại kết nối, giới hạn và thời gian chờ, chống làm phiền khi ghép đôi, hủy ghép đôi, `hello.os`. Danh tính hỏng hoặc thiếu một nửa báo lỗi thay vì tự tạo lại.
 - ✅ `core/pairing.py`: máy trạng thái ghép đôi sans-IO (mục 3.1), test bằng `hypothesis`.
-- `net/discovery.py` (zeroconf), `net/connection.py` (listener một cổng, phân loại kết nối, trao `hello`, keepalive, thay `SSLContext` khi danh sách tin cậy đổi).
-- `app/node.py` + `app/pairing.py`: ghép các thành phần, giữ kết nối điều khiển tới thiết bị tin cậy, luồng ghép đôi, hủy ghép đôi.
+- ✅ `core/messages.py`: `control_open`, `ping`, `pong`.
+- ✅ Khám phá mDNS: `core/discovery.py` (bản ghi TXT, lọc địa chỉ, nhận ra card ảo, máy trạng thái `DiscoveryTracker` tự kiểm còn sống) và `net/discovery.py` (zeroconf: quảng bá, cập nhật, goodbye, duyệt) — `protocol.md` mục 8.
+- `net/connection.py` (listener một cổng, phân loại kết nối, trao `hello`, keepalive, thay `SSLContext` khi danh sách tin cậy đổi).
+- `app/node.py` + `app/pairing.py`: ghép các thành phần, giữ kết nối điều khiển tới thiết bị tin cậy, luồng ghép đôi, hủy ghép đôi; quảng bá lại (`advertise`) khi card mạng/địa chỉ đổi hoặc máy thức dậy, để máy khác thấy lại ngay (`protocol.md` mục 8).
 - CLI: `teleport list`, `teleport listen`, `teleport pair <thiết bị>`, `teleport unpair <thiết bị>`; `<thiết bị>` là tên hoặc tiền tố `device_id`; `pair` nhận thêm `ip[:cổng]` để ghép đôi khi mạng chặn mDNS (mvp F12).
 - **Xong khi:** đạt N1 trên 2 máy thật; ghép đôi xong thì tự nhận ra nhau sau khi khởi động lại; máy chưa ghép đôi không mở được kết nối điều khiển hay dữ liệu theo cả hai chiều (chỉ mở được kết nối ghép đôi).
 
 #### Giai đoạn 2 — Truyền file, backpressure, an toàn khi nhận
-- `core/blocks.py`: khung khối nhị phân kèm hash; `core/messages.py`: thêm `control_open`, `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
+- `core/blocks.py`: khung khối nhị phân kèm hash; `core/messages.py`: thêm `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
 - `core/transfer.py`: máy trạng thái gửi/nhận (`offer`/`accept`, nhiều file, hủy), không I/O.
 - `app/transfers.py`: chạy máy trạng thái trên kết nối thật, đọc/ghi `.part` theo khối.
 - An toàn khi nhận (mục 3.3): làm sạch tên, file tạm trong `.teleport/`, đổi tên không ghi đè; hủy ở cả hai bên (máy nhận xóa file tạm); giới hạn tốc độ gửi.
@@ -348,6 +350,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | Vi phạm điều kiện LGPL/GPL khi đóng gói | Đóng gói `--onedir`, không sửa mã thư viện LGPL, kèm văn bản giấy phép và chỉ dẫn lấy mã nguồn; kiểm lại trong Giai đoạn 6 |
 | Bộ cài PyInstaller nặng (N11) hoặc bị antivirus báo nhầm | Build thử từ Giai đoạn 2; gửi mẫu cho các hãng antivirus nếu bị báo nhầm |
 | Windows Firewall chặn | Bộ cài tạo rule; app phát hiện và hướng dẫn khi bị chặn |
+| python-zeroconf nâng TTL bản ghi PTR nhận được lên ≥ 1125 s, nên máy tắt đột ngột không tự biến mất trong < 2 phút (N1) | Bên nhận tự kiểm còn sống bằng cách resolve lại SRV/TXT/A theo chu kỳ (`protocol.md` mục 8); đo N1 trên 2 máy thật; kiểm lại hành vi này mỗi khi nâng phiên bản zeroconf |
 | Lỗ hổng bảo mật (path traversal, dữ liệu độc hại từ máy khác) | Kiểm tra hợp lệ mọi trường nhận được; fuzz test; `SECURITY.md` để nhận báo lỗi |
 | Làm một mình, không có hạn → kéo dài, ôm thêm tính năng | Bám các bản phát hành ở mục 5.1; ý tưởng mới ghi Issues nhãn `after-1.0`; nếu trễ thì cắt theo thứ tự ở mvp mục 14 |
 | Chỉ có 1 máy để thử | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật |

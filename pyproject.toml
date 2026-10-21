@@ -13,6 +13,10 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "cryptography>=42",
+    # LGPL-2.1-or-later. Chặn trên có chủ đích: code dựa vào hành vi nội bộ của zeroconf
+    # (TTL PTR tối thiểu 1125 s, cách parse TXT), nên chỉ nâng sau khi đã kiểm lại.
+    "zeroconf>=0.148,<0.152",
+    "ifaddr>=0.2",  # MIT
 ]
 
 [project.optional-dependencies]

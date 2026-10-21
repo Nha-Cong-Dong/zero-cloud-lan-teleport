@@ -21,6 +21,9 @@ PROTOCOL_VERSION = 1
 MAX_NAME_LEN = 64
 MAX_APP_VERSION_LEN = 32
 MAX_CERT_PEM_LEN = 8192
+# Số nguyên lớn nhất mà JSON trao đổi an toàn giữa mọi bộ giải mã (số thực 64 bit
+# biểu diễn chính xác). Cận trên của `t` (ping/pong), sau này của seq/resume_seq.
+MAX_SAFE_INTEGER = 2**53 - 1
 
 CERT_PEM_HEADER = "-----BEGIN CERTIFICATE-----"
 
@@ -85,6 +88,19 @@ def _validate_text(value: object, field: str, max_len: int) -> str:
     return value
 
 
+def _validate_int(value: object, field: str, lo: int, hi: int) -> int:
+    """Số nguyên JSON trong đoạn `lo`…`hi`.
+
+    Dùng `type(...) is int`: bool là lớp con của int, còn float 1.0 bằng 1; cả hai
+    (và mọi lớp con khác của int) đều bị từ chối.
+    """
+    if type(value) is not int:
+        raise MessageError(f"{field} phải là số nguyên")
+    if not lo <= value <= hi:
+        raise MessageError(f"{field} phải là số nguyên {lo}…{hi}")
+    return value
+
+
 def _validate_hex32(value: object, field: str) -> str:
     """32 byte viết thành đúng 64 ký tự hex thường (nonce, commitment)."""
     if not isinstance(value, str) or not _HEX32_BYTES_RE.fullmatch(value):
@@ -107,6 +123,17 @@ def validate_device_name(value: object) -> str:
     return _validate_text(value, "name", MAX_NAME_LEN)
 
 
+def validate_os(value: object) -> str:
+    """Tên hệ điều hành: 1–16 ký tự a-z, 0-9 hoặc _; giá trị lạ đúng dạng vẫn hợp lệ.
+
+    Trả về `str` thuần (ví dụ `OsName.WINDOWS` → "windows"); sai thì raise MessageError.
+    """
+    if not isinstance(value, str) or not _OS_RE.fullmatch(value):
+        raise MessageError("os phải gồm 1–16 ký tự a-z, 0-9 hoặc _")
+    # Lớp con của str (ví dụ OsName) đổi về str thuần để so sánh và mã hóa nhất quán.
+    return value if type(value) is str else str.__str__(value)
+
+
 @dataclass(frozen=True, slots=True)
 class Hello:
     """Gửi ngay sau khi bắt tay TLS, cả hai chiều."""
@@ -126,11 +153,10 @@ class Hello:
         validate_device_id(self.device_id)
         validate_device_name(self.name)
         _validate_text(self.app_version, "app_version", MAX_APP_VERSION_LEN)
-        if not isinstance(self.os, str) or not _OS_RE.fullmatch(self.os):
-            raise MessageError("os phải gồm 1–16 ký tự a-z, 0-9 hoặc _")
-        if type(self.os) is not str:
+        os_name = validate_os(self.os)
+        if os_name is not self.os:
             # Ví dụ OsName.WINDOWS: đổi về str thuần để so sánh và mã hóa nhất quán.
-            object.__setattr__(self, "os", str.__str__(self.os))
+            object.__setattr__(self, "os", os_name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,10 +226,54 @@ class PairAbort:
             object.__setattr__(self, "reason", str.__str__(self.reason))
 
 
-Message = Hello | PairRequest | PairChallenge | PairReveal | PairConfirm | PairAbort
+@dataclass(frozen=True, slots=True)
+class ControlOpen:
+    """Client mở đầu kết nối điều khiển (protocol.md mục 2.1). Không có trường."""
+
+    TYPE: ClassVar[str] = "control_open"
+
+
+@dataclass(frozen=True, slots=True)
+class Ping:
+    """Giữ kết nối điều khiển sống. `t`: mili giây theo đồng hồ bên gửi, bên nhận không diễn giải."""
+
+    TYPE: ClassVar[str] = "ping"
+
+    t: int
+
+    def __post_init__(self) -> None:
+        _validate_int(self.t, "t", 0, MAX_SAFE_INTEGER)
+
+
+@dataclass(frozen=True, slots=True)
+class Pong:
+    """Trả lời `ping` với đúng `t` của nó; `pong` không cần trả lời."""
+
+    TYPE: ClassVar[str] = "pong"
+
+    t: int
+
+    def __post_init__(self) -> None:
+        _validate_int(self.t, "t", 0, MAX_SAFE_INTEGER)
+
+
+Message = (
+    Hello | PairRequest | PairChallenge | PairReveal | PairConfirm | PairAbort | ControlOpen | Ping | Pong
+)
 
 _MESSAGE_TYPES: dict[str, type[Message]] = {
-    cls.TYPE: cls for cls in (Hello, PairRequest, PairChallenge, PairReveal, PairConfirm, PairAbort)
+    cls.TYPE: cls
+    for cls in (
+        Hello,
+        PairRequest,
+        PairChallenge,
+        PairReveal,
+        PairConfirm,
+        PairAbort,
+        ControlOpen,
+        Ping,
+        Pong,
+    )
 }
 
 

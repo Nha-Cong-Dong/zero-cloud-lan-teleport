@@ -19,7 +19,7 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 
 - TCP + **TLS 1.3** ✅. Phiên bản thấp hơn bị từ chối.
 - Mỗi node lắng nghe trên **một cổng TCP**, mặc định **47474** 📝. Cổng mặc định bận thì node để hệ điều hành chọn một cổng trống, lưu vào `settings.json` để lần chạy sau dùng lại, và hiện cổng đó trong `teleport identity` / `teleport list`; cổng thật luôn được quảng bá qua mDNS (mục 8). Nhập IP thủ công nhận `ip` (dùng cổng mặc định) hoặc `ip:cổng`.
-- **Địa chỉ:** v1.0 chỉ dùng IPv4. Node lắng nghe trên mọi địa chỉ IPv4 (`0.0.0.0`) và quảng bá qua mDNS các địa chỉ IPv4 của card mạng đang hoạt động, bỏ loopback, link-local `169.254.0.0/16` và các card ảo nhận ra được (Hyper-V/WSL `vEthernet`, Docker, VPN). Client thử **song song** mọi địa chỉ được quảng bá của một thiết bị và giữ kết nối thành công đầu tiên, nên một địa chỉ chết không làm chậm việc kết nối (mvp F2, N1).
+- **Địa chỉ:** v1.0 chỉ dùng IPv4. Node lắng nghe trên mọi địa chỉ IPv4 (`0.0.0.0`) và quảng bá qua mDNS các địa chỉ IPv4 của máy (tối đa 16, mục 8; chưa lọc theo trạng thái bật/tắt của card), bỏ loopback, link-local `169.254.0.0/16` và các card ảo nhận ra được ✅. Card ảo nhận ra theo tên card (tiền tố như `docker`, `veth`, `vEthernet`, `tun`, `wg`, `utun`, hoặc chứa `virtual`, `hyper-v`, `wsl`, `vpn`…; danh sách đầy đủ ở `teleport.core.discovery`). Hai ngoại lệ: luôn giữ **địa chỉ nguồn ưu tiên** dù card đó trông như card ảo — đó là địa chỉ nguồn hệ điều hành chọn cho tuyến tới nhóm multicast mDNS, hoặc, nếu địa chỉ đó là loopback (Windows thường chọn `127.0.0.1` cho tuyến multicast), địa chỉ nguồn của tuyến mặc định; địa chỉ này đứng đầu danh sách quảng bá; và nếu mọi địa chỉ đều nằm trên card ảo thì quảng bá tất cả thay vì không quảng bá gì. Client thử **song song** mọi địa chỉ được quảng bá của một thiết bị và giữ kết nối thành công đầu tiên, nên một địa chỉ chết không làm chậm việc kết nối (mvp F2, N1).
 - Server dùng `CERT_OPTIONAL` ✅ và nạp chứng chỉ của mọi thiết bị tin cậy làm trust anchor, kèm kiểm tra X.509 nghiêm ngặt (`teleport.net.tls.server_context(..., allow_anonymous=True)`):
   - Client **gửi chứng chỉ** → chứng chỉ phải nằm trong danh sách tin cậy, nếu không bắt tay thất bại (kể cả khi danh sách rỗng). Kiểm chứng bởi `tests/net/test_tls.py`.
   - Client **không gửi chứng chỉ** → kết nối ẩn danh, chỉ được dùng để ghép đôi.
@@ -51,7 +51,7 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 - Header vượt giới hạn → đóng kết nối ngay, không đọc thân (`read_message(reader, max_size)`) ✅.
 - `read_message` không tự đặt thời gian chờ; tầng gọi nó bọc trong `asyncio.timeout`.
 - **Xác nhận ghép đôi** ✅ (`teleport.core.pairing`): mỗi máy tính 60 s từ lúc hiện mã; người dùng máy này phải quyết trong 60 s đó. Máy đã gửi `pair_confirm` mà chưa nhận `pair_confirm` của máy kia thì chờ thêm 10 s (`CONFIRM_GRACE`, tới 70 s kể từ lúc hiện mã), vì người dùng máy kia có thể bấm sát giây thứ 60 và message còn phải đi qua mạng. Hết giờ → `pair_abort{timeout}`; quyết định tới sau hạn chót vẫn là hết giờ.
-- **Keepalive** trên kết nối điều khiển: bên nào không gửi gì trong 10 s thì gửi `ping`; không nhận được byte nào trong 30 s → coi là mất kết nối (mục 6.2).
+- 📝 **Keepalive** trên kết nối điều khiển: bên nào không gửi gì trong 10 s thì gửi `ping`; không nhận được byte nào trong 30 s → coi là mất kết nối (mục 6.2). Nhận `ping` thì bắt buộc trả `pong` với đúng `t` đó; `pong` không cần trả lời.
 
 ## 3. Kênh điều khiển
 
@@ -73,7 +73,7 @@ Mỗi message:
 
 ### 3.2. Các loại message
 
-`hello` và các message `pair_*` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅; chưa được gửi trên mạng 📝. Các message còn lại là dự thảo 📝.
+`hello`, các message `pair_*`, `control_open`, `ping` và `pong` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅; chưa được gửi trên mạng 📝. Các message còn lại là dự thảo 📝.
 
 | `type` | Hướng | Kết nối | Trường |
 |---|---|---|---|
@@ -93,7 +93,7 @@ Mỗi message:
 | `verified` | nhận → gửi | điều khiển | `transfer_id`, `file_index`; gửi lại được (mục 6.3) |
 | `cancel` | ↔ | điều khiển | `transfer_id`, `reason`: `user` · `source_changed` · `unknown_transfer` · `error` |
 | `clipboard` | ↔ | điều khiển | `kind`: `text` · `image/png`, `sha256`, `data` (văn bản UTF-8 hoặc base64; dữ liệu gốc trước base64 ≤ 10 MiB) |
-| `ping` / `pong` | ↔ | điều khiển | `t` (timestamp) |
+| `ping` / `pong` | ↔ | điều khiển | `t` (số nguyên, mili giây, 0 … 2⁵³ − 1) |
 
 Hai bên gửi `hello` ngay sau khi bắt tay TLS, trên mọi loại kết nối. Khác `protocol` thì đóng kết nối và báo người dùng cập nhật app.
 
@@ -113,8 +113,8 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 - **`reason`** (`pair_abort`): 1–32 ký tự `[a-z_]`. Giá trị chuẩn: `user` (người dùng từ chối), `busy` (đang có phiên ghép đôi khác hoặc node không nhận ghép đôi lúc này), `timeout` (hết giờ), `invalid` (message hoặc cam kết sai). Giá trị lạ đúng dạng vẫn được nhận, để bản mới thêm lý do được.
 - Kiểm tra hex, chữ số, `os` và `reason` chỉ dùng lớp ký tự ASCII trên **toàn bộ** chuỗi: `"user\n"` hay chữ số toàn chiều rộng đều sai.
 - `type` là chuỗi nhưng chưa biết thì bên nhận phân biệt được với message hỏng (để bản cũ bỏ qua message mới).
-- Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức.
-- 📝 **`t`** (`ping`/`pong`): số nguyên JSON ≥ 0, mili giây theo đồng hồ của bên gửi `ping` (chỉ để đo độ trễ, không so giữa hai máy). Nhận `ping` thì bắt buộc trả `pong` với đúng `t` đó; `pong` không cần trả lời. `control_open` không có trường.
+- 📝 Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức.
+- **`t`** (`ping`/`pong`): số nguyên JSON 0 … 2⁵³ − 1; không nhận `true`/`false` hay số thực (kể cả `1.0`, `1e3`). Mili giây theo đồng hồ của bên gửi `ping` (chỉ để đo độ trễ, không so giữa hai máy). Trả lời `ping`: mục 2.3.
 - 📝 **`seq`**, **`resume_seq`**: số nguyên JSON 1 … 2⁵³ − 1; không nhận `true`/`false` hay số thực. Phạm vi của `seq`: mục 4.1.
 - 📝 Quy tắc cho message truyền file (chốt khi cài đặt ở Giai đoạn 2): `transfer_id` đúng 32 hex thường; `file_index` < số file trong `offer`; `size` và `mtime` là số nguyên ≥ 0, `size` ≤ 2⁵²; `name` qua bộ làm sạch tên file (mục 4.4); `bitfield` dài đúng ⌈số khối / 8⌉ byte, các bit thừa ở cuối bằng 0.
 
@@ -294,14 +294,38 @@ Message điều khiển có thể mất khi kết nối đứt hoặc bị thay 
 - **Cùng `device_id`, khác fingerprint** (mDNS, `hello` hay `pair_request` báo `device_id` của một máy tin cậy nhưng chứng chỉ khác): không có lý do hợp lệ, vì danh tính mới luôn có `device_id` mới (mục 1). Chặn kết nối, không cho ghép đôi đè (mục 5.1), cảnh báo có thể có giả mạo. Muốn ghép đôi lại thì người dùng phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa, nên máy giả không thừa hưởng “Luôn nhận” hay “Đồng bộ clipboard”.
 - **Máy tin cậy xóa thư mục cấu hình** (cài lại sạch): xuất hiện như một thiết bị mới chưa ghép đôi, có thể trùng tên với mục cũ. App gợi ý ghép đôi lại; ghép đôi xong thì đề nghị xóa mục cũ cùng tên (mục cũ không bao giờ kết nối lại được).
 
-## 8. Khám phá (mDNS) 📝
+## 8. Khám phá (mDNS) ✅
 
-- Dịch vụ `_teleport._tcp.local.`; cổng thật nằm trong bản ghi SRV. **Tên instance là `device_id`** (luôn khác nhau giữa các máy, nên zeroconf không phải tự đổi tên); tên hiển thị chỉ nằm trong TXT.
+Cài đặt ở `teleport.core.discovery` (bản ghi, lọc, theo dõi thiết bị) và `teleport.net.discovery` (zeroconf). Node và CLI chưa dùng tới (Giai đoạn 1, PR sau).
+
+- Dịch vụ `_teleport._tcp.local.`; cổng thật nằm trong bản ghi SRV. **Tên instance là `device_id`** (`<device_id>._teleport._tcp.local.`, luôn khác nhau giữa các máy, nên zeroconf không phải tự đổi tên); tên hiển thị chỉ nằm trong TXT. Host trong SRV là `teleport-<device_id>.local.`. Chỉ quảng bá bản ghi A (IPv4, mục 2.1), tối đa **16 địa chỉ**.
 - Thuộc tính TXT: `id` (`device_id`), `name`, `os`, `proto` (phiên bản giao thức). Không quảng bá fingerprint: TLS và `trusted.json` đã đủ để nhận ra thiết bị tin cậy.
-- Mỗi chuỗi TXT tối đa 255 byte (RFC 6763 mục 6.1). Tên thiết bị hợp lệ có thể dài tới 256 byte UTF-8, nên `name` trong TXT được cắt ở ranh giới ký tự cho vừa ≤ 200 byte; tên đầy đủ lấy từ `hello` khi kết nối.
-- Mọi giá trị TXT là dữ liệu không tin cậy; sai thì bỏ qua bản ghi đó. `id` kiểm như `device_id`, `os` như `os`, `name` như `name` (mục 3.3, trừ độ dài theo byte ở trên); `proto` là số nguyên thập phân ASCII ≥ 1, không có số 0 ở đầu.
+- Mỗi chuỗi TXT tối đa 255 byte (RFC 6763 mục 6.1). Tên thiết bị hợp lệ có thể dài tới 256 byte UTF-8, nên `name` trong TXT được cắt theo code point cho vừa **≤ 200 byte**, rồi bỏ khoảng trắng và U+200D (ZWJ) ở cuối; tên đầy đủ lấy từ `hello` khi kết nối. Cắt theo code point, không theo grapheme, nên emoji ghép có thể bị cắt mất phần sau.
+- Mọi bản ghi nhận được là dữ liệu không tin cậy; một trường sai thì **bỏ qua cả bản ghi** đó (ghi log DEBUG, không báo người dùng):
+  - Khóa TXT là chữ thường, so chính xác (`ID` không phải `id`). Khóa trùng thì lấy lần đầu; khóa lạ bị bỏ qua; khóa thiếu `=` (không có giá trị) là sai.
+  - `id` kiểm như `device_id` và **phải bằng nhãn của tên instance**; `os` kiểm như `os`; `name` như `name` (mục 3.3), dài ≤ 200 byte UTF-8 và giải mã UTF-8 chặt; `proto` là số nguyên thập phân ASCII 1…2⁵³−1, không có số 0 ở đầu. `proto` khác phiên bản của máy này vẫn hợp lệ (so phiên bản ở `hello`, mục 9).
+  - Cổng SRV phải là 1–65535.
+  - Địa chỉ: chỉ IPv4; bỏ loopback, link-local, multicast, reserved (`240.0.0.0/4`, `255.255.255.255`) và `0.0.0.0/8`; bỏ trùng, sắp tăng dần, giữ tối đa 16. Không còn địa chỉ nào → bỏ bản ghi.
 - Thoát app thì gửi gói “goodbye” để máy khác xóa thiết bị ngay (mvp N1).
-- Mọi bản ghi được đăng ký với **TTL 60 s**, thay cho TTL mặc định 75 phút của mDNS (RFC 6762). Nhờ vậy máy mất mạng đột ngột hoặc đi ngủ biến mất khỏi radar trong < 2 phút (mvp N1). Kiểm chứng bằng đo đạc ở Giai đoạn 1.
+- Mọi bản ghi được đăng ký với **TTL 60 s**, thay cho TTL mặc định 75 phút của mDNS (RFC 6762).
+- **Kiểm còn sống:** python-zeroconf nâng TTL của bản ghi PTR *nhận được* lên tối thiểu 1125 s (goodbye TTL 0 thì không), nên máy mất mạng đột ngột hoặc đi ngủ không biến mất khi PTR hết hạn. Bên nhận vì vậy **resolve lại SRV/TXT/A mỗi 15 s** cho từng thiết bị (bộ hẹn giờ chạy mỗi 5 s, chờ tối đa 3 s mỗi lần resolve). Khi SRV/TXT/A còn trong cache, resolve trả ngay từ cache; hết hạn thì zeroconf gửi truy vấn mới ngay.
+  - Cần **2 lần resolve thất bại liên tiếp** mới xóa thiết bị (chống nhấp nháy khi mất một gói); resolve thành công lần sau → thiết bị hiện lại. Máy trả lời nhưng bản ghi mới bị sai vẫn được coi là còn sống, và giữ bản hợp lệ cũ.
+  - Dịch vụ chưa từng có bản ghi hợp lệ mà resolve thất bại (hoặc bản ghi sai) 2 lần liên tiếp thì bị ngừng theo dõi, nhường chỗ trong giới hạn 256 bên dưới.
+  - **Probe thưa dần:** thiết bị đã từng hiện nhưng đã bị xóa vì kiểm còn sống thất bại vẫn được theo dõi, nhưng khoảng cách giữa hai lần resolve nhân đôi sau mỗi lần thất bại (15 s, 30 s, 60 s…), tối đa **240 s**. Có bản ghi hợp lệ, hoặc zeroconf báo thấy lại dịch vụ (resolve ngay), thì trở về 15 s. Thiết bị đang hiện luôn được kiểm mỗi 15 s.
+    - Hệ quả: thiết bị đã biến mất rồi quay lại **mà không quảng bá lại** (ngủ rồi thức, Wi-Fi nối lại) có thể chỉ hiện lại ở lần probe kế tiếp, tức chậm tối đa 240 s + 5 s nhịp hẹn giờ + 3 s resolve ≈ 248 s. Thiết bị quảng bá lại (zeroconf báo `Updated`) thì được resolve và hiện ngay; vì vậy node quảng bá lại khi card mạng/địa chỉ đổi hoặc khi máy thức dậy.
+  - Resolve lần đầu (thiết bị mới hoặc vừa đổi) được ưu tiên hơn kiểm còn sống; tối đa 16 resolve chạy cùng lúc, luôn dành 4 trong 16 chỗ cho kiểm còn sống, và mỗi thiết bị có tối đa một resolve đang chạy.
+  - Resolve của **thiết bị đã ghép đôi** được xếp lên **đầu** hàng chờ resolve, trước mọi dịch vụ chưa ghép đôi đang chờ. Nhờ vậy khi có lũ dịch vụ giả, thiết bị đã ghép đôi chỉ chờ một chỗ trống, và vẫn hiện sau khoảng một lần hết giờ resolve (vài giây).
+  - Cận trên, khi không có hàng đợi resolve: ≈ 60 s (TTL, bản ghi còn trong cache) + 2 × (15 s chu kỳ + 5 s nhịp hẹn giờ + 3 s resolve) ≈ 106 s < 2 phút (mvp N1). Đo trên 2 máy thật ở Giai đoạn 1.
+  - Giới hạn đã biết: máy thật mà 2 lần resolve đầu đều mất gói (Wi-Fi xấu) bị bỏ như bản ghi chưa từng hợp lệ, và chỉ hiện lại khi zeroconf nạp lại SRV/TXT/A (máy đó quảng bá lại, hoặc bên duyệt làm mới PTR ở mốc 75 % TTL, có thể tới ~14 phút). Kiểm kịch bản này khi đo N1.
+- Bên nhận theo dõi tối đa **256** dịch vụ cùng lúc; dịch vụ của chính máy này bị bỏ qua.
+  - **Ưu tiên thiết bị đã ghép đôi:** dịch vụ có `device_id` nằm trong `trusted.json` luôn được theo dõi và **không tính vào 256** (số này bị chặn bởi số thiết bị tin cậy). Một dịch vụ đang theo dõi trở thành tin cậy (vừa ghép đôi) thì nhả một chỗ trong 256, nên mục cũ nhất của danh sách tràn bên dưới được nhận ngay. Thiết bị thôi tin cậy mà đang được theo dõi thì vẫn giữ, nhưng từ đó tính vào 256.
+  - **Danh sách tràn:** dịch vụ mới khi đã đủ không bị quên (zeroconf chỉ báo một dịch vụ mới một lần cho mỗi PTR) mà được ghi vào danh sách chờ, tối đa **1024** `device_id`, thứ tự vào trước ra trước, đầy thì bỏ mục cũ nhất. Mỗi khi một dịch vụ bị ngừng theo dõi và có chỗ trống, mục cũ nhất trong danh sách được nhận và resolve ngay. Dịch vụ cũ không bao giờ bị đẩy ra để nhường chỗ. Mục chờ đã cũ (máy đã đi mà không gửi goodbye) được nhận rồi bị bỏ sau 2 lần resolve thất bại như dịch vụ chưa từng hợp lệ.
+- ⚠️ **mDNS không xác thực.** Bất kỳ máy nào trong LAN cũng quảng bá được `<device_id>` của máy khác, với tên, địa chỉ, cổng tùy ý. Kết quả khám phá chỉ là gợi ý để biết kết nối tới đâu; danh tính chỉ được tin qua fingerprint chứng chỉ khi bắt tay TLS (mục 2.2, 7). Không bao giờ dùng `name` hay `device_id` từ mDNS để quyết định tin cậy.
+  - Vì vậy có ba kiểu từ chối dịch vụ đã biết mà mDNS không chặn được:
+    1. **Lũ PTR** lấp đầy danh sách theo dõi (256 dịch vụ và 1024 mục chờ): máy *chưa ghép đôi* mới có thể không hiện. Máy đã ghép đôi vẫn được theo dõi và được resolve trước hàng chờ, nên vẫn hiện sau vài giây.
+    2. **Goodbye giả** (bản ghi TTL 0 mạo danh) xóa hoặc ẩn một thiết bị khỏi danh sách.
+    3. **Đè bản ghi SRV/A** làm kết nối đi sai địa chỉ hoặc cổng. Kiểm fingerprint khi bắt tay TLS chặn việc mạo danh, nên kẻ tấn công chỉ làm kết nối thất bại.
+  - Đường dự phòng cho cả ba là **nhập IP thủ công** (mục 2.1).
 
 ## 9. Phiên bản giao thức
 

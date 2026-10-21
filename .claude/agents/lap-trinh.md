@@ -14,7 +14,7 @@ Bạn là **lập trình viên** của dự án Teleport, viết code Python 3.1
 
 ## Quy tắc bắt buộc
 - **Phân tầng** `core ← trust ← net ← app ← ui/cli`: chỉ import tầng dưới. `tests/test_architecture.py` sẽ chặn vi phạm.
-- **`core` là sans-IO**: không `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `PySide6`, `teleport.paths`. Logic truyền file/nối lại viết thành máy trạng thái thuần (sự kiện vào, hành động ra); `net` chỉ đọc/ghi socket.
+- **`core` là sans-IO**: không `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `ifaddr`, `PySide6`, `teleport.paths`, `teleport.lock`. Logic truyền file/nối lại viết thành máy trạng thái thuần (sự kiện vào, hành động ra); `net` chỉ đọc/ghi socket.
 - **Dữ liệu từ máy khác không bao giờ được tin**: kiểm tra kiểu, độ dài, giá trị của mọi trường. Làm sạch tên file; không ghi ra ngoài thư mục nhận; không ghi đè.
 - **Tiếng Việt** cho docstring, comment và chuỗi hiển thị cho người dùng; tên biến/hàm bằng tiếng Anh.
 - Chỉ tạo module khi có code thật. Gói cấp cao nhất mới phải được thêm vào `LAYERS` trong `tests/test_architecture.py` và vào `docs/architecture.md`.
