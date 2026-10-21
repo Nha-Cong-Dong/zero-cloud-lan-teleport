@@ -64,7 +64,8 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | — | `paths.py` | Thư mục cấu hình theo hệ điều hành; `TELEPORT_HOME` ghi đè | ✅ |
 | — | `lock.py` | Khóa file của hệ điều hành: `node.lock` (một node cho mỗi thư mục cấu hình), `identity.lock` (khi tạo danh tính) | ✅ |
 | core | `framing.py` | Mã hóa/giải mã khung `[uint32 độ dài][JSON]`; giới hạn 16 MiB, riêng kết nối ghép đôi 16 KiB | ✅ |
-| core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*`, `control_open`, `ping`/`pong`) | ✅ |
+| core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*`, `control_open`, `ping`/`pong`); bảng loại kết nối (`ConnectionKind`, `allowed_types`, `opening_kind`) | ✅ |
+| core | `keepalive.py` | Keepalive sans-IO: khi nào gửi ping, khi nào coi là mất kết nối ([protocol.md](protocol.md) mục 2.3) | ✅ |
 | core | `pairing_code.py` | Cam kết nonce và mã ghép đôi 6 số từ hai fingerprint + hai nonce | ✅ |
 | core | `pairing.py` | Máy trạng thái ghép đôi sans-IO: thứ tự `pair_*`, hết giờ, lý do hủy (`InitiatorSession`, `ResponderSession`); chống làm phiền: một phiên tại một thời điểm, chờ tăng dần theo IP, hai bên cùng chủ động (`PairingGate`) | ✅ |
 | core | `discovery.py` | Khám phá sans-IO: dựng/kiểm bản ghi TXT, cắt tên ≤ 200 byte, lọc địa chỉ, nhận ra card ảo, chọn địa chỉ quảng bá; máy trạng thái `DiscoveryTracker` (thiết bị thêm/sửa/xóa, kiểm còn sống và probe thưa dần cho thiết bị đã biến mất, ưu tiên thiết bị đã ghép đôi, danh sách tràn khi đã đủ 256; protocol mục 8) | ✅ |
@@ -76,7 +77,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | net | `tls.py` | `SSLContext` TLS 1.3; server một cổng (`CERT_OPTIONAL` + thiết bị tin cậy làm trust anchor); client so toàn bộ fingerprint | ✅ |
 | net | `stream.py` | Đọc/ghi message trên `asyncio` stream | ✅ |
 | net | `discovery.py` | Quảng bá & tìm `_teleport._tcp.local.` (zeroconf, `MdnsDiscovery`): đăng ký/cập nhật/goodbye, duyệt và resolve theo `core.discovery`, đặt tập thiết bị ưu tiên (`set_priority`), đọc card mạng (ifaddr) và địa chỉ nguồn ưu tiên | ✅ |
-| net | `connection.py` | Listener một cổng; phân loại kết nối ghép đôi / điều khiển / dữ liệu; trao `hello`; giới hạn, thời gian chờ, keepalive; thay `SSLContext` khi danh sách tin cậy đổi | ⏳ |
+| net | `connection.py` | Listener một cổng (TCP trần + `start_tls` theo context hiện tại); trao `hello`; phân loại ghép đôi / điều khiển; giới hạn đang mở đầu 4/IP · 64 và ẩn danh 1/IP · 8; thời gian chờ; `Connection`, `ControlChannel` (keepalive); `open_pairing` / `open_control` thử song song mọi địa chỉ | ✅ (kết nối dữ liệu ⬜, Giai đoạn 2) |
 | app | `node.py` | Ghép các thành phần lại: lắng nghe, khám phá, giữ một kết nối điều khiển tới mỗi thiết bị tin cậy (chống trùng, nối lại), điều phối | ⏳ |
 | app | `pairing.py` | Dịch vụ ghép đôi: sinh nonce, chạy máy trạng thái `core.pairing` trên kết nối thật, lưu thiết bị tin cậy, hủy ghép đôi | ⏳ |
 | app | `transfers.py`, `clipboard.py` | Quản lý lượt truyền, đồng bộ clipboard | ⬜ |

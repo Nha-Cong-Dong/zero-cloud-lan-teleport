@@ -7,6 +7,9 @@
 Mọi message đến từ máy khác nên không bao giờ được tin: kiểu, độ dài và giá trị
 của từng trường đều được kiểm trong `__post_init__`, nên kể cả dataclass tạo
 bằng tay với giá trị sai cũng raise `MessageError`.
+
+Bảng loại kết nối (`ConnectionKind`, `allowed_types`, `opening_kind`,
+`check_message_kind`) quy định message nào hợp lệ trên loại kết nối nào (mục 2.1, 3.3).
 """
 
 from __future__ import annotations
@@ -307,3 +310,65 @@ def to_dict(msg: Message) -> dict:
     if type(msg) not in _MESSAGE_TYPES.values():
         raise TypeError(f"không phải message: {type(msg).__name__}")
     return {"type": msg.TYPE, **{f.name: getattr(msg, f.name) for f in fields(msg)}}
+
+
+# ---- Loại kết nối --------------------------------------------------------------------------
+
+
+class ConnectionKind(StrEnum):
+    """Loại kết nối trên cổng chung (protocol.md mục 2.1)."""
+
+    PAIRING = "pairing"
+    CONTROL = "control"
+    DATA = "data"
+
+
+class WrongConnectionKind(MessageError):
+    """Message hợp lệ nhưng không được phép trên loại kết nối này (protocol.md mục 3.3)."""
+
+
+# `hello` và message mở đầu (`control_open`, `data_open`) không thuộc tập nào: chúng chỉ
+# xuất hiện đúng một lần, trước khi loại kết nối được xác định.
+_ALLOWED_TYPES: dict[ConnectionKind, frozenset[str]] = {
+    ConnectionKind.PAIRING: frozenset(
+        cls.TYPE for cls in (PairRequest, PairChallenge, PairReveal, PairConfirm, PairAbort)
+    ),
+    # Giai đoạn 2 sẽ thêm offer, accept, resume…
+    ConnectionKind.CONTROL: frozenset(cls.TYPE for cls in (Ping, Pong)),
+    # Sau `data_open` chỉ có khung khối nhị phân (protocol.md mục 4.2).
+    ConnectionKind.DATA: frozenset(),
+}
+
+
+def allowed_types(kind: ConnectionKind | str) -> frozenset[str]:
+    """Các `type` được nhận/gửi trên kết nối `kind` SAU message mở đầu.
+
+    `kind` là chuỗi bằng giá trị của `ConnectionKind` cũng được; giá trị khác → ValueError.
+    """
+    return _ALLOWED_TYPES[ConnectionKind(kind)]
+
+
+def opening_kind(msg: Message, *, has_client_cert: bool) -> ConnectionKind:
+    """Loại kết nối do message mở đầu của client khai báo (protocol.md mục 2.1).
+
+    `pair_request` chỉ hợp lệ khi client không gửi chứng chỉ (kết nối ẩn danh),
+    `control_open` chỉ khi có. Mọi trường hợp khác → WrongConnectionKind (kể cả
+    `data_open`, vì chưa có kiểu nên `parse_message` đã báo UnknownMessageType từ trước).
+    Không kiểm danh sách tin cậy: đó là việc của tầng `net`.
+    """
+    if isinstance(msg, PairRequest) and not has_client_cert:
+        return ConnectionKind.PAIRING
+    if isinstance(msg, ControlOpen) and has_client_cert:
+        return ConnectionKind.CONTROL
+    msg_type = getattr(msg, "TYPE", type(msg).__name__)
+    cert_note = "có" if has_client_cert else "không có"
+    raise WrongConnectionKind(f"{msg_type} không mở được kết nối khi client {cert_note} chứng chỉ")
+
+
+def check_message_kind(kind: ConnectionKind | str, msg: Message) -> None:
+    """`msg.TYPE` không thuộc `allowed_types(kind)` → WrongConnectionKind."""
+    if type(msg) not in _MESSAGE_TYPES.values():
+        raise TypeError(f"không phải message: {type(msg).__name__}")
+    kind = ConnectionKind(kind)
+    if msg.TYPE not in _ALLOWED_TYPES[kind]:
+        raise WrongConnectionKind(f"{msg.TYPE} không hợp lệ trên kết nối {kind.value}")

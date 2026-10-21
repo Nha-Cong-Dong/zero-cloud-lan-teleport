@@ -1,6 +1,8 @@
 """Test `teleport.core.messages` theo đặc tả PR1 (kế hoạch §2.3, §2.5 và phụ lục điểm 1–5, 7, 18).
 
 PR2 thêm `control_open`, `ping`, `pong` (docs/protocol.md §3.2–3.3, kế hoạch PR2 mục Test).
+PR-2 (kết nối) thêm bảng loại kết nối: `ConnectionKind`, `allowed_types`, `opening_kind`,
+`check_message_kind` (đặc tả PR-2 mục 2.1, test M1–M5 ở cuối file).
 """
 
 import dataclasses
@@ -20,6 +22,7 @@ from teleport.core.messages import (
     MAX_SAFE_INTEGER,
     PROTOCOL_VERSION,
     AbortReason,
+    ConnectionKind,
     ControlOpen,
     Hello,
     MessageError,
@@ -32,6 +35,10 @@ from teleport.core.messages import (
     Ping,
     Pong,
     UnknownMessageType,
+    WrongConnectionKind,
+    allowed_types,
+    check_message_kind,
+    opening_kind,
     parse_message,
     to_dict,
     validate_device_id,
@@ -1007,3 +1014,115 @@ def test_property_device_id_is_exactly_32_lowercase_hex(value):
         assert not expected_ok
         return
     assert expected_ok
+
+
+# --- Bảng loại kết nối (đặc tả PR-2 mục 2.1, test M1–M5) ------------------------------------------
+
+PAIRING_TYPES = frozenset({"pair_request", "pair_challenge", "pair_reveal", "pair_confirm", "pair_abort"})
+CONTROL_TYPES = frozenset({"ping", "pong"})
+EXPECTED_ALLOWED = {"pairing": PAIRING_TYPES, "control": CONTROL_TYPES, "data": frozenset()}
+KIND_INPUTS = [*ConnectionKind, "pairing", "control", "data"]
+
+
+def test_connection_kind_values():
+    assert issubclass(ConnectionKind, enum.StrEnum)
+    assert {k.value for k in ConnectionKind} == {"pairing", "control", "data"}
+    assert ConnectionKind.PAIRING == "pairing"
+    assert ConnectionKind.CONTROL == "control"
+    assert ConnectionKind.DATA == "data"
+
+
+def test_wrong_connection_kind_is_message_error():
+    assert issubclass(WrongConnectionKind, MessageError)
+    assert not issubclass(WrongConnectionKind, UnknownMessageType)
+
+
+@pytest.mark.parametrize("kind", KIND_INPUTS, ids=repr)
+def test_allowed_types_match_spec_table(kind):
+    allowed = allowed_types(kind)
+    assert isinstance(allowed, frozenset)
+    assert allowed == EXPECTED_ALLOWED[str(kind)]
+
+
+@pytest.mark.parametrize("kind", list(ConnectionKind))
+@pytest.mark.parametrize("type_name", ["hello", "control_open", "data_open"])
+def test_opening_and_hello_types_are_never_allowed_after_opening(kind, type_name):
+    assert type_name not in allowed_types(kind)
+
+
+def test_allowed_types_accepts_plain_string():
+    assert allowed_types("control") == allowed_types(ConnectionKind.CONTROL)
+
+
+@pytest.mark.parametrize("bad", ["foo", "PAIRING", "Control", "", " control", "control "], ids=repr)
+def test_allowed_types_rejects_unknown_kind(bad):
+    with pytest.raises(ValueError):
+        allowed_types(bad)
+
+
+def test_pair_request_without_cert_opens_pairing():
+    assert (
+        opening_kind(PairRequest(cert=CERT, commitment=HEX64), has_client_cert=False)
+        is ConnectionKind.PAIRING
+    )
+
+
+def test_pair_request_with_cert_is_wrong_kind():
+    with pytest.raises(WrongConnectionKind):
+        opening_kind(PairRequest(cert=CERT, commitment=HEX64), has_client_cert=True)
+
+
+def test_control_open_with_cert_opens_control():
+    assert opening_kind(ControlOpen(), has_client_cert=True) is ConnectionKind.CONTROL
+
+
+def test_control_open_without_cert_is_wrong_kind():
+    with pytest.raises(WrongConnectionKind):
+        opening_kind(ControlOpen(), has_client_cert=False)
+
+
+NON_OPENING_MESSAGES = [m for m in VALID_MESSAGES if not isinstance(m, (PairRequest, ControlOpen))]
+
+
+@pytest.mark.parametrize("has_cert", [False, True])
+@pytest.mark.parametrize("msg", NON_OPENING_MESSAGES, ids=lambda m: type(m).__name__)
+def test_any_other_message_cannot_open_a_connection(msg, has_cert):
+    with pytest.raises(WrongConnectionKind):
+        opening_kind(msg, has_client_cert=has_cert)
+
+
+@pytest.mark.parametrize("kind", KIND_INPUTS, ids=repr)
+@pytest.mark.parametrize("msg", VALID_MESSAGES, ids=lambda m: type(m).__name__)
+def test_check_message_kind_follows_table(kind, msg):
+    if msg.TYPE in EXPECTED_ALLOWED[str(kind)]:
+        assert check_message_kind(kind, msg) is None
+    else:
+        with pytest.raises(WrongConnectionKind):
+            check_message_kind(kind, msg)
+
+
+def test_check_message_kind_error_is_catchable_as_message_error():
+    with pytest.raises(MessageError):
+        check_message_kind(ConnectionKind.CONTROL, PairChallenge(nonce=HEX64))
+
+
+valid_message_values = st.sampled_from(VALID_MESSAGES) | st.builds(
+    lambda cls, t: cls(t=t), st.sampled_from([Ping, Pong]), st.integers(0, MAX_SAFE_INTEGER)
+)
+
+
+@settings(max_examples=300, deadline=None)
+@given(msg=valid_message_values, kind=st.sampled_from(KIND_INPUTS), has_cert=st.booleans())
+def test_property_kind_table_is_consistent(msg, kind, has_cert):
+    try:
+        check_message_kind(kind, msg)
+        passed = True
+    except WrongConnectionKind:
+        passed = False
+    assert passed == (msg.TYPE in allowed_types(kind))
+    try:
+        opened = opening_kind(msg, has_client_cert=has_cert)
+    except WrongConnectionKind:
+        return
+    assert opened is not ConnectionKind.DATA
+    assert opened in (ConnectionKind.PAIRING, ConnectionKind.CONTROL)
