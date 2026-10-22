@@ -136,8 +136,11 @@ def test_actions_are_frozen_dataclasses():
     ]
     for obj in objs:
         assert dataclasses.is_dataclass(obj)
+        # Gán vào chính một trường của đối tượng: gán thuộc tính lạ vào dataclass
+        # frozen + slots ra TypeError thay vì FrozenInstanceError trên Python 3.12.
+        field = dataclasses.fields(obj)[0].name
         with pytest.raises(dataclasses.FrozenInstanceError):
-            obj.device_id = Q  # type: ignore[misc]
+            setattr(obj, field, Q)
 
 
 def test_constants_are_read_at_call_time(monkeypatch):
