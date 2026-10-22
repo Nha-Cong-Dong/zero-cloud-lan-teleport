@@ -87,9 +87,10 @@ Mỗi message:
 | `type` | Hướng | Kết nối | Trường |
 |---|---|---|---|
 | `hello` | ↔ | mọi loại | `protocol` (int ≥ 1), `device_id`, `name`, `app_version`, `os` |
-| `pair_request` | khởi xướng → trả lời | ghép đôi | `cert` (PEM), `commitment` (64 hex) |
-| `pair_challenge` | trả lời → khởi xướng | ghép đôi | `nonce` (64 hex = 32 byte) |
-| `pair_reveal` | khởi xướng → trả lời | ghép đôi | `nonce` (64 hex = 32 byte) |
+| `pair_request` | khởi xướng → trả lời | ghép đôi | `cert` (PEM) |
+| `pair_commit` | trả lời → khởi xướng | ghép đôi | `commitment` (64 hex) — cam kết cho n_B |
+| `pair_nonce` | khởi xướng → trả lời | ghép đôi | `nonce` (64 hex = 32 byte) — n_A |
+| `pair_reveal` | trả lời → khởi xướng | ghép đôi | `nonce` (64 hex = 32 byte) — n_B đã cam kết |
 | `pair_confirm` | ↔ | ghép đôi | (không có trường) |
 | `pair_abort` | ↔ | ghép đôi | `reason` |
 | `control_open` | client → server | điều khiển | (không có trường) — mở đầu kết nối điều khiển |
@@ -189,7 +190,11 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 
 ## 5. Ghép đôi
 
-Ghép đôi theo kiểu *numeric comparison* của Bluetooth: hai bên trao nonce ngẫu nhiên, bên khởi xướng **cam kết** nonce của mình trước khi thấy nonce bên kia, rồi cả hai hiện cùng một mã 6 số cho người dùng so. Nếu mã chỉ tính từ hai fingerprint, kẻ đứng giữa có thể sinh khóa offline tới khi ra mã trùng; với nonce cam kết, mỗi lần thử chỉ thành công với xác suất 10⁻⁶. Công thức đã cài đặt ở `teleport.core.pairing_code` ✅; máy trạng thái ghép đôi và chống làm phiền ở `teleport.core.pairing` ✅ (thứ tự message, hết giờ, lý do hủy, mục 5.1 và 5.3); trao đổi trên mạng ✅ (`teleport.app.pairing`).
+Ghép đôi theo kiểu *numeric comparison* của Bluetooth: hai bên trao nonce ngẫu nhiên, bên **trả lời cam kết** nonce của mình trước khi thấy nonce bên kia, rồi cả hai hiện cùng một mã 6 số cho người dùng so. Nếu mã chỉ tính từ hai fingerprint, kẻ đứng giữa có thể sinh khóa offline tới khi ra mã trùng; với nonce cam kết, mỗi lần thử chỉ thành công với xác suất 10⁻⁶, và mỗi lần thử đều làm một máy hiện mã.
+
+Vì sao bên trả lời cam kết: nó là máy đang chờ ghép đôi, ai trong LAN cũng gọi tới được. Ở bản dự thảo cũ bên khởi xướng cam kết, nên kẻ đứng giữa đóng vai bên khởi xướng nhận được n_B trước khi phải lộ nonce của mình và tính trước được mã mà bên trả lời sắp hiện. Mã không như ý thì nó bỏ phiên và thử lại; bên trả lời không hiện mã nên người dùng không thấy gì (chỉ còn chờ tăng dần ở mục 5.3 làm chậm). Nay bên khởi xướng chỉ lộ n_A sau khi đã nhận cam kết, còn bên trả lời hiện mã trước rồi mới lộ n_B, nên không bên nào biết mã trước khi đã bị ràng buộc vào nonce của mình.
+
+Công thức đã cài đặt ở `teleport.core.pairing_code` ✅; máy trạng thái ghép đôi và chống làm phiền ở `teleport.core.pairing` ✅ (thứ tự message, hết giờ, lý do hủy, mục 5.1 và 5.3); trao đổi trên mạng ✅ (`teleport.app.pairing`).
 
 ### 5.1. Luồng
 
@@ -200,13 +205,23 @@ A (khởi xướng)                              B (trả lời)
 TLS tới cổng của B: A không gửi chứng chỉ (kết nối ghép đôi)
 hello ───────────────────────────────────►
       ◄─────────────────────────────────── hello
-pair_request{cert, commitment}   ────────►  B: kiểm cert, CN khớp hello.device_id của A
-      ◄─────────────────────────────────── pair_challenge{nonce = n_B}  (hoặc pair_abort{busy})
-pair_reveal{nonce = n_A}         ────────►  B: kiểm commitment; sai → pair_abort{invalid}
-Cả hai tính mã và hỏi người dùng (hết giờ 60 s → pair_abort{timeout})
+pair_request{cert}               ────────►  B: kiểm cert, CN khớp hello.device_id của A
+      ◄─────────────────────────────────── pair_commit{commitment = C_B}  (hoặc pair_abort{busy})
+pair_nonce{nonce = n_A}          ────────►  B: tính mã, HIỆN MÃ, rồi mới gửi n_B
+      ◄─────────────────────────────────── pair_reveal{nonce = n_B}
+A: kiểm C_B bằng fp_B (từ bắt tay TLS); sai → pair_abort{invalid}, không hiện mã.
+   Đúng → tính mã và hiện mã.
+Cả hai hỏi người dùng (hết giờ 60 s → pair_abort{timeout})
 pair_confirm ◄──────────────────────────► pair_confirm   (từ chối → pair_abort{user})
 Mỗi bên: đã GỬI pair_confirm VÀ đã NHẬN pair_confirm của bên kia → lưu trusted.json, đóng.
 ```
+
+Bốn bất biến ✅ (`teleport.core.pairing`):
+
+1. A chỉ gửi n_A (`pair_nonce`) sau khi đã nhận `pair_commit`.
+2. B chỉ gửi n_B (`pair_reveal`) sau khi đã nhận n_A, và mã đã hiện trong cùng bước đó: n_B không bao giờ rời B khi B chưa hiện mã.
+3. A chỉ hiện mã khi cam kết của B đúng (kiểm bằng fingerprint của B lấy từ bắt tay TLS và n_B).
+4. A không bao giờ tự thử lại một phiên thất bại: mỗi phiên khởi xướng là một thao tác của người dùng. Phiên khởi xướng bị nhường (hai bên cùng chủ động, mục 5.3) thì máy đó chuyển sang vai trả lời, và vai này vẫn cam kết trước.
 
 - n_A, n_B: mỗi nonce 32 byte ngẫu nhiên, sinh mới cho mỗi lần ghép đôi.
 - Chứng chỉ của B: A lấy từ bắt tay TLS (đã được TLS xác thực là B giữ khóa riêng). A kiểm CN chứng chỉ đó khớp `hello.device_id` của B.
@@ -222,7 +237,7 @@ Mỗi bên: đã GỬI pair_confirm VÀ đã NHẬN pair_confirm của bên kia 
 `‖` là nối byte. Fingerprint (64 ký tự hex) được đổi sang 32 byte trước khi băm. Thứ tự cố định theo vai trò (khởi xướng trước), **không** sắp xếp.
 
 ```
-commitment = hex(SHA-256(b"teleport-commit-v1" ‖ fp_khởi_xướng ‖ n_A))
+commitment = hex(SHA-256(b"teleport-commit-v1" ‖ fp_trả_lời ‖ n_B))
 digest     = SHA-256(b"teleport-pair-v1" ‖ fp_khởi_xướng ‖ fp_trả_lời ‖ n_A ‖ n_B)
 mã         = int.from_bytes(digest[0:4], "big") mod 1 000 000, viết đủ 6 chữ số (có số 0 đầu)
 ```
@@ -239,7 +254,7 @@ Kết nối ghép đôi không cần chứng chỉ, nên bất kỳ máy nào tr
   - `pair_abort{busy}` gửi trong lúc IP đang bị chờ **không** kéo dài thời gian chờ.
   - IP yên lặng 10 phút kể từ khi hết thời gian chờ thì được quên (đếm lại từ đầu). Theo dõi tối đa 1024 IP; quá thì quên IP có thời gian chờ hết sớm nhất. Bộ đếm chỉ nằm trong bộ nhớ, mất khi khởi động lại node.
 - **Hai bên cùng chủ động ghép đôi với nhau** (máy này đang có phiên khởi xướng tới **một trong các địa chỉ** máy này đang thử cho máy đó, tức các địa chỉ mDNS quảng bá hoặc IP nhập tay, và yêu cầu tới từ chính địa chỉ đó): bên có `device_id` **lớn hơn** hủy phiên khởi xướng của mình và trả lời phiên của bên kia; bên nhỏ hơn trả `pair_abort{busy}`. Luật này xét trước việc node có đang nhận ghép đôi không (gạch cuối) và trước thời gian chờ của IP. Phiên khởi xướng bị nhường gửi `pair_abort{busy}` nếu đã gửi `pair_request`, chưa gửi thì chỉ đóng. `device_id` trên kết nối ẩn danh chưa được xác thực, nên cần IP khớp; kẻ giả mạo vẫn có thể làm phiên tự hủy (chỉ gây phiền, không ghép đôi được). Bên nhường trả kết quả của phiên trả lời thay thế cho người dùng (lệnh `teleport pair` vẫn có đúng một kết quả). Giới hạn: máy kia gửi yêu cầu từ một địa chỉ không nằm trong danh sách đó (ví dụ địa chỉ của card ảo bị lọc khỏi bản quảng bá) thì luật này không áp được, và hai bên cùng nhận `busy` rồi thử lại.
-- **Giới hạn của các biện pháp trên:** đây là chống làm phiền ở mức tốt nhất có thể, không chống được tấn công từ chối dịch vụ trong LAN. Một máy đổi IP liên tục (IPv6 tạm thời, xin DHCP mới) vẫn có thể làm hiện hộp thoại nhiều lần hoặc giữ phiên ghép đôi. Ngay cả một máy ẩn danh duy nhất, gửi và đọc thật chậm (sát hạn ở mỗi bước), cũng giữ được phiên duy nhất tới khoảng 10 s cho mỗi bước trao message cộng 60 s chờ người dùng xác nhận (cỡ 70 s hoặc hơn chút); trong lúc đó mọi yêu cầu khác nhận `pair_abort{busy}`. Việc này chỉ ảnh hưởng khi node đang nhận yêu cầu ghép đôi (gạch cuối; với CLI là trong lúc `teleport listen` đang chạy). Ghép đôi vẫn an toàn vì cần người dùng xác nhận mã ở cả hai máy.
+- **Giới hạn của các biện pháp trên:** đây là chống làm phiền ở mức tốt nhất có thể, không chống được tấn công từ chối dịch vụ trong LAN. Một máy đổi IP liên tục (IPv6 tạm thời, xin DHCP mới) vẫn có thể làm hiện hộp thoại nhiều lần hoặc giữ phiên ghép đôi. Kẻ đứng giữa làm vậy cũng thử được nhiều mã trong một lần ghép đôi: mỗi phiên trả lời chỉ trúng với xác suất 10⁻⁶ (mục 5.1), nên N phiên cho xác suất cỡ N·10⁻⁶, nhưng mỗi phiên đều làm máy này hiện một mã mới, nên người dùng thấy được dấu hiệu bất thường. Ngay cả một máy ẩn danh duy nhất, gửi và đọc thật chậm (sát hạn ở mỗi bước), cũng giữ được phiên duy nhất tới khoảng 10 s cho mỗi bước trao message cộng 60 s chờ người dùng xác nhận (cỡ 70 s hoặc hơn chút); trong lúc đó mọi yêu cầu khác nhận `pair_abort{busy}`. Việc này chỉ ảnh hưởng khi node đang nhận yêu cầu ghép đôi (gạch cuối; với CLI là trong lúc `teleport listen` đang chạy). Ghép đôi vẫn an toàn vì cần người dùng xác nhận mã ở cả hai máy.
 - Khi nào node nhận yêu cầu ghép đôi: giao diện luôn nhận (hiện hộp thoại, mvp F3) 📝; CLI chỉ nhận khi đang chạy `teleport listen` ✅. Ngoài các trường hợp đó → `pair_abort{busy}`.
 
 ### 5.4. Test vector
@@ -250,7 +265,7 @@ Kết nối ghép đôi không cần chứng chỉ, nên bất kỳ máy nào tr
 | `fp_trả_lời` | `2846c2e746ec2e9bb0dbcfad4873a0e81d82f256f89fb6b0e2bca91890b498f3` |
 | `n_A` | `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f` |
 | `n_B` | `202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f` |
-| `commitment` | `3e4caf4ec8e56d982e218a573ac0c4322e7d0241022faaf2295ea6887211c65b` |
+| `commitment` (cam kết của bên trả lời cho n_B) | `a3fd58883a0ae9e63ebc321d164eeaf743173032ba03c44aefc333753e314e69` |
 | `digest` | `4a58a291a77f5de3163a28b02a8ca6c465aac3805851f1f3f2477c87232d3e64` |
 | **mã** | `322769` (hiển thị `322 769`) |
 

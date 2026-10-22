@@ -17,6 +17,17 @@ kết nối thật:
 - Gửi lỗi (kết nối đã đứt) thì bỏ qua và vẫn thực hiện các hành động sau, nhất là
   `Close` và `PairingGate.finish`.
 
+Bên trả lời (B) cam kết nonce trước, kiểu Bluetooth numeric comparison (protocol mục
+5.1). Bốn bất biến mà máy trạng thái giữ:
+
+1. Bên khởi xướng (A) chỉ gửi n_A (`pair_nonce`) sau khi đã nhận `pair_commit`.
+2. B chỉ gửi n_B (`pair_reveal`) sau khi đã nhận n_A, và mã đã hiện trong cùng bước
+   (`ShowCode` đứng trước `SendMessage(PairReveal)`).
+3. A chỉ hiện mã khi cam kết của B đúng với n_B và fingerprint của B.
+4. A không bao giờ tự thử lại một phiên thất bại: mỗi phiên khởi xướng là một thao tác
+   của người dùng. Nhường phiên (hai bên cùng chủ động) thì máy này chuyển sang vai
+   trả lời, và vai này vẫn cam kết trước.
+
 `core` không phân tích chứng chỉ: `app` gọi `trust.peer_cert_from_pem` /
 `peer_cert_from_der` rồi đưa kết quả vào dưới dạng `DeviceCert`. Các kiểm tra
 thuần logic (CN khớp `hello`, tự ghép với chính mình, ghép đè danh tính) nằm ở đây.
@@ -41,8 +52,9 @@ from teleport.core.messages import (
     Hello,
     Message,
     PairAbort,
-    PairChallenge,
+    PairCommit,
     PairConfirm,
+    PairNonce,
     PairRequest,
     PairReveal,
     validate_device_id,
@@ -50,7 +62,7 @@ from teleport.core.messages import (
 from teleport.core.pairing_code import NONCE_SIZE, check_commitment, make_commitment, pairing_code
 
 # Thời gian tính bằng giây (protocol mục 2.3, 5.1, 5.3).
-MESSAGE_TIMEOUT = 10.0  # chờ pair_challenge / pair_reveal
+MESSAGE_TIMEOUT = 10.0  # chờ pair_commit / pair_nonce / pair_reveal
 CONFIRM_TIMEOUT = 60.0  # người dùng quyết định, tính từ lúc hiện mã
 # Máy này đã xác nhận: chờ thêm pair_confirm của máy kia tới shown_at + 60 + 10, vì
 # người dùng máy kia có thể bấm sát giây thứ 60 và message còn phải đi qua mạng.
@@ -82,8 +94,9 @@ class State(StrEnum):
     """Trạng thái của phiên."""
 
     IDLE = "idle"  # chưa nhận Start
-    AWAIT_CHALLENGE = "await_challenge"  # bên khởi xướng đã gửi pair_request
-    AWAIT_REVEAL = "await_reveal"  # bên trả lời đã gửi pair_challenge
+    AWAIT_COMMIT = "await_commit"  # bên khởi xướng đã gửi pair_request
+    AWAIT_NONCE = "await_nonce"  # bên trả lời đã gửi pair_commit
+    AWAIT_REVEAL = "await_reveal"  # bên khởi xướng đã gửi pair_nonce
     CONFIRMING = "confirming"  # đã hiện mã, chờ hai bên xác nhận
     DONE = "done"  # đã trả Close
 
@@ -141,7 +154,7 @@ class DeviceCert:
 
 @dataclass(frozen=True, slots=True)
 class Start:
-    """Bắt đầu phiên: bên khởi xướng gửi pair_request, bên trả lời gửi pair_challenge."""
+    """Bắt đầu phiên: bên khởi xướng gửi pair_request, bên trả lời gửi pair_commit."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,10 +483,11 @@ class PairingSession:
 
 
 class InitiatorSession(PairingSession):
-    """Bên khởi xướng (A): gửi `pair_request`, chờ `pair_challenge`, gửi `pair_reveal`.
+    """Bên khởi xướng (A): gửi `pair_request`, chờ `pair_commit`, gửi `pair_nonce`, chờ `pair_reveal`.
 
-    `peer` là chứng chỉ của B lấy từ bắt tay TLS. `known_fingerprint` là fingerprint
-    đã lưu cho `peer.device_id` trong `trusted.json` (nếu có).
+    `peer` là chứng chỉ của B lấy từ bắt tay TLS; cam kết của B được kiểm bằng
+    `peer.fingerprint`. `known_fingerprint` là fingerprint đã lưu cho `peer.device_id`
+    trong `trusted.json` (nếu có).
     """
 
     def __init__(
@@ -495,6 +509,7 @@ class InitiatorSession(PairingSession):
             nonce=nonce,
             known_fingerprint=known_fingerprint,
         )
+        self._commitment: str | None = None  # cam kết của B, nhận trong pair_commit
 
     def _start(self, now: float) -> list[Action]:
         peer = self._peer
@@ -505,17 +520,24 @@ class InitiatorSession(PairingSession):
         problem = self._self_or_conflict(peer)
         if problem is not None:
             return self._close(problem)
-        request = PairRequest(
-            cert=self._local.pem, commitment=make_commitment(self._local.fingerprint, self._nonce)
-        )
-        self._state = State.AWAIT_CHALLENGE
+        self._state = State.AWAIT_COMMIT
         self._deadline = now + MESSAGE_TIMEOUT
-        return [SendMessage(request)]
+        return [SendMessage(PairRequest(cert=self._local.pem))]
 
     def _on_message(self, msg: Message, now: float) -> list[Action] | None:
-        if self._state is State.AWAIT_CHALLENGE and isinstance(msg, PairChallenge):
-            reveal = SendMessage(PairReveal(self._nonce.hex()))
-            return [reveal, self._show_code(bytes.fromhex(msg.nonce), now)]
+        if self._state is State.AWAIT_COMMIT and isinstance(msg, PairCommit):
+            # Bất biến 1: n_A chỉ rời máy sau khi đã có cam kết của B.
+            self._commitment = msg.commitment
+            self._state = State.AWAIT_REVEAL
+            self._deadline = now + MESSAGE_TIMEOUT
+            return [SendMessage(PairNonce(self._nonce.hex()))]
+        if self._state is State.AWAIT_REVEAL and isinstance(msg, PairReveal):
+            assert self._peer is not None and self._commitment is not None
+            peer_nonce = bytes.fromhex(msg.nonce)
+            # Bất biến 3: cam kết sai thì không hiện mã.
+            if not check_commitment(self._peer.fingerprint, peer_nonce, self._commitment):
+                return self._abort(AbortReason.INVALID, Outcome.PROTOCOL_ERROR, "cam kết nonce sai")
+            return [self._show_code(peer_nonce, now)]
         return None
 
     def _code_args(self, peer_nonce: bytes) -> tuple[str, str, bytes, bytes]:
@@ -526,6 +548,7 @@ class InitiatorSession(PairingSession):
 class ResponderSession(PairingSession):
     """Bên trả lời (B): tạo sau khi đã đọc `pair_request` và `PairingGate.admit` trả ACCEPT.
 
+    Gửi `pair_commit`, chờ `pair_nonce`, rồi hiện mã và gửi `pair_reveal`.
     `peer` là kết quả `peer_cert_from_pem(request.cert)`, hoặc None nếu chứng chỉ hỏng
     (phiên sẽ gửi `pair_abort{invalid}` khi Start). `known_fingerprint` như bên khởi xướng.
     """
@@ -536,12 +559,9 @@ class ResponderSession(PairingSession):
         local: DeviceCert,
         peer: DeviceCert | None,
         peer_hello: Hello,
-        request: PairRequest,
         nonce: bytes,
         known_fingerprint: str | None = None,
     ) -> None:
-        if not isinstance(request, PairRequest):
-            raise ValueError("request phải là PairRequest")
         super().__init__(
             role=Role.RESPONDER,
             local=local,
@@ -550,7 +570,6 @@ class ResponderSession(PairingSession):
             nonce=nonce,
             known_fingerprint=known_fingerprint,
         )
-        self._request = request
 
     def _start(self, now: float) -> list[Action]:
         peer = self._peer
@@ -562,17 +581,15 @@ class ResponderSession(PairingSession):
         problem = self._self_or_conflict(peer)
         if problem is not None:
             return self._abort(AbortReason.INVALID, problem)
-        self._state = State.AWAIT_REVEAL
+        self._state = State.AWAIT_NONCE
         self._deadline = now + MESSAGE_TIMEOUT
-        return [SendMessage(PairChallenge(self._nonce.hex()))]
+        return [SendMessage(PairCommit(make_commitment(self._local.fingerprint, self._nonce)))]
 
     def _on_message(self, msg: Message, now: float) -> list[Action] | None:
-        if self._state is State.AWAIT_REVEAL and isinstance(msg, PairReveal):
-            assert self._peer is not None
-            peer_nonce = bytes.fromhex(msg.nonce)
-            if not check_commitment(self._peer.fingerprint, peer_nonce, self._request.commitment):
-                return self._abort(AbortReason.INVALID, Outcome.PROTOCOL_ERROR, "cam kết nonce sai")
-            return [self._show_code(peer_nonce, now)]
+        if self._state is State.AWAIT_NONCE and isinstance(msg, PairNonce):
+            # Bất biến 2: hiện mã TRƯỚC, rồi mới để n_B rời máy.
+            show = self._show_code(bytes.fromhex(msg.nonce), now)
+            return [show, SendMessage(PairReveal(self._nonce.hex()))]
         return None
 
     def _code_args(self, peer_nonce: bytes) -> tuple[str, str, bytes, bytes]:

@@ -7,6 +7,8 @@ rút ngắn bằng `fast`), cộng client/server thô để thử dữ liệu đ
 """
 
 import asyncio
+import contextlib
+import hashlib
 import logging
 import os
 import re
@@ -19,7 +21,7 @@ from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt,
 from teleport.core.framing import HEADER, encode_message
 from teleport.core.messages import PROTOCOL_VERSION, Hello
 from teleport.core.pairing import Outcome, Role
-from teleport.core.pairing_code import format_code
+from teleport.core.pairing_code import format_code, pairing_code
 from teleport.net.stream import read_message
 from teleport.trust.identity import load_or_create_identity, peer_cert_from_pem
 from teleport.trust.store import TrustStore, TrustStoreError
@@ -34,6 +36,11 @@ integration = pytest.mark.integration
 LOCAL = "127.0.0.1"
 INVALID = {"type": "pair_abort", "reason": "invalid"}
 GARBAGE_PEM = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+
+
+def ref_commitment(fp_responder: str, nonce: bytes) -> str:
+    """Cam kết của bên trả lời, tính độc lập theo docs/protocol.md §5."""
+    return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_responder) + nonce).hexdigest()
 
 
 async def pair(a, b, timeout: float = 15.0) -> PairingFinished:
@@ -557,12 +564,18 @@ async def test_p15_responder_node_close_while_asking(node_factory):
 
 
 @integration
-async def test_p16_raw_client_aborts_after_challenge(node_factory, raw_pairing_client, app_helpers, tmp_path):
+async def test_p16_raw_client_closes_after_commit_gets_no_n_b_and_no_prompt(
+    node_factory, raw_pairing_client, tmp_path
+):
+    """Client thô lấy `pair_commit` rồi bỏ đi: B không hiện lời hỏi, không bao giờ gửi n_B."""
     B = await node_factory("B", accept_pairing=True, answer=True)
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(B.port)
     await c.begin(raw_id)
-    await c.read_type("pair_challenge")
+    commitment = await c.read_commit()
+    # Chưa gửi pair_nonce thì B không gửi gì thêm (đặc biệt không có pair_reveal).
+    with pytest.raises(TimeoutError):
+        await c.read(timeout=0.3)
     t0 = time.monotonic()
     c.abort()
     await B.rec.wait_finished(1, timeout=2)
@@ -571,6 +584,125 @@ async def test_p16_raw_client_aborts_after_challenge(node_factory, raw_pairing_c
     assert time.monotonic() - t0 <= 1.0 + 0.5
     assert B.pairing.gate.failures(LOCAL) == 1
     assert B.rec.prompts == []
+    assert re.fullmatch(r"[0-9a-f]{64}", commitment)
+
+
+@integration
+async def test_raw_client_reads_reveal_then_aborts_was_prompted_and_backs_off(
+    node_factory, raw_pairing_client, tmp_path
+):
+    """Kẻ lấy n_B rồi bỏ đi ngay: B đã hiện lời hỏi cho đúng phiên đó (có dấu vết), IP bị tính
+    một lần thất bại (chịu backoff), không lưu gì."""
+    B = await node_factory("B", accept_pairing=True)  # không trả lời lời hỏi
+    raw_id = load_or_create_identity(tmp_path / "raw")
+    c = await raw_pairing_client(B.port)
+    await c.begin(raw_id)
+    code = await c.run_to_code(B.identity.fingerprint)
+    c.abort()
+    await B.rec.wait_finished(1, timeout=3)
+    assert outcomes(B.rec) == ["connection_lost"]
+    assert len(B.rec.prompts) == 1, "B phải hiện lời hỏi trước khi tiết lộ n_B"
+    prompt = B.rec.prompts[0]
+    assert prompt.session_id == B.rec.finished[0].session_id
+    assert prompt.code == code
+    assert B.rec.prompt_times[0] <= B.rec.finished_times[0]
+    await wait_until(lambda: B.pairing.gate.active is None, 1.0)
+    assert B.pairing.gate.failures(LOCAL) == 1
+    assert B.store.devices() == []
+
+
+def _blocking_pairing_client(port: int, identity, out: dict) -> None:
+    """Client ghép đôi thô chạy trong **luồng riêng** (socket chặn), đóng vai A tới hết `pair_reveal`.
+
+    Ghi `out["reveal_read_at"]` = `time.monotonic()` ngay khi đọc xong `pair_reveal`. Vì không chung
+    event loop với node, nó đọc được reveal ngay khi reveal lên dây, kể cả khi loop của node đang bận.
+    """
+    import json
+    import socket as socket_mod
+
+    from teleport.net import tls
+
+    def read_frame(s) -> dict:
+        def exact(n: int) -> bytes:
+            buf = b""
+            while len(buf) < n:
+                chunk = s.recv(n - len(buf))
+                if not chunk:
+                    raise ConnectionError("đóng giữa chừng")
+                buf += chunk
+            return buf
+
+        (length,) = HEADER.unpack(exact(HEADER.size))
+        assert length <= 16 * 1024
+        return json.loads(exact(length))
+
+    n_a = secrets.token_bytes(32)
+    raw = socket_mod.create_connection((LOCAL, port), timeout=5)
+    s = tls.client_context(None).wrap_socket(raw)
+    try:
+        s.settimeout(5)
+        hello = read_frame(s)
+        assert hello["type"] == "hello"
+        s.sendall(
+            encode_message(
+                {
+                    "type": "hello",
+                    "protocol": PROTOCOL_VERSION,
+                    "device_id": identity.device_id,
+                    "name": "Raw",
+                    "app_version": "0.0.0",
+                    "os": "windows",
+                }
+            )
+        )
+        s.sendall(encode_message({"type": "pair_request", "cert": identity.cert_pem()}))
+        commit = read_frame(s)
+        assert commit["type"] == "pair_commit", commit
+        out["sent_nonce_at"] = time.monotonic()
+        s.sendall(encode_message({"type": "pair_nonce", "nonce": n_a.hex()}))
+        reveal = read_frame(s)
+        out["reveal_read_at"] = time.monotonic()
+        assert reveal["type"] == "pair_reveal", reveal
+        n_b = bytes.fromhex(reveal["nonce"])
+        assert ref_commitment(out["responder_fp"], n_b) == commit["commitment"]
+        out["code"] = pairing_code(identity.fingerprint, out["responder_fp"], n_a, n_b)
+    finally:
+        with contextlib.suppress(OSError):
+            s.close()
+
+
+PROMPT_HOLD = 0.2  # lời hỏi ở B "chiếm" chừng này giây; reveal gửi trước lời hỏi sẽ bị đọc trong lúc đó
+
+
+@integration
+async def test_responder_prompt_happens_before_pair_reveal_reaches_the_wire(node_factory, tmp_path):
+    """B phải gọi `on_prompt` (hiện mã) **xong** rồi mới gửi `pair_reveal`.
+
+    `on_prompt` của B giữ PROMPT_HOLD giây rồi ghi mốc kết thúc. Client ở luồng riêng ghi mốc lúc
+    đọc được `pair_reveal`. Thứ tự đúng: mốc kết thúc lời hỏi < mốc đọc reveal. Nếu app gửi reveal
+    trước (đảo ShowCode/SendMessage), client đọc được reveal trong lúc lời hỏi đang giữ → fail.
+    """
+    prompt_done: list[float] = []
+
+    def hold_prompt(prompt) -> None:
+        time.sleep(PROMPT_HOLD)  # cố ý chặn loop của B: chỉ client ở luồng khác còn chạy
+        prompt_done.append(time.monotonic())
+
+    B = await node_factory("B", accept_pairing=True, answer=hold_prompt)
+    raw_id = load_or_create_identity(tmp_path / "raw")
+    out: dict = {"responder_fp": B.identity.fingerprint}
+    await asyncio.wait_for(asyncio.to_thread(_blocking_pairing_client, B.port, raw_id, out), 10)
+
+    await B.rec.wait_finished(1, timeout=3)  # client đã đóng → connection_lost
+    assert len(B.rec.prompts) == 1
+    assert B.rec.prompts[0].code == out["code"]
+    assert len(prompt_done) == 1
+    assert B.rec.prompt_times[0] >= out["sent_nonce_at"]
+    assert prompt_done[0] <= out["reveal_read_at"], (
+        f"pair_reveal tới client lúc {out['reveal_read_at']:.3f}, trước khi lời hỏi xong lúc "
+        f"{prompt_done[0]:.3f}: n_B lộ trước khi B hiện mã"
+    )
+    await wait_until(lambda: B.pairing.gate.active is None, 1.0)
 
 
 @integration
@@ -581,12 +713,9 @@ async def test_p17_save_only_after_both_confirm(node_factory, raw_pairing_client
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(B.port)
     await c.begin(raw_id, "Raw")
-    challenge = await c.read_type("pair_challenge")
-    c.send_dict({"type": "pair_reveal", "nonce": c.nonce.hex()})
-    await c.drain()
+    code = await c.run_to_code(B.identity.fingerprint)
 
     await B.rec.wait_prompts()
-    code = c.code_for(B.identity.fingerprint, challenge["nonce"])
     assert B.rec.prompts[0].code == code  # mã của B đúng công thức protocol §5
     assert await c.read_type("pair_confirm") == {"type": "pair_confirm"}
 
@@ -597,12 +726,13 @@ async def test_p17_save_only_after_both_confirm(node_factory, raw_pairing_client
     rest = await c.read_until_closed(3)
     assert rest in ([], [{"type": "pair_abort", "reason": "timeout"}])
 
-    # N9: log không chứa mã, nonce hai bên.
+    # N9: log không chứa mã, nonce hai bên, cam kết.
     text = caplog.text
     assert not re.search(rf"(?<!\d){code}(?!\d)", text)
     assert format_code(code) not in text
     assert c.nonce.hex() not in text
-    assert challenge["nonce"] not in text
+    assert c.responder_nonce.hex() not in text
+    assert c.commitment not in text
 
 
 # --- P18: hai bên cùng chủ động ------------------------------------------------------------------------
@@ -660,7 +790,8 @@ async def test_p18_yield_rule_always_gives_one_paired_result_per_side(node_facto
 # --- P19–P23: dữ liệu độc ------------------------------------------------------------------------------
 
 
-BAD_AFTER_CHALLENGE = {
+# Message sai gửi tới B khi B đang chờ `pair_nonce` (AWAIT_NONCE).
+BAD_AFTER_COMMIT = {
     "rac": lambda c, ident: c.send_bytes(HEADER.pack(9) + b"khong-json"[:9]),
     "hello_lan_hai": lambda c, ident: c.send_dict(
         {
@@ -672,28 +803,36 @@ BAD_AFTER_CHALLENGE = {
             "os": "windows",
         }
     ),
-    "reveal_sai_cam_ket": lambda c, ident: c.send_dict(
-        {"type": "pair_reveal", "nonce": secrets.token_hex(32)}
+    # pair_reveal / pair_commit chỉ bên trả lời được gửi.
+    "reveal_sai_vai": lambda c, ident: c.send_dict({"type": "pair_reveal", "nonce": secrets.token_hex(32)}),
+    "commit_sai_vai": lambda c, ident: c.send_dict(
+        {"type": "pair_commit", "commitment": secrets.token_hex(32)}
     ),
-    "confirm_truoc_reveal": lambda c, ident: c.send_dict({"type": "pair_confirm"}),
+    "request_lan_hai": lambda c, ident: c.send_dict({"type": "pair_request", "cert": ident.cert_pem()}),
+    "confirm_truoc_nonce": lambda c, ident: c.send_dict({"type": "pair_confirm"}),
     "type_la": lambda c, ident: c.send_dict({"type": "chao_tu_tuong_lai"}),
-    "reveal_sai_kieu": lambda c, ident: c.send_dict({"type": "pair_reveal", "nonce": 5}),
+    "challenge_cu": lambda c, ident: c.send_dict({"type": "pair_challenge", "nonce": secrets.token_hex(32)}),
+    "nonce_sai_kieu": lambda c, ident: c.send_dict({"type": "pair_nonce", "nonce": 5}),
+    "nonce_hoa": lambda c, ident: c.send_dict({"type": "pair_nonce", "nonce": "AB" * 32}),
+    "nonce_ngan": lambda c, ident: c.send_dict({"type": "pair_nonce", "nonce": "ab" * 31}),
     "header_qua_lon": lambda c, ident: c.send_bytes(HEADER.pack(16 * 1024 + 1)),
 }
 
 
 @integration
-@pytest.mark.parametrize("case", list(BAD_AFTER_CHALLENGE))
-async def test_p19_responder_bad_message_after_request(node_factory, raw_pairing_client, tmp_path, case):
+@pytest.mark.parametrize("case", list(BAD_AFTER_COMMIT))
+async def test_p19_responder_bad_message_after_commit(node_factory, raw_pairing_client, tmp_path, case):
     B = await node_factory("B", accept_pairing=True, answer=True)
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(B.port)
     await c.begin(raw_id)
-    await c.read_type("pair_challenge")
-    BAD_AFTER_CHALLENGE[case](c, raw_id)
+    await c.read_commit()
+    BAD_AFTER_COMMIT[case](c, raw_id)
     await c.drain()
 
     msgs = await c.read_until_closed(5)
+    # Không bao giờ có pair_reveal: n_B không lộ khi chưa có pair_nonce hợp lệ.
+    assert all(m.get("type") != "pair_reveal" for m in msgs), msgs
     if case != "header_qua_lon":
         assert msgs == [INVALID], msgs
     await B.rec.wait_finished(1, timeout=3)
@@ -734,11 +873,15 @@ def _serve_pairing_script(identity, bad_bytes: bytes, received: list):
     return script
 
 
+# Message sai gửi tới A khi A đang chờ `pair_commit` (AWAIT_COMMIT).
 BAD_FOR_INITIATOR = {
-    "challenge_hong": encode_message({"type": "pair_challenge", "nonce": "zz"}),
+    "commit_hong": encode_message({"type": "pair_commit", "commitment": "zz"}),
+    "commit_hoa": encode_message({"type": "pair_commit", "commitment": "AB" * 32}),
     "confirm_som": encode_message({"type": "pair_confirm"}),
     "rac": HEADER.pack(4) + b"\xff\x00ab",
-    "reveal_sai_vai": encode_message({"type": "pair_reveal", "nonce": "ab" * 32}),
+    "reveal_truoc_commit": encode_message({"type": "pair_reveal", "nonce": "ab" * 32}),
+    "nonce_sai_vai": encode_message({"type": "pair_nonce", "nonce": "ab" * 32}),
+    "challenge_cu": encode_message({"type": "pair_challenge", "nonce": "ab" * 32}),
 }
 
 
@@ -752,9 +895,129 @@ async def test_p20_initiator_bad_message_from_server(node_factory, fake_server, 
     result = await asyncio.wait_for(A.pairing.pair_with([LOCAL], port), 10)
     assert result.outcome == PairingOutcome.PROTOCOL_ERROR
     await wait_until(lambda: INVALID in received, 3, "server chưa nhận pair_abort{invalid}")
+    # A chưa nhận pair_commit hợp lệ thì không được gửi n_A.
+    assert all(m.get("type") != "pair_nonce" for m in received), received
     assert A.rec.prompts == []
     assert A.rec.finished == [result]
     assert A.pairing.gate.active is None
+
+
+def _fake_responder_script(identity, mode: str, log: list, initiator_fp: str | None = None):
+    """Bên trả lời giả (FakeServer) theo luồng mới; `log` ghi mọi message nó nhận sau hello của mình.
+
+    mode:
+    - "honest": cam kết n_B bằng fp của mình, tiết lộ đúng n_B (đối chứng).
+    - "doi_n_b": cam kết n_B, thấy n_A rồi tiết lộ n_B khác (lái mã).
+    - "cam_ket_fp_khoi_xuong": cam kết bằng fp của A thay vì fp của mình, tiết lộ đúng nonce.
+    - "reveal_truoc_commit": gửi pair_reveal ngay sau pair_request, không có pair_commit.
+    """
+    n_b = secrets.token_bytes(32)
+    n_b_other = secrets.token_bytes(32)
+    state: dict = {"n_b": n_b, "n_b_other": n_b_other}
+
+    async def script(reader, writer):
+        try:
+            writer.write(
+                encode_message(
+                    {
+                        "type": "hello",
+                        "protocol": PROTOCOL_VERSION,
+                        "device_id": identity.device_id,
+                        "name": "Srv",
+                        "app_version": "0.0.0",
+                        "os": "linux",
+                    }
+                )
+            )
+            await writer.drain()
+            hello = await read_message(reader, 16384)
+            log.append(hello)
+            request = await read_message(reader, 16384)
+            log.append(request)
+            if mode == "reveal_truoc_commit":
+                writer.write(encode_message({"type": "pair_reveal", "nonce": n_b.hex()}))
+            else:
+                fp = identity.fingerprint
+                if mode == "cam_ket_fp_khoi_xuong":
+                    fp = initiator_fp
+                commitment = ref_commitment(fp, n_b)
+                state["commitment"] = commitment
+                writer.write(encode_message({"type": "pair_commit", "commitment": commitment}))
+                await writer.drain()
+                nonce_msg = await read_message(reader, 16384)
+                log.append(nonce_msg)
+                state["n_a"] = nonce_msg["nonce"]
+                revealed = n_b_other if mode == "doi_n_b" else n_b
+                writer.write(encode_message({"type": "pair_reveal", "nonce": revealed.hex()}))
+            await writer.drain()
+            while (msg := await read_message(reader, 16384)) is not None:
+                log.append(msg)
+        except Exception:
+            pass
+
+    script.state = state  # type: ignore[attr-defined]
+    return script
+
+
+@integration
+@pytest.mark.parametrize("mode", ["doi_n_b", "cam_ket_fp_khoi_xuong", "reveal_truoc_commit"])
+async def test_initiator_rejects_fake_responder_without_prompt(
+    node_factory, fake_server, tmp_path, caplog, mode
+):
+    """Bên trả lời giả lái mã (đổi n_B sau khi thấy n_A, cam kết sai fp, reveal trước commit):
+    `pair_with` → protocol_error, A không hiện lời hỏi, bên giả nhận `pair_abort{invalid}`.
+    `pair_request` A gửi chỉ có `cert`; log không chứa nonce hay cam kết."""
+    caplog.set_level(logging.DEBUG)
+    A = await node_factory("A", answer=True)
+    srv = load_or_create_identity(tmp_path / "srv")
+    log: list = []
+    script = _fake_responder_script(srv, mode, log, initiator_fp=A.identity.fingerprint)
+    port = await fake_server(srv, script)
+    result = await asyncio.wait_for(A.pairing.pair_with([LOCAL], port), 10)
+    assert result.outcome == PairingOutcome.PROTOCOL_ERROR
+    await wait_until(lambda: INVALID in log, 3, "bên giả chưa nhận pair_abort{invalid}")
+    assert A.rec.prompts == []
+    assert A.rec.finished == [result]
+    assert A.store.devices() == []
+    assert A.pairing.gate.active is None
+
+    # Message đầu tiên sau hello: pair_request chỉ có cert (không nonce, không cam kết).
+    assert log[0]["type"] == "hello"
+    assert log[1] == {"type": "pair_request", "cert": A.identity.cert_pem()}
+    if mode == "reveal_truoc_commit":
+        # Chưa có pair_commit thì A không gửi n_A.
+        assert all(m.get("type") != "pair_nonce" for m in log), log
+    else:
+        assert log[2]["type"] == "pair_nonce"
+
+    text = caplog.text
+    secrets_seen = [script.state["n_b"].hex(), script.state["n_b_other"].hex()]
+    if "commitment" in script.state:
+        secrets_seen.append(script.state["commitment"])
+    if "n_a" in script.state:
+        secrets_seen.append(script.state["n_a"])
+    for value in secrets_seen:
+        assert value not in text
+
+
+@integration
+async def test_initiator_with_honest_fake_responder_prompts_with_spec_code(
+    node_factory, fake_server, tmp_path
+):
+    """Đối chứng cho bên giả ở trên: cùng kịch bản nhưng trung thực → A hiện mã đúng công thức."""
+    A = await node_factory("A", answer=False)
+    srv = load_or_create_identity(tmp_path / "srv")
+    log: list = []
+    script = _fake_responder_script(srv, "honest", log)
+    port = await fake_server(srv, script)
+    result = await asyncio.wait_for(A.pairing.pair_with([LOCAL], port), 10)
+    assert result.outcome == PairingOutcome.USER_REJECTED
+    assert len(A.rec.prompts) == 1
+    n_a = bytes.fromhex(script.state["n_a"])
+    expected = pairing_code(A.identity.fingerprint, srv.fingerprint, n_a, script.state["n_b"])
+    assert A.rec.prompts[0].code == expected
+    assert log[1] == {"type": "pair_request", "cert": A.identity.cert_pem()}
+    await wait_until(lambda: {"type": "pair_abort", "reason": "user"} in log, 3, "chưa nhận pair_abort{user}")
 
 
 @integration
@@ -765,7 +1028,7 @@ async def test_p21_bad_cert_in_pair_request(node_factory, raw_pairing_client, ap
     pem = app_helpers.fake_cert_with_cn(device_id, ca=True) if cert_kind == "ca" else GARBAGE_PEM
     c = await raw_pairing_client(B.port)
     c.send_dict(app_helpers.hello_dict(device_id))
-    c.send_dict({"type": "pair_request", "cert": pem, "commitment": "ab" * 32})
+    c.send_dict({"type": "pair_request", "cert": pem})
     await c.drain()
     msgs = await c.read_until_closed(5)
     assert msgs == [INVALID], msgs
@@ -781,7 +1044,7 @@ async def test_p22_cert_cn_differs_from_hello(node_factory, raw_pairing_client, 
     real = load_or_create_identity(tmp_path / "x")
     c = await raw_pairing_client(B.port)
     c.send_dict(app_helpers.hello_dict(app_helpers.new_device_id()))
-    c.send_dict({"type": "pair_request", "cert": real.cert_pem(), "commitment": "ab" * 32})
+    c.send_dict({"type": "pair_request", "cert": real.cert_pem()})
     await c.drain()
     msgs = await c.read_until_closed(5)
     assert msgs == [INVALID], msgs
@@ -796,7 +1059,7 @@ async def test_p23_silent_after_request_times_out(node_factory, raw_pairing_clie
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(B.port)
     await c.begin(raw_id)
-    await c.read_type("pair_challenge")
+    await c.read_commit()
     t0 = time.monotonic()
     msg = await c.read(timeout=fast.MESSAGE_TIMEOUT + fast.SLACK)
     waited = time.monotonic() - t0
@@ -804,6 +1067,7 @@ async def test_p23_silent_after_request_times_out(node_factory, raw_pairing_clie
     assert 0.8 * fast.MESSAGE_TIMEOUT <= waited <= fast.MESSAGE_TIMEOUT + fast.SLACK
     await B.rec.wait_finished(1)
     assert outcomes(B.rec) == ["timeout"]
+    assert B.rec.prompts == []
     await wait_until(lambda: B.pairing.gate.active is None, 1)
 
 
@@ -811,7 +1075,7 @@ GATE_FREE_AFTER_FAILURE = 1.5  # sửa F4: gửi pair_abort + đóng tổng 1 s,
 
 
 @integration
-@pytest.mark.parametrize("case", ["confirm_truoc_reveal", "rac"])
+@pytest.mark.parametrize("case", ["confirm_truoc_nonce", "rac"])
 async def test_failed_session_frees_gate_quickly_when_peer_never_closes(
     node_factory, raw_pairing_client, tmp_path, monkeypatch, case
 ):
@@ -832,9 +1096,9 @@ async def test_failed_session_frees_gate_quickly_when_peer_never_closes(
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(B.port)
     await c.begin(raw_id)
-    await c.read_type("pair_challenge")
+    await c.read_commit()
     c.writer.transport.pause_reading()  # từ đây không đọc gì nữa (kể cả close_notify), không đóng
-    BAD_AFTER_CHALLENGE[case](c, raw_id)
+    BAD_AFTER_COMMIT[case](c, raw_id)
     await c.drain()
     t0 = time.monotonic()
     await wait_until(
@@ -1110,8 +1374,7 @@ async def test_pair_confirm_flood_is_rejected_after_second_frame(node_factory, r
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(B.port)
     await c.begin(raw_id)
-    await c.read_type("pair_challenge")
-    c.send_dict({"type": "pair_reveal", "nonce": c.nonce.hex()})
+    await c.run_to_code(B.identity.fingerprint)
     c.send_bytes(encode_message({"type": "pair_confirm"}) * 500)
     await c.drain()
     msgs = await c.read_until_closed(5)

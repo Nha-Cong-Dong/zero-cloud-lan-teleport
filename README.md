@@ -17,8 +17,8 @@
 
 > [!NOTE]
 > **Teleport đang được phát triển và chưa có bản phát hành.**
-> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khung message điều khiển, nền ghép đôi (message `hello`/`pair_*`, mã 6 số có nonce cam kết, kho thiết bị tin cậy), khóa một node mỗi thư mục cấu hình, lệnh `teleport identity`.
-> - **Đang làm:** khám phá thiết bị qua mDNS và ghép đôi qua mạng.
+> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khung message điều khiển, khám phá thiết bị qua mDNS, ghép đôi qua mạng bằng mã 6 số có nonce cam kết, kho thiết bị tin cậy, tự giữ kết nối điều khiển tới thiết bị đã ghép đôi, khóa một node mỗi thư mục cấu hình, các lệnh `teleport identity` / `list` / `listen` / `pair` / `unpair`.
+> - **Đang làm:** đo thời gian tìm thấy nhau (mvp N1) trên hai máy thật để khép lại giai đoạn khám phá & ghép đôi.
 > - **Chưa có:** gửi file, nối lại, clipboard, giao diện.
 >
 > Các tính năng bên dưới là **mục tiêu của v1.0**. Tiến độ xem ở [Lộ trình](#lộ-trình); lịch sử thay đổi ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
@@ -109,7 +109,7 @@ Mọi quyết định đều dựa trên sáu nguyên tắc: **riêng tư tuyệ
 ```
 
 1. **Khám phá:** mỗi máy quảng bá dịch vụ `_teleport._tcp.local.` qua mDNS, kèm mã thiết bị, tên, hệ điều hành và phiên bản giao thức. Mọi kết nối đi vào một cổng duy nhất.
-2. **Danh tính & ghép đôi:** lần chạy đầu, mỗi máy tự tạo một khóa ECDSA P-256 và chứng chỉ tự ký. Fingerprint SHA-256 của chứng chỉ là định danh của máy. Khi ghép đôi, hai máy trao nhau nonce ngẫu nhiên (bên khởi xướng cam kết nonce của mình trước khi thấy nonce bên kia), rồi cùng tính một mã 6 số từ hai fingerprint và hai nonce. Nhờ cam kết, kẻ đứng giữa không thể dò trước khóa cho ra mã trùng. Người dùng xác nhận mã trùng ở cả hai máy thì hai bên lưu chứng chỉ của nhau.
+2. **Danh tính & ghép đôi:** lần chạy đầu, mỗi máy tự tạo một khóa ECDSA P-256 và chứng chỉ tự ký. Fingerprint SHA-256 của chứng chỉ là định danh của máy. Khi ghép đôi, hai máy trao nhau nonce ngẫu nhiên (máy đang chờ ghép đôi cam kết nonce của mình trước khi thấy nonce bên kia, và hiện mã rồi mới lộ nonce), rồi cùng tính một mã 6 số từ hai fingerprint và hai nonce. Nhờ cam kết, kẻ đứng giữa không thể dò trước khóa cho ra mã trùng, cũng không thể dò mã của máy đang chờ mà máy đó không hiện mã lên. Người dùng xác nhận mã trùng ở cả hai máy thì hai bên lưu chứng chỉ của nhau.
 3. **Kết nối:** TLS 1.3. Client so toàn bộ fingerprint của server với fingerprint đã lưu; server chỉ chấp nhận client có chứng chỉ nằm trong danh sách tin cậy (mTLS). Thiết bị gửi chứng chỉ lạ bị từ chối ngay trong lúc bắt tay; thiết bị không gửi chứng chỉ chỉ được ghép đôi.
 4. **Truyền tải:** kênh điều khiển dùng message `[4 byte độ dài][JSON]`; dữ liệu đi trên kênh riêng theo khung nhị phân gọn. Bên gửi tự chờ khi mạng hoặc ổ đĩa bên nhận chậm hơn (backpressure), nên bộ nhớ không phình ra.
 5. **Toàn vẹn & nối lại:** mỗi khối mang hash SHA-256 của chính nó; bên nhận băm lại và so ngay, ghi khối xuống đĩa rồi lưu bảng các khối đã xác minh (bitfield). Kết nối lại thì chỉ những khối còn thiếu được gửi tiếp. Cuối cùng bên nhận đọc lại cả file từ đĩa, so từng khối và Merkle root rồi mới đổi sang tên thật.
@@ -146,7 +146,7 @@ Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 | Phiên bản | Nội dung |
 |---|---|
 | — | ✅ Nền tảng: khung dự án, CI 3 hệ điều hành, danh tính thiết bị, TLS 1.3 + mTLS |
-| — | ⏳ Khám phá thiết bị & ghép đôi (đã có nền ghép đôi không mạng) |
+| — | ⏳ Khám phá thiết bị & ghép đôi (đã có mDNS, ghép đôi qua mạng, tự giữ kết nối, lệnh `teleport list` / `listen` / `pair` / `unpair`; còn đo N1 trên hai máy thật) |
 | `v0.1.0-alpha` | Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi |
 | `v0.2.0-alpha` | Kiểm tra toàn vẹn, tự nối lại |
 | `v0.3.0-beta` | Giao diện radar, khay hệ thống, Tiếng Việt / English |
@@ -182,6 +182,10 @@ Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope Curre
 | `pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal` | Chạy một test |
 | `ruff check .` · `ruff format .` | Kiểm tra và định dạng code (CI chạy `ruff check`, `ruff format --check`, `pytest`) |
 | `teleport identity` | Tạo / xem danh tính thiết bị của máy này (hoặc `python -m teleport identity`) |
+| `teleport list` | Liệt kê các máy thấy được qua mDNS trong vài giây |
+| `teleport listen` | Chờ ghép đôi: hiện mã 6 số, hỏi xác nhận |
+| `teleport pair <tên \| tiền tố mã \| ip[:cổng]>` | Ghép đôi với một máy |
+| `teleport unpair <thiết bị>` | Hủy ghép đôi (khi không có `teleport listen` nào đang chạy) |
 | `teleport --version` | Xem phiên bản |
 
 ### Chạy nhiều node trên một máy
@@ -217,11 +221,11 @@ Thư mục cấu hình mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Lib
 
 ```
 src/teleport/
-  core/  trust/  net/      # các tầng đã có code
-  app/   ui/               # sẽ được thêm khi có code thật
-  cli.py  __main__.py      # lệnh `teleport`
-  paths.py                 # thư mục cấu hình theo hệ điều hành
-tests/                     # chia theo tầng: core/, trust/, net/ + test phân tầng
+  core/  trust/  net/  app/  # các tầng đã có code
+  ui/                        # sẽ được thêm khi có code thật
+  cli.py  __main__.py        # lệnh `teleport`
+  paths.py  lock.py  atomic.py  # thư mục cấu hình, khóa file, ghi file nguyên tử
+tests/                       # chia theo tầng: core/, trust/, net/, app/ + test phân tầng
 docs/                      # toàn bộ tài liệu
 ```
 

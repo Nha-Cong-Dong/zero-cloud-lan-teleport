@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import datetime
 import gc
+import hashlib
 import inspect
 import secrets
 import socket
@@ -32,7 +33,7 @@ from cryptography.x509.oid import NameOID
 
 from teleport.core.framing import HEADER, MAX_PAIRING_MESSAGE_SIZE, FramingError, encode_message
 from teleport.core.messages import PROTOCOL_VERSION
-from teleport.core.pairing_code import NONCE_SIZE, make_commitment, pairing_code
+from teleport.core.pairing_code import NONCE_SIZE, pairing_code
 from teleport.lock import NodeLock
 from teleport.net import tls
 from teleport.net.stream import read_message
@@ -248,31 +249,67 @@ class RawPeer:
             self.writer.close()
 
 
+def ref_commitment(fp_responder: str, nonce: bytes) -> str:
+    """Cam kết của bên trả lời, tính độc lập theo docs/protocol.md §5 (không dùng code `core`)."""
+    return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_responder) + nonce).hexdigest()
+
+
 class PairingClient(RawPeer):
-    """Client ghép đôi thô (đóng vai bên khởi xướng): tự tính cam kết và nonce."""
+    """Client ghép đôi thô (đóng vai bên khởi xướng A), theo luồng bên trả lời cam kết trước:
+
+    `begin` (hello + `pair_request{cert}`) → `read_commit` → `send_nonce` → `read_reveal` (tự kiểm
+    cam kết bằng fp của server, tính mã). `run_to_code` làm cả chuỗi sau `begin`.
+    """
 
     identity: Identity
     nonce: bytes
+    commitment: str | None = None
+    responder_nonce: bytes | None = None
 
     async def begin(self, identity: Identity, name: str = "Raw", *, nonce: bytes | None = None) -> None:
-        """Đọc hello server, gửi hello và `pair_request` hợp lệ."""
+        """Đọc hello server, gửi hello và `pair_request` hợp lệ (chỉ có `cert`)."""
         self.identity = identity
         self.nonce = nonce if nonce is not None else secrets.token_bytes(NONCE_SIZE)
+        self.commitment = None
+        self.responder_nonce = None
         if self.server_hello is None:
             await self.read_hello()
         self.send_dict(hello_dict(identity, name))
+        self.send_dict({"type": "pair_request", "cert": identity.cert_pem()})
+        await self.drain()
+
+    async def read_commit(self, timeout: float = 3.0) -> str:
+        """Đọc `pair_commit` của bên trả lời; trả và nhớ `commitment`."""
+        msg = await self.read_type("pair_commit", timeout)
+        assert set(msg) == {"type", "commitment"}, f"pair_commit có trường lạ: {msg!r}"
+        self.commitment = msg["commitment"]
+        return self.commitment
+
+    async def send_nonce(self, nonce_hex: str | None = None) -> None:
+        """Gửi `pair_nonce` (mặc định n_A của client)."""
         self.send_dict(
-            {
-                "type": "pair_request",
-                "cert": identity.cert_pem(),
-                "commitment": make_commitment(identity.fingerprint, self.nonce),
-            }
+            {"type": "pair_nonce", "nonce": nonce_hex if nonce_hex is not None else self.nonce.hex()}
         )
         await self.drain()
 
-    def code_for(self, responder_fingerprint: str, challenge_nonce_hex: str) -> str:
+    async def read_reveal(self, responder_fingerprint: str, timeout: float = 3.0) -> str:
+        """Đọc `pair_reveal`, kiểm nó khớp cam kết đã nhận (với fp của server), trả mã 6 số."""
+        msg = await self.read_type("pair_reveal", timeout)
+        n_b = bytes.fromhex(msg["nonce"])
+        assert self.commitment is not None, "nhận pair_reveal trước pair_commit"
+        assert ref_commitment(responder_fingerprint, n_b) == self.commitment, "n_B không khớp cam kết"
+        self.responder_nonce = n_b
+        return self.code_for(responder_fingerprint, msg["nonce"])
+
+    async def run_to_code(self, responder_fingerprint: str, timeout: float = 3.0) -> str:
+        """Sau `begin`: commit → nonce → reveal; trả mã."""
+        await self.read_commit(timeout)
+        await self.send_nonce()
+        return await self.read_reveal(responder_fingerprint, timeout)
+
+    def code_for(self, responder_fingerprint: str, reveal_nonce_hex: str) -> str:
         return pairing_code(
-            self.identity.fingerprint, responder_fingerprint, self.nonce, bytes.fromhex(challenge_nonce_hex)
+            self.identity.fingerprint, responder_fingerprint, self.nonce, bytes.fromhex(reveal_nonce_hex)
         )
 
 
@@ -934,6 +971,7 @@ def app_helpers():
         read_message=read_message,
         encode_message=encode_message,
         dev=make_discovered,
+        ref_commitment=ref_commitment,
     )
 
 

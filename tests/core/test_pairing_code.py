@@ -1,4 +1,8 @@
-"""Test `teleport.core.pairing_code`: tính lại độc lập bằng `hashlib` theo công thức kế hoạch §2.3."""
+"""Test `teleport.core.pairing_code`: tính lại độc lập bằng `hashlib` theo công thức kế hoạch §2.3.
+
+Cam kết do **bên trả lời** làm (kiểu Bluetooth): `commitment = SHA-256("teleport-commit-v1" ‖
+fp_trả_lời ‖ n_B)`. Công thức mã không đổi.
+"""
 
 import hashlib
 import re
@@ -20,8 +24,8 @@ from teleport.core.pairing_code import (
 # --- Tham chiếu độc lập (không chép từ code) ---------------------------------------------------
 
 
-def ref_commitment(fp_initiator: str, nonce: bytes) -> str:
-    return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_initiator) + nonce).hexdigest()
+def ref_commitment(fp_responder: str, nonce: bytes) -> str:
+    return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_responder) + nonce).hexdigest()
 
 
 def ref_code(fp_initiator: str, fp_responder: str, n_a: bytes, n_b: bytes) -> str:
@@ -42,7 +46,8 @@ N_B_LEADING_ZERO = bytes.fromhex("f506" + "00" * 30)
 
 VECTOR_FP_A = "59eb3cb130074f7b1ddb99c8fe14f27e1dbca735bb3da82e1ff0305340a32419"
 VECTOR_FP_B = "6dcde155f1f900e157d25bb5c24b1a54d71ea35b78661ed9b1a8be3532c3d4f5"
-VECTOR_COMMITMENT = "d55c4dad2e3d3ee9d9d81205366d8b8521b5c3390379d41a5f6e5ae50986fc02"
+# Cam kết của bên trả lời: fp_trả_lời = FP_B, nonce = N_B.
+VECTOR_COMMITMENT = "eb5499dbf5833b2d9e2f2be9c53e617617a82dc244be424b079507ce53469352"
 VECTOR_CODE = "536981"
 
 
@@ -60,12 +65,18 @@ def test_constants():
 def test_fixed_vector_inputs_are_what_we_think():
     assert FP_A == VECTOR_FP_A
     assert FP_B == VECTOR_FP_B
-    assert ref_commitment(FP_A, N_A) == VECTOR_COMMITMENT
+    assert ref_commitment(FP_B, N_B) == VECTOR_COMMITMENT
     assert ref_code(FP_A, FP_B, N_A, N_B) == VECTOR_CODE
 
 
 def test_commitment_fixed_vector():
-    assert make_commitment(FP_A, N_A) == VECTOR_COMMITMENT
+    assert make_commitment(FP_B, N_B) == VECTOR_COMMITMENT
+
+
+def test_commitment_with_initiator_fingerprint_does_not_check():
+    # Cam kết gắn với fp bên trả lời: tính lại bằng fp khởi xướng phải ra False.
+    assert check_commitment(FP_A, N_B, VECTOR_COMMITMENT) is False
+    assert make_commitment(FP_A, N_B) != VECTOR_COMMITMENT
 
 
 def test_pairing_code_fixed_vector():
@@ -78,7 +89,7 @@ def test_pairing_code_keeps_leading_zeros():
 
 
 def test_commitment_is_64_lowercase_hex():
-    assert re.fullmatch(r"[0-9a-f]{64}", make_commitment(FP_A, N_A))
+    assert re.fullmatch(r"[0-9a-f]{64}", make_commitment(FP_B, N_B))
 
 
 @pytest.mark.parametrize(
@@ -108,29 +119,43 @@ def test_role_order_is_fixed_not_sorted():
 
 
 def test_check_commitment_true_when_matching():
-    assert check_commitment(FP_A, N_A, VECTOR_COMMITMENT) is True
+    assert check_commitment(FP_B, N_B, VECTOR_COMMITMENT) is True
 
 
 def test_check_commitment_false_with_other_nonce():
-    assert check_commitment(FP_A, flip(N_A), VECTOR_COMMITMENT) is False
-    assert check_commitment(FP_A, flip(N_A, 31), VECTOR_COMMITMENT) is False
-
-
-def test_check_commitment_false_with_other_fingerprint():
+    # Bên trả lời đổi n_B sau khi đã cam kết (vd. sau khi thấy n_A) → không khớp.
+    assert check_commitment(FP_B, flip(N_B), VECTOR_COMMITMENT) is False
+    assert check_commitment(FP_B, flip(N_B, 31), VECTOR_COMMITMENT) is False
     assert check_commitment(FP_B, N_A, VECTOR_COMMITMENT) is False
 
 
+def test_check_commitment_false_with_other_fingerprint():
+    assert check_commitment(FP_C, N_B, VECTOR_COMMITMENT) is False
+
+
 def test_check_commitment_false_with_other_commitment():
-    other = make_commitment(FP_A, N_B)
-    assert check_commitment(FP_A, N_A, other) is False
+    other = make_commitment(FP_B, N_A)
+    assert check_commitment(FP_B, N_B, other) is False
     tampered = VECTOR_COMMITMENT[:-1] + ("0" if VECTOR_COMMITMENT[-1] != "0" else "1")
-    assert check_commitment(FP_A, N_A, tampered) is False
+    assert check_commitment(FP_B, N_B, tampered) is False
+
+
+@pytest.mark.parametrize(
+    "bad", ["", VECTOR_COMMITMENT.upper(), VECTOR_COMMITMENT[:63], VECTOR_COMMITMENT + "0"], ids=repr
+)
+def test_check_commitment_false_or_value_error_on_malformed_commitment(bad):
+    # Cam kết sai dạng không bao giờ được coi là khớp.
+    try:
+        result = check_commitment(FP_B, N_B, bad)
+    except ValueError:
+        return
+    assert result is False
 
 
 def test_commitment_domain_separated_from_code():
     # Cùng fp và nonce nhưng tiền tố khác: commitment không được trùng digest của mã.
-    digest_hex = hashlib.sha256(b"teleport-pair-v1" + bytes.fromhex(FP_A) + N_A).hexdigest()
-    assert make_commitment(FP_A, N_A) != digest_hex
+    digest_hex = hashlib.sha256(b"teleport-pair-v1" + bytes.fromhex(FP_B) + N_B).hexdigest()
+    assert make_commitment(FP_B, N_B) != digest_hex
 
 
 # --- ValueError --------------------------------------------------------------------------------
@@ -250,7 +275,7 @@ def test_property_commitment_matches_reference_and_checks(fp, n, other):
 
 @settings(max_examples=200)
 @given(fingerprints, fingerprints, nonces)
-def test_property_commitment_bound_to_initiator_fingerprint(fp, other_fp, n):
+def test_property_commitment_bound_to_responder_fingerprint(fp, other_fp, n):
     assume(fp != other_fp)
     assert check_commitment(other_fp, n, make_commitment(fp, n)) is False
 
@@ -283,7 +308,8 @@ PROTOCOL_MD = Path(__file__).resolve().parents[2] / "docs" / "protocol.md"
 def _doc_vector() -> dict[str, str]:
     text = PROTOCOL_MD.read_text(encoding="utf-8")
     section = text[re.search(r"^### (?:[0-9.]+ )?Test vector", text, re.MULTILINE).start() :]
-    rows = dict(re.findall(r"^\|\s*\**`?([^`|*]+?)`?\**\s*\|\s*\**`([0-9a-f]+)`", section, flags=re.M))
+    # Cột đầu: tên đại lượng (có thể in đậm/backtick), sau đó có thể có chú thích trong ngoặc.
+    rows = dict(re.findall(r"^\|\s*\**`?([^`|*\s]+)`?\**[^|]*\|\s*\**`([0-9a-f]+)`", section, flags=re.M))
     return rows
 
 
@@ -294,16 +320,29 @@ def test_protocol_md_vector_matches_independent_computation():
     # Tài liệu nói hai fp là SHA-256 của hai chuỗi ASCII này.
     assert fp_a == hashlib.sha256(b"teleport test vector A").hexdigest()
     assert fp_b == hashlib.sha256(b"teleport test vector B").hexdigest()
-    assert rows["commitment"] == ref_commitment(fp_a, n_a)
+    # Cam kết do bên trả lời làm: fp_trả_lời và n_B (không phải fp_khởi_xướng, n_A).
+    assert rows["commitment"] == ref_commitment(fp_b, n_b)
+    assert rows["commitment"] != ref_commitment(fp_a, n_a)
     digest = hashlib.sha256(
         b"teleport-pair-v1" + bytes.fromhex(fp_a) + bytes.fromhex(fp_b) + n_a + n_b
     ).hexdigest()
     assert rows["digest"] == digest
     assert rows["mã"] == ref_code(fp_a, fp_b, n_a, n_b)
     # Và code cài đặt cho đúng các giá trị đó.
-    assert make_commitment(fp_a, n_a) == rows["commitment"]
+    assert make_commitment(fp_b, n_b) == rows["commitment"]
+    assert check_commitment(fp_b, n_b, rows["commitment"]) is True
+    assert check_commitment(fp_a, n_b, rows["commitment"]) is False
     assert pairing_code(fp_a, fp_b, n_a, n_b) == rows["mã"]
     assert format_code(rows["mã"]) == rows["mã"][:3] + " " + rows["mã"][3:]
+
+
+def test_protocol_md_code_vector_unchanged():
+    # Đổi thứ tự cam kết không đổi công thức mã: vector cũ vẫn đúng.
+    rows = _doc_vector()
+    assert rows["mã"] == "322769"
+    text = PROTOCOL_MD.read_text(encoding="utf-8")
+    assert "cho mã `488828`" in text
+    assert "cho mã `682735`" in text
 
 
 def test_protocol_md_role_and_nonce_swap_codes():

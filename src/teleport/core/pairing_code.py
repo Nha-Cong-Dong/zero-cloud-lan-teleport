@@ -1,9 +1,15 @@
 """Mã ghép đôi 6 số có nonce cam kết (kiểu Bluetooth numeric comparison).
 
 Đặc tả ở docs/protocol.md mục 5. Nếu mã chỉ tính từ hai fingerprint, kẻ đứng giữa
-(MITM) có thể sinh khóa offline tới khi ra mã trùng. Ở đây bên khởi xướng cam kết
-nonce n_A *trước* khi biết n_B, rồi mới tiết lộ n_A; mã phụ thuộc cả hai nonce, nên
-mỗi lần thử MITM chỉ thành công với xác suất 10⁻⁶.
+(MITM) có thể sinh khóa offline tới khi ra mã trùng. Ở đây bên trả lời cam kết
+nonce n_B *trước* khi biết n_A, và chỉ tiết lộ n_B sau khi đã nhận n_A và đã hiện
+mã; mã phụ thuộc cả hai nonce, nên mỗi lần thử MITM chỉ thành công với xác suất
+10⁻⁶, và mỗi lần thử đều làm một máy hiện mã cho người dùng thấy.
+
+Bên trả lời là bên cam kết vì nó là máy đang chờ ghép đôi, có thể bị gọi tới nhiều
+lần: nếu bên khởi xướng cam kết, kẻ đứng giữa đóng vai bên khởi xướng sẽ tính được
+mã của bên trả lời trước khi phải lộ nonce của mình, rồi bỏ phiên mà bên trả lời
+không hiện mã.
 
 Module chỉ tính toán (sans-IO); sinh nonce bằng `secrets.token_bytes(NONCE_SIZE)`
 là việc của tầng app.
@@ -37,19 +43,19 @@ def _check_nonce(nonce: object, field: str) -> bytes:
     return nonce
 
 
-def make_commitment(fp_initiator: str, nonce: bytes) -> str:
-    """`SHA-256(b"teleport-commit-v1" ‖ fp_khởi_xướng ‖ n_A)`, dạng 64 ký tự hex thường."""
-    fp = _fingerprint_bytes(fp_initiator, "fp_initiator")
+def make_commitment(fp_responder: str, nonce: bytes) -> str:
+    """`SHA-256(b"teleport-commit-v1" ‖ fp_trả_lời ‖ n_B)`, dạng 64 ký tự hex thường."""
+    fp = _fingerprint_bytes(fp_responder, "fp_responder")
     n = _check_nonce(nonce, "nonce")
     return hashlib.sha256(_COMMIT_LABEL + fp + n).hexdigest()
 
 
-def check_commitment(fp_initiator: str, nonce: bytes, commitment: str) -> bool:
-    """True nếu `commitment` đúng là cam kết của (`fp_initiator`, `nonce`).
+def check_commitment(fp_responder: str, nonce: bytes, commitment: str) -> bool:
+    """True nếu `commitment` đúng là cam kết của (`fp_responder`, `nonce`).
 
     `commitment` sai định dạng thì trả False (không raise); fp/nonce sai thì ValueError.
     """
-    expected = make_commitment(fp_initiator, nonce)
+    expected = make_commitment(fp_responder, nonce)
     if not isinstance(commitment, str) or not _FINGERPRINT_RE.fullmatch(commitment):
         return False
     # compare_digest so sánh trong thời gian không đổi.

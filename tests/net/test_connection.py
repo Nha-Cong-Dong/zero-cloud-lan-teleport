@@ -30,8 +30,10 @@ from teleport.core.messages import (
     Hello,
     MessageError,
     PairAbort,
-    PairChallenge,
+    PairCommit,
+    PairNonce,
     PairRequest,
+    PairReveal,
     Ping,
     Pong,
     UnknownMessageType,
@@ -102,7 +104,7 @@ def wire_hello(identity_or_id, name: str = "B", **overrides) -> dict:
 
 
 def pair_request(identity) -> PairRequest:
-    return PairRequest(cert=identity.cert_pem(), commitment=HEX64)
+    return PairRequest(cert=identity.cert_pem())
 
 
 def frame(body: bytes) -> bytes:
@@ -531,9 +533,16 @@ async def test_open_pairing_end_to_end(fast, listener_factory, ids):
         assert h.listener.connection_count == 1
         assert h.listener.opening_count == 0
 
-        challenge = PairChallenge(nonce=HEX64)
-        await server.send(challenge)
-        assert await asyncio.wait_for(conn.receive(), 2) == challenge
+        # Luồng ghép đôi (protocol §5): commit (B→A), nonce (A→B), reveal (B→A) đi qua kết nối.
+        commit = PairCommit(commitment=HEX64)
+        await server.send(commit)
+        assert await asyncio.wait_for(conn.receive(), 2) == commit
+        nonce = PairNonce(nonce=HEX64)
+        await conn.send(nonce)
+        assert await asyncio.wait_for(server.receive(), 2) == nonce
+        reveal = PairReveal(nonce=HEX64)
+        await server.send(reveal)
+        assert await asyncio.wait_for(conn.receive(), 2) == reveal
         abort = PairAbort(reason="user")
         await conn.send(abort)
         assert await asyncio.wait_for(server.receive(), 2) == abort
@@ -861,8 +870,10 @@ async def test_slowloris_deadline_is_not_extended(fast, monkeypatch, listener_fa
 KNOWN_TYPES = [
     "hello",
     "pair_request",
-    "pair_challenge",
+    "pair_commit",
+    "pair_nonce",
     "pair_reveal",
+    "pair_challenge",  # type của luồng cũ, nay lạ
     "pair_confirm",
     "pair_abort",
     "control_open",
@@ -907,8 +918,10 @@ fuzz_dicts = st.builds(
 )
 valid_openings = st.sampled_from(
     [
+        {"type": "pair_request", "cert": FAKE_CERT},
+        {"type": "pair_request", "cert": FAKE_CERT, "x": [1]},
+        # `commitment` của luồng cũ giờ là trường lạ, bị bỏ qua.
         {"type": "pair_request", "cert": FAKE_CERT, "commitment": HEX64},
-        {"type": "pair_request", "cert": FAKE_CERT, "commitment": HEX64, "x": [1]},
         {"type": "control_open"},
         {"type": "control_open", "future": True},
     ]
@@ -1536,7 +1549,13 @@ async def test_cancelling_open_leaves_nothing_behind(fast, monkeypatch, fake_ser
 @pytest.mark.integration
 @pytest.mark.parametrize(
     "msg",
-    [hello_of(SimpleNamespace(device_id="0" * 32)), ControlOpen(), PairChallenge(nonce=HEX64)],
+    [
+        hello_of(SimpleNamespace(device_id="0" * 32)),
+        ControlOpen(),
+        PairCommit(commitment=HEX64),
+        PairNonce(nonce=HEX64),
+        PairReveal(nonce=HEX64),
+    ],
     ids=lambda m: type(m).__name__,
 )
 async def test_send_rejects_type_not_allowed_on_control(fast, listener_factory, ids, msg):
@@ -1595,9 +1614,18 @@ async def test_receive_on_control_reports_wrong_kind_and_unknown_type(
     """A2 (CONTROL)."""
     h = await listener_factory(ids.server, trusted=[ids.b])
     peer, server = await raw_control(raw_client, h, ids)
-    peer.send_dict({"type": "pair_challenge", "nonce": HEX64})
+    peer.send_dict({"type": "pair_commit", "commitment": HEX64})
     await peer.drain()
     with pytest.raises(WrongConnectionKind):
+        await asyncio.wait_for(server.receive(), 2)
+    peer.send_dict({"type": "pair_nonce", "nonce": HEX64})
+    await peer.drain()
+    with pytest.raises(WrongConnectionKind):
+        await asyncio.wait_for(server.receive(), 2)
+    # Type của luồng cũ không còn tồn tại: là type lạ, không phải sai loại kết nối.
+    peer.send_dict({"type": "pair_challenge", "nonce": HEX64})
+    await peer.drain()
+    with pytest.raises(UnknownMessageType):
         await asyncio.wait_for(server.receive(), 2)
     peer.send_dict({"type": "future_thing", "x": 1})
     await peer.drain()
@@ -1844,7 +1872,7 @@ async def test_partial_message_counts_as_alive(fast, listener_factory, raw_clien
         ("peer_closed", CloseReason.PEER_CLOSED),
         ("garbage", CloseReason.PROTOCOL_ERROR),
         ("oversized", CloseReason.PROTOCOL_ERROR),
-        ("pair_challenge", CloseReason.PROTOCOL_ERROR),
+        ("pair_commit", CloseReason.PROTOCOL_ERROR),
         ("ping_missing_t", CloseReason.PROTOCOL_ERROR),
         ("local_close", CloseReason.LOCAL),
     ],
@@ -1862,8 +1890,8 @@ async def test_channel_close_reasons(fast, listener_factory, raw_client, ids, ca
             peer.send_bytes(frame(b"\xff\xfe\xfd\xfc\xfb"))
         elif case == "oversized":
             peer.send_bytes(HEADER.pack(0xFFFFFFFF))
-        elif case == "pair_challenge":
-            peer.send_dict({"type": "pair_challenge", "nonce": HEX64})
+        elif case == "pair_commit":
+            peer.send_dict({"type": "pair_commit", "commitment": HEX64})
         elif case == "ping_missing_t":
             peer.send_dict({"type": "ping"})
         else:

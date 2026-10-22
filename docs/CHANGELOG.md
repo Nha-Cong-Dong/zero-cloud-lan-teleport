@@ -16,8 +16,8 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Thư mục cấu hình chuẩn theo hệ điều hành; biến môi trường `TELEPORT_HOME` để ghi đè.
 - Tài liệu `docs/architecture.md`, `docs/protocol.md` (dự thảo giao thức phiên bản 1), `docs/SECURITY.md`; toàn bộ tài liệu gom vào `docs/`.
 - Phân tầng `core ← trust ← net ← app ← ui / cli` được kiểm tra tự động; `core` bắt buộc sans-IO.
-- `teleport.core.messages`: kiểu và kiểm tra hợp lệ các message `hello`, `pair_request`, `pair_challenge`, `pair_reveal`, `pair_confirm`, `pair_abort`.
-- `teleport.core.pairing_code`: mã ghép đôi 6 số tính từ hai fingerprint và hai nonce; bên khởi xướng cam kết nonce trước khi thấy nonce của bên kia.
+- `teleport.core.messages`: kiểu và kiểm tra hợp lệ các message `hello`, `pair_request`, `pair_commit`, `pair_nonce`, `pair_reveal`, `pair_confirm`, `pair_abort`.
+- `teleport.core.pairing_code`: mã ghép đôi 6 số tính từ hai fingerprint và hai nonce; bên trả lời cam kết nonce trước khi thấy nonce của bên kia.
 - `teleport.trust.identity`: `PeerCert`, `peer_cert_from_pem` và `peer_cert_from_der` để kiểm tra chứng chỉ của máy khác.
 - `teleport.trust.store`: kho thiết bị đã ghép đôi `trusted.json`, ghi nguyên tử.
 - `teleport.lock`: `NodeLock` giữ `node.lock`, bảo đảm một node cho mỗi thư mục cấu hình (Windows và POSIX). Là tiện ích dùng chung như `paths`, vì `trust` cũng dùng nó khi tạo danh tính. `acquire(timeout=...)` chờ khóa được nhả (Windows nhả khóa của tiến trình bị kill không đồng bộ).
@@ -51,6 +51,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `docs/mvp.md` mục 8: thêm 4 thông báo (máy kia chưa sẵn sàng ghép đôi; nhập IP mà không kết nối được; danh tính không hợp lệ khi ghép đôi; ghép đôi với chính máy này).
 - `teleport.net.tls.server_context(identity, trusted_certs, *, allow_anonymous=False)`: bỏ chế độ `trusted_certs=None` (không xác thực client); `allow_anonymous=True` cho cổng chung.
 - `docs/protocol.md` mục 5 (dự thảo, chưa phát hành): mã ghép đôi dùng nonce cam kết thay vì chỉ hai fingerprint; bên khởi xướng gửi chứng chỉ trong `pair_request` thay vì trong bắt tay TLS.
+- `docs/protocol.md` mục 5 (dự thảo, chưa phát hành): **bên trả lời cam kết nonce trước** (kiểu Bluetooth numeric comparison). Luồng mới `pair_request{cert}` → `pair_commit{commitment}` → `pair_nonce{nonce = n_A}` → bên trả lời hiện mã rồi mới gửi `pair_reveal{nonce = n_B}` → bên khởi xướng kiểm cam kết rồi hiện mã; `pair_request` bỏ trường `commitment`, bỏ message `pair_challenge`; cam kết tính trên fingerprint của bên trả lời và n_B (test vector mục 5.4 đổi dòng `commitment`, mã giữ nguyên).
 - `docs/protocol.md` mục 2.3 (dự thảo, chưa phát hành): máy đã gửi `pair_confirm` chờ thêm 10 s (`CONFIRM_GRACE`, tới 70 s kể từ lúc hiện mã) để nhận `pair_confirm` của máy kia; quyết định tới sau hạn chót vẫn là hết giờ.
 - `docs/protocol.md` mục 5.1 (dự thảo): bên khởi xướng phát hiện lỗi trước khi gửi `pair_request` (CN không khớp `hello`, tự ghép với chính mình, trùng danh tính) thì chỉ đóng kết nối, không gửi gì; `hello` thứ hai, message có `type` chưa biết và `pair_confirm` nhận lần hai trên kết nối ghép đôi đều là `pair_abort{invalid}`.
 - `docs/protocol.md` mục 5.3 (dự thảo): chi tiết chờ tăng dần theo IP: chỉ tính phiên mà máy này là bên trả lời; mất kết nối và trùng danh tính tính là thất bại, phiên do node tự hủy thì không; `pair_abort{busy}` lúc đang chờ không kéo dài thời gian chờ; quên IP sau 10 phút yên lặng, theo dõi tối đa 1024 IP, bộ đếm chỉ nằm trong bộ nhớ. Luật nhường khi hai bên cùng chủ động: bên có `device_id` lớn hơn hủy phiên khởi xướng của mình và trả lời phiên của bên kia, bên nhỏ hơn trả `pair_abort{busy}`; luật này xét trước việc node có đang nhận ghép đôi không và trước thời gian chờ của IP.
@@ -81,6 +82,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Từ chối mọi chứng chỉ có dấu hiệu CA (BasicConstraints CA=true, KeyUsage keyCertSign/cRLSign, Netscape Cert Type), vì chứng chỉ tin cậy được dùng làm trust anchor cho mTLS.
 - Tên thiết bị và phiên bản app nhận từ máy khác không được chứa ký tự điều khiển, ký tự vô hình hay ký tự đổi hướng chữ, để không giả mạo được tên hiển thị.
 - Mã ghép đôi có nonce cam kết: kẻ đứng giữa không thể sinh khóa offline cho tới khi trùng mã.
+- Kẻ đứng giữa không còn dò được mã của máy đang chờ ghép đôi mà máy đó không hiện mã: trước đây nó đóng vai bên khởi xướng, tính được mã trước khi phải lộ nonce rồi bỏ phiên và thử lại; nay bên trả lời cam kết trước và hiện mã trước khi lộ nonce của mình.
 - `teleport.core.framing`: JSON có số nguyên quá dài hoặc lồng quá sâu báo `FramingError` thay vì lỗi không kiểm soát.
 - `trusted.json` hỏng thì cả file bị từ chối, và không bao giờ bị tự xóa hay ghi đè.
 - `teleport.core.pairing` chỉ lưu thiết bị khi máy này đã gửi **và** đã nhận `pair_confirm`; cam kết nonce sai, chứng chỉ không khớp `hello` hay tự ghép với chính mình đều hủy phiên trước khi hiện mã.

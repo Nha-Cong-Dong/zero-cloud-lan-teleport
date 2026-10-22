@@ -619,17 +619,15 @@ async def test_close_cancelled_midway_still_stops_port_and_releases_lock(
     `node.lock` lấy lại được, không còn task `teleport.node*` / `teleport.pairing*` /
     `teleport.connection*` sau một nhịp ngắn; `close()` lần hai trả về không lỗi.
 
-    Client ghép đôi thô ngừng đọc sau khi gửi `pair_reveal`, nên `close()` phải chờ đóng phiên
-    (tới `CLOSE_TIMEOUT`) và lệnh hủy chắc chắn tới khi nó đang chạy dở.
+    Client ghép đôi thô ngừng đọc sau khi nhận `pair_reveal` (B đang hỏi), nên `close()` phải chờ
+    đóng phiên (tới `CLOSE_TIMEOUT`) và lệnh hủy chắc chắn tới khi nó đang chạy dở.
     """
     B = await node_factory("B", accept_pairing=True)
     port = B.port
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(port)
     await c.begin(raw_id)
-    await c.read_type("pair_challenge")
-    c.send_dict({"type": "pair_reveal", "nonce": c.nonce.hex()})
-    await c.drain()
+    await c.run_to_code(B.identity.fingerprint)
     await B.rec.wait_prompts()
     c.writer.transport.pause_reading()  # không trả lời close_notify: close() phải chờ
 

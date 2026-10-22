@@ -2,12 +2,20 @@
 
 Viết từ đặc tả (kế hoạch + docs/protocol.md §5), không từ code. Chứng chỉ ở đây là PEM giả:
 `core` coi PEM là chuỗi mờ, chỉ cần bắt đầu bằng CERT_PEM_HEADER và không quá MAX_CERT_PEM_LEN.
+
+Luồng (bên trả lời cam kết trước, kiểu Bluetooth), A = khởi xướng, B = trả lời:
+    A → B  pair_request{cert}
+    B → A  pair_commit{commitment = C_B}
+    A → B  pair_nonce{nonce = n_A}
+    B: hiện mã, rồi gửi pair_reveal{nonce = n_B}
+    A: kiểm C_B bằng fp_B; sai → pair_abort{invalid}, không hiện mã; đúng → hiện mã.
 """
 
 from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import math
 from pathlib import Path
 
@@ -24,12 +32,14 @@ from teleport.core.messages import (
     ControlOpen,
     Hello,
     PairAbort,
-    PairChallenge,
+    PairCommit,
     PairConfirm,
+    PairNonce,
     PairRequest,
     PairReveal,
     Ping,
     Pong,
+    to_dict,
 )
 from teleport.core.pairing import (
     CONFIRM_GRACE,
@@ -54,7 +64,7 @@ from teleport.core.pairing import (
     Tick,
     UserDecision,
 )
-from teleport.core.pairing_code import NONCE_SIZE, make_commitment, pairing_code
+from teleport.core.pairing_code import NONCE_SIZE, check_commitment, make_commitment, pairing_code
 
 # --- Dữ liệu dựng sẵn ---------------------------------------------------------------------------
 
@@ -85,10 +95,14 @@ HELLO_B = make_hello(CERT_B.device_id, "Laptop Bình")
 N_A = bytes(range(NONCE_SIZE))
 N_B = bytes(range(NONCE_SIZE, 2 * NONCE_SIZE))
 N_OTHER = bytes([0xEE] * NONCE_SIZE)
-REQUEST_A = PairRequest(cert=CERT_A.pem, commitment=make_commitment(CERT_A.fingerprint, N_A))
+REQUEST_A = PairRequest(cert=CERT_A.pem)
+COMMIT_B = PairCommit(make_commitment(CERT_B.fingerprint, N_B))
+NONCE_A = PairNonce(N_A.hex())
+REVEAL_B = PairReveal(N_B.hex())
 CODE_AB = pairing_code(CERT_A.fingerprint, CERT_B.fingerprint, N_A, N_B)
 
 T0 = 100.0  # thời điểm Start
+COMMIT_AT = T0 + 0.5  # thời điểm A nhận pair_commit trong các builder bên dưới
 SHOWN_AT = T0 + 1  # thời điểm hiện mã trong các builder bên dưới
 
 ABORT_INVALID = SendMessage(PairAbort("invalid"))
@@ -122,7 +136,6 @@ def make_responder(
     local: DeviceCert = CERT_B,
     peer: DeviceCert | None = CERT_A,
     peer_hello: Hello = HELLO_A,
-    request: PairRequest = REQUEST_A,
     nonce: bytes = N_B,
     known_fingerprint: str | None = None,
 ) -> ResponderSession:
@@ -130,7 +143,6 @@ def make_responder(
         local=local,
         peer=peer,
         peer_hello=peer_hello,
-        request=request,
         nonce=nonce,
         known_fingerprint=known_fingerprint,
     )
@@ -152,18 +164,29 @@ def assert_done(session, outcome: Outcome) -> None:
     assert session.deadline is None
 
 
+def sent_text(actions: list) -> str:
+    """Toàn bộ nội dung các message sẽ gửi đi, dạng JSON trên dây (để tìm nonce bị lộ)."""
+    return json.dumps([to_dict(a.message) for a in actions if isinstance(a, SendMessage)])
+
+
 # Builder: trả về (phiên, thời điểm của lời gọi cuối) ở từng trạng thái đang chạy.
 
 
-def init_await():
+def init_await_commit():
     s = make_initiator()
     s.handle(Start(), T0)
     return s, T0
 
 
+def init_await_reveal():
+    s, _ = init_await_commit()
+    s.handle(MessageReceived(COMMIT_B), COMMIT_AT)
+    return s, COMMIT_AT
+
+
 def init_confirming():
-    s, _ = init_await()
-    s.handle(MessageReceived(PairChallenge(N_B.hex())), SHOWN_AT)
+    s, _ = init_await_reveal()
+    s.handle(MessageReceived(REVEAL_B), SHOWN_AT)
     return s, SHOWN_AT
 
 
@@ -179,15 +202,15 @@ def init_peer_confirmed():
     return s, SHOWN_AT + 5
 
 
-def resp_await():
+def resp_await_nonce():
     s = make_responder()
     s.handle(Start(), T0)
     return s, T0
 
 
 def resp_confirming():
-    s, _ = resp_await()
-    s.handle(MessageReceived(PairReveal(N_A.hex())), SHOWN_AT)
+    s, _ = resp_await_nonce()
+    s.handle(MessageReceived(NONCE_A), SHOWN_AT)
     return s, SHOWN_AT
 
 
@@ -204,22 +227,35 @@ def resp_peer_confirmed():
 
 
 ACTIVE_BUILDERS = {
-    "init-await_challenge": init_await,
+    "init-await_commit": init_await_commit,
+    "init-await_reveal": init_await_reveal,
     "init-confirming": init_confirming,
     "init-local_confirmed": init_local_confirmed,
     "init-peer_confirmed": init_peer_confirmed,
-    "resp-await_reveal": resp_await,
+    "resp-await_nonce": resp_await_nonce,
     "resp-confirming": resp_confirming,
     "resp-local_confirmed": resp_local_confirmed,
     "resp-peer_confirmed": resp_peer_confirmed,
 }
-# deadline mong đợi ở từng trạng thái (mục 2.5–2.7).
+# Trạng thái và deadline mong đợi ở từng builder (mục 2.5–2.7).
+EXPECTED_STATE = {
+    "init-await_commit": State.AWAIT_COMMIT,
+    "init-await_reveal": State.AWAIT_REVEAL,
+    "init-confirming": State.CONFIRMING,
+    "init-local_confirmed": State.CONFIRMING,
+    "init-peer_confirmed": State.CONFIRMING,
+    "resp-await_nonce": State.AWAIT_NONCE,
+    "resp-confirming": State.CONFIRMING,
+    "resp-local_confirmed": State.CONFIRMING,
+    "resp-peer_confirmed": State.CONFIRMING,
+}
 EXPECTED_DEADLINE = {
-    "init-await_challenge": T0 + 10,
+    "init-await_commit": T0 + 10,
+    "init-await_reveal": COMMIT_AT + 10,
     "init-confirming": SHOWN_AT + 60,
     "init-local_confirmed": SHOWN_AT + 70,
     "init-peer_confirmed": SHOWN_AT + 60,
-    "resp-await_reveal": T0 + 10,
+    "resp-await_nonce": T0 + 10,
     "resp-confirming": SHOWN_AT + 60,
     "resp-local_confirmed": SHOWN_AT + 70,
     "resp-peer_confirmed": SHOWN_AT + 60,
@@ -235,7 +271,7 @@ def done_initiator_paired():
 
 
 def done_initiator_cancelled():
-    s, now = init_await()
+    s, now = init_await_commit()
     s.handle(Cancel(), now)
     return s, now
 
@@ -252,14 +288,23 @@ def done_initiator_idle_cancel():
     return s, T0
 
 
+def done_initiator_bad_reveal():
+    s, now = init_await_reveal()
+    s.handle(MessageReceived(PairReveal(N_OTHER.hex())), now + 1)
+    return s, now + 1
+
+
 DONE_BUILDERS = {
     "init-paired": done_initiator_paired,
     "init-cancelled": done_initiator_cancelled,
     "resp-user_rejected": done_responder_rejected,
     "init-cancel_at_idle": done_initiator_idle_cancel,
+    "init-bad_reveal": done_initiator_bad_reveal,
 }
 done_builders = pytest.mark.parametrize("build", list(DONE_BUILDERS.values()), ids=list(DONE_BUILDERS))
 
+
+PAIRING_FLOW_MESSAGES = [REQUEST_A, COMMIT_B, NONCE_A, REVEAL_B]
 
 # Mọi loại sự kiện (trừ Start) để thử ở các trạng thái.
 ALL_NON_START_EVENTS = [
@@ -272,8 +317,7 @@ ALL_NON_START_EVENTS = [
     Cancel(AbortReason.BUSY),
     MessageReceived(PairConfirm()),
     MessageReceived(PairAbort("user")),
-    MessageReceived(PairChallenge(N_B.hex())),
-    MessageReceived(PairReveal(N_A.hex())),
+    *(MessageReceived(m) for m in PAIRING_FLOW_MESSAGES),
     MessageReceived(HELLO_A),
 ]
 
@@ -290,7 +334,18 @@ def test_timeout_constants_match_protocol():
 def test_enum_values():
     assert Role.INITIATOR == "initiator"
     assert Role.RESPONDER == "responder"
-    assert {s.value for s in State} == {"idle", "await_challenge", "await_reveal", "confirming", "done"}
+    assert {s.value for s in State} == {
+        "idle",
+        "await_commit",
+        "await_nonce",
+        "await_reveal",
+        "confirming",
+        "done",
+    }
+    assert State.AWAIT_COMMIT == "await_commit"
+    assert State.AWAIT_NONCE == "await_nonce"
+    assert State.AWAIT_REVEAL == "await_reveal"
+    assert not hasattr(State, "AWAIT_CHALLENGE")
     assert {o.value for o in Outcome} == {
         "paired",
         "user_rejected",
@@ -417,7 +472,7 @@ def test_cancel_rejects_other_reasons(reason):
 
 BAD_NONCES = [b"", N_A[:-1], N_A + b"\x00", bytearray(N_A), N_A.hex(), None, list(N_A)]
 BAD_KNOWN_FP = ["", "a" * 63, "a" * 65, "A" * 64, "a" * 63 + "\n", b"a" * 64, 0]
-BAD_HELLOS = [None, {"type": "hello"}, PairChallenge(N_B.hex()), "hello"]
+BAD_HELLOS = [None, {"type": "hello"}, COMMIT_B, "hello"]
 BAD_CERTS = [None, "cert", CERT_A.pem, (CERT_A.device_id, CERT_A.fingerprint, CERT_A.pem)]
 
 
@@ -457,10 +512,12 @@ def test_responder_rejects_non_hello_peer_hello(hello):
         make_responder(peer_hello=hello)
 
 
-@pytest.mark.parametrize("request_", [None, PairChallenge(N_B.hex()), {"type": "pair_request"}], ids=repr)
-def test_responder_rejects_non_pair_request(request_):
-    with pytest.raises(ValueError):
-        make_responder(request=request_)
+def test_responder_no_longer_takes_request():
+    # pair_request không còn cam kết nên phiên trả lời không cần nó: `request=` là tham số lạ.
+    with pytest.raises(TypeError):
+        ResponderSession(  # type: ignore[call-arg]
+            local=CERT_B, peer=CERT_A, peer_hello=HELLO_A, request=REQUEST_A, nonce=N_B
+        )
 
 
 @pytest.mark.parametrize("cert", BAD_CERTS, ids=repr)
@@ -497,7 +554,7 @@ def test_sessions_are_keyword_only():
     with pytest.raises(TypeError):
         InitiatorSession(CERT_A, CERT_B, HELLO_B, N_A)  # type: ignore[misc]
     with pytest.raises(TypeError):
-        ResponderSession(CERT_B, CERT_A, HELLO_A, REQUEST_A, N_B)  # type: ignore[misc]
+        ResponderSession(CERT_B, CERT_A, HELLO_A, N_B)  # type: ignore[misc]
 
 
 def test_initial_properties():
@@ -627,8 +684,7 @@ IDLE_FORBIDDEN = [
     BadMessage(),
     MessageReceived(PairConfirm()),
     MessageReceived(PairAbort("user")),
-    MessageReceived(PairChallenge(N_B.hex())),
-    MessageReceived(PairReveal(N_A.hex())),
+    *(MessageReceived(m) for m in PAIRING_FLOW_MESSAGES),
 ]
 
 
@@ -659,9 +715,8 @@ def test_done_start_is_usage_error(build):
 
 
 def test_start_twice_is_usage_error():
-    s, now = init_await()
-    # Start khi đang chạy không nằm trong bảng; theo R1/R2 nó chỉ hợp lệ ở IDLE.
-    # Đọc hợp lý nhất: đang chạy mà Start lại là lỗi lập trình của app.
+    s, now = init_await_commit()
+    # Start chỉ hợp lệ ở IDLE (R1/R2): đang chạy mà Start lại là lỗi lập trình của app.
     with pytest.raises(PairingUsageError):
         s.handle(Start(), now)
 
@@ -669,13 +724,13 @@ def test_start_twice_is_usage_error():
 # --- Bảng 2.5: bên khởi xướng ------------------------------------------------------------------
 
 
-def test_initiator_start_sends_pair_request_with_commitment():
+def test_initiator_start_sends_pair_request_with_cert_only():
     s = make_initiator()
     actions = s.handle(Start(), T0)
-    assert actions == [
-        SendMessage(PairRequest(cert=CERT_A.pem, commitment=make_commitment(CERT_A.fingerprint, N_A)))
-    ]
-    assert s.state == State.AWAIT_CHALLENGE
+    assert actions == [SendMessage(PairRequest(cert=CERT_A.pem))]
+    # Trên dây chỉ có cert: không nonce, không commitment.
+    assert to_dict(actions[0].message) == {"type": "pair_request", "cert": CERT_A.pem}
+    assert s.state == State.AWAIT_COMMIT
     assert s.deadline == T0 + 10
     assert s.code is None
     assert s.outcome is None
@@ -730,32 +785,70 @@ def test_initiator_start_same_known_fingerprint_is_allowed():
     s = make_initiator(known_fingerprint=CERT_B.fingerprint)
     actions = s.handle(Start(), T0)
     assert actions == [SendMessage(REQUEST_A)]
-    assert s.state == State.AWAIT_CHALLENGE
+    assert s.state == State.AWAIT_COMMIT
 
 
-def test_initiator_challenge_reveals_nonce_and_shows_code():
-    s, _ = init_await()
-    actions = s.handle(MessageReceived(PairChallenge(N_B.hex())), T0 + 3)
-    assert actions == [SendMessage(PairReveal(N_A.hex())), ShowCode(CODE_AB)]
+def test_initiator_commit_sends_nonce_and_waits_for_reveal():
+    s, _ = init_await_commit()
+    actions = s.handle(MessageReceived(COMMIT_B), T0 + 3)
+    assert actions == [SendMessage(PairNonce(N_A.hex()))]
+    assert s.state == State.AWAIT_REVEAL
+    assert s.deadline == T0 + 3 + 10
+    assert s.code is None, "chưa có n_B thì chưa có mã"
+
+
+def test_initiator_sends_nonce_for_any_well_formed_commitment():
+    # A không kiểm được cam kết lúc nhận (chưa có n_B): commitment nào đúng dạng cũng cho đi tiếp.
+    s, _ = init_await_commit()
+    actions = s.handle(MessageReceived(PairCommit("0" * 64)), T0 + 1)
+    assert actions == [SendMessage(NONCE_A)]
+    assert s.state == State.AWAIT_REVEAL
+
+
+def test_initiator_matching_reveal_shows_code():
+    s, _ = init_await_reveal()
+    actions = s.handle(MessageReceived(REVEAL_B), COMMIT_AT + 2)
+    assert actions == [ShowCode(CODE_AB)]
     assert s.state == State.CONFIRMING
     assert s.code == CODE_AB
-    assert s.deadline == T0 + 3 + 60
+    assert s.deadline == COMMIT_AT + 2 + 60
     assert s.local_confirmed is False
     assert s.peer_confirmed is False
 
 
 def test_initiator_code_uses_initiator_fingerprint_first():
-    s, _ = init_await()
-    actions = s.handle(MessageReceived(PairChallenge(N_B.hex())), T0 + 1)
-    code = actions[1].code
+    s, _ = init_await_reveal()
+    actions = s.handle(MessageReceived(REVEAL_B), COMMIT_AT + 1)
+    code = actions[0].code
     assert code == pairing_code(CERT_A.fingerprint, CERT_B.fingerprint, N_A, N_B)
     assert len(code) == 6
     assert code.isascii()
     assert code.isdigit()
 
 
-def test_initiator_times_out_after_10s_without_challenge():
-    s, _ = init_await()
+@pytest.mark.parametrize(
+    ("label", "commitment", "revealed"),
+    [
+        ("n_B khác cam kết", make_commitment(CERT_B.fingerprint, N_B), N_OTHER),
+        ("n_B = n_A", make_commitment(CERT_B.fingerprint, N_B), N_A),
+        ("cam kết bằng fp khởi xướng", make_commitment(CERT_A.fingerprint, N_B), N_B),
+        ("cam kết bằng fp máy thứ ba", make_commitment(CERT_C.fingerprint, N_B), N_B),
+        ("cam kết rác", "0" * 64, N_B),
+    ],
+)
+def test_initiator_reveal_not_matching_commitment_aborts_without_code(label, commitment, revealed):
+    s, _ = init_await_commit()
+    s.handle(MessageReceived(PairCommit(commitment)), T0 + 1)
+    actions = s.handle(MessageReceived(PairReveal(revealed.hex())), T0 + 2)
+    assert actions[:-1] == [ABORT_INVALID], label
+    assert_closed(actions, Outcome.PROTOCOL_ERROR)
+    assert not any(isinstance(a, ShowCode) for a in actions)
+    assert s.code is None
+    assert_done(s, Outcome.PROTOCOL_ERROR)
+
+
+def test_initiator_times_out_after_10s_without_commit():
+    s, _ = init_await_commit()
     assert s.handle(Tick(), T0 + 9.999) == []
     actions = s.handle(Tick(), T0 + 10)
     assert actions[:-1] == [ABORT_TIMEOUT]
@@ -763,9 +856,28 @@ def test_initiator_times_out_after_10s_without_challenge():
     assert_done(s, Outcome.TIMEOUT)
 
 
-def test_initiator_challenge_at_deadline_is_timeout_not_code():
-    s, _ = init_await()
-    actions = s.handle(MessageReceived(PairChallenge(N_B.hex())), T0 + 10)
+def test_initiator_times_out_10s_after_commit_without_reveal():
+    s, _ = init_await_reveal()
+    # Hạn chót tính lại từ lúc nhận pair_commit, không phải từ Start.
+    assert s.handle(Tick(), T0 + 10) == []
+    assert s.handle(Tick(), COMMIT_AT + 9.999) == []
+    actions = s.handle(Tick(), COMMIT_AT + 10)
+    assert actions[:-1] == [ABORT_TIMEOUT]
+    assert_closed(actions, Outcome.TIMEOUT)
+    assert s.code is None
+
+
+def test_initiator_commit_at_deadline_is_timeout_and_nonce_not_sent():
+    s, _ = init_await_commit()
+    actions = s.handle(MessageReceived(COMMIT_B), T0 + 10)
+    assert actions[:-1] == [ABORT_TIMEOUT]
+    assert_closed(actions, Outcome.TIMEOUT)
+    assert N_A.hex() not in sent_text(actions)
+
+
+def test_initiator_reveal_at_deadline_is_timeout_not_code():
+    s, _ = init_await_reveal()
+    actions = s.handle(MessageReceived(REVEAL_B), COMMIT_AT + 10)
     assert actions[:-1] == [ABORT_TIMEOUT]
     assert_closed(actions, Outcome.TIMEOUT)
     assert s.code is None
@@ -774,12 +886,20 @@ def test_initiator_challenge_at_deadline_is_timeout_not_code():
 # --- Bảng 2.6: bên trả lời ---------------------------------------------------------------------
 
 
-def test_responder_start_sends_challenge():
+def test_responder_start_sends_commitment_of_own_fingerprint_and_nonce():
     s = make_responder()
     actions = s.handle(Start(), T0)
-    assert actions == [SendMessage(PairChallenge(N_B.hex()))]
-    assert s.state == State.AWAIT_REVEAL
+    assert actions == [SendMessage(PairCommit(make_commitment(CERT_B.fingerprint, N_B)))]
+    assert to_dict(actions[0].message) == {
+        "type": "pair_commit",
+        "commitment": make_commitment(CERT_B.fingerprint, N_B),
+    }
+    # Cam kết gắn với fp bên trả lời, không phải fp bên khởi xướng; n_B chưa lộ.
+    assert actions[0].message.commitment != make_commitment(CERT_A.fingerprint, N_B)
+    assert N_B.hex() not in sent_text(actions)
+    assert s.state == State.AWAIT_NONCE
     assert s.deadline == T0 + 10
+    assert s.code is None
 
 
 def test_responder_start_with_unparsable_cert_aborts_invalid():
@@ -807,11 +927,7 @@ def test_responder_start_cn_differs_from_hello_aborts_invalid():
 
 def test_responder_start_rejects_same_fingerprint():
     peer = make_cert("A", fingerprint=CERT_B.fingerprint)
-    s = make_responder(
-        peer=peer,
-        peer_hello=make_hello(peer.device_id, "Gương"),
-        request=PairRequest(cert=peer.pem, commitment=make_commitment(peer.fingerprint, N_A)),
-    )
+    s = make_responder(peer=peer, peer_hello=make_hello(peer.device_id, "Gương"))
     actions = s.handle(Start(), T0)
     assert actions[:-1] == [ABORT_INVALID]
     assert_closed(actions, Outcome.PROTOCOL_ERROR)
@@ -819,11 +935,7 @@ def test_responder_start_rejects_same_fingerprint():
 
 def test_responder_start_rejects_same_device_id():
     peer = make_cert("A", device_id=CERT_B.device_id)
-    s = make_responder(
-        peer=peer,
-        peer_hello=make_hello(CERT_B.device_id, "Gương"),
-        request=PairRequest(cert=peer.pem, commitment=make_commitment(peer.fingerprint, N_A)),
-    )
+    s = make_responder(peer=peer, peer_hello=make_hello(CERT_B.device_id, "Gương"))
     actions = s.handle(Start(), T0)
     assert actions[:-1] == [ABORT_INVALID]
     assert_closed(actions, Outcome.PROTOCOL_ERROR)
@@ -840,16 +952,25 @@ def test_responder_start_identity_conflict_aborts_invalid_before_code():
 
 def test_responder_start_same_known_fingerprint_is_allowed():
     s = make_responder(known_fingerprint=CERT_A.fingerprint)
-    assert s.handle(Start(), T0) == [SendMessage(PairChallenge(N_B.hex()))]
+    assert s.handle(Start(), T0) == [SendMessage(COMMIT_B)]
 
 
-def test_responder_correct_reveal_shows_code():
-    s, _ = resp_await()
-    actions = s.handle(MessageReceived(PairReveal(N_A.hex())), T0 + 2)
-    assert actions == [ShowCode(CODE_AB)]
+def test_responder_nonce_shows_code_then_reveals():
+    s, _ = resp_await_nonce()
+    actions = s.handle(MessageReceived(NONCE_A), T0 + 2)
+    # Đúng thứ tự: hiện mã TRƯỚC, rồi mới tiết lộ n_B.
+    assert actions == [ShowCode(CODE_AB), SendMessage(PairReveal(N_B.hex()))]
     assert s.state == State.CONFIRMING
     assert s.code == CODE_AB
     assert s.deadline == T0 + 2 + 60
+
+
+def test_responder_accepts_any_well_formed_n_a():
+    # B không kiểm được n_A; mã đổi theo n_A, người dùng so mã sẽ bắt được kẻ đứng giữa.
+    s, _ = resp_await_nonce()
+    actions = s.handle(MessageReceived(PairNonce(N_OTHER.hex())), T0 + 1)
+    expected = pairing_code(CERT_A.fingerprint, CERT_B.fingerprint, N_OTHER, N_B)
+    assert actions == [ShowCode(expected), SendMessage(REVEAL_B)]
 
 
 def test_both_roles_compute_same_code():
@@ -858,57 +979,47 @@ def test_both_roles_compute_same_code():
     assert a.code == b.code == CODE_AB
 
 
-def test_responder_wrong_reveal_is_invalid():
-    s, _ = resp_await()
-    actions = s.handle(MessageReceived(PairReveal(N_OTHER.hex())), T0 + 1)
-    assert actions[:-1] == [ABORT_INVALID]
-    assert_closed(actions, Outcome.PROTOCOL_ERROR)
-    assert s.code is None
-
-
-def test_responder_commitment_from_other_fingerprint_is_invalid():
-    # Cam kết làm với fingerprint khác chứng chỉ trong pair_request → sai.
-    req = PairRequest(cert=CERT_A.pem, commitment=make_commitment(CERT_C.fingerprint, N_A))
-    s = make_responder(request=req)
-    s.handle(Start(), T0)
-    actions = s.handle(MessageReceived(PairReveal(N_A.hex())), T0 + 1)
-    assert actions[:-1] == [ABORT_INVALID]
-    assert_closed(actions, Outcome.PROTOCOL_ERROR)
-
-
-def test_responder_times_out_after_10s_without_reveal():
-    s, _ = resp_await()
+def test_responder_times_out_after_10s_without_nonce():
+    s, _ = resp_await_nonce()
     assert s.handle(Tick(), T0 + 9.999) == []
     actions = s.handle(Tick(), T0 + 10)
     assert actions[:-1] == [ABORT_TIMEOUT]
     assert_closed(actions, Outcome.TIMEOUT)
+    assert N_B.hex() not in sent_text(actions)
 
 
-def test_responder_reveal_at_deadline_is_timeout():
-    s, _ = resp_await()
-    actions = s.handle(MessageReceived(PairReveal(N_A.hex())), T0 + 10)
+def test_responder_nonce_at_deadline_is_timeout_and_n_b_stays_secret():
+    s, _ = resp_await_nonce()
+    actions = s.handle(MessageReceived(NONCE_A), T0 + 10)
     assert actions[:-1] == [ABORT_TIMEOUT]
     assert_closed(actions, Outcome.TIMEOUT)
     assert s.code is None
+    assert not any(isinstance(a, ShowCode) for a in actions)
+    assert N_B.hex() not in sent_text(actions)
 
 
 # --- R4: message không nằm trong bảng của trạng thái -------------------------------------------
 
-OTHER_REQUEST = PairRequest(cert=CERT_C.pem, commitment=make_commitment(CERT_C.fingerprint, N_OTHER))
+OTHER_REQUEST = PairRequest(cert=CERT_C.pem)
+OTHER_COMMIT = PairCommit(make_commitment(CERT_B.fingerprint, N_OTHER))
 OUT_OF_ORDER = {
-    init_await: [HELLO_B, REQUEST_A, PairReveal(N_A.hex()), PairConfirm()],
-    resp_await: [HELLO_A, OTHER_REQUEST, PairChallenge(N_B.hex()), PairConfirm()],
-    init_confirming: [HELLO_B, REQUEST_A, PairChallenge(N_B.hex()), PairReveal(N_A.hex())],
-    init_local_confirmed: [HELLO_B, PairChallenge(N_B.hex()), PairReveal(N_A.hex())],
-    init_peer_confirmed: [HELLO_B, PairChallenge(N_B.hex()), PairConfirm()],  # PairConfirm lần hai
-    resp_confirming: [HELLO_A, OTHER_REQUEST, PairChallenge(N_B.hex()), PairReveal(N_A.hex())],
-    resp_local_confirmed: [HELLO_A, PairReveal(N_A.hex()), PairChallenge(N_B.hex())],
-    resp_peer_confirmed: [HELLO_A, PairReveal(N_A.hex()), PairConfirm()],  # PairConfirm lần hai
+    # A nhận pair_reveal trước pair_commit, hoặc pair_nonce (chỉ A được gửi).
+    init_await_commit: [HELLO_B, REQUEST_A, NONCE_A, REVEAL_B, PairConfirm()],
+    # pair_commit lần hai, pair_nonce, pair_request giữa phiên.
+    init_await_reveal: [HELLO_B, REQUEST_A, COMMIT_B, OTHER_COMMIT, NONCE_A, PairConfirm()],
+    init_confirming: [HELLO_B, REQUEST_A, COMMIT_B, NONCE_A, REVEAL_B],
+    init_local_confirmed: [HELLO_B, COMMIT_B, NONCE_A, REVEAL_B],
+    init_peer_confirmed: [HELLO_B, COMMIT_B, REVEAL_B, PairConfirm()],  # PairConfirm lần hai
+    # B nhận pair_commit/pair_reveal (chỉ B được gửi), pair_request giữa phiên.
+    resp_await_nonce: [HELLO_A, REQUEST_A, OTHER_REQUEST, COMMIT_B, REVEAL_B, PairConfirm()],
+    resp_confirming: [HELLO_A, OTHER_REQUEST, COMMIT_B, NONCE_A, REVEAL_B],  # NONCE_A lần hai
+    resp_local_confirmed: [HELLO_A, NONCE_A, COMMIT_B, REVEAL_B],
+    resp_peer_confirmed: [HELLO_A, NONCE_A, PairConfirm()],  # PairConfirm lần hai
 }
 OUT_OF_ORDER_CASES = [
-    pytest.param(build, msg, id=f"{build.__name__}-{type(msg).__name__}")
+    pytest.param(build, msg, id=f"{build.__name__}-{type(msg).__name__}-{i}")
     for build, msgs in OUT_OF_ORDER.items()
-    for msg in msgs
+    for i, msg in enumerate(msgs)
 ]
 
 
@@ -919,7 +1030,23 @@ def test_out_of_order_message_aborts_invalid(build, msg):
     assert actions[:-1] == [ABORT_INVALID]
     assert_closed(actions, Outcome.PROTOCOL_ERROR)
     assert_done(s, Outcome.PROTOCOL_ERROR)
-    assert not any(isinstance(a, SavePeer) for a in actions)
+    assert not any(isinstance(a, SavePeer | ShowCode) for a in actions)
+
+
+def test_responder_second_nonce_does_not_reveal_again():
+    s, now = resp_confirming()
+    actions = s.handle(MessageReceived(PairNonce(N_OTHER.hex())), now + 1)
+    assert actions[:-1] == [ABORT_INVALID]
+    assert not any(isinstance(a, SendMessage) and isinstance(a.message, PairReveal) for a in actions)
+
+
+def test_initiator_reveal_before_commit_never_shows_code():
+    s, _ = init_await_commit()
+    actions = s.handle(MessageReceived(REVEAL_B), T0 + 1)
+    assert actions[:-1] == [ABORT_INVALID]
+    assert_closed(actions, Outcome.PROTOCOL_ERROR)
+    assert s.code is None
+    assert N_A.hex() not in sent_text(actions)
 
 
 @active_builders
@@ -982,8 +1109,9 @@ def test_cancel_sends_abort_with_reason(build, reason):
 
 
 @pytest.mark.parametrize("name", list(ACTIVE_BUILDERS))
-def test_deadline_property_per_state(name):
+def test_state_and_deadline_per_builder(name):
     s, _ = ACTIVE_BUILDERS[name]()
+    assert s.state == EXPECTED_STATE[name]
     assert s.deadline == EXPECTED_DEADLINE[name]
 
 
@@ -996,7 +1124,10 @@ def test_tick_before_deadline_does_nothing(build):
     assert s.deadline == deadline
 
 
-@pytest.mark.parametrize("build", [init_await, resp_await, init_local_confirmed, resp_local_confirmed])
+@pytest.mark.parametrize(
+    "build",
+    [init_await_commit, init_await_reveal, resp_await_nonce, init_local_confirmed, resp_local_confirmed],
+)
 @pytest.mark.parametrize("accepted", [True, False])
 def test_user_decision_outside_prompt_is_ignored(build, accepted):
     s, now = build()
@@ -1019,8 +1150,7 @@ R0_EVENTS = [
     Cancel(AbortReason.BUSY),
     MessageReceived(PairConfirm()),
     MessageReceived(PairAbort("user")),
-    MessageReceived(PairChallenge(N_B.hex())),
-    MessageReceived(PairReveal(N_A.hex())),
+    *(MessageReceived(m) for m in PAIRING_FLOW_MESSAGES),
     MessageReceived(HELLO_A),
 ]
 
@@ -1030,11 +1160,13 @@ R0_EVENTS = [
 @pytest.mark.parametrize("late", [0.0, 0.1, 1000.0])
 def test_any_event_at_or_after_deadline_is_timeout(build, event, late):
     s, _ = build()
+    code_before = s.code
     actions = s.handle(event, s.deadline + late)
     assert actions[:-1] == [ABORT_TIMEOUT], "hết giờ xét trước, sự kiện bị bỏ"
     assert_closed(actions, Outcome.TIMEOUT)
     assert_done(s, Outcome.TIMEOUT)
-    assert not any(isinstance(a, SavePeer) for a in actions)
+    assert not any(isinstance(a, SavePeer | ShowCode) for a in actions)
+    assert s.code == code_before
 
 
 # --- Bảng 2.7: CONFIRMING ----------------------------------------------------------------------
@@ -1220,15 +1352,21 @@ def _bad(s, now):
     return s.handle(BadMessage(), now + 1)
 
 
+def _bad_reveal(s, now):
+    return s.handle(MessageReceived(PairReveal(N_OTHER.hex())), now + 1)
+
+
 ABORT_REASON_CASES = [
     pytest.param(init_confirming, _reject, "user", id="user-decision-false"),
-    pytest.param(resp_await, _cancel_user, "user", id="cancel-user"),
-    pytest.param(init_await, _cancel_busy, "busy", id="initiator-yields-busy"),
-    pytest.param(init_await, _wait_out, "timeout", id="no-challenge-10s"),
-    pytest.param(resp_await, _wait_out, "timeout", id="no-reveal-10s"),
+    pytest.param(resp_await_nonce, _cancel_user, "user", id="cancel-user"),
+    pytest.param(init_await_commit, _cancel_busy, "busy", id="initiator-yields-busy"),
+    pytest.param(init_await_commit, _wait_out, "timeout", id="no-commit-10s"),
+    pytest.param(init_await_reveal, _wait_out, "timeout", id="no-reveal-10s"),
+    pytest.param(resp_await_nonce, _wait_out, "timeout", id="no-nonce-10s"),
     pytest.param(resp_confirming, _wait_out, "timeout", id="confirm-60s"),
     pytest.param(init_local_confirmed, _wait_out, "timeout", id="confirm-grace-70s"),
     pytest.param(init_confirming, _bad, "invalid", id="bad-message"),
+    pytest.param(init_await_reveal, _bad_reveal, "invalid", id="reveal-not-matching-commitment"),
 ]
 
 
@@ -1291,13 +1429,12 @@ def test_property_two_sessions_pair_in_any_order(
     assert len(to_b) == 1
     assert isinstance(to_b[0], PairRequest)
     request = to_b.pop(0)
-    assert request.cert == cert_a.pem
+    assert to_dict(request) == {"type": "pair_request", "cert": cert_a.pem}
     # net đọc pair_request, gate ACCEPT, app tạo phiên trả lời với chứng chỉ phân tích từ request.cert.
     b = ResponderSession(
         local=cert_b,
         peer=cert_a,
         peer_hello=hello_a,
-        request=request,
         nonce=n_b,
         known_fingerprint=fp_a if repair else None,
     )
@@ -1345,8 +1482,8 @@ def test_property_two_sessions_pair_in_any_order(
 # --- Thuộc tính (b): chuỗi sự kiện ngẫu nhiên giữ mọi bảo đảm mục 2.4 ---------------------------
 
 ALLOWED_SENDS = {
-    Role.INITIATOR: (PairRequest, PairReveal, PairConfirm, PairAbort),
-    Role.RESPONDER: (PairChallenge, PairConfirm, PairAbort),
+    Role.INITIATOR: (PairRequest, PairNonce, PairConfirm, PairAbort),
+    Role.RESPONDER: (PairCommit, PairReveal, PairConfirm, PairAbort),
 }
 SENT_REASONS = {"user", "busy", "timeout", "invalid"}
 
@@ -1355,11 +1492,22 @@ FUZZ_MESSAGES = [
     HELLO_B,
     REQUEST_A,
     OTHER_REQUEST,
-    PairChallenge(N_B.hex()),
-    PairChallenge(N_OTHER.hex()),
-    PairReveal(N_A.hex()),
-    PairReveal(N_A.hex()),
+    COMMIT_B,
+    COMMIT_B,
+    COMMIT_B,
+    OTHER_COMMIT,  # cam kết hợp lệ cho N_OTHER: đi cặp với PairReveal(N_OTHER)
+    PairCommit(make_commitment(CERT_A.fingerprint, N_B)),  # cam kết bằng fp khởi xướng
+    PairCommit(make_commitment(CERT_C.fingerprint, N_B)),  # cam kết bằng fp kẻ giả
+    NONCE_A,
+    NONCE_A,
+    NONCE_A,
+    PairNonce(N_OTHER.hex()),
+    PairNonce(N_B.hex()),
+    REVEAL_B,
+    REVEAL_B,
+    REVEAL_B,
     PairReveal(N_OTHER.hex()),
+    PairReveal(N_A.hex()),
     PairConfirm(),
     PairConfirm(),
     PairConfirm(),
@@ -1545,15 +1693,14 @@ small_deltas = st.one_of(st.just(0.0), st.floats(min_value=0.0, max_value=2.0, a
 
 
 def happy_path(role: Role, peer_first: bool) -> list:
-    first = (
-        MessageReceived(PairChallenge(N_B.hex()))
-        if role == Role.INITIATOR
-        else MessageReceived(PairReveal(N_A.hex()))
-    )
+    if role == Role.INITIATOR:
+        first = [MessageReceived(COMMIT_B), MessageReceived(REVEAL_B)]
+    else:
+        first = [MessageReceived(NONCE_A)]
     confirms = [UserDecision(True), MessageReceived(PairConfirm())]
     if peer_first:
         confirms.reverse()
-    return [first, *confirms]
+    return [*first, *confirms]
 
 
 @pytest.mark.parametrize("role", [Role.INITIATOR, Role.RESPONDER])
@@ -1564,7 +1711,7 @@ def happy_path(role: Role, peer_first: bool) -> list:
     steps=st.lists(
         # Mỗi bước: khoảng 1/8 là nhiễu, còn lại đi tiếp đường đúng.
         st.tuples(st.sampled_from([HAPPY] * 7 + ["noise"]), fuzz_events, small_deltas),
-        min_size=3,
+        min_size=4,
         max_size=12,
     ),
 )
@@ -1577,24 +1724,285 @@ def test_property_noisy_happy_path_keeps_guarantees(role, variant, peer_first, s
     check_event_sequence(session, role, peer, name, events)
 
 
-# --- Thuộc tính (c): MITM tiết lộ nonce khác nonce đã cam kết ----------------------------------
+# --- Hồi quy tấn công: bí mật của từng bên chỉ lộ đúng lúc (bên trả lời cam kết trước) ---------
+#
+# Lý do của thứ tự mới: ở luồng cũ, bên khởi xướng cam kết trước và bên trả lời gửi n_B ngay sau
+# pair_request; kẻ đứng giữa có thể mở phiên, lấy n_B rồi bỏ đi mà B chưa từng hiện mã. Nay:
+#   (a) n_B không rời B trước khi B nhận một pair_nonce hợp lệ ở AWAIT_NONCE;
+#   (b) B luôn ShowCode trước khi gửi pair_reveal (người dùng thấy mã → có dấu vết);
+#   (c) n_A không rời A trước khi A nhận pair_commit; pair_request không mang nonce/commitment;
+#   (d) A chỉ ShowCode khi pair_reveal khớp cam kết đã nhận với fp của B.
+
+
+def check_secrecy(session, role: Role, events) -> None:
+    """Kiểm (a)–(d) trên một chuỗi sự kiện bất kỳ cho phiên mặc định (A = CERT_A/N_A, B = CERT_B/N_B)."""
+    own_secret = (N_A if role == Role.INITIATOR else N_B).hex()
+    may_leak = False  # bí mật của mình đã được phép rời máy chưa
+    received_commitment: str | None = None
+    now = 0.0
+    for event, delta in events:
+        now += delta
+        before_state = session.state
+        before_deadline = session.deadline
+        out = session.handle(event, now)
+        active = before_state not in (State.IDLE, State.DONE)
+        timed_out = active and now >= before_deadline
+        msg = event.message if isinstance(event, MessageReceived) else None
+
+        gate = not timed_out and (
+            (role == Role.INITIATOR and before_state == State.AWAIT_COMMIT and isinstance(msg, PairCommit))
+            or (role == Role.RESPONDER and before_state == State.AWAIT_NONCE and isinstance(msg, PairNonce))
+        )
+        if gate and role == Role.INITIATOR:
+            received_commitment = msg.commitment
+        may_leak = may_leak or gate
+
+        if not may_leak:
+            assert own_secret not in sent_text(out), (
+                f"{role}: nonce của mình lộ ra ở trạng thái {before_state} với sự kiện {event!r}: {out!r}"
+            )
+
+        for i, act in enumerate(out):
+            if isinstance(act, SendMessage):
+                m = act.message
+                if isinstance(m, PairRequest):
+                    # (c) pair_request chỉ có cert.
+                    assert to_dict(m) == {"type": "pair_request", "cert": CERT_A.pem}
+                if isinstance(m, PairNonce):
+                    assert role == Role.INITIATOR
+                    assert m.nonce == N_A.hex()
+                    assert gate, "pair_nonce chỉ được gửi ngay khi nhận pair_commit ở AWAIT_COMMIT"
+                if isinstance(m, PairReveal):
+                    # (b) bên trả lời hiện mã trước khi tiết lộ n_B, trong cùng danh sách hành động.
+                    assert role == Role.RESPONDER
+                    assert m.nonce == N_B.hex()
+                    assert gate, "pair_reveal chỉ được gửi ngay khi nhận pair_nonce ở AWAIT_NONCE"
+                    assert any(isinstance(a, ShowCode) for a in out[:i]), f"reveal trước ShowCode: {out!r}"
+                if isinstance(m, PairCommit):
+                    assert role == Role.RESPONDER
+                    assert m.commitment == make_commitment(CERT_B.fingerprint, N_B)
+            elif isinstance(act, ShowCode):
+                if role == Role.INITIATOR:
+                    # (d) chỉ hiện mã khi reveal khớp cam kết đã nhận, tính với fp của B.
+                    assert before_state == State.AWAIT_REVEAL
+                    assert isinstance(msg, PairReveal)
+                    assert received_commitment is not None
+                    n_b = bytes.fromhex(msg.nonce)
+                    assert check_commitment(CERT_B.fingerprint, n_b, received_commitment)
+                    assert act.code == pairing_code(CERT_A.fingerprint, CERT_B.fingerprint, N_A, n_b)
+                else:
+                    assert gate
+                    n_a = bytes.fromhex(msg.nonce)
+                    assert act.code == pairing_code(CERT_A.fingerprint, CERT_B.fingerprint, n_a, N_B)
+
+        # Ngược lại của (d): reveal không khớp ở AWAIT_REVEAL → luôn invalid, không mã.
+        if (
+            role == Role.INITIATOR
+            and not timed_out
+            and before_state == State.AWAIT_REVEAL
+            and isinstance(msg, PairReveal)
+        ):
+            n_b = bytes.fromhex(msg.nonce)
+            if check_commitment(CERT_B.fingerprint, n_b, received_commitment):
+                assert out == [ShowCode(pairing_code(CERT_A.fingerprint, CERT_B.fingerprint, N_A, n_b))]
+            else:
+                assert out[:-1] == [ABORT_INVALID]
+                assert_closed(out, Outcome.PROTOCOL_ERROR)
+        # Đường đúng của B: đúng hai hành động, đúng thứ tự.
+        if role == Role.RESPONDER and gate:
+            n_a = bytes.fromhex(msg.nonce)
+            code = pairing_code(CERT_A.fingerprint, CERT_B.fingerprint, n_a, N_B)
+            assert out == [ShowCode(code), SendMessage(PairReveal(N_B.hex()))]
+    hypothesis.event(f"may_leak={may_leak}, outcome={session.outcome}")
+
+
+# Sự kiện tấn công: nghiêng về các message của luồng mới để thường xuyên chạm cổng.
+attack_messages = st.sampled_from(FUZZ_MESSAGES[2:]).map(MessageReceived)
+attack_events = st.one_of(attack_messages, attack_messages, attack_messages, other_events)
+
+
+@pytest.mark.parametrize("role", [Role.INITIATOR, Role.RESPONDER])
+@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(steps=st.lists(st.tuples(attack_events, deltas), max_size=12))
+def test_property_nonces_never_leak_before_their_gate(role, steps):
+    # (a) + (b) cho bên trả lời, (c) + (d) cho bên khởi xướng, với chuỗi sự kiện ngẫu nhiên.
+    session = make_initiator() if role == Role.INITIATOR else make_responder()
+    check_secrecy(session, role, [(Start(), 0.0), *steps])
+
+
+@pytest.mark.parametrize("role", [Role.INITIATOR, Role.RESPONDER])
+@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    steps=st.lists(
+        st.tuples(st.sampled_from([HAPPY] * 5 + ["noise"]), attack_events, small_deltas),
+        min_size=1,
+        max_size=8,
+    )
+)
+def test_property_nonces_never_leak_on_noisy_happy_path(role, steps):
+    # Biến thể đi gần đường đúng để thật sự chạm và vượt cổng (pair_commit / pair_nonce).
+    session = make_initiator() if role == Role.INITIATOR else make_responder()
+    path = iter(happy_path(role, peer_first=False))
+    events = [(Start(), 0.0)]
+    for kind, noise, delta in steps:
+        events.append((next(path, Tick()) if kind == HAPPY else noise, delta))
+    check_secrecy(session, role, events)
+
+
+def test_responder_n_b_never_sent_before_nonce_deterministic():
+    # (a) đơn giản, không phụ thuộc hypothesis: mọi sự kiện có thể tới trước pair_nonce.
+    for event in ALL_NON_START_EVENTS:
+        s = make_responder()
+        out = s.handle(Start(), T0) + s.handle(event, T0 + 1)
+        if isinstance(event, MessageReceived) and isinstance(event.message, PairNonce):
+            continue
+        assert N_B.hex() not in sent_text(out), f"n_B lộ với sự kiện {event!r}"
+        assert not any(isinstance(a, ShowCode) for a in out)
+
+
+def test_initiator_n_a_never_sent_before_commit_deterministic():
+    # (c) đơn giản: mọi sự kiện có thể tới trước pair_commit.
+    for event in ALL_NON_START_EVENTS:
+        s = make_initiator()
+        out = s.handle(Start(), T0) + s.handle(event, T0 + 1)
+        if isinstance(event, MessageReceived) and isinstance(event.message, PairCommit):
+            continue
+        assert N_A.hex() not in sent_text(out), f"n_A lộ với sự kiện {event!r}"
 
 
 @settings(max_examples=300, deadline=None)
-@given(n_a=nonces, n_b=nonces, revealed=nonces, swap_fp=st.booleans(), delay=st.floats(0, 9.99))
-def test_property_reveal_not_matching_commitment_is_protocol_error(n_a, n_b, revealed, swap_fp, delay):
-    if swap_fp:
-        # Kẻ đứng giữa thay chứng chỉ: cam kết làm với fingerprint của nó, nonce tiết lộ đúng.
-        commitment = make_commitment(CERT_C.fingerprint, n_a)
-        revealed = n_a
+@given(
+    n_a=nonces,
+    n_b=nonces,
+    n_b2=nonces,
+    commit_fp=st.sampled_from(["responder", "initiator", "third"]),
+    d1=st.floats(0, 9.99),
+    d2=st.floats(0, 9.99),
+)
+def test_property_responder_changing_n_b_after_seeing_n_a_is_protocol_error(
+    n_a, n_b, n_b2, commit_fp, d1, d2
+):
+    # (d) Bên trả lời giả: cam kết n_B, thấy n_A, rồi tiết lộ n_B2 để lái mã. Hoặc cam kết bằng
+    # fp không phải của B (kẻ thay chứng chỉ) rồi tiết lộ đúng nonce đã cam kết.
+    fp = {
+        "responder": CERT_B.fingerprint,
+        "initiator": CERT_A.fingerprint,
+        "third": CERT_C.fingerprint,
+    }[commit_fp]
+    if commit_fp == "responder":
+        assume(n_b2 != n_b)
+        revealed = n_b2
     else:
-        assume(revealed != n_a)
-        commitment = make_commitment(CERT_A.fingerprint, n_a)
-    s = make_responder(request=PairRequest(cert=CERT_A.pem, commitment=commitment), nonce=n_b)
-    assert s.handle(Start(), T0) == [SendMessage(PairChallenge(n_b.hex()))]
-    actions = s.handle(MessageReceived(PairReveal(revealed.hex())), T0 + delay)
+        revealed = n_b
+    s = make_initiator(nonce=n_a)
+    assert s.handle(Start(), T0) == [SendMessage(PairRequest(cert=CERT_A.pem))]
+    assert s.handle(MessageReceived(PairCommit(make_commitment(fp, n_b))), T0 + d1) == [
+        SendMessage(PairNonce(n_a.hex()))
+    ]
+    actions = s.handle(MessageReceived(PairReveal(revealed.hex())), T0 + d1 + d2)
     assert actions[:-1] == [ABORT_INVALID]
     assert_closed(actions, Outcome.PROTOCOL_ERROR)
     assert not any(isinstance(a, ShowCode) for a in actions)
     assert s.code is None
     assert_done(s, Outcome.PROTOCOL_ERROR)
+
+
+@settings(max_examples=300, deadline=None)
+@given(n_a=nonces, n_b=nonces, d1=st.floats(0, 9.99), d2=st.floats(0, 9.99))
+def test_property_honest_reveal_always_shows_code(n_a, n_b, d1, d2):
+    s = make_initiator(nonce=n_a)
+    s.handle(Start(), T0)
+    s.handle(MessageReceived(PairCommit(make_commitment(CERT_B.fingerprint, n_b))), T0 + d1)
+    actions = s.handle(MessageReceived(PairReveal(n_b.hex())), T0 + d1 + d2)
+    assert actions == [ShowCode(pairing_code(CERT_A.fingerprint, CERT_B.fingerprint, n_a, n_b))]
+
+
+# (e) Kẻ đứng giữa mở N phiên liên tiếp tới B, mỗi phiên làm một kiểu: gửi pair_nonce, gửi
+# reveal/commit/request sai lúc, hủy, mất kết nối, rác, chờ hết giờ… Nó chỉ được biết n_B của
+# những phiên mà B đã ShowCode (người dùng ở B thấy lời hỏi nên có dấu vết).
+ATTACK_MOVES = [
+    "nonce",
+    "nonce_n_b",
+    "reveal_early",
+    "commit",
+    "request",
+    "confirm",
+    "abort",
+    "lost",
+    "bad",
+    "hello",
+    "cancel_busy",
+    "timeout",
+    "user_yes",
+    "user_no",
+]
+
+
+def _attack_event(move: str, guess: bytes, n_b_seen: str | None):
+    return {
+        "nonce": MessageReceived(PairNonce(guess.hex())),
+        # Gửi lại n_B (nếu đã thấy) làm n_A: thử dắt B tự tính mã với n_A = n_B.
+        "nonce_n_b": MessageReceived(PairNonce(n_b_seen or guess.hex())),
+        "reveal_early": MessageReceived(PairReveal(guess.hex())),
+        "commit": MessageReceived(PairCommit(make_commitment(CERT_A.fingerprint, guess))),
+        "request": MessageReceived(PairRequest(cert=CERT_C.pem)),
+        "confirm": MessageReceived(PairConfirm()),
+        "abort": MessageReceived(PairAbort("user")),
+        "lost": ConnectionLost(),
+        "bad": BadMessage("rác"),
+        "hello": MessageReceived(HELLO_A),
+        "cancel_busy": Cancel(AbortReason.BUSY),
+        "timeout": Tick(),
+        "user_yes": UserDecision(True),
+        "user_no": UserDecision(False),
+    }[move]
+
+
+@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    sessions=st.lists(
+        st.tuples(
+            nonces,
+            nonces,
+            st.lists(st.tuples(st.sampled_from(ATTACK_MOVES), small_deltas), min_size=1, max_size=4),
+        ),
+        min_size=1,
+        max_size=8,
+    )
+)
+def test_property_mitm_learns_n_b_only_from_sessions_that_showed_code(sessions):
+    now = 0.0
+    learned: set[bytes] = set()
+    shown_sessions: set[bytes] = set()
+    prompts = 0
+    for n_b, guess, moves in sessions:
+        s = make_responder(nonce=n_b)
+        actions = s.handle(Start(), now)
+        n_b_seen: str | None = None
+        for move, delta in moves:
+            if s.state == State.DONE:
+                break
+            now += delta
+            if move == "timeout":
+                now = max(now, s.deadline)
+            out = s.handle(_attack_event(move, guess, n_b_seen), now)
+            actions += out
+            if n_b.hex() in sent_text(out):
+                n_b_seen = n_b.hex()
+        if s.state != State.DONE:
+            actions += s.handle(ConnectionLost(), now)
+        showed = any(isinstance(a, ShowCode) for a in actions)
+        prompts += showed
+        if showed:
+            shown_sessions.add(n_b)
+        if n_b.hex() in sent_text(actions):
+            learned.add(n_b)
+            assert showed, f"kẻ tấn công lấy được n_B mà B không hiện mã: {actions!r}"
+        # Cam kết là thứ duy nhất về n_B mà kẻ tấn công thấy được khi B chưa hiện mã.
+        commits = [
+            a.message for a in actions if isinstance(a, SendMessage) and isinstance(a.message, PairCommit)
+        ]
+        assert commits == [PairCommit(make_commitment(CERT_B.fingerprint, n_b))]
+    assert learned <= shown_sessions
+    assert len(learned) <= prompts
+    hypothesis.event(f"learned={len(learned)}/{len(sessions)}")

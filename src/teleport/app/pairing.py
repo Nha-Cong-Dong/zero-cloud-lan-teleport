@@ -432,7 +432,6 @@ class PairingService:
                 local=self._local,
                 peer=remote,
                 peer_hello=hello,
-                request=request,
                 nonce=secrets.token_bytes(NONCE_SIZE),
                 known_fingerprint=known.fingerprint if known is not None else None,
             )
