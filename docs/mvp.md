@@ -283,6 +283,10 @@ Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì
 | Danh tính thiết bị thay đổi (cùng mã thiết bị, khác chứng chỉ) | “*PC-Nha* đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. Kết nối đã bị chặn.” | Không cho ghép đôi đè; nút “Hủy ghép đôi *PC-Nha*” (kèm cảnh báo), sau đó mới ghép đôi lại được |
 | Máy đã ghép đôi cài lại Teleport | “Có một *PC-Nha* mới chưa ghép đôi. Nếu máy đó vừa cài lại Teleport, hãy ghép đôi lại.” | Nút “Ghép đôi”; ghép xong thì hỏi xóa mục *PC-Nha* cũ |
 | Máy kia từ chối máy này | “*PC-Nha* từ chối kết nối từ máy này. Có thể máy đó đã hủy ghép đôi.” | Nút “Ghép đôi lại” |
+| Máy kia chưa sẵn sàng ghép đôi | “*PC-Nha* chưa sẵn sàng ghép đôi: máy đó đang ghép đôi với máy khác, chưa mở chế độ chờ ghép đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau.” | Nút “Thử lại”; CLI gợi ý `teleport listen` |
+| Nhập IP thủ công nhưng không kết nối được | “Không kết nối được tới *192.168.1.5:47474*. Hãy kiểm tra Teleport đang chạy trên máy đó, hai máy dùng chung một mạng, và tường lửa cho phép Teleport.” | Nút “Thử lại” |
+| Thiết bị trả lời bằng danh tính không hợp lệ khi ghép đôi | “Thiết bị ở *192.168.1.5:47474* gửi danh tính không hợp lệ nên kết nối đã bị chặn. Có thể có người đang giả mạo.” | — |
+| Ghép đôi với chính máy này | “Đó là chính máy này. Hãy nhập địa chỉ của máy kia.” | — |
 | Danh tính của chính máy này bị hỏng | “Không đọc được danh tính của máy này. Teleport sẽ không tự tạo danh tính mới để khỏi mất các ghép đôi.” | Nút “Tạo danh tính mới” (cảnh báo phải ghép đôi lại) |
 | Mã ghép đôi không trùng / hết giờ | “Ghép đôi với *MacBook* chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo.” | Nút “Thử lại” |
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |

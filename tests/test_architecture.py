@@ -3,7 +3,7 @@
     core  ←  trust  ←  net  ←  app  ←  ui / cli
 
 - Mỗi tầng chỉ được import các tầng **bên dưới** nó (và tiện ích dùng chung `teleport.paths`,
-  `teleport.lock`).
+  `teleport.lock`, `teleport.atomic`).
 - `core` là sans-IO: không import thư viện mạng/bất đồng bộ, không import tầng nào khác.
 """
 
@@ -19,7 +19,7 @@ LAYERS = ["core", "trust", "net", "app", "ui", "cli"]
 TOP = {"ui", "cli"}
 
 # Tiện ích dùng chung: tầng nào cũng import được (trừ core), và chúng không import tầng nào.
-SHARED = ("paths", "lock")
+SHARED = ("paths", "lock", "atomic")
 
 SANS_IO_FORBIDDEN = (
     "asyncio",

@@ -28,13 +28,14 @@ Tài liệu này là **nguồn duy nhất** về trạng thái từng module. Tr
         │   core — giao thức thuần (sans-IO)               │   framing, message, Merkle, bitfield,
         │                                                 │   máy trạng thái truyền file, mã ghép đôi
         └─────────────────────────────────────────────────┘
-   paths.py, lock.py — thư mục cấu hình theo hệ điều hành, khóa file; tầng nào cũng dùng được (trừ core)
+   paths.py, lock.py, atomic.py — thư mục cấu hình theo hệ điều hành, khóa file, ghi file nguyên tử;
+   tầng nào cũng dùng được (trừ core)
 ```
 
 **Quy tắc**, được `tests/test_architecture.py` kiểm tra tự động:
 1. Mỗi tầng chỉ import các tầng **bên dưới**. `ui` và `cli` không import lẫn nhau.
 2. `core` là **sans-IO**: không import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `ifaddr`, `PySide6`, `teleport.paths`, `teleport.lock`, hay bất kỳ tầng nào khác.
-3. Mọi module/gói ở cấp `teleport.*` phải thuộc một tầng, hoặc là tiện ích dùng chung (`paths`, `lock`) không import tầng nào. Tạo gói mới thì phải xếp nó vào sơ đồ.
+3. Mọi module/gói ở cấp `teleport.*` phải thuộc một tầng, hoặc là tiện ích dùng chung (`paths`, `lock`, `atomic`) không import tầng nào. Tạo gói mới thì phải xếp nó vào sơ đồ.
 
 ### Vì sao chia như vậy
 
@@ -53,6 +54,8 @@ Mỗi thư mục cấu hình (tức mỗi danh tính) chỉ có **một node** c
 | `v0.1`–`v0.2` (chỉ có CLI) | Mỗi lệnh CLI tự chạy một node. Node giữ **file khóa** `<config_dir>/node.lock`; tiến trình thứ hai cùng thư mục cấu hình sẽ báo “Teleport đang chạy” rồi thoát. |
 | Từ `v0.3` (có giao diện) | Giao diện chạy node nền ở khay hệ thống. CLI phát hiện node đang chạy thì gửi lệnh cho nó qua **IPC cục bộ** (socket trên `127.0.0.1` kèm token trong thư mục cấu hình), không tự chạy node thứ hai. |
 
+`teleport unpair` sửa `trusted.json` khi không có node nào chạy, và giữ `node.lock` trong lúc sửa. Đang có `teleport listen` thì báo phải dừng nó trước (tới v0.3).
+
 Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi node một thư mục cấu hình riêng bằng `TELEPORT_HOME` hoặc `--config-dir`.
 
 ## 3. Bản đồ module
@@ -63,6 +66,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 |---|---|---|---|
 | — | `paths.py` | Thư mục cấu hình theo hệ điều hành; `TELEPORT_HOME` ghi đè | ✅ |
 | — | `lock.py` | Khóa file của hệ điều hành: `node.lock` (một node cho mỗi thư mục cấu hình), `identity.lock` (khi tạo danh tính) | ✅ |
+| — | `atomic.py` | Ghi file nguyên tử (`.tmp` → fsync → `os.replace`, thử lại khi bị khóa); dùng cho `trusted.json`, `settings.json` | ✅ |
 | core | `framing.py` | Mã hóa/giải mã khung `[uint32 độ dài][JSON]`; giới hạn 16 MiB, riêng kết nối ghép đôi 16 KiB | ✅ |
 | core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*`, `control_open`, `ping`/`pong`); bảng loại kết nối (`ConnectionKind`, `allowed_types`, `opening_kind`) | ✅ |
 | core | `keepalive.py` | Keepalive sans-IO: khi nào gửi ping, khi nào coi là mất kết nối ([protocol.md](protocol.md) mục 2.3) | ✅ |
@@ -78,10 +82,12 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | net | `stream.py` | Đọc/ghi message trên `asyncio` stream | ✅ |
 | net | `discovery.py` | Quảng bá & tìm `_teleport._tcp.local.` (zeroconf, `MdnsDiscovery`): đăng ký/cập nhật/goodbye, duyệt và resolve theo `core.discovery`, đặt tập thiết bị ưu tiên (`set_priority`), đọc card mạng (ifaddr) và địa chỉ nguồn ưu tiên | ✅ |
 | net | `connection.py` | Listener một cổng (TCP trần + `start_tls` theo context hiện tại); trao `hello`; phân loại ghép đôi / điều khiển; giới hạn đang mở đầu 4/IP · 64 và ẩn danh 1/IP · 8; thời gian chờ; `Connection`, `ControlChannel` (keepalive); `open_pairing` / `open_control` thử song song mọi địa chỉ | ✅ (kết nối dữ liệu ⬜, Giai đoạn 2) |
-| app | `node.py` | Ghép các thành phần lại: lắng nghe, khám phá, giữ một kết nối điều khiển tới mỗi thiết bị tin cậy (chống trùng, nối lại), điều phối | ⏳ |
-| app | `pairing.py` | Dịch vụ ghép đôi: sinh nonce, chạy máy trạng thái `core.pairing` trên kết nối thật, lưu thiết bị tin cậy, hủy ghép đôi | ⏳ |
+| app | `settings.py` | `settings.json`: cổng dự phòng; giữ trường lạ; file hỏng → mặc định + `.bak` trước khi ghi đè | ✅ |
+| app | `devices.py` | Đọc địa chỉ nhập tay (`ip[:cổng]`); tìm thiết bị tin cậy theo tên hoặc tiền tố `device_id` (mvp F12) | ✅ |
+| app | `pairing.py` | Dịch vụ ghép đôi (`PairingService`): sinh nonce, chạy `core.pairing` trên `Connection`, `PairingGate`, lưu thiết bị, nhường phiên khi hai bên cùng chủ động | ✅ |
+| app | `node.py` | Ghép các thành phần lại (`Node`): giữ `node.lock`, lắng nghe, khám phá, kết nối điều khiển tới thiết bị tin cậy, điều phối | ✅ lắng nghe, cổng dự phòng, ghép đôi, nhận kết nối điều khiển (tối đa 1 mỗi thiết bị), hủy ghép đôi đóng kết nối ngay · ⏳ mDNS, tự giữ kết nối điều khiển, chống trùng §6.1 (PR-4) |
 | app | `transfers.py`, `clipboard.py` | Quản lý lượt truyền, đồng bộ clipboard | ⬜ |
-| cli | `cli.py`, `__main__.py` | Lệnh `teleport` / `python -m teleport` | ✅ `identity` · ⏳ `list`, `listen`, `pair`, `unpair` |
+| cli | `cli.py`, `__main__.py` | Lệnh `teleport` / `python -m teleport` | ✅ `identity`, `listen`, `pair <ip[:cổng]>`, `unpair` · ⏳ `list`, `pair <tên>` |
 | ui | `ui/` | Radar, lượt truyền, ghép đôi, cài đặt, khay hệ thống | ⬜ |
 
 Module chỉ được tạo khi có code thật, không tạo file rỗng trước.
@@ -94,7 +100,7 @@ Module chỉ được tạo khi có code thật, không tạo file rỗng trư�
 | `<config_dir>/trusted.json` | Chứng chỉ + tên các thiết bị đã ghép đôi ✅ |
 | `<config_dir>/node.lock` | Khóa: chỉ một node mỗi thư mục cấu hình ✅ |
 | `<config_dir>/identity.lock` | Khóa trong lúc tạo danh tính, để nhiều tiến trình chạy lần đầu cùng lúc nhận cùng một danh tính ✅ |
-| `<config_dir>/settings.json` | Cài đặt người dùng, gồm cổng dự phòng khi 47474 bận ([protocol.md](protocol.md) mục 2.1), và cả cài đặt theo từng thiết bị tin cậy (“Hỏi trước khi nhận”, “Đồng bộ clipboard”), theo `device_id`. Không đưa vào `trusted.json`: file đó bỏ trường lạ khi ghi và bị bản cũ từ chối nếu tăng `version` ⬜ |
+| `<config_dir>/settings.json` | Cài đặt người dùng: cổng dự phòng khi 47474 bận ([protocol.md](protocol.md) mục 2.1) ✅; sau này cả cài đặt theo từng thiết bị tin cậy (“Hỏi trước khi nhận”, “Đồng bộ clipboard”), theo `device_id` ⬜. Không đưa vào `trusted.json`: file đó bỏ trường lạ khi ghi và bị bản cũ từ chối nếu tăng `version`. Chi tiết bên dưới |
 | `<config_dir>/history.json` | 100 lượt truyền gần nhất (mvp F5), ghi nguyên tử ⬜ |
 | `<thư mục nhận>/.teleport/<transfer_id>/transfer.json` | Trạng thái mức lượt truyền, còn sau khi khởi động lại: manifest của `offer`, thiết bị gửi (`device_id`), đã chấp nhận, file hiện tại, các file đã `verified`; ghi nguyên tử; xóa 24 giờ sau khi file cuối xong ([protocol.md](protocol.md) mục 6.3) ⬜ |
 | `<thư mục nhận>/.teleport/<transfer_id>/<file_index>.part` | Dữ liệu đang nhận, ghi đúng vị trí từng khối ⬜ |
@@ -129,10 +135,25 @@ Do `teleport.trust.store` đọc/ghi.
 }
 ```
 
-- **Ghi:** UTF-8, `indent=2`, giữ nguyên ký tự Unicode; các mục sắp theo tên (không phân biệt hoa thường) rồi `device_id`; `paired_at` theo UTC, dạng `YYYY-MM-DDTHH:MM:SSZ`. Ghi nguyên tử: `trusted.json.tmp` → fsync → `os.replace` (tối đa 5 lần thử, cách nhau 50 ms, nếu file đích đang bị tiến trình khác mở). Trên Linux/macOS quyền file là `0o600` và thư mục cha được fsync sau khi đổi tên. Thư mục cấu hình được tạo nếu chưa có. Trường lạ không được giữ khi ghi lại.
+- **Ghi:** UTF-8, `indent=2`, giữ nguyên ký tự Unicode; các mục sắp theo tên (không phân biệt hoa thường) rồi `device_id`; `paired_at` theo UTC, dạng `YYYY-MM-DDTHH:MM:SSZ`. Ghi nguyên tử bằng `teleport.atomic.write_atomic`: `trusted.json.tmp` → fsync → `os.replace` (tối đa 5 lần thử, cách nhau 50 ms, nếu file đích đang bị tiến trình khác mở). Trên Linux/macOS quyền file là `0o600` và thư mục cha được fsync sau khi đổi tên. Thư mục cấu hình được tạo nếu chưa có. Trường lạ không được giữ khi ghi lại.
 - **Đọc:** chấp nhận BOM UTF-8. Chưa có file → kho rỗng, không tạo file. Mỗi mục được kiểm lại: phân tích lại chứng chỉ (như khi ghép đôi, xem [protocol.md](protocol.md) mục 5), `fingerprint` = SHA-256 DER, `device_id` khớp CN, `name` hợp lệ, `paired_at` là ISO 8601 có múi giờ. Trường lạ bị bỏ qua.
 - **Lỗi:** JSON hỏng, thiếu/sai trường, `version` khác số nguyên 1 (lớn hơn là bản mới hơn), trùng `device_id` hoặc trùng `fingerprint` → **cả file** bị từ chối (`TrustStoreError`). File hỏng **không bao giờ** bị tự xóa, sửa hay tạo lại.
 - `TrustStore.add` thay mục cũ trùng `device_id` hoặc `fingerprint`. Tầng `app` không bao giờ gọi nó với `device_id` đã tin cậy mà fingerprint khác: trường hợp đó bị chặn từ lúc ghép đôi ([protocol.md](protocol.md) mục 5.1, 7).
+
+### `settings.json`
+
+Do `teleport.app.settings.Settings` đọc/ghi.
+
+```json
+{
+  "version": 1,
+  "port": 47475
+}
+```
+
+- **Ghi:** chỉ khi phải dùng cổng dự phòng (47474 hay cổng đã lưu không mở được → hệ điều hành chọn cổng khác). UTF-8, `indent=2`, ghi nguyên tử bằng `teleport.atomic.write_atomic`. Trường lạ được giữ nguyên, kể cả `version` lớn hơn bản app hỗ trợ (không coi là lỗi), để bản cũ không xóa dữ liệu của bản mới.
+- **Đọc:** chấp nhận BOM UTF-8. Chưa có file → mặc định, không tạo file. Không bao giờ chặn app: file hỏng (> 1 MiB, không phải JSON UTF-8, không phải object) → ghi cảnh báo vào log (chỉ loại lỗi, không ghi nội dung) và dùng mặc định; `port` hay `version` sai → cảnh báo, bỏ trường đó.
+- **File hỏng:** trước khi ghi đè, bản gốc được chép nguyên byte sang `settings.json.bak` (ghi đè `.bak` cũ). Không chép được thì không ghi file chính.
 
 ### `node.lock`
 
@@ -146,9 +167,11 @@ Do `teleport.lock.NodeLock` giữ (tiện ích dùng chung như `paths.py`, vì 
 
 Toàn bộ mạng chạy trên **một event loop `asyncio`**; giao diện Qt dùng chung event loop đó qua `qasync`. Việc chặn (ghi đĩa lớn, băm) được đẩy sang thread bằng `asyncio.to_thread`, để event loop không bao giờ bị đứng.
 
+Ngoại lệ có chủ đích: ghi `trusted.json` và `settings.json` chạy đồng bộ trên event loop. File nhỏ (thường < 50 ms, xấu nhất ~250 ms khi phải thử lại `os.replace`), và nhờ vậy trạng thái trong RAM đổi cùng lúc với file, không có `await` xen giữa (ví dụ `Node.unpair`: xóa khỏi kho, đổi danh sách tin cậy của cổng và lấy kết nối của máy đó ra khỏi bảng trong cùng một bước).
+
 ## 6. Kiểm thử
 
-- `tests/` chia thư mục theo tầng: `core/`, `trust/`, `net/`… Test ở thư mục gốc `tests/` dành cho các tiện ích dùng chung (`paths`, `lock`), `cli` và quy tắc phân tầng.
+- `tests/` chia thư mục theo tầng: `core/`, `trust/`, `net/`… Test ở thư mục gốc `tests/` dành cho các tiện ích dùng chung (`paths`, `lock`, `atomic`), `cli` và quy tắc phân tầng.
 - Test cần socket thật được đánh dấu `@pytest.mark.integration`. Chạy nhanh phần còn lại bằng `pytest -m "not integration"`.
 
 Giao thức trên dây: xem [protocol.md](protocol.md).

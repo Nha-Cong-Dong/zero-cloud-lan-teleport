@@ -32,11 +32,17 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport.net.connection`: node lắng nghe trên một cổng (mặc định 47474), nhận kết nối ghép đôi và điều khiển, giới hạn kết nối và thời gian chờ chống lũ, keepalive `ping`/`pong`, đổi danh sách tin cậy có hiệu lực ngay mà không mở lại cổng; client thử song song mọi địa chỉ.
 - `teleport.core.keepalive`: keepalive sans-IO (khi nào gửi `ping`, khi nào coi là mất kết nối).
 - `teleport.core.messages`: bảng loại kết nối `ConnectionKind` / `allowed_types` / `opening_kind`.
+- Ghép đôi hai máy qua mạng bằng dòng lệnh: `teleport listen` (chờ ghép đôi, hiện mã 6 số, hỏi xác nhận `[c/k]`), `teleport pair <ip[:cổng]>`, `teleport unpair <thiết bị>` (tên hoặc tiền tố mã thiết bị, khi không có node nào chạy); `--json` (JSON Lines cho `listen` / `pair`); mã thoát 0 (thành công), 1 (lỗi lúc chạy), 2 (lệnh sai).
+- `teleport.app`: `Node` (giữ `node.lock`, lắng nghe, nhận kết nối điều khiển, tối đa một cho mỗi thiết bị), `PairingService` (luồng ghép đôi trên mạng, chống làm phiền, nhường phiên khi hai bên cùng chủ động), cài đặt (`settings.json`), tìm thiết bị theo tên / tiền tố mã.
+- Cổng 47474 bận thì hệ điều hành chọn cổng khác, lưu vào `settings.json` để lần sau dùng lại.
+- Hủy ghép đôi khi node đang chạy đóng ngay kết nối đang mở với máy bị hủy.
+- `teleport.atomic`: ghi file nguyên tử dùng chung (`write_atomic`).
 
 ### Changed
 - `docs/protocol.md` (dự thảo, chưa phát hành): mọi kết nối đi vào **một cổng** (mặc định 47474) với `CERT_OPTIONAL`; ba loại kết nối ghép đôi / điều khiển / dữ liệu, client khai báo loại bằng `pair_request` / `control_open` / `data_open` ngay sau `hello`; kết nối dữ liệu đi cùng chiều với kết nối điều khiển (qua được tường lửa một chiều); giới hạn kích thước, thời gian chờ, keepalive; chống làm phiền khi ghép đôi (chờ tăng dần theo IP); không ghép đôi đè danh tính khác; một kết nối điều khiển cho mỗi cặp máy; mDNS TTL 60 s; hủy ghép đôi có hiệu lực ngay; quy tắc tăng số phiên bản giao thức từ `v0.1.0-alpha`.
 - `docs/protocol.md` mục 4 (dự thảo): hash SHA-256 của mỗi khối nằm trong header khung khối, thay cho `block_hashes` theo lô 64 khối trên kênh điều khiển; `fsync` mỗi 16 khối; `resume{seq}` là cơ chế gửi lại duy nhất (bỏ `corrupt`), mỗi kết nối dữ liệu phục vụ đúng một `resume`; mọi message của lượt truyền gửi lại được và hai bên đồng bộ lại sau mỗi kết nối điều khiển mới; mỗi chiều giữa hai máy chạy một lượt truyền; bên nhận đọc lại toàn bộ file từ đĩa trước khi đổi tên (phát hiện byte bị sửa lúc tạm dừng); đổi tên không ghi đè trên mọi hệ file; file tạm nằm trong `.teleport/<transfer_id>/`.
 - `docs/protocol.md` (dự thảo): IPv4, thử song song mọi địa chỉ được quảng bá, cổng dự phòng lưu lại; tên instance mDNS là `device_id`, TXT `name` ≤ 200 byte; quy tắc trường `ping`/`pong`/`seq`; `seq` có phạm vi một kết nối điều khiển; trạng thái mức lượt truyền `transfer.json`; chính sách nối lại khi không có lượt truyền và khi bị từ chối; `teleport pair` nhận `ip[:cổng]`.
+- `docs/mvp.md` mục 8: thêm 4 thông báo (máy kia chưa sẵn sàng ghép đôi; nhập IP mà không kết nối được; danh tính không hợp lệ khi ghép đôi; ghép đôi với chính máy này).
 - `teleport.net.tls.server_context(identity, trusted_certs, *, allow_anonymous=False)`: bỏ chế độ `trusted_certs=None` (không xác thực client); `allow_anonymous=True` cho cổng chung.
 - `docs/protocol.md` mục 5 (dự thảo, chưa phát hành): mã ghép đôi dùng nonce cam kết thay vì chỉ hai fingerprint; bên khởi xướng gửi chứng chỉ trong `pair_request` thay vì trong bắt tay TLS.
 - `docs/protocol.md` mục 2.3 (dự thảo, chưa phát hành): máy đã gửi `pair_confirm` chờ thêm 10 s (`CONFIRM_GRACE`, tới 70 s kể từ lúc hiện mã) để nhận `pair_confirm` của máy kia; quyết định tới sau hạn chót vẫn là hết giờ.
@@ -52,6 +58,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport.net.tls.verify_pin`, `normalize_pin`, `MIN_PIN_HEX`: không tính năng nào xác thực bằng tiền tố fingerprint; pin ngắn chỉ còn để hiển thị.
 
 ### Security
+- Ghép đôi qua CLI chỉ lưu thiết bị khi người dùng xác nhận `[c/k]` ở cả hai máy sau khi mã đã hiện (dòng gõ sẵn trước lúc hiện mã bị bỏ); hủy ghép đôi đóng ngay kết nối đang mở với máy đó; mỗi thiết bị tin cậy chỉ giữ một kết nối điều khiển.
 - Danh tính thiếu một nửa, hỏng hoặc khóa không khớp chứng chỉ báo `IdentityError` (CLI thoát mã 1, không in traceback) thay vì âm thầm tạo danh tính mới làm mất mọi ghép đôi.
 - Khóa riêng được tạo với quyền `0o600` ngay từ đầu (trước đây có một khoảnh khắc người khác đọc được trên Linux/macOS); danh tính được tạo qua file tạm và đổi tên không ghi đè.
 - Chứng chỉ thiết bị có hiệu lực từ 2000-01-01 tới 9999-12-31: không ngày nào phụ thuộc đồng hồ của máy tạo, nên máy lệch đồng hồ vẫn bắt tay mTLS được và danh tính không hết hạn.
