@@ -45,6 +45,7 @@ from teleport.core.pairing import (
     CONFIRM_GRACE,
     CONFIRM_TIMEOUT,
     MESSAGE_TIMEOUT,
+    NONCE_TIMEOUT,
     BadMessage,
     Cancel,
     Close,
@@ -255,7 +256,7 @@ EXPECTED_DEADLINE = {
     "init-confirming": SHOWN_AT + 60,
     "init-local_confirmed": SHOWN_AT + 70,
     "init-peer_confirmed": SHOWN_AT + 60,
-    "resp-await_nonce": T0 + 10,
+    "resp-await_nonce": T0 + NONCE_TIMEOUT,  # hạn riêng chờ pair_nonce, ngắn hơn MESSAGE_TIMEOUT
     "resp-confirming": SHOWN_AT + 60,
     "resp-local_confirmed": SHOWN_AT + 70,
     "resp-peer_confirmed": SHOWN_AT + 60,
@@ -327,6 +328,8 @@ ALL_NON_START_EVENTS = [
 
 def test_timeout_constants_match_protocol():
     assert MESSAGE_TIMEOUT == 10.0
+    assert NONCE_TIMEOUT == 5.0
+    assert NONCE_TIMEOUT < MESSAGE_TIMEOUT
     assert CONFIRM_TIMEOUT == 60.0
     assert CONFIRM_GRACE == 10.0
 
@@ -898,7 +901,7 @@ def test_responder_start_sends_commitment_of_own_fingerprint_and_nonce():
     assert actions[0].message.commitment != make_commitment(CERT_A.fingerprint, N_B)
     assert N_B.hex() not in sent_text(actions)
     assert s.state == State.AWAIT_NONCE
-    assert s.deadline == T0 + 10
+    assert s.deadline == T0 + NONCE_TIMEOUT
     assert s.code is None
 
 
@@ -979,10 +982,10 @@ def test_both_roles_compute_same_code():
     assert a.code == b.code == CODE_AB
 
 
-def test_responder_times_out_after_10s_without_nonce():
+def test_responder_times_out_after_nonce_timeout_without_nonce():
     s, _ = resp_await_nonce()
-    assert s.handle(Tick(), T0 + 9.999) == []
-    actions = s.handle(Tick(), T0 + 10)
+    assert s.handle(Tick(), T0 + NONCE_TIMEOUT - 0.001) == []
+    actions = s.handle(Tick(), T0 + NONCE_TIMEOUT)
     assert actions[:-1] == [ABORT_TIMEOUT]
     assert_closed(actions, Outcome.TIMEOUT)
     assert N_B.hex() not in sent_text(actions)
@@ -990,12 +993,103 @@ def test_responder_times_out_after_10s_without_nonce():
 
 def test_responder_nonce_at_deadline_is_timeout_and_n_b_stays_secret():
     s, _ = resp_await_nonce()
-    actions = s.handle(MessageReceived(NONCE_A), T0 + 10)
+    actions = s.handle(MessageReceived(NONCE_A), T0 + NONCE_TIMEOUT)
     assert actions[:-1] == [ABORT_TIMEOUT]
     assert_closed(actions, Outcome.TIMEOUT)
     assert s.code is None
     assert not any(isinstance(a, ShowCode) for a in actions)
     assert N_B.hex() not in sent_text(actions)
+
+
+# --- Hạn riêng NONCE_TIMEOUT: kẻ lạ nhận pair_commit rồi im lặng không giữ gate lâu -------------
+#
+# Bên trả lời chờ pair_nonce tối đa NONCE_TIMEOUT kể từ Start (lúc gửi pair_commit), ngắn hơn
+# MESSAGE_TIMEOUT (10 s) vẫn áp cho bên khởi xướng. Hạn tính từ mốc cố định; sự kiện không đi tiếp
+# luồng không gia hạn. Hằng số là biến module đọc lúc dùng (monkeypatch được).
+
+EPS = 0.001
+
+
+def test_responder_nonce_just_before_nonce_timeout_shows_code_then_reveals():
+    s, _ = resp_await_nonce()
+    assert s.deadline == T0 + NONCE_TIMEOUT
+    assert s.handle(Tick(), T0 + NONCE_TIMEOUT - EPS) == []
+    actions = s.handle(MessageReceived(NONCE_A), T0 + NONCE_TIMEOUT - EPS)
+    assert actions == [ShowCode(CODE_AB), SendMessage(REVEAL_B)]
+    assert s.state == State.CONFIRMING
+
+
+def test_responder_tick_at_nonce_timeout_sends_abort_timeout_and_closes():
+    s, _ = resp_await_nonce()
+    actions = s.handle(Tick(), T0 + NONCE_TIMEOUT)
+    # Đúng hai hành động: SendMessage(pair_abort{timeout}) rồi Close(TIMEOUT) (detail tự do).
+    assert len(actions) == 2
+    assert actions[0] == ABORT_TIMEOUT
+    assert_closed(actions, Outcome.TIMEOUT)
+    assert_done(s, Outcome.TIMEOUT)
+    assert s.code is None
+    assert not any(isinstance(a, ShowCode) for a in actions)
+    assert N_B.hex() not in sent_text(actions)
+
+
+def test_responder_nonce_wait_is_not_message_timeout():
+    # Hồi quy lỗi cũ: trước đây kẻ lạ giữ slot tới MESSAGE_TIMEOUT. Ở T0 + NONCE_TIMEOUT phiên
+    # phải đã hết giờ, không còn chờ tới T0 + MESSAGE_TIMEOUT.
+    s, _ = resp_await_nonce()
+    assert s.deadline < T0 + MESSAGE_TIMEOUT
+    out = s.handle(Tick(), T0 + NONCE_TIMEOUT)
+    assert_closed(out, Outcome.TIMEOUT)
+
+
+def test_responder_ignored_events_do_not_extend_nonce_deadline():
+    # Sự kiện không đi tiếp luồng (Tick, UserDecision ngoài lời hỏi) không dời mốc.
+    s, _ = resp_await_nonce()
+    for t in (T0 + 1, T0 + 2.5, T0 + NONCE_TIMEOUT - EPS):
+        assert s.handle(Tick(), t) == []
+        assert s.handle(UserDecision(True), t) == []
+        assert s.deadline == T0 + NONCE_TIMEOUT
+    assert_closed(s.handle(Tick(), T0 + NONCE_TIMEOUT), Outcome.TIMEOUT)
+
+
+def test_initiator_await_commit_still_uses_message_timeout():
+    s, _ = init_await_commit()
+    assert s.deadline == T0 + MESSAGE_TIMEOUT
+    assert s.handle(Tick(), T0 + NONCE_TIMEOUT) == []
+    assert s.state == State.AWAIT_COMMIT
+    assert s.handle(Tick(), T0 + MESSAGE_TIMEOUT - EPS) == []
+    assert_closed(s.handle(Tick(), T0 + MESSAGE_TIMEOUT), Outcome.TIMEOUT)
+
+
+def test_initiator_await_reveal_still_uses_message_timeout():
+    s, _ = init_await_reveal()
+    assert s.deadline == COMMIT_AT + MESSAGE_TIMEOUT
+    assert s.handle(Tick(), COMMIT_AT + NONCE_TIMEOUT) == []
+    assert s.state == State.AWAIT_REVEAL
+    actions = s.handle(MessageReceived(REVEAL_B), COMMIT_AT + MESSAGE_TIMEOUT - EPS)
+    assert actions == [ShowCode(CODE_AB)]
+
+
+def test_nonce_timeout_is_read_at_use_time(monkeypatch):
+    monkeypatch.setattr(pairing_mod, "NONCE_TIMEOUT", 2.0)
+    s = make_responder()
+    s.handle(Start(), T0)
+    assert s.deadline == T0 + 2.0
+    assert s.handle(Tick(), T0 + 2.0 - EPS) == []
+    assert_closed(s.handle(Tick(), T0 + 2.0), Outcome.TIMEOUT)
+
+
+def test_patching_nonce_timeout_does_not_touch_initiator_deadlines(monkeypatch):
+    monkeypatch.setattr(pairing_mod, "NONCE_TIMEOUT", 2.0)
+    s, _ = init_await_commit()
+    assert s.deadline == T0 + MESSAGE_TIMEOUT
+    s.handle(MessageReceived(COMMIT_B), COMMIT_AT)
+    assert s.deadline == COMMIT_AT + MESSAGE_TIMEOUT
+
+
+def test_patching_message_timeout_does_not_touch_responder_nonce_deadline(monkeypatch):
+    monkeypatch.setattr(pairing_mod, "MESSAGE_TIMEOUT", 1.0)
+    s, _ = resp_await_nonce()
+    assert s.deadline == T0 + NONCE_TIMEOUT
 
 
 # --- R4: message không nằm trong bảng của trạng thái -------------------------------------------
@@ -1362,7 +1456,7 @@ ABORT_REASON_CASES = [
     pytest.param(init_await_commit, _cancel_busy, "busy", id="initiator-yields-busy"),
     pytest.param(init_await_commit, _wait_out, "timeout", id="no-commit-10s"),
     pytest.param(init_await_reveal, _wait_out, "timeout", id="no-reveal-10s"),
-    pytest.param(resp_await_nonce, _wait_out, "timeout", id="no-nonce-10s"),
+    pytest.param(resp_await_nonce, _wait_out, "timeout", id="no-nonce-5s"),
     pytest.param(resp_confirming, _wait_out, "timeout", id="confirm-60s"),
     pytest.param(init_local_confirmed, _wait_out, "timeout", id="confirm-grace-70s"),
     pytest.param(init_confirming, _bad, "invalid", id="bad-message"),
@@ -1455,7 +1549,9 @@ def test_property_two_sessions_pair_in_any_order(
         if not choices:
             break
         choice = data.draw(st.sampled_from(choices))
-        now += data.draw(st.floats(min_value=0.0, max_value=3.0, allow_nan=False))
+        # ≤ 2 s mỗi bước: B nhận pair_nonce sau đúng hai bước (commit tới A, nonce tới B), tức
+        # ≤ 4 s < NONCE_TIMEOUT; các hạn khác (10 s, 60 s) còn rộng hơn.
+        now += data.draw(st.floats(min_value=0.0, max_value=2.0, allow_nan=False))
         if choice.startswith("user_"):
             side = choice[-1]
             user_pending[side] = False
@@ -1532,7 +1628,7 @@ fuzz_events = st.one_of(
 deltas = st.one_of(
     st.just(0.0),
     st.floats(min_value=0.0, max_value=3.0, allow_nan=False),
-    st.sampled_from([9.99, 10.0, 59.9, 60.0, 70.0]),
+    st.sampled_from([4.99, 5.0, 9.99, 10.0, 59.9, 60.0, 70.0]),  # biên NONCE/MESSAGE/CONFIRM
 )
 first_events = st.sampled_from(
     [Start(), Start(), Start(), Start(), Start(), Cancel("user"), Cancel("busy"), ConnectionLost()]

@@ -419,6 +419,7 @@ def fast_cli(monkeypatch):
     values = {
         core_pairing: {
             "MESSAGE_TIMEOUT": 1.0,
+            "NONCE_TIMEOUT": 0.5,
             "CONFIRM_TIMEOUT": 2.0,
             "CONFIRM_GRACE": 0.5,
             "BACKOFF_BASE": 0.5,

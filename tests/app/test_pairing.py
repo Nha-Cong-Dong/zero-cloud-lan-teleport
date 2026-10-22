@@ -629,7 +629,7 @@ async def test_p16_raw_client_closes_after_commit_gets_no_n_b_and_no_prompt(
     commitment = await c.read_commit()
     # Chưa gửi pair_nonce thì B không gửi gì thêm (đặc biệt không có pair_reveal).
     with pytest.raises(TimeoutError):
-        await c.read(timeout=0.3)
+        await c.read(timeout=0.1)
     t0 = time.monotonic()
     c.abort()
     await B.rec.wait_finished(1, timeout=2)
@@ -1115,14 +1115,115 @@ async def test_p23_silent_after_request_times_out(node_factory, raw_pairing_clie
     await c.begin(raw_id)
     await c.read_commit()
     t0 = time.monotonic()
-    msg = await c.read(timeout=fast.MESSAGE_TIMEOUT + fast.SLACK)
+    # Bên trả lời chờ pair_nonce theo hạn riêng NONCE_TIMEOUT. Test phân biệt hạn này với
+    # MESSAGE_TIMEOUT là test_stranger_after_commit_holds_gate_only_until_nonce_timeout.
+    msg = await c.read(timeout=fast.NONCE_TIMEOUT + fast.SLACK)
     waited = time.monotonic() - t0
     assert msg == {"type": "pair_abort", "reason": "timeout"}
-    assert 0.8 * fast.MESSAGE_TIMEOUT <= waited <= fast.MESSAGE_TIMEOUT + fast.SLACK
+    assert 0.8 * fast.NONCE_TIMEOUT <= waited <= fast.NONCE_TIMEOUT + fast.SLACK
     await B.rec.wait_finished(1)
     assert outcomes(B.rec) == ["timeout"]
     assert B.rec.prompts == []
     await wait_until(lambda: B.pairing.gate.active is None, 1)
+
+
+# --- Kẻ lạ nhận pair_commit rồi im lặng / nhỏ giọt: không giữ slot duy nhất của gate lâu ---------
+#
+# Đặc tả: bên trả lời chờ pair_nonce tối đa NONCE_TIMEOUT kể từ lúc gửi pair_commit; byte tới
+# không gia hạn. Trong lúc đó node bị chiếm slot (một phiên tại một thời điểm), nên `pair_with`
+# từ chính node đó trả `busy` ngay (không thể thử bằng client ẩn danh thứ hai cùng 127.0.0.1 vì
+# giới hạn 1 kết nối ẩn danh mỗi IP chặn nó trước gate). Sau NONCE_TIMEOUT + FAILED_CLOSE_TIMEOUT
+# gate phải trống và ghép đôi thật được.
+#
+# MESSAGE_TIMEOUT được nâng lên quá NONCE_TIMEOUT + SLACK: với FAST (0,5 / 1,0) hai hạn đều nằm gọn
+# trong SLACK nên không phân biệt được; nâng lên thì nếu bên trả lời dùng nhầm MESSAGE_TIMEOUT,
+# pair_abort đến muộn và test hỏng.
+
+NONCE_DRIP_INTERVAL = 0.05  # nhỏ giọt pair_nonce: một byte mỗi 50 ms (~100 byte → ~5 s, quá hạn xa)
+
+
+async def _drip(c, data: bytes, sent: list[int]) -> None:
+    """Gửi `data` từng byte, mỗi byte cách NONCE_DRIP_INTERVAL; đếm số byte đã gửi vào `sent`."""
+    for i in range(len(data)):
+        with contextlib.suppress(Exception):
+            c.writer.write(data[i : i + 1])
+            await c.writer.drain()
+        sent[0] = i + 1
+        await asyncio.sleep(NONCE_DRIP_INTERVAL)
+
+
+@integration
+@pytest.mark.parametrize("case", ["im_lang", "nho_giot_nonce"])
+async def test_stranger_after_commit_holds_gate_only_until_nonce_timeout(
+    node_factory, raw_pairing_client, tmp_path, fast, monkeypatch, case
+):
+    from teleport.app import pairing as app_pairing
+    from teleport.core import pairing as core_pairing
+
+    long_message_timeout = fast.NONCE_TIMEOUT + fast.SLACK + 2.0
+    monkeypatch.setattr(core_pairing, "MESSAGE_TIMEOUT", long_message_timeout)
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    C = await node_factory("C", accept_pairing=True, answer=True)
+    raw_id = load_or_create_identity(tmp_path / "raw")
+    c = await raw_pairing_client(B.port)
+    await c.begin(raw_id)
+    await c.read_commit()
+    t0 = time.monotonic()
+
+    drip: asyncio.Task | None = None
+    sent = [0]
+    frame_len = 0
+    if case == "nho_giot_nonce":
+        data = encode_message({"type": "pair_nonce", "nonce": c.nonce.hex()})
+        frame_len = len(data)
+        drip = asyncio.create_task(_drip(c, data, sent), name="test.drip")
+    try:
+        # Trong hạn: slot của gate bị phiên này chiếm → node B không khởi xướng được phiên khác.
+        busy = await asyncio.wait_for(B.pairing.pair_with([LOCAL], C.port), 0.8 * fast.NONCE_TIMEOUT)
+        assert time.monotonic() - t0 < 0.8 * fast.NONCE_TIMEOUT, "máy test quá chậm để kiểm hạn"
+        assert busy.outcome == PairingOutcome.BUSY
+        assert B.pairing.gate.active is not None
+        assert C.rec.prompts == [] and C.rec.finished == []
+
+        msg = await c.read(timeout=fast.NONCE_TIMEOUT + fast.SLACK)
+        waited = time.monotonic() - t0
+    finally:
+        if drip is not None:
+            drip.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await drip
+    assert msg == {"type": "pair_abort", "reason": "timeout"}, msg
+    assert 0.8 * fast.NONCE_TIMEOUT <= waited <= fast.NONCE_TIMEOUT + fast.SLACK, f"chờ {waited:.2f} s"
+    if case == "nho_giot_nonce":
+        assert 0 < sent[0] < frame_len, "pair_nonce phải bị cắt khi còn đang nhỏ giọt"
+
+    limit = fast.NONCE_TIMEOUT + app_pairing.FAILED_CLOSE_TIMEOUT + fast.SLACK
+    await wait_until(lambda: B.pairing.gate.active is None, limit, "gate chưa được nhả")
+    assert time.monotonic() - t0 <= limit
+    await c.read_until_closed(app_pairing.FAILED_CLOSE_TIMEOUT + fast.SLACK)
+    await wait_until(lambda: "timeout" in outcomes(B.rec), 1, "phiên trả lời chưa kết thúc TIMEOUT")
+    assert B.rec.prompts == [], "chưa nhận pair_nonce thì không được hiện mã"
+    assert B.pairing.gate.recent_codes(asyncio.get_running_loop().time()) == 0, "không được đếm mã"
+    assert B.store.devices() == []
+
+    # Hết bị chiếm: không còn busy, ghép đôi thật B → C thành công.
+    result = await asyncio.wait_for(B.pairing.pair_with([LOCAL], C.port), 15)
+    assert result.outcome == PairingOutcome.PAIRED
+    assert B.store.get(C.id) is not None and C.store.get(B.id) is not None
+
+
+@integration
+async def test_real_pairing_succeeds_with_short_nonce_timeout(node_factory, fast):
+    from teleport.core import pairing as core_pairing
+
+    assert core_pairing.NONCE_TIMEOUT == fast.NONCE_TIMEOUT < core_pairing.MESSAGE_TIMEOUT
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    A = await node_factory("A", answer=True)
+    result = await pair(A, B)
+    assert result.outcome == PairingOutcome.PAIRED
+    await B.rec.wait_finished(1)
+    assert outcomes(B.rec) == ["paired"]
+    assert A.store.get(B.id) is not None and B.store.get(A.id) is not None
 
 
 GATE_FREE_AFTER_FAILURE = 1.5  # sửa F4: gửi pair_abort + đóng tổng 1 s, cộng 0,5 s cho máy chậm

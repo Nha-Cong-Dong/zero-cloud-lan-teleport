@@ -34,8 +34,9 @@ thuần logic (CN khớp `hello`, tự ghép với chính mình, ghép đè danh
 
 `PairingGate` quyết định có nhận một yêu cầu ghép đôi tới hay không (một phiên
 tại một thời điểm, chờ tăng dần theo IP, giới hạn số mã hiện ra, hai bên cùng chủ
-động; protocol mục 5.3). Giới hạn số kết nối ẩn danh (1 mỗi IP, 8 tổng) là việc của
-tầng `net`.
+động; protocol mục 5.3). Bên trả lời chờ `pair_nonce` với hạn riêng NONCE_TIMEOUT, ngắn
+hơn MESSAGE_TIMEOUT, để một máy lạ không giữ được phiên lâu trước khi mã hiện ra.
+Giới hạn số kết nối ẩn danh (1 mỗi IP, 8 tổng) là việc của tầng `net`.
 """
 
 from __future__ import annotations
@@ -64,7 +65,8 @@ from teleport.core.messages import (
 from teleport.core.pairing_code import NONCE_SIZE, check_commitment, make_commitment, pairing_code
 
 # Thời gian tính bằng giây (protocol mục 2.3, 5.1, 5.3).
-MESSAGE_TIMEOUT = 10.0  # chờ pair_commit / pair_nonce / pair_reveal
+MESSAGE_TIMEOUT = 10.0  # bên khởi xướng chờ pair_commit, rồi chờ pair_reveal
+NONCE_TIMEOUT = 5.0  # bên trả lời chờ pair_nonce, tính từ lúc gửi pair_commit (protocol mục 2.3)
 CONFIRM_TIMEOUT = 60.0  # người dùng quyết định, tính từ lúc hiện mã
 # Máy này đã xác nhận: chờ thêm pair_confirm của máy kia tới shown_at + 60 + 10, vì
 # người dùng máy kia có thể bấm sát giây thứ 60 và message còn phải đi qua mạng.
@@ -562,7 +564,8 @@ class InitiatorSession(PairingSession):
 class ResponderSession(PairingSession):
     """Bên trả lời (B): tạo sau khi đã đọc `pair_request` và `PairingGate.admit` trả ACCEPT.
 
-    Gửi `pair_commit`, chờ `pair_nonce`, rồi hiện mã và gửi `pair_reveal`.
+    Gửi `pair_commit`, chờ `pair_nonce` tối đa NONCE_TIMEOUT, rồi hiện mã và gửi
+    `pair_reveal`.
     `peer` là kết quả `peer_cert_from_pem(request.cert)`, hoặc None nếu chứng chỉ hỏng
     (phiên sẽ gửi `pair_abort{invalid}` khi Start). `known_fingerprint` như bên khởi xướng.
     """
@@ -596,7 +599,9 @@ class ResponderSession(PairingSession):
         if problem is not None:
             return self._abort(AbortReason.INVALID, problem)
         self._state = State.AWAIT_NONCE
-        self._deadline = now + MESSAGE_TIMEOUT
+        # Hạn ngắn hơn MESSAGE_TIMEOUT: trước khi hiện mã, máy lạ giữ slot duy nhất của
+        # PairingGate lâu nhất là chừng này (protocol mục 5.3).
+        self._deadline = now + NONCE_TIMEOUT
         return [SendMessage(PairCommit(make_commitment(self._local.fingerprint, self._nonce)))]
 
     def _on_message(self, msg: Message, now: float) -> list[Action] | None:

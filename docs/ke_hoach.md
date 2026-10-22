@@ -355,6 +355,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | Bộ cài PyInstaller nặng (N11) hoặc bị antivirus báo nhầm | Build thử từ Giai đoạn 2; gửi mẫu cho các hãng antivirus nếu bị báo nhầm |
 | Windows Firewall chặn | Bộ cài tạo rule; app phát hiện và hướng dẫn khi bị chặn |
 | python-zeroconf nâng TTL bản ghi PTR nhận được lên ≥ 1125 s, nên máy tắt đột ngột không tự biến mất trong < 2 phút (N1) | Bên nhận tự kiểm còn sống bằng cách resolve lại SRV/TXT/A theo chu kỳ (`protocol.md` mục 8); đo N1 trên 2 máy thật; kiểm lại hành vi này mỗi khi nâng phiên bản zeroconf |
+| Từ chối dịch vụ ghép đôi trong LAN (giữ phiên, đổi IP, làm đầy giới hạn kết nối ẩn danh) | Chờ tăng dần theo IP, giới hạn số mã hiện ra, hạn chờ `pair_nonce` ngắn (`protocol.md` mục 2.3); phần còn lại chấp nhận theo `protocol.md` mục 5.3. Giới hạn kết nối ẩn danh và kết nối đang mở đầu ở tầng `net` (`protocol.md` mục 2.3) chưa có chờ tăng dần, sẽ xem ở việc sau |
 | Lỗ hổng bảo mật (path traversal, dữ liệu độc hại từ máy khác) | Kiểm tra hợp lệ mọi trường nhận được; fuzz test; `SECURITY.md` để nhận báo lỗi |
 | Làm một mình, không có hạn → kéo dài, ôm thêm tính năng | Bám các bản phát hành ở mục 5.1; ý tưởng mới ghi Issues nhãn `after-1.0`; nếu trễ thì cắt theo thứ tự ở mvp mục 14 |
 | Chỉ có 1 máy để thử | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật |

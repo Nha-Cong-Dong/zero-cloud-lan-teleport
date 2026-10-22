@@ -47,6 +47,7 @@ CLOSED_ERRORS: tuple[type[BaseException], ...] = (ConnectionError, ssl.SSLError)
 # Hằng thời gian sau khi patch (mục 4.1); test đọc từ đây để tính biên.
 FAST = SimpleNamespace(
     MESSAGE_TIMEOUT=1.0,
+    NONCE_TIMEOUT=0.5,  # bên trả lời chờ pair_nonce; nhỏ hơn MESSAGE_TIMEOUT để phân biệt hai hạn
     CONFIRM_TIMEOUT=2.0,
     CONFIRM_GRACE=0.5,
     BACKOFF_BASE=0.5,
@@ -669,7 +670,14 @@ def fast(monkeypatch):
     from teleport.core import pairing as core_pairing
     from teleport.net import connection
 
-    for name in ("MESSAGE_TIMEOUT", "CONFIRM_TIMEOUT", "CONFIRM_GRACE", "BACKOFF_BASE", "BACKOFF_MAX"):
+    for name in (
+        "MESSAGE_TIMEOUT",
+        "NONCE_TIMEOUT",
+        "CONFIRM_TIMEOUT",
+        "CONFIRM_GRACE",
+        "BACKOFF_BASE",
+        "BACKOFF_MAX",
+    ):
         monkeypatch.setattr(core_pairing, name, getattr(FAST, name))
     for name in ("OPENING_TIMEOUT", "CLOSE_TIMEOUT", "DRAIN_TIMEOUT"):
         monkeypatch.setattr(connection, name, getattr(FAST, name))

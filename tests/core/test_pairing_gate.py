@@ -10,6 +10,7 @@ from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from teleport.core import pairing as core_pairing
+from teleport.core.messages import CERT_PEM_HEADER, Hello, PairAbort, PairNonce
 from teleport.core.pairing import (
     BACKOFF_BASE,
     BACKOFF_FORGET_AFTER,
@@ -1070,3 +1071,83 @@ def test_property_admit_matches_sliding_window_model(gaps):
         shown.append(now)
         g.finish(slot, Outcome.CANCELLED, now)
         assert g.failures(IP) == 0
+
+
+# =================================================================================================
+# Kẻ lạ nhận pair_commit rồi im lặng: phiên trả lời hết giờ ở NONCE_TIMEOUT (không phải
+# MESSAGE_TIMEOUT 10 s), nhả slot duy nhất của gate. Gate không đổi: kết quả TIMEOUT tính là một
+# lần thất bại của IP đó, IP khác được nhận ngay, và không có mã nào được ghi (chưa hiện mã).
+# =================================================================================================
+
+_FAKE_PEM = f"{CERT_PEM_HEADER}\nZmFrZQ==\n-----END CERTIFICATE-----\n"
+_LOCAL_CERT = core_pairing.DeviceCert(device_id=OWN, fingerprint="b" * 64, pem=_FAKE_PEM)
+_PEER_CERT = core_pairing.DeviceCert(device_id=PEER, fingerprint="a" * 64, pem=_FAKE_PEM)
+_PEER_HELLO = Hello(protocol=1, device_id=PEER, name="Kẻ lạ", app_version="0.1.0", os="linux")
+
+
+def _admit_responder(g: PairingGate, ip: str, now: float):
+    """admit → ACCEPT → tạo phiên trả lời và Start (gửi pair_commit) ở `now`."""
+    slot = assert_accept(g.admit(ip, PEER, now), ip)
+    session = core_pairing.ResponderSession(
+        local=_LOCAL_CERT, peer=_PEER_CERT, peer_hello=_PEER_HELLO, nonce=bytes(32), known_fingerprint=None
+    )
+    out = session.handle(core_pairing.Start(), now)
+    assert [type(a.message).__name__ for a in out] == ["PairCommit"]
+    return slot, session
+
+
+def test_silent_peer_after_commit_frees_gate_at_nonce_timeout():
+    g = gate()
+    t0 = 100.0
+    nonce_timeout = core_pairing.NONCE_TIMEOUT
+    slot, session = _admit_responder(g, IP, t0)
+
+    # Còn trong hạn: phiên vẫn giữ slot, mọi IP khác nhận BUSY.
+    assert session.handle(core_pairing.Tick(), t0 + nonce_timeout - 0.001) == []
+    assert g.active == slot
+    assert_busy(g.admit(IP2, HIGHER, t0 + nonce_timeout - 0.001))
+
+    # Đúng t0 + NONCE_TIMEOUT: pair_abort{timeout} + Close(TIMEOUT); app gọi finish ngay lúc đó.
+    out = session.handle(core_pairing.Tick(), t0 + nonce_timeout)
+    assert [a.message for a in out[:-1]] == [PairAbort("timeout")]
+    close = out[-1]
+    assert isinstance(close, core_pairing.Close)
+    assert close.outcome == Outcome.TIMEOUT
+    g.finish(slot, close.outcome, t0 + nonce_timeout)
+
+    assert g.active is None
+    assert g.recent_codes(t0 + nonce_timeout) == 0, "chưa hiện mã thì không được đếm mã"
+    assert g.failures(IP) == 1
+    end = t0 + nonce_timeout + BACKOFF_BASE
+    assert g.blocked_until(IP) == end
+
+    # IP khác được nhận ngay; cùng IP nhận BUSY tới hết thời gian chờ tăng dần.
+    other = assert_accept(g.admit(IP2, PEER, t0 + nonce_timeout), IP2)
+    g.finish(other, Outcome.CANCELLED, t0 + nonce_timeout)
+    assert_busy(g.admit(IP, PEER, t0 + nonce_timeout))
+    assert_busy(g.admit(IP, PEER, end - 0.001))
+    assert_accept(g.admit(IP, PEER, end), IP)
+    assert g.recent_codes(end) == 0
+
+
+def test_silent_peer_slot_is_not_held_until_message_timeout():
+    # Hồi quy: trước đây slot bị giữ tới MESSAGE_TIMEOUT. Ở t0 + NONCE_TIMEOUT phiên đã kết thúc.
+    g = gate()
+    slot, session = _admit_responder(g, IP, 0.0)
+    assert session.deadline == core_pairing.NONCE_TIMEOUT
+    assert session.deadline < core_pairing.MESSAGE_TIMEOUT
+    out = session.handle(core_pairing.Tick(), core_pairing.NONCE_TIMEOUT)
+    assert out and out[-1].outcome == Outcome.TIMEOUT
+    g.finish(slot, out[-1].outcome, core_pairing.NONCE_TIMEOUT)
+    assert g.active is None
+
+
+def test_late_nonce_after_nonce_timeout_never_reaches_code_shown():
+    g = gate()
+    slot, session = _admit_responder(g, IP, 0.0)
+    out = session.handle(core_pairing.MessageReceived(PairNonce("11" * 32)), core_pairing.NONCE_TIMEOUT)
+    assert not any(isinstance(a, core_pairing.ShowCode) for a in out)
+    assert out[-1].outcome == Outcome.TIMEOUT
+    g.finish(slot, out[-1].outcome, core_pairing.NONCE_TIMEOUT)
+    assert g.recent_codes(core_pairing.NONCE_TIMEOUT) == 0
+    assert g.active is None
