@@ -1,7 +1,14 @@
-"""Hiểu thứ người dùng gõ: địa chỉ nhập tay (`ip[:cổng]`) và tên / mã của thiết bị tin cậy.
+"""Thiết bị người dùng thấy, và hiểu thứ người dùng gõ.
 
-Hàm thuần, không I/O. Không bao giờ tự đoán (mvp F12): khớp nhiều thiết bị thì báo để
-người dùng gõ cụ thể hơn.
+- `DeviceRegistry` / `DeviceView`: gộp `trusted.json`, mDNS và trạng thái kết nối.
+  Mỗi thiết bị đã ghép đôi hoặc đang thấy qua mDNS có một view. `paired` và tên của
+  thiết bị đã ghép đôi chỉ lấy từ `trusted.json`; mDNS chỉ là gợi ý (tên của thiết bị
+  chưa ghép đôi, hệ điều hành, địa chỉ, cổng).
+- `parse_manual_address`: địa chỉ nhập tay (`ip[:cổng]`).
+- `resolve_trusted` / `resolve_device`: tên hoặc tiền tố mã thiết bị.
+
+Hàm và lớp thuần, không I/O. Không bao giờ tự đoán (mvp F12): khớp nhiều thiết bị thì
+báo để người dùng gõ cụ thể hơn.
 """
 
 from __future__ import annotations
@@ -10,7 +17,9 @@ import ipaddress
 import re
 import unicodedata
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
+from teleport.core.discovery import DiscoveredDevice
 from teleport.net.connection import DEFAULT_PORT
 from teleport.trust.store import TrustedDevice
 
@@ -24,39 +33,130 @@ _BROADCAST = ipaddress.IPv4Address("255.255.255.255")
 _ADDRESS_HINT = "ví dụ 192.168.1.5 hoặc 192.168.1.5:47474"
 
 
+@dataclass(frozen=True, slots=True)
+class DeviceView:
+    """Một thiết bị như người dùng thấy (đã ghép đôi, hoặc đang thấy qua mDNS)."""
+
+    device_id: str
+    name: str  # đã ghép đôi: tên trong trusted.json; chưa: tên TXT mDNS
+    os: str | None  # từ mDNS; None nếu không thấy qua mDNS
+    paired: bool  # CHỈ theo trusted.json
+    online: bool  # mDNS đang thấy (không tính kết nối)
+    connected: bool  # có kết nối điều khiển (chỉ có thể True khi paired)
+    addresses: tuple[str, ...]  # từ mDNS; () nếu không thấy
+    port: int | None  # từ mDNS; None nếu không thấy
+
+
 class DeviceLookupError(Exception):
-    """Không xác định được đúng một thiết bị tin cậy từ chuỗi người dùng nhập."""
+    """Không xác định được đúng một thiết bị từ chuỗi người dùng nhập."""
 
     query: str
 
 
 class DeviceNotFound(DeviceLookupError):
-    """Không thiết bị tin cậy nào khớp.
+    """Không thiết bị nào khớp.
 
-    `known`: mọi thiết bị tin cậy lúc tìm (để giao diện liệt kê), sắp như `candidates`.
+    `known`: mọi thiết bị đã xét lúc tìm (để giao diện liệt kê), sắp như `candidates`.
     """
 
-    def __init__(self, query: str, known: Sequence[TrustedDevice] = ()) -> None:
-        super().__init__(f"không có thiết bị tin cậy nào khớp {query!r}")
+    def __init__(self, query: str, known: Sequence[TrustedDevice | DeviceView] = ()) -> None:
+        super().__init__(f"không có thiết bị nào khớp {query!r}")
         self.query = query
-        self.known: tuple[TrustedDevice, ...] = tuple(sorted(known, key=_sort_key))
+        self.known: tuple[TrustedDevice | DeviceView, ...] = tuple(sorted(known, key=_sort_key))
 
 
 class AmbiguousDevice(DeviceLookupError):
     """Khớp nhiều thiết bị; `candidates` sắp theo (NFC(name).casefold(), device_id)."""
 
-    def __init__(self, query: str, candidates: Sequence[TrustedDevice]) -> None:
+    def __init__(self, query: str, candidates: Sequence[TrustedDevice | DeviceView]) -> None:
         super().__init__(f"{query!r} khớp {len(candidates)} thiết bị")
         self.query = query
-        self.candidates: tuple[TrustedDevice, ...] = tuple(sorted(candidates, key=_sort_key))
+        self.candidates: tuple[TrustedDevice | DeviceView, ...] = tuple(sorted(candidates, key=_sort_key))
 
 
 def _nfc_fold(text: str) -> str:
     return unicodedata.normalize("NFC", text).casefold()
 
 
-def _sort_key(device: TrustedDevice) -> tuple[str, str]:
+def _sort_key(device: TrustedDevice | DeviceView) -> tuple[str, str]:
     return _nfc_fold(device.name), device.device_id
+
+
+# ---- Gộp mDNS + trusted.json ---------------------------------------------------------------
+
+
+class DeviceRegistry:
+    """Gộp `trusted.json`, mDNS và trạng thái kết nối thành `DeviceView` (thuần, không I/O).
+
+    Có view khi thiết bị đã ghép đôi hoặc đang thấy qua mDNS; máy này không bao giờ có
+    view. Dữ liệu mDNS không bao giờ đổi `paired` hay tên của thiết bị đã ghép đôi.
+    """
+
+    def __init__(self, own_device_id: str) -> None:
+        self._own_id = own_device_id
+        self._trusted: dict[str, TrustedDevice] = {}
+        self._seen: dict[str, DiscoveredDevice] = {}
+        self._connected: set[str] = set()
+
+    def set_trusted(self, devices: Iterable[TrustedDevice]) -> None:
+        """Thay toàn bộ tập thiết bị đã ghép đôi; thiết bị thôi tin cậy mất trạng thái kết nối."""
+        self._trusted = {d.device_id: d for d in devices if d.device_id != self._own_id}
+        self._connected &= self._trusted.keys()
+
+    def seen(self, device: DiscoveredDevice) -> None:
+        """mDNS thấy (hoặc thấy lại, đổi) một thiết bị (`DeviceAdded` / `DeviceUpdated`)."""
+        if not isinstance(device, DiscoveredDevice):
+            raise TypeError("device phải là DiscoveredDevice")
+        if device.device_id != self._own_id:
+            self._seen[device.device_id] = device
+
+    def gone(self, device_id: str) -> None:
+        """mDNS báo thiết bị biến mất (`DeviceRemoved`)."""
+        self._seen.pop(device_id, None)
+
+    def clear_seen(self) -> tuple[str, ...]:
+        """Đánh dấu mọi thiết bị offline (khởi động lại mDNS); trả các id đã thấy, sắp tăng dần."""
+        ids = tuple(sorted(self._seen))
+        self._seen.clear()
+        return ids
+
+    def set_connected(self, device_id: str, connected: bool) -> None:
+        """Có / không có kết nối điều khiển; thiết bị chưa ghép đôi bị bỏ qua."""
+        if device_id not in self._trusted:
+            return
+        if connected:
+            self._connected.add(device_id)
+        else:
+            self._connected.discard(device_id)
+
+    def get(self, device_id: str) -> DeviceView | None:
+        """View của thiết bị; None khi chưa ghép đôi và không thấy (hoặc là máy này)."""
+        trusted = self._trusted.get(device_id)
+        seen = self._seen.get(device_id)
+        if trusted is not None:
+            name = trusted.name
+        elif seen is not None:
+            name = seen.name
+        else:
+            return None
+        return DeviceView(
+            device_id=device_id,
+            name=name,
+            os=seen.os if seen is not None else None,
+            paired=trusted is not None,
+            online=seen is not None,
+            connected=device_id in self._connected,
+            addresses=seen.addresses if seen is not None else (),
+            port=seen.port if seen is not None else None,
+        )
+
+    def views(self) -> tuple[DeviceView, ...]:
+        """Mọi view, sắp theo (NFC(name).casefold(), device_id)."""
+        views = (self.get(device_id) for device_id in self._trusted.keys() | self._seen.keys())
+        return tuple(sorted((v for v in views if v is not None), key=_sort_key))
+
+
+# ---- Chuỗi người dùng nhập -----------------------------------------------------------------
 
 
 def parse_manual_address(text: str, default_port: int = DEFAULT_PORT) -> tuple[str, int]:
@@ -87,14 +187,8 @@ def parse_manual_address(text: str, default_port: int = DEFAULT_PORT) -> tuple[s
     return ip_text, port
 
 
-def resolve_trusted(query: str, devices: Iterable[TrustedDevice]) -> TrustedDevice:
-    """Tìm đúng một thiết bị tin cậy theo tên hoặc tiền tố `device_id`.
-
-    Tên: trùng nguyên tên sau NFC + casefold (không khớp tiền tố tên). Mã: ít nhất
-    MIN_ID_PREFIX ký tự hex (không phân biệt hoa thường) là tiền tố của `device_id`.
-    Gộp hai cách khớp. Đúng một → trả về; không có (kể cả `query` rỗng) → DeviceNotFound;
-    nhiều → AmbiguousDevice. `query` không phải chuỗi → TypeError.
-    """
+def _resolve[D: (TrustedDevice, DeviceView)](query: str, devices: Iterable[D]) -> D:
+    """Luật chung của `resolve_trusted` và `resolve_device`."""
     if not isinstance(query, str):
         raise TypeError("query phải là chuỗi")
     known = list(devices)
@@ -104,7 +198,7 @@ def resolve_trusted(query: str, devices: Iterable[TrustedDevice]) -> TrustedDevi
     name_key = _nfc_fold(q)
     id_prefix = q.lower()
     by_id = len(q) >= MIN_ID_PREFIX and _HEX_RE.fullmatch(id_prefix) is not None
-    matches: dict[str, TrustedDevice] = {}
+    matches: dict[str, D] = {}
     for device in known:
         if _nfc_fold(device.name) == name_key or (by_id and device.device_id.startswith(id_prefix)):
             matches[device.device_id] = device
@@ -113,3 +207,22 @@ def resolve_trusted(query: str, devices: Iterable[TrustedDevice]) -> TrustedDevi
     if len(matches) > 1:
         raise AmbiguousDevice(query, list(matches.values()))
     return next(iter(matches.values()))
+
+
+def resolve_trusted(query: str, devices: Iterable[TrustedDevice]) -> TrustedDevice:
+    """Tìm đúng một thiết bị tin cậy theo tên hoặc tiền tố `device_id`.
+
+    Tên: trùng nguyên tên sau NFC + casefold (không khớp tiền tố tên). Mã: ít nhất
+    MIN_ID_PREFIX ký tự hex (không phân biệt hoa thường) là tiền tố của `device_id`.
+    Gộp hai cách khớp. Đúng một → trả về; không có (kể cả `query` rỗng) → DeviceNotFound;
+    nhiều → AmbiguousDevice. `query` không phải chuỗi → TypeError.
+    """
+    return _resolve(query, devices)
+
+
+def resolve_device(query: str, views: Iterable[DeviceView]) -> DeviceView:
+    """Như `resolve_trusted`, trên các `DeviceView` (đã ghép đôi hoặc đang thấy qua mDNS).
+
+    Khớp cả view offline: bên gọi tự quyết làm gì với view đó.
+    """
+    return _resolve(query, views)

@@ -255,6 +255,7 @@ class PairingService:
         self._gate = PairingGate(identity.device_id, accepting=accepting)
         self._runs: dict[int, _Run] = {}  # slot.id → phiên đang chạy
         self._closed = False
+        self._aborted = False  # abort_all đã chạy: không bao giờ ghi trusted.json nữa
 
     @property
     def gate(self) -> PairingGate:
@@ -288,7 +289,9 @@ class PairingService:
         ip = addrs[0]
         if self._closed:
             return self._report_early(PairingOutcome.CANCELLED, ip, port)
-        slot = self._gate.begin_outgoing(ip)
+        # Các địa chỉ còn lại của cùng máy: luật hai bên cùng chủ động vẫn áp khi máy kia
+        # gửi yêu cầu từ một địa chỉ khác địa chỉ đầu (protocol §5.3).
+        slot = self._gate.begin_outgoing(ip, also=addrs[1:])
         if slot is None:
             return self._report_early(PairingOutcome.BUSY, ip, port)
 
@@ -490,6 +493,22 @@ class PairingService:
         self._gate.accepting = False
         await self.cancel_all()
 
+    def abort_all(self) -> None:
+        """Hủy cứng ngay, đồng bộ: dừng nhận yêu cầu mới (như `close`), `task.cancel()` cho
+        task của mọi phiên đang chạy trừ task đang gọi, và từ đây không bao giờ ghi
+        trusted.json nữa. Không chờ. Gọi nhiều lần không lỗi.
+
+        Node gọi hàm này khi `close()` bị hủy, trước khi nhả `node.lock`: một phiên còn chạy
+        nền sau đó không được ghi kho mà node khác có thể đang giữ.
+        """
+        self._closed = True
+        self._aborted = True
+        self._gate.accepting = False
+        current = asyncio.current_task()
+        for run in list(self._runs.values()):
+            if run.task is not None and run.task is not current and not run.task.done():
+                run.task.cancel()
+
     @staticmethod
     async def _wait_done(runs: list[_Run], timeout: float) -> list[_Run]:
         """Chờ `done` của các phiên tối đa `timeout`; trả các phiên chưa xong."""
@@ -617,6 +636,11 @@ class PairingService:
 
     def _save(self, run: _Run, action: SavePeer) -> None:
         peer = action.peer
+        if self._aborted:
+            # Node đã (hoặc sắp) nhả khóa: không ghi trusted.json nữa.
+            log.warning("ghép đôi: bỏ lưu thiết bị %s vì node đang dừng", peer.device_id[:8])
+            run.save_failed = True
+            return
         try:
             run.device = self._store.add(PeerCert(peer.device_id, peer.fingerprint, peer.pem), action.name)
         except (TrustStoreError, ValueError) as e:

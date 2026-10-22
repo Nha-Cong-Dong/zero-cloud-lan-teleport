@@ -2673,3 +2673,125 @@ async def test_cancelled_close_aborts_transport(fast, monkeypatch, listener_fact
             await server.send(Ping(t=1))
     finally:
         sock.close()
+
+
+# --- Listener.start() bị hủy hoặc bị close() chen ngang ở từng nhịp (sửa G1, review PR-4 vòng 2) ----
+#
+# Hợp đồng kiểm ở đây:
+# - `start()` raise (CancelledError khi bị hủy, RuntimeError khi close() chen ngang) thì cổng đã
+#   đóng ngay lúc đó, KHÔNG cần ai gọi `close()` (bên gọi như `Node.start` nhả `node.lock` ngay sau).
+# - `start()` bị hủy vẫn gọi lại được (như mọi lần `start()` thất bại, PR-2); `close()` đóng được.
+# - `close()` trả về thì cổng đã đóng, kể cả khi `start()` đang chạy dở.
+# Cổng “đã đóng” đo bằng cách bind lại đúng cổng đó (không SO_REUSEADDR): nhanh, không phụ thuộc
+# việc Windows mất ~2 s mới báo kết nối bị từ chối.
+
+_SWEEP_TICKS = 12  # đủ phủ toàn bộ start() (thực tế chỉ vài nhịp); nhịp cuối phải là start() đã xong
+
+
+def _port_is_free(port: int) -> bool:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind((LOCAL, port))
+    except OSError:
+        return False
+    else:
+        return True
+    finally:
+        s.close()
+
+
+@pytest.fixture
+async def server_tracker(monkeypatch):
+    """Ghi mọi `asyncio.Server` tạo trong test (kể cả server bị rò khi hủy) để dọn khi test xong.
+
+    Chỉ dùng để dọn và in chẩn đoán, không để khẳng định: `loop.create_server` được bọc bằng phiên
+    bản tương đương (bind với start_serving=False, ghi lại, rồi `start_serving()` nếu bên gọi muốn).
+    """
+    loop = asyncio.get_running_loop()
+    real = loop.create_server
+    servers: list[asyncio.Server] = []
+
+    async def create_server(*args, **kwargs):
+        serving = kwargs.pop("start_serving", True)
+        server = await real(*args, start_serving=False, **kwargs)
+        servers.append(server)
+        if serving:
+            await server.start_serving()
+        return server
+
+    monkeypatch.setattr(loop, "create_server", create_server)
+    yield servers
+    for server in servers:
+        server.close()
+    for server in servers:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(server.wait_closed(), 2)
+
+
+def _serving(servers) -> list[str]:
+    return [repr(s) for s in servers if s.is_serving()]
+
+
+@pytest.mark.integration
+async def test_start_cancelled_at_any_tick_leaves_no_listening_port(
+    fast, listener_factory, server_tracker, ids
+):
+    outcomes: list[str] = []
+    for k in range(_SWEEP_TICKS):
+        h = await listener_factory(ids.server, start=False)
+        port = free_port()
+        task = asyncio.create_task(h.listener.start(LOCAL, port), name="test.listener-start")
+        for _ in range(k):
+            await asyncio.sleep(0)
+        if task.done():
+            outcomes.append("done")
+            assert task.result() == port
+            assert not _port_is_free(port), f"k={k}: start() xong mà cổng chưa nghe"
+            await h.listener.close()
+            assert _port_is_free(port), f"k={k}: close() xong mà cổng còn nghe"
+            continue
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        outcomes.append("cancelled")
+        assert _port_is_free(port), (
+            f"k={k}: start() đã raise CancelledError mà cổng {port} vẫn bị giữ "
+            f"(server rò, close() không đóng được): {_serving(server_tracker)}"
+        )
+        # start() bị hủy là một lần start() thất bại: gọi lại được, rồi close() đóng được.
+        again = await asyncio.wait_for(h.listener.start(LOCAL, port), 2)
+        assert again == port
+        await h.listener.close()
+        assert _port_is_free(port), f"k={k}: close() sau lần start() thứ hai mà cổng còn nghe"
+    assert "cancelled" in outcomes, outcomes
+    assert outcomes[-1] == "done", f"{_SWEEP_TICKS} nhịp chưa phủ hết start(): {outcomes}"
+    assert _serving(server_tracker) == []
+
+
+@pytest.mark.integration
+async def test_close_during_start_at_any_tick_closes_port(fast, listener_factory, server_tracker, ids):
+    outcomes: list[str] = []
+    for k in range(_SWEEP_TICKS):
+        h = await listener_factory(ids.server, start=False)
+        port = free_port()
+        task = asyncio.create_task(h.listener.start(LOCAL, port), name="test.listener-start")
+        for _ in range(k):
+            await asyncio.sleep(0)
+        started = task.done()
+        await asyncio.wait_for(h.listener.close(), 3)
+        assert _port_is_free(port), (
+            f"k={k}: close() đã trả về mà cổng {port} vẫn nghe: {_serving(server_tracker)}"
+        )
+        try:
+            got = await asyncio.wait_for(task, 2)
+        except RuntimeError:
+            outcomes.append("refused")
+        else:
+            assert started, f"k={k}: start() trả về {got} dù close() đã chạy trước khi nó xong"
+            outcomes.append("done")
+        assert _port_is_free(port), f"k={k}: start() kết thúc mà cổng {port} vẫn nghe"
+        with pytest.raises(RuntimeError):
+            await h.listener.start(LOCAL, 0)  # sau close(): không start lại được
+    assert "refused" in outcomes, outcomes
+    assert outcomes[-1] == "done", f"{_SWEEP_TICKS} nhịp chưa phủ hết start(): {outcomes}"
+    assert _serving(server_tracker) == []

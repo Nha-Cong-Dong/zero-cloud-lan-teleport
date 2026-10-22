@@ -2045,3 +2045,144 @@ def test_property_tracker_invariants(steps, max_services, initial_priority):
             break
         deliver(min(outstanding), "none")
     assert not outstanding, "tracker yêu cầu resolve mãi không dừng"
+
+
+# =================================================================================================
+# PR-4: `NetworkWatch` (đặc tả PR-4 mục 2.2, NW1–NW5). Truy cập qua module để file vẫn import được
+# khi tên mới chưa có.
+# =================================================================================================
+
+NW_INTERVAL = 5.0
+NW_A = ("192.168.1.5",)
+NW_AB = ("192.168.1.5", "10.0.0.2")
+NW_WALL = 1_700_000_000.0
+
+
+def nw(addresses=NW_A, mono: float = 100.0, wall: float = NW_WALL):
+    return core_discovery.NetworkWatch(addresses, mono, wall)
+
+
+def test_nw_constants_and_values():
+    assert core_discovery.WAKE_JUMP == 15.0
+    change = core_discovery.NetworkChange
+    assert {c.value for c in change} == {"none", "addresses", "woke"}
+    assert change.NONE == "none" and change.ADDRESSES == "addresses" and change.WOKE == "woke"
+
+
+def test_nw1_nothing_changed_is_none():
+    w = nw()
+    assert w.sample(NW_A, 105.0, NW_WALL + 5, interval=NW_INTERVAL) == core_discovery.NetworkChange.NONE
+    assert w.sample(list(NW_A), 110.0, NW_WALL + 10, interval=NW_INTERVAL) == "none"  # list = tuple
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        (NW_A, NW_AB),  # thêm
+        (NW_AB, NW_A),  # bớt
+        (NW_AB, tuple(reversed(NW_AB))),  # chỉ đổi thứ tự
+        (NW_A, ()),  # mất hết
+        ((), NW_A),  # có lại
+        (NW_A, ("192.168.1.6",)),  # đổi
+    ],
+    ids=["them", "bot", "thu_tu", "mat_het", "co_lai", "doi"],
+)
+def test_nw2_address_change_is_addresses(before, after):
+    w = nw(before)
+    assert w.sample(after, 105.0, NW_WALL + 5, interval=NW_INTERVAL) == "addresses"
+    # Giá trị mới được lưu: lần đo sau không đổi gì → NONE.
+    assert w.sample(after, 110.0, NW_WALL + 10, interval=NW_INTERVAL) == "none"
+
+
+def test_nw2_address_change_wins_over_clock_jump():
+    w = nw()
+    assert w.sample(NW_AB, 100.0 + 3600, NW_WALL + 7200, interval=NW_INTERVAL) == "addresses"
+
+
+def test_nw3_monotonic_jump_while_asleep_is_woke():
+    jump = core_discovery.WAKE_JUMP
+    w = nw()
+    gm = NW_INTERVAL + jump + 1
+    assert w.sample(NW_A, 100.0 + gm, NW_WALL + gm, interval=NW_INTERVAL) == "woke"
+    w = nw()
+    gm = NW_INTERVAL + jump - 1
+    assert w.sample(NW_A, 100.0 + gm, NW_WALL + gm, interval=NW_INTERVAL) == "none"
+
+
+def test_nw3_thresholds_are_strict():
+    jump = core_discovery.WAKE_JUMP
+    w = nw()
+    gm = NW_INTERVAL + jump
+    assert w.sample(NW_A, 100.0 + gm, NW_WALL + gm, interval=NW_INTERVAL) == "none"
+    w = nw()
+    assert w.sample(NW_A, 105.0, NW_WALL + 5 + jump, interval=NW_INTERVAL) == "none"
+
+
+def test_nw4_wall_clock_jump_with_stopped_monotonic_is_woke():
+    w = nw()
+    assert w.sample(NW_A, 105.0, NW_WALL + NW_INTERVAL + 3600, interval=NW_INTERVAL) == "woke"
+    w = nw()
+    assert w.sample(NW_A, 105.0, NW_WALL + NW_INTERVAL - 3600, interval=NW_INTERVAL) == "woke"
+
+
+def test_nw4_small_wall_drift_is_none():
+    w = nw()
+    assert w.sample(NW_A, 105.0, NW_WALL + NW_INTERVAL - 2.0, interval=NW_INTERVAL) == "none"
+
+
+def test_nw_each_sample_updates_baseline():
+    w = nw()
+    assert w.sample(NW_A, 105.0, NW_WALL + 3605, interval=NW_INTERVAL) == "woke"
+    # Mốc mới là (105, …3605): lần đo kế bình thường → NONE (không báo WOKE mãi).
+    assert w.sample(NW_A, 110.0, NW_WALL + 3610, interval=NW_INTERVAL) == "none"
+    assert w.sample(NW_A, 110.0, NW_WALL + 3610, interval=NW_INTERVAL) == "none"  # mono bằng: được
+
+
+def test_nw_interval_is_per_call():
+    w = nw()
+    assert w.sample(NW_A, 150.0, NW_WALL + 50, interval=60.0) == "none"
+    assert w.sample(NW_A, 200.0, NW_WALL + 100, interval=1.0) == "woke"
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: core_discovery.NetworkWatch("1.2.3.4", 0.0, 0.0),
+        lambda: core_discovery.NetworkWatch(NW_A, math.nan, 0.0),
+        lambda: core_discovery.NetworkWatch(NW_A, 0.0, math.inf),
+        lambda: core_discovery.NetworkWatch(NW_A, "0", 0.0),
+    ],
+    ids=["chuoi_don", "mono_nan", "wall_inf", "mono_chuoi"],
+)
+def test_nw5_constructor_rejects_bad_arguments(make):
+    with pytest.raises((ValueError, TypeError)):
+        make()
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda w: w.sample("1.2.3.4", 105.0, 5.0, interval=NW_INTERVAL),
+        lambda w: w.sample(NW_A, 99.0, 5.0, interval=NW_INTERVAL),
+        lambda w: w.sample(NW_A, math.nan, 5.0, interval=NW_INTERVAL),
+        lambda w: w.sample(NW_A, 105.0, math.nan, interval=NW_INTERVAL),
+        lambda w: w.sample(NW_A, 105.0, 5.0, interval=0.0),
+        lambda w: w.sample(NW_A, 105.0, 5.0, interval=-1.0),
+        lambda w: w.sample(NW_A, 105.0, 5.0, interval=math.nan),
+        lambda w: w.sample(NW_A, 105.0, 5.0, interval=math.inf),
+    ],
+    ids=[
+        "chuoi_don",
+        "mono_giam",
+        "mono_nan",
+        "wall_nan",
+        "interval_0",
+        "interval_am",
+        "interval_nan",
+        "interval_inf",
+    ],
+)
+def test_nw5_sample_rejects_bad_arguments(call):
+    w = nw(NW_A, 100.0, 0.0)
+    with pytest.raises((ValueError, TypeError)):
+        call(w)

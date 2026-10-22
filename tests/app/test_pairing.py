@@ -1120,3 +1120,106 @@ async def test_pair_confirm_flood_is_rejected_after_second_frame(node_factory, r
     assert outcomes(B.rec) == ["protocol_error"]
     assert B.store.devices() == []
     assert B.pairing.gate.active is None
+
+
+# =================================================================================================
+# PR-4 (đặc tả PR-4 mục 4.7 PA1; mục 4.5 NL13 = backlog b)
+# =================================================================================================
+
+PA1_ROUNDS = 5
+TEST_NET = "192.0.2.1"  # TEST-NET-1: không có máy nào; kết nối treo hoặc lỗi ngay tùy mạng
+
+
+@integration
+async def test_pa1_yield_rule_with_several_addresses(node_factory, fast):
+    """Backlog d: bên lớn hơn thử `[192.0.2.1, 127.0.0.1]`, yêu cầu của bên nhỏ tới từ 127.0.0.1
+    (địa chỉ phụ của phiên khởi xướng) → vẫn coi là hai bên cùng chủ động và bên lớn nhường.
+
+    Kỳ vọng như P18: mỗi bên đúng một lời hỏi, cùng mã, hai kho có nhau, mỗi bên đúng một kết quả
+    PAIRED. Không phải đợi hết OPENING_TIMEOUT của địa chỉ treo.
+    """
+    tally: list[str] = []
+    for i in range(PA1_ROUNDS):
+        A = await node_factory(f"A{i}", accept_pairing=True, answer=True)
+        B = await node_factory(f"B{i}", accept_pairing=True, answer=True)
+        lo, hi = sorted([A, B], key=lambda n: n.id)
+        t0 = time.monotonic()
+        r_lo, r_hi = await asyncio.wait_for(
+            asyncio.gather(
+                lo.pairing.pair_with([LOCAL], hi.port),
+                hi.pairing.pair_with([TEST_NET, LOCAL], lo.port),
+            ),
+            20,
+        )
+        took = time.monotonic() - t0
+        await asyncio.sleep(0.1)
+        tally.append(f"{r_lo.outcome}/{r_hi.outcome}/{r_hi.role}")
+        where = f"lần {i + 1}/{PA1_ROUNDS}, các lần đến giờ: {tally}"
+        assert r_lo.outcome == PairingOutcome.PAIRED, where
+        assert r_hi.outcome == PairingOutcome.PAIRED, where
+        assert r_lo.role == Role.INITIATOR, where
+        assert r_hi.role == Role.RESPONDER, where
+        assert lo.rec.finished == [r_lo], (where, outcomes(lo.rec))
+        assert hi.rec.finished == [r_hi], (where, outcomes(hi.rec))
+        assert len(lo.rec.prompts) == 1 and len(hi.rec.prompts) == 1, where
+        assert lo.rec.prompts[0].code == hi.rec.prompts[0].code, where
+        assert TrustStore.load(lo.dir).get(hi.id) is not None, where
+        assert TrustStore.load(hi.dir).get(lo.id) is not None, where
+        assert gates_idle(A, B), where
+        assert took < fast.OPENING_TIMEOUT, f"{where}: mất {took:.2f} s (đợi hết thời gian của {TEST_NET}?)"
+        await A.close()
+        await B.close()
+
+
+NL13_TRIES = 5
+
+
+@integration
+async def test_nl13_cancel_pair_with_while_waiting_for_replacement(node_factory):
+    """Backlog b: task `pair_with` của bên lớn hơn đã nhường (gate có slot RESPONDER) bị hủy.
+
+    → task raise CancelledError; phiên thay thế kết thúc CANCELLED (đúng một on_finished); bên nhỏ
+    hơn nhận PEER_REJECTED với `peer_reason == "user"`. Cuộc đua đã biết (bên lớn nhận `busy` trước
+    khi kịp nhường) thì thử lại, tối đa NL13_TRIES lần.
+    """
+    races: list[str] = []
+    for i in range(NL13_TRIES):
+        A = await node_factory(f"A{i}", accept_pairing=True)
+        B = await node_factory(f"B{i}", accept_pairing=True)
+        lo, hi = sorted([A, B], key=lambda n: n.id)
+        t_lo = asyncio.create_task(lo.pairing.pair_with([LOCAL], hi.port), name="test.pair-lo")
+        t_hi = asyncio.create_task(hi.pairing.pair_with([LOCAL], lo.port), name="test.pair-hi")
+        await wait_until(
+            lambda hi=hi, t_hi=t_hi: (
+                t_hi.done()
+                or (hi.pairing.gate.active is not None and hi.pairing.gate.active.role == Role.RESPONDER)
+            ),
+            5,
+            "bên lớn chưa nhường",
+        )
+        if t_hi.done():
+            races.append(str(t_hi.result().outcome))
+            t_lo.cancel()
+            await asyncio.gather(t_lo, return_exceptions=True)
+            await A.close()
+            await B.close()
+            continue
+        await hi.rec.wait_prompts()
+        await lo.rec.wait_prompts()
+        assert not t_hi.done(), "pair_with của bên đã nhường phải chờ phiên thay thế"
+        t_hi.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(t_hi, 5)
+        await hi.rec.wait_finished(1, timeout=3)
+        await asyncio.sleep(0.2)
+        assert outcomes(hi.rec) == ["cancelled"], outcomes(hi.rec)
+        assert hi.rec.finished[0].role == Role.RESPONDER
+        r_lo = await asyncio.wait_for(t_lo, 5)
+        assert r_lo.outcome == PairingOutcome.PEER_REJECTED
+        assert r_lo.peer_reason == "user"
+        assert lo.rec.finished == [r_lo]
+        assert TrustStore.load(hi.dir).get(lo.id) is None
+        assert TrustStore.load(lo.dir).get(hi.id) is None
+        assert gates_idle(A, B)
+        return
+    pytest.skip(f"cuộc đua đã biết xảy ra cả {NL13_TRIES} lần: {races}")
