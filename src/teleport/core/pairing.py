@@ -15,14 +15,28 @@ kết nối thật:
 - Thực hiện hành động đúng thứ tự trả về. `Close` luôn là hành động cuối: đóng
   gọn (`close()` rồi `wait_closed()`) để `pair_confirm` cuối cùng vẫn tới máy kia.
 - Gửi lỗi (kết nối đã đứt) thì bỏ qua và vẫn thực hiện các hành động sau, nhất là
-  `Close` và `PairingGate.finish`.
+  `Close` và `PairingGate.finish`. Riêng `pair_confirm` của máy này chưa ghi xong vào
+  kết nối thì bỏ `SavePeer` (protocol mục 5.1: chỉ lưu khi đã GỬI và đã NHẬN).
+
+Bên trả lời (B) cam kết nonce trước, kiểu Bluetooth numeric comparison (protocol mục
+5.1). Bốn bất biến mà máy trạng thái giữ:
+
+1. Bên khởi xướng (A) chỉ gửi n_A (`pair_nonce`) sau khi đã nhận `pair_commit`.
+2. B chỉ gửi n_B (`pair_reveal`) sau khi đã nhận n_A, và mã đã hiện trong cùng bước
+   (`ShowCode` đứng trước `SendMessage(PairReveal)`).
+3. A chỉ hiện mã khi cam kết của B đúng với n_B và fingerprint của B.
+4. A không bao giờ tự thử lại một phiên thất bại: mỗi phiên khởi xướng là một thao tác
+   của người dùng. Nhường phiên (hai bên cùng chủ động) thì máy này chuyển sang vai
+   trả lời, và vai này vẫn cam kết trước.
 
 `core` không phân tích chứng chỉ: `app` gọi `trust.peer_cert_from_pem` /
 `peer_cert_from_der` rồi đưa kết quả vào dưới dạng `DeviceCert`. Các kiểm tra
 thuần logic (CN khớp `hello`, tự ghép với chính mình, ghép đè danh tính) nằm ở đây.
 
 `PairingGate` quyết định có nhận một yêu cầu ghép đôi tới hay không (một phiên
-tại một thời điểm, chờ tăng dần theo IP, hai bên cùng chủ động; protocol mục 5.3).
+tại một thời điểm, chờ tăng dần theo IP, giới hạn số mã hiện ra, hai bên cùng chủ
+động; protocol mục 5.3). Bên trả lời chờ `pair_nonce` với hạn riêng NONCE_TIMEOUT, ngắn
+hơn MESSAGE_TIMEOUT, để một máy lạ không giữ được phiên lâu trước khi mã hiện ra.
 Giới hạn số kết nối ẩn danh (1 mỗi IP, 8 tổng) là việc của tầng `net`.
 """
 
@@ -30,6 +44,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -41,8 +56,9 @@ from teleport.core.messages import (
     Hello,
     Message,
     PairAbort,
-    PairChallenge,
+    PairCommit,
     PairConfirm,
+    PairNonce,
     PairRequest,
     PairReveal,
     validate_device_id,
@@ -50,7 +66,8 @@ from teleport.core.messages import (
 from teleport.core.pairing_code import NONCE_SIZE, check_commitment, make_commitment, pairing_code
 
 # Thời gian tính bằng giây (protocol mục 2.3, 5.1, 5.3).
-MESSAGE_TIMEOUT = 10.0  # chờ pair_challenge / pair_reveal
+MESSAGE_TIMEOUT = 10.0  # bên khởi xướng chờ pair_commit, rồi chờ pair_reveal
+NONCE_TIMEOUT = 5.0  # bên trả lời chờ pair_nonce, tính từ lúc gửi pair_commit (protocol mục 2.3)
 CONFIRM_TIMEOUT = 60.0  # người dùng quyết định, tính từ lúc hiện mã
 # Máy này đã xác nhận: chờ thêm pair_confirm của máy kia tới shown_at + 60 + 10, vì
 # người dùng máy kia có thể bấm sát giây thứ 60 và message còn phải đi qua mạng.
@@ -59,12 +76,20 @@ BACKOFF_BASE = 10.0  # lần thất bại đầu: chờ 10 s, rồi gấp đôi
 BACKOFF_MAX = 600.0  # tối đa 10 phút
 BACKOFF_FORGET_AFTER = 600.0  # quên một IP sau 600 s yên lặng kể từ khi hết thời gian chờ
 MAX_TRACKED_IPS = 1024  # giới hạn bộ nhớ cho bộ đếm theo IP
+# Giới hạn số mã hiện ra ở vai trả lời (docs/mvp.md F3): mỗi mã là một lần kẻ giả mạo
+# được đoán, nên chặn số lần đoán bất kể đổi IP; từ mã thứ WARN_RECENT_CODES thì cảnh báo.
+CODE_WINDOW = 60.0  # cửa sổ đếm mã, giây
+MAX_CODES_PER_WINDOW = 5  # đủ số mã này trong cửa sổ → yêu cầu mới nhận pair_abort{busy}
+WARN_RECENT_CODES = 3  # giao diện cảnh báo khi số mã trong cửa sổ (kể cả mã đang hiện) ≥ số này
 
 _FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
 # Số mũ tối đa khi tính thời gian chờ: 2**32 · 10 s đã vượt xa BACKOFF_MAX, và chặn
 # OverflowError khi đổi số nguyên khổng lồ sang float.
 _MAX_BACKOFF_EXPONENT = 32
 _MAX_ALIASES = 15  # địa chỉ khác của máy đích (net mở tới tối đa 16 địa chỉ)
+# Số mốc hiện mã giữ trong bộ nhớ (cố định lúc tạo gate). MAX_CODES_PER_WINDOW lớn hơn số
+# này thì bộ đếm không bao giờ đạt giới hạn, nên `admit` báo ValueError thay vì âm thầm tắt nó.
+_MAX_CODE_TIMES = 64
 
 
 class PairingUsageError(RuntimeError):
@@ -82,8 +107,9 @@ class State(StrEnum):
     """Trạng thái của phiên."""
 
     IDLE = "idle"  # chưa nhận Start
-    AWAIT_CHALLENGE = "await_challenge"  # bên khởi xướng đã gửi pair_request
-    AWAIT_REVEAL = "await_reveal"  # bên trả lời đã gửi pair_challenge
+    AWAIT_COMMIT = "await_commit"  # bên khởi xướng đã gửi pair_request
+    AWAIT_NONCE = "await_nonce"  # bên trả lời đã gửi pair_commit
+    AWAIT_REVEAL = "await_reveal"  # bên khởi xướng đã gửi pair_nonce
     CONFIRMING = "confirming"  # đã hiện mã, chờ hai bên xác nhận
     DONE = "done"  # đã trả Close
 
@@ -102,7 +128,7 @@ class Outcome(StrEnum):
     PEER_INVALID = "peer_invalid"  # nhận pair_abort{invalid}
     PEER_ABORTED = "peer_aborted"  # nhận pair_abort với reason lạ nhưng đúng dạng
     CONNECTION_LOST = "connection_lost"
-    CANCELLED = "cancelled"  # app hủy: Ctrl+C, tắt node, nhường khi hai bên cùng chủ động
+    CANCELLED = "cancelled"  # app hủy: Ctrl+C, tắt node, nhường phiên, không hiện được mã
 
 
 _PEER_ABORT_OUTCOMES: dict[str, Outcome] = {
@@ -141,7 +167,7 @@ class DeviceCert:
 
 @dataclass(frozen=True, slots=True)
 class Start:
-    """Bắt đầu phiên: bên khởi xướng gửi pair_request, bên trả lời gửi pair_challenge."""
+    """Bắt đầu phiên: bên khởi xướng gửi pair_request, bên trả lời gửi pair_commit."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +215,11 @@ class ConnectionLost:
 
 @dataclass(frozen=True, slots=True)
 class Cancel:
-    """`app` hủy phiên. `reason` chỉ là `user` (Ctrl+C, tắt node) hoặc `busy` (nhường phiên)."""
+    """`app` hủy phiên. `reason` chỉ là `user` hoặc `busy`.
+
+    `user`: Ctrl+C, tắt node, hoặc vai khởi xướng không hiện được mã. `busy`: nhường phiên
+    (hai bên cùng chủ động), hoặc vai trả lời không hiện được mã (protocol mục 5.1).
+    """
 
     reason: str = AbortReason.USER
 
@@ -222,10 +252,18 @@ class ShowCode:
 
 @dataclass(frozen=True, slots=True)
 class SavePeer:
-    """Lưu máy kia vào `trusted.json`. Luôn đứng ngay trước `Close(PAIRED)`."""
+    """Lưu máy kia vào `trusted.json`. Luôn đứng ngay trước `Close(PAIRED)`.
+
+    `keep_known_name` True khi ghép đôi lại ở vai trả lời (máy kia đã có trong
+    `trusted.json` với cùng fingerprint): chứng chỉ lấy từ `pair_request`, máy kia chưa
+    chứng minh giữ khóa riêng, nên `app` giữ tên đã lưu thay vì `name`, chỉ cập nhật thời
+    điểm ghép đôi (protocol mục 5.5). Vai khởi xướng luôn False: chứng chỉ của máy kia đã
+    được bắt tay TLS xác thực.
+    """
 
     peer: DeviceCert
     name: str  # tên trong hello của máy kia
+    keep_known_name: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,7 +495,11 @@ class PairingSession:
 
     def _paired(self) -> list[Action]:
         assert self._peer is not None
-        return [SavePeer(self._peer, self._peer_hello.name), *self._close(Outcome.PAIRED)]
+        # Tới đây thì known_fingerprint (nếu có) trùng fingerprint của máy kia: khác thì
+        # phiên đã dừng với IDENTITY_CONFLICT trước khi hiện mã.
+        keep = self._role is Role.RESPONDER and self._known_fingerprint is not None
+        save = SavePeer(self._peer, self._peer_hello.name, keep_known_name=keep)
+        return [save, *self._close(Outcome.PAIRED)]
 
     def _abort(self, reason: str, outcome: Outcome, detail: str = "") -> list[Action]:
         return [SendMessage(PairAbort(reason)), *self._close(outcome, detail=detail)]
@@ -470,10 +512,11 @@ class PairingSession:
 
 
 class InitiatorSession(PairingSession):
-    """Bên khởi xướng (A): gửi `pair_request`, chờ `pair_challenge`, gửi `pair_reveal`.
+    """Bên khởi xướng (A): gửi `pair_request`, chờ `pair_commit`, gửi `pair_nonce`, chờ `pair_reveal`.
 
-    `peer` là chứng chỉ của B lấy từ bắt tay TLS. `known_fingerprint` là fingerprint
-    đã lưu cho `peer.device_id` trong `trusted.json` (nếu có).
+    `peer` là chứng chỉ của B lấy từ bắt tay TLS; cam kết của B được kiểm bằng
+    `peer.fingerprint`. `known_fingerprint` là fingerprint đã lưu cho `peer.device_id`
+    trong `trusted.json` (nếu có).
     """
 
     def __init__(
@@ -495,6 +538,7 @@ class InitiatorSession(PairingSession):
             nonce=nonce,
             known_fingerprint=known_fingerprint,
         )
+        self._commitment: str | None = None  # cam kết của B, nhận trong pair_commit
 
     def _start(self, now: float) -> list[Action]:
         peer = self._peer
@@ -505,17 +549,24 @@ class InitiatorSession(PairingSession):
         problem = self._self_or_conflict(peer)
         if problem is not None:
             return self._close(problem)
-        request = PairRequest(
-            cert=self._local.pem, commitment=make_commitment(self._local.fingerprint, self._nonce)
-        )
-        self._state = State.AWAIT_CHALLENGE
+        self._state = State.AWAIT_COMMIT
         self._deadline = now + MESSAGE_TIMEOUT
-        return [SendMessage(request)]
+        return [SendMessage(PairRequest(cert=self._local.pem))]
 
     def _on_message(self, msg: Message, now: float) -> list[Action] | None:
-        if self._state is State.AWAIT_CHALLENGE and isinstance(msg, PairChallenge):
-            reveal = SendMessage(PairReveal(self._nonce.hex()))
-            return [reveal, self._show_code(bytes.fromhex(msg.nonce), now)]
+        if self._state is State.AWAIT_COMMIT and isinstance(msg, PairCommit):
+            # Bất biến 1: n_A chỉ rời máy sau khi đã có cam kết của B.
+            self._commitment = msg.commitment
+            self._state = State.AWAIT_REVEAL
+            self._deadline = now + MESSAGE_TIMEOUT
+            return [SendMessage(PairNonce(self._nonce.hex()))]
+        if self._state is State.AWAIT_REVEAL and isinstance(msg, PairReveal):
+            assert self._peer is not None and self._commitment is not None
+            peer_nonce = bytes.fromhex(msg.nonce)
+            # Bất biến 3: cam kết sai thì không hiện mã.
+            if not check_commitment(self._peer.fingerprint, peer_nonce, self._commitment):
+                return self._abort(AbortReason.INVALID, Outcome.PROTOCOL_ERROR, "cam kết nonce sai")
+            return [self._show_code(peer_nonce, now)]
         return None
 
     def _code_args(self, peer_nonce: bytes) -> tuple[str, str, bytes, bytes]:
@@ -526,6 +577,8 @@ class InitiatorSession(PairingSession):
 class ResponderSession(PairingSession):
     """Bên trả lời (B): tạo sau khi đã đọc `pair_request` và `PairingGate.admit` trả ACCEPT.
 
+    Gửi `pair_commit`, chờ `pair_nonce` tối đa NONCE_TIMEOUT, rồi hiện mã và gửi
+    `pair_reveal`.
     `peer` là kết quả `peer_cert_from_pem(request.cert)`, hoặc None nếu chứng chỉ hỏng
     (phiên sẽ gửi `pair_abort{invalid}` khi Start). `known_fingerprint` như bên khởi xướng.
     """
@@ -536,12 +589,9 @@ class ResponderSession(PairingSession):
         local: DeviceCert,
         peer: DeviceCert | None,
         peer_hello: Hello,
-        request: PairRequest,
         nonce: bytes,
         known_fingerprint: str | None = None,
     ) -> None:
-        if not isinstance(request, PairRequest):
-            raise ValueError("request phải là PairRequest")
         super().__init__(
             role=Role.RESPONDER,
             local=local,
@@ -550,7 +600,6 @@ class ResponderSession(PairingSession):
             nonce=nonce,
             known_fingerprint=known_fingerprint,
         )
-        self._request = request
 
     def _start(self, now: float) -> list[Action]:
         peer = self._peer
@@ -562,17 +611,17 @@ class ResponderSession(PairingSession):
         problem = self._self_or_conflict(peer)
         if problem is not None:
             return self._abort(AbortReason.INVALID, problem)
-        self._state = State.AWAIT_REVEAL
-        self._deadline = now + MESSAGE_TIMEOUT
-        return [SendMessage(PairChallenge(self._nonce.hex()))]
+        self._state = State.AWAIT_NONCE
+        # Hạn ngắn hơn MESSAGE_TIMEOUT: trước khi hiện mã, máy lạ giữ slot duy nhất của
+        # PairingGate lâu nhất là chừng này (protocol mục 5.3).
+        self._deadline = now + NONCE_TIMEOUT
+        return [SendMessage(PairCommit(make_commitment(self._local.fingerprint, self._nonce)))]
 
     def _on_message(self, msg: Message, now: float) -> list[Action] | None:
-        if self._state is State.AWAIT_REVEAL and isinstance(msg, PairReveal):
-            assert self._peer is not None
-            peer_nonce = bytes.fromhex(msg.nonce)
-            if not check_commitment(self._peer.fingerprint, peer_nonce, self._request.commitment):
-                return self._abort(AbortReason.INVALID, Outcome.PROTOCOL_ERROR, "cam kết nonce sai")
-            return [self._show_code(peer_nonce, now)]
+        if self._state is State.AWAIT_NONCE and isinstance(msg, PairNonce):
+            # Bất biến 2: hiện mã TRƯỚC, rồi mới để n_B rời máy.
+            show = self._show_code(bytes.fromhex(msg.nonce), now)
+            return [show, SendMessage(PairReveal(self._nonce.hex()))]
         return None
 
     def _code_args(self, peer_nonce: bytes) -> tuple[str, str, bytes, bytes]:
@@ -623,7 +672,8 @@ class PairingGate:
     """Cửa vào cho các phiên ghép đôi của một node: một phiên tại một thời điểm, chờ tăng dần.
 
     `accepting`: giao diện luôn True; CLI chỉ True khi đang chạy `teleport listen`.
-    Bộ đếm theo IP chỉ nằm trong bộ nhớ, chỉ tính phiên mà máy này là bên trả lời.
+    Bộ đếm theo IP và bộ đếm mã hiện ra chỉ nằm trong bộ nhớ, chỉ tính phiên mà máy
+    này là bên trả lời.
     """
 
     def __init__(self, own_device_id: str, *, accepting: bool = False) -> None:
@@ -632,6 +682,7 @@ class PairingGate:
         self._active: Slot | None = None
         self._next_id = 1
         self._records: dict[str, _IpRecord] = {}
+        self._codes: deque[float] = deque(maxlen=_MAX_CODE_TIMES)  # mốc hiện mã (vai trả lời), tăng dần
         self._last_now: float | None = None
 
     @property
@@ -682,11 +733,16 @@ class PairingGate:
         động (máy này đang khởi xướng tới `ip`, hoặc `ip` nằm trong `aliases` của phiên
         đó) → bên có `device_id` lớn hơn nhường phiên khởi xướng; không nhận ghép đôi →
         BUSY; đang có phiên → BUSY; IP đang bị chờ → BUSY (không kéo dài thời gian chờ);
-        còn lại → ACCEPT.
+        đã hiện đủ MAX_CODES_PER_WINDOW mã trong CODE_WINDOW giây qua → BUSY (không ghi
+        gì vào bộ đếm theo IP); còn lại → ACCEPT. Luật hai bên cùng chủ động đứng trước
+        nên không bị giới hạn số mã chặn, nhưng mã của phiên đó vẫn được đếm.
 
         `ip` phải ở cùng một dạng chuẩn do `net` bảo đảm (IPv4 dạng chấm, không tiền tố
         `::ffff:`): bộ đếm và luật hai bên cùng chủ động so `ip` theo chuỗi.
+        MAX_CODES_PER_WINDOW lớn hơn số mốc gate giữ được (64) → ValueError, gate giữ nguyên.
         """
+        if MAX_CODES_PER_WINDOW > _MAX_CODE_TIMES:
+            raise ValueError(f"MAX_CODES_PER_WINDOW không được lớn hơn {_MAX_CODE_TIMES}")
         _check_ip(ip)
         validate_device_id(peer_device_id)
         self._last_now = _check_now(now, self._last_now)
@@ -706,7 +762,33 @@ class PairingGate:
         blocked = self.blocked_until(ip)
         if blocked is not None and now < blocked:
             return busy
+        if self._count_codes(now) >= MAX_CODES_PER_WINDOW:
+            return busy
         return Admission(Decision.ACCEPT, self._new_slot(Role.RESPONDER, ip))
+
+    def code_shown(self, slot: Slot, now: float) -> int:
+        """Báo phiên của `slot` vừa hiện mã; trả số mã đã hiện trong CODE_WINDOW giây qua.
+
+        Chỉ ghi khi `slot` là phiên đang chạy và máy này là bên trả lời; slot khởi xướng
+        hoặc slot đã xong thì không ghi, chỉ trả số đếm hiện tại. Số trả về gồm cả mã vừa
+        ghi; một mã thôi được đếm đúng tại `t + CODE_WINDOW`. `slot` không phải Slot →
+        ValueError; `now` như `admit`.
+        """
+        if not isinstance(slot, Slot):
+            raise ValueError("slot phải là Slot")
+        self._last_now = _check_now(now, self._last_now)
+        if slot == self._active and slot.role is Role.RESPONDER:
+            self._codes.append(self._last_now)
+        return self._count_codes(now)
+
+    def recent_codes(self, now: float) -> int:
+        """Số mã đã hiện (vai trả lời) trong CODE_WINDOW giây qua.
+
+        Không ghi mốc mới (chỉ bỏ các mốc đã ra khỏi cửa sổ); `now` được kiểm và đẩy đồng
+        hồ của gate như `admit`.
+        """
+        self._last_now = _check_now(now, self._last_now)
+        return self._count_codes(now)
 
     def finish(self, slot: Slot, outcome: Outcome, now: float) -> None:
         """Báo phiên của `slot` đã kết thúc với `outcome`; slot không còn active → bỏ qua.
@@ -735,6 +817,13 @@ class PairingGate:
         """Số lần thất bại liên tiếp đang tính cho IP."""
         record = self._records.get(ip)
         return 0 if record is None else record.failures
+
+    def _count_codes(self, now: float) -> int:
+        """Bỏ các mốc đã ra khỏi cửa sổ (`t + CODE_WINDOW <= now`) rồi đếm phần còn lại."""
+        codes = self._codes
+        while codes and codes[0] + CODE_WINDOW <= now:
+            codes.popleft()
+        return len(codes)
 
     def _new_slot(self, role: Role, ip: str, aliases: frozenset[str] = frozenset()) -> Slot:
         slot = Slot(self._next_id, role, ip, aliases)

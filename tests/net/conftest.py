@@ -8,27 +8,84 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import gc
 import inspect
 import ssl
 import time
+import uuid
 import warnings
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtensionOID, NameOID
 
 from teleport.core.framing import MAX_MESSAGE_SIZE, encode_message
 from teleport.core.messages import PROTOCOL_VERSION, Hello
 from teleport.net import tls
 from teleport.net.stream import read_message
-from teleport.trust.identity import Identity, load_or_create_identity
+from teleport.trust.identity import (
+    CERT_FILE,
+    KEY_FILE,
+    Identity,
+    fingerprint_of_der,
+    load_or_create_identity,
+)
 
 # Các cách một kết nối bị đóng mà phía đọc có thể thấy. Windows hay báo ConnectionResetError
 # (WinError 10054) hoặc ConnectionAbortedError (10053) thay cho EOF (đặc tả mục 3.6).
 CLOSED_ERRORS: tuple[type[BaseException], ...] = (ConnectionError, ssl.SSLError)
 
 HEX64 = "ab" * 32
+
+# SAN chứa GeneralName mà `cryptography` không hỗ trợ (DER thô của extension). OpenSSL vẫn nạp và
+# bắt tay được với chứng chỉ mang chúng, còn `cryptography` ném UnsupportedGeneralNameType (kế thừa
+# thẳng từ Exception, không từ ValueError) khi đọc extension (đợt kiểm tra M1).
+UNSUPPORTED_SAN: dict[str, bytes] = {
+    "x400": b"\x30\x02\xa3\x00",  # SEQUENCE { x400Address [3] rỗng }
+    # SEQUENCE { ediPartyName [5] { partyName "ab" } }; bản [5] rỗng thì OpenSSL không nạp làm cert server.
+    "edi": bytes.fromhex("3008a506a1040c026162"),
+}
+
+
+def write_identity_with_san(config_dir: Path, san_der: bytes) -> Identity:
+    """Danh tính trông như của Teleport (P-256, CN đúng dạng, tự ký, ECDSA-SHA256) nhưng SAN là `san_der`."""
+    config_dir.mkdir(parents=True, exist_ok=True)
+    key = ec.generate_private_key(ec.SECP256R1())
+    device_id = uuid.uuid4().hex
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "teleport-" + device_id)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC))
+        .not_valid_after(datetime.datetime(9999, 12, 31, 23, 59, 59, tzinfo=datetime.UTC))
+        .add_extension(
+            x509.UnrecognizedExtension(ExtensionOID.SUBJECT_ALTERNATIVE_NAME, san_der), critical=False
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = config_dir / CERT_FILE
+    key_path = config_dir / KEY_FILE
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+    return Identity(
+        device_id=device_id,
+        cert_path=cert_path,
+        key_path=key_path,
+        fingerprint=fingerprint_of_der(cert.public_bytes(serialization.Encoding.DER)),
+    )
 
 
 def connection_module():
@@ -278,6 +335,16 @@ def make_identity(tmp_path):
         if name not in cache:
             cache[name] = load_or_create_identity(tmp_path / name)
         return cache[name]
+
+    return make
+
+
+@pytest.fixture
+def make_san_identity(tmp_path):
+    """`make_san_identity("x400" | "edi")` → Identity có SAN chứa GeneralName lạ (M1), trong `tmp_path`."""
+
+    def make(kind: str) -> Identity:
+        return write_identity_with_san(tmp_path / f"san-{kind}", UNSUPPORTED_SAN[kind])
 
     return make
 

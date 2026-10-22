@@ -21,6 +21,12 @@ bị bỏ, nên gõ sẵn `c` không xác nhận được một mã chưa thấy
 không dùng `monotonic`: trên Windows `monotonic` chỉ chính xác tới ~15,6 ms, nên một
 dòng đọc trước lúc hiện mã vài ms vẫn có thể mang cùng mốc.
 
+Lời hỏi ghép đôi theo bố cục docs/mvp.md mục 7.2: dòng mã chỉ gồm nhãn cố định và mã, đứng
+trước mọi chữ do máy kia đặt; tên máy kia (chưa xác thực) hiện qua `display_name`, trong “…”.
+
+`pair` bị Ctrl+C khi kết quả đã có (ví dụ lúc đang đóng kết nối sau khi đã ghép đôi) thì
+vẫn báo đúng kết quả đó và trả mã thoát theo nó; chỉ khi chưa có kết quả mới báo đã hủy.
+
 `--json`: `listen` / `pair` in JSON Lines (mỗi sự kiện một dòng), các lệnh khác in một
 object. Khóa tiếng Anh, có `time` UTC.
 """
@@ -30,6 +36,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime
+import functools
 import ipaddress
 import json
 import logging
@@ -42,6 +49,7 @@ import threading
 import time
 import unicodedata
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -71,8 +79,11 @@ from teleport.app.node import (
 )
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt
 from teleport.app.settings import Settings
+from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc lúc dùng
+from teleport.core.display import display_name
 from teleport.core.links import ConnectResult
 from teleport.core.messages import MessageError
+from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
 from teleport.lock import NodeLockedError
 from teleport.net.connection import DEFAULT_PORT
@@ -193,18 +204,36 @@ def outcome_message(result: PairingFinished, *, seen_name: str | None = None) ->
 
     `seen_name`: tên của đích thấy qua mDNS (`pair <tên>`); khi có, “không kết nối được”
     đổi thành câu “Thấy X nhưng không kết nối được…”.
+
+    Đã ghép đôi: dùng tên vừa lưu (`device.name`); ghép đôi lại ở vai trả lời thì đó là tên
+    đã lưu từ trước, không phải tên máy kia tự xưng. Phiên chưa xong mà chưa hiện mã
+    (`code_shown` False) thì không nhắc so mã, câu theo vai. Danh tính khác ở vai trả lời:
+    `pair_request` chưa được xác minh nên không gợi ý hủy ghép đôi máy thật.
     """
     outcome = result.outcome
     target = _target(result)
     x = result.peer_name or seen_name or target
+    responder = result.role is Role.RESPONDER
     if outcome is PairingOutcome.UNREACHABLE and seen_name is not None:
         return [_unreachable_seen(seen_name), _HOTSPOT_HINT]
     if outcome is _PAIRED:
-        return [f"Đã ghép đôi với {x}."]
+        name = result.device.name if result.device is not None else x
+        return [f"Đã ghép đôi với {name}."]
     if outcome in _UNFINISHED:
-        return [f"Ghép đôi với {x} chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo."]
+        if result.code_shown:
+            return [
+                f"Ghép đôi với {x} chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo."
+            ]
+        if responder:
+            return [f"Một máy tự xưng là {x} đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã."]
+        return [f"Ghép đôi với {x} chưa xong vì phiên dừng trước khi hiện mã. Hãy thử lại."]
     if outcome is PairingOutcome.IDENTITY_CONFLICT:
         known = result.known_name or x
+        if responder:
+            return [
+                f"Một máy chưa xác minh tự xưng là {known} nhưng dùng danh tính khác với lúc ghép đôi. "
+                "Có thể có người đang giả mạo máy đó. Yêu cầu ghép đôi đã bị chặn."
+            ]
         short_id = (result.peer_device_id or "")[:8]
         return [
             f"{known} đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. "
@@ -239,6 +268,8 @@ def outcome_message(result: PairingFinished, *, seen_name: str | None = None) ->
             f"Đã xác nhận ghép đôi với {x} nhưng không lưu được vào trusted.json. "
             "Hãy kiểm tra quyền ghi thư mục cấu hình rồi ghép đôi lại."
         ]
+    if outcome is PairingOutcome.PROMPT_FAILED:
+        return ["Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại."]
     return ["Đã hủy ghép đôi."]  # CANCELLED
 
 
@@ -301,7 +332,7 @@ def connect_failed_message(view: DeviceView, result: ConnectResult) -> list[str]
 def _print_event(output: _Output, event: NodeEvent) -> None:
     """In một `NodeEvent` của `teleport listen`."""
     view = event.device
-    who = f"“{view.name}” ({view.device_id[:8]}"
+    who = f"“{display_name(view.name)}” ({view.device_id[:8]}"
     if isinstance(event, DeviceOnline):
         where = f"{view.addresses[0]}:{view.port}" if view.addresses else "?"
         output.text(f"Thấy {who}, {_os_label(view.os)}, {_paired_label(view)}) tại {where}.")
@@ -353,12 +384,64 @@ def _emit_result(output: _Output, result: PairingFinished, *, seen_name: str | N
 # ---- Hỏi người dùng ------------------------------------------------------------------------
 
 
+def _code_warning(prompt: PairingPrompt) -> str | None:
+    """Cảnh báo khi máy này (vai trả lời) đã hiện nhiều mã trong 1 phút (docs/mvp.md mục 8)."""
+    if prompt.role is not Role.RESPONDER or prompt.recent_codes < core_pairing.WARN_RECENT_CODES:
+        return None
+    return (
+        f"Cảnh báo: máy này đã hiện {prompt.recent_codes} mã ghép đôi trong 1 phút qua. "
+        "Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: "
+        "hãy từ chối (gõ k)."
+    )
+
+
+# Dòng đầu của lời hỏi xét theo lệnh (mvp mục 7.2); không chứa chữ số hay chữ do máy kia đặt.
+_PROMPT_HEADER_LISTEN = "Có yêu cầu ghép đôi. Hãy so mã dưới đây với mã trên màn hình máy kia."
+_PROMPT_HEADER_PAIR = "Hãy so mã dưới đây với mã trên màn hình máy kia."
+
+
+def _prompt_lines(prompt: PairingPrompt, *, listening: bool) -> list[str]:
+    """Các dòng của lời hỏi ghép đôi trước câu “Trùng khớp?” (mvp mục 7.2).
+
+    Thứ tự bắt buộc: tiêu đề cố định, dòng mã (chỉ nhãn và mã), cảnh báo số mã (nếu có),
+    tên máy kia tự xưng, tên đã lưu (nếu đã ghép đôi). Tên chỉ hiện qua `display_name`,
+    trong “…”, sau dòng mã: kẻ đứng giữa đặt tên trông như mã cũng không chen được lên trước.
+    """
+    short_id = prompt.peer_device_id[:8]
+    lines = [
+        _PROMPT_HEADER_LISTEN if listening else _PROMPT_HEADER_PAIR,
+        f"Mã ghép đôi:   {format_code(prompt.code)}",
+    ]
+    warning = _code_warning(prompt)
+    if warning is not None:
+        lines.append(warning)
+    name = display_name(prompt.peer_name)
+    lines.append(f"Máy kia tự xưng là “{name}” (mã máy {short_id}, {prompt.address}).")
+    if prompt.known_name is not None:
+        known = display_name(prompt.known_name)
+        line = f"Máy này đã ghép đôi với mã máy {short_id} trước đây, tên đã lưu: “{known}”."
+        if prompt.role is Role.RESPONDER:  # vai trả lời giữ tên đã lưu (protocol mục 5.5)
+            line += " Ghép đôi lại sẽ giữ nguyên tên đã lưu."
+        lines.append(line)
+    return lines
+
+
+@dataclass
+class _PairState:
+    """Kết quả của `pair`, ghi ngay khi có để `cmd_pair` vẫn báo đúng khi bị Ctrl+C giữa chừng."""
+
+    result: PairingFinished | None = None  # kết quả cuối, ghi trước mọi `await` sau khi có
+    seen_name: str | None = None  # `pair <tên>`: tên thấy qua mDNS (câu “Thấy X nhưng…”)
+    emitted: bool = False  # đã in kết quả: cmd_pair không in thêm
+
+
 class _Prompter:
     """Hiện lời hỏi ghép đôi và chuyển câu trả lời từ stdin tới `PairingService.decide`."""
 
-    def __init__(self, output: _Output, *, listening: bool) -> None:
+    def __init__(self, output: _Output, *, listening: bool, state: _PairState | None = None) -> None:
         self._output = output
         self._listening = listening  # listen: in mọi kết quả; pair: run_pair tự in kết quả
+        self._state = state  # pair: ghi kết quả ngay trong on_finished
         self.node: Node | None = None
         self._prompt: PairingPrompt | None = None
         self._shown_at = 0.0
@@ -369,14 +452,9 @@ class _Prompter:
         self._prompt = prompt
         self._shown_at = time.perf_counter()  # cùng đồng hồ với mốc của StdinReader
         out = self._output
-        where = f"({prompt.address}, mã máy {prompt.peer_device_id[:8]})"
-        if self._listening:
-            first = f"Yêu cầu ghép đôi từ “{prompt.peer_name}” {where}."
-        else:
-            first = f"Ghép đôi với “{prompt.peer_name}” {where}."
-        code = format_code(prompt.code)
-        out.text(first, f"Kiểm tra mã này trùng với màn hình của {prompt.peer_name}:   {code}")
+        out.text(*_prompt_lines(prompt, listening=self._listening))
         out.ask("Trùng khớp? [c/k]: ")
+        # JSON giữ nguyên tên gốc: giao diện đọc JSON tự hiện theo mvp mục 7.2.
         out.event(
             "pair_prompt",
             session_id=prompt.session_id,
@@ -386,6 +464,9 @@ class _Prompter:
             address=prompt.address,
             code=prompt.code,
             expires_in=round(max(0.0, prompt.expires_at - asyncio.get_running_loop().time()), 3),
+            recent_codes=prompt.recent_codes,
+            warning=_code_warning(prompt),
+            known_name=prompt.known_name,
         )
         if self._stdin_closed:
             self._decide(False)
@@ -393,6 +474,8 @@ class _Prompter:
     def on_finished(self, result: PairingFinished) -> None:
         if self._prompt is not None and self._prompt.session_id == result.session_id:
             self._prompt = None  # lời hỏi tự hủy (hết giờ, máy kia hủy…)
+        if self._state is not None and not self._state.emitted:
+            self._state.result = result
         if not self._listening:
             return
         _emit_result(self._output, result)
@@ -651,13 +734,20 @@ def _pair_target(text: str) -> tuple[str, tuple[str, int] | None]:
         return target, None
 
 
-async def run_pair(args: argparse.Namespace, lines: Lines, out: TextIO, err: TextIO) -> int:
+async def run_pair(
+    args: argparse.Namespace, lines: Lines, out: TextIO, err: TextIO, *, state: _PairState | None = None
+) -> int:
     """`teleport pair <tên | tiền tố mã | ip[:cổng]>`: ghép đôi với một máy; 0 nếu đã ghép đôi, ngược lại 1.
 
     Đích rỗng (sau khi bỏ khoảng trắng hai đầu) → mã 2. Địa chỉ hay tên: xem
     `_pair_target`; trông như địa chỉ mà không phải IPv4 hợp lệ → mã 2, không đem đi
     tìm theo tên.
+
+    `state` (của `cmd_pair`) nhận kết quả ngay khi có, tên thấy qua mDNS và việc đã in kết
+    quả hay chưa, để lệnh bị hủy giữa chừng vẫn báo đúng kết quả đã có.
     """
+    if state is None:
+        state = _PairState()
     output = _Output(out, err, bool(getattr(args, "json", False)))
     target = args.address.strip()
     if not target:
@@ -669,14 +759,14 @@ async def run_pair(args: argparse.Namespace, lines: Lines, out: TextIO, err: Tex
         output.error("invalid_address", _bad_address_message(target))
         return 2
     if endpoint is not None:
-        return await _pair_by_address(args, lines, output, *endpoint)
-    return await _pair_by_name(args, lines, output, target)
+        return await _pair_by_address(args, lines, output, *endpoint, state=state)
+    return await _pair_by_name(args, lines, output, target, state=state)
 
 
 async def _pair_by_address(
-    args: argparse.Namespace, lines: Lines, output: _Output, ip: str, port: int
+    args: argparse.Namespace, lines: Lines, output: _Output, ip: str, port: int, *, state: _PairState
 ) -> int:
-    prompter = _Prompter(output, listening=False)
+    prompter = _Prompter(output, listening=False, state=state)
     node = _make_node(args, output, prompter, accept_pairing=False)
     if isinstance(node, int):
         return node
@@ -685,27 +775,42 @@ async def _pair_by_address(
         return code
     try:
         output.text(f"Đang kết nối tới {ip}:{port}…")
-        result = await _pair_with(node, lines, prompter, [ip], port)
+        result = await _pair_with(node, lines, prompter, [ip], port, state=state)
         _emit_result(output, result)
+        state.emitted = True
         return 0 if result.outcome is _PAIRED else 1
     finally:
         await node.close()
 
 
 async def _pair_with(
-    node: Node, lines: Lines, prompter: _Prompter, addresses: Sequence[str], port: int
+    node: Node,
+    lines: Lines,
+    prompter: _Prompter,
+    addresses: Sequence[str],
+    port: int,
+    *,
+    state: _PairState,
 ) -> PairingFinished:
+    """`PairingService.pair_with` kèm đọc stdin; ghi kết quả vào `state` trước mọi `await` dọn dẹp.
+
+    `pair_with` bị hủy sau khi hai bên đã xác nhận thì vẫn trả kết quả thật (không ném).
+    """
     feeder = asyncio.create_task(_feed_lines(lines, prompter), name="teleport.cli.stdin")
     try:
-        return await node.pairing.pair_with(addresses, port)
+        result = await node.pairing.pair_with(addresses, port)
+        state.result = result
+        return result
     finally:
         feeder.cancel()
         await asyncio.wait({feeder})
 
 
-async def _pair_by_name(args: argparse.Namespace, lines: Lines, output: _Output, query: str) -> int:
+async def _pair_by_name(
+    args: argparse.Namespace, lines: Lines, output: _Output, query: str, *, state: _PairState
+) -> int:
     """`pair <tên | tiền tố mã>`: duyệt mDNS (không quảng bá, không tự nối), chọn đúng một máy."""
-    prompter = _Prompter(output, listening=False)
+    prompter = _Prompter(output, listening=False, state=state)
     mdns = _mdns_options(args, advertise=False)
     node = _make_node(args, output, prompter, accept_pairing=False, mdns=mdns, auto_connect=False)
     if isinstance(node, int):
@@ -735,11 +840,14 @@ async def _pair_by_name(args: argparse.Namespace, lines: Lines, output: _Output,
         if view is None:
             return 1
         assert view.port is not None and view.addresses
+        state.seen_name = view.name
         output.text(
-            f"Đang kết nối tới “{view.name}” ({view.device_id[:8]}) tại {view.addresses[0]}:{view.port}…"
+            f"Đang kết nối tới “{display_name(view.name)}” ({view.device_id[:8]}) "
+            f"tại {view.addresses[0]}:{view.port}…"
         )
-        result = await _pair_with(node, lines, prompter, view.addresses, view.port)
+        result = await _pair_with(node, lines, prompter, view.addresses, view.port, state=state)
         _emit_result(output, result, seen_name=view.name)
+        state.emitted = True
         return 0 if result.outcome is _PAIRED else 1
     finally:
         await node.close()
@@ -1006,9 +1114,17 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_pair(args: argparse.Namespace) -> int:
-    code = _run_async(args, run_pair)
+    state = _PairState()
+    code = _run_async(args, functools.partial(run_pair, state=state))
     if code is not None:
         return code
+    # Bị hủy (Ctrl+C, Ctrl+Break). Kết quả đã có thì nó mới là sự thật, kể cả khi lệnh hủy
+    # tới lúc đang đóng kết nối hay đóng node: đã in thì thôi, chưa in thì in bây giờ.
+    result = state.result
+    if result is not None and (state.emitted or result.outcome is not PairingOutcome.CANCELLED):
+        if not state.emitted:
+            _emit_result(_Output(sys.stdout, sys.stderr, args.json), result, seen_name=state.seen_name)
+        return 0 if result.outcome is _PAIRED else 1
     output = _Output(sys.stdout, sys.stderr, args.json)
     message = "Đã hủy ghép đôi."
     output.text(message)

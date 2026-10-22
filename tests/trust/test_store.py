@@ -2,12 +2,14 @@
 
 import dataclasses
 import datetime
+import hashlib
 import json
 import os
 import re
 
 import pytest
 from cryptography.hazmat.primitives import serialization
+from cryptography.x509.oid import NameOID
 
 from teleport.trust.identity import PeerCert, load_or_create_identity, peer_cert_from_pem
 from teleport.trust.store import (
@@ -600,6 +602,57 @@ def test_version_2_file_is_not_overwritten(cfg, peer):
     with pytest.raises(TrustStoreError):
         TrustStore.load(cfg)
     assert (cfg / TRUSTED_FILE).read_bytes() == before
+
+
+# --- M1: chứng chỉ có GeneralName lạ (x400Address/EDIPartyName) ---------------------------------
+
+
+def _hand_made_peer(cert) -> PeerCert:
+    """PeerCert dựng tay từ một chứng chỉ mà `peer_cert_from_pem` sẽ từ chối."""
+    der = cert.public_bytes(serialization.Encoding.DER)
+    cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+    return PeerCert(
+        device_id=cn.removeprefix("teleport-"), fingerprint=hashlib.sha256(der).hexdigest(), pem=_pem(cert)
+    )
+
+
+def test_m1_entry_with_unsupported_general_name_cert_raises_and_file_untouched(
+    cfg, peer, make_cert, unsupported_name_ext
+):
+    """Mục khớp nhau về device_id/fingerprint nhưng chứng chỉ không phân tích được → TrustStoreError."""
+    bad = _hand_made_peer(make_cert(extensions=[(unsupported_name_ext, False)]))
+    before = write_store(cfg, {"version": 1, "devices": [entry(peer, name="Tốt"), entry(bad, name="Xấu")]})
+    mtime = (cfg / TRUSTED_FILE).stat().st_mtime_ns
+
+    with pytest.raises(TrustStoreError):
+        TrustStore.load(cfg)
+    # Lần hai vẫn lỗi: file không bị tự sửa, xóa hay tạo lại.
+    with pytest.raises(TrustStoreError):
+        TrustStore.load(cfg)
+
+    assert (cfg / TRUSTED_FILE).read_bytes() == before
+    assert (cfg / TRUSTED_FILE).stat().st_mtime_ns == mtime
+    assert sorted(p.name for p in cfg.iterdir()) == [TRUSTED_FILE]
+
+
+def test_m1_add_with_unparseable_cert_raises_value_error_and_writes_nothing(
+    cfg, peer, make_cert, unsupported_name_ext
+):
+    """`add` kiểm lại chứng chỉ: không phân tích được → ValueError, file và RAM giữ nguyên."""
+    store = TrustStore.load(cfg)
+    device = store.add(peer, "PC", now=NOW)
+    before = (cfg / TRUSTED_FILE).read_bytes()
+    mtime = (cfg / TRUSTED_FILE).stat().st_mtime_ns
+    bad = _hand_made_peer(make_cert(extensions=[(unsupported_name_ext, False)]))
+
+    with pytest.raises(ValueError):
+        store.add(bad, "Xấu", now=NOW)
+
+    assert store.devices() == [device]
+    assert store.get(bad.device_id) is None
+    assert (cfg / TRUSTED_FILE).read_bytes() == before
+    assert (cfg / TRUSTED_FILE).stat().st_mtime_ns == mtime
+    assert TrustStore.load(cfg).devices() == [device]
 
 
 # --- Ghi nguyên tử, lỗi ghi --------------------------------------------------------------------

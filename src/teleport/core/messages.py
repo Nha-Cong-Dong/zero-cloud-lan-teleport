@@ -164,12 +164,11 @@ class Hello:
 
 @dataclass(frozen=True, slots=True)
 class PairRequest:
-    """Bên khởi xướng gửi chứng chỉ của mình và cam kết cho nonce n_A (protocol.md mục 5)."""
+    """Bên khởi xướng gửi chứng chỉ của mình (protocol.md mục 5)."""
 
     TYPE: ClassVar[str] = "pair_request"
 
     cert: str
-    commitment: str
 
     def __post_init__(self) -> None:
         # Ở đây chỉ kiểm dạng; phân tích chứng chỉ là việc của teleport.trust.identity.
@@ -179,14 +178,25 @@ class PairRequest:
             raise MessageError(f"cert dài quá {MAX_CERT_PEM_LEN} ký tự")
         if not self.cert.startswith(CERT_PEM_HEADER):
             raise MessageError(f"cert phải bắt đầu bằng {CERT_PEM_HEADER}")
+
+
+@dataclass(frozen=True, slots=True)
+class PairCommit:
+    """Bên trả lời cam kết cho nonce n_B của mình, trước khi biết n_A."""
+
+    TYPE: ClassVar[str] = "pair_commit"
+
+    commitment: str
+
+    def __post_init__(self) -> None:
         _validate_hex32(self.commitment, "commitment")
 
 
 @dataclass(frozen=True, slots=True)
-class PairChallenge:
-    """Bên trả lời gửi nonce n_B của mình."""
+class PairNonce:
+    """Bên khởi xướng gửi nonce n_A của mình, sau khi đã nhận `pair_commit`."""
 
-    TYPE: ClassVar[str] = "pair_challenge"
+    TYPE: ClassVar[str] = "pair_nonce"
 
     nonce: str
 
@@ -196,7 +206,7 @@ class PairChallenge:
 
 @dataclass(frozen=True, slots=True)
 class PairReveal:
-    """Bên khởi xướng tiết lộ nonce n_A đã cam kết trong `pair_request`."""
+    """Bên trả lời tiết lộ nonce n_B đã cam kết trong `pair_commit` (sau khi đã hiện mã)."""
 
     TYPE: ClassVar[str] = "pair_reveal"
 
@@ -261,7 +271,16 @@ class Pong:
 
 
 Message = (
-    Hello | PairRequest | PairChallenge | PairReveal | PairConfirm | PairAbort | ControlOpen | Ping | Pong
+    Hello
+    | PairRequest
+    | PairCommit
+    | PairNonce
+    | PairReveal
+    | PairConfirm
+    | PairAbort
+    | ControlOpen
+    | Ping
+    | Pong
 )
 
 _MESSAGE_TYPES: dict[str, type[Message]] = {
@@ -269,7 +288,8 @@ _MESSAGE_TYPES: dict[str, type[Message]] = {
     for cls in (
         Hello,
         PairRequest,
-        PairChallenge,
+        PairCommit,
+        PairNonce,
         PairReveal,
         PairConfirm,
         PairAbort,
@@ -331,7 +351,7 @@ class WrongConnectionKind(MessageError):
 # xuất hiện đúng một lần, trước khi loại kết nối được xác định.
 _ALLOWED_TYPES: dict[ConnectionKind, frozenset[str]] = {
     ConnectionKind.PAIRING: frozenset(
-        cls.TYPE for cls in (PairRequest, PairChallenge, PairReveal, PairConfirm, PairAbort)
+        cls.TYPE for cls in (PairRequest, PairCommit, PairNonce, PairReveal, PairConfirm, PairAbort)
     ),
     # Giai đoạn 2 sẽ thêm offer, accept, resume…
     ConnectionKind.CONTROL: frozenset(cls.TYPE for cls in (Ping, Pong)),

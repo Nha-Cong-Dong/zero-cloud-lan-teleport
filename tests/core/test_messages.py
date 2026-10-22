@@ -28,8 +28,9 @@ from teleport.core.messages import (
     MessageError,
     OsName,
     PairAbort,
-    PairChallenge,
+    PairCommit,
     PairConfirm,
+    PairNonce,
     PairRequest,
     PairReveal,
     Ping,
@@ -66,9 +67,10 @@ def valid_dicts() -> dict[str, dict]:
             "app_version": "0.1.0",
             "os": "windows",
         },
-        "pair_request": {"type": "pair_request", "cert": CERT, "commitment": HEX64},
-        "pair_challenge": {"type": "pair_challenge", "nonce": HEX64},
-        "pair_reveal": {"type": "pair_reveal", "nonce": HEX64_B},
+        "pair_request": {"type": "pair_request", "cert": CERT},
+        "pair_commit": {"type": "pair_commit", "commitment": HEX64},
+        "pair_nonce": {"type": "pair_nonce", "nonce": HEX64_B},
+        "pair_reveal": {"type": "pair_reveal", "nonce": HEX64},
         "pair_confirm": {"type": "pair_confirm"},
         "pair_abort": {"type": "pair_abort", "reason": "user"},
         "control_open": {"type": "control_open"},
@@ -80,9 +82,10 @@ def valid_dicts() -> dict[str, dict]:
 VALID_MESSAGES = [
     Hello(protocol=1, device_id=DEVICE_ID, name="PC-Nha", app_version="0.1.0", os="windows"),
     Hello(protocol=7, device_id=DEVICE_ID, name="Máy của Minh 🚀", app_version="1.2.3-dev+abc", os="windows"),
-    PairRequest(cert=CERT, commitment=HEX64),
-    PairChallenge(nonce=HEX64),
-    PairReveal(nonce=HEX64_B),
+    PairRequest(cert=CERT),
+    PairCommit(commitment=HEX64),
+    PairNonce(nonce=HEX64_B),
+    PairReveal(nonce=HEX64),
     PairConfirm(),
     PairAbort(reason="user"),
     PairAbort(reason="new_reason"),
@@ -95,7 +98,8 @@ VALID_MESSAGES = [
 EXPECTED_TYPE = {
     Hello: "hello",
     PairRequest: "pair_request",
-    PairChallenge: "pair_challenge",
+    PairCommit: "pair_commit",
+    PairNonce: "pair_nonce",
     PairReveal: "pair_reveal",
     PairConfirm: "pair_confirm",
     PairAbort: "pair_abort",
@@ -193,10 +197,19 @@ def test_parse_does_not_mutate_input():
     assert wire == snapshot
 
 
-def test_messages_are_frozen():
-    msg = PairChallenge(nonce=HEX64)
+@pytest.mark.parametrize(
+    ("msg", "field"),
+    [
+        (PairCommit(commitment=HEX64), "commitment"),
+        (PairNonce(nonce=HEX64), "nonce"),
+        (PairReveal(nonce=HEX64), "nonce"),
+        (PairRequest(cert=CERT), "cert"),
+    ],
+    ids=["PairCommit", "PairNonce", "PairReveal", "PairRequest"],
+)
+def test_messages_are_frozen(msg, field):
     with pytest.raises(dataclasses.FrozenInstanceError):
-        msg.nonce = HEX64_B  # type: ignore[misc]
+        setattr(msg, field, HEX64_B)
 
 
 # --- Khung message: không phải dict, thiếu type, type sai --------------------------------------
@@ -228,7 +241,10 @@ def test_missing_or_non_string_type_is_message_error_not_unknown(obj):
     assert not isinstance(exc.value, UnknownMessageType)
 
 
-@pytest.mark.parametrize("type_name", ["foo", "new_message", "hello2", "pair_requests"])
+# `pair_challenge` thuộc luồng ghép đôi cũ (bên khởi xướng cam kết trước), nay đã bỏ.
+@pytest.mark.parametrize(
+    "type_name", ["foo", "new_message", "hello2", "pair_requests", "pair_challenge", "pair_commitment"]
+)
 def test_unknown_type_string_raises_unknown_message_type(type_name):
     with pytest.raises(UnknownMessageType):
         parse_message({"type": type_name})
@@ -285,14 +301,17 @@ def test_missing_field_raises(type_name, field):
         ("pair_request", "cert", None),
         ("pair_request", "cert", CERT.encode()),
         ("pair_request", "cert", [CERT]),
-        ("pair_request", "commitment", None),
-        ("pair_request", "commitment", 0),
-        ("pair_request", "commitment", bytes.fromhex(HEX64)),
-        ("pair_challenge", "nonce", None),
-        ("pair_challenge", "nonce", 12345),
-        ("pair_challenge", "nonce", bytes.fromhex(HEX64)),
+        ("pair_commit", "commitment", None),
+        ("pair_commit", "commitment", 0),
+        ("pair_commit", "commitment", bytes.fromhex(HEX64)),
+        ("pair_commit", "commitment", [HEX64]),
+        ("pair_nonce", "nonce", None),
+        ("pair_nonce", "nonce", 12345),
+        ("pair_nonce", "nonce", bytes.fromhex(HEX64)),
+        ("pair_nonce", "nonce", True),
         ("pair_reveal", "nonce", None),
         ("pair_reveal", "nonce", [HEX64]),
+        ("pair_reveal", "nonce", bytes.fromhex(HEX64)),
         ("pair_abort", "reason", None),
         ("pair_abort", "reason", 1),
         ("pair_abort", "reason", ["user"]),
@@ -464,7 +483,7 @@ def _cert_of_length(n: int) -> str:
 def test_cert_at_limit_is_accepted():
     cert = _cert_of_length(MAX_CERT_PEM_LEN)
     assert len(cert) == 8192
-    assert parse_message({"type": "pair_request", "cert": cert, "commitment": HEX64}).cert == cert
+    assert parse_message({"type": "pair_request", "cert": cert}).cert == cert
 
 
 @pytest.mark.parametrize(
@@ -485,13 +504,71 @@ def test_cert_at_limit_is_accepted():
 )
 def test_invalid_cert_rejected(cert):
     with pytest.raises(MessageError):
-        parse_message({"type": "pair_request", "cert": cert, "commitment": HEX64})
+        parse_message({"type": "pair_request", "cert": cert})
 
 
 def test_cert_only_checks_shape_not_content():
     # Phụ lục điểm 7: tầng message chỉ kiểm dạng, không phân tích chứng chỉ.
     cert = CERT_HEADER + "đây không phải base64"
-    assert PairRequest(cert=cert, commitment=HEX64).cert == cert
+    assert PairRequest(cert=cert).cert == cert
+
+
+# --- pair_request chỉ còn cert (bên trả lời cam kết trước, docs/protocol.md §5) ----------------
+
+
+def test_pair_request_has_only_cert_field():
+    assert [f.name for f in dataclasses.fields(PairRequest)] == ["cert"]
+
+
+def test_pair_request_to_dict_has_no_commitment():
+    assert to_dict(PairRequest(cert=CERT)) == {"type": "pair_request", "cert": CERT}
+
+
+@pytest.mark.parametrize("value", [HEX64, "không phải hex", None, 0, HEX64.upper()], ids=repr)
+def test_pair_request_ignores_legacy_commitment_field(value):
+    # `commitment` của luồng cũ giờ là trường lạ: bị bỏ qua, kể cả khi giá trị sai dạng.
+    msg = parse_message({"type": "pair_request", "cert": CERT, "commitment": value})
+    assert msg == PairRequest(cert=CERT)
+    assert "commitment" not in to_dict(msg)
+
+
+def test_pair_challenge_is_gone():
+    import teleport.core.messages as messages_mod
+
+    assert not hasattr(messages_mod, "PairChallenge")
+    with pytest.raises(UnknownMessageType):
+        parse_message({"type": "pair_challenge", "nonce": HEX64})
+
+
+def test_pair_request_constructor_rejects_commitment_argument():
+    with pytest.raises(TypeError):
+        PairRequest(cert=CERT, commitment=HEX64)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    ("cls", "field"), [(PairCommit, "commitment"), (PairNonce, "nonce"), (PairReveal, "nonce")]
+)
+def test_new_pairing_messages_have_exactly_one_hex_field(cls, field):
+    assert [f.name for f in dataclasses.fields(cls)] == [field]
+
+
+def test_pair_commit_nonce_reveal_wire_format():
+    assert to_dict(PairCommit(commitment=HEX64)) == {"type": "pair_commit", "commitment": HEX64}
+    assert to_dict(PairNonce(nonce=HEX64)) == {"type": "pair_nonce", "nonce": HEX64}
+    assert to_dict(PairReveal(nonce=HEX64)) == {"type": "pair_reveal", "nonce": HEX64}
+    assert parse_message({"type": "pair_commit", "commitment": HEX64}) == PairCommit(commitment=HEX64)
+    assert parse_message({"type": "pair_nonce", "nonce": HEX64}) == PairNonce(nonce=HEX64)
+
+
+def test_pairing_messages_use_their_own_field_names():
+    # `pair_commit` mang `commitment`; `pair_nonce`/`pair_reveal` mang `nonce`. Tên khác → thiếu trường.
+    for wire in (
+        {"type": "pair_commit", "nonce": HEX64},
+        {"type": "pair_nonce", "commitment": HEX64},
+        {"type": "pair_reveal", "commitment": HEX64},
+    ):
+        with pytest.raises(MessageError):
+            parse_message(wire)
 
 
 # --- nonce / commitment ------------------------------------------------------------------------
@@ -514,23 +591,30 @@ BAD_HEX64 = [
 
 
 @pytest.mark.parametrize("value", BAD_HEX64, ids=repr)
-@pytest.mark.parametrize(("type_name", "field"), [("pair_challenge", "nonce"), ("pair_reveal", "nonce")])
-def test_bad_nonce_rejected(type_name, field, value):
-    with pytest.raises(MessageError):
+@pytest.mark.parametrize(
+    ("type_name", "field"),
+    [("pair_commit", "commitment"), ("pair_nonce", "nonce"), ("pair_reveal", "nonce")],
+)
+def test_bad_hex64_field_rejected(type_name, field, value):
+    with pytest.raises(MessageError) as exc:
         parse_message({"type": type_name, field: value})
+    assert not isinstance(exc.value, UnknownMessageType)
 
 
 @pytest.mark.parametrize("value", BAD_HEX64, ids=repr)
-def test_bad_commitment_rejected(value):
+@pytest.mark.parametrize(
+    ("cls", "field"), [(PairCommit, "commitment"), (PairNonce, "nonce"), (PairReveal, "nonce")]
+)
+def test_bad_hex64_rejected_when_constructing(cls, field, value):
     with pytest.raises(MessageError):
-        parse_message({"type": "pair_request", "cert": CERT, "commitment": value})
+        cls(**{field: value})
 
 
 @pytest.mark.parametrize("value", ["0" * 64, "f" * 64, HEX64, HEX64_B])
 def test_good_hex64_accepted(value):
-    assert parse_message({"type": "pair_challenge", "nonce": value}).nonce == value
+    assert parse_message({"type": "pair_commit", "commitment": value}).commitment == value
+    assert parse_message({"type": "pair_nonce", "nonce": value}).nonce == value
     assert parse_message({"type": "pair_reveal", "nonce": value}).nonce == value
-    assert parse_message({"type": "pair_request", "cert": CERT, "commitment": value}).commitment == value
 
 
 # --- reason ------------------------------------------------------------------------------------
@@ -670,11 +754,12 @@ def test_property_validate_os_agrees_with_hello_os(value):
         lambda: Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="", os="windows"),
         lambda: Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="v" * 33, os="windows"),
         lambda: Hello(protocol=1, device_id=DEVICE_ID, name="PC", app_version="1", os="Windows"),
-        lambda: PairRequest(cert="không phải PEM", commitment=HEX64),
-        lambda: PairRequest(cert=_cert_of_length(8193), commitment=HEX64),
-        lambda: PairRequest(cert=CERT, commitment=HEX64.upper()),
-        lambda: PairChallenge(nonce="x"),
-        lambda: PairChallenge(nonce=bytes(32)),
+        lambda: PairRequest(cert="không phải PEM"),
+        lambda: PairRequest(cert=_cert_of_length(8193)),
+        lambda: PairCommit(commitment=HEX64.upper()),
+        lambda: PairCommit(commitment=bytes(32)),
+        lambda: PairNonce(nonce="x"),
+        lambda: PairNonce(nonce=bytes(32)),
         lambda: PairReveal(nonce=HEX64[:62]),
         lambda: PairAbort(reason="USER"),
         lambda: PairAbort(reason=""),
@@ -938,7 +1023,8 @@ any_message_input = json_values | near_valid_messages | st.builds(lambda t: {"ty
 MESSAGE_CLASSES = (
     Hello,
     PairRequest,
-    PairChallenge,
+    PairCommit,
+    PairNonce,
     PairReveal,
     PairConfirm,
     PairAbort,
@@ -1018,7 +1104,9 @@ def test_property_device_id_is_exactly_32_lowercase_hex(value):
 
 # --- Bảng loại kết nối (đặc tả PR-2 mục 2.1, test M1–M5) ------------------------------------------
 
-PAIRING_TYPES = frozenset({"pair_request", "pair_challenge", "pair_reveal", "pair_confirm", "pair_abort"})
+PAIRING_TYPES = frozenset(
+    {"pair_request", "pair_commit", "pair_nonce", "pair_reveal", "pair_confirm", "pair_abort"}
+)
 CONTROL_TYPES = frozenset({"ping", "pong"})
 EXPECTED_ALLOWED = {"pairing": PAIRING_TYPES, "control": CONTROL_TYPES, "data": frozenset()}
 KIND_INPUTS = [*ConnectionKind, "pairing", "control", "data"]
@@ -1061,15 +1149,12 @@ def test_allowed_types_rejects_unknown_kind(bad):
 
 
 def test_pair_request_without_cert_opens_pairing():
-    assert (
-        opening_kind(PairRequest(cert=CERT, commitment=HEX64), has_client_cert=False)
-        is ConnectionKind.PAIRING
-    )
+    assert opening_kind(PairRequest(cert=CERT), has_client_cert=False) is ConnectionKind.PAIRING
 
 
 def test_pair_request_with_cert_is_wrong_kind():
     with pytest.raises(WrongConnectionKind):
-        opening_kind(PairRequest(cert=CERT, commitment=HEX64), has_client_cert=True)
+        opening_kind(PairRequest(cert=CERT), has_client_cert=True)
 
 
 def test_control_open_with_cert_opens_control():
@@ -1103,7 +1188,21 @@ def test_check_message_kind_follows_table(kind, msg):
 
 def test_check_message_kind_error_is_catchable_as_message_error():
     with pytest.raises(MessageError):
-        check_message_kind(ConnectionKind.CONTROL, PairChallenge(nonce=HEX64))
+        check_message_kind(ConnectionKind.CONTROL, PairCommit(commitment=HEX64))
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [PairCommit(commitment=HEX64), PairNonce(nonce=HEX64), PairReveal(nonce=HEX64)],
+    ids=lambda m: type(m).__name__,
+)
+def test_new_pairing_messages_only_on_pairing_and_cannot_open(msg):
+    with pytest.raises(WrongConnectionKind):
+        check_message_kind(ConnectionKind.CONTROL, msg)
+    assert check_message_kind(ConnectionKind.PAIRING, msg) is None
+    for has_cert in (False, True):
+        with pytest.raises(WrongConnectionKind):
+            opening_kind(msg, has_client_cert=has_cert)
 
 
 valid_message_values = st.sampled_from(VALID_MESSAGES) | st.builds(

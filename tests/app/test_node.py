@@ -619,17 +619,15 @@ async def test_close_cancelled_midway_still_stops_port_and_releases_lock(
     `node.lock` lấy lại được, không còn task `teleport.node*` / `teleport.pairing*` /
     `teleport.connection*` sau một nhịp ngắn; `close()` lần hai trả về không lỗi.
 
-    Client ghép đôi thô ngừng đọc sau khi gửi `pair_reveal`, nên `close()` phải chờ đóng phiên
-    (tới `CLOSE_TIMEOUT`) và lệnh hủy chắc chắn tới khi nó đang chạy dở.
+    Client ghép đôi thô ngừng đọc sau khi nhận `pair_reveal` (B đang hỏi), nên `close()` phải chờ
+    đóng phiên (tới `CLOSE_TIMEOUT`) và lệnh hủy chắc chắn tới khi nó đang chạy dở.
     """
     B = await node_factory("B", accept_pairing=True)
     port = B.port
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(port)
     await c.begin(raw_id)
-    await c.read_type("pair_challenge")
-    c.send_dict({"type": "pair_reveal", "nonce": c.nonce.hex()})
-    await c.drain()
+    await c.run_to_code(B.identity.fingerprint)
     await B.rec.wait_prompts()
     c.writer.transport.pause_reading()  # không trả lời close_notify: close() phải chờ
 
@@ -671,6 +669,37 @@ async def test_n14_accept_pairing_can_change_while_running(node_factory):
     third = await asyncio.wait_for(B.pairing.pair_with([LOCAL], A.port), 10)
     assert third.outcome == "peer_busy"
     assert len(A.rec.prompts) == 1
+
+
+def test_accept_pairing_without_prompt_raises_in_constructor(tmp_path):
+    """Kế hoạch L1: `Node(accept_pairing=True)` mà thiếu `on_pairing_prompt` → ValueError ngay."""
+    with pytest.raises(ValueError):
+        Node(tmp_path / "A", name="A", host=LOCAL, port=0, accept_pairing=True)
+    with pytest.raises(ValueError):
+        Node(tmp_path / "A", name="A", host=LOCAL, port=0, accept_pairing=True, on_pairing_prompt=None)
+    assert not (tmp_path / "A").exists()
+
+
+def test_node_without_prompt_and_not_accepting_is_allowed(tmp_path):
+    Node(tmp_path / "A", name="A", host=LOCAL, port=0, accept_pairing=False, on_pairing_prompt=None)
+
+
+@integration
+async def test_accept_pairing_setter_without_prompt_raises(node_factory):
+    """Kế hoạch L1: node chạy mà thiếu lời hỏi → bật `accept_pairing` là ValueError, giữ nguyên False;
+    yêu cầu ghép đôi tới vẫn chỉ nhận `busy`, không callback."""
+    A = await node_factory("A", prompt=False)
+    B = await node_factory("B", answer=True)
+    with pytest.raises(ValueError):
+        A.accept_pairing = True
+    assert A.accept_pairing is False and A.pairing.accepting is False
+    result = await asyncio.wait_for(B.pairing.pair_with([LOCAL], A.port), 10)
+    assert result.outcome == "peer_busy"
+    await asyncio.sleep(0.2)
+    assert A.rec.prompts == [] and A.rec.finished == []
+    with pytest.raises(ValueError):
+        await A.pairing.pair_with([LOCAL], B.port)
+    assert A.rec.finished == []
 
 
 @integration

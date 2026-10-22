@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import datetime
 import gc
+import hashlib
 import inspect
 import secrets
 import socket
@@ -28,11 +29,11 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtensionOID, NameOID
 
 from teleport.core.framing import HEADER, MAX_PAIRING_MESSAGE_SIZE, FramingError, encode_message
 from teleport.core.messages import PROTOCOL_VERSION
-from teleport.core.pairing_code import NONCE_SIZE, make_commitment, pairing_code
+from teleport.core.pairing_code import NONCE_SIZE, pairing_code
 from teleport.lock import NodeLock
 from teleport.net import tls
 from teleport.net.stream import read_message
@@ -46,6 +47,7 @@ CLOSED_ERRORS: tuple[type[BaseException], ...] = (ConnectionError, ssl.SSLError)
 # Hằng thời gian sau khi patch (mục 4.1); test đọc từ đây để tính biên.
 FAST = SimpleNamespace(
     MESSAGE_TIMEOUT=1.0,
+    NONCE_TIMEOUT=0.5,  # bên trả lời chờ pair_nonce; nhỏ hơn MESSAGE_TIMEOUT để phân biệt hai hạn
     CONFIRM_TIMEOUT=2.0,
     CONFIRM_GRACE=0.5,
     BACKOFF_BASE=0.5,
@@ -159,6 +161,62 @@ def fake_cert_with_cn(device_id: str, *, ca: bool = False) -> str:
     return cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
 
 
+# SAN thô mà `cryptography` không đọc được (UnsupportedGeneralNameType, không phải ValueError):
+# GeneralNames chứa một x400Address [3] hoặc một EDIPartyName [5] rỗng (kế hoạch M1).
+SAN_X400 = b"\x30\x02\xa3\x00"
+SAN_EDI = b"\x30\x02\xa5\x00"
+
+
+def cert_with_raw_san(device_id: str, san_der: bytes) -> tuple[str, bytes]:
+    """Chứng chỉ tự ký P-256, CN `teleport-<device_id>`, hiệu lực 2000–9999, ký ECDSA-SHA256, chỉ
+    thêm extension SAN mang `san_der` thô. Trả (PEM chứng chỉ, PEM khóa riêng PKCS8).
+
+    Đúng mọi điều kiện của chứng chỉ thiết bị Teleport trừ SAN: lỗi nào xảy ra là do SAN.
+    """
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "teleport-" + device_id)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC))
+        .not_valid_after(datetime.datetime(9999, 12, 31, tzinfo=datetime.UTC))
+        .add_extension(
+            x509.UnrecognizedExtension(ExtensionOID.SUBJECT_ALTERNATIVE_NAME, san_der), critical=False
+        )
+        .sign(key, hashes.SHA256())
+    )
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
+    return cert.public_bytes(serialization.Encoding.PEM).decode("ascii"), key_pem
+
+
+def identity_from_pem(directory: Path, device_id: str, cert_pem: str, key_pem: bytes) -> Identity:
+    """`Identity` dựng thẳng từ chứng chỉ và khóa cho trước (không qua `load_or_create_identity`,
+    không kiểm gì), để chạy một server TLS giả mang chứng chỉ đó."""
+    directory.mkdir(parents=True, exist_ok=True)
+    cert_path, key_path = directory / "device.crt", directory / "device.key"
+    cert_path.write_text(cert_pem, encoding="ascii")
+    key_path.write_bytes(key_pem)
+    der = x509.load_pem_x509_certificate(cert_pem.encode("ascii")).public_bytes(serialization.Encoding.DER)
+    return Identity(device_id, cert_path, key_path, hashlib.sha256(der).hexdigest())
+
+
+def identity_below(directory: Path, device_id: str, tries: int = 64) -> Identity:
+    """Một danh tính mới (trong `directory/<i>`) có `device_id` nhỏ hơn `device_id` cho trước.
+
+    Dùng để dựng "bên nhỏ hơn" trong luật hai bên cùng chủ động (protocol §5.3).
+    """
+    for i in range(tries):
+        identity = load_or_create_identity(directory / str(i))
+        if identity.device_id < device_id:
+            return identity
+    raise AssertionError(f"{tries} lần không sinh được device_id nhỏ hơn {device_id}")
+
+
 def ensure_identity(directory: Path) -> Identity:
     return load_or_create_identity(directory)
 
@@ -248,31 +306,67 @@ class RawPeer:
             self.writer.close()
 
 
+def ref_commitment(fp_responder: str, nonce: bytes) -> str:
+    """Cam kết của bên trả lời, tính độc lập theo docs/protocol.md §5 (không dùng code `core`)."""
+    return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_responder) + nonce).hexdigest()
+
+
 class PairingClient(RawPeer):
-    """Client ghép đôi thô (đóng vai bên khởi xướng): tự tính cam kết và nonce."""
+    """Client ghép đôi thô (đóng vai bên khởi xướng A), theo luồng bên trả lời cam kết trước:
+
+    `begin` (hello + `pair_request{cert}`) → `read_commit` → `send_nonce` → `read_reveal` (tự kiểm
+    cam kết bằng fp của server, tính mã). `run_to_code` làm cả chuỗi sau `begin`.
+    """
 
     identity: Identity
     nonce: bytes
+    commitment: str | None = None
+    responder_nonce: bytes | None = None
 
     async def begin(self, identity: Identity, name: str = "Raw", *, nonce: bytes | None = None) -> None:
-        """Đọc hello server, gửi hello và `pair_request` hợp lệ."""
+        """Đọc hello server, gửi hello và `pair_request` hợp lệ (chỉ có `cert`)."""
         self.identity = identity
         self.nonce = nonce if nonce is not None else secrets.token_bytes(NONCE_SIZE)
+        self.commitment = None
+        self.responder_nonce = None
         if self.server_hello is None:
             await self.read_hello()
         self.send_dict(hello_dict(identity, name))
+        self.send_dict({"type": "pair_request", "cert": identity.cert_pem()})
+        await self.drain()
+
+    async def read_commit(self, timeout: float = 3.0) -> str:
+        """Đọc `pair_commit` của bên trả lời; trả và nhớ `commitment`."""
+        msg = await self.read_type("pair_commit", timeout)
+        assert set(msg) == {"type", "commitment"}, f"pair_commit có trường lạ: {msg!r}"
+        self.commitment = msg["commitment"]
+        return self.commitment
+
+    async def send_nonce(self, nonce_hex: str | None = None) -> None:
+        """Gửi `pair_nonce` (mặc định n_A của client)."""
         self.send_dict(
-            {
-                "type": "pair_request",
-                "cert": identity.cert_pem(),
-                "commitment": make_commitment(identity.fingerprint, self.nonce),
-            }
+            {"type": "pair_nonce", "nonce": nonce_hex if nonce_hex is not None else self.nonce.hex()}
         )
         await self.drain()
 
-    def code_for(self, responder_fingerprint: str, challenge_nonce_hex: str) -> str:
+    async def read_reveal(self, responder_fingerprint: str, timeout: float = 3.0) -> str:
+        """Đọc `pair_reveal`, kiểm nó khớp cam kết đã nhận (với fp của server), trả mã 6 số."""
+        msg = await self.read_type("pair_reveal", timeout)
+        n_b = bytes.fromhex(msg["nonce"])
+        assert self.commitment is not None, "nhận pair_reveal trước pair_commit"
+        assert ref_commitment(responder_fingerprint, n_b) == self.commitment, "n_B không khớp cam kết"
+        self.responder_nonce = n_b
+        return self.code_for(responder_fingerprint, msg["nonce"])
+
+    async def run_to_code(self, responder_fingerprint: str, timeout: float = 3.0) -> str:
+        """Sau `begin`: commit → nonce → reveal; trả mã."""
+        await self.read_commit(timeout)
+        await self.send_nonce()
+        return await self.read_reveal(responder_fingerprint, timeout)
+
+    def code_for(self, responder_fingerprint: str, reveal_nonce_hex: str) -> str:
         return pairing_code(
-            self.identity.fingerprint, responder_fingerprint, self.nonce, bytes.fromhex(challenge_nonce_hex)
+            self.identity.fingerprint, responder_fingerprint, self.nonce, bytes.fromhex(reveal_nonce_hex)
         )
 
 
@@ -632,7 +726,14 @@ def fast(monkeypatch):
     from teleport.core import pairing as core_pairing
     from teleport.net import connection
 
-    for name in ("MESSAGE_TIMEOUT", "CONFIRM_TIMEOUT", "CONFIRM_GRACE", "BACKOFF_BASE", "BACKOFF_MAX"):
+    for name in (
+        "MESSAGE_TIMEOUT",
+        "NONCE_TIMEOUT",
+        "CONFIRM_TIMEOUT",
+        "CONFIRM_GRACE",
+        "BACKOFF_BASE",
+        "BACKOFF_MAX",
+    ):
         monkeypatch.setattr(core_pairing, name, getattr(FAST, name))
     for name in ("OPENING_TIMEOUT", "CLOSE_TIMEOUT", "DRAIN_TIMEOUT"):
         monkeypatch.setattr(connection, name, getattr(FAST, name))
@@ -714,6 +815,7 @@ async def node_factory(fast, tmp_path):
     xong; sau đó kiểm `node.lock` của mọi thư mục đã chạy đều lấy lại được ngay.
     `answer=True/False` → trong `on_prompt` gọi `decide`; `answer=callable` → gọi với prompt.
     `hostname=True` → truyền `name=None` cho Node (tên lấy từ hostname).
+    `prompt=False` → truyền `on_pairing_prompt=None` (node không ghép đôi được; kế hoạch L1).
     """
     from teleport.app.node import Node
 
@@ -735,6 +837,7 @@ async def node_factory(fast, tmp_path):
         mdns=None,
         auto_connect: bool = True,
         raise_in_event: bool = False,
+        prompt: bool = True,
     ) -> AppNode:
         directory = tmp_path / label
         rec = Recorder(
@@ -755,7 +858,7 @@ async def node_factory(fast, tmp_path):
             port=port,
             host=host,
             accept_pairing=accept_pairing,
-            on_pairing_prompt=rec.on_prompt,
+            on_pairing_prompt=rec.on_prompt if prompt else None,
             on_pairing_finished=rec.on_finished,
             **extra,
         )
@@ -926,6 +1029,11 @@ def app_helpers():
         hello_dict=hello_dict,
         frame=frame,
         fake_cert_with_cn=fake_cert_with_cn,
+        SAN_X400=SAN_X400,
+        SAN_EDI=SAN_EDI,
+        cert_with_raw_san=cert_with_raw_san,
+        identity_from_pem=identity_from_pem,
+        identity_below=identity_below,
         ensure_identity=ensure_identity,
         seed_trust=seed_trust,
         lock_is_free=lock_is_free,
@@ -934,6 +1042,7 @@ def app_helpers():
         read_message=read_message,
         encode_message=encode_message,
         dev=make_discovered,
+        ref_commitment=ref_commitment,
     )
 
 
