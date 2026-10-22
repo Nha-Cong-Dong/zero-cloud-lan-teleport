@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -63,6 +64,7 @@ _FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
 # Số mũ tối đa khi tính thời gian chờ: 2**32 · 10 s đã vượt xa BACKOFF_MAX, và chặn
 # OverflowError khi đổi số nguyên khổng lồ sang float.
 _MAX_BACKOFF_EXPONENT = 32
+_MAX_ALIASES = 15  # địa chỉ khác của máy đích (net mở tới tối đa 16 địa chỉ)
 
 
 class PairingUsageError(RuntimeError):
@@ -595,6 +597,7 @@ class Slot:
     id: int
     role: Role
     ip: str
+    aliases: frozenset[str] = frozenset()  # địa chỉ khác của cùng máy đích (chỉ phiên khởi xướng)
 
 
 @dataclass(frozen=True, slots=True)
@@ -646,25 +649,40 @@ class PairingGate:
         """Phiên đang chạy (khởi xướng hoặc trả lời), None nếu rảnh."""
         return self._active
 
-    def begin_outgoing(self, ip: str) -> Slot | None:
+    def begin_outgoing(self, ip: str, *, also: Iterable[str] = ()) -> Slot | None:
         """Giữ chỗ cho một phiên khởi xướng tới `ip`; None nếu đang có phiên khác.
 
         Không xét `accepting`: người dùng chủ động ghép đôi thì luôn được. `ip` phải ở
         cùng một dạng chuẩn do `net` bảo đảm (IPv4 dạng chấm, không tiền tố `::ffff:`),
         vì luật hai bên cùng chủ động so `ip` theo chuỗi.
+
+        `also`: các địa chỉ khác của cùng máy đích (`Slot.aliases`), để luật hai bên cùng
+        chủ động vẫn áp khi máy kia gửi yêu cầu từ một địa chỉ khác `ip`. Bỏ trùng và bỏ
+        chính `ip`; phần tử sai, `also` là một chuỗi, hoặc còn hơn 15 địa chỉ → ValueError
+        (gate giữ nguyên).
         """
         _check_ip(ip)
+        if isinstance(also, str | bytes):
+            raise ValueError("also phải là một dãy địa chỉ, không phải một chuỗi")
+        aliases: dict[str, None] = {}
+        for value in also:
+            _check_ip(value)
+            if value != ip:
+                aliases[value] = None
+        if len(aliases) > _MAX_ALIASES:
+            raise ValueError(f"also có tối đa {_MAX_ALIASES} địa chỉ khác ip")
         if self._active is not None:
             return None
-        return self._new_slot(Role.INITIATOR, ip)
+        return self._new_slot(Role.INITIATOR, ip, frozenset(aliases))
 
     def admit(self, ip: str, peer_device_id: str, now: float) -> Admission:
         """Quyết định với một `pair_request` tới từ `ip`; `peer_device_id` lấy từ `hello`.
 
         Xét theo thứ tự, dừng ở luật đầu tiên khớp: tự ghép → BUSY; hai bên cùng chủ
-        động (máy này đang khởi xướng tới đúng `ip`) → bên có `device_id` lớn hơn nhường
-        phiên khởi xướng; không nhận ghép đôi → BUSY; đang có phiên → BUSY; IP đang bị
-        chờ → BUSY (không kéo dài thời gian chờ); còn lại → ACCEPT.
+        động (máy này đang khởi xướng tới `ip`, hoặc `ip` nằm trong `aliases` của phiên
+        đó) → bên có `device_id` lớn hơn nhường phiên khởi xướng; không nhận ghép đôi →
+        BUSY; đang có phiên → BUSY; IP đang bị chờ → BUSY (không kéo dài thời gian chờ);
+        còn lại → ACCEPT.
 
         `ip` phải ở cùng một dạng chuẩn do `net` bảo đảm (IPv4 dạng chấm, không tiền tố
         `::ffff:`): bộ đếm và luật hai bên cùng chủ động so `ip` theo chuỗi.
@@ -678,7 +696,7 @@ class PairingGate:
         if peer_device_id == self._own_device_id:
             return busy
         active = self._active
-        if active is not None and active.role is Role.INITIATOR and active.ip == ip:
+        if active is not None and active.role is Role.INITIATOR and (ip == active.ip or ip in active.aliases):
             # device_id chưa được xác thực trên kết nối ẩn danh, nên luật cần IP khớp.
             if self._own_device_id > peer_device_id:
                 return Admission(Decision.ACCEPT, self._new_slot(Role.RESPONDER, ip), cancel_outgoing=active)
@@ -718,8 +736,8 @@ class PairingGate:
         record = self._records.get(ip)
         return 0 if record is None else record.failures
 
-    def _new_slot(self, role: Role, ip: str) -> Slot:
-        slot = Slot(self._next_id, role, ip)
+    def _new_slot(self, role: Role, ip: str, aliases: frozenset[str] = frozenset()) -> Slot:
+        slot = Slot(self._next_id, role, ip, aliases)
         self._next_id += 1
         self._active = slot
         return slot

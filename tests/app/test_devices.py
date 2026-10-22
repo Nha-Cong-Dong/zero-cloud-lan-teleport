@@ -360,3 +360,269 @@ def test_parse_manual_address_only_raises_value_error(text):
     assert not (addr.is_unspecified or addr.is_multicast or ip == "255.255.255.255")
     assert 1 <= port <= 65535
     assert ip in text
+
+
+# =================================================================================================
+# PR-4: `DeviceView`, `DeviceRegistry`, `resolve_device` (đặc tả PR-4 mục 2.4, 4.4: DR1–DR5, RD1–RD4).
+# Tên mới được import trong từng test, để các test PR-3 ở trên vẫn chạy khi chúng chưa có.
+# RD4 = mọi test `resolve_trusted` ở trên chạy không sửa.
+# =================================================================================================
+
+OWN_ID = "8" * 32
+ID_D = "d00d" + "2" * 28
+
+
+def seen_dev(device_id: str, name: str, *, os: str = "windows", port: int = 47474, addresses=("192.0.2.10",)):
+    from teleport.core.discovery import DiscoveredDevice
+    from teleport.core.messages import PROTOCOL_VERSION
+
+    return DiscoveredDevice(
+        device_id=device_id, name=name, os=os, proto=PROTOCOL_VERSION, port=port, addresses=tuple(addresses)
+    )
+
+
+def registry(*trusted: TrustedDevice):
+    from teleport.app.devices import DeviceRegistry
+
+    r = DeviceRegistry(OWN_ID)
+    r.set_trusted(list(trusted))
+    return r
+
+
+def view(device_id: str, name: str, *, paired: bool = True, online: bool = True, os: str | None = "windows"):
+    from teleport.app.devices import DeviceView
+
+    return DeviceView(
+        device_id=device_id,
+        name=name,
+        os=os if online else None,
+        paired=paired,
+        online=online,
+        connected=False,
+        addresses=("192.0.2.10",) if online else (),
+        port=47474 if online else None,
+    )
+
+
+def test_device_view_is_frozen():
+    import dataclasses
+
+    v = view(ID_A, "A")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        v.name = "B"  # type: ignore[misc]
+
+
+def test_dr1_paired_offline_device_view():
+    from teleport.app.devices import DeviceView
+
+    r = registry(dev(ID_A, "PC Nhà"))
+    assert r.get(ID_A) == DeviceView(
+        device_id=ID_A,
+        name="PC Nhà",
+        os=None,
+        paired=True,
+        online=False,
+        connected=False,
+        addresses=(),
+        port=None,
+    )
+    assert r.views() == (r.get(ID_A),)
+
+
+def test_dr1_seen_paired_device_keeps_trusted_name():
+    r = registry(dev(ID_A, "PC Nhà"))
+    r.seen(seen_dev(ID_A, "Ten-gia-mao", os="linux", port=50000, addresses=("192.0.2.1", "192.0.2.2")))
+    v = r.get(ID_A)
+    assert v.name == "PC Nhà"  # tên mDNS không đổi tên thiết bị đã ghép đôi
+    assert v.paired is True and v.online is True and v.connected is False
+    assert v.os == "linux"
+    assert v.addresses == ("192.0.2.1", "192.0.2.2")
+    assert v.port == 50000
+
+
+def test_dr1_seen_unpaired_device_uses_txt_name():
+    r = registry()
+    r.seen(seen_dev(ID_B, "Laptop", os="macos"))
+    v = r.get(ID_B)
+    assert v.name == "Laptop" and v.paired is False and v.online is True and v.os == "macos"
+    assert v.port == 47474 and v.addresses == ("192.0.2.10",)
+
+
+def test_dr1_seen_update_replaces_address_and_port():
+    r = registry()
+    r.seen(seen_dev(ID_B, "Laptop", port=1000))
+    r.seen(seen_dev(ID_B, "Laptop 2", port=2000, addresses=("192.0.2.99",)))
+    v = r.get(ID_B)
+    assert (v.name, v.port, v.addresses) == ("Laptop 2", 2000, ("192.0.2.99",))
+    assert len(r.views()) == 1
+
+
+def test_dr2_gone_removes_unpaired_and_marks_paired_offline():
+    r = registry(dev(ID_A, "A"))
+    r.seen(seen_dev(ID_A, "A"))
+    r.seen(seen_dev(ID_B, "B"))
+    r.gone(ID_B)
+    assert r.get(ID_B) is None
+    r.gone(ID_A)
+    v = r.get(ID_A)
+    assert (v.online, v.os, v.addresses, v.port, v.paired) == (False, None, (), None, True)
+    r.gone(ID_C)  # lạ: không lỗi
+    assert [x.device_id for x in r.views()] == [ID_A]
+
+
+def test_dr2_own_device_never_has_a_view():
+    from teleport.app.devices import DeviceRegistry
+
+    r = DeviceRegistry(OWN_ID)
+    r.seen(seen_dev(OWN_ID, "Máy này"))
+    assert r.get(OWN_ID) is None
+    r.set_trusted([dev(OWN_ID, "Máy này")])
+    assert r.get(OWN_ID) is None
+    assert r.views() == ()
+
+
+def test_dr3_untrusting_seen_device_keeps_view_as_unpaired():
+    r = registry(dev(ID_A, "Tên lưu"), dev(ID_B, "B"))
+    r.seen(seen_dev(ID_A, "Tên TXT"))
+    r.set_connected(ID_A, True)
+    assert r.get(ID_A).connected is True
+    r.set_trusted([dev(ID_B, "B")])
+    v = r.get(ID_A)
+    assert (v.paired, v.connected, v.name, v.online) == (False, False, "Tên TXT", True)
+
+
+def test_dr3_untrusting_unseen_device_removes_view():
+    r = registry(dev(ID_A, "A"), dev(ID_B, "B"))
+    r.set_trusted([dev(ID_B, "B")])
+    assert r.get(ID_A) is None
+    assert [v.device_id for v in r.views()] == [ID_B]
+
+
+def test_dr3_trusting_seen_device_uses_trusted_name():
+    r = registry()
+    r.seen(seen_dev(ID_A, "Tên TXT"))
+    r.set_trusted([dev(ID_A, "Tên lưu")])
+    v = r.get(ID_A)
+    assert (v.paired, v.name, v.online) == (True, "Tên lưu", True)
+
+
+def test_dr4_set_connected_only_for_paired():
+    r = registry(dev(ID_A, "A"))
+    r.seen(seen_dev(ID_B, "B"))
+    before = r.views()
+    r.set_connected(ID_B, True)
+    r.set_connected(ID_C, True)  # không có view
+    assert r.views() == before
+    assert r.get(ID_C) is None
+    r.set_connected(ID_A, True)
+    assert r.get(ID_A).connected is True  # đang offline vẫn có kết nối được (mDNS chỉ là gợi ý)
+    r.set_connected(ID_A, False)
+    assert r.get(ID_A).connected is False
+
+
+def test_dr4_views_sorted_by_folded_name_then_id():
+    r = registry(dev(ID_C, "b"), dev(ID_A, "B"))
+    r.seen(seen_dev(ID_B, "a"))
+    r.seen(seen_dev(ID_D, unicodedata.normalize("NFD", "Ä")))
+    names = [(v.name, v.device_id) for v in r.views()]
+    expected = sorted(names, key=lambda x: (unicodedata.normalize("NFC", x[0]).casefold(), x[1]))
+    assert names == expected
+    assert [v.device_id for v in r.views()][:3] == [ID_B, ID_A, ID_C]
+
+
+def test_dr5_clear_seen_returns_seen_ids_and_marks_all_offline():
+    r = registry(dev(ID_A, "A"), dev(ID_C, "C"))
+    r.seen(seen_dev(ID_A, "A"))
+    r.seen(seen_dev(ID_B, "B"))
+    ids = r.clear_seen()
+    assert isinstance(ids, tuple)
+    assert set(ids) == {ID_A, ID_B}
+    assert not any(v.online for v in r.views())
+    assert r.get(ID_B) is None  # chưa ghép đôi → mất view
+    assert {v.device_id for v in r.views()} == {ID_A, ID_C}
+    assert r.clear_seen() == ()
+
+
+def test_registry_never_changes_trusted_list():
+    """Dữ liệu mDNS chỉ là gợi ý: `seen` không biến thiết bị lạ thành đã ghép đôi."""
+    r = registry(dev(ID_A, "A"))
+    r.seen(seen_dev(ID_B, "A"))  # cùng tên với thiết bị đã ghép đôi
+    assert r.get(ID_B).paired is False
+    assert r.get(ID_A).paired is True and r.get(ID_A).online is False
+
+
+# --- RD1–RD3 ------------------------------------------------------------------------------------------
+
+
+def test_rd1_resolve_device_by_name_prefix_and_full_id():
+    from teleport.app.devices import resolve_device
+
+    views = [view(ID_A, "PC Nhà"), view(ID_B, "Laptop", paired=False), view(ID_C, "Văn phòng", online=False)]
+    assert resolve_device("pc nhà", views) is views[0]
+    assert resolve_device(unicodedata.normalize("NFD", "PC NHÀ"), views) is views[0]
+    assert resolve_device(ID_B[:4], views) is views[1]
+    assert resolve_device(ID_B[:4].upper(), views) is views[1]
+    assert resolve_device(ID_A, views) is views[0]
+    assert resolve_device("văn phòng", views) is views[2]  # khớp cả view offline
+    assert resolve_device(f"  {ID_C[:6]} ", views) is views[2]
+
+
+def test_rd2_same_name_paired_and_unpaired_is_ambiguous():
+    from teleport.app.devices import resolve_device
+
+    views = [view(ID_C, "pc"), view(ID_A, "PC", paired=False), view(ID_B, "other")]
+    with pytest.raises(AmbiguousDevice) as exc:
+        resolve_device("Pc", views)
+    assert exc.value.query == "Pc"
+    assert [c.device_id for c in exc.value.candidates] == [ID_A, ID_C]
+
+
+def test_rd2_not_found_lists_given_views():
+    from teleport.app.devices import resolve_device
+
+    views = [view(ID_B, "b"), view(ID_A, "a", paired=False)]
+    with pytest.raises(DeviceNotFound) as exc:
+        resolve_device("khong-co", views)
+    assert exc.value.query == "khong-co"
+    assert [v.device_id for v in exc.value.known] == [ID_A, ID_B]
+    with pytest.raises(DeviceNotFound):
+        resolve_device("", [])
+    with pytest.raises(DeviceNotFound):
+        resolve_device(ID_A[:3], views)  # < 4 ký tự: không phải mã
+
+
+def test_rd_shared_exceptions_still_work_with_trusted_devices():
+    a, b = dev(ID_A, "x"), dev(ID_B, "X")
+    exc = AmbiguousDevice("x", [b, a])
+    assert [c.device_id for c in exc.candidates] == [ID_A, ID_B]
+    nf = DeviceNotFound("q", [b, a])
+    assert [c.device_id for c in nf.known] == [ID_A, ID_B]
+    assert DeviceNotFound("q").known == ()
+
+
+@st.composite
+def views_and_query(draw):
+    devices, q = draw(devices_and_query())
+    out = []
+    for d in devices:
+        out.append(view(d.device_id, d.name, paired=draw(st.booleans()), online=draw(st.booleans())))
+    return out, q
+
+
+@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(views_and_query())
+def test_rd3_resolve_device_matches_definition(case):
+    from teleport.app.devices import resolve_device
+
+    views, query = case
+    expected = oracle(query, views)
+    if len(expected) == 1:
+        assert resolve_device(query, views) is expected[0]
+    elif not expected:
+        with pytest.raises(DeviceNotFound) as exc:
+            resolve_device(query, views)
+        assert exc.value.query == query
+    else:
+        with pytest.raises(AmbiguousDevice) as exc:
+            resolve_device(query, views)
+        assert list(exc.value.candidates) == sorted(expected, key=sort_key)

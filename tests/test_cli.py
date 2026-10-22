@@ -72,7 +72,10 @@ LOCAL = "127.0.0.1"
 TIME_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
 MVP_NOT_DONE = "Ghép đôi với {x} chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo."
 LOCKED_UNPAIR = "Lỗi: Teleport đang chạy với thư mục cấu hình này; hãy dừng `teleport listen` trước."
-BAD_ADDRESS = "`teleport pair` hiện chỉ nhận địa chỉ IP, ví dụ 192.168.1.5 hoặc 192.168.1.5:47474."
+BAD_ADDRESS = (  # PR-4 mục 3.10 (đổi theo mục 4.8)
+    "“{target}” không phải địa chỉ IPv4 hợp lệ. Hãy nhập địa chỉ IP, ví dụ 192.168.1.5 hoặc "
+    "192.168.1.5:47474, hoặc tên / mã thiết bị như `teleport list` hiện."
+)
 NODE_OPTS = ["--host", LOCAL, "--port", "0"]
 
 
@@ -340,12 +343,23 @@ def test_unpair_with_missing_config_dir_creates_nothing(tmp_path, capsys, json_m
 
 
 @pytest.mark.parametrize(
-    "address", ["pc-nha", "1.2.3.4:0", "::1", "1.2.3.4:65536", "0.0.0.0", "192.168.1", "1.2.3.4:080"]
+    "address",
+    [
+        "1.2.3.4:0",
+        "::1",
+        "1.2.3.4:65536",
+        "0.0.0.0",
+        "192.168.1",
+        "1.2.3.4:080",
+        "12.5",
+        "fe80::1",
+        "[::1]:80",
+    ],
 )
 def test_cl5_pair_bad_address_exits_2_without_side_effects(tmp_path, capsys, address):
     d = tmp_path / "cfg"
     assert run_main_guarded(["--config-dir", str(d), "pair", address, *NODE_OPTS]) == 2
-    assert BAD_ADDRESS in capsys.readouterr().err
+    assert BAD_ADDRESS.format(target=address) in capsys.readouterr().err
     assert not (d / "node.lock").exists()
     assert not (d / "settings.json").exists()
     assert not (d / "device.crt").exists()
@@ -353,7 +367,7 @@ def test_cl5_pair_bad_address_exits_2_without_side_effects(tmp_path, capsys, add
 
 def test_cl5_pair_bad_address_json(tmp_path, capsys):
     d = tmp_path / "cfg"
-    assert run_main_guarded(["--config-dir", str(d), "pair", "pc-nha", "--json", *NODE_OPTS]) == 2
+    assert run_main_guarded(["--config-dir", str(d), "pair", "1.2.3.4:0", "--json", *NODE_OPTS]) == 2
     captured = capsys.readouterr()
     obj = json.loads(captured.out.strip())
     assert obj["error"] == "invalid_address"
@@ -1095,3 +1109,1025 @@ async def test_stdin_reader_queue_is_bounded(monkeypatch):
         if w is not None:
             os.close(w)
         fake_stdin.close()
+
+
+# =================================================================================================
+# PR-4: `identity` (cổng, thư mục là file), `list`, `pair <tên>`, `listen` với mDNS
+# (đặc tả PR-4 mục 2.7, 3.10, 4.8: CL16–CL30). `MdnsDiscovery` được thay bằng bản giả: fixture của
+# tests/app/conftest.py không dùng được ở đây (mỗi thư mục một conftest), nên bản giả gọn được chép lại.
+# =================================================================================================
+
+MVP_NO_DEVICES = (
+    "Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia và kiểm tra hai máy dùng chung một mạng Wi-Fi."
+)
+MVP_REINSTALL = "Có một {x} mới chưa ghép đôi. Nếu máy đó vừa cài lại Teleport, hãy ghép đôi lại."
+MVP_SEEN_UNREACHABLE = (
+    "Thấy {x} nhưng không kết nối được. Mạng Wi-Fi này có thể đang chặn các thiết bị nói chuyện với nhau "
+    "(hay gặp ở quán cà phê, khách sạn)."
+)
+HOTSPOT_HINT = (
+    "Hãy thử dùng điểm phát Wi-Fi từ điện thoại, và kiểm tra tường lửa trên máy kia đã cho phép Teleport."
+)
+MVP_REJECTED = "{x} từ chối kết nối từ máy này. Có thể máy đó đã hủy ghép đôi."
+MVP_IDENTITY = (
+    "{x} đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. "
+    "Kết nối đã bị chặn."
+)
+MDNS_OFF = (
+    "Không tìm được thiết bị theo tên vì khám phá mDNS đang tắt. "
+    "Hãy nhập địa chỉ IP: teleport pair <ip[:cổng]>"
+)
+MDNS_HINT = "Nếu mạng chặn mDNS, hãy nhập địa chỉ IP: teleport pair <ip[:cổng]>"
+LISTEN_DISCOVERY = "Máy khác trong mạng thấy máy này qua `teleport list` và tự kết nối nếu đã ghép đôi."
+MDNS_OPTS = ["--mdns-interface", LOCAL]
+
+
+def new_identity(directory):
+    return load_or_create_identity(directory)
+
+
+def discovered(device_id: str, name: str, port: int, *, addresses=(LOCAL,), os: str = "windows"):
+    from teleport.core.discovery import DiscoveredDevice
+    from teleport.core.messages import PROTOCOL_VERSION
+
+    return DiscoveredDevice(
+        device_id=device_id, name=name, os=os, proto=PROTOCOL_VERSION, port=port, addresses=tuple(addresses)
+    )
+
+
+class CliFakeMdnsControl:
+    def __init__(self) -> None:
+        self.instances: list = []
+        self.fail_start: BaseException | None = None
+        self.fail_advertise: BaseException | None = None
+        self.seed: dict = {}
+
+    @property
+    def last(self):
+        assert self.instances, "chưa có MdnsDiscovery nào được tạo"
+        return self.instances[-1]
+
+
+class CliFakeMdns:
+    """Bản giả `MdnsDiscovery` (như `FakeMdns` của tests/app): không socket; thiết bị trong `seed`
+    được báo `DeviceAdded` ngay sau `start_browsing`."""
+
+    def __init__(self, ctl: CliFakeMdnsControl, **kwargs) -> None:
+        self.ctl = ctl
+        self.kwargs = kwargs
+        self.calls: list[str] = []
+        self.advertised: list[dict] = []
+        self.closing = False
+        self.on_event = None
+        self._devices: dict = {}
+        ctl.instances.append(self)
+
+    async def start(self) -> None:
+        self.calls.append("start")
+        if self.ctl.fail_start is not None:
+            raise self.ctl.fail_start
+
+    async def close(self) -> None:
+        self.calls.append("close")
+        self.closing = True
+
+    async def advertise(self, **kw) -> None:
+        self.calls.append("advertise")
+        if self.ctl.fail_advertise is not None:
+            raise self.ctl.fail_advertise
+        self.advertised.append(kw)
+
+    async def stop_advertising(self) -> None:
+        self.calls.append("stop_advertising")
+
+    async def start_browsing(self, *, self_device_id: str, on_event, max_services: int = 256) -> None:
+        from teleport.core.discovery import DeviceAdded
+
+        self.calls.append("start_browsing")
+        self.on_event = on_event
+        loop = asyncio.get_running_loop()
+        for d in self.ctl.seed.values():
+            if d.device_id != self_device_id:
+                loop.call_soon(self.emit, DeviceAdded(d))
+
+    def set_priority(self, device_ids) -> None:
+        self.calls.append("set_priority")
+        list(device_ids)
+
+    @property
+    def devices(self):
+        return dict(self._devices)
+
+    def emit(self, event) -> None:
+        from teleport.core.discovery import DeviceRemoved
+
+        if self.closing:
+            return
+        if isinstance(event, DeviceRemoved):
+            self._devices.pop(event.device.device_id, None)
+        else:
+            self._devices[event.device.device_id] = event.device
+        if self.on_event is not None:
+            self.on_event(event)
+
+
+@pytest.fixture
+def cli_mdns(monkeypatch):
+    """Thay `teleport.app.node.MdnsDiscovery`; địa chỉ card mạng cố định (không khởi động lại mDNS)."""
+    from teleport.app import node as node_mod
+    from teleport.net import discovery as net_discovery
+
+    ctl = CliFakeMdnsControl()
+    monkeypatch.setattr(node_mod, "MdnsDiscovery", lambda **kw: CliFakeMdns(ctl, **kw))
+    monkeypatch.setattr(net_discovery, "local_ipv4_addresses", lambda: ("192.0.2.5",))
+    return ctl
+
+
+@pytest.fixture
+def open_control_calls(monkeypatch):
+    """Đếm lời gọi `teleport.app.node.open_control` (node tự mở kết nối điều khiển)."""
+    from teleport.app import node as node_mod
+
+    calls: list = []
+    real = node_mod.open_control
+
+    async def counting(*args, **kwargs):
+        calls.append(args)
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(node_mod, "open_control", counting)
+    return calls
+
+
+@pytest.fixture
+def fast_links(fast_cli, monkeypatch):
+    """`fast_cli` + hằng của `teleport.core.links` và `NETWORK_CHECK_INTERVAL` (như `fast` của tests/app)."""
+    from teleport.app import node as node_mod
+    from teleport.core import links
+
+    for name, value in {
+        "RETRY_BASE": 0.2,
+        "RETRY_MAX": 1.0,
+        "EVENT_RETRY_GAP": 0.2,
+        "REPLACE_AFTER": 2.0,
+    }.items():
+        monkeypatch.setattr(links, name, value)
+    monkeypatch.setattr(node_mod, "NETWORK_CHECK_INTERVAL", 0.2)
+
+
+@pytest.fixture
+def browse_fast(monkeypatch):
+    from teleport import cli
+
+    monkeypatch.setattr(cli, "_PAIR_BROWSE_TIMEOUT", 0.3)
+
+
+async def run_list_capture(argv: list[str]) -> tuple[int, str, str]:
+    from teleport.cli import run_list
+
+    out, err = io.StringIO(), io.StringIO()
+    code = await asyncio.wait_for(run_list(build_parser().parse_args(argv), out, err), 15)
+    return code, out.getvalue(), err.getvalue()
+
+
+def list_argv(d, *extra: str) -> list[str]:
+    return ["--config-dir", str(d), "list", *MDNS_OPTS, "--timeout", "0.3", *extra]
+
+
+def name_pair_argv(d, target: str, *, json_mode: bool = False, name: str = "A") -> list[str]:
+    mode = ["--json"] if json_mode else []
+    return ["--config-dir", str(d), "pair", target, *mode, "--name", name, *NODE_OPTS, *MDNS_OPTS]
+
+
+def mdns_listen_argv(d, *, json_mode: bool = True, name: str = "A") -> list[str]:
+    mode = ["--json"] if json_mode else []
+    return ["--config-dir", str(d), "listen", *mode, "--name", name, *NODE_OPTS, *MDNS_OPTS]
+
+
+# --- CL16, CL17: identity ------------------------------------------------------------------------------
+
+
+def test_cl16_identity_with_config_dir_that_is_a_file(config_is_file, capsys):
+    assert run_main_guarded(["--config-dir", str(config_is_file), "identity"]) == 1
+    captured = capsys.readouterr()
+    assert f"Lỗi: {CONFIG_DIR_ERROR} {config_is_file}" in captured.err, captured.err
+    assert "Traceback" not in captured.err + captured.out
+    assert config_is_file.read_bytes() == b"khong phai thu muc"
+
+
+def test_cl17_identity_shows_port(tmp_path, capsys):
+    d = tmp_path / "cfg"
+    assert run_main(["--config-dir", str(d), "identity"]) == 0
+    assert re.search(r"^Cổng:\s+47474$", capsys.readouterr().out, re.M)
+    from teleport.app.settings import Settings
+
+    Settings(port=47480).save(d)
+    assert run_main(["--config-dir", str(d), "identity"]) == 0
+    out = capsys.readouterr().out
+    assert re.search(r"^Cổng:\s+47480$", out, re.M), out
+    assert "Fingerprint:" in out
+
+
+# --- CL18: tham số của list ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["0", "abc", "61", "nan", "inf", "-1", "60.5"])
+def test_cl18_list_bad_timeout_exits_2(tmp_path, value):
+    d = tmp_path / "cfg"
+    assert run_main_guarded(["--config-dir", str(d), "list", "--timeout", value]) == 2
+    assert not d.exists() or not (d / "node.lock").exists()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["list", "--mdns-interface", "localhost"],
+        ["list", "--mdns-interface", "1.2.3"],
+        ["listen", "--mdns-interface", "::1", *NODE_OPTS],
+        ["listen", "--advertise-address", "192.168.1", *NODE_OPTS],
+        ["pair", "B", "--mdns-interface", "x", *NODE_OPTS],
+    ],
+)
+def test_hidden_mdns_options_must_be_ipv4(tmp_path, argv):
+    d = tmp_path / "cfg"
+    assert run_main_guarded(["--config-dir", str(d), *argv]) == 2
+    assert not (d / "node.lock").exists()
+
+
+def test_list_help_hides_mdns_options(capsys):
+    with pytest.raises(SystemExit):
+        main(["list", "--help"])
+    out = capsys.readouterr().out
+    assert "--timeout" in out and "--json" in out
+    assert "--mdns-interface" not in out
+    with pytest.raises(SystemExit):
+        main(["listen", "--help"])
+    out = capsys.readouterr().out
+    assert "--mdns-interface" not in out and "--advertise-address" not in out
+
+
+# --- CL19–CL22: list (FakeMdns, không socket TCP) ------------------------------------------------------
+
+
+@pytest.fixture
+def list_cfg(tmp_path):
+    """Máy này + B (đã ghép đôi, thấy), C (chưa ghép đôi, thấy), D (đã ghép đôi, không thấy)."""
+    d = tmp_path / "cfg"
+    me = load_or_create_identity(d)
+    peers = {k: load_or_create_identity(tmp_path / f"peer-{k}") for k in "BCD"}
+    store = TrustStore.load(d)
+    store.add(peer_cert_from_pem(peers["B"].cert_pem()), "B")
+    store.add(peer_cert_from_pem(peers["D"].cert_pem()), "D")
+    seed = {
+        peers["B"].device_id: discovered(
+            peers["B"].device_id, "B-ten-txt", 47474, addresses=("192.0.2.10", "192.0.2.11")
+        ),
+        peers["C"].device_id: discovered(
+            peers["C"].device_id, "C", 50000, addresses=("192.0.2.20",), os="macos"
+        ),
+    }
+    return d, me, peers, seed
+
+
+async def test_cl19_list_text(list_cfg, cli_mdns):
+    from teleport.app.node import default_device_name
+
+    d, me, peers, seed = list_cfg
+    cli_mdns.seed = seed
+    code, out, err = await run_list_capture(list_argv(d))
+    assert code == 0, err
+    b8, c8, d8 = (peers[k].device_id[:8] for k in "BCD")
+    lines = out.splitlines()
+    assert f"Máy này: {default_device_name(me)} ({me.device_id[:8]}), cổng 47474" in lines, out
+    i = lines.index("Thiết bị trong mạng:")
+    assert lines[i + 1] == f"  B  {b8}  Windows  đã ghép đôi  192.0.2.10:47474, 192.0.2.11:47474", out
+    assert lines[i + 2] == f"  C  {c8}  macOS  chưa ghép đôi  192.0.2.20:50000", out
+    j = lines.index("Thiết bị đã ghép đôi nhưng không thấy trong mạng:")
+    assert j > i + 2
+    assert lines[j + 1] == f"  D  {d8}", out
+    assert "B-ten-txt" not in out, "tên mDNS không được thay tên đã ghép đôi"
+    m = cli_mdns.last
+    assert "advertise" not in m.calls, "list không được quảng bá"
+    assert m.closing
+    assert not (d / "node.lock").exists(), "list không được đụng node.lock"
+    assert lock_is_free(d)
+
+
+async def test_cl20_list_json_single_object(list_cfg, cli_mdns):
+    d, me, peers, seed = list_cfg
+    cli_mdns.seed = seed
+    code, out, err = await run_list_capture(list_argv(d, "--json"))
+    assert code == 0 and err == ""
+    lines = [line for line in out.splitlines() if line.strip()]
+    assert len(lines) == 1, out
+    obj = json.loads(lines[0])
+    assert TIME_RE.match(obj["time"]), obj["time"]
+    assert obj["self"]["device_id"] == me.device_id
+    assert obj["self"]["port"] == 47474
+    assert isinstance(obj["self"]["name"], str) and obj["self"]["name"]
+    devs = {x["device_id"]: x for x in obj["devices"]}
+    assert set(devs) == {peers[k].device_id for k in "BCD"}
+    keys = {"device_id", "name", "os", "paired", "online", "addresses", "port"}
+    assert all(set(x) == keys for x in obj["devices"]), obj["devices"]
+    b, c, dd = (devs[peers[k].device_id] for k in "BCD")
+    assert b == {
+        "device_id": peers["B"].device_id,
+        "name": "B",
+        "os": "windows",
+        "paired": True,
+        "online": True,
+        "addresses": ["192.0.2.10", "192.0.2.11"],
+        "port": 47474,
+    }
+    assert (c["paired"], c["online"], c["os"], c["port"]) == (False, True, "macos", 50000)
+    assert (dd["paired"], dd["online"], dd["os"], dd["addresses"], dd["port"]) == (
+        True,
+        False,
+        None,
+        [],
+        None,
+    )
+
+
+async def test_cl21_list_nothing_seen(tmp_path, cli_mdns):
+    code, out, err = await run_list_capture(list_argv(tmp_path / "cfg"))
+    assert code == 0, err
+    assert MVP_NO_DEVICES in out
+    assert "Thiết bị trong mạng:" not in out
+    assert "không thấy trong mạng" not in out
+
+
+async def test_cl21_list_reinstall_hint(tmp_path, cli_mdns):
+    d = tmp_path / "cfg"
+    load_or_create_identity(d)
+    old = load_or_create_identity(tmp_path / "cu")
+    new = load_or_create_identity(tmp_path / "moi")
+    TrustStore.load(d).add(peer_cert_from_pem(old.cert_pem()), "PC-Nha")
+    cli_mdns.seed = {new.device_id: discovered(new.device_id, "PC-Nha", 47474, addresses=("192.0.2.30",))}
+    code, out, err = await run_list_capture(list_argv(d))
+    assert code == 0, err
+    assert MVP_REINSTALL.format(x="PC-Nha") in out, out
+    assert "*" not in out
+
+
+async def test_cl21_no_reinstall_hint_when_paired_device_is_online(tmp_path, cli_mdns):
+    d = tmp_path / "cfg"
+    load_or_create_identity(d)
+    old = load_or_create_identity(tmp_path / "cu")
+    other = load_or_create_identity(tmp_path / "khac")
+    TrustStore.load(d).add(peer_cert_from_pem(old.cert_pem()), "PC-Nha")
+    cli_mdns.seed = {
+        old.device_id: discovered(old.device_id, "PC-Nha", 47474, addresses=("192.0.2.31",)),
+        other.device_id: discovered(other.device_id, "Laptop", 47474, addresses=("192.0.2.30",)),
+    }
+    code, out, _ = await run_list_capture(list_argv(d))
+    assert code == 0
+    assert "mới chưa ghép đôi" not in out
+
+
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_cl22_list_discovery_error(tmp_path, cli_mdns, json_mode):
+    cli_mdns.fail_start = OSError("giả lập không mở được socket mDNS")
+    code, out, err = await run_list_capture(list_argv(tmp_path / "cfg", *(["--json"] if json_mode else [])))
+    assert code == 1
+    assert "Traceback" not in out + err
+    if json_mode:
+        obj = json.loads(out.strip())
+        assert obj["error"] == "discovery_error"
+        assert isinstance(obj["message"], str) and obj["message"]
+    else:
+        assert err.startswith("Lỗi: "), err
+
+
+@pytest.mark.parametrize("case", ["config_file", "corrupt_store", "corrupt_identity"])
+async def test_list_runtime_errors_exit_1(tmp_path, cli_mdns, case):
+    expected = {
+        "config_file": "config_dir_error",
+        "corrupt_store": "trust_store_error",
+        "corrupt_identity": "identity_error",
+    }[case]
+    d = tmp_path / "cfg"
+    if case == "config_file":
+        d.write_bytes(b"x")
+    else:
+        load_or_create_identity(d)
+        target = d / ("trusted.json" if case == "corrupt_store" else "device.crt")
+        target.write_bytes(b"rac")
+    code, out, err = await run_list_capture(list_argv(d, "--json"))
+    assert code == 1
+    assert json.loads(out.strip())["error"] == expected
+    code, out, err = await run_list_capture(list_argv(d))
+    assert code == 1 and err.startswith("Lỗi: ") and "Traceback" not in err
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
+def test_list_interrupted_prints_cancelled(tmp_path, procs):
+    """`cmd_list`: Ctrl+C → “Đã hủy.”, mã 1, không traceback (mDNS thật chỉ trên loopback).
+
+    Chờ tín hiệu sẵn sàng thay cho ngủ cố định: `list` tạo danh tính (`device.crt`) bên trong vòng lặp
+    sự kiện, sau khi đã cài xử lý Ctrl+C/Ctrl+Break, nên lúc đó gửi Ctrl+C là đúng lúc lệnh đang chạy.
+    """
+    cfg = tmp_path / "cfg"
+    proc = procs(["--config-dir", str(cfg), "list", "--timeout", "20", *MDNS_OPTS])
+    deadline = time.monotonic() + 30.0
+    while not (cfg / "device.crt").exists():
+        assert proc.p.poll() is None, f"list đã thoát sớm: {proc.err_text()}"
+        assert time.monotonic() < deadline, "hết 30 s mà list chưa tạo danh tính"
+        time.sleep(0.05)
+    time.sleep(0.2)  # cho lệnh đi tiếp vào phần duyệt mDNS
+    assert proc.p.poll() is None, proc.err_text()
+    proc.interrupt()
+    code = proc.finish(30)
+    text = "\n".join(proc.out) + proc.err_text()
+    assert code == 1, text
+    assert "Đã hủy." in text
+    assert "Traceback" not in text
+
+
+# --- CL23–CL26: pair theo tên ------------------------------------------------------------------------------
+
+
+@with_marks(socket_test)
+async def test_cl23_pair_by_name_then_by_prefix(
+    tmp_path, fast_links, cli_mdns, browse_fast, open_control_calls, cli_runs
+):
+    listen = cli_runs("listen", listen_argv(tmp_path / "B"))  # B: 127.0.0.1, không mDNS
+    ev = await listen.wait_event("listening")
+    b_id, port = ev["device_id"], ev["port"]
+    cli_mdns.seed = {b_id: discovered(b_id, "B", port)}
+
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "B"))
+    await pair.wait_text("Trùng khớp? [c/k]:")
+    await listen.wait_event("pair_prompt")
+    text = pair.text()
+    assert "Đang tìm “B” trong mạng…" in text
+    assert f"Đang kết nối tới “B” ({b_id[:8]}) tại 127.0.0.1:{port}…" in text
+    pair.say("c")
+    listen.say("c")
+    assert await asyncio.wait_for(pair.task, 10) == 0, pair.text()
+    assert TrustStore.load(tmp_path / "A").get(b_id) is not None
+    assert cli_mdns.instances and all(m.advertised == [] for m in cli_mdns.instances), (
+        "pair <tên> không quảng bá"
+    )
+    assert all("advertise" not in m.calls for m in cli_mdns.instances)
+
+    n = len(cli_mdns.instances)
+    pair2 = cli_runs("pair", name_pair_argv(tmp_path / "A", b_id[:6], json_mode=True))
+    p2 = await pair2.wait_event("pair_prompt")
+    assert p2["peer_device_id"] == b_id
+    await listen.wait_event("pair_prompt", n=2)
+    pair2.say("c")
+    listen.say("c")
+    assert await asyncio.wait_for(pair2.task, 10) == 0, pair2.text()
+    assert pair2.events_of("pair_result")[0]["outcome"] == "paired"
+    assert len(cli_mdns.instances) == n + 1
+    assert open_control_calls == [], "pair <tên> không được tự mở kết nối điều khiển"
+
+
+@with_marks(socket_test)
+async def test_cl24_pair_by_name_not_found(tmp_path, fast_links, cli_mdns, browse_fast, cli_runs):
+    c = load_or_create_identity(tmp_path / "peer-C")
+    cli_mdns.seed = {c.device_id: discovered(c.device_id, "C", 47474, addresses=("192.0.2.20",))}
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "khong-co"))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    text = pair.text()
+    assert "Lỗi: Không thấy thiết bị nào khớp “khong-co” trong mạng." in text, text
+    assert "Thiết bị đang thấy:" in text
+    assert re.search(rf"^  {c.device_id[:8]}  C$", text, re.M), text
+    assert MDNS_HINT in text
+
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "khong-co", json_mode=True))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    [obj] = pair.events_of("error")
+    assert obj["error"] == "not_found"
+    assert obj["candidates"] == [{"device_id": c.device_id, "name": "C"}]
+
+
+@with_marks(socket_test)
+async def test_cl24_pair_by_name_nothing_seen(tmp_path, fast_links, cli_mdns, browse_fast, cli_runs):
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "B"))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    text = pair.text()
+    assert "(chưa thấy thiết bị nào)" in text
+    assert MDNS_HINT in text
+
+
+@with_marks(socket_test)
+async def test_cl24_pair_by_name_ambiguous(tmp_path, fast_links, cli_mdns, browse_fast, cli_runs):
+    x = load_or_create_identity(tmp_path / "peer-X")
+    y = load_or_create_identity(tmp_path / "peer-Y")
+    cli_mdns.seed = {
+        x.device_id: discovered(x.device_id, "pc", 47474, addresses=("192.0.2.21",)),
+        y.device_id: discovered(y.device_id, "PC", 47474, addresses=("192.0.2.22",)),
+    }
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "Pc"))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    text = pair.text()
+    assert "Lỗi: “Pc” khớp nhiều thiết bị; hãy nhập mã thiết bị dài hơn:" in text, text
+    assert re.search(rf"^  {x.device_id}  pc$", text, re.M), text
+    assert re.search(rf"^  {y.device_id}  PC$", text, re.M), text
+
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "pc", json_mode=True))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    [obj] = pair.events_of("error")
+    assert obj["error"] == "ambiguous"
+    assert sorted(c["device_id"] for c in obj["candidates"]) == sorted([x.device_id, y.device_id])
+
+
+@with_marks(socket_test)
+async def test_cl24_pair_by_name_paired_but_offline(tmp_path, fast_links, cli_mdns, browse_fast, cli_runs):
+    d = tmp_path / "A"
+    load_or_create_identity(d)
+    dd = load_or_create_identity(tmp_path / "peer-D")
+    TrustStore.load(d).add(peer_cert_from_pem(dd.cert_pem()), "D")
+    pair = cli_runs("pair", name_pair_argv(d, "D"))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    text = pair.text()
+    assert f"Lỗi: “D” ({dd.device_id[:8]}) không có trong mạng lúc này. {MDNS_HINT}" in text, text
+
+    pair = cli_runs("pair", name_pair_argv(d, "D", json_mode=True))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    assert pair.events_of("error")[0]["error"] == "offline"
+
+
+@with_marks(socket_test)
+async def test_cl25_seen_but_unreachable(tmp_path, fast_links, cli_mdns, browse_fast, cli_runs):
+    b = load_or_create_identity(tmp_path / "peer-B")
+    s = socket.socket()
+    s.bind((LOCAL, 0))
+    closed_port = s.getsockname()[1]
+    s.close()
+    cli_mdns.seed = {b.device_id: discovered(b.device_id, "B", closed_port)}
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "B"))
+    assert await asyncio.wait_for(pair.task, 15) == 1
+    text = pair.text()
+    assert MVP_SEEN_UNREACHABLE.format(x="B") in text, text
+    assert HOTSPOT_HINT in text
+
+
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+def test_cl26_pair_by_name_without_mdns(tmp_path, capsys, json_mode):
+    d = tmp_path / "cfg"
+    argv = ["--config-dir", str(d), "pair", "B", *(["--json"] if json_mode else []), *NODE_OPTS]
+    assert run_main_guarded(argv) == 1
+    captured = capsys.readouterr()
+    if json_mode:
+        obj = json.loads(captured.out.strip())
+        assert obj["error"] == "discovery_error"
+        assert obj["message"] == MDNS_OFF
+    else:
+        assert MDNS_OFF in captured.err, captured.err
+    assert not (d / "node.lock").exists()
+
+
+@with_marks(socket_test)
+async def test_pair_by_name_when_mdns_cannot_start(tmp_path, fast_links, cli_mdns, cli_runs):
+    cli_mdns.fail_start = OSError("giả lập")
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "B"))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    text = pair.text()
+    assert "Không tìm được thiết bị theo tên vì không bật được khám phá mDNS (" in text, text
+    assert "teleport pair <ip[:cổng]>" in text
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", "B", json_mode=True))
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    assert pair.events_of("error")[0]["error"] == "discovery_error"
+
+
+def test_pair_by_name_bad_name_option_exits_2(tmp_path):
+    d = tmp_path / "cfg"
+    argv = ["--config-dir", str(d), "pair", "B", "--name", "  x", *NODE_OPTS, *MDNS_OPTS]
+    assert run_main_guarded(argv) == 2
+    assert not (d / "node.lock").exists()
+
+
+@with_marks(socket_test)
+async def test_pair_by_ip_does_not_use_mdns(tmp_path, fast_links, cli_mdns, cli_runs):
+    """Chốt thêm 8: `pair <ip>` không bật mDNS, kể cả khi có `--mdns-interface`."""
+    s = socket.socket()
+    s.bind((LOCAL, 0))
+    port = s.getsockname()[1]
+    s.close()
+    argv = [
+        "--config-dir",
+        str(tmp_path / "A"),
+        "pair",
+        f"{LOCAL}:{port}",
+        "--name",
+        "A",
+        *NODE_OPTS,
+        *MDNS_OPTS,
+    ]
+    pair = cli_runs("pair", argv)
+    assert await asyncio.wait_for(pair.task, 15) == 1
+    assert cli_mdns.instances == []
+
+
+@pytest.fixture
+def fake_open_pairing(monkeypatch):
+    """Thay `open_pairing` của `teleport.app.pairing`: ghi (địa chỉ, cổng) rồi báo không kết nối được.
+
+    Nhờ vậy `pair 1.2.3.4…` không gửi gói nào ra mạng thật."""
+    from teleport.app import pairing as app_pairing
+    from teleport.net.connection import Unreachable
+
+    calls: list[tuple[list[str], int]] = []
+
+    async def fake(addresses, port, hello):
+        calls.append((list(addresses), port))
+        raise Unreachable("giả lập: không kết nối được", address=next(iter(addresses)))
+
+    monkeypatch.setattr(app_pairing, "open_pairing", fake)
+    return calls
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("1.2.3.4\xa0:47474", (["1.2.3.4"], 47474)),
+        ("1.2.3.4\xa0", (["1.2.3.4"], 47474)),
+        ("\xa01.2.3.4:50000\xa0", (["1.2.3.4"], 50000)),
+        ("\N{EM SPACE}1.2.3.4\t", (["1.2.3.4"], 47474)),
+    ],
+    ids=["nbsp-before-port", "nbsp-trailing", "nbsp-both-ends", "unicode-space"],
+)
+async def test_pair_target_with_unicode_whitespace_is_an_address(
+    tmp_path, fast_links, cli_mdns, fake_open_pairing, cli_runs, target, expected
+):
+    """Sửa F6: dán địa chỉ từ web (NBSP, khoảng trắng Unicode) vẫn được hiểu là địa chỉ, không duyệt mDNS."""
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", target))
+    t0 = time.monotonic()
+    assert await asyncio.wait_for(pair.task, 15) == 1, pair.text()
+    assert fake_open_pairing == [expected], pair.text()
+    assert cli_mdns.instances == [], "đích là địa chỉ: không được bật mDNS để tìm theo tên"
+    assert "Đang tìm" not in pair.text()
+    assert time.monotonic() - t0 < 3.0
+
+
+@pytest.mark.parametrize(
+    "target", ["", "   ", "\xa0", " \t\N{IDEOGRAPHIC SPACE} "], ids=["empty", "spaces", "nbsp", "mixed"]
+)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+def test_pair_empty_target_exits_2_immediately(tmp_path, cli_mdns, target, json_mode):
+    """Sửa F6: `pair ""` / chỉ khoảng trắng → lỗi cú pháp, mã 2 ngay (không duyệt mDNS 3 s,
+    không chạy node)."""
+    d = tmp_path / "cfg"
+    argv = [
+        "--config-dir",
+        str(d),
+        "pair",
+        target,
+        *(["--json"] if json_mode else []),
+        *NODE_OPTS,
+        *MDNS_OPTS,
+    ]
+    t0 = time.monotonic()
+    assert run_main_guarded(argv) == 2
+    assert time.monotonic() - t0 < 1.0
+    assert cli_mdns.instances == []
+    assert not (d / "node.lock").exists()
+
+
+# --- Sửa G2, G3 (review PR-4 vòng 2): đích có khoảng trắng bên trong; Ctrl+C khi `pair` ------------
+#
+# G2: bỏ khoảng trắng hai đầu; còn khoảng trắng bên trong thì chỉ là địa chỉ khi bỏ hết khoảng trắng
+# ra được IPv4[:cổng] HỢP LỆ, ngược lại là tên (tìm theo tên, không phải lỗi cú pháp mã 2).
+# Không có khoảng trắng bên trong thì như cũ (trông như địa chỉ mà sai → mã 2: CL5).
+
+G2_ADDRESSES = [
+    ("1.2.3.4\xa0:47474", (["1.2.3.4"], 47474)),
+    ("1.2.3. 4", (["1.2.3.4"], 47474)),
+    ("192.168.1.5\N{IDEOGRAPHIC SPACE}", (["192.168.1.5"], 47474)),
+    ("1 . 2 . 3 . 4 : 50000", (["1.2.3.4"], 50000)),
+]
+G2_NAMES = [
+    "PC Nha",
+    "a 1",
+    "dead beef",
+    "1 2",
+    "Laptop 2.0",
+    "Phòng 2:30",
+    "12 . 5",
+    "2024 . 1",
+    "Cafe 2:1",
+    "Bed 1:2",
+    "Dad 10:30",
+    "Cafe: 2",
+    "A: B",
+]
+
+
+@pytest.fixture
+def browse_instant(monkeypatch):
+    from teleport import cli
+
+    monkeypatch.setattr(cli, "_PAIR_BROWSE_TIMEOUT", 0.05)
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize(("target", "expected"), G2_ADDRESSES, ids=repr)
+async def test_g2_target_with_inner_space_that_compacts_to_valid_ipv4_is_an_address(
+    tmp_path, fast_links, cli_mdns, fake_open_pairing, cli_runs, target, expected
+):
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", target, json_mode=True))
+    assert await asyncio.wait_for(pair.task, 15) == 1, pair.text()
+    assert fake_open_pairing == [expected], pair.text()
+    assert cli_mdns.instances == [], "đích là địa chỉ: không được bật mDNS để tìm theo tên"
+    assert [e["error"] for e in pair.events_of("error")] == []
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("name", G2_NAMES, ids=repr)
+async def test_g2_name_with_inner_space_is_searched_by_name(
+    tmp_path, fast_links, cli_mdns, fake_open_pairing, browse_instant, cli_runs, name
+):
+    """Tên thiết bị hợp lệ có khoảng trắng bên trong không bị coi là địa chỉ sai (mã 2)."""
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", f"\xa0{name} ", json_mode=True))
+    code = await asyncio.wait_for(pair.task, 15)
+    [err] = pair.events_of("error")
+    assert err["error"] == "not_found", pair.text()
+    assert f"“{name}”" in err["message"], "tìm theo tên đã bỏ khoảng trắng hai đầu"
+    assert code == 1
+    assert cli_mdns.instances, "tìm theo tên phải bật mDNS"
+    assert fake_open_pairing == []
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("name", ["Cafe 2:1", "Laptop 2.0", "12 . 5"], ids=repr)
+async def test_g2_name_with_inner_space_reaches_the_device_seen_under_that_name(
+    tmp_path, fast_links, cli_mdns, fake_open_pairing, browse_instant, cli_runs, name
+):
+    c = load_or_create_identity(tmp_path / "peer-C")
+    cli_mdns.seed = {c.device_id: discovered(c.device_id, name, 47474, addresses=("192.0.2.30",))}
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", name, json_mode=True))
+    assert await asyncio.wait_for(pair.task, 15) == 1, pair.text()
+    assert fake_open_pairing == [(["192.0.2.30"], 47474)], pair.text()
+
+
+def _sigint_soon() -> None:
+    """Ctrl+C thật trong tiến trình: SIGINT tới handler mà `asyncio.Runner` của lệnh đã cài."""
+    asyncio.get_running_loop().call_soon(signal.raise_signal, signal.SIGINT)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("target", "port"),
+    [
+        ("1.2.3.4\xa0:47474", 47474),
+        ("\xa01.2.3.4:50000 ", 50000),
+        ("1.2.3. 4", 47474),
+    ],
+    ids=repr,
+)
+def test_g3_ctrl_c_during_pair_by_address_reports_normalized_address(
+    tmp_path, capsys, fast_cli, monkeypatch, target, port
+):
+    """G3: Ctrl+C khi `pair <địa chỉ> --json` đang kết nối → `pair_result.address` là IPv4 đã chuẩn
+    hóa, không kèm cổng (như `pair_result` của đường thường, `PairingFinished.address`), không phải
+    chuỗi thô người dùng gõ (còn NBSP, khoảng trắng)."""
+    from teleport.app import pairing as app_pairing
+
+    calls: list = []
+
+    async def hang(addresses, port, hello):
+        calls.append((list(addresses), port))
+        _sigint_soon()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(app_pairing, "open_pairing", hang)
+    d = tmp_path / "A"
+    argv = ["--config-dir", str(d), "pair", target, "--json", "--name", "A", *NODE_OPTS]
+    assert run_main(argv) == 1
+    out = capsys.readouterr().out
+    assert calls == [(["1.2.3.4"], port)], f"lệnh chưa tới bước kết nối đúng địa chỉ: {out!r}"
+    events = [json.loads(line) for line in out.splitlines() if line.strip()]
+    [result] = [e for e in events if e.get("event") == "pair_result"]
+    assert result["outcome"] == "cancelled"
+    assert result["address"] == "1.2.3.4"
+    assert lock_is_free(d)
+
+
+@pytest.mark.integration
+def test_g3_ctrl_c_during_pair_by_name_reports_stripped_name(
+    tmp_path, capsys, fast_links, cli_mdns, monkeypatch
+):
+    """G3: Ctrl+C lúc đang tìm theo tên → `pair_result.address` là tên đã bỏ khoảng trắng hai đầu."""
+    from teleport import cli
+    from teleport.app import node as node_mod
+
+    monkeypatch.setattr(cli, "_PAIR_BROWSE_TIMEOUT", 10.0)
+
+    def factory(**kwargs):
+        m = CliFakeMdns(cli_mdns, **kwargs)
+        real = m.start_browsing
+
+        async def start_browsing(**kw):
+            await real(**kw)
+            _sigint_soon()
+
+        m.start_browsing = start_browsing
+        return m
+
+    monkeypatch.setattr(node_mod, "MdnsDiscovery", factory)
+    d = tmp_path / "A"
+    t0 = time.monotonic()
+    assert run_main(name_pair_argv(d, "\xa0 PC Nha\N{IDEOGRAPHIC SPACE}", json_mode=True)) == 1
+    assert time.monotonic() - t0 < 5.0, "Ctrl+C phải dừng ngay, không chờ hết thời gian duyệt"
+    out = capsys.readouterr().out
+    events = [json.loads(line) for line in out.splitlines() if line.strip()]
+    [result] = [e for e in events if e.get("event") == "pair_result"]
+    assert result["outcome"] == "cancelled"
+    assert result["address"] == "PC Nha"
+    assert lock_is_free(d)
+
+
+# --- CL27–CL30: listen với mDNS ----------------------------------------------------------------------
+
+
+async def start_plain_node(directory, name: str):
+    from teleport.app.node import Node
+
+    node = Node(directory, name=name, host=LOCAL, port=0)
+    await node.start()
+    return node
+
+
+def trust_dirs(a, b, name_a: str = "A", name_b: str = "B"):
+    ia, ib = load_or_create_identity(a), load_or_create_identity(b)
+    TrustStore.load(a).add(peer_cert_from_pem(ib.cert_pem()), name_b)
+    TrustStore.load(b).add(peer_cert_from_pem(ia.cert_pem()), name_a)
+    return ia, ib
+
+
+@with_marks(socket_test)
+async def test_cl27_listen_text_with_discovery(tmp_path, fast_links, cli_mdns, cli_runs):
+    from teleport.core.discovery import DeviceAdded, DeviceRemoved
+
+    _ia, ib = trust_dirs(tmp_path / "A", tmp_path / "B")
+    listen = cli_runs("listen", mdns_listen_argv(tmp_path / "A", json_mode=False))
+    await listen.wait_text("Nhấn Ctrl+C để dừng.")
+    head = listen.text()
+    assert LISTEN_DISCOVERY in head
+    assert head.index(LISTEN_DISCOVERY) < head.index("Nhấn Ctrl+C để dừng.")
+    m = cli_mdns.last
+    assert m.advertised, "listen phải quảng bá"
+    x = load_or_create_identity(tmp_path / "peer-X")
+    m.emit(DeviceAdded(discovered(x.device_id, "X", 47474, addresses=("192.0.2.30",))))
+    await listen.wait_text(f"Thấy “X” ({x.device_id[:8]}, Windows, chưa ghép đôi) tại 192.0.2.30:47474.")
+    m.emit(DeviceRemoved(discovered(x.device_id, "X", 47474, addresses=("192.0.2.30",))))
+    await listen.wait_text(f"“X” ({x.device_id[:8]}) đã rời mạng.")
+
+    b = await start_plain_node(tmp_path / "B", "B")
+    try:
+        m.emit(DeviceAdded(discovered(ib.device_id, "B", b.port)))
+        await listen.wait_text(f"Thấy “B” ({ib.device_id[:8]}, Windows, đã ghép đôi) tại 127.0.0.1:{b.port}.")
+        await listen.wait_text(f"Đã kết nối với “B” ({ib.device_id[:8]}).")
+    finally:
+        await b.close()
+    await listen.wait_text(f"Mất kết nối với “B” ({ib.device_id[:8]}). Đang nối lại…")
+
+
+@with_marks(socket_test)
+async def test_cl27_listen_json_with_discovery(tmp_path, fast_links, cli_mdns, cli_runs):
+    from teleport.core.discovery import DeviceAdded, DeviceRemoved
+
+    _ia, ib = trust_dirs(tmp_path / "A", tmp_path / "B")
+    listen = cli_runs("listen", mdns_listen_argv(tmp_path / "A"))
+    ev = await listen.wait_event("listening")
+    assert ev["discovery"] is True
+    assert ev["discovery_error"] is None
+    m = cli_mdns.last
+    x = load_or_create_identity(tmp_path / "peer-X")
+    m.emit(DeviceAdded(discovered(x.device_id, "X", 47474, addresses=("192.0.2.30",), os="linux")))
+    on = await listen.wait_event("device_online")
+    assert {"device_id", "name", "os", "paired", "addresses", "port", "time"} <= set(on)
+    assert (on["device_id"], on["name"], on["os"], on["paired"]) == (x.device_id, "X", "linux", False)
+    assert (on["addresses"], on["port"]) == (["192.0.2.30"], 47474)
+    assert TIME_RE.match(on["time"])
+
+    b = await start_plain_node(tmp_path / "B", "B")
+    try:
+        m.emit(DeviceAdded(discovered(ib.device_id, "B", b.port)))
+        conn = await listen.wait_event("device_connected")
+        assert (conn["device_id"], conn["name"], conn["outgoing"]) == (ib.device_id, "B", True)
+        m.emit(DeviceRemoved(discovered(ib.device_id, "B", b.port)))
+        off = await listen.wait_event("device_offline")
+        assert (off["device_id"], off["name"]) == (ib.device_id, "B")
+        await asyncio.sleep(0.3)
+        assert listen.events_of("device_disconnected") == [], "mất mDNS không đóng kết nối đang sống"
+    finally:
+        await b.close()
+    disc = await listen.wait_event("device_disconnected")
+    assert (disc["device_id"], disc["name"]) == (ib.device_id, "B")
+    for line in listen.out.getvalue().splitlines():
+        json.loads(line)
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_cl28_listen_advertise_failure_warns_and_keeps_running(
+    tmp_path, fast_links, cli_mdns, cli_runs, json_mode
+):
+    from teleport.net.discovery import DiscoveryError
+
+    cli_mdns.fail_advertise = DiscoveryError("không có địa chỉ để quảng bá")
+    listen = cli_runs("listen", mdns_listen_argv(tmp_path / "A", json_mode=json_mode))
+    if json_mode:
+        ev = await listen.wait_event("listening")
+        assert ev["discovery"] is True
+        assert isinstance(ev["discovery_error"], str) and ev["discovery_error"]
+    else:
+        await listen.wait_text("Nhấn Ctrl+C để dừng.")
+        warning = (
+            "Cảnh báo: chưa quảng bá được qua mDNS (không có địa chỉ để quảng bá); "
+            "máy khác vẫn ghép đôi được bằng IP."
+        )
+        assert warning in listen.text(), listen.text()
+        assert LISTEN_DISCOVERY not in listen.text()
+    await asyncio.sleep(0.2)
+    assert not listen.task.done()
+
+
+@with_marks(socket_test)
+async def test_cl28_listen_mdns_start_failure_warns(tmp_path, fast_links, cli_mdns, cli_runs):
+    cli_mdns.fail_start = OSError("giả lập socket")
+    listen = cli_runs("listen", mdns_listen_argv(tmp_path / "A", json_mode=False))
+    await listen.wait_text("Nhấn Ctrl+C để dừng.")
+    assert "Cảnh báo: chưa quảng bá được qua mDNS (" in listen.text()
+    assert not listen.task.done()
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_cl29_listen_on_loopback_without_mdns_interface(
+    tmp_path, fast_cli, cli_mdns, cli_runs, json_mode
+):
+    listen = cli_runs("listen", listen_argv(tmp_path / "B", json_mode=json_mode))
+    if json_mode:
+        ev = await listen.wait_event("listening")
+        assert ev["discovery"] is False
+        assert ev["discovery_error"] is None
+    else:
+        await listen.wait_text("Nhấn Ctrl+C để dừng.")
+        assert LISTEN_DISCOVERY not in listen.text()
+        assert "Cảnh báo" not in listen.text()
+    assert cli_mdns.instances == []
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_cl30_listen_reports_rejected(tmp_path, fast_links, cli_mdns, cli_runs, json_mode):
+    from teleport.core.discovery import DeviceAdded
+
+    a = load_or_create_identity(tmp_path / "A")
+    b_dir = tmp_path / "B"
+    ib = load_or_create_identity(b_dir)
+    TrustStore.load(tmp_path / "A").add(peer_cert_from_pem(ib.cert_pem()), "B")  # B không tin A
+    del a
+    listen = cli_runs("listen", mdns_listen_argv(tmp_path / "A", json_mode=json_mode))
+    if json_mode:
+        await listen.wait_event("listening")
+    else:
+        await listen.wait_text("Nhấn Ctrl+C để dừng.")
+    b = await start_plain_node(b_dir, "B")
+    try:
+        cli_mdns.last.emit(DeviceAdded(discovered(ib.device_id, "B", b.port)))
+        if json_mode:
+            ev = await listen.wait_event("connect_failed")
+            assert (ev["device_id"], ev["name"], ev["result"]) == (ib.device_id, "B", "rejected")
+            assert MVP_REJECTED.format(x="B") in ev["message"]
+        else:
+            await listen.wait_text(MVP_REJECTED.format(x="B"))
+            await listen.wait_text(f"Để ghép đôi lại: `teleport pair {ib.device_id[:8]}`")
+        await asyncio.sleep(0.5)
+        assert listen.text().count(MVP_REJECTED.format(x="B")) == 1
+    finally:
+        await b.close()
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_cl30_listen_reports_identity_mismatch(tmp_path, fast_links, cli_mdns, cli_runs, json_mode):
+    from teleport.core.discovery import DeviceAdded
+
+    load_or_create_identity(tmp_path / "A")
+    ib = load_or_create_identity(tmp_path / "peer-B")
+    TrustStore.load(tmp_path / "A").add(peer_cert_from_pem(ib.cert_pem()), "B")
+    listen = cli_runs("listen", mdns_listen_argv(tmp_path / "A", json_mode=json_mode))
+    if json_mode:
+        await listen.wait_event("listening")
+    else:
+        await listen.wait_text("Nhấn Ctrl+C để dừng.")
+    c = await start_plain_node(tmp_path / "C", "C")  # máy khác trả lời ở “địa chỉ của B”
+    try:
+        cli_mdns.last.emit(DeviceAdded(discovered(ib.device_id, "B", c.port)))
+        if json_mode:
+            ev = await listen.wait_event("connect_failed")
+            assert (ev["device_id"], ev["name"], ev["result"]) == (ib.device_id, "B", "identity_mismatch")
+            assert MVP_IDENTITY.format(x="B") in ev["message"]
+        else:
+            await listen.wait_text(MVP_IDENTITY.format(x="B"))
+            await listen.wait_text(f"teleport unpair {ib.device_id[:8]}")
+    finally:
+        await c.close()

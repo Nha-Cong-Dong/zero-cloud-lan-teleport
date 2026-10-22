@@ -37,6 +37,12 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Cổng 47474 bận thì hệ điều hành chọn cổng khác, lưu vào `settings.json` để lần sau dùng lại.
 - Hủy ghép đôi khi node đang chạy đóng ngay kết nối đang mở với máy bị hủy.
 - `teleport.atomic`: ghi file nguyên tử dùng chung (`write_atomic`).
+- `teleport list` (`--timeout`, `--json`): liệt kê các máy Teleport trong mạng (tên, mã, hệ điều hành, đã/chưa ghép đôi, địa chỉ), không giữ `node.lock` và không quảng bá máy này; gợi ý ghép đôi lại khi một máy đã ghép đôi có vẻ vừa cài lại.
+- `teleport pair <tên | tiền tố mã>`: tìm máy qua mDNS rồi ghép đôi, không phải gõ IP; trùng tên thì liệt kê để người dùng gõ cụ thể hơn.
+- `teleport listen` quảng bá qua mDNS, tự kết nối và giữ kết nối với các thiết bị đã ghép đôi, in sự kiện thiết bị (thấy, rời mạng) và kết nối (được, mất, bị từ chối, danh tính đổi).
+- Tự nối lại kết nối điều khiển theo lịch 1, 2, 4… ≤ 30 s; chống trùng khi hai máy gọi nhau cùng lúc (`teleport.core.links`).
+- Quảng bá lại mDNS khi mạng đổi hoặc máy thức dậy.
+- `teleport identity` hiện cổng của máy này.
 
 ### Changed
 - `docs/protocol.md` (dự thảo, chưa phát hành): mọi kết nối đi vào **một cổng** (mặc định 47474) với `CERT_OPTIONAL`; ba loại kết nối ghép đôi / điều khiển / dữ liệu, client khai báo loại bằng `pair_request` / `control_open` / `data_open` ngay sau `hello`; kết nối dữ liệu đi cùng chiều với kết nối điều khiển (qua được tường lửa một chiều); giới hạn kích thước, thời gian chờ, keepalive; chống làm phiền khi ghép đôi (chờ tăng dần theo IP); không ghép đôi đè danh tính khác; một kết nối điều khiển cho mỗi cặp máy; mDNS TTL 60 s; hủy ghép đôi có hiệu lực ngay; quy tắc tăng số phiên bản giao thức từ `v0.1.0-alpha`.
@@ -53,6 +59,12 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `docs/protocol.md` (dự thảo): giới hạn kết nối đang mở đầu 4 mỗi IP, 64 tổng (mục 2.3); keepalive tính theo byte; gửi không tiến triển 30 s trên kết nối điều khiển thì đóng; lỗi giao thức trên kết nối điều khiển thì đóng (mục 3.3); “bị từ chối” chỉ tính sau khi bắt tay TLS xong (mục 2.2, 6.2); đổi danh sách tin cậy bằng context mới cho từng kết nối thay vì mở lại listener (mục 7).
 - README: thêm giá trị “Không sợ rớt mạng” và mục “Nguyên tắc sản phẩm”; mô tả ghép đôi theo nonce cam kết; cập nhật hiện trạng và lộ trình.
 - Tài liệu sản phẩm và kế hoạch đưa vào repo: `docs/y_tuong.md` (ý tưởng, nguyên tắc, tầm nhìn), `docs/mvp.md` (phạm vi, tính năng F1–F12, yêu cầu N1–N12), `docs/ke_hoach.md` (thiết kế, lộ trình, trạng thái). `docs/README.md` thành mục lục chung kèm thuật ngữ và quy tắc đồng bộ.
+
+### Fixed
+- `teleport --config-dir <file> identity` in traceback; nay báo “Không dùng được thư mục cấu hình” và thoát mã 1.
+- Dừng node đúng lúc đang ghép đôi có thể để phiên ghép đôi chạy tiếp sau khi đã nhả `node.lock`.
+- Hai máy cùng ghép đôi với nhau khi máy kia có nhiều địa chỉ: luật nhường nay xét mọi địa chỉ của máy đích.
+- Hủy khởi động node đúng lúc vừa mở cổng có thể để cổng vẫn nhận kết nối tới hết tiến trình dù đã nhả `node.lock`.
 
 ### Removed
 - `teleport.net.tls.verify_pin`, `normalize_pin`, `MIN_PIN_HEX`: không tính năng nào xác thực bằng tiền tố fingerprint; pin ngắn chỉ còn để hiển thị.

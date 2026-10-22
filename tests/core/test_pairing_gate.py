@@ -647,3 +647,99 @@ def test_finish_rejects_unknown_outcome(outcome):
     slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
     with pytest.raises(ValueError):
         g.finish(slot, outcome, 1.0)
+
+
+# =================================================================================================
+# PR-4: địa chỉ khác của cùng máy đích (`begin_outgoing(ip, also=...)`, `Slot.aliases`; đặc tả PR-4
+# mục 2.3, PG1–PG3). PG3 = mọi test ở trên chạy không sửa.
+# =================================================================================================
+
+IP3 = "192.168.1.22"
+
+
+def test_pg_slot_aliases_default_is_empty():
+    slot = Slot(1, Role.INITIATOR, IP)
+    assert slot.aliases == frozenset()
+    assert gate().begin_outgoing(IP).aliases == frozenset()
+
+
+def test_pg1_request_from_alias_counts_as_both_initiating_when_own_is_larger():
+    g = gate(accepting=False)
+    out = g.begin_outgoing(IP, also=[IP2])
+    assert out.ip == IP and out.aliases == frozenset({IP2})
+    adm = g.admit(IP2, LOWER, 0.0)
+    slot = assert_accept(adm, IP2)
+    assert adm.cancel_outgoing == out
+    assert g.active == slot
+
+
+def test_pg1_request_from_alias_is_busy_when_own_is_smaller():
+    g = gate()
+    out = g.begin_outgoing(IP, also=[IP2])
+    assert_busy(g.admit(IP2, HIGHER, 0.0))
+    assert g.active == out
+    assert g.failures(IP2) == 0
+
+
+def test_pg1_request_from_other_ip_is_busy():
+    g = gate(accepting=False)
+    out = g.begin_outgoing(IP, also=[IP2])
+    assert_busy(g.admit(IP3, LOWER, 0.0))
+    assert g.active == out
+
+
+def test_pg1_alias_rule_also_beats_backoff():
+    g = gate()
+    fail_once(g, IP2, 0.0)  # IP2 đang bị chặn tới 10.0
+    out = g.begin_outgoing(IP, also=[IP2])
+    adm = g.admit(IP2, LOWER, 1.0)
+    assert_accept(adm, IP2)
+    assert adm.cancel_outgoing == out
+
+
+@pytest.mark.parametrize(
+    "also",
+    [
+        [IP2, 1],  # `_check_ip`: chuỗi khác rỗng
+        [IP2, ""],
+        [None],
+        [b"192.168.1.21"],
+        "192.168.1.21",
+        b"192.168.1.21",
+        [f"10.0.0.{i}" for i in range(1, 17)],  # 16 địa chỉ khác ip
+    ],
+    ids=["khong_phai_chuoi", "rong", "none", "bytes_phan_tu", "chuoi", "bytes", "16_dia_chi"],
+)
+def test_pg2_bad_also_raises_and_gate_stays_free(also):
+    g = gate()
+    with pytest.raises(ValueError):
+        g.begin_outgoing(IP, also=also)
+    assert g.active is None
+    assert g.begin_outgoing(IP) is not None
+
+
+def test_pg2_fifteen_other_addresses_are_allowed():
+    g = gate()
+    also = [f"10.0.0.{i}" for i in range(1, 16)]
+    out = g.begin_outgoing(IP, also=[*also, IP, also[0]])  # chính ip và phần tử trùng không tính
+    assert out.aliases == frozenset(also)
+
+
+def test_pg2_own_ip_and_duplicates_are_dropped():
+    g = gate()
+    out = g.begin_outgoing(IP, also=(IP, IP2, IP2))
+    assert out.aliases == frozenset({IP2})
+    adm = g.admit(IP, LOWER, 0.0)  # ip chính vẫn khớp như cũ
+    assert adm.cancel_outgoing == out
+
+
+def test_pg2_also_accepts_any_iterable():
+    g = gate()
+    out = g.begin_outgoing(IP, also=(x for x in [IP2, IP3]))
+    assert out.aliases == frozenset({IP2, IP3})
+
+
+def test_pg_responder_slot_has_no_aliases():
+    g = gate()
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    assert slot.aliases == frozenset()

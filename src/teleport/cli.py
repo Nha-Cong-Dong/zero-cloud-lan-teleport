@@ -1,11 +1,17 @@
 """Giao diện dòng lệnh: `teleport <lệnh>`.
 
 Mỗi lệnh là một hàm `cmd_<tên>(args) -> int` (mã thoát). Lệnh mới được thêm
-theo từng giai đoạn: `list`, `send`, `receive`.
+theo từng giai đoạn: `send`, `receive`.
 
 Mã thoát: 0 thành công; 1 lỗi lúc chạy (khóa bận, danh tính/kho hỏng, không mở được
-cổng, ghép đôi không thành, không tìm thấy thiết bị); 2 cú pháp lệnh sai (argparse,
-địa chỉ sai dạng, `--name` không hợp lệ).
+cổng, không bật được mDNS, ghép đôi không thành, không tìm thấy thiết bị); 2 cú pháp
+lệnh sai (argparse, đích trông như địa chỉ mà sai dạng, `--name` không hợp lệ).
+
+`list` chỉ duyệt mDNS vài giây: không giữ `node.lock`, không quảng bá máy này.
+`listen` quảng bá và duyệt mDNS, tự giữ kết nối với các máy đã ghép đôi và in sự kiện
+thiết bị. `pair <tên>` duyệt mDNS (không quảng bá, không tự kết nối) rồi chọn đúng một
+máy; `pair <ip>` không dùng mDNS. mDNS bật khi nghe trên mọi địa chỉ (mặc định), hoặc
+khi có cờ ẩn `--mdns-interface` (test).
 
 `listen` và `pair` chạy một node trong tiến trình này (tới v0.3) và hỏi người dùng qua
 stdin. stdin được đọc bằng `os.read` trong một thread daemon, không dùng `input()`:
@@ -27,19 +33,45 @@ import datetime
 import ipaddress
 import json
 import logging
+import math
 import os
+import re
 import signal
 import sys
 import threading
 import time
+import unicodedata
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
 from teleport import __version__
-from teleport.app.devices import AmbiguousDevice, DeviceNotFound, parse_manual_address
-from teleport.app.node import ConfigDirError, Node, unpair_offline
+from teleport.app.devices import (
+    AmbiguousDevice,
+    DeviceNotFound,
+    DeviceView,
+    parse_manual_address,
+    resolve_device,
+)
+from teleport.app.node import (
+    MAX_SCAN_TIMEOUT,
+    SCAN_TIMEOUT,
+    ConfigDirError,
+    ConnectFailed,
+    DeviceConnected,
+    DeviceDisconnected,
+    DeviceOffline,
+    DeviceOnline,
+    DiscoveryUnavailable,
+    MdnsOptions,
+    Node,
+    NodeEvent,
+    scan_devices,
+    unpair_offline,
+)
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt
+from teleport.app.settings import Settings
+from teleport.core.links import ConnectResult
 from teleport.core.messages import MessageError
 from teleport.core.pairing_code import format_code
 from teleport.lock import NodeLockedError
@@ -77,10 +109,16 @@ _UNFINISHED = frozenset(
 
 def cmd_identity(args: argparse.Namespace) -> int:
     directory = args.config_dir or config_dir()
-    identity = load_or_create_identity(directory)
+    try:
+        identity = load_or_create_identity(directory)
+    except OSError as e:  # ví dụ đường dẫn là một file
+        _config_dir_error(_Output(sys.stdout, sys.stderr, False), directory, e)
+        return 1
+    port = Settings.load(directory).port or DEFAULT_PORT
     print(f"Mã thiết bị:   {identity.device_id}")
     print(f"Pin ngắn:      {identity.short_fingerprint}")
     print(f"Fingerprint:   {format_fingerprint(identity.fingerprint)}")
+    print(f"Cổng:          {port}")
     print(f"Thư mục:       {directory}")
     return 0
 
@@ -150,11 +188,17 @@ def _target(result: PairingFinished) -> str:
     return result.address if result.port is None else f"{result.address}:{result.port}"
 
 
-def outcome_message(result: PairingFinished) -> list[str]:
-    """Câu báo kết quả ghép đôi (docs/mvp.md mục 8); dòng đầu là câu chính."""
+def outcome_message(result: PairingFinished, *, seen_name: str | None = None) -> list[str]:
+    """Câu báo kết quả ghép đôi (docs/mvp.md mục 8); dòng đầu là câu chính.
+
+    `seen_name`: tên của đích thấy qua mDNS (`pair <tên>`); khi có, “không kết nối được”
+    đổi thành câu “Thấy X nhưng không kết nối được…”.
+    """
     outcome = result.outcome
     target = _target(result)
-    x = result.peer_name or target
+    x = result.peer_name or seen_name or target
+    if outcome is PairingOutcome.UNREACHABLE and seen_name is not None:
+        return [_unreachable_seen(seen_name), _HOTSPOT_HINT]
     if outcome is _PAIRED:
         return [f"Đã ghép đôi với {x}."]
     if outcome in _UNFINISHED:
@@ -198,8 +242,101 @@ def outcome_message(result: PairingFinished) -> list[str]:
     return ["Đã hủy ghép đôi."]  # CANCELLED
 
 
-def _emit_result(output: _Output, result: PairingFinished) -> None:
-    lines = outcome_message(result)
+def _unreachable_seen(name: str) -> str:
+    return (
+        f"Thấy {name} nhưng không kết nối được. Mạng Wi-Fi này có thể đang chặn các thiết bị nói chuyện "
+        "với nhau (hay gặp ở quán cà phê, khách sạn)."
+    )
+
+
+_HOTSPOT_HINT = (
+    "Hãy thử dùng điểm phát Wi-Fi từ điện thoại, và kiểm tra tường lửa trên máy kia đã cho phép Teleport."
+)
+_OS_LABELS = {"windows": "Windows", "macos": "macOS", "linux": "Linux"}
+
+
+def _os_label(os_name: str | None) -> str:
+    if os_name is None:
+        return "?"
+    return _OS_LABELS.get(os_name, os_name)
+
+
+def _paired_label(view: DeviceView) -> str:
+    return "đã ghép đôi" if view.paired else "chưa ghép đôi"
+
+
+def _view_dict(view: DeviceView) -> dict[str, Any]:
+    return {
+        "device_id": view.device_id,
+        "name": view.name,
+        "os": view.os,
+        "paired": view.paired,
+        "online": view.online,
+        "addresses": list(view.addresses),
+        "port": view.port,
+    }
+
+
+def connect_failed_message(view: DeviceView, result: ConnectResult) -> list[str]:
+    """Câu báo không kết nối được tới thiết bị đã ghép đôi (docs/mvp.md mục 8)."""
+    x = view.name
+    short_id = view.device_id[:8]
+    if result is ConnectResult.REJECTED:
+        return [
+            f"{x} từ chối kết nối từ máy này. Có thể máy đó đã hủy ghép đôi.",
+            f"Để ghép đôi lại: `teleport pair {short_id}`",
+        ]
+    if result is ConnectResult.IDENTITY_MISMATCH:
+        return [
+            f"{x} đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. "
+            "Kết nối đã bị chặn.",
+            "Nếu chắc chắn máy đó đã đổi danh tính, hãy hủy ghép đôi mục cũ trước: "
+            f"`teleport unpair {short_id}`",
+        ]
+    if result is ConnectResult.VERSION_MISMATCH:
+        return [f"{x} đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản."]
+    return [_unreachable_seen(x)]
+
+
+def _print_event(output: _Output, event: NodeEvent) -> None:
+    """In một `NodeEvent` của `teleport listen`."""
+    view = event.device
+    who = f"“{view.name}” ({view.device_id[:8]}"
+    if isinstance(event, DeviceOnline):
+        where = f"{view.addresses[0]}:{view.port}" if view.addresses else "?"
+        output.text(f"Thấy {who}, {_os_label(view.os)}, {_paired_label(view)}) tại {where}.")
+        output.event(
+            "device_online",
+            device_id=view.device_id,
+            name=view.name,
+            os=view.os,
+            paired=view.paired,
+            addresses=list(view.addresses),
+            port=view.port,
+        )
+    elif isinstance(event, DeviceOffline):
+        output.text(f"{who}) đã rời mạng.")
+        output.event("device_offline", device_id=view.device_id, name=view.name)
+    elif isinstance(event, DeviceConnected):
+        output.text(f"Đã kết nối với {who}).")
+        output.event("device_connected", device_id=view.device_id, name=view.name, outgoing=event.outgoing)
+    elif isinstance(event, DeviceDisconnected):
+        output.text(f"Mất kết nối với {who})." + (" Đang nối lại…" if view.online else ""))
+        output.event("device_disconnected", device_id=view.device_id, name=view.name)
+    elif isinstance(event, ConnectFailed):
+        lines = connect_failed_message(view, event.result)
+        output.text(*lines)
+        output.event(
+            "connect_failed",
+            device_id=view.device_id,
+            name=view.name,
+            result=event.result.value,
+            message=" ".join(lines),
+        )
+
+
+def _emit_result(output: _Output, result: PairingFinished, *, seen_name: str | None = None) -> None:
+    lines = outcome_message(result, seen_name=seen_name)
     output.text(*lines)
     output.event(
         "pair_result",
@@ -311,8 +448,26 @@ def _valid_host(host: object) -> bool:
         return False
 
 
+def _mdns_options(args: argparse.Namespace, *, advertise: bool) -> MdnsOptions | None:
+    """Luật bật mDNS: có `--mdns-interface`, hoặc nghe trên mọi địa chỉ (`--host` mặc định)."""
+    interfaces = getattr(args, "mdns_interface", None)
+    if interfaces:
+        advertised = tuple(getattr(args, "advertise_address", None) or ()) or None
+        return MdnsOptions(advertise=advertise, interfaces=tuple(interfaces), advertise_addresses=advertised)
+    if getattr(args, "host", _ANY_HOST) == _ANY_HOST:
+        return MdnsOptions(advertise=advertise)
+    return None
+
+
 def _make_node(
-    args: argparse.Namespace, output: _Output, prompter: _Prompter, *, accept_pairing: bool
+    args: argparse.Namespace,
+    output: _Output,
+    prompter: _Prompter,
+    *,
+    accept_pairing: bool,
+    mdns: MdnsOptions | None = None,
+    auto_connect: bool = True,
+    on_event: Callable[[NodeEvent], None] | None = None,
 ) -> Node | int:
     """Tạo `Node` từ tham số dòng lệnh; tham số sai → mã thoát 2 (đã in lỗi)."""
     host = getattr(args, "host", _ANY_HOST)
@@ -328,6 +483,9 @@ def _make_node(
             accept_pairing=accept_pairing,
             on_pairing_prompt=prompter.on_prompt,
             on_pairing_finished=prompter.on_finished,
+            mdns=mdns,
+            auto_connect=auto_connect,
+            on_event=on_event,
         )
     except MessageError as e:
         output.error("invalid_name", f"Tên thiết bị không hợp lệ: {e}")
@@ -368,11 +526,38 @@ def _config_dir_error(output: _Output, path: Path, error: OSError) -> None:
 # ---- listen --------------------------------------------------------------------------------
 
 
+class _EventPrinter:
+    """In `NodeEvent` của `listen`; giữ lại các sự kiện tới trước khi in xong phần đầu."""
+
+    def __init__(self, output: _Output) -> None:
+        self._output = output
+        self._pending: list[NodeEvent] | None = []
+
+    def __call__(self, event: NodeEvent) -> None:
+        if self._pending is not None:
+            self._pending.append(event)
+        else:
+            _print_event(self._output, event)
+
+    def ready(self) -> None:
+        pending, self._pending = self._pending, None
+        for event in pending or ():
+            _print_event(self._output, event)
+
+
+def _error_text(error: BaseException) -> str:
+    return str(error) or type(error).__name__
+
+
 async def run_listen(args: argparse.Namespace, lines: Lines, out: TextIO, err: TextIO) -> int:
     """`teleport listen`: chờ ghép đôi tới khi bị hủy; chỉ trả về khi lỗi khởi động."""
     output = _Output(out, err, bool(getattr(args, "json", False)))
     prompter = _Prompter(output, listening=True)
-    node = _make_node(args, output, prompter, accept_pairing=True)
+    printer = _EventPrinter(output)
+    mdns = _mdns_options(args, advertise=True)
+    node = _make_node(
+        args, output, prompter, accept_pairing=True, mdns=mdns, auto_connect=True, on_event=printer
+    )
     if isinstance(node, int):
         return node
     code = await _start(node, output)
@@ -382,15 +567,28 @@ async def run_listen(args: argparse.Namespace, lines: Lines, out: TextIO, err: T
         addresses = await node.local_addresses()
         port = node.port
         assert port is not None
+        discovery_error = node.discovery_error
         output.event(
             "listening",
             name=node.name,
             device_id=node.identity.device_id,
             port=port,
             addresses=list(addresses),
+            discovery=node.discovery_active,
+            discovery_error=None if discovery_error is None else _error_text(discovery_error),
         )
         suffix = "" if port == DEFAULT_PORT else f":{port}"
         target = f"{addresses[0]}{suffix}" if addresses else f"<địa chỉ IP của máy này>{suffix}"
+        discovery_lines: list[str] = []
+        if mdns is not None and discovery_error is None:
+            discovery_lines.append(
+                "Máy khác trong mạng thấy máy này qua `teleport list` và tự kết nối nếu đã ghép đôi."
+            )
+        elif mdns is not None:
+            discovery_lines.append(
+                f"Cảnh báo: chưa quảng bá được qua mDNS ({_error_text(discovery_error)}); "
+                "máy khác vẫn ghép đôi được bằng IP."
+            )
         output.text(
             "Teleport đang chờ ghép đôi.",
             f"  Tên:      {node.name}",
@@ -398,8 +596,10 @@ async def run_listen(args: argparse.Namespace, lines: Lines, out: TextIO, err: T
             f"  Cổng:     {port}",
             f"  Địa chỉ:  {', '.join(addresses) if addresses else '(không tìm thấy địa chỉ IPv4 nào)'}",
             f"Trên máy kia, chạy: teleport pair {target}",
+            *discovery_lines,
             "Nhấn Ctrl+C để dừng.",
         )
+        printer.ready()
         await _feed_lines(lines, prompter)
         return 0  # không tới đây: _feed_lines chạy tới khi bị hủy
     finally:
@@ -409,17 +609,73 @@ async def run_listen(args: argparse.Namespace, lines: Lines, out: TextIO, err: T
 
 # ---- pair ----------------------------------------------------------------------------------
 
-_PAIR_ADDRESS_HELP = "`teleport pair` hiện chỉ nhận địa chỉ IP, ví dụ 192.168.1.5 hoặc 192.168.1.5:47474."
+_PAIR_BROWSE_TIMEOUT = 3.0  # giây duyệt mDNS trước khi chọn thiết bị theo tên (đọc lúc dùng)
+_BROWSE_POLL = 0.05
+# Chuỗi “trông như địa chỉ”: chỉ gồm ký tự của IPv4/IPv6 và có “:”, hoặc chỉ gồm số và “.”.
+_ADDRESS_LIKE_RE = re.compile(r"[0-9a-fA-F.:\[\]]*:[0-9a-fA-F.:\[\]]*")
+_DOTTED_LIKE_RE = re.compile(r"[0-9.]*\.[0-9.]*")
+_FULL_ID_RE = re.compile(r"[0-9a-f]{32}")
+_IP_HINT = "teleport pair <ip[:cổng]>"
+_PAIR_USAGE = "teleport pair <tên | tiền tố mã | ip[:cổng]>"
+
+
+def _bad_address_message(target: str) -> str:
+    return (
+        f"“{target}” không phải địa chỉ IPv4 hợp lệ. Hãy nhập địa chỉ IP, ví dụ 192.168.1.5 hoặc "
+        "192.168.1.5:47474, hoặc tên / mã thiết bị như `teleport list` hiện."
+    )
+
+
+def _looks_like_address(text: str) -> bool:
+    return _ADDRESS_LIKE_RE.fullmatch(text) is not None or _DOTTED_LIKE_RE.fullmatch(text) is not None
+
+
+def _pair_target(text: str) -> tuple[str, tuple[str, int] | None]:
+    """Phân loại đích của `pair`: trả `(đích đã bỏ khoảng trắng hai đầu, (ip, cổng) hoặc None)`.
+
+    None nghĩa là tìm theo tên. Khoảng trắng hai đầu (cả Unicode, như NBSP khi dán từ
+    web) bị bỏ. Không còn khoảng trắng bên trong: trông như địa chỉ (chỉ gồm ký tự của
+    IPv4/IPv6 và có “:”, hoặc chỉ gồm số và “.”) thì là địa chỉ, không phải IPv4[:cổng]
+    hợp lệ → ValueError. Có khoảng trắng bên trong: chỉ là địa chỉ khi bỏ hết khoảng
+    trắng ra được IPv4[:cổng] hợp lệ (“1.2.3.4 :47474”), ngược lại là tên (“PC Nha”).
+    """
+    target = text.strip()
+    compact = "".join(target.split())
+    if compact == target:
+        if not _looks_like_address(target):
+            return target, None
+        return target, parse_manual_address(target)
+    try:
+        return target, parse_manual_address(compact)
+    except ValueError:
+        return target, None
 
 
 async def run_pair(args: argparse.Namespace, lines: Lines, out: TextIO, err: TextIO) -> int:
-    """`teleport pair <ip[:cổng]>`: ghép đôi với một máy; 0 nếu đã ghép đôi, ngược lại 1."""
+    """`teleport pair <tên | tiền tố mã | ip[:cổng]>`: ghép đôi với một máy; 0 nếu đã ghép đôi, ngược lại 1.
+
+    Đích rỗng (sau khi bỏ khoảng trắng hai đầu) → mã 2. Địa chỉ hay tên: xem
+    `_pair_target`; trông như địa chỉ mà không phải IPv4 hợp lệ → mã 2, không đem đi
+    tìm theo tên.
+    """
     output = _Output(out, err, bool(getattr(args, "json", False)))
-    try:
-        ip, port = parse_manual_address(args.address)
-    except ValueError:
-        output.error("invalid_address", _PAIR_ADDRESS_HELP)
+    target = args.address.strip()
+    if not target:
+        output.error("invalid_address", f"Hãy nhập tên, mã thiết bị hoặc địa chỉ IP: {_PAIR_USAGE}")
         return 2
+    try:
+        target, endpoint = _pair_target(target)
+    except ValueError:
+        output.error("invalid_address", _bad_address_message(target))
+        return 2
+    if endpoint is not None:
+        return await _pair_by_address(args, lines, output, *endpoint)
+    return await _pair_by_name(args, lines, output, target)
+
+
+async def _pair_by_address(
+    args: argparse.Namespace, lines: Lines, output: _Output, ip: str, port: int
+) -> int:
     prompter = _Prompter(output, listening=False)
     node = _make_node(args, output, prompter, accept_pairing=False)
     if isinstance(node, int):
@@ -429,16 +685,182 @@ async def run_pair(args: argparse.Namespace, lines: Lines, out: TextIO, err: Tex
         return code
     try:
         output.text(f"Đang kết nối tới {ip}:{port}…")
-        feeder = asyncio.create_task(_feed_lines(lines, prompter), name="teleport.cli.stdin")
-        try:
-            result = await node.pairing.pair_with([ip], port)
-        finally:
-            feeder.cancel()
-            await asyncio.wait({feeder})
+        result = await _pair_with(node, lines, prompter, [ip], port)
         _emit_result(output, result)
         return 0 if result.outcome is _PAIRED else 1
     finally:
         await node.close()
+
+
+async def _pair_with(
+    node: Node, lines: Lines, prompter: _Prompter, addresses: Sequence[str], port: int
+) -> PairingFinished:
+    feeder = asyncio.create_task(_feed_lines(lines, prompter), name="teleport.cli.stdin")
+    try:
+        return await node.pairing.pair_with(addresses, port)
+    finally:
+        feeder.cancel()
+        await asyncio.wait({feeder})
+
+
+async def _pair_by_name(args: argparse.Namespace, lines: Lines, output: _Output, query: str) -> int:
+    """`pair <tên | tiền tố mã>`: duyệt mDNS (không quảng bá, không tự nối), chọn đúng một máy."""
+    prompter = _Prompter(output, listening=False)
+    mdns = _mdns_options(args, advertise=False)
+    node = _make_node(args, output, prompter, accept_pairing=False, mdns=mdns, auto_connect=False)
+    if isinstance(node, int):
+        return node
+    if mdns is None:
+        output.error(
+            "discovery_error",
+            f"Không tìm được thiết bị theo tên vì khám phá mDNS đang tắt. Hãy nhập địa chỉ IP: {_IP_HINT}",
+        )
+        return 1
+    code = await _start(node, output)
+    if code is not None:
+        return code
+    try:
+        output.text(f"Đang tìm “{query}” trong mạng…")
+        if not node.discovery_active:
+            reason = node.discovery_error
+            why = "" if reason is None else f" ({_error_text(reason)})"
+            output.error(
+                "discovery_error",
+                f"Không tìm được thiết bị theo tên vì không bật được khám phá mDNS{why}. "
+                f"Hãy nhập địa chỉ IP: {_IP_HINT}",
+            )
+            return 1
+        await _browse(node, query)
+        view = _choose_device(output, query, node.devices())
+        if view is None:
+            return 1
+        assert view.port is not None and view.addresses
+        output.text(
+            f"Đang kết nối tới “{view.name}” ({view.device_id[:8]}) tại {view.addresses[0]}:{view.port}…"
+        )
+        result = await _pair_with(node, lines, prompter, view.addresses, view.port)
+        _emit_result(output, result, seen_name=view.name)
+        return 0 if result.outcome is _PAIRED else 1
+    finally:
+        await node.close()
+
+
+async def _browse(node: Node, query: str) -> None:
+    """Chờ đủ `_PAIR_BROWSE_TIMEOUT`; chỉ dừng sớm khi `query` là mã đủ 32 ký tự và đã thấy máy đó."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _PAIR_BROWSE_TIMEOUT
+    full_id = query.strip().lower()
+    exact = _FULL_ID_RE.fullmatch(full_id) is not None
+    while (left := deadline - loop.time()) > 0:
+        if exact and any(v.device_id == full_id and v.online for v in node.devices()):
+            return
+        await asyncio.sleep(min(left, _BROWSE_POLL))
+
+
+def _choose_device(output: _Output, query: str, views: tuple[DeviceView, ...]) -> DeviceView | None:
+    """Chọn đúng một thiết bị đang thấy; không được thì in lỗi và trả None."""
+    try:
+        view = resolve_device(query, views)
+    except DeviceNotFound:
+        online = [v for v in views if v.online]
+        if online:
+            extra = ["Thiết bị đang thấy:", *(f"  {v.device_id[:8]}  {v.name}" for v in online)]
+        else:
+            extra = ["(chưa thấy thiết bị nào)"]
+        output.error(
+            "not_found",
+            f"Không thấy thiết bị nào khớp “{query}” trong mạng.",
+            extra=[*extra, f"Nếu mạng chặn mDNS, hãy nhập địa chỉ IP: {_IP_HINT}"],
+            candidates=_candidates(tuple(online)),
+        )
+        return None
+    except AmbiguousDevice as e:
+        output.error(
+            "ambiguous",
+            f"“{query}” khớp nhiều thiết bị; hãy nhập mã thiết bị dài hơn:",
+            extra=[f"  {d.device_id}  {d.name}" for d in e.candidates],
+            candidates=_candidates(e.candidates),
+        )
+        return None
+    if not view.online or not view.addresses or view.port is None:
+        output.error(
+            "offline",
+            f"“{view.name}” ({view.device_id[:8]}) không có trong mạng lúc này. "
+            f"Nếu mạng chặn mDNS, hãy nhập địa chỉ IP: {_IP_HINT}",
+            device_id=view.device_id,
+            name=view.name,
+        )
+        return None
+    return view
+
+
+# ---- list ----------------------------------------------------------------------------------
+
+
+async def run_list(args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
+    """`teleport list`: duyệt mDNS vài giây rồi in các thiết bị; không giữ `node.lock`, không quảng bá."""
+    output = _Output(out, err, bool(getattr(args, "json", False)))
+    directory = _config(args)
+    interfaces = getattr(args, "mdns_interface", None)
+    mdns = MdnsOptions(advertise=False, interfaces=tuple(interfaces)) if interfaces else None
+    timeout = getattr(args, "timeout", None) or SCAN_TIMEOUT
+    try:
+        result = await scan_devices(directory, timeout=timeout, mdns=mdns)
+    except IdentityError as e:
+        output.error("identity_error", str(e))
+        return 1
+    except TrustStoreError as e:
+        output.error("trust_store_error", str(e))
+        return 1
+    except ConfigDirError as e:
+        _config_dir_error(output, e.path, e.error)
+        return 1
+    except DiscoveryUnavailable as e:
+        cause = e.__cause__ if e.__cause__ is not None else e
+        output.error("discovery_error", f"Không bật được khám phá mDNS ({_error_text(cause)}).")
+        return 1
+    if output.json:
+        obj = {
+            "time": _utc_now(),
+            "self": {"device_id": result.device_id, "name": result.name, "port": result.port},
+            "devices": [_view_dict(v) for v in result.devices],
+        }
+        print(json.dumps(obj, ensure_ascii=False), file=out, flush=True)
+        return 0
+    online = [v for v in result.devices if v.online]
+    offline_paired = [v for v in result.devices if v.paired and not v.online]
+    text = [f"Máy này: {result.name} ({result.device_id[:8]}), cổng {result.port}"]
+    if online:
+        text.append("Thiết bị trong mạng:")
+        for v in online:
+            where = ", ".join(f"{ip}:{v.port}" for ip in v.addresses)
+            text.append(f"  {v.name}  {v.device_id[:8]}  {_os_label(v.os)}  {_paired_label(v)}  {where}")
+    else:
+        text.append(_NO_DEVICES)
+    if offline_paired:
+        text.append("Thiết bị đã ghép đôi nhưng không thấy trong mạng:")
+        text.extend(f"  {v.name}  {v.device_id[:8]}" for v in offline_paired)
+    # Gợi ý cài lại (mvp F3): máy chưa ghép đôi trùng tên với một máy đã ghép đôi đang offline.
+    offline_names = {_fold(v.name) for v in offline_paired}
+    hinted: set[str] = set()
+    for v in online:
+        key = _fold(v.name)
+        if not v.paired and key in offline_names and key not in hinted:
+            hinted.add(key)
+            text.append(
+                f"Có một {v.name} mới chưa ghép đôi. Nếu máy đó vừa cài lại Teleport, hãy ghép đôi lại."
+            )
+    output.text(*text)
+    return 0
+
+
+_NO_DEVICES = (
+    "Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia và kiểm tra hai máy dùng chung một mạng Wi-Fi."
+)
+
+
+def _fold(name: str) -> str:
+    return unicodedata.normalize("NFC", name).casefold()
 
 
 # ---- Chạy lệnh async -----------------------------------------------------------------------
@@ -563,6 +985,26 @@ def cmd_listen(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _list_main(args: argparse.Namespace) -> int:
+    restore = _handle_ctrl_break(asyncio.get_running_loop(), asyncio.current_task())
+    try:
+        return await run_list(args, sys.stdout, sys.stderr)
+    finally:
+        restore()
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    with asyncio.Runner() as runner:
+        try:
+            return runner.run(_list_main(args))
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+    output = _Output(sys.stdout, sys.stderr, args.json)
+    output.text("Đã hủy.")
+    output.event("error", error="cancelled", message="Đã hủy.")
+    return 1
+
+
 def cmd_pair(args: argparse.Namespace) -> int:
     code = _run_async(args, run_pair)
     if code is not None:
@@ -571,9 +1013,10 @@ def cmd_pair(args: argparse.Namespace) -> int:
     message = "Đã hủy ghép đôi."
     output.text(message)
     try:
-        address = parse_manual_address(args.address)[0]
+        target, endpoint = _pair_target(args.address)
+        address = target if endpoint is None else endpoint[0]  # như PairingFinished.address: chỉ IPv4
     except ValueError:
-        address = args.address
+        address = args.address.strip()
     output.event(
         "pair_result",
         session_id=None,
@@ -590,7 +1033,7 @@ def cmd_pair(args: argparse.Namespace) -> int:
 # ---- unpair --------------------------------------------------------------------------------
 
 
-def _candidates(devices: tuple[TrustedDevice, ...]) -> list[dict[str, str]]:
+def _candidates(devices: Sequence[TrustedDevice | DeviceView]) -> list[dict[str, str]]:
     return [{"device_id": d.device_id, "name": d.name} for d in devices]
 
 
@@ -658,6 +1101,26 @@ def _add_node_options(parser: argparse.ArgumentParser) -> None:
     # Ẩn: chỉ để test bind 127.0.0.1 và cổng 0 (tránh hộp thoại tường lửa Windows).
     parser.add_argument("--host", default=_ANY_HOST, help=argparse.SUPPRESS)
     parser.add_argument("--port", type=_port_type, default=None, help=argparse.SUPPRESS)
+    # Ẩn: chỉ duyệt/quảng bá mDNS trên các card này (test dùng 127.0.0.1).
+    parser.add_argument("--mdns-interface", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
+
+
+def _ipv4_type(text: str) -> str:
+    if not _valid_host(text):
+        raise argparse.ArgumentTypeError(f"phải là địa chỉ IPv4 dạng chấm: {text!r}")
+    return text
+
+
+def _timeout_type(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"thời gian phải là số giây: {text!r}") from None
+    if not math.isfinite(value) or not 0 < value <= MAX_SCAN_TIMEOUT:
+        raise argparse.ArgumentTypeError(
+            f"thời gian phải trong khoảng (0, {MAX_SCAN_TIMEOUT:g}] giây: {text!r}"
+        )
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -676,12 +1139,30 @@ def build_parser() -> argparse.ArgumentParser:
         handler=cmd_identity
     )
 
-    listen = sub.add_parser("listen", help="chờ máy khác ghép đôi với máy này")
+    list_ = sub.add_parser("list", help="liệt kê các máy Teleport trong mạng")
+    list_.add_argument(
+        "--timeout",
+        type=_timeout_type,
+        default=SCAN_TIMEOUT,
+        metavar="GIÂY",
+        help=f"thời gian tìm (mặc định {SCAN_TIMEOUT:g} giây)",
+    )
+    list_.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    list_.add_argument("--mdns-interface", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
+    list_.set_defaults(handler=cmd_list)
+
+    listen = sub.add_parser("listen", help="chờ ghép đôi và giữ kết nối với các máy đã ghép đôi")
     _add_node_options(listen)
+    # Ẩn: địa chỉ quảng bá cố định (test), không theo dõi đổi địa chỉ.
+    listen.add_argument("--advertise-address", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
     listen.set_defaults(handler=cmd_listen)
 
-    pair = sub.add_parser("pair", help="ghép đôi với máy khác theo địa chỉ IP")
-    pair.add_argument("address", metavar="<ip[:cổng]>", help="địa chỉ máy kia, ví dụ 192.168.1.5")
+    pair = sub.add_parser("pair", help="ghép đôi với máy khác theo tên, mã thiết bị hoặc địa chỉ IP")
+    pair.add_argument(
+        "address",
+        metavar="<tên | tiền tố mã | ip[:cổng]>",
+        help="máy kia như `teleport list` hiện, hoặc địa chỉ IP, ví dụ 192.168.1.5",
+    )
     _add_node_options(pair)
     pair.set_defaults(handler=cmd_pair)
 

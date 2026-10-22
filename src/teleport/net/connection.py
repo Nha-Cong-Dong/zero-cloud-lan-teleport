@@ -687,14 +687,25 @@ class Listener:
             raise RuntimeError("Listener chỉ start được một lần")
         self._starting = True
         try:
-            server = await asyncio.start_server(self._handle, host, port)
+            # start_serving=False: bind xong là trả về ngay, không có `await` nào giữa lúc bind
+            # và lúc có tham chiếu tới server (bị hủy ở đó thì server rò, cổng mở tới hết tiến trình).
+            server = await asyncio.start_server(self._handle, host, port, start_serving=False)
         except BaseException:
             self._starting = False  # cho phép thử lại (ví dụ với cổng khác)
             raise
-        if self._closed:  # close() chạy trong lúc đang mở cổng
+        self._server = server  # close() chạy song song từ đây cũng đóng được cổng
+        try:
+            if self._closed:  # close() chạy trong lúc đang mở cổng
+                raise RuntimeError("Listener đã đóng")
+            await server.start_serving()
+            if self._closed:
+                raise RuntimeError("Listener đã đóng")
+        except BaseException:
             server.close()
-            raise RuntimeError("Listener đã đóng")
-        self._server = server
+            if not self._closed:
+                self._server = None
+                self._starting = False  # cho phép thử lại
+            raise
         self._port = server.sockets[0].getsockname()[1]
         log.debug("lắng nghe trên %s:%d", host, self._port)
         return self._port

@@ -58,6 +58,12 @@ FAST = SimpleNamespace(
     ABORT_ON_CANCEL_TIMEOUT=0.5,
     CLOSE_SESSIONS_TIMEOUT=1.0,
     LOCK_TIMEOUT=0.5,
+    # PR-4 (đặc tả PR-4 mục 4.1): teleport.core.links và teleport.app.node
+    RETRY_BASE=0.2,
+    RETRY_MAX=1.0,
+    EVENT_RETRY_GAP=0.2,
+    REPLACE_AFTER=2.0,
+    NETWORK_CHECK_INTERVAL=0.2,
     SLACK=2.5,  # biên trên nới cho CI: thời gian chờ + 2,5 s
 )
 
@@ -271,14 +277,22 @@ class PairingClient(RawPeer):
 
 
 class Recorder:
-    """Ghi lại callback của một Node: lời hỏi, kết quả, kèm thời điểm."""
+    """Ghi lại callback của một Node: lời hỏi, kết quả, sự kiện `NodeEvent`, kèm thời điểm."""
 
     def __init__(
-        self, answer=None, *, raise_in_prompt: bool = False, raise_in_finished: bool = False
+        self,
+        answer=None,
+        *,
+        raise_in_prompt: bool = False,
+        raise_in_finished: bool = False,
+        raise_in_event: bool = False,
     ) -> None:
         self.answer = answer
         self.raise_in_prompt = raise_in_prompt
         self.raise_in_finished = raise_in_finished
+        self.raise_in_event = raise_in_event
+        self.events: list = []  # NodeEvent theo thứ tự nhận (PR-4)
+        self.event_times: list[float] = []  # time.monotonic()
         self.node = None
         self.prompts: list = []
         self.finished: list = []
@@ -310,6 +324,28 @@ class Recorder:
         self.finished_event.set()
         if self.raise_in_finished:
             raise RuntimeError("lỗi giả lập trong on_finished")
+
+    def on_event(self, event) -> None:
+        self.events.append(event)
+        self.event_times.append(time.monotonic())
+        if self.raise_in_event:
+            raise RuntimeError("lỗi giả lập trong on_event")
+
+    def events_of(self, kind: type, device_id: str | None = None) -> list:
+        return [
+            e
+            for e in self.events
+            if isinstance(e, kind) and (device_id is None or e.device.device_id == device_id)
+        ]
+
+    async def wait_event(
+        self, kind: type, device_id: str | None = None, n: int = 1, timeout: float = 5.0
+    ) -> object:
+        name = getattr(kind, "__name__", str(kind))
+        await wait_until(
+            lambda: len(self.events_of(kind, device_id)) >= n, timeout, f"chưa có {n} sự kiện {name}"
+        )
+        return self.events_of(kind, device_id)[n - 1]
 
     async def wait_prompts(self, n: int = 1, timeout: float = 5.0) -> None:
         await wait_until(lambda: len(self.prompts) >= n, timeout, f"chưa có {n} lời hỏi")
@@ -361,6 +397,217 @@ class ControlClient:
         return sum(1 for m in self.received if getattr(m, "TYPE", None) == "pong")
 
 
+class FakeMdnsControl:
+    """Bộ điều khiển `FakeMdns` (đặc tả PR-4 mục 4.1).
+
+    - `instances`: mọi `FakeMdns` theo thứ tự tạo; `last`: cái mới nhất.
+    - `fail_start` / `fail_advertise`: ngoại lệ ném ra ở `start()` / `advertise()` (giữ tới khi gán None).
+    - `close_delay`: `close()` chờ chừng ấy giây (không che chắn khỏi hủy, như yêu cầu nghiêm nhất).
+    - `seed`: thiết bị “đã thấy sẵn”, được báo `DeviceAdded` ngay sau `start_browsing` (vòng lặp kế).
+    - `local_addresses`: giá trị `teleport.net.discovery.local_ipv4_addresses()` trả về; `addr_reads`
+      đếm số lần đọc. Gán một exception để giả lỗi đọc card mạng.
+    - `log`: (số thứ tự instance, tên phương thức) theo thứ tự toàn cục (NF6).
+    """
+
+    def __init__(self) -> None:
+        self.instances: list[FakeMdns] = []
+        self.fail_start: BaseException | None = None
+        self.fail_advertise: BaseException | None = None
+        self.close_delay: float = 0.0
+        self.seed: dict = {}
+        self.local_addresses: tuple[str, ...] | BaseException = ("192.0.2.5",)
+        self.addr_reads = 0
+        self.log: list[tuple[int, str]] = []
+        self.hang: str | None = None  # tên phương thức async treo mãi (tới khi bị hủy)
+
+    @property
+    def last(self) -> FakeMdns:
+        assert self.instances, "chưa có FakeMdns nào được tạo"
+        return self.instances[-1]
+
+    def of(self, node) -> FakeMdns:
+        """Instance đang sống mới nhất mà `node` đã `start_browsing` (theo `self_device_id`)."""
+        device_id = node.identity.device_id
+        mine = [m for m in self.instances if m.self_device_id == device_id and not m.closing]
+        assert mine, f"node {device_id[:8]} không có FakeMdns đang duyệt"
+        return mine[-1]
+
+    def read_addresses(self) -> tuple[str, ...]:
+        self.addr_reads += 1
+        value = self.local_addresses
+        if isinstance(value, BaseException):
+            raise value
+        return tuple(value)
+
+
+class FakeMdns:
+    """Bản giả `teleport.net.discovery.MdnsDiscovery`: không socket, sự kiện do test phát (`emit`)."""
+
+    def __init__(self, ctl: FakeMdnsControl, **kwargs) -> None:
+        self.ctl = ctl
+        self.kwargs = kwargs
+        self.index = len(ctl.instances)
+        self.calls: list[str] = []
+        self.advertised: list[dict] = []
+        self.priorities: list[frozenset[str]] = []
+        self.started = False
+        self.closing = False  # đã gọi close(): không phát sự kiện nữa
+        self.closed = False  # close() đã chạy xong
+        self.self_device_id: str | None = None
+        self.on_event = None
+        self.max_services: int | None = None
+        self._devices: dict = {}
+        ctl.instances.append(self)
+
+    def _call(self, name: str) -> None:
+        self.calls.append(name)
+        self.ctl.log.append((self.index, name))
+
+    async def _maybe_hang(self, name: str) -> None:
+        if self.ctl.hang == name:
+            await asyncio.Event().wait()
+
+    async def start(self) -> None:
+        self._call("start")
+        await self._maybe_hang("start")
+        if self.ctl.fail_start is not None:
+            raise self.ctl.fail_start
+        self.started = True
+
+    async def close(self) -> None:
+        self._call("close")
+        self.closing = True
+        if self.closed:
+            return
+        if self.ctl.close_delay:
+            await asyncio.sleep(self.ctl.close_delay)
+        self.closed = True
+        self.ctl.log.append((self.index, "closed"))
+
+    async def advertise(self, **kw) -> None:
+        self._call("advertise")
+        await self._maybe_hang("advertise")
+        if self.ctl.fail_advertise is not None:
+            raise self.ctl.fail_advertise
+        self.advertised.append(dict(kw))
+
+    async def stop_advertising(self) -> None:
+        self._call("stop_advertising")
+
+    async def start_browsing(self, *, self_device_id: str, on_event, max_services: int = 256) -> None:
+        self._call("start_browsing")
+        await self._maybe_hang("start_browsing")
+        self.self_device_id = self_device_id
+        self.on_event = on_event
+        self.max_services = max_services
+        if self.ctl.seed:
+            from teleport.core.discovery import DeviceAdded
+
+            seeded = [d for d in self.ctl.seed.values() if d.device_id != self_device_id]
+            loop = asyncio.get_running_loop()
+            for device in seeded:
+                loop.call_soon(self.emit, DeviceAdded(device))
+
+    def set_priority(self, device_ids) -> None:
+        self._call("set_priority")
+        self.priorities.append(frozenset(device_ids))
+
+    @property
+    def devices(self):
+        from types import MappingProxyType
+
+        return MappingProxyType(dict(self._devices))
+
+    def emit(self, event) -> None:
+        """Cập nhật `devices` rồi gọi `on_event` (như MdnsDiscovery); sau `close()` thì im lặng."""
+        from teleport.core.discovery import DeviceRemoved
+
+        if self.closing:
+            return
+        if isinstance(event, DeviceRemoved):
+            self._devices.pop(event.device.device_id, None)
+        else:
+            self._devices[event.device.device_id] = event.device
+        if self.on_event is not None:
+            self.on_event(event)
+
+
+class OpenControlCounter:
+    """Bọc `teleport.app.node.open_control`: ghi mọi lời gọi (đặc tả PR-4 mục 4.1).
+
+    Mỗi bản ghi: `SimpleNamespace(t, caller, fingerprint, addresses, port)`; `t` = time.monotonic().
+    `rewrite_to="127.0.0.1"` → gọi hàm thật với địa chỉ đó thay cho địa chỉ mDNS (M2).
+    """
+
+    def __init__(self, real, rewrite_to: str | None) -> None:
+        self.real = real
+        self.rewrite_to = rewrite_to
+        self.calls: list[SimpleNamespace] = []
+        self._sig = inspect.signature(real)
+
+    async def __call__(self, *args, **kwargs):
+        bound = self._sig.bind(*args, **kwargs)
+        a = bound.arguments
+        self.calls.append(
+            SimpleNamespace(
+                t=time.monotonic(),
+                caller=a["identity"].device_id,
+                fingerprint=a["expected_fingerprint"],
+                addresses=tuple(a["addresses"]),
+                port=a["port"],
+            )
+        )
+        if self.rewrite_to is not None:
+            bound.arguments["addresses"] = [self.rewrite_to]
+        return await self.real(*bound.args, **bound.kwargs)
+
+    def count(self, *, to=None, caller=None) -> int:
+        return len(self.of(to=to, caller=caller))
+
+    def of(self, *, to=None, caller=None) -> list[SimpleNamespace]:
+        """`to`: AppNode / Identity / fingerprint của máy đích; `caller`: AppNode / device_id của máy gọi."""
+        if to is None or isinstance(to, str):
+            fp = to
+        elif isinstance(to, AppNode):
+            fp = to.identity.fingerprint
+        else:
+            fp = to.fingerprint  # Identity
+        cid = None if caller is None else (caller if isinstance(caller, str) else caller.identity.device_id)
+        return [
+            c for c in self.calls if (fp is None or c.fingerprint == fp) and (cid is None or c.caller == cid)
+        ]
+
+
+def make_discovered(
+    target,
+    *,
+    addresses: tuple[str, ...] = (LOCAL,),
+    port: int | None = None,
+    name: str | None = None,
+    os: str = "windows",
+    device_id: str | None = None,
+):
+    """`DiscoveredDevice` trỏ tới `target` (AppNode thật, hoặc Identity khi có `port`)."""
+    from teleport.core.discovery import DiscoveredDevice
+
+    if isinstance(target, AppNode):
+        did = target.id
+        default_name = target.name
+        default_port = target.port
+    else:
+        did = target.device_id
+        default_name = "B"
+        default_port = None
+    return DiscoveredDevice(
+        device_id=device_id or did,
+        name=name or default_name,
+        os=os,
+        proto=PROTOCOL_VERSION,
+        port=port if port is not None else default_port,
+        addresses=tuple(addresses),
+    )
+
+
 async def find_leaks(before: set[asyncio.Task]) -> list[str]:
     problems: list[str] = []
     await asyncio.sleep(0.05)
@@ -407,7 +654,53 @@ def fast(monkeypatch):
         app_node = None
     if app_node is not None:
         monkeypatch.setattr(app_node, "LOCK_TIMEOUT", FAST.LOCK_TIMEOUT)
+        monkeypatch.setattr(app_node, "NETWORK_CHECK_INTERVAL", FAST.NETWORK_CHECK_INTERVAL, raising=False)
+    try:
+        from teleport.core import links
+    except ImportError:
+        links = None
+    if links is not None:
+        for name in ("RETRY_BASE", "RETRY_MAX", "EVENT_RETRY_GAP", "REPLACE_AFTER"):
+            monkeypatch.setattr(links, name, getattr(FAST, name))
     return FAST
+
+
+@pytest.fixture
+def fake_mdns(monkeypatch):
+    """Thay `teleport.app.node.MdnsDiscovery` bằng `FakeMdns`; trả `FakeMdnsControl`.
+
+    Cũng thay `teleport.net.discovery.local_ipv4_addresses` (node đọc qua thuộc tính module) bằng
+    `ctl.read_addresses`, để việc theo dõi mạng không phụ thuộc card mạng thật của máy chạy test.
+    """
+    from teleport.app import node as app_node
+    from teleport.net import discovery as net_discovery
+
+    ctl = FakeMdnsControl()
+
+    def factory(*args, **kwargs):
+        assert not args, f"MdnsDiscovery phải được tạo bằng đối số từ khóa, nhận {args!r}"
+        return FakeMdns(ctl, **kwargs)
+
+    monkeypatch.setattr(app_node, "MdnsDiscovery", factory)
+    monkeypatch.setattr(net_discovery, "local_ipv4_addresses", ctl.read_addresses)
+    return ctl
+
+
+@pytest.fixture
+def count_open_control(monkeypatch):
+    """`count_open_control(rewrite_to=None)` → `OpenControlCounter` đã cài vào `teleport.app.node`."""
+    from teleport.app import node as app_node
+
+    installed: list[OpenControlCounter] = []
+
+    def install(rewrite_to: str | None = None) -> OpenControlCounter:
+        real = installed[0].real if installed else app_node.open_control
+        counter = OpenControlCounter(real, rewrite_to)
+        monkeypatch.setattr(app_node, "open_control", counter)
+        installed.append(counter)
+        return counter
+
+    return install
 
 
 _LABEL = object()
@@ -439,9 +732,23 @@ async def node_factory(fast, tmp_path):
         hostname: bool = False,
         raise_in_prompt: bool = False,
         raise_in_finished: bool = False,
+        mdns=None,
+        auto_connect: bool = True,
+        raise_in_event: bool = False,
     ) -> AppNode:
         directory = tmp_path / label
-        rec = Recorder(answer, raise_in_prompt=raise_in_prompt, raise_in_finished=raise_in_finished)
+        rec = Recorder(
+            answer,
+            raise_in_prompt=raise_in_prompt,
+            raise_in_finished=raise_in_finished,
+            raise_in_event=raise_in_event,
+        )
+        # PR-4: `mdns`/`auto_connect` chỉ truyền khi khác mặc định; `on_event` luôn ghi vào `rec.events`.
+        extra: dict = {"on_event": rec.on_event}
+        if mdns is not None:
+            extra["mdns"] = mdns
+        if auto_connect is not True:
+            extra["auto_connect"] = auto_connect
         node = Node(
             directory,
             name=None if hostname else (name or label),
@@ -450,6 +757,7 @@ async def node_factory(fast, tmp_path):
             accept_pairing=accept_pairing,
             on_pairing_prompt=rec.on_prompt,
             on_pairing_finished=rec.on_finished,
+            **extra,
         )
         rec.node = node
         handle = AppNode(node, rec, directory, label)
@@ -625,6 +933,7 @@ def app_helpers():
         new_device_id=lambda: uuid.uuid4().hex,
         read_message=read_message,
         encode_message=encode_message,
+        dev=make_discovered,
     )
 
 

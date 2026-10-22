@@ -3,7 +3,9 @@
 Đặc tả ở docs/protocol.md mục 8. Module không mở socket, không xem đồng hồ: tầng
 `net` (`teleport.net.discovery`) bọc thư viện zeroconf, đưa tên dịch vụ và kết quả
 resolve vào `DiscoveryTracker` cùng thời gian monotonic `now`, rồi thực hiện các
-lệnh resolve và chuyển sự kiện thiết bị mà tracker trả về.
+lệnh resolve và chuyển sự kiện thiết bị mà tracker trả về. `NetworkWatch` nhận các
+lần đọc địa chỉ và đồng hồ định kỳ, báo khi mạng đổi hoặc máy vừa thức dậy (để `app`
+khởi động lại hoặc quảng bá lại mDNS).
 
 Mọi bản ghi mDNS đến từ máy khác nên không bao giờ được tin: tên dịch vụ, TXT,
 cổng và địa chỉ đều được kiểm ở đây (`parse_service`); bản ghi sai bị bỏ qua.
@@ -24,8 +26,9 @@ import ipaddress
 import itertools
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
 
 from teleport.core.messages import (
@@ -48,6 +51,7 @@ PROBE_INTERVAL = 15.0  # giây giữa hai lần resolve lại để kiểm thi�
 MAX_PROBE_BACKOFF = 240.0  # giây, khoảng probe tối đa cho thiết bị đã biến mất
 RESOLVE_TIMEOUT = 3.0  # giây chờ tối đa cho một lần resolve
 MAX_RESOLVE_FAILURES = 2  # số lần resolve thất bại liên tiếp trước khi coi thiết bị đã biến mất
+WAKE_JUMP = 15.0  # giây: đồng hồ nhảy quá mức này thì coi là máy vừa thức dậy (`NetworkWatch`)
 
 _SERVICE_SUFFIX = "." + SERVICE_TYPE
 _PROTO_RE = re.compile(r"[1-9][0-9]{0,15}")
@@ -691,3 +695,71 @@ class DiscoveryTracker:
                 cand.pending = True
                 due.append(cand.name)
         return TrackerOutput(probe=tuple(due)) if due else _EMPTY
+
+
+# ---- Mạng đổi, máy thức dậy ----------------------------------------------------------------
+
+
+class NetworkChange(StrEnum):
+    """Kết quả một lần `NetworkWatch.sample`."""
+
+    NONE = "none"
+    ADDRESSES = "addresses"  # danh sách địa chỉ quảng bá đổi (cả thứ tự)
+    WOKE = "woke"  # máy vừa thức dậy (hoặc giờ hệ thống bị chỉnh)
+
+
+def _check_clock(name: str, value: object) -> float:
+    """Giá trị đồng hồ: số hữu hạn (giây)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError(f"{name} phải là số giây")
+    if not math.isfinite(value):
+        raise ValueError(f"{name} phải là số hữu hạn")
+    return float(value)
+
+
+def _check_address_list(addresses: object) -> tuple[str, ...]:
+    if isinstance(addresses, str | bytes) or not isinstance(addresses, Iterable):
+        raise ValueError("addresses phải là một dãy địa chỉ, không phải một chuỗi")
+    items = tuple(addresses)
+    if not all(isinstance(a, str) for a in items):
+        raise ValueError("địa chỉ phải là chuỗi")
+    return items
+
+
+class NetworkWatch:
+    """Phát hiện mạng đổi hoặc máy vừa thức dậy, từ các lần đọc định kỳ (sans-IO).
+
+    `app` cứ `interval` giây đọc địa chỉ quảng bá (`local_ipv4_addresses`), đồng hồ
+    monotonic và đồng hồ hệ thống, rồi gọi `sample`. Địa chỉ khác lần trước (cả thứ
+    tự) → `ADDRESSES`; không thì đồng hồ nhảy → `WOKE`: khoảng monotonic giữa hai lần
+    đọc vượt `interval + WAKE_JUMP` (nền tảng mà monotonic chạy trong lúc ngủ, như
+    Windows), hoặc khoảng đồng hồ hệ thống lệch khoảng monotonic quá `WAKE_JUMP`
+    (nền tảng mà monotonic dừng lúc ngủ, như Linux, macOS; cả khi giờ bị chỉnh tay).
+    """
+
+    def __init__(self, addresses: Sequence[str], mono: float, wall: float) -> None:
+        """Tham số sai → ValueError / TypeError."""
+        self._addresses = _check_address_list(addresses)
+        self._mono = _check_clock("mono", mono)
+        self._wall = _check_clock("wall", wall)
+
+    def sample(self, addresses: Sequence[str], mono: float, wall: float, *, interval: float) -> NetworkChange:
+        """Một lần đọc mới; lưu lại cả ba giá trị. Tham số sai (gồm `mono` giảm) → ValueError /
+        TypeError, trạng thái giữ nguyên."""
+        items = _check_address_list(addresses)
+        mono = _check_clock("mono", mono)
+        wall = _check_clock("wall", wall)
+        interval = _check_clock("interval", interval)
+        if interval <= 0:
+            raise ValueError("interval phải > 0")
+        if mono < self._mono:
+            raise ValueError("mono không được giảm")
+        gap_mono = mono - self._mono
+        gap_wall = wall - self._wall
+        changed = items != self._addresses
+        self._addresses, self._mono, self._wall = items, mono, wall
+        if changed:
+            return NetworkChange.ADDRESSES
+        if gap_mono > interval + WAKE_JUMP or abs(gap_wall - gap_mono) > WAKE_JUMP:
+            return NetworkChange.WOKE
+        return NetworkChange.NONE
