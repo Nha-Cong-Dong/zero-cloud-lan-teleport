@@ -1291,7 +1291,7 @@ def test_local_then_peer_confirm_saves_peer_and_pairs(role):
     s, _ = build()
     s.handle(UserDecision(True), SHOWN_AT + 30)
     actions = s.handle(MessageReceived(PairConfirm()), SHOWN_AT + 31)
-    assert actions[:-1] == [SavePeer(peer, name)]
+    assert actions[:-1] == [SavePeer(peer, name, keep_known_name=False)]
     assert_closed(actions, Outcome.PAIRED)
     assert_done(s, Outcome.PAIRED)
 
@@ -1313,7 +1313,7 @@ def test_peer_then_local_confirm_sends_confirm_saves_and_pairs(role):
     s, _ = build()
     s.handle(MessageReceived(PairConfirm()), SHOWN_AT + 20)
     actions = s.handle(UserDecision(True), SHOWN_AT + 40)
-    assert actions[:-1] == [SendMessage(PairConfirm()), SavePeer(peer, name)]
+    assert actions[:-1] == [SendMessage(PairConfirm()), SavePeer(peer, name, keep_known_name=False)]
     assert_closed(actions, Outcome.PAIRED)
     assert_done(s, Outcome.PAIRED)
 
@@ -1386,7 +1386,7 @@ def test_grace_period_accepts_late_peer_confirm(role):
     s.handle(UserDecision(True), SHOWN_AT + 55)
     assert s.handle(Tick(), SHOWN_AT + 65) == []
     actions = s.handle(MessageReceived(PairConfirm()), SHOWN_AT + 69.9)
-    assert actions[:-1] == [SavePeer(peer, name)]
+    assert actions[:-1] == [SavePeer(peer, name, keep_known_name=False)]
     assert_closed(actions, Outcome.PAIRED)
 
 
@@ -1421,6 +1421,81 @@ def test_connection_lost_between_confirms_does_not_save(role):
     actions = s.handle(ConnectionLost(), SHOWN_AT + 2)
     assert len(actions) == 1
     assert_closed(actions, Outcome.CONNECTION_LOST)
+
+
+# --- M5: ghép đôi lại ở vai trả lời không đổi tên đã lưu (`SavePeer.keep_known_name`) ------------
+#
+# Bên trả lời nhận chứng chỉ trong `pair_request` mà chưa có bằng chứng bên kia giữ khóa riêng, nên
+# một máy lạ gửi được chứng chỉ công khai của một máy đã tin cậy. Ghép đôi lại ở vai này giữ tên đã
+# lưu; vai khởi xướng (đã kiểm khóa qua bắt tay TLS) và thiết bị mới thì dùng tên trong hello.
+
+
+def test_m5_save_peer_keep_known_name_is_required():
+    import dataclasses
+
+    fields = {f.name: f for f in dataclasses.fields(SavePeer)}
+    assert {"peer", "name", "keep_known_name"} <= set(fields)
+    keep = fields["keep_known_name"]
+    no_default = keep.default is dataclasses.MISSING and keep.default_factory is dataclasses.MISSING
+    assert no_default, "keep_known_name là trường bắt buộc"
+    with pytest.raises(TypeError):
+        SavePeer(CERT_A, HELLO_A.name)  # type: ignore[call-arg]
+
+
+def _confirm_both(role: Role, *, known: bool, peer_first: bool) -> list:
+    """Đi đường đúng tới khi hai bên xác nhận; trả lô hành động cuối (có SavePeer, Close)."""
+    if role == Role.INITIATOR:
+        s = make_initiator(known_fingerprint=CERT_B.fingerprint if known else None)
+        s.handle(Start(), T0)
+        s.handle(MessageReceived(COMMIT_B), COMMIT_AT)
+        assert s.handle(MessageReceived(REVEAL_B), SHOWN_AT) == [ShowCode(CODE_AB)]
+    else:
+        s = make_responder(known_fingerprint=CERT_A.fingerprint if known else None)
+        s.handle(Start(), T0)
+        assert s.handle(MessageReceived(NONCE_A), SHOWN_AT)[0] == ShowCode(CODE_AB)
+    if peer_first:
+        assert s.handle(MessageReceived(PairConfirm()), SHOWN_AT + 1) == []
+        return s.handle(UserDecision(True), SHOWN_AT + 2)
+    assert s.handle(UserDecision(True), SHOWN_AT + 1) == [SendMessage(PairConfirm())]
+    return s.handle(MessageReceived(PairConfirm()), SHOWN_AT + 2)
+
+
+M5_CASES = [
+    pytest.param(Role.RESPONDER, True, True, id="responder-ghep-lai"),
+    pytest.param(Role.RESPONDER, False, False, id="responder-thiet-bi-moi"),
+    pytest.param(Role.INITIATOR, True, False, id="initiator-ghep-lai"),
+    pytest.param(Role.INITIATOR, False, False, id="initiator-thiet-bi-moi"),
+]
+
+
+@pytest.mark.parametrize("peer_first", [False, True], ids=["tu-xac-nhan-truoc", "may-kia-truoc"])
+@pytest.mark.parametrize(("role", "known", "keep"), M5_CASES)
+def test_m5_keep_known_name_only_when_responder_repairs(role, known, keep, peer_first):
+    actions = _confirm_both(role, known=known, peer_first=peer_first)
+    saves = [a for a in actions if isinstance(a, SavePeer)]
+    assert len(saves) == 1
+    save = saves[0]
+    assert type(save.keep_known_name) is bool
+    assert save.keep_known_name == keep
+    # SavePeer vẫn mang tên trong hello của máy kia; `app` quyết định giữ tên đã lưu hay không.
+    peer, name = (CERT_B, HELLO_B.name) if role == Role.INITIATOR else (CERT_A, HELLO_A.name)
+    assert (save.peer, save.name) == (peer, name)
+    assert actions[-2] is save
+    assert_closed(actions, Outcome.PAIRED)
+
+
+def test_m5_responder_repair_with_other_name_in_hello_still_keeps_known_name():
+    """Máy lạ gửi chứng chỉ công khai của V (đã tin cậy) nhưng tự xưng tên khác: vẫn là ghép đôi
+    lại ở vai trả lời, nên SavePeer báo giữ tên đã lưu."""
+    s = make_responder(
+        peer_hello=make_hello(CERT_A.device_id, "Laptop-Bob"), known_fingerprint=CERT_A.fingerprint
+    )
+    s.handle(Start(), T0)
+    s.handle(MessageReceived(NONCE_A), SHOWN_AT)
+    s.handle(UserDecision(True), SHOWN_AT + 1)
+    actions = s.handle(MessageReceived(PairConfirm()), SHOWN_AT + 2)
+    assert actions[:-1] == [SavePeer(CERT_A, "Laptop-Bob", keep_known_name=True)]
+    assert_closed(actions, Outcome.PAIRED)
 
 
 # --- Bảng 2.8: lý do hủy gửi đi -----------------------------------------------------------------
@@ -1566,8 +1641,9 @@ def test_property_two_sessions_pair_in_any_order(
     expected_code = pairing_code(fp_a, fp_b, n_a, n_b)
     assert not to_a
     assert not to_b
-    assert rec_a == [ShowCode(expected_code), SavePeer(cert_b, name_b), rec_a[-1]]
-    assert rec_b == [ShowCode(expected_code), SavePeer(cert_a, name_a), rec_b[-1]]
+    # M5: chỉ bên trả lời ghép đôi lại mới giữ tên đã lưu; bên khởi xướng luôn cập nhật tên.
+    assert rec_a == [ShowCode(expected_code), SavePeer(cert_b, name_b, keep_known_name=False), rec_a[-1]]
+    assert rec_b == [ShowCode(expected_code), SavePeer(cert_a, name_a, keep_known_name=repair), rec_b[-1]]
     assert_closed(rec_a, Outcome.PAIRED)
     assert_closed(rec_b, Outcome.PAIRED)
     assert_done(a, Outcome.PAIRED)
@@ -1636,6 +1712,12 @@ first_events = st.sampled_from(
 VARIANTS = ["normal", "normal", "normal", "known_same", "known_conflict", "cn_mismatch", "self", "peer_none"]
 
 
+def expected_keep_known_name(role: Role, variant: str) -> bool:
+    """M5: `SavePeer.keep_known_name` chỉ True khi máy này là bên trả lời và đã tin máy kia
+    (cùng fingerprint). Các biến thể khác hoặc không tới được SavePeer, hoặc là thiết bị mới."""
+    return role == Role.RESPONDER and variant == "known_same"
+
+
 def build_fuzz_session(role: Role, variant: str):
     """Trả về (phiên, chứng chỉ máy kia mong đợi trong SavePeer, tên máy kia)."""
     if role == Role.INITIATOR:
@@ -1665,7 +1747,9 @@ def build_fuzz_session(role: Role, variant: str):
     return make_responder(**kw), CERT_A, HELLO_A.name
 
 
-def check_event_sequence(session, role: Role, expected_peer, expected_name, events) -> None:
+def check_event_sequence(
+    session, role: Role, expected_peer, expected_name, events, *, expected_keep: bool = False
+) -> None:
     now = 0.0
     closed = False
     shown = 0
@@ -1742,6 +1826,8 @@ def check_event_sequence(session, role: Role, expected_peer, expected_name, even
                 assert out[-1].outcome == Outcome.PAIRED
                 assert act.peer == expected_peer
                 assert act.name == expected_name
+                assert type(act.keep_known_name) is bool
+                assert act.keep_known_name == expected_keep
 
         if close_idx:
             closed = True
@@ -1778,7 +1864,8 @@ def check_event_sequence(session, role: Role, expected_peer, expected_name, even
 )
 def test_property_random_events_keep_guarantees(role, variant, first, steps, first_delta):
     session, peer, name = build_fuzz_session(role, variant)
-    check_event_sequence(session, role, peer, name, [(first, first_delta), *steps])
+    keep = expected_keep_known_name(role, variant)
+    check_event_sequence(session, role, peer, name, [(first, first_delta), *steps], expected_keep=keep)
 
 
 # Biến thể "đường đúng có nhiễu": mỗi bước hoặc là bước kế tiếp của đường đúng, hoặc là sự kiện
@@ -1817,7 +1904,8 @@ def test_property_noisy_happy_path_keeps_guarantees(role, variant, peer_first, s
     events = [(Start(), 0.0)]
     for kind, noise, delta in steps:
         events.append((next(path, Tick()) if kind == HAPPY else noise, delta))
-    check_event_sequence(session, role, peer, name, events)
+    keep = expected_keep_known_name(role, variant)
+    check_event_sequence(session, role, peer, name, events, expected_keep=keep)
 
 
 # --- Hồi quy tấn công: bí mật của từng bên chỉ lộ đúng lúc (bên trả lời cam kết trước) ---------

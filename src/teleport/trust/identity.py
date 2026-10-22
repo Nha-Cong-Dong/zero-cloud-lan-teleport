@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID, SignatureAlgorithmOID
@@ -43,18 +43,6 @@ PEM_END = "-----END CERTIFICATE-----"
 _NETSCAPE_CERT_TYPE = x509.ObjectIdentifier("2.16.840.1.113730.1.1")
 
 _CN_RE = re.compile(re.escape(CN_PREFIX) + r"[0-9a-f]{32}")
-
-# Lỗi `cryptography` có thể ném khi đọc một chứng chỉ hỏng. Tùy phiên bản, lỗi như
-# InvalidVersion (không phải ValueError) bật ra ngay lúc load hoặc lúc đọc thuộc tính,
-# nên cả hai chỗ đều phải bắt cùng một bộ.
-_CERT_ERRORS = (
-    ValueError,
-    TypeError,
-    InvalidSignature,
-    UnsupportedAlgorithm,
-    x509.InvalidVersion,
-    x509.DuplicateExtension,
-)
 
 
 @dataclass(frozen=True)
@@ -84,7 +72,14 @@ def format_fingerprint(hex_fp: str) -> str:
 
 
 class InvalidCertificate(ValueError):
-    """Chứng chỉ của máy khác không hợp lệ hoặc không phải chứng chỉ thiết bị Teleport."""
+    """Chứng chỉ của máy khác không hợp lệ hoặc không phải chứng chỉ thiết bị Teleport.
+
+    Mọi lỗi khi phân tích hay kiểm chứng chỉ đều thành lỗi này (protocol §5.1).
+    `cryptography` ném nhiều lớp lỗi không chung gốc, tùy phiên bản và tùy lúc load hay
+    lúc đọc thuộc tính (ví dụ InvalidVersion, DuplicateExtension, hay
+    UnsupportedGeneralNameType với SAN x400Address/EDIPartyName, kế thừa thẳng từ
+    Exception), nên các chỗ phân tích bắt `Exception` thay vì liệt kê từng lớp.
+    """
 
 
 @dataclass(frozen=True)
@@ -123,7 +118,7 @@ def _parse_pem(pem: str) -> x509.Certificate:
         raise InvalidCertificate("cần đúng một khối CERTIFICATE, ngoài khối chỉ được có khoảng trắng")
     try:
         return x509.load_pem_x509_certificate(body.encode("ascii"))
-    except _CERT_ERRORS as e:
+    except Exception as e:  # mọi lỗi của `cryptography`, xem InvalidCertificate
         raise InvalidCertificate("không phân tích được chứng chỉ PEM") from e
 
 
@@ -135,7 +130,7 @@ def peer_cert_from_der(der: bytes) -> PeerCert:
         raise InvalidCertificate(f"chứng chỉ DER dài quá {MAX_PEM_LEN} byte")
     try:
         cert = x509.load_der_x509_certificate(der)
-    except _CERT_ERRORS as e:
+    except Exception as e:  # mọi lỗi của `cryptography`, xem InvalidCertificate
         raise InvalidCertificate("không phân tích được chứng chỉ DER") from e
     return _peer_cert(cert)
 
@@ -195,7 +190,7 @@ def _peer_cert(cert: x509.Certificate) -> PeerCert:
         pem = cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
     except InvalidCertificate:
         raise
-    except _CERT_ERRORS as e:
+    except Exception as e:  # mọi lỗi của `cryptography`, xem InvalidCertificate
         raise InvalidCertificate("chứng chỉ không hợp lệ hoặc chữ ký tự ký sai") from e
     if len(pem) > MAX_PEM_LEN:
         raise InvalidCertificate(f"chứng chỉ PEM dài quá {MAX_PEM_LEN} ký tự")

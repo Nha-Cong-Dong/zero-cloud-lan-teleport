@@ -14,6 +14,10 @@ Không hiện được mã (`on_prompt` raise) thì hủy phiên ngay, không đ
 trả lời gửi `pair_abort{busy}`, vai khởi xướng gửi `pair_abort{user}`; kết quả là
 `PROMPT_FAILED` và không tính vào chờ tăng dần theo IP (protocol mục 5.1, 5.3).
 
+`pair_confirm` của máy này chưa ghi xong vào kết nối thì không lưu thiết bị, kết quả là
+`CONNECTION_LOST` (protocol mục 5.1). Ghép đôi lại ở vai trả lời giữ tên đã lưu, chỉ cập
+nhật thời điểm ghép đôi, vì máy kia chưa chứng minh giữ khóa riêng (protocol mục 5.5).
+
 Mỗi phiên chỉ có tối đa **một** `conn.receive()` đang chờ: message kế tiếp chỉ được đọc
 khi message trước đã xử lý xong, nên máy kia gửi dồn cũng không làm phình RAM.
 
@@ -32,7 +36,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from teleport.core.framing import FramingError
-from teleport.core.messages import AbortReason, Hello, MessageError, PairAbort, PairRequest
+from teleport.core.messages import AbortReason, Hello, MessageError, PairAbort, PairConfirm, PairRequest
 from teleport.core.pairing import (
     Action,
     BadMessage,
@@ -67,7 +71,7 @@ from teleport.net.connection import (
     VersionMismatch,
     open_pairing,
 )
-from teleport.trust.identity import Identity, InvalidCertificate, PeerCert, peer_cert_from_pem
+from teleport.trust.identity import Identity, PeerCert, peer_cert_from_pem
 from teleport.trust.store import TrustedDevice, TrustStore, TrustStoreError
 
 # Thời gian tính bằng giây; đọc lúc dùng để test rút ngắn được bằng monkeypatch.
@@ -142,6 +146,9 @@ class PairingPrompt:
     # Số mã máy này đã hiện ở vai trả lời trong CODE_WINDOW giây qua, kể cả mã này
     # (`PairingGate.code_shown`); vai khởi xướng luôn 0. Giao diện cảnh báo khi ≥ WARN_RECENT_CODES.
     recent_codes: int
+    # Tên đã lưu trong trusted.json cho peer_device_id lúc phiên bắt đầu; khác None nghĩa là
+    # máy này đã ghép đôi với máy đó (ghép đôi lại). Vai trả lời giữ tên này khi lưu.
+    known_name: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +165,7 @@ class PairingFinished:
     peer_reason: str | None  # reason của pair_abort nhận được (Close.peer_reason)
     device: TrustedDevice | None  # mục vừa lưu, chỉ khi PAIRED
     known_name: str | None  # tên đã lưu trong trusted.json cho peer_device_id (IDENTITY_CONFLICT cần)
+    code_shown: bool  # on_prompt của phiên này đã chạy xong không lỗi (người dùng đã thấy mã)
 
 
 class _Run:
@@ -177,18 +185,30 @@ class _Run:
         self.peer_reason: str | None = None
         self.outcome: PairingOutcome | None = None  # có giá trị khi phiên đã ra kết quả
         self.decided = False
-        self.cancelled = False
+        # Lệnh hủy đã đưa vào hàng đợi (tối đa một); `_drive` xét nó trước message mạng.
+        self.cancel_event: Cancel | None = None
         self.save_failed = False
         self.prompt_failed = False  # on_prompt raise: phiên bị hủy, kết quả PROMPT_FAILED
+        self.confirm_send_failed = False  # pair_confirm của máy này chưa ghi xong: không lưu
+        self.code_shown = False  # on_prompt đã chạy xong không lỗi
         self.device: TrustedDevice | None = None
         self.replaced_by: _Run | None = None  # phiên trả lời thay phiên khởi xướng này
         self.result: PairingFinished | None = None
 
     def cancel(self, reason: str) -> None:
         """Đưa `Cancel(reason)` vào hàng đợi, tối đa một lần."""
-        if not self.cancelled and not self.done.is_set():
-            self.cancelled = True
-            self.queue.put_nowait(Cancel(reason))
+        if self.cancel_event is None and not self.done.is_set():
+            self.cancel_event = Cancel(reason)
+            self.queue.put_nowait(self.cancel_event)
+
+    def cancel_replacement(self) -> None:
+        """Phiên khởi xướng này bị hủy trước khi chốt: hủy luôn phiên trả lời đã thay nó.
+
+        Gọi càng sớm càng tốt (trước mọi `await` dọn dẹp), để phiên thay thế không kịp
+        hiện mã sau lúc người dùng đã hủy. Đã chốt (PAIRED, SAVE_FAILED) thì không làm gì.
+        """
+        if self.replaced_by is not None and self.outcome not in _CONFIRMED:
+            self.replaced_by.cancel(AbortReason.USER)
 
 
 def _check_addresses(addresses: object) -> list[str]:
@@ -307,9 +327,16 @@ class PairingService:
         `on_finished`). `on_finished` được gọi đúng một lần với cùng kết quả, trừ khi
         phiên bị nhường cho phiên trả lời của cùng máy kia (hai bên cùng chủ động): khi
         đó trả kết quả của phiên thay thế.
-        Bị hủy (task bị `cancel()`) → gửi `pair_abort{user}`, đóng, `on_finished(CANCELLED)`
-        rồi để CancelledError bay ra; đang chờ phiên thay thế thì hủy phiên đó
-        (`pair_abort{user}`), và chính phiên đó gọi `on_finished`.
+
+        Bị hủy (task bị `cancel()`) trước khi kết quả được chốt → gửi `pair_abort{user}`,
+        đóng, `on_finished(CANCELLED)` rồi để CancelledError bay ra; đã có phiên thay thế
+        thì hủy luôn phiên đó (`pair_abort{user}`), và chính phiên đó gọi `on_finished`.
+
+        Bị hủy sau khi kết quả đã chốt (hai bên đã xác nhận: PAIRED hoặc SAVE_FAILED, tức
+        đã chạy `SavePeer`) → không ném: gỡ lệnh hủy (`Task.uncancel()`), gọi `on_finished`
+        đúng một lần với kết quả thật và trả kết quả đó. Phiên thay thế đã chốt cũng vậy:
+        chờ nó đóng xong (chỉ còn bước đóng kết nối, tối đa cỡ `CLOSE_TIMEOUT` của `net`)
+        rồi trả kết quả của nó; bị hủy thêm lần nữa trong lúc chờ thì ném CancelledError.
         """
         addrs = _check_addresses(addresses)
         if type(port) is not int or not 1 <= port <= 65535:
@@ -325,9 +352,18 @@ class PairingService:
         if slot is None:
             return self._report_early(PairingOutcome.BUSY, ip, port)
 
+        task = asyncio.current_task()
+        assert task is not None
         run = self._register(slot, ip, port)
         try:
             run.outcome = await self._initiate(run, addrs, port)
+        except asyncio.CancelledError:
+            if run.outcome not in _CONFIRMED:
+                run.cancel_replacement()  # phiên thay thế không được chạy tiếp và hiện mã
+                raise
+            # Kết quả đã chốt (SavePeer đã chạy): lệnh hủy tới muộn, thường khi đang đóng gọn
+            # kết nối, nên trả kết quả thật thay vì báo hủy.
+            task.uncancel()
         finally:
             outcome = run.outcome or PairingOutcome.CANCELLED
             # Phiên bị nhường thường nhận pair_abort{busy} của máy kia trước lệnh hủy cục bộ
@@ -340,9 +376,14 @@ class PairingService:
             try:
                 await replacement.done.wait()
             except asyncio.CancelledError:
-                # Hủy pair_with thì hủy luôn phiên đã thay nó; phiên đó tự báo on_finished.
-                replacement.cancel(AbortReason.USER)
-                raise
+                if replacement.outcome not in _CONFIRMED:
+                    # Hủy pair_with thì hủy luôn phiên đã thay nó; phiên đó tự báo on_finished.
+                    replacement.cancel(AbortReason.USER)
+                    raise
+                # Phiên thay thế đã chốt, chỉ còn đóng kết nối: chờ nó xong rồi trả kết quả
+                # thật. Bị hủy thêm lần nữa ở đây thì để CancelledError bay ra.
+                task.uncancel()
+                await replacement.done.wait()
             assert replacement.result is not None
             return replacement.result
         assert run.result is not None
@@ -357,6 +398,8 @@ class PairingService:
             await asyncio.wait({opener, local}, return_when=asyncio.FIRST_COMPLETED)
             waited = True
         finally:
+            if not waited:
+                run.cancel_replacement()  # bị hủy khi đang mở kết nối: trước mọi await dọn dẹp
             local.cancel()
             if not opener.done():
                 opener.cancel()  # PR-2 bảo đảm hủy giữa chừng không để lại socket
@@ -454,8 +497,14 @@ class PairingService:
         try:
             try:
                 remote: DeviceCert | None = _device_cert(peer_cert_from_pem(request.cert))
-            except (InvalidCertificate, ValueError):
-                remote = None  # phiên gửi pair_abort{invalid} khi Start
+            except Exception as e:
+                # Mọi lỗi khi phân tích chứng chỉ của máy kia đều là chứng chỉ không hợp lệ
+                # (protocol mục 5.1), kể cả lỗi lạ của thư viện: phiên gửi pair_abort{invalid}
+                # khi Start và IP bị tính chờ tăng dần. Chỉ ghi tên lớp lỗi, không ghi PEM (mvp N9).
+                log.debug(
+                    "ghép đôi: chứng chỉ trong pair_request từ %s không hợp lệ (%s)", ip, type(e).__name__
+                )
+                remote = None
             known = self._store.get(remote.device_id) if remote is not None else None
             run.known_name = known.name if known is not None else None
             session = ResponderSession(
@@ -562,7 +611,8 @@ class PairingService:
         """Chạy phiên tới khi nó trả `Close`; kết nối luôn đã đóng khi hàm trả về.
 
         Bị hủy cứng khi phiên chưa xong → `Cancel(user)`, thực hiện các hành động trong
-        ABORT_ON_CANCEL_TIMEOUT, rồi để CancelledError bay ra.
+        ABORT_ON_CANCEL_TIMEOUT, rồi để CancelledError bay ra; chưa chốt thì hủy luôn phiên
+        thay thế (nếu có) trước. Lệnh hủy qua `_Run.cancel` được xét trước message mạng.
         """
         loop = asyncio.get_running_loop()
         run.session = session
@@ -604,7 +654,12 @@ class PairingService:
                 pending = {t for t in (recv, local) if t is not None}
                 done, _ = await asyncio.wait(pending, timeout=wait, return_when=asyncio.FIRST_COMPLETED)
                 event: Event
-                if recv is not None and recv in done:  # ưu tiên message mạng
+                if run.cancel_event is not None:
+                    # Lệnh hủy đi trước mọi thứ, kể cả message đã đọc xong cùng lúc và Cancel
+                    # vừa vào hàng đợi mà `local` chưa kịp lấy: phiên đã bị hủy thì không hiện
+                    # mã nữa. Cancel luôn kết thúc phiên nên nhánh này chạy tối đa một lần.
+                    event = run.cancel_event
+                elif recv is not None and recv in done:  # rồi tới message mạng
                     event, reading = _map_receive(recv)
                     recv = None
                 elif local in done:
@@ -614,6 +669,7 @@ class PairingService:
                     event = Tick()
                 actions = session.handle(event, loop.time())
         except asyncio.CancelledError:
+            run.cancel_replacement()  # trước mọi await dọn dẹp bên dưới
             if session.state is not State.DONE:
                 log.debug("ghép đôi: phiên %d bị hủy cứng", run.slot.id)
                 try:
@@ -639,6 +695,8 @@ class PairingService:
 
         Mỗi lần gửi chờ tối đa SEND_TIMEOUT, và không quá `deadline` (`loop.time()`) nếu có.
         Không hiện được mã → đặt `run.prompt_failed`, bỏ mọi hành động còn lại, trả None.
+        Gửi `pair_confirm` không xong → đặt `run.confirm_send_failed`; `SavePeer` gặp sau đó
+        (cùng lô hay lô sau, khi `pair_confirm` của máy kia tới) bị bỏ.
         """
         loop = asyncio.get_running_loop()
         for action in actions:
@@ -652,12 +710,22 @@ class PairingService:
                 except (ConnectionLostError, TimeoutError) as e:
                     # Lần receive kế tiếp sẽ ra ConnectionLost; vẫn làm tiếp các hành động sau.
                     log.debug("ghép đôi: gửi %s thất bại (%s)", action.message.TYPE, type(e).__name__)
+                    if isinstance(action.message, PairConfirm):
+                        # "Đã GỬI" là đã ghi xong vào kết nối (protocol mục 5.1): máy kia có thể
+                        # chưa nhận nên chưa lưu, máy này cũng không lưu.
+                        run.confirm_send_failed = True
             elif isinstance(action, ShowCode):
                 if not self._show_code(run, conn, action):
                     run.prompt_failed = True
                     return None
             elif isinstance(action, SavePeer):
-                self._save(run, action)
+                if run.confirm_send_failed:
+                    log.debug(
+                        "ghép đôi: không lưu thiết bị %s vì chưa gửi được pair_confirm",
+                        action.peer.device_id[:8],
+                    )
+                else:
+                    self._save(run, action)
             elif isinstance(action, Close):
                 return action
         return None
@@ -681,6 +749,7 @@ class PairingService:
             code=action.code,
             expires_at=session.deadline,
             recent_codes=recent,
+            known_name=run.known_name,
         )
         try:
             if self._on_prompt is None:
@@ -690,6 +759,7 @@ class PairingService:
             # Như _call: không ghi mã hay nonce vào log (mvp N9).
             log.exception("ghép đôi: không hiện được mã của phiên %d, hủy phiên", run.slot.id)
             return False
+        run.code_shown = True
         return True
 
     def _save(self, run: _Run, action: SavePeer) -> None:
@@ -699,8 +769,15 @@ class PairingService:
             log.warning("ghép đôi: bỏ lưu thiết bị %s vì node đang dừng", peer.device_id[:8])
             run.save_failed = True
             return
+        name = action.name
+        if action.keep_known_name:
+            # Ghép đôi lại ở vai trả lời: máy kia chưa chứng minh giữ khóa riêng nên không
+            # được đổi tên đã lưu; chỉ cập nhật paired_at (protocol mục 5.5).
+            known = self._store.get(peer.device_id)
+            if known is not None and known.fingerprint == peer.fingerprint:
+                name = known.name
         try:
-            run.device = self._store.add(PeerCert(peer.device_id, peer.fingerprint, peer.pem), action.name)
+            run.device = self._store.add(PeerCert(peer.device_id, peer.fingerprint, peer.pem), name)
         except (TrustStoreError, ValueError) as e:
             log.error("ghép đôi: không lưu được thiết bị %s: %s", peer.device_id[:8], type(e).__name__)
             run.save_failed = True
@@ -715,6 +792,8 @@ class PairingService:
         run.peer_reason = close.peer_reason
         if run.prompt_failed:
             return PairingOutcome.PROMPT_FAILED
+        if run.confirm_send_failed and close.outcome is Outcome.PAIRED:
+            return PairingOutcome.CONNECTION_LOST  # không lưu (xem _perform)
         if run.save_failed:
             return PairingOutcome.SAVE_FAILED
         return PairingOutcome(close.outcome.value)
@@ -735,6 +814,10 @@ class PairingService:
         session = run.session
         if session is not None and session.outcome is not None:
             core_outcome = session.outcome  # PAIRED kể cả khi lưu lỗi: giao thức đã thành công
+            if core_outcome is Outcome.PAIRED and run.confirm_send_failed:
+                # Máy này chưa gửi được pair_confirm nên không lưu: tính như mất kết nối
+                # (vai trả lời: một lần thất bại của IP đó).
+                core_outcome = Outcome.CONNECTION_LOST
         elif run.slot.role is Role.INITIATOR:
             core_outcome = Outcome.CONNECTION_LOST  # chỉ để nhả slot (khởi xướng không tính bộ đếm)
         else:
@@ -754,6 +837,7 @@ class PairingService:
                 peer_reason=run.peer_reason,
                 device=run.device if outcome is PairingOutcome.PAIRED else None,
                 known_name=run.known_name,
+                code_shown=run.code_shown,
             )
             log.info(
                 "ghép đôi kết thúc: vai %s, %s, thiết bị %s, kết quả %s",
@@ -779,6 +863,7 @@ class PairingService:
             peer_reason=None,
             device=None,
             known_name=None,
+            code_shown=False,
         )
         log.info("ghép đôi tới %s: %s", ip, outcome.value)
         self._call(self._on_finished, result)

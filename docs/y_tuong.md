@@ -3,7 +3,7 @@
 > **Vai trò:** ý tưởng và tầm nhìn sản phẩm — vì sao làm, cho ai, trải nghiệm mong muốn, cách tiếp cận ở mức cao, các nguyên tắc dùng để ra quyết định.
 > **Không chứa:** con số yêu cầu, tiêu chí chấp nhận → [mvp.md](mvp.md). Thiết kế kỹ thuật, lộ trình → [ke_hoach.md](ke_hoach.md). Thuật ngữ và bản đồ tài liệu → [README.md](README.md).
 > **Bản đầu tiên** (WebRTC, điện thoại ↔ laptop) đã được điều chỉnh; những gì đã đổi xem mục 9.
-> **Cập nhật:** 2026-10-20
+> **Cập nhật:** 2026-10-23
 
 ---
 
@@ -44,7 +44,7 @@ Người chịu nỗi đau này nhiều nhất là người làm việc với nh
 | 1 | **Radar khám phá** | Mở app, các máy đang mở Teleport trong cùng mạng tự hiện thành chấm trên radar. Mạng chặn tự tìm thì vẫn nhập IP được. | mvp F2 |
 | 2 | **Ghép đôi một lần** | Lần đầu gửi tới máy nào, hai màn hình cùng hiện một mã 6 số; thấy trùng thì bấm xác nhận ở cả hai máy. Từ đó hai máy tự tin nhau. | mvp F3 |
 | 3 | **Kéo thả file cực lớn** | Kéo một hoặc nhiều file thả vào chấm trên radar; máy kia được hỏi Nhận / Từ chối; thanh tiến độ, tốc độ, thời gian còn lại. | mvp F4, F5 |
-| 4 | **Tự nối lại** | Rớt Wi-Fi thì hiện “Đang nối lại…”, có mạng là chạy tiếp từ chỗ dừng, kể cả khi đã tắt app. File chỉ hiện ra khi đã kiểm tra khớp với bản gốc. | mvp F6, F7 |
+| 4 | **Tự nối lại** | Rớt Wi-Fi thì hiện “Đang nối lại…”, có mạng là chạy tiếp từ chỗ dừng, kể cả khi đã tắt app nhận. File chỉ hiện ra khi đã kiểm tra khớp với bản gốc. | mvp F6, F7 |
 | 5 | **Clipboard chung** | Ctrl+C đoạn văn hoặc ảnh chụp màn hình trên máy này, Ctrl+V ngay trên máy kia. Bật riêng cho từng máy tin cậy. | mvp F8 |
 | 6 | **Luôn sẵn sàng** | App nằm dưới khay hệ thống, chạy nền, vẫn nhận file và clipboard. Người dùng nâng cao gửi được bằng dòng lệnh. | mvp F9, F12 |
 
@@ -123,7 +123,7 @@ Thứ tự chính thức và các câu hỏi còn mở: [ke_hoach.md](ke_hoach.m
 
 Các ứng dụng gần nhất là **LocalSend**, **KDE Connect** và **Nearby Share**. Teleport không cố làm nhiều hơn, mà tập trung làm tốt hơn ở ba điểm:
 
-- **File cực lớn và rớt mạng:** nối lại theo từng khối, chỉ gửi phần thiếu, kể cả sau khi tắt app; kiểm tra toàn vẹn bằng Merkle root.
+- **File cực lớn và rớt mạng:** nối lại theo từng khối, chỉ gửi phần thiếu, kể cả sau khi tắt app nhận; kiểm tra toàn vẹn bằng Merkle root.
 - **Clipboard chung** giữa các máy tin cậy, bật riêng từng máy.
 - **Không tài khoản, không cloud** mà vẫn chống được giả mạo nhờ ghép đôi bằng mã 6 số.
 

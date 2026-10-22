@@ -118,10 +118,11 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
   - không có khoảng trắng ở đầu hoặc cuối (kể cả khoảng trắng Unicode như NBSP, U+3000);
   - không chứa ký tự loại `Cc` (điều khiển), `Cs` (surrogate lẻ), U+2028, U+2029, U+200B, U+FEFF, U+2060, hay ký tự điều khiển hướng chữ U+200E, U+200F, U+202A–U+202E, U+2066–U+2069;
   - được phép: chữ có dấu, emoji, kể cả emoji ghép bằng ZWJ U+200D. Giá trị giữ nguyên, không chuẩn hóa NFC.
+  - `name` do máy kia tự đặt và **chưa được xác thực**: trên kết nối ghép đôi (ẩn danh), máy nào cũng gửi được tên bất kỳ đúng luật trên, kể cả chữ số, dấu `:`, khoảng trắng ở giữa tên hay ký tự trông như khoảng trắng (U+2800, U+3164…). Tên chỉ để hiển thị, không bao giờ dùng để quyết định tin cậy. Lời hỏi ghép đôi hiện tên sau mã, trong ngoặc, có giới hạn độ rộng: [mvp.md](mvp.md) mục 7.2.
 - **`os`**: 1–16 ký tự `[a-z0-9_]`. Giá trị chuẩn: `windows`, `macos`, `linux`. Giá trị lạ đúng dạng vẫn được nhận và hiển thị như hệ điều hành không rõ.
 - **`cert`**: chuỗi ≤ 8192 ký tự, bắt đầu đúng bằng `-----BEGIN CERTIFICATE-----`. Bên nhận còn phân tích và kiểm tra chứng chỉ (mục 5).
 - **`commitment`**, **`nonce`**: đúng 64 ký tự hex thường (32 byte).
-- **`reason`** (`pair_abort`): 1–32 ký tự `[a-z_]`. Giá trị chuẩn: `user` (người dùng từ chối), `busy` (đang có phiên ghép đôi khác, node không nhận ghép đôi lúc này, hoặc không hiện được mã), `timeout` (hết giờ), `invalid` (message hoặc cam kết sai). Giá trị lạ đúng dạng vẫn được nhận, để bản mới thêm lý do được.
+- **`reason`** (`pair_abort`): 1–32 ký tự `[a-z_]`. Giá trị chuẩn: `user` (người dùng từ chối), `busy` (đang có phiên ghép đôi khác, node không nhận ghép đôi lúc này, hoặc không hiện được mã), `timeout` (hết giờ), `invalid` (message, chứng chỉ hoặc cam kết sai). Giá trị lạ đúng dạng vẫn được nhận, để bản mới thêm lý do được.
 - Kiểm tra hex, chữ số, `os` và `reason` chỉ dùng lớp ký tự ASCII trên **toàn bộ** chuỗi: `"user\n"` hay chữ số toàn chiều rộng đều sai.
 - `type` là chuỗi nhưng chưa biết thì bên nhận phân biệt được với message hỏng (để bản cũ bỏ qua message mới).
 - Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức ✅ (`teleport.core.messages.allowed_types`).
@@ -226,11 +227,13 @@ Bốn bất biến ✅ (`teleport.core.pairing`):
 
 - n_A, n_B: mỗi nonce 32 byte ngẫu nhiên, sinh mới cho mỗi lần ghép đôi.
 - Chứng chỉ của B: A lấy từ bắt tay TLS (đã được TLS xác thực là B giữ khóa riêng). A kiểm CN chứng chỉ đó khớp `hello.device_id` của B.
-- **A phát hiện lỗi trước khi gửi `pair_request`** (CN không khớp `hello`, tự ghép với chính mình, trùng danh tính bên dưới): A chỉ đóng kết nối, không gửi gì. B thấy EOF trước message mở đầu thì không tạo phiên và không tính vào thời gian chờ của IP đó (mục 5.3).
-- Chứng chỉ của A: B lấy từ `pair_request.cert`. Về sau, mTLS buộc A chứng minh giữ khóa riêng ở mỗi kết nối.
-- Chứng chỉ nhận được phải: phân tích được; ≤ 8192 ký tự PEM, chỉ ASCII, đúng một khối `CERTIFICATE`; X.509 v3; subject có đúng một CN dạng `teleport-<32 hex thường>`; issuer trùng subject và chữ ký tự ký hợp lệ; khóa ECDSA P-256; chữ ký ECDSA-SHA256; không có dấu hiệu chứng chỉ CA: từ chối `BasicConstraints CA=true`, `KeyUsage` có `keyCertSign` hoặc `cRLSign`, và mọi chứng chỉ có extension Netscape Cert Type (OID `2.16.840.1.113730.1.1`). Lý do: chứng chỉ tin cậy được nạp làm trust anchor cho mTLS, nên không được phép ký ra chứng chỉ khác. Ngày hiệu lực không được kiểm khi ghép đôi (chứng chỉ của Teleport không hết hạn, mục 1).
-- **Không ghép đôi đè danh tính:** `device_id` của bên kia đã có trong `trusted.json` với fingerprint **khác** → mỗi bên tự hủy phiên trước khi hiện mã (B gửi `pair_abort{invalid}`; A chỉ đóng, như ở trên), và báo người dùng (mục 7). Muốn ghép đôi lại thì phải hủy ghép đôi mục cũ trước. Cùng `device_id` và cùng fingerprint (ghép đôi lại sau ghép đôi một phía) thì được.
+- **A phát hiện lỗi trước khi gửi `pair_request`** (chứng chỉ của B không hợp lệ, CN không khớp `hello`, tự ghép với chính mình, trùng danh tính bên dưới): A chỉ đóng kết nối, không gửi gì. B thấy EOF trước message mở đầu thì không tạo phiên và không tính vào thời gian chờ của IP đó (mục 5.3).
+- Chứng chỉ của A: B lấy từ `pair_request.cert`. Về sau, mTLS buộc A chứng minh giữ khóa riêng ở mỗi kết nối. Còn trong lúc ghép đôi, B **chưa có bằng chứng** bên gửi `pair_request` giữ khóa riêng của chứng chỉ đó. Chứng chỉ không bí mật (ai bắt tay TLS với một máy cũng lấy được chứng chỉ của máy đó), nên một máy lạ M gửi được chứng chỉ công khai của một máy V khác. Nếu người dùng B xác nhận mã với M, B lưu chứng chỉ của V: ghép đôi lại nếu B đã tin V, hoặc tin một phía nếu chưa. M vẫn không kết nối được bằng danh tính đó, vì mTLS đòi khóa riêng; còn tên M tự xưng không ghi đè được tên B đã lưu cho V (mục 5.5). Bước chứng minh giữ khóa trong lúc ghép đôi là việc cần chốt ([ke_hoach.md](ke_hoach.md) mục 9).
+- Chứng chỉ nhận được phải: phân tích được; ≤ 8192 ký tự PEM, chỉ ASCII, đúng một khối `CERTIFICATE`; X.509 v3; subject có đúng một CN dạng `teleport-<32 hex thường>`; issuer trùng subject và chữ ký tự ký hợp lệ; khóa ECDSA P-256; chữ ký ECDSA-SHA256; không có dấu hiệu chứng chỉ CA: từ chối `BasicConstraints CA=true`, `KeyUsage` có `keyCertSign` hoặc `cRLSign`, và mọi chứng chỉ có extension Netscape Cert Type (OID `2.16.840.1.113730.1.1`). Lý do: chứng chỉ tin cậy được nạp làm trust anchor cho mTLS, nên không được phép ký ra chứng chỉ khác. Ngày hiệu lực không được kiểm khi ghép đôi (chứng chỉ của Teleport không hết hạn, mục 1). Mọi lỗi khi phân tích hay kiểm chứng chỉ, kể cả kiểu dữ liệu mà thư viện không hỗ trợ (ví dụ SAN kiểu x400Address hay EDIPartyName), đều tính là chứng chỉ không hợp lệ: B gửi `pair_abort{invalid}` (tính là thất bại trong chờ tăng dần theo IP, mục 5.3); A chỉ đóng kết nối (gạch “A phát hiện lỗi…” ở trên) và báo danh tính không hợp lệ (mvp mục 8).
+- **Không ghép đôi đè danh tính:** `device_id` của bên kia đã có trong `trusted.json` với fingerprint **khác** → mỗi bên tự hủy phiên trước khi hiện mã (B gửi `pair_abort{invalid}`; A chỉ đóng, như ở trên), và báo người dùng (mục 7). Muốn ghép đôi lại thì phải hủy ghép đôi mục cũ trước. Cùng `device_id` và cùng fingerprint (ghép đôi lại sau ghép đôi một phía) thì được, và lưu theo mục 5.5.
 - Message sai thứ tự, message không phải `pair_*` (kể cả `hello` thứ hai; message có `type` chưa biết cũng không được bỏ qua trên kết nối ghép đôi), `pair_confirm` nhận lần hai, hay message lỗi → `pair_abort{invalid}` và đóng. Nhận `pair_abort` thì đóng, không trả lời.
+- **Hiện mã:** `hello.name` do máy kia tự đặt và chưa được xác thực (mục 3.3), nên kẻ đứng giữa đặt được tên trông như một mã. Vì vậy lời hỏi hiện mã trước mọi chữ do máy kia đặt, theo bố cục ở [mvp.md](mvp.md) mục 7.2.
+- **“Đã gửi” `pair_confirm`** nghĩa là đã ghi xong message vào kết nối. Gửi lỗi (mất kết nối, quá hạn gửi) thì máy đó không lưu gì, kể cả khi đã nhận `pair_confirm` của máy kia, và phiên kết thúc là mất kết nối (với bên trả lời, tính là thất bại trong chờ tăng dần, mục 5.3).
 - Rớt mạng giữa hai `pair_confirm` có thể để lại ghép đôi một phía. Phía còn tin sẽ bị từ chối ở lần kết nối sau (mục 7); ghép đôi lại sẽ sửa.
 
 ### 5.2. Công thức
@@ -275,7 +278,13 @@ Hai fingerprint ở trên là SHA-256 của chuỗi ASCII `teleport test vector 
 
 ### 5.5. Lưu trữ
 
-Mỗi bên lưu `device_id`, tên, fingerprint và chứng chỉ PEM của bên kia vào `trusted.json` (định dạng ở [architecture.md](architecture.md) mục 4). Ghép đôi lại cùng `device_id` và cùng fingerprint thì mục cũ được ghi đè (cập nhật tên). Thay đổi danh sách tin cậy có hiệu lực ngay với kết nối mới (mục 7).
+Mỗi bên lưu `device_id`, tên, fingerprint và chứng chỉ PEM của bên kia vào `trusted.json` (định dạng ở [architecture.md](architecture.md) mục 4). Thay đổi danh sách tin cậy có hiệu lực ngay với kết nối mới (mục 7).
+
+Ghép đôi lại cùng `device_id` và cùng fingerprint ✅ (`teleport.core.pairing.SavePeer.keep_known_name`, `teleport.app.pairing`):
+
+- **Bên khởi xướng** ghi đè mục cũ, cập nhật tên theo `hello` của bên kia. Chứng chỉ của bên trả lời đến từ bắt tay TLS, nên `hello` đó do chính máy giữ khóa riêng gửi.
+- **Bên trả lời** giữ tên đã lưu, chỉ cập nhật `paired_at`, vì nó chưa có bằng chứng bên gửi `pair_request` giữ khóa riêng (mục 5.1). Nhờ vậy máy lạ dùng chứng chỉ công khai của một thiết bị đã tin cậy không đổi được tên của thiết bị đó, nên không làm người dùng gửi nhầm hay hủy ghép đôi nhầm máy.
+- Lời hỏi ghép đôi ở cả hai vai hiện tên đã lưu (mvp mục 7.2).
 
 ## 6. Kết nối giữa các thiết bị tin cậy & nối lại
 
@@ -326,7 +335,7 @@ Message điều khiển có thể mất khi kết nối đứt hoặc bị thay 
   - Khi không có node nào chạy, `teleport unpair` chỉ sửa `trusted.json` ✅.
 - Kết nối đã bắt đầu bắt tay bằng context cũ vẫn bắt tay xong với context đó. Vì vậy khi nhận `control_open` (✅) hay `data_open` (📝), node còn kiểm fingerprint của client có trong danh sách tin cậy **hiện tại** không; không có thì đóng.
 - **Máy kia từ chối máy này** (đã hủy ghép đôi, hoặc ghép đôi một phía): lần kết nối sau nhận EOF hoặc lỗi SSL trước `hello` (mục 2.2) → báo “*X* từ chối kết nối từ máy này” và gợi ý ghép đôi lại. Không đoán lý do, vì client không phân biệt được. ✅ (`teleport listen` in thông báo)
-- **Cùng `device_id`, khác fingerprint** (mDNS, `hello` hay `pair_request` báo `device_id` của một máy tin cậy nhưng chứng chỉ khác): không có lý do hợp lệ, vì danh tính mới luôn có `device_id` mới (mục 1). Chặn kết nối, không cho ghép đôi đè (mục 5.1), cảnh báo có thể có giả mạo. Phần ghép đôi ✅ (từ chối trước khi hiện mã); phần kết nối điều khiển và mDNS ✅ (`IdentityMismatch` → cảnh báo một lần, không tự thử lại theo lịch). Muốn ghép đôi lại thì người dùng phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa, nên máy giả không thừa hưởng “Luôn nhận” hay “Đồng bộ clipboard”.
+- **Cùng `device_id`, khác fingerprint** (mDNS, `hello` hay `pair_request` báo `device_id` của một máy tin cậy nhưng chứng chỉ khác): không có lý do hợp lệ, vì danh tính mới luôn có `device_id` mới (mục 1). Chặn kết nối, không cho ghép đôi đè (mục 5.1), cảnh báo có thể có giả mạo. Phần ghép đôi ✅ (từ chối trước khi hiện mã; ở bên trả lời, `pair_request` chưa được xác minh nên chỉ cảnh báo, không gợi ý hủy ghép đôi máy thật, mvp mục 8); phần kết nối điều khiển và mDNS ✅ (`IdentityMismatch` → cảnh báo một lần, không tự thử lại theo lịch). Muốn ghép đôi lại thì người dùng phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa, nên máy giả không thừa hưởng “Luôn nhận” hay “Đồng bộ clipboard”.
 - **Máy tin cậy xóa thư mục cấu hình** (cài lại sạch): xuất hiện như một thiết bị mới chưa ghép đôi, có thể trùng tên với mục cũ. App gợi ý ghép đôi lại; ghép đôi xong thì đề nghị xóa mục cũ cùng tên (mục cũ không bao giờ kết nối lại được).
 
 ## 8. Khám phá (mDNS) ✅

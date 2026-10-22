@@ -4,7 +4,7 @@
 > **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
 > **Không chứa:** phạm vi, tính năng, tiêu chí chấp nhận và con số chất lượng → [mvp.md](mvp.md) (tham chiếu theo mã F1–F12, N1–N12). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
 > **Bản chính thức về kỹ thuật:** đặc tả giao thức [protocol.md](protocol.md) và trạng thái từng module [architecture.md](architecture.md); khi lệch nhau thì hai file đó đúng.
-> **Cập nhật:** 2026-10-20
+> **Cập nhật:** 2026-10-23
 
 ---
 
@@ -370,3 +370,4 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 2. **Ngân sách ký mã** cho Windows/macOS.
 3. **Chế độ khách cho điện thoại** (qua trình duyệt) có làm ngay sau v1.0, trước app Android, hay không.
 4. **App iOS và CLA** (sau v1.0): điều khoản App Store xung đột với GPL. Muốn đưa app lên App Store thì chủ bản quyền phải cấp thêm giấy phép riêng, nên cần người đóng góp ký thỏa thuận chuyển quyền (CLA) **trước khi** nhận code của họ. Chưa có người đóng góp ngoài nên chưa cần; cần quyết trước khi nhận Pull Request đầu tiên từ bên ngoài.
+5. **Chứng minh giữ khóa riêng khi ghép đôi.** Bên trả lời lấy chứng chỉ của bên khởi xướng từ `pair_request` mà chưa có bằng chứng bên đó giữ khóa riêng (`protocol.md` mục 5.1). Hiện tại: máy lạ gửi chứng chỉ công khai của máy khác thì không kết nối được bằng danh tính đó (mTLS đòi khóa riêng) và không đổi được tên đã lưu khi ghép đôi lại (`protocol.md` mục 5.5). Rủi ro còn lại, đang chấp nhận: người dùng xác nhận mã với máy lạ thì máy này tin một phía chứng chỉ của một máy chưa từng ghép đôi, dưới tên máy lạ tự đặt; máy thật sẽ từ chối mọi kết nối từ máy này. Hướng sửa: `pair_confirm` của bên khởi xướng mang chữ ký bằng khóa riêng của nó trên dữ liệu của phiên (hai fingerprint, hai nonce). Đây là thay đổi định dạng trên dây, nên cần quyết trước khi chốt protocol v1 (`v0.1.0-alpha`, `protocol.md` mục 9).

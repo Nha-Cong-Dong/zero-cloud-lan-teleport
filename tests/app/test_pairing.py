@@ -8,6 +8,7 @@ rút ngắn bằng `fast`), cộng client/server thô để thử dữ liệu đ
 
 import asyncio
 import contextlib
+import datetime
 import hashlib
 import logging
 import os
@@ -22,6 +23,7 @@ from teleport.core.framing import HEADER, encode_message
 from teleport.core.messages import PROTOCOL_VERSION, Hello
 from teleport.core.pairing import Outcome, Role
 from teleport.core.pairing_code import format_code, pairing_code
+from teleport.net.connection import ConnectionLostError
 from teleport.net.stream import read_message
 from teleport.trust.identity import load_or_create_identity, peer_cert_from_pem
 from teleport.trust.store import TrustStore, TrustStoreError
@@ -85,6 +87,13 @@ def test_outcome_values_cover_core_outcome_plus_app_only():
         assert PairingOutcome(value).value == value
 
 
+def _required(cls, name: str) -> bool:
+    import dataclasses
+
+    field = next(f for f in dataclasses.fields(cls) if f.name == name)
+    return field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING
+
+
 def test_prompt_and_finished_are_frozen_dataclasses():
     import dataclasses
 
@@ -99,13 +108,14 @@ def test_prompt_and_finished_are_frozen_dataclasses():
         "code",
         "expires_at",
         "recent_codes",
+        "known_name",
     }
-    assert names[-1] == "recent_codes"  # kế hoạch L4: trường mới đặt cuối
-    recent = next(f for f in dataclasses.fields(PairingPrompt) if f.name == "recent_codes")
-    no_default = (recent.default is dataclasses.MISSING) and (recent.default_factory is dataclasses.MISSING)
-    assert no_default, "recent_codes là trường bắt buộc"
-    names = {f.name for f in dataclasses.fields(PairingFinished)}
-    assert names == {
+    # Trường mới đặt cuối: recent_codes (L4 đợt trước), rồi known_name (M5).
+    assert names[-2:] == ["recent_codes", "known_name"]
+    assert _required(PairingPrompt, "recent_codes"), "recent_codes là trường bắt buộc"
+    assert _required(PairingPrompt, "known_name"), "known_name là trường bắt buộc"
+    names = [f.name for f in dataclasses.fields(PairingFinished)]
+    assert set(names) == {
         "session_id",
         "role",
         "outcome",
@@ -116,7 +126,12 @@ def test_prompt_and_finished_are_frozen_dataclasses():
         "peer_reason",
         "device",
         "known_name",
+        "code_shown",
     }
+    assert names[-1] == "code_shown"  # L4: trường mới đặt cuối
+    assert _required(PairingFinished, "code_shown"), "code_shown là trường bắt buộc"
+    for cls in (PairingPrompt, PairingFinished):
+        assert cls.__dataclass_params__.frozen, f"{cls.__name__} phải là frozen dataclass"
 
 
 @pytest.fixture
@@ -1905,3 +1920,679 @@ async def test_nl13_cancel_pair_with_while_waiting_for_replacement(node_factory)
         assert gates_idle(A, B)
         return
     pytest.skip(f"cuộc đua đã biết xảy ra cả {NL13_TRIES} lần: {races}")
+
+
+# =================================================================================================
+# Nhóm (a) của đợt kiểm tra PR #10: M1, M4, M5, L2, L3, L4 ở tầng app (tiêu chí xong của kế hoạch)
+# =================================================================================================
+
+# CLOSE_TIMEOUT khi máy kia cố ý không trả close_notify: đủ dài để hủy rơi vào bước đóng gọn.
+STALL_CLOSE_TIMEOUT = 2.0
+OLD_PAIRED_AT = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
+
+
+def _errors_logged(caplog) -> list[str]:
+    """Mọi bản ghi log mức ERROR trở lên (mọi logger, kể cả asyncio)."""
+    return [f"{r.name}: {r.getMessage()}" for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def _srv_hello(identity, name: str = "Srv") -> dict:
+    return {
+        "type": "hello",
+        "protocol": PROTOCOL_VERSION,
+        "device_id": identity.device_id,
+        "name": name,
+        "app_version": "0.0.0",
+        "os": "linux",
+    }
+
+
+def _stalling_responder_script(identity, state: dict):
+    """Bên trả lời giả trung thực tới khi hai bên xác nhận, rồi không bao giờ trả close_notify.
+
+    Đọc `pair_confirm` của A, ngừng đọc (`pause_reading`: close_notify của A nằm yên trong bộ
+    đệm), gửi `pair_confirm` của mình rồi giữ kết nối mở. Bước đóng gọn sau PAIRED của A vì thế
+    treo tới CLOSE_TIMEOUT (kịch bản M4 trong báo cáo kiểm tra).
+    """
+    n_b = secrets.token_bytes(32)
+
+    async def script(reader, writer):
+        writer.write(encode_message(_srv_hello(identity)))
+        await writer.drain()
+        await read_message(reader, 16384)  # hello của A
+        await read_message(reader, 16384)  # pair_request
+        commitment = ref_commitment(identity.fingerprint, n_b)
+        writer.write(encode_message({"type": "pair_commit", "commitment": commitment}))
+        await writer.drain()
+        await read_message(reader, 16384)  # pair_nonce
+        writer.write(encode_message({"type": "pair_reveal", "nonce": n_b.hex()}))
+        await writer.drain()
+        state["confirm"] = await read_message(reader, 16384)
+        writer.transport.pause_reading()
+        writer.write(encode_message({"type": "pair_confirm"}))
+        await writer.drain()
+        await asyncio.sleep(60)  # fake_server hủy task này khi test xong
+
+    return script
+
+
+def _target_script(identity, seen: asyncio.Event, log: list, *, stall: bool):
+    """Máy đích giả của `pair_with` (bên nhỏ hơn khi hai bên cùng chủ động).
+
+    Gửi hello, đọc hello + `pair_request`, đặt `seen`, rồi không trả lời gì. `stall=True`: ngừng
+    đọc luôn (không trả close_notify, bước đóng của bên khởi xướng treo tới hạn); False: đọc tiếp,
+    ghi mọi message vào `log`, thêm "eof" khi kết nối đóng.
+    """
+
+    async def script(reader, writer):
+        writer.write(encode_message(_srv_hello(identity, "Lo")))
+        await writer.drain()
+        log.append(await read_message(reader, 16384))  # hello
+        log.append(await read_message(reader, 16384))  # pair_request
+        seen.set()
+        if stall:
+            writer.transport.pause_reading()
+            await asyncio.sleep(60)
+            return
+        while (msg := await read_message(reader, 16384)) is not None:
+            log.append(msg)
+        log.append("eof")
+
+    return script
+
+
+# --- M1: chứng chỉ có SAN `cryptography` không đọc được --------------------------------------------
+
+
+@integration
+@pytest.mark.parametrize("san", ["x400Address", "EDIPartyName"])
+async def test_m1_responder_rejects_cert_with_unreadable_san(
+    node_factory, raw_pairing_client, app_helpers, tmp_path, monkeypatch, caplog, san
+):
+    """M1, vai trả lời: `pair_request` mang chứng chỉ có SAN x400Address/EDIPartyName là chứng chỉ
+    không hợp lệ như mọi chứng chỉ hỏng khác (protocol §5.1).
+
+    → máy kia nhận `pair_abort{invalid}`; phiên PROTOCOL_ERROR, chưa hiện mã (`code_shown` False);
+    IP bị tính một lần thất bại, nên yêu cầu kế tiếp trong 10 s nhận `pair_abort{busy}`; không có
+    log ERROR nào, log không chứa PEM (mvp N9).
+    """
+    from teleport.core import pairing as core_pairing
+
+    caplog.set_level(logging.DEBUG)
+    # Thời gian chờ thật của lần thất bại đầu (10 s); `fast` rút còn 0,5 s.
+    monkeypatch.setattr(core_pairing, "BACKOFF_BASE", 10.0)
+    monkeypatch.setattr(core_pairing, "BACKOFF_MAX", 600.0)
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    device_id = app_helpers.new_device_id()
+    raw_san = app_helpers.SAN_X400 if san == "x400Address" else app_helpers.SAN_EDI
+    pem, _ = app_helpers.cert_with_raw_san(device_id, raw_san)
+
+    c = await raw_pairing_client(B.port)
+    c.send_dict(app_helpers.hello_dict(device_id))
+    c.send_dict({"type": "pair_request", "cert": pem})
+    await c.drain()
+    msgs = await c.read_until_closed(5)
+    assert msgs == [INVALID], msgs
+
+    await B.rec.wait_finished(1)
+    result = B.rec.finished[0]
+    assert result.outcome == PairingOutcome.PROTOCOL_ERROR
+    assert result.role == Role.RESPONDER
+    assert result.code_shown is False
+    assert result.device is None
+    assert B.rec.prompts == []
+    await wait_until(lambda: B.pairing.gate.active is None, 1, "gate chưa được nhả")
+    assert B.pairing.gate.failures(LOCAL) == 1
+    assert B.store.devices() == []
+
+    # Yêu cầu kế tiếp từ cùng IP (máy khác, chứng chỉ hợp lệ) trong thời gian chờ → busy.
+    await asyncio.sleep(0.1)  # để listener nhả chỗ ẩn danh của kết nối trước (1 mỗi IP)
+    other = load_or_create_identity(tmp_path / "other")
+    c2 = await raw_pairing_client(B.port)
+    await c2.begin(other)
+    assert await c2.read_until_closed(3) == [{"type": "pair_abort", "reason": "busy"}]
+    await asyncio.sleep(0.1)
+    assert len(B.rec.finished) == 1 and B.rec.prompts == []
+    assert B.pairing.gate.failures(LOCAL) == 1
+
+    assert _errors_logged(caplog) == []
+    assert "BEGIN CERTIFICATE" not in caplog.text
+    assert pem.splitlines()[1] not in caplog.text
+
+
+@integration
+async def test_m1_initiator_server_cert_with_unreadable_san_is_identity_mismatch(
+    node_factory, fake_server, app_helpers, tmp_path, caplog
+):
+    """M1, vai khởi xướng: server TLS mang chứng chỉ có SAN x400Address → `pair_with` trả
+    IDENTITY_MISMATCH (không ném), `on_finished` đúng một lần, không hiện mã, không log ERROR."""
+    caplog.set_level(logging.DEBUG)
+    A = await node_factory("A", answer=True)
+    device_id = app_helpers.new_device_id()
+    pem, key = app_helpers.cert_with_raw_san(device_id, app_helpers.SAN_X400)
+    srv = app_helpers.identity_from_pem(tmp_path / "srv", device_id, pem, key)
+    port = await fake_server(srv, _hello_script(srv))
+
+    result = await asyncio.wait_for(A.pairing.pair_with([LOCAL], port), 10)
+    assert result.outcome == PairingOutcome.IDENTITY_MISMATCH
+    assert result.role == Role.INITIATOR
+    assert result.device is None
+    assert result.code_shown is False
+    await asyncio.sleep(0.1)
+    assert A.rec.finished == [result]
+    assert A.rec.prompts == []
+    assert A.store.devices() == []
+    assert A.pairing.gate.active is None
+    assert _errors_logged(caplog) == []
+
+
+# --- M4: bị hủy sau khi đã chốt thì `pair_with` trả kết quả thật ---------------------------------
+
+
+@integration
+async def test_m4_cancel_while_closing_after_paired_returns_paired(
+    node_factory, fake_server, tmp_path, monkeypatch, fast
+):
+    """M4: hai bên đã xác nhận, A đã lưu máy kia và đang đóng gọn (máy kia không trả close_notify)
+    thì task `pair_with` bị hủy → `pair_with` trả PAIRED thay vì ném CancelledError, lệnh hủy được
+    gỡ (`cancelling() == 0`), `on_finished` đúng một lần với PAIRED, kho có thiết bị."""
+    from teleport.net import connection
+
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", STALL_CLOSE_TIMEOUT)
+    A = await node_factory("A", answer=True)
+    srv = load_or_create_identity(tmp_path / "srv")
+    state: dict = {}
+    port = await fake_server(srv, _stalling_responder_script(srv, state))
+
+    async def run():
+        result = await A.pairing.pair_with([LOCAL], port)
+        return result, asyncio.current_task().cancelling()
+
+    task = asyncio.create_task(run(), name="test.pair")
+    await wait_until(lambda: A.store.get(srv.device_id) is not None, 5, "A chưa lưu máy kia")
+    await asyncio.sleep(0.1)
+    assert state.get("confirm") == {"type": "pair_confirm"}
+    assert not task.done(), "bước đóng gọn sau PAIRED phải đang chờ close_notify"
+
+    task.cancel()
+    try:
+        result, cancelling = await asyncio.wait_for(task, STALL_CLOSE_TIMEOUT + fast.SLACK)
+    except asyncio.CancelledError:
+        pytest.fail("pair_with ném CancelledError dù hai bên đã xác nhận và trusted.json đã lưu")
+    assert result.outcome == PairingOutcome.PAIRED
+    assert cancelling == 0, "trả kết quả đã chốt thì phải gỡ lệnh hủy (uncancel)"
+    assert A.rec.finished == [result]
+    assert result.device is not None and result.device.device_id == srv.device_id
+    assert result.code_shown is True
+    assert TrustStore.load(A.dir).get(srv.device_id).fingerprint == srv.fingerprint
+    assert A.pairing.gate.active is None
+
+
+@integration
+async def test_m4_cancel_while_closing_after_save_failed_returns_save_failed(
+    node_factory, fake_server, tmp_path, monkeypatch, fast
+):
+    """M4, biến thể: hai bên đã xác nhận nhưng `store.add` lỗi (SAVE_FAILED cũng là kết quả đã chốt)
+    → hủy trong lúc đóng gọn vẫn trả SAVE_FAILED, không ném, `on_finished` đúng một lần."""
+    from teleport.net import connection
+
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", STALL_CLOSE_TIMEOUT)
+    A = await node_factory("A", answer=True)
+    srv = load_or_create_identity(tmp_path / "srv")
+    port = await fake_server(srv, _stalling_responder_script(srv, {}))
+    add_calls: list[str] = []
+
+    def failing_add(peer, name, **kwargs):
+        add_calls.append(peer.device_id)
+        raise TrustStoreError("giả lập không ghi được trusted.json")
+
+    monkeypatch.setattr(A.store, "add", failing_add)
+
+    async def run():
+        result = await A.pairing.pair_with([LOCAL], port)
+        return result, asyncio.current_task().cancelling()
+
+    task = asyncio.create_task(run(), name="test.pair")
+    await wait_until(lambda: add_calls == [srv.device_id], 5, "A chưa thử lưu máy kia")
+    await asyncio.sleep(0.1)
+    assert not task.done(), "bước đóng gọn sau khi chốt phải đang chờ close_notify"
+
+    task.cancel()
+    try:
+        result, cancelling = await asyncio.wait_for(task, STALL_CLOSE_TIMEOUT + fast.SLACK)
+    except asyncio.CancelledError:
+        pytest.fail("pair_with ném CancelledError dù hai bên đã xác nhận (SAVE_FAILED)")
+    assert result.outcome == PairingOutcome.SAVE_FAILED
+    assert result.device is None
+    assert cancelling == 0
+    assert A.rec.finished == [result]
+    assert A.pairing.gate.active is None
+
+
+@integration
+async def test_m4_cancel_while_waiting_for_confirmed_replacement_returns_its_result(
+    node_factory, fake_server, raw_pairing_client, app_helpers, tmp_path, monkeypatch, fast
+):
+    """M4, nhánh nhường phiên: `pair_with` của bên lớn đã nhường và đang chờ phiên trả lời thay thế;
+    phiên đó đã chốt (hai bên xác nhận, đã lưu) và đang đóng gọn thì task bị hủy → `pair_with` chờ
+    phiên đó xong rồi trả kết quả PAIRED của nó (vai RESPONDER), không ném CancelledError."""
+    from teleport.core import pairing as core_pairing
+    from teleport.net import connection
+
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", STALL_CLOSE_TIMEOUT)
+    monkeypatch.setattr(core_pairing, "MESSAGE_TIMEOUT", 10.0)  # phiên khởi xướng không tự hết giờ
+    hi = await node_factory("H", answer=True)
+    lo = app_helpers.identity_below(tmp_path / "lo", hi.id)
+    seen = asyncio.Event()
+    target_log: list = []
+    port = await fake_server(lo, _target_script(lo, seen, target_log, stall=False))
+
+    async def run():
+        result = await hi.pairing.pair_with([LOCAL], port)
+        return result, asyncio.current_task().cancelling()
+
+    task = asyncio.create_task(run(), name="test.pair-hi")
+    await asyncio.wait_for(seen.wait(), 5)
+    outgoing = hi.pairing.gate.active
+    assert outgoing is not None and outgoing.role == Role.INITIATOR
+
+    # Bên nhỏ hơn (client thô, cùng 127.0.0.1) gửi yêu cầu tới hi: hi nhường, chuyển sang trả lời.
+    c = await raw_pairing_client(hi.port)
+    await c.begin(lo, "Lo")
+    code = await c.run_to_code(hi.identity.fingerprint)
+    assert await c.read_type("pair_confirm") == {"type": "pair_confirm"}  # hi đã bấm “Trùng”
+    await wait_until(
+        lambda: outgoing.id not in hi.pairing._runs and "eof" in target_log,
+        3,
+        "pair_with chưa tới bước chờ phiên thay thế",
+    )
+    assert {"type": "pair_abort", "reason": "busy"} in target_log
+    c.writer.transport.pause_reading()  # không bao giờ trả close_notify: bước đóng của hi treo
+    c.send_dict({"type": "pair_confirm"})
+    await c.drain()
+    await wait_until(lambda: hi.store.get(lo.device_id) is not None, 3, "hi chưa lưu máy kia")
+    await asyncio.sleep(0.1)
+    assert not task.done(), "phiên thay thế phải đang đóng gọn"
+
+    task.cancel()
+    try:
+        result, cancelling = await asyncio.wait_for(task, STALL_CLOSE_TIMEOUT + fast.SLACK)
+    except asyncio.CancelledError:
+        pytest.fail("pair_with ném CancelledError dù phiên thay thế đã chốt PAIRED")
+    assert result.outcome == PairingOutcome.PAIRED
+    assert result.role == Role.RESPONDER
+    assert result.peer_device_id == lo.device_id
+    assert cancelling == 0
+    assert hi.rec.finished == [result]
+    assert [p.code for p in hi.rec.prompts] == [code]
+    assert TrustStore.load(hi.dir).get(lo.device_id).fingerprint == lo.fingerprint
+    assert hi.pairing.gate.active is None
+
+
+# --- L2: hủy `pair_with` trong cửa sổ nhường phiên ------------------------------------------------
+
+
+@integration
+@pytest.mark.parametrize("nonce_at", ["sau_khi_huy", "cung_luc_huy"])
+async def test_l2_cancel_pair_with_while_yielding_cancels_replacement(
+    node_factory, fake_server, raw_pairing_client, app_helpers, tmp_path, monkeypatch, fast, nonce_at
+):
+    """L2: task `pair_with` bị hủy khi đang nhường phiên (đã có phiên trả lời thay thế, phiên khởi
+    xướng còn đang đóng) → phiên thay thế cũng bị hủy: máy kia nhận `pair_abort{user}`, phiên đó
+    kết thúc CANCELLED trong ≤ ABORT_ON_CANCEL_TIMEOUT + 1 s, không hiện mã sau lúc hủy (kể cả khi
+    máy kia gửi `pair_nonce`); gate rảnh, không còn phiên nào.
+
+    `nonce_at`: máy kia gửi `pair_nonce` sau khi `pair_with` đã ném CancelledError, hoặc ghi nó
+    xuống socket ngay trước lệnh hủy (cùng một bước của loop). Ca sau: `pair_nonce` có thể tới
+    trước lệnh hủy, khi đó mã được hiện TRƯỚC lúc hủy (cho phép); không bao giờ được hiện sau.
+    """
+    from teleport.app import pairing as app_pairing
+    from teleport.core import pairing as core_pairing
+    from teleport.net import connection
+
+    # Máy đích không trả close_notify: phiên khởi xướng đã nhường còn đóng tới FAILED_CLOSE_TIMEOUT,
+    # đủ rộng để lệnh hủy rơi đúng vào cửa sổ đó. Bên trả lời chờ pair_nonce lâu (không tự hết giờ).
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", 5.0)
+    monkeypatch.setattr(app_pairing, "FAILED_CLOSE_TIMEOUT", 3.0)
+    monkeypatch.setattr(core_pairing, "MESSAGE_TIMEOUT", 10.0)
+    monkeypatch.setattr(core_pairing, "NONCE_TIMEOUT", 10.0)
+    hi = await node_factory("H", answer=True)
+    lo = app_helpers.identity_below(tmp_path / "lo", hi.id)
+    seen = asyncio.Event()
+    port = await fake_server(lo, _target_script(lo, seen, [], stall=True))
+    task = asyncio.create_task(hi.pairing.pair_with([LOCAL], port), name="test.pair-hi")
+    await asyncio.wait_for(seen.wait(), 5)
+    outgoing = hi.pairing.gate.active
+    assert outgoing is not None and outgoing.role == Role.INITIATOR
+
+    c = await raw_pairing_client(hi.port)
+    await c.begin(lo, "Lo")
+    await c.read_commit()  # phiên trả lời thay thế đã chạy, đang chờ pair_nonce
+    active = hi.pairing.gate.active
+    assert active is not None and active.role == Role.RESPONDER
+    assert outgoing.id in hi.pairing._runs and not task.done(), "phải đang trong cửa sổ nhường phiên"
+
+    if nonce_at == "cung_luc_huy":
+        c.send_dict({"type": "pair_nonce", "nonce": c.nonce.hex()})  # chưa nhường loop
+    t0 = time.monotonic()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 5)
+    if nonce_at == "sau_khi_huy":
+        # Sau lúc hủy, máy kia vẫn gửi pair_nonce: phiên thay thế không được hiện mã hay tiết lộ n_B.
+        await c.send_nonce()
+    msgs = await c.read_until_closed(fast.ABORT_ON_CANCEL_TIMEOUT + 1 + fast.SLACK)
+
+    await hi.rec.wait_finished(1, timeout=fast.ABORT_ON_CANCEL_TIMEOUT + 1)
+    took = hi.rec.finished_times[0] - t0
+    assert took <= fast.ABORT_ON_CANCEL_TIMEOUT + 1, f"phiên thay thế kết thúc sau {took:.2f} s"
+    replacement = hi.rec.finished[0]
+    assert replacement.outcome == PairingOutcome.CANCELLED
+    assert replacement.role == Role.RESPONDER
+    assert replacement.peer_device_id == lo.device_id
+    late = [t - t0 for t in hi.rec.prompt_times if t >= t0]
+    assert late == [], f"hiện mã sau lúc hủy (+{late} s)"
+    assert msgs[-1:] == [{"type": "pair_abort", "reason": "user"}], msgs
+    if nonce_at == "sau_khi_huy" or not hi.rec.prompts:
+        assert msgs == [{"type": "pair_abort", "reason": "user"}], msgs
+        assert hi.rec.prompts == []
+    await wait_until(lambda: hi.pairing.gate.active is None and not hi.pairing._runs, 2, "còn phiên chưa dọn")
+    await asyncio.sleep(0.1)
+    assert len(hi.rec.finished) == 1
+    assert hi.store.get(lo.device_id) is None
+
+
+# --- M5: ghép đôi lại ở vai trả lời không đổi tên đã lưu -------------------------------------------
+
+
+@integration
+async def test_m5_stranger_with_public_cert_of_trusted_device_cannot_rename_it(
+    node_factory, raw_pairing_client, app_helpers, tmp_path
+):
+    """M5: B tin V tên “PC-Nha”. Một máy lạ (kết nối ẩn danh, không có khóa riêng của V) gửi chứng
+    chỉ công khai của V với tên “Laptop-Bob”, hai bên xác nhận → B vẫn lưu V tên “PC-Nha” (trong
+    RAM và trên đĩa), fingerprint không đổi, chỉ cập nhật thời điểm ghép đôi; kết quả và lời hỏi
+    cho giao diện thấy tên đã lưu."""
+    victim = load_or_create_identity(tmp_path / "V")
+    app_helpers.ensure_identity(tmp_path / "B")
+    TrustStore.load(tmp_path / "B").add(peer_cert_from_pem(victim.cert_pem()), "PC-Nha", now=OLD_PAIRED_AT)
+    B = await node_factory("B", accept_pairing=True, answer=True)
+
+    c = await raw_pairing_client(B.port)
+    await c.begin(victim, "Laptop-Bob")
+    code = await c.run_to_code(B.identity.fingerprint)
+    assert await c.read_type("pair_confirm") == {"type": "pair_confirm"}
+    c.send_dict({"type": "pair_confirm"})
+    await c.drain()
+    await c.read_until_closed(5)
+    await B.rec.wait_finished(1)
+
+    prompt = B.rec.prompts[0]
+    assert prompt.code == code
+    assert (prompt.peer_name, prompt.peer_device_id) == ("Laptop-Bob", victim.device_id)
+    assert prompt.known_name == "PC-Nha"
+    result = B.rec.finished[0]
+    assert result.outcome == PairingOutcome.PAIRED
+    assert result.known_name == "PC-Nha"
+    assert result.device is not None
+    assert (result.device.name, result.device.fingerprint) == ("PC-Nha", victim.fingerprint)
+    for store in (B.store, TrustStore.load(B.dir)):
+        device = store.get(victim.device_id)
+        assert device is not None
+        assert (device.name, device.fingerprint) == ("PC-Nha", victim.fingerprint)
+        assert device.paired_at > OLD_PAIRED_AT, "ghép đôi lại vẫn cập nhật paired_at"
+        assert len(store.devices()) == 1
+    assert "Laptop-Bob" not in (B.dir / "trusted.json").read_text(encoding="utf-8")
+
+
+@integration
+@pytest.mark.parametrize("known_by", ["responder", "initiator"])
+async def test_m5_repair_keeps_name_as_responder_updates_name_as_initiator(
+    node_factory, app_helpers, tmp_path, known_by
+):
+    """Ghép đôi lại với máy thật (cùng danh tính), mỗi lần chỉ một bên đã lưu máy kia:
+    - bên trả lời đã lưu A là “A-cũ” → giữ “A-cũ”;
+    - bên khởi xướng đã lưu B là “B-cũ” → đổi thành “B” (hồi quy test_p13).
+    `PairingPrompt.known_name` = tên đã lưu ở bên đã ghép đôi, None ở bên ghép đôi lần đầu."""
+    id_a = app_helpers.ensure_identity(tmp_path / "A")
+    id_b = app_helpers.ensure_identity(tmp_path / "B")
+    if known_by == "responder":
+        app_helpers.seed_trust(tmp_path / "B", id_a.cert_pem(), "A-cũ")
+    else:
+        app_helpers.seed_trust(tmp_path / "A", id_b.cert_pem(), "B-cũ")
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    A = await node_factory("A", answer=True)
+    assert (A.id, B.id) == (id_a.device_id, id_b.device_id)
+
+    result = await pair(A, B)
+    await B.rec.wait_finished(1)
+    assert result.outcome == PairingOutcome.PAIRED
+    rb = B.rec.finished[0]
+    assert rb.outcome == PairingOutcome.PAIRED
+    pa, pb = A.rec.prompts[0], B.rec.prompts[0]
+    assert (pa.peer_name, pb.peer_name) == ("B", "A")
+    if known_by == "responder":
+        assert pb.known_name == "A-cũ" and pa.known_name is None
+        assert rb.device.name == "A-cũ"
+        assert B.store.get(A.id).name == "A-cũ"
+        assert TrustStore.load(B.dir).get(A.id).name == "A-cũ"
+        assert result.device.name == "B" and A.store.get(B.id).name == "B"
+    else:
+        assert pa.known_name == "B-cũ" and pb.known_name is None
+        assert result.device.name == "B"
+        assert A.store.get(B.id).name == "B"
+        assert TrustStore.load(A.dir).get(B.id).name == "B"
+        assert rb.device.name == "A" and B.store.get(A.id).name == "A"
+
+
+# --- L3: gửi `pair_confirm` lỗi thì không lưu -----------------------------------------------------
+
+L3_CASES = [
+    pytest.param(Role.RESPONDER, "tu_truoc", ConnectionLostError, id="tra-loi-tu-xac-nhan-truoc"),
+    pytest.param(Role.RESPONDER, "may_kia_truoc", ConnectionLostError, id="tra-loi-may-kia-truoc"),
+    pytest.param(Role.INITIATOR, "tu_truoc", ConnectionLostError, id="khoi-xuong-tu-xac-nhan-truoc"),
+    pytest.param(Role.INITIATOR, "may_kia_truoc", ConnectionLostError, id="khoi-xuong-may-kia-truoc"),
+    pytest.param(Role.RESPONDER, "tu_truoc", TimeoutError, id="tra-loi-gui-qua-han"),
+    pytest.param(Role.INITIATOR, "may_kia_truoc", TimeoutError, id="khoi-xuong-gui-qua-han"),
+]
+
+
+@integration
+@pytest.mark.parametrize(("failing_role", "order", "error"), L3_CASES)
+async def test_l3_failed_pair_confirm_send_does_not_save(
+    node_factory, app_helpers, monkeypatch, tmp_path, failing_role, order, error
+):
+    """L3: máy này gửi `pair_confirm` không xong (ConnectionLostError, hoặc quá hạn gửi) thì không
+    được lưu, dù máy kia xác nhận trước hay sau (protocol §5.1: chỉ lưu khi đã GỬI xong và đã NHẬN).
+
+    → `trusted.json` giữ nguyên nội dung và mtime; `on_trust_changed` không được gọi; kết quả
+    CONNECTION_LOST; ở vai trả lời IP bị tính một lần thất bại. Máy kia cũng không lưu.
+    Lỗi gửi được giả lập ở `Connection.send`, chỉ cho `pair_confirm` của bên `failing_role`
+    (kết nối vẫn mở, như khi gửi quá SEND_TIMEOUT).
+    """
+    from teleport.net import connection as net_connection
+
+    other = load_or_create_identity(tmp_path / "khac")
+    for label in ("A", "B"):
+        app_helpers.seed_trust(tmp_path / label, other.cert_pem(), "Khác")  # trusted.json có sẵn
+    B = await node_factory("B", accept_pairing=True)
+    A = await node_factory("A")
+    failing, peer = (B, A) if failing_role == Role.RESPONDER else (A, B)
+    failing_is_server = failing_role == Role.RESPONDER  # kết nối của bên trả lời là phía server
+
+    real_send = net_connection.Connection.send
+    real_receive = net_connection.Connection.receive
+    attempts: list[str] = []
+    received: list[tuple[bool, str | None]] = []
+
+    async def flaky_send(self, msg):
+        if self.is_server == failing_is_server and getattr(msg, "TYPE", None) == "pair_confirm":
+            attempts.append(msg.TYPE)
+            raise error("giả lập: gửi pair_confirm không xong")
+        return await real_send(self, msg)
+
+    async def logging_receive(self):
+        msg = await real_receive(self)
+        received.append((self.is_server, getattr(msg, "TYPE", None)))
+        return msg
+
+    monkeypatch.setattr(net_connection.Connection, "send", flaky_send)
+    monkeypatch.setattr(net_connection.Connection, "receive", logging_receive)
+
+    trusted = failing.dir / "trusted.json"
+    before = (trusted.read_bytes(), trusted.stat().st_mtime_ns)
+    trust_calls: list[int] = []
+    real_changed = failing.pairing._on_trust_changed
+
+    def counting_trust_changed() -> None:
+        trust_calls.append(1)
+        real_changed()
+
+    monkeypatch.setattr(failing.pairing, "_on_trust_changed", counting_trust_changed)
+
+    task = asyncio.create_task(A.pairing.pair_with([LOCAL], B.port), name="test.pair")
+    await A.rec.wait_prompts()
+    await B.rec.wait_prompts()
+    failing_sid = failing.rec.prompts[0].session_id
+    peer_sid = peer.rec.prompts[0].session_id
+    if order == "tu_truoc":
+        assert failing.pairing.decide(failing_sid, True) is True
+        await wait_until(lambda: attempts == ["pair_confirm"], 2, "chưa thử gửi pair_confirm")
+        peer.pairing.decide(peer_sid, True)
+    else:
+        assert peer.pairing.decide(peer_sid, True) is True
+        await wait_until(
+            lambda: (failing_is_server, "pair_confirm") in received, 2, "pair_confirm của máy kia chưa tới"
+        )
+        assert failing.pairing.decide(failing_sid, True) is True
+
+    result_a = await asyncio.wait_for(task, 10)
+    await B.rec.wait_finished(1, timeout=5)
+    mine = failing.rec.finished[0]
+    assert attempts == ["pair_confirm"]
+    assert mine.outcome == PairingOutcome.CONNECTION_LOST, mine.outcome
+    assert mine.device is None
+    assert (trusted.read_bytes(), trusted.stat().st_mtime_ns) == before, "trusted.json bị ghi"
+    assert failing.store.get(peer.id) is None
+    assert trust_calls == [], "on_trust_changed không được gọi khi không lưu"
+    assert peer.store.get(failing.id) is None
+    assert TrustStore.load(peer.dir).get(failing.id) is None
+    assert A.rec.finished == [result_a]
+    if failing_role == Role.RESPONDER:
+        await wait_until(lambda: B.pairing.gate.active is None, 1, "gate chưa được nhả")
+        assert B.pairing.gate.failures(LOCAL) == 1
+    assert gates_idle(A, B)
+
+
+# --- L4: `PairingFinished.code_shown` --------------------------------------------------------------
+
+
+@integration
+async def test_l4_code_shown_true_when_both_sides_saw_code(node_factory):
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    A = await node_factory("A", answer=True)
+    result = await pair(A, B)
+    await B.rec.wait_finished(1)
+    assert result.outcome == PairingOutcome.PAIRED
+    assert result.code_shown is True
+    assert B.rec.finished[0].code_shown is True
+
+
+@integration
+async def test_l4_code_shown_false_when_peer_leaves_before_code(node_factory, raw_pairing_client, tmp_path):
+    """Máy kia đóng ngay sau `pair_commit`: phiên dừng trước khi hiện mã → `code_shown` False."""
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    raw_id = load_or_create_identity(tmp_path / "raw")
+    c = await raw_pairing_client(B.port)
+    await c.begin(raw_id)
+    await c.read_commit()
+    c.abort()
+    await B.rec.wait_finished(1, timeout=3)
+    result = B.rec.finished[0]
+    assert result.outcome == PairingOutcome.CONNECTION_LOST
+    assert result.code_shown is False
+    assert B.rec.prompts == []
+
+
+@integration
+async def test_l4_code_shown_true_when_peer_leaves_after_code(node_factory, raw_pairing_client, tmp_path):
+    """Máy kia lấy `pair_reveal` rồi bỏ đi: B đã hiện mã → `code_shown` True dù kết quả không phải PAIRED."""
+    B = await node_factory("B", accept_pairing=True)
+    raw_id = load_or_create_identity(tmp_path / "raw")
+    c = await raw_pairing_client(B.port)
+    await c.begin(raw_id)
+    await c.run_to_code(B.identity.fingerprint)
+    c.abort()
+    await B.rec.wait_finished(1, timeout=3)
+    result = B.rec.finished[0]
+    assert result.outcome == PairingOutcome.CONNECTION_LOST
+    assert result.code_shown is True
+    assert len(B.rec.prompts) == 1
+
+
+@integration
+@pytest.mark.parametrize("raising", ["responder", "initiator"])
+async def test_l4_code_shown_false_when_prompt_raises(node_factory, raising):
+    """`on_prompt` raise thì mã chưa hiện được ở bên đó (`code_shown` False); bên kia đã hiện mã
+    (vai trả lời, khi bên khởi xướng hỏng) thì `code_shown` True, còn chưa hiện thì False."""
+    B = await node_factory("B", accept_pairing=True, raise_in_prompt=raising == "responder")
+    A = await node_factory("A", answer=True, raise_in_prompt=raising == "initiator")
+    result = await pair(A, B)
+    await B.rec.wait_finished(1)
+    rb = B.rec.finished[0]
+    if raising == "responder":
+        assert rb.outcome == PairingOutcome.PROMPT_FAILED and rb.code_shown is False
+        assert result.outcome == PairingOutcome.PEER_BUSY and result.code_shown is False
+    else:
+        assert result.outcome == PairingOutcome.PROMPT_FAILED and result.code_shown is False
+        assert rb.outcome == PairingOutcome.PEER_REJECTED and rb.code_shown is True
+
+
+@integration
+@pytest.mark.parametrize("known_by", ["initiator", "responder"])
+async def test_l4_code_shown_false_for_identity_conflict(node_factory, app_helpers, known_by):
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    A = await node_factory("A", answer=True)
+    if known_by == "initiator":
+        A.store.add(peer_cert_from_pem(app_helpers.fake_cert_with_cn(B.id)), "B-cũ")
+    else:
+        B.store.add(peer_cert_from_pem(app_helpers.fake_cert_with_cn(A.id)), "A-cũ")
+    result = await pair(A, B)
+    assert result.code_shown is False
+    if known_by == "initiator":
+        assert result.outcome == PairingOutcome.IDENTITY_CONFLICT
+    else:
+        await B.rec.wait_finished(1)
+        assert B.rec.finished[0].outcome == PairingOutcome.IDENTITY_CONFLICT
+        assert B.rec.finished[0].code_shown is False
+        assert result.outcome == PairingOutcome.PEER_INVALID
+
+
+@integration
+async def test_l4_code_shown_false_when_unreachable(node_factory, app_helpers):
+    A = await node_factory("A")
+    result = await asyncio.wait_for(A.pairing.pair_with([LOCAL], app_helpers.free_port()), 10)
+    assert result.outcome == PairingOutcome.UNREACHABLE
+    assert result.code_shown is False
+
+
+async def test_l4_code_shown_false_for_early_results(service_parts, monkeypatch):
+    """Kết quả trả sớm, chưa có phiên (`_report_early`): BUSY và CANCELLED sau `close()` → False."""
+    from teleport.app import pairing as app_pairing
+
+    async def no_io(*args, **kwargs):
+        raise AssertionError("không được mở kết nối")
+
+    monkeypatch.setattr(app_pairing, "open_pairing", no_io)
+    svc = make_service(service_parts)
+    held = svc.gate.begin_outgoing("192.0.2.9")  # giữ slot: pair_with kế tiếp nhận BUSY ngay
+    assert held is not None
+    busy = await svc.pair_with([LOCAL], 47474)
+    assert busy.outcome == PairingOutcome.BUSY
+    assert busy.code_shown is False
+    svc.gate.finish(held, Outcome.CANCELLED, asyncio.get_running_loop().time())
+    await svc.close()
+    cancelled = await svc.pair_with([LOCAL], 47474)
+    assert cancelled.outcome == PairingOutcome.CANCELLED
+    assert cancelled.code_shown is False
+    assert service_parts[3] == [busy, cancelled]

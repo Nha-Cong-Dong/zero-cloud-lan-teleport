@@ -74,7 +74,7 @@ Mọi quyết định đều dựa trên sáu nguyên tắc: **riêng tư tuyệ
 | 📡 | **Radar tự tìm thiết bị** | Mở app là thấy các máy khác đang chạy Teleport trong cùng mạng. Mạng chặn tự tìm thì vẫn nhập IP được |
 | 🤝 | **Ghép đôi một lần** | Lần đầu, hai máy hiện cùng một mã 6 số để bạn xác nhận. Các lần sau tự nhận ra nhau |
 | 📦 | **Gửi file cực lớn** | Kéo thả một hoặc nhiều file vào thiết bị trên radar. Người nhận được hỏi trước khi nhận (tắt được cho từng thiết bị tin cậy) |
-| 🔁 | **Tự nối lại** | Rớt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi tiếp phần còn thiếu, kể cả khi đã tắt app hay khởi động lại máy |
+| 🔁 | **Tự nối lại** | Rớt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi tiếp phần còn thiếu, kể cả khi đã tắt app nhận hay khởi động lại máy nhận |
 | 🧩 | **Kiểm tra toàn vẹn** | Mỗi khối 1 MiB được kiểm tra bằng SHA-256; cả file được đối chiếu bằng cây băm Merkle. Khối hỏng được gửi lại tự động |
 | 📋 | **Đồng bộ clipboard** | Ctrl+C văn bản hoặc ảnh chụp màn hình trên máy này, Ctrl+V trên máy kia. Bật riêng cho từng thiết bị, mặc định tắt |
 | 🔒 | **Bảo mật** | TLS 1.3; chỉ thiết bị đã ghép đôi mới gửi được file hay clipboard, theo cả hai chiều |
@@ -275,13 +275,13 @@ Thường gặp ở Wi-Fi công cộng bật cô lập thiết bị, hoặc khi 
 <details>
 <summary><b>Nếu tôi tắt máy giữa chừng thì sao?</b></summary>
 
-Phần đã nhận vẫn nằm an toàn trên đĩa. Mở lại Teleport ở cả hai máy, lượt truyền tự tiếp tục từ chỗ còn thiếu. Nếu file gốc đã bị sửa trong lúc đó, Teleport sẽ báo và yêu cầu gửi lại.
+Phần đã nhận vẫn nằm an toàn trên đĩa. Nếu máy **nhận** tắt hoặc khởi động lại, mở lại Teleport trên máy đó thì lượt truyền tự tiếp tục từ chỗ còn thiếu, miễn là Teleport trên máy gửi vẫn chạy. Nếu máy **gửi** tắt Teleport (hoặc tắt máy), lượt gửi bị hủy: máy nhận báo và dọn file tạm, bạn chỉ cần gửi lại. Nếu file gốc đã bị sửa trong lúc đó, Teleport sẽ báo và yêu cầu gửi lại.
 </details>
 
 <details>
 <summary><b>Khác gì LocalSend, KDE Connect hay Nearby Share?</b></summary>
 
-Teleport tập trung vào **file cực lớn và đường truyền chập chờn**: nối lại theo từng khối kể cả sau khi tắt app, kiểm tra toàn vẹn bằng cây Merkle. Thêm vào đó là đồng bộ clipboard giữa máy tính với nhau và xác thực hai chiều bằng chứng chỉ.
+Teleport tập trung vào **file cực lớn và đường truyền chập chờn**: nối lại theo từng khối kể cả sau khi tắt app nhận, kiểm tra toàn vẹn bằng cây Merkle. Thêm vào đó là đồng bộ clipboard giữa máy tính với nhau và xác thực hai chiều bằng chứng chỉ.
 </details>
 
 ## Đóng góp · Bảo mật · Giấy phép

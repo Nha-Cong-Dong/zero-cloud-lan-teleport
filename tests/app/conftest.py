@@ -29,7 +29,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtensionOID, NameOID
 
 from teleport.core.framing import HEADER, MAX_PAIRING_MESSAGE_SIZE, FramingError, encode_message
 from teleport.core.messages import PROTOCOL_VERSION
@@ -159,6 +159,62 @@ def fake_cert_with_cn(device_id: str, *, ca: bool = False) -> str:
         builder = builder.add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
     cert = builder.sign(key, hashes.SHA256())
     return cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+# SAN thô mà `cryptography` không đọc được (UnsupportedGeneralNameType, không phải ValueError):
+# GeneralNames chứa một x400Address [3] hoặc một EDIPartyName [5] rỗng (kế hoạch M1).
+SAN_X400 = b"\x30\x02\xa3\x00"
+SAN_EDI = b"\x30\x02\xa5\x00"
+
+
+def cert_with_raw_san(device_id: str, san_der: bytes) -> tuple[str, bytes]:
+    """Chứng chỉ tự ký P-256, CN `teleport-<device_id>`, hiệu lực 2000–9999, ký ECDSA-SHA256, chỉ
+    thêm extension SAN mang `san_der` thô. Trả (PEM chứng chỉ, PEM khóa riêng PKCS8).
+
+    Đúng mọi điều kiện của chứng chỉ thiết bị Teleport trừ SAN: lỗi nào xảy ra là do SAN.
+    """
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "teleport-" + device_id)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC))
+        .not_valid_after(datetime.datetime(9999, 12, 31, tzinfo=datetime.UTC))
+        .add_extension(
+            x509.UnrecognizedExtension(ExtensionOID.SUBJECT_ALTERNATIVE_NAME, san_der), critical=False
+        )
+        .sign(key, hashes.SHA256())
+    )
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
+    return cert.public_bytes(serialization.Encoding.PEM).decode("ascii"), key_pem
+
+
+def identity_from_pem(directory: Path, device_id: str, cert_pem: str, key_pem: bytes) -> Identity:
+    """`Identity` dựng thẳng từ chứng chỉ và khóa cho trước (không qua `load_or_create_identity`,
+    không kiểm gì), để chạy một server TLS giả mang chứng chỉ đó."""
+    directory.mkdir(parents=True, exist_ok=True)
+    cert_path, key_path = directory / "device.crt", directory / "device.key"
+    cert_path.write_text(cert_pem, encoding="ascii")
+    key_path.write_bytes(key_pem)
+    der = x509.load_pem_x509_certificate(cert_pem.encode("ascii")).public_bytes(serialization.Encoding.DER)
+    return Identity(device_id, cert_path, key_path, hashlib.sha256(der).hexdigest())
+
+
+def identity_below(directory: Path, device_id: str, tries: int = 64) -> Identity:
+    """Một danh tính mới (trong `directory/<i>`) có `device_id` nhỏ hơn `device_id` cho trước.
+
+    Dùng để dựng "bên nhỏ hơn" trong luật hai bên cùng chủ động (protocol §5.3).
+    """
+    for i in range(tries):
+        identity = load_or_create_identity(directory / str(i))
+        if identity.device_id < device_id:
+            return identity
+    raise AssertionError(f"{tries} lần không sinh được device_id nhỏ hơn {device_id}")
 
 
 def ensure_identity(directory: Path) -> Identity:
@@ -973,6 +1029,11 @@ def app_helpers():
         hello_dict=hello_dict,
         frame=frame,
         fake_cert_with_cn=fake_cert_with_cn,
+        SAN_X400=SAN_X400,
+        SAN_EDI=SAN_EDI,
+        cert_with_raw_san=cert_with_raw_san,
+        identity_from_pem=identity_from_pem,
+        identity_below=identity_below,
         ensure_identity=ensure_identity,
         seed_trust=seed_trust,
         lock_is_free=lock_is_free,

@@ -15,7 +15,8 @@ kết nối thật:
 - Thực hiện hành động đúng thứ tự trả về. `Close` luôn là hành động cuối: đóng
   gọn (`close()` rồi `wait_closed()`) để `pair_confirm` cuối cùng vẫn tới máy kia.
 - Gửi lỗi (kết nối đã đứt) thì bỏ qua và vẫn thực hiện các hành động sau, nhất là
-  `Close` và `PairingGate.finish`.
+  `Close` và `PairingGate.finish`. Riêng `pair_confirm` của máy này chưa ghi xong vào
+  kết nối thì bỏ `SavePeer` (protocol mục 5.1: chỉ lưu khi đã GỬI và đã NHẬN).
 
 Bên trả lời (B) cam kết nonce trước, kiểu Bluetooth numeric comparison (protocol mục
 5.1). Bốn bất biến mà máy trạng thái giữ:
@@ -251,10 +252,18 @@ class ShowCode:
 
 @dataclass(frozen=True, slots=True)
 class SavePeer:
-    """Lưu máy kia vào `trusted.json`. Luôn đứng ngay trước `Close(PAIRED)`."""
+    """Lưu máy kia vào `trusted.json`. Luôn đứng ngay trước `Close(PAIRED)`.
+
+    `keep_known_name` True khi ghép đôi lại ở vai trả lời (máy kia đã có trong
+    `trusted.json` với cùng fingerprint): chứng chỉ lấy từ `pair_request`, máy kia chưa
+    chứng minh giữ khóa riêng, nên `app` giữ tên đã lưu thay vì `name`, chỉ cập nhật thời
+    điểm ghép đôi (protocol mục 5.5). Vai khởi xướng luôn False: chứng chỉ của máy kia đã
+    được bắt tay TLS xác thực.
+    """
 
     peer: DeviceCert
     name: str  # tên trong hello của máy kia
+    keep_known_name: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,7 +495,11 @@ class PairingSession:
 
     def _paired(self) -> list[Action]:
         assert self._peer is not None
-        return [SavePeer(self._peer, self._peer_hello.name), *self._close(Outcome.PAIRED)]
+        # Tới đây thì known_fingerprint (nếu có) trùng fingerprint của máy kia: khác thì
+        # phiên đã dừng với IDENTITY_CONFLICT trước khi hiện mã.
+        keep = self._role is Role.RESPONDER and self._known_fingerprint is not None
+        save = SavePeer(self._peer, self._peer_hello.name, keep_known_name=keep)
+        return [save, *self._close(Outcome.PAIRED)]
 
     def _abort(self, reason: str, outcome: Outcome, detail: str = "") -> list[Action]:
         return [SendMessage(PairAbort(reason)), *self._close(outcome, detail=detail)]

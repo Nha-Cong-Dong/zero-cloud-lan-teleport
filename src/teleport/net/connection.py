@@ -1109,7 +1109,7 @@ async def _attempt(
                     ) from e
             try:
                 cert = peer_cert_from_der(der)
-            except InvalidCertificate as e:
+            except Exception as e:  # InvalidCertificate; phòng thủ: lỗi lạ cũng là danh tính sai
                 raise IdentityMismatch(
                     "chứng chỉ của máy kia không hợp lệ", address=address, actual_fingerprint=actual
                 ) from e

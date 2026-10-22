@@ -815,6 +815,25 @@ async def test_unknown_client_cert_is_rejected(fast, listener_factory, ids):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("san", ["x400", "edi"])
+async def test_m1_listener_rejects_client_cert_with_unsupported_general_name_quietly(
+    fast, listener_factory, make_san_identity, ids, caplog, san
+):
+    """Chứng chỉ client có SAN lạ lọt vào danh sách tin cậy (không qua TrustStore) và qua được OpenSSL:
+    server vẫn coi là chứng chỉ không hợp lệ, từ chối như mọi kết nối xấu, không ghi log ERROR."""
+    caplog.set_level(logging.DEBUG, logger="teleport")
+    evil = make_san_identity(san)
+    h = await listener_factory(ids.server, trusted=[evil])
+    with pytest.raises(Rejected):
+        await b_control(h, ids, identity=evil)
+    await h.wait_idle()
+    assert h.calls == 0
+    assert h.listener.connection_count == 0
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert not errors, [r.getMessage() for r in errors]
+
+
+@pytest.mark.integration
 async def test_silence_after_handshake_times_out(fast, listener_factory, raw_client, ids):
     """R8: im lặng sau bắt tay → đóng sau ≈ OPENING_TIMEOUT (0,5 s)."""
     h = await listener_factory(ids.server)
@@ -1539,6 +1558,64 @@ async def test_cancelling_open_leaves_nothing_behind(fast, monkeypatch, fake_ser
         await task
     # Server câm thấy kết nối của client bị đóng.
     await wait_until(lambda: not server._tasks, 2.0, "socket phía client đã đóng")
+
+
+# --- M1: chứng chỉ server không phân tích được → IdentityMismatch --------------------------------
+
+
+async def _record(server, reader, writer):
+    await server.record_until_closed(reader, timeout=5)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("san", ["x400", "edi"])
+@pytest.mark.parametrize("kind", ["pairing", "control"])
+async def test_m1_server_cert_with_unsupported_general_name_is_identity_mismatch(
+    slow_opening, fake_server, make_san_identity, ids, kind, san
+):
+    """Chứng chỉ server có SAN x400Address/EDIPartyName → IdentityMismatch ngay, không lọt lỗi lạ.
+
+    Với kết nối điều khiển, fingerprint mong đợi khớp đúng chứng chỉ đó, nên chỉ bước phân tích
+    chứng chỉ chặn được; client cũng không gửi byte nào cho máy chưa xác minh (protocol §2.1).
+    """
+    evil = make_san_identity(san)
+    server = await fake_server(evil, _record, trusted_certs=[ids.b.cert_pem()])
+    start = time.monotonic()
+    with pytest.raises(IdentityMismatch) as exc:
+        await _open_kind(kind, server.port, ids, expected=evil.fingerprint)
+    assert time.monotonic() - start < 2.0, "phải báo ngay, không chờ hết giờ"
+    assert exc.value.address == LOCAL
+    assert exc.value.actual_fingerprint == evil.fingerprint
+    await wait_until(lambda: not server._tasks, 3.0, "server giả thấy client đóng")
+    assert server.connections == 1, "server giả không thấy kết nối nào: phép kiểm vô nghĩa"
+    if kind == "control":
+        assert bytes(server.received) == b""
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("kind", ["pairing", "control"])
+async def test_m1_unexpected_error_parsing_server_cert_is_identity_mismatch(
+    slow_opening, monkeypatch, fake_server, ids, kind
+):
+    """Lớp phòng thủ ở net: phân tích chứng chỉ server ném lỗi lạ bất kỳ → vẫn là IdentityMismatch."""
+
+    class OddError(Exception):
+        pass
+
+    calls: list[bytes] = []
+
+    def broken(der):
+        calls.append(der)
+        raise OddError("lỗi lạ khi phân tích chứng chỉ")
+
+    monkeypatch.setattr(connection, "peer_cert_from_der", broken)
+    server = await fake_server(ids.server, _record, trusted_certs=[ids.b.cert_pem()])
+    with pytest.raises(IdentityMismatch) as exc:
+        await _open_kind(kind, server.port, ids)
+    assert calls, "peer_cert_from_der bị thay chưa được gọi: phép thử vô nghĩa"
+    assert exc.value.address == LOCAL
+    assert exc.value.actual_fingerprint == ids.server.fingerprint
+    assert isinstance(exc.value.__cause__, OddError)
 
 
 # =================================================================================================

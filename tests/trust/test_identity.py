@@ -1,6 +1,7 @@
 import base64
 import dataclasses
 import datetime
+import functools
 import os
 import re
 import ssl
@@ -12,6 +13,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtensionOID
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -606,6 +608,198 @@ def test_invalid_x509_version_rejected_from_pem_and_der(identity):
         peer_cert_from_der(bad_der)
     with pytest.raises(InvalidCertificate):
         peer_cert_from_pem(bad_pem)
+
+
+# --- M1: mọi lỗi khi phân tích hay kiểm chứng chỉ đều là InvalidCertificate ---------------------
+#
+# protocol §5.1: chứng chỉ nhận được phải "phân tích được"; lỗi bất kỳ trong lúc phân tích hay kiểm
+# là chứng chỉ không hợp lệ, không được lọt lên tầng trên như một lỗi lạ. Mẫu thật: SAN chứa
+# x400Address/EDIPartyName làm `cryptography` ném UnsupportedGeneralNameType (kế thừa thẳng từ
+# Exception). Mẫu mô phỏng: thay hàm load hoặc thuộc tính của chứng chỉ để ném một lớp lỗi lạ.
+
+
+def _parse(source, form: str):
+    """`peer_cert_from_pem` hoặc `peer_cert_from_der` trên chứng chỉ của `source` (Identity hoặc x509)."""
+    pem = pem_of(source) if isinstance(source, x509.Certificate) else source.cert_pem()
+    return peer_cert_from_pem(pem) if form == "pem" else peer_cert_from_der(ssl.PEM_cert_to_DER_cert(pem))
+
+
+def _loader_name(form: str) -> str:
+    return "load_pem_x509_certificate" if form == "pem" else "load_der_x509_certificate"
+
+
+class _OddError(Exception):
+    """Lớp lỗi lạ, không chung gốc với ValueError (giống UnsupportedGeneralNameType)."""
+
+
+class _Stop(BaseException):
+    """Không phải Exception (như KeyboardInterrupt, CancelledError)."""
+
+
+class _BrokenCert:
+    """Bọc một chứng chỉ thật; đọc thuộc tính `broken` thì ném `error`."""
+
+    def __init__(self, cert: x509.Certificate, broken: str, error: BaseException) -> None:
+        self._cert = cert
+        self._broken = broken
+        self._error = error
+
+    def __getattr__(self, name: str):
+        if name == self._broken:
+            raise self._error
+        value = getattr(self._cert, name)
+        if name == "verify_directly_issued_by":
+            # Hàm thật cần chứng chỉ thật làm issuer, không nhận lớp bọc.
+            return lambda issuer: value(issuer._cert if isinstance(issuer, _BrokenCert) else issuer)
+        return value
+
+
+def _wrap_loader(monkeypatch, form: str, broken: str, error: BaseException) -> list[_BrokenCert]:
+    """Thay hàm load của `cryptography` để mọi chứng chỉ trả về đều là `_BrokenCert`."""
+    name = _loader_name(form)
+    real = getattr(x509, name)
+    made: list[_BrokenCert] = []
+
+    def load(data, *args, **kwargs):
+        made.append(_BrokenCert(real(data, *args, **kwargs), broken, error))
+        return made[-1]
+
+    monkeypatch.setattr(x509, name, load)
+    return made
+
+
+def test_m1_unsupported_general_name_is_unparseable_by_cryptography(make_cert, unsupported_name_ext):
+    """Tiền đề của các test M1 bên dưới: chính `cryptography` không đọc được extension mẫu."""
+    cert = make_cert(extensions=[(unsupported_name_ext, False)])
+    try:
+        _ = cert.extensions
+    except Exception:
+        return
+    pytest.fail("cryptography đọc được extension mẫu: test M1 với mẫu này không còn ý nghĩa")
+
+
+@pytest.mark.parametrize("critical", [False, True], ids=["non-critical", "critical"])
+def test_m1_cert_with_unsupported_general_name_rejected_from_pem_and_der(
+    make_cert, unsupported_name_ext, critical
+):
+    cert = make_cert(extensions=[(unsupported_name_ext, critical)])
+    with pytest.raises(InvalidCertificate):
+        peer_cert_from_pem(pem_of(cert))
+    with pytest.raises(InvalidCertificate):
+        peer_cert_from_der(der_of(cert))
+
+
+def test_m1_own_cert_with_unsupported_general_name_is_identity_error(
+    tmp_path, make_cert, unsupported_name_ext
+):
+    """`device.crt` của chính máy mang tên lạ: IdentityError (CLI in câu và thoát 1), không tạo lại."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    cert = make_cert(key=key, extensions=[(unsupported_name_ext, False)])
+    (tmp_path / CERT_FILE).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / KEY_FILE).write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+    before = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    with pytest.raises(IdentityError, match=CERT_FILE):
+        load_or_create_identity(tmp_path)
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.name != IDENTITY_LOCK} == before
+
+
+@pytest.mark.parametrize("form", ["pem", "der"])
+def test_m1_unexpected_error_while_loading_is_invalid_certificate(identity, monkeypatch, form):
+    calls = []
+
+    def broken(*args, **kwargs):
+        calls.append(args)
+        raise _OddError("lỗi lạ lúc load")
+
+    monkeypatch.setattr(x509, _loader_name(form), broken)
+    with pytest.raises(InvalidCertificate) as exc:
+        _parse(identity, form)
+    assert calls, "hàm load bị thay chưa được gọi: phép thử vô nghĩa"
+    assert isinstance(exc.value.__cause__, _OddError)
+
+
+# Thuộc tính cần đọc để kiểm đủ các điều kiện ở protocol §5.1 (dấu hiệu CA, loại khóa, CN, thuật
+# toán chữ ký, chữ ký tự ký) và để dựng PEM/fingerprint đã chuẩn hóa.
+CHECKED_ATTRIBUTES = [
+    "extensions",
+    "public_key",
+    "subject",
+    "signature_algorithm_oid",
+    "verify_directly_issued_by",
+    "public_bytes",
+]
+
+
+@pytest.mark.parametrize("form", ["pem", "der"])
+@pytest.mark.parametrize("attribute", CHECKED_ATTRIBUTES)
+def test_m1_unexpected_error_while_checking_is_invalid_certificate(identity, monkeypatch, form, attribute):
+    made = _wrap_loader(monkeypatch, form, attribute, _OddError(f"lỗi lạ khi đọc {attribute}"))
+    with pytest.raises(InvalidCertificate) as exc:
+        _parse(identity, form)
+    assert made, "hàm load bị thay chưa được gọi: phép thử vô nghĩa"
+    assert isinstance(exc.value.__cause__, _OddError)
+
+
+@pytest.mark.parametrize("form", ["pem", "der"])
+@pytest.mark.parametrize("stage", ["load", "extensions"])
+def test_m1_base_exception_is_not_turned_into_invalid_certificate(identity, monkeypatch, form, stage):
+    """Chỉ lỗi (Exception) mới thành InvalidCertificate; Ctrl+C hay hủy task phải bay ra nguyên vẹn."""
+    if stage == "load":
+
+        def broken(*args, **kwargs):
+            raise _Stop
+
+        monkeypatch.setattr(x509, _loader_name(form), broken)
+    else:
+        _wrap_loader(monkeypatch, form, "extensions", _Stop())
+    with pytest.raises(_Stop):
+        _parse(identity, form)
+
+
+def _der_tlv(tag: int, content: bytes) -> bytes:
+    length = len(content)
+    if length < 0x80:
+        return bytes([tag, length]) + content
+    size = length.to_bytes((length.bit_length() + 7) // 8, "big")
+    return bytes([tag, 0x80 | len(size)]) + size + content
+
+
+# GeneralName bất kỳ: tag ngữ cảnh [0]..[8], dạng nguyên thủy hoặc cấu trúc, nội dung ngẫu nhiên.
+_general_names = st.builds(
+    lambda number, constructed, content: _der_tlv((0xA0 if constructed else 0x80) | number, content),
+    st.integers(0, 8),
+    st.booleans(),
+    st.binary(max_size=40),
+)
+_general_name_lists = st.lists(_general_names, min_size=1, max_size=4).map(
+    lambda names: _der_tlv(0x30, b"".join(names))
+)
+
+
+@settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    oid=st.sampled_from([ExtensionOID.SUBJECT_ALTERNATIVE_NAME, ExtensionOID.ISSUER_ALTERNATIVE_NAME]),
+    value=_general_name_lists,
+    critical=st.booleans(),
+)
+def test_m1_fuzz_general_names_only_raise_invalid_certificate(make_cert, oid, value, critical):
+    """SAN/IAN có GeneralName bất kỳ: hoặc là chứng chỉ hợp lệ, hoặc InvalidCertificate, không gì khác."""
+    cert = make_cert(key=_fuzz_key(), extensions=[(x509.UnrecognizedExtension(oid, value), critical)])
+    for form in ("pem", "der"):
+        try:
+            peer = _parse(cert, form)
+        except InvalidCertificate:
+            continue
+        assert peer.fingerprint == fingerprint_of_der(der_of(cert))
+
+
+@functools.cache
+def _fuzz_key() -> ec.EllipticCurvePrivateKey:
+    return ec.generate_private_key(ec.SECP256R1())
 
 
 # --- Fuzz --------------------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 > **Vai trò:** đặc tả sản phẩm — giải quyết vấn đề gì, cho ai, gồm những gì, trông ra sao, đạt chuẩn nào thì được phát hành.
 > **Nguồn duy nhất cho:** phạm vi MVP, tính năng và tiêu chí chấp nhận (F1–F12), yêu cầu phi chức năng (N1–N12), thông báo lỗi, tiêu chí phát hành.
 > **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
-> **Cập nhật:** 2026-10-20
+> **Cập nhật:** 2026-10-23
 
 ---
 
@@ -66,7 +66,7 @@
 | Ghép đôi bằng mã 6 số | Tài khoản, đăng nhập |
 | Gửi một hoặc nhiều file (kéo thả hoặc chọn file) | Gửi cả thư mục, đồng bộ thư mục |
 | Hỏi người nhận chấp nhận / từ chối | Gửi một lúc tới nhiều thiết bị |
-| Tự nối lại sau rớt mạng, kể cả khi đã tắt app | Chế độ khách qua trình duyệt |
+| Tự nối lại sau rớt mạng, kể cả khi đã tắt app nhận | Chế độ khách qua trình duyệt |
 | Kiểm tra toàn vẹn bằng SHA-256 Merkle | Nén dữ liệu khi truyền |
 | Đồng bộ clipboard văn bản và ảnh | Đồng bộ clipboard dạng file |
 | Khay hệ thống, chạy nền, khởi động cùng máy | Tự động cập nhật ngầm |
@@ -111,6 +111,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Hạn chế máy lạ làm phiền: chỉ một phiên ghép đôi tại một thời điểm; sau mỗi lần từ chối hay hết giờ, máy đó phải chờ lâu dần (10 giây, 20 giây… tối đa 10 phút) mới gửi được yêu cầu mới. Đây là mức tốt nhất có thể trong LAN, không chống được máy cố tình đổi địa chỉ liên tục; ghép đôi vẫn an toàn vì cần xác nhận mã ở cả hai máy.
   - Máy đang chờ ghép đôi hiện tối đa **5 mã mỗi phút** (gộp mọi máy gửi yêu cầu); quá thì yêu cầu mới nhận “chưa sẵn sàng ghép đôi” (mục 8). Từ mã thứ **3** trong 1 phút, máy đó cảnh báo có thể có người đang thử giả mạo (mục 8). Nhờ vậy kẻ đứng giữa chỉ thử được vài mã trong lúc người dùng chờ xác nhận.
   - Không ghép đôi đè lên một thiết bị tin cậy có cùng mã thiết bị nhưng danh tính khác; phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa.
+  - Ghép đôi lại với một thiết bị tin cậy (cùng mã thiết bị, cùng danh tính, ví dụ sau khi ghép đôi một phía): lời hỏi hiện thêm tên đã lưu (mục 7.2). Máy nhận yêu cầu ghép đôi giữ nguyên tên đã lưu, chỉ máy gửi yêu cầu cập nhật tên theo tên máy kia đang dùng, vì lúc ghép đôi máy nhận yêu cầu chưa xác minh được máy kia đúng là thiết bị đó ([protocol.md](protocol.md) mục 5.1, 5.5).
 
 ### F4. Gửi file
 - **US-06:** Tôi muốn kéo một hoặc nhiều file thả vào thiết bị trên radar để gửi.
@@ -238,15 +239,52 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 
 ### 7.2. Ghép đôi
 ```
-┌─ Ghép đôi với “MacBook” ─────────────────┐
-│  Kiểm tra mã này trùng với màn hình       │
-│  của MacBook:                             │
+┌─ Ghép đôi ────────────────────────────────┐
+│  Hãy so mã dưới đây với mã trên màn hình  │
+│  máy kia.                                 │
 │                                           │
 │              4 8 2   9 1 3                │
+│                                           │
+│  Máy kia tự xưng là “MacBook”             │
+│  (mã máy 3f2a9c1e, 192.168.1.5)           │
 │                                           │
 │  [ Không trùng ]          [ Trùng khớp ]  │
 └───────────────────────────────────────────┘
 ```
+
+Tên máy kia do chính máy đó tự đặt và chưa được xác thực ([protocol.md](protocol.md) mục 3.3). Nếu tên đứng ngay trước mã, kẻ đứng giữa đặt tên kiểu `PC-A:   382 104` là hiện được một mã giả đúng chỗ người dùng nhìn. Vì vậy lời hỏi ghép đôi, ở giao diện lẫn CLI, theo đúng bố cục sau:
+
+- Tiêu đề chỉ là “Ghép đôi”, không chứa tên máy kia.
+- Mã đứng riêng và đứng **trước** mọi chữ do máy kia đặt. Giao diện: một dòng chữ lớn chỉ có mã. CLI: dòng `Mã ghép đôi:   382 104`, chỉ gồm nhãn cố định và mã. Không chữ nào do máy kia đặt được đứng trước mã hay cùng dòng với mã.
+- Cảnh báo nhiều mã (mục 8), nếu có, nằm ngay dưới mã.
+- Tên máy kia nằm sau mã, luôn trong ngoặc “…”, kèm mã máy (8 ký tự đầu của `device_id`) và địa chỉ:
+  - dài quá **32 cột** thì bị cắt và thêm `…`, tổng vẫn ≤ 32 cột; chữ rộng (CJK, phần lớn emoji) tính 2 cột, dấu kết hợp và ZWJ (U+200D) tính 0 cột, ký tự khác 1 cột;
+  - ký tự trông như khoảng trắng mà không phải dấu cách thường U+0020 được hiện thành `·`: các khoảng trắng Unicode khác (U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000) và các ký tự trống U+2800, U+3164, U+115F, U+1160, U+FFA0.
+- Máy kia đã ghép đôi với máy này (F3, ghép đôi lại) thì hiện thêm tên đã lưu, theo cùng cách hiện tên ở trên.
+
+Bản CLI, ví dụ ở `teleport listen` với đủ các dòng tùy chọn:
+```
+Có yêu cầu ghép đôi. Hãy so mã dưới đây với mã trên màn hình máy kia.
+Mã ghép đôi:   382 104
+Cảnh báo: máy này đã hiện 3 mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).
+Máy kia tự xưng là “MacBook” (mã máy 3f2a9c1e, 192.168.1.5).
+Máy này đã ghép đôi với mã máy 3f2a9c1e trước đây, tên đã lưu: “MacBook”. Ghép đôi lại sẽ giữ nguyên tên đã lưu.
+Trùng khớp? [c/k]:
+```
+
+| Thứ tự | Khi nào | Dòng |
+|---|---|---|
+| 1 | `teleport listen` | `Có yêu cầu ghép đôi. Hãy so mã dưới đây với mã trên màn hình máy kia.` |
+| 1 | `teleport pair` | `Hãy so mã dưới đây với mã trên màn hình máy kia.` |
+| 2 | Luôn có | `Mã ghép đôi:   <mã>` (nhãn, ba dấu cách, mã dạng `382 104`) |
+| 3 | Máy nhận yêu cầu ghép đôi đã hiện từ 3 mã trong 1 phút | Câu cảnh báo ở mục 8, giữ nguyên |
+| 4 | Luôn có | `Máy kia tự xưng là “<tên>” (mã máy <mã máy>, <địa chỉ>).` |
+| 5 | Máy kia đã ghép đôi; máy này nhận yêu cầu ghép đôi | `Máy này đã ghép đôi với mã máy <mã máy> trước đây, tên đã lưu: “<tên đã lưu>”. Ghép đôi lại sẽ giữ nguyên tên đã lưu.` |
+| 5 | Máy kia đã ghép đôi; máy này gửi yêu cầu ghép đôi | `Máy này đã ghép đôi với mã máy <mã máy> trước đây, tên đã lưu: “<tên đã lưu>”.` |
+| 6 | Luôn có | `Trùng khớp? [c/k]: ` |
+
+- `<tên>` và `<tên đã lưu>` hiện theo cách ở trên (≤ 32 cột, ký tự trống thành `·`); `<mã máy>` là 8 ký tự đầu của `device_id`.
+- Máy gửi yêu cầu là bên khởi xướng, máy nhận yêu cầu là bên trả lời ([protocol.md](protocol.md) mục 5.1). Thường `teleport pair` là bên khởi xướng; khi hai máy cùng ghép đôi với nhau thì một bên `teleport pair` chuyển sang vai trả lời ([protocol.md](protocol.md) mục 5.3). Vì vậy dòng 1 xét theo lệnh, còn dòng 3 và dòng 5 xét theo vai.
 
 ### 7.3. Có file gửi tới
 ```
@@ -281,7 +319,8 @@ Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì
 | Tường lửa chặn | “Tường lửa của Windows đang chặn Teleport nhận kết nối.” (máy bị chặn tự phát hiện và hiện; nếu chiều ngược lại vẫn kết nối được thì Teleport vẫn chạy, chỉ hiện gợi ý) | Nút “Mở hướng dẫn” |
 | macOS chưa cho quyền mạng cục bộ | “Teleport chưa được phép dùng mạng cục bộ nên không thấy máy khác.” | Nút “Mở Cài đặt hệ thống” |
 | Không đủ dung lượng | “Không đủ chỗ trống: cần 12,4 GB, ổ D: còn 8,1 GB.” | Nút “Đổi thư mục nhận” |
-| Danh tính thiết bị thay đổi (cùng mã thiết bị, khác chứng chỉ) | “*PC-Nha* đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. Kết nối đã bị chặn.” | Không cho ghép đôi đè; nút “Hủy ghép đôi *PC-Nha*” (kèm cảnh báo), sau đó mới ghép đôi lại được |
+| Danh tính thiết bị thay đổi (cùng mã thiết bị, khác chứng chỉ), khi máy này kết nối hoặc gửi yêu cầu ghép đôi tới máy đó | “*PC-Nha* đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. Kết nối đã bị chặn.” | Không cho ghép đôi đè; nút “Hủy ghép đôi *PC-Nha*” (kèm cảnh báo), sau đó mới ghép đôi lại được |
+| Một máy gửi yêu cầu ghép đôi tới máy này, tự xưng là một thiết bị đã ghép đôi (cùng mã thiết bị) nhưng dùng danh tính khác | “Một máy chưa xác minh tự xưng là *PC-Nha* nhưng dùng danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy đó. Yêu cầu ghép đôi đã bị chặn.” | Không gợi ý hủy ghép đôi: máy thật có thể không liên quan |
 | Máy đã ghép đôi cài lại Teleport | “Có một *PC-Nha* mới chưa ghép đôi. Nếu máy đó vừa cài lại Teleport, hãy ghép đôi lại.” | Nút “Ghép đôi”; ghép xong thì hỏi xóa mục *PC-Nha* cũ |
 | Máy kia từ chối máy này | “*PC-Nha* từ chối kết nối từ máy này. Có thể máy đó đã hủy ghép đôi.” | Nút “Ghép đôi lại” |
 | Máy kia chưa sẵn sàng ghép đôi | “*PC-Nha* chưa sẵn sàng ghép đôi: máy đó đang ghép đôi với máy khác, chưa mở chế độ chờ ghép đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau.” | Nút “Thử lại”; CLI gợi ý `teleport listen` |
@@ -289,13 +328,14 @@ Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì
 | Thiết bị trả lời bằng danh tính không hợp lệ khi ghép đôi | “Thiết bị ở *192.168.1.5:47474* gửi danh tính không hợp lệ nên kết nối đã bị chặn. Có thể có người đang giả mạo.” | — |
 | Ghép đôi với chính máy này | “Đó là chính máy này. Hãy nhập địa chỉ của máy kia.” | — |
 | Danh tính của chính máy này bị hỏng | “Không đọc được danh tính của máy này. Teleport sẽ không tự tạo danh tính mới để khỏi mất các ghép đôi.” | Nút “Tạo danh tính mới” (cảnh báo phải ghép đôi lại) |
-| Mã ghép đôi không trùng / hết giờ | “Ghép đôi với *MacBook* chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo.” | Nút “Thử lại” |
+| Mã ghép đôi không trùng / hết giờ (sau khi đã hiện mã) | “Ghép đôi với *MacBook* chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo.” | Nút “Thử lại” |
+| Phiên ghép đôi dừng trước khi hiện mã (máy kia ngắt kết nối, gửi dữ liệu sai hoặc quá hạn chờ) | Máy gửi yêu cầu ghép đôi: “Ghép đôi với *MacBook* chưa xong vì phiên dừng trước khi hiện mã. Hãy thử lại.” Máy nhận yêu cầu ghép đôi: “Một máy tự xưng là *MacBook* đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã.” | Máy gửi yêu cầu: nút “Thử lại”. Máy nhận yêu cầu: không cần làm gì |
 | Máy đang chờ ghép đôi đã hiện từ 3 mã trở lên trong 1 phút | “Cảnh báo: máy này đã hiện *3* mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).” | Hiện ngay dưới mã; từ chối nếu không tự ghép đôi. Câu trên là bản CLI; giao diện thay “(gõ k)” bằng nút “Từ chối” |
 | Không hiện được mã ghép đôi (giao diện lỗi) | “Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại.” | Nút “Thử lại” |
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |
 | File nguồn bị sửa khi đang gián đoạn | “*video.mp4* đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại.” | Nút “Gửi lại” |
 | Người nhận từ chối | “*PC-Nha* đã từ chối nhận file.” | — |
-| Máy gửi đã tắt app khi đang gián đoạn | “*Laptop-Minh* đã hủy lượt gửi *video.mp4*. Hãy nhờ gửi lại.” | — |
+| Đã tắt app gửi khi lượt truyền đang gián đoạn | “*Laptop-Minh* đã hủy lượt gửi *video.mp4*. Hãy nhờ gửi lại.” | — |
 | Mất mạng | “Đang nối lại…” (không phải lỗi) | Tự xử lý |
 
 ---
@@ -360,7 +400,7 @@ App không có telemetry, nên trải nghiệm được đo bằng thử nghiệ
 | Mối đe dọa | Ví dụ | Biện pháp trong MVP |
 |---|---|---|
 | Nghe lén trên Wi-Fi chung | Người cùng quán cà phê bắt gói tin | Toàn bộ dữ liệu mã hóa TLS 1.3 |
-| Giả mạo thiết bị (MITM) | Kẻ xấu đặt tên máy “PC-Nha” | Ghép đôi bằng mã 6 số có nonce cam kết (kẻ giữa không thể dò trước khóa cho trùng mã); sau đó chỉ chấp nhận đúng chứng chỉ đã ghim |
+| Giả mạo thiết bị (MITM) | Kẻ xấu đặt tên máy “PC-Nha” | Ghép đôi bằng mã 6 số có nonce cam kết (kẻ giữa không thể dò trước khóa cho trùng mã); lời hỏi hiện mã trước tên do máy kia tự đặt (mục 7.2); sau đó chỉ chấp nhận đúng chứng chỉ đã ghim |
 | Thiết bị lạ gửi rác | Máy lạ spam file | Máy chưa ghép đôi không kết nối được; mặc định luôn hỏi trước khi nhận |
 | File độc hại ghi đè hệ thống | Tên file `..\..\Windows\x.dll` | Làm sạch tên, chỉ ghi trong thư mục nhận, không ghi đè |
 | Dữ liệu điều khiển độc hại | Message cực lớn hoặc sai định dạng | Giới hạn kích thước, kiểm tra hợp lệ từng trường, fuzz test |

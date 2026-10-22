@@ -1,18 +1,27 @@
 import asyncio
 import contextlib
+import datetime
+import hashlib
 import io
 import json
+import logging
 import os
 import queue
 import re
+import secrets
 import signal
 import socket
+import ssl
+import struct
 import subprocess
 import sys
 import threading
 import time
+import unicodedata
 
 import pytest
+from hypothesis import HealthCheck, assume, given, settings
+from hypothesis import strategies as st
 
 from teleport import __version__
 from teleport.cli import build_parser, main
@@ -77,6 +86,7 @@ BAD_ADDRESS = (  # PR-4 mục 3.10 (đổi theo mục 4.8)
     "192.168.1.5:47474, hoặc tên / mã thiết bị như `teleport list` hiện."
 )
 NODE_OPTS = ["--host", LOCAL, "--port", "0"]
+CODE_LINE_RE = r"^Mã ghép đôi:   (\d{3} \d{3})$"  # H1: dòng mã chỉ gồm nhãn cố định và mã
 
 
 def run_main(argv: list[str]) -> int:
@@ -571,6 +581,7 @@ async def test_cl7_listen_and_pair_json_end_to_end(tmp_path, fast_cli, cli_runs)
         assert isinstance(p["expires_in"], float) and 0 < p["expires_in"] <= 2.0
         assert TIME_RE.match(p["time"])
         assert "session_id" in p
+        assert p["known_name"] is None  # M5: chưa từng ghép đôi
     assert pa["peer_device_id"] == ev["device_id"]
 
     pair.say("c")
@@ -610,11 +621,12 @@ async def test_cl8_text_mode_reject_messages(tmp_path, fast_cli, cli_runs):
     await pair.wait_text("Trùng khớp? [c/k]:")
     await listen.wait_text("Trùng khớp? [c/k]:")
     assert f"Đang kết nối tới 127.0.0.1:{port}…" in pair.text()
-    assert "Ghép đôi với “B” (127.0.0.1, mã máy " in pair.text()
-    assert "Yêu cầu ghép đôi từ “A” (127.0.0.1, mã máy " in listen.text()
-    codes_a = re.findall(r"màn hình của B:\s+(\d{3} \d{3})", pair.text())
-    codes_b = re.findall(r"màn hình của A:\s+(\d{3} \d{3})", listen.text())
-    assert codes_a and codes_a == codes_b
+    # H1 (mvp mục 7.2): mã đứng riêng một dòng, tên máy kia ở dòng sau, trong ngoặc.
+    assert re.search(r"^Máy kia tự xưng là “B” \(mã máy [0-9a-f]{8}, 127\.0\.0\.1\)\.$", pair.text(), re.M)
+    assert re.search(r"^Máy kia tự xưng là “A” \(mã máy [0-9a-f]{8}, 127\.0\.0\.1\)\.$", listen.text(), re.M)
+    codes_a = re.findall(CODE_LINE_RE, pair.text(), re.M)
+    codes_b = re.findall(CODE_LINE_RE, listen.text(), re.M)
+    assert len(codes_a) == 1 and codes_a == codes_b, (pair.text(), listen.text())
 
     pair.say("k")
     assert await asyncio.wait_for(pair.task, 10) == 1
@@ -2147,19 +2159,30 @@ MVP_PROMPT_FAILED = "Không hiện được mã ghép đôi trên máy này nên
 ASK = "Trùng khớp? [c/k]: "
 
 
-def _prompt(role: str, recent_codes: int):
+def _prompt(
+    role: str,
+    recent_codes: int,
+    *,
+    peer_name: str = "A",
+    known_name: str | None = None,
+    code: str = "123456",
+    peer_device_id: str = "ab" * 16,
+    address: str = "192.168.1.5",
+    expires_at: float | None = None,
+):
     from teleport.app.pairing import PairingPrompt
     from teleport.core.pairing import Role
 
     return PairingPrompt(
         session_id=7,
         role=Role(role),
-        address="192.168.1.5",
-        peer_name="A",
-        peer_device_id="ab" * 16,
-        code="123456",
-        expires_at=asyncio.get_running_loop().time() + 60,
+        address=address,
+        peer_name=peer_name,
+        peer_device_id=peer_device_id,
+        code=code,
+        expires_at=asyncio.get_running_loop().time() + 60 if expires_at is None else expires_at,
         recent_codes=recent_codes,
+        known_name=known_name,
     )
 
 
@@ -2178,18 +2201,21 @@ async def test_responder_prompt_below_threshold_has_no_warning(n):
     assert "Cảnh báo" not in text and "mã ghép đôi trong 1 phút qua" not in text
     lines = text.split("\n")
     assert lines[-1] == ASK
-    assert "123 456" in lines[-2]
+    i = lines.index("Mã ghép đôi:   123 456")
+    assert lines[i + 1].startswith("Máy kia tự xưng là “A”")
     assert err.getvalue() == ""
 
 
 @pytest.mark.parametrize("n", [3, 5, 64])
 async def test_responder_prompt_at_threshold_warns_between_code_and_question(n):
+    """H1: cảnh báo nằm ngay dưới dòng mã (mvp mục 7.2), trước tên máy kia và câu hỏi."""
     p, out, err = _prompter(json_mode=False)
     p.on_prompt(_prompt("responder", n))
     lines = out.getvalue().split("\n")
     assert lines[-1] == ASK
-    assert lines[-2] == WARN_CODES.format(n=n)
-    assert "123 456" in lines[-3]
+    i = lines.index("Mã ghép đôi:   123 456")
+    assert lines[i + 1] == WARN_CODES.format(n=n)
+    assert lines[i + 2].startswith("Máy kia tự xưng là “A”")
     assert out.getvalue().count("Cảnh báo") == 1
     assert err.getvalue() == ""
 
@@ -2251,6 +2277,7 @@ def test_outcome_message_prompt_failed(role):
         peer_reason=None,
         device=None,
         known_name=None,
+        code_shown=False,
     )
     assert outcome_message(result) == [MVP_PROMPT_FAILED]
 
@@ -2298,7 +2325,9 @@ async def test_listen_text_warns_on_third_code(tmp_path, fast_cli, cli_runs):
         assert "Cảnh báo" not in pair.text()
     text = listen.text()
     assert text.count("mã ghép đôi trong 1 phút qua") == 1
-    assert WARN_CODES.format(n=3) + "\n" + ASK in text
+    # H1: cảnh báo ngay dưới dòng mã, trước dòng tên máy kia.
+    pattern = CODE_LINE_RE[:-1] + r"\n" + re.escape(WARN_CODES.format(n=3)) + r"\nMáy kia tự xưng là “A” "
+    assert re.search(pattern, text, re.M), text
 
 
 @with_marks(socket_test)
@@ -2324,3 +2353,1113 @@ async def test_listen_over_code_limit_answers_busy_without_prompt(tmp_path, fast
     assert len(listen.events_of("pair_prompt")) == 1
     assert len(listen.events_of("pair_result")) == 1
     assert not listen.task.done()
+
+
+# =================================================================================================
+# Nhóm (a) PR #10, việc VT-3 (kế hoạch nhóm (a), mục “Tiêu chí xong” H1, M1, M4, M5, L4).
+#
+# H1: lời hỏi theo bố cục mvp mục 7.2: dòng `Mã ghép đôi:   382 104` đứng riêng, trước mọi chữ do máy
+# kia đặt; tên máy kia chỉ nằm trong “…” ở dòng `Máy kia tự xưng là …` (qua `display_name`: ≤ 32 cột,
+# ký tự trống thành `·`). M1/M4/M5/L4: câu báo, mã thoát và JSON của CLI. Câu chữ so nguyên văn với
+# kế hoạch. Độ rộng và ký tự trống được tính lại độc lập (`_columns`, `_BLANKS`).
+# =================================================================================================
+
+HEADER_LISTEN = "Có yêu cầu ghép đôi. Hãy so mã dưới đây với mã trên màn hình máy kia."
+HEADER_PAIR = "Hãy so mã dưới đây với mã trên màn hình máy kia."
+KNOWN_RESPONDER = (
+    "Máy này đã ghép đôi với mã máy {id8} trước đây, tên đã lưu: “{name}”. "
+    "Ghép đôi lại sẽ giữ nguyên tên đã lưu."
+)
+KNOWN_INITIATOR = "Máy này đã ghép đôi với mã máy {id8} trước đây, tên đã lưu: “{name}”."
+NOT_SHOWN_INITIATOR = "Ghép đôi với {x} chưa xong vì phiên dừng trước khi hiện mã. Hãy thử lại."
+NOT_SHOWN_RESPONDER = "Một máy tự xưng là {x} đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã."
+CONFLICT_RESPONDER = (
+    "Một máy chưa xác minh tự xưng là {known} nhưng dùng danh tính khác với lúc ghép đôi. "
+    "Có thể có người đang giả mạo máy đó. Yêu cầu ghép đôi đã bị chặn."
+)
+CONFLICT_INITIATOR = (
+    "{known} đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. "
+    "Kết nối đã bị chặn.",
+    "Nếu chắc chắn máy đó đã đổi danh tính, hãy hủy ghép đôi mục cũ trước: `teleport unpair {id8}`",
+)
+MVP_INVALID_IDENTITY = (
+    "Thiết bị ở {target} gửi danh tính không hợp lệ nên kết nối đã bị chặn. Có thể có người đang giả mạo."
+)
+CANCELLED_TEXT = "Đã hủy ghép đôi."
+NAME_LINE_RE = re.compile(r"^Máy kia tự xưng là “(.*)” \(mã máy ([0-9a-f]{8}), ([0-9.]+)\)\.$")
+# Các kết quả “chưa xong” (mvp mục 8, dòng “Mã ghép đôi không trùng / hết giờ”).
+UNFINISHED = (
+    "user_rejected",
+    "timeout",
+    "peer_rejected",
+    "peer_timeout",
+    "protocol_error",
+    "peer_invalid",
+    "peer_aborted",
+    "connection_lost",
+)
+# Tên chứa mã giả (kế hoạch H1; kịch bản tan-cong 1). Mã thật trong các test là 123 456.
+FAKE_CODE_NAMES = [
+    "PC-A:   382 104",
+    "PC-A" + "\u2800" * 20 + "382 104",
+    "PC-A\u3164\u3164\u3164382 104",
+    "Mã ghép đôi:   111 222",
+    "PC-A\u3000\u3000\uff13\uff18\uff12 \uff11\uff10\uff14",  # U+3000 và chữ số toàn chiều rộng
+    "PC-A:   382 104 " + "x" * 48,  # đúng 64 ký tự
+    "B" * 64,
+]
+FAKE_CODE_IDS = [
+    "colon-spaces",
+    "braille-blank",
+    "hangul-filler",
+    "code-label",
+    "ideographic-space-fullwidth-digits",
+    "64-chars-fake-code",
+    "64-chars",
+]
+# Vai và lệnh: `listen` luôn là bên trả lời; `pair` thường là bên khởi xướng, chuyển sang vai trả lời
+# khi hai máy cùng ghép đôi với nhau (protocol mục 5.3). Dòng đầu xét theo lệnh, cảnh báo và dòng tên
+# đã lưu xét theo vai (mvp mục 7.2).
+PROMPT_MODES = [(True, "responder"), (False, "initiator"), (False, "responder")]
+PROMPT_MODE_IDS = ["listen", "pair", "pair-yielded"]
+
+_ZWJ = "\u200d"
+_BLANKS = frozenset(
+    [chr(c) for c in range(0x110000) if unicodedata.category(chr(c)) == "Zs" and c != 0x20]
+    + ["\u2800", "\u3164", "\u115f", "\u1160", "\uffa0"]
+)
+# Vừa là dấu kết hợp vừa rộng: đặc tả không nói luật nào thắng, nên hypothesis không sinh.
+_AMBIGUOUS_WIDTH = frozenset(
+    chr(c)
+    for c in range(0x110000)
+    if unicodedata.category(chr(c)) in ("Mn", "Me") and unicodedata.east_asian_width(chr(c)) in ("W", "F")
+)
+
+
+def _columns(text: str) -> int:
+    """Độ rộng theo cột, tính độc lập theo đặc tả (W/F = 2; Mn, Me, U+200D = 0; còn lại 1)."""
+    total = 0
+    for ch in text:
+        if ch == _ZWJ or unicodedata.category(ch) in ("Mn", "Me"):
+            continue
+        total += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return total
+
+
+def _spaced(code: str) -> str:
+    return f"{code[:3]} {code[3:]}"
+
+
+def _valid_name(name: str) -> bool:
+    from teleport.core.messages import MessageError, validate_device_name
+
+    try:
+        validate_device_name(name)
+    except MessageError:
+        return False
+    return True
+
+
+def render_prompt(prompt, *, listening: bool, json_mode: bool = False) -> tuple[str, str]:
+    """Cho `_Prompter` hiện một lời hỏi; trả (stdout, stderr). Cần vòng lặp đang chạy."""
+    p, out, err = _prompter(json_mode=json_mode, listening=listening)
+    p.on_prompt(prompt)
+    return out.getvalue(), err.getvalue()
+
+
+def expected_prompt_lines(prompt, *, listening: bool) -> list[str]:
+    """Các dòng lời hỏi đúng theo kế hoạch H1 / mvp mục 7.2; dòng cuối là câu hỏi (không xuống dòng)."""
+    from teleport.core.display import display_name
+
+    responder = prompt.role.value == "responder"
+    id8 = prompt.peer_device_id[:8]
+    lines = [HEADER_LISTEN if listening else HEADER_PAIR, f"Mã ghép đôi:   {_spaced(prompt.code)}"]
+    if responder and prompt.recent_codes >= 3:
+        lines.append(WARN_CODES.format(n=prompt.recent_codes))
+    lines.append(f"Máy kia tự xưng là “{display_name(prompt.peer_name)}” (mã máy {id8}, {prompt.address}).")
+    if prompt.known_name is not None:
+        template = KNOWN_RESPONDER if responder else KNOWN_INITIATOR
+        lines.append(template.format(id8=id8, name=display_name(prompt.known_name)))
+    lines.append(ASK)
+    return lines
+
+
+def check_code_first(lines: list[str], code: str, *, name_is_distinctive: bool = False) -> str:
+    """Bất biến H1, kiểm độc lập với `display_name`; trả phần tên nằm trong “…”.
+
+    - Đúng một dòng bắt đầu bằng “Mã ghép đôi”, và đó là `Mã ghép đôi:   <mã thật>`.
+    - Trước dòng mã chỉ có tiêu đề cố định: không chữ số, không chữ nào do máy kia đặt.
+    - Tên máy kia nằm trong “…” ở đúng một dòng `Máy kia tự xưng là …`, sau dòng mã; phần trong
+      ngoặc ≤ 32 cột và không còn ký tự trống.
+    - `name_is_distinctive`: phần tên đó không xuất hiện ở dòng nào khác (trừ dòng tên đã lưu).
+    """
+    code_line = f"Mã ghép đôi:   {_spaced(code)}"
+    assert [line for line in lines if line.startswith("Mã ghép đôi")] == [code_line], lines
+    i = lines.index(code_line)
+    for line in lines[:i]:
+        assert not any(ch.isdigit() for ch in line), f"chữ số trước dòng mã: {line!r}"
+        assert line in (HEADER_LISTEN, HEADER_PAIR), f"chữ lạ trước dòng mã: {line!r}"
+    named = [(j, m) for j, line in enumerate(lines) if (m := NAME_LINE_RE.match(line))]
+    assert len(named) == 1, lines
+    j, m = named[0]
+    assert j > i, "tên máy kia phải ở sau dòng mã"
+    shown = m.group(1)
+    assert _columns(shown) <= 32, shown
+    assert not set(shown) & _BLANKS, shown
+    if name_is_distinctive:
+        for k, line in enumerate(lines):
+            if k != j and not line.startswith("Máy này đã ghép đôi"):
+                assert shown not in line, f"tên máy kia ở ngoài “…”: {line!r}"
+    return shown
+
+
+# --- H1: bố cục lời hỏi (trong tiến trình, không socket) ---------------------------------------------
+
+
+@pytest.mark.parametrize(("listening", "role"), PROMPT_MODES, ids=PROMPT_MODE_IDS)
+@pytest.mark.parametrize("recent", [0, 4])
+@pytest.mark.parametrize("name", FAKE_CODE_NAMES, ids=FAKE_CODE_IDS)
+async def test_h1_prompt_shows_code_line_before_any_peer_text(name, recent, listening, role):
+    assert _valid_name(name), "máy kia gửi được tên này trong hello"
+    prompt = _prompt(role, recent, peer_name=name)
+    text, err = render_prompt(prompt, listening=listening)
+    lines = text.split("\n")
+    assert lines == expected_prompt_lines(prompt, listening=listening)
+    check_code_first(lines, "123456", name_is_distinctive=True)
+    if recent >= 3 and role == "responder":
+        assert lines[lines.index("Mã ghép đôi:   123 456") + 1] == WARN_CODES.format(n=recent)
+    assert err == ""
+
+
+async def test_h1_prompt_for_plain_name_matches_spec_example():
+    """Ví dụ của mvp mục 7.2 (bỏ cảnh báo và tên đã lưu), so nguyên văn."""
+    prompt = _prompt("responder", 1, peer_name="MacBook", peer_device_id="3f2a9c1e" + "0" * 24, code="382104")
+    text, _ = render_prompt(prompt, listening=True)
+    assert text == (
+        f"{HEADER_LISTEN}\n"
+        "Mã ghép đôi:   382 104\n"
+        "Máy kia tự xưng là “MacBook” (mã máy 3f2a9c1e, 192.168.1.5).\n"
+        "Trùng khớp? [c/k]: "
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [
+        ("PC-A" + "\u2800" * 20 + "382 104", "PC-A" + "·" * 20 + "382 104"),
+        ("PC-A\u3164\u3164\u3164382 104", "PC-A···382 104"),
+        ("B" * 64, "B" * 31 + "…"),
+    ],
+    ids=["braille-blank", "hangul-filler", "64-chars"],
+)
+async def test_h1_prompt_name_is_shown_with_blank_marks_and_cut(name, shown):
+    text, _ = render_prompt(_prompt("responder", 0, peer_name=name), listening=True)
+    assert f"Máy kia tự xưng là “{shown}” (mã máy abababab, 192.168.1.5)." in text.split("\n")
+
+
+_PROMPT_NAME_CHARS = st.one_of(
+    st.characters(exclude_categories=("Cc", "Cs")).filter(lambda ch: ch not in _AMBIGUOUS_WIDTH),
+    st.sampled_from(
+        [*sorted(_BLANKS), "3", " ", ":", "中", "\U0001f468", _ZWJ, "\u0301", "\uff13", "“", "”"]
+    ),
+)
+
+
+@settings(
+    max_examples=150,
+    deadline=None,
+    suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
+)
+@given(
+    name=st.text(_PROMPT_NAME_CHARS, min_size=1, max_size=64),
+    known=st.none() | st.text(_PROMPT_NAME_CHARS, min_size=1, max_size=64),
+    code=st.from_regex(r"[0-9]{6}", fullmatch=True),
+    recent=st.integers(min_value=0, max_value=10),
+    mode=st.sampled_from(PROMPT_MODES),
+)
+def test_h1_prompt_layout_holds_for_any_valid_name(name, known, code, recent, mode):
+    assume(_valid_name(name) and (known is None or _valid_name(known)))
+    listening, role = mode
+
+    async def show():
+        prompt = _prompt(role, recent, peer_name=name, known_name=known, code=code)
+        return prompt, render_prompt(prompt, listening=listening)
+
+    prompt, (text, err) = asyncio.run(show())
+    lines = text.split("\n")
+    assert lines == expected_prompt_lines(prompt, listening=listening)
+    check_code_first(lines, code)
+    assert err == ""
+
+
+@pytest.mark.parametrize("known", [None, "PC-Nha"])
+async def test_h1_json_prompt_keeps_raw_fields_and_adds_known_name(known):
+    name = "PC-A\u2800\u2800382 104"
+    prompt = _prompt("responder", 0, peer_name=name, known_name=known)
+    text, err = render_prompt(prompt, listening=True, json_mode=True)
+    events = [json.loads(line) for line in text.splitlines() if line.strip()]
+    assert [e["event"] for e in events] == ["pair_prompt"], text
+    ev = events[0]
+    fields = {"session_id", "role", "peer_name", "peer_device_id", "address", "code", "expires_in"}
+    assert fields | {"recent_codes", "warning", "known_name", "time"} <= set(ev)
+    assert ev["peer_name"] == name, "JSON giữ tên gốc; giao diện tự hiện"
+    assert ev["known_name"] == known
+    assert ev["code"] == "123456"
+    assert err == ""
+
+
+# --- Bên khởi xướng / bên trả lời thô cho các test đầu-cuối -------------------------------------------
+
+
+def _hello(device_id: str, name: str) -> dict:
+    from teleport.core.messages import PROTOCOL_VERSION
+
+    return {
+        "type": "hello",
+        "protocol": PROTOCOL_VERSION,
+        "device_id": device_id,
+        "name": name,
+        "app_version": "0.0.0",
+        "os": "windows",
+    }
+
+
+def _commitment(fp_responder: str, nonce: bytes) -> str:
+    """Cam kết của bên trả lời, tính lại theo protocol mục 5.2."""
+    return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_responder) + nonce).hexdigest()
+
+
+class RawInitiator:
+    """Bên khởi xướng thô (TLS ẩn danh, asyncio) gửi tới `listen`: tự đặt `hello.name` và chứng chỉ
+    trong `pair_request` (có thể là chứng chỉ công khai của máy khác, như ở M5)."""
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.reader = reader
+        self.writer = writer
+        der = writer.get_extra_info("ssl_object").getpeercert(binary_form=True)
+        self.server_fp = hashlib.sha256(der).hexdigest()
+        self.nonce = secrets.token_bytes(32)
+
+    @classmethod
+    async def connect(cls, port: int) -> "RawInitiator":
+        from teleport.net import tls
+
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(LOCAL, port, ssl=tls.client_context()), 5
+        )
+        return cls(reader, writer)
+
+    def send(self, msg: dict) -> None:
+        from teleport.core.framing import encode_message
+
+        self.writer.write(encode_message(msg))
+
+    async def recv_type(self, type_name: str, timeout: float = 5.0) -> dict:
+        from teleport.core.framing import MAX_PAIRING_MESSAGE_SIZE
+        from teleport.net.stream import read_message
+
+        msg = await asyncio.wait_for(read_message(self.reader, MAX_PAIRING_MESSAGE_SIZE), timeout)
+        assert msg is not None and msg.get("type") == type_name, f"cần {type_name}, nhận {msg!r}"
+        return msg
+
+    async def start(self, device_id: str, name: str, cert_pem: str) -> None:
+        """Đọc hello của server; gửi hello và `pair_request{cert}`."""
+        await self.recv_type("hello")
+        self.send(_hello(device_id, name))
+        self.send({"type": "pair_request", "cert": cert_pem})
+        await self.writer.drain()
+
+    async def to_code(self, own_fingerprint: str) -> str:
+        """`pair_commit` → gửi `pair_nonce` → `pair_reveal` (kiểm cam kết); trả mã thật."""
+        from teleport.core.pairing_code import pairing_code
+
+        commit = await self.recv_type("pair_commit")
+        self.send({"type": "pair_nonce", "nonce": self.nonce.hex()})
+        await self.writer.drain()
+        reveal = await self.recv_type("pair_reveal")
+        n_b = bytes.fromhex(reveal["nonce"])
+        assert _commitment(self.server_fp, n_b) == commit["commitment"]
+        return pairing_code(own_fingerprint, self.server_fp, self.nonce, n_b)
+
+    def abort(self) -> None:
+        with contextlib.suppress(Exception):
+            self.writer.transport.abort()
+        with contextlib.suppress(Exception):
+            self.writer.close()
+
+
+class ThreadResponder:
+    """Bên trả lời thô trong thread riêng (socket TLS chặn): dùng được cả với `main()` chạy ở thread
+    chính (vòng lặp riêng của lệnh) lẫn với `cli_runs`.
+
+    - `pair=False`: chỉ bắt tay TLS và gửi `hello` (M1: chứng chỉ server không hợp lệ).
+    - `pair=True`: ghép đôi đúng giao thức: cam kết → nonce → reveal (tính `code`) → chờ
+      `pair_confirm` của máy kia rồi gửi `pair_confirm`.
+    - Sau đó chờ máy kia đóng kết nối (close_notify hoặc reset), gọi `on_peer_closing` (trong thread
+      này). `close_notify=False`: không bao giờ trả close_notify, giữ kết nối tới khi test xong.
+    """
+
+    def __init__(
+        self,
+        cert_path,
+        key_path,
+        device_id: str,
+        *,
+        name: str = "M",
+        pair: bool = True,
+        close_notify: bool = True,
+        on_peer_closing=None,
+    ) -> None:
+        self.device_id = device_id
+        self.name = name
+        self.pair = pair
+        self.close_notify = close_notify
+        self.on_peer_closing = on_peer_closing
+        with open(cert_path, encoding="ascii") as f:
+            self.fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert(f.read())).hexdigest()
+        self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+        self.ctx.load_cert_chain(cert_path, key_path)
+        self.ctx.num_tickets = 0
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind((LOCAL, 0))
+        self.sock.listen(4)
+        self.sock.settimeout(0.1)
+        self.port: int = self.sock.getsockname()[1]
+        self.code: str | None = None
+        self.received: list[dict] = []
+        self.errors: list[BaseException] = []
+        self.stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="test-responder", daemon=True)
+
+    def __enter__(self) -> "ThreadResponder":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop.set()
+        self._thread.join(15)
+        self.sock.close()
+
+    def _run(self) -> None:
+        conn = None
+        try:
+            while conn is None:
+                if self.stop.is_set():
+                    return
+                with contextlib.suppress(TimeoutError):
+                    conn, _ = self.sock.accept()
+            conn.settimeout(15)
+            conn = self.ctx.wrap_socket(conn, server_side=True)
+            self._send(conn, _hello(self.device_id, self.name))
+            if self.pair:
+                self._pair(conn)
+            self._wait_peer_close(conn)
+            if self.on_peer_closing is not None:
+                self.on_peer_closing()
+            if self.close_notify:
+                with contextlib.suppress(OSError, ValueError):
+                    conn = conn.unwrap()
+            else:
+                self.stop.wait(30)
+        except Exception as e:
+            self.errors.append(e)
+        finally:
+            if conn is not None:
+                with contextlib.suppress(OSError):
+                    conn.close()
+
+    def _pair(self, conn) -> None:
+        from teleport.core.pairing_code import pairing_code
+
+        assert self._recv(conn)["type"] == "hello"
+        request = self._recv(conn)
+        assert request["type"] == "pair_request", request
+        fp_initiator = hashlib.sha256(ssl.PEM_cert_to_DER_cert(request["cert"])).hexdigest()
+        n_b = secrets.token_bytes(32)
+        self._send(conn, {"type": "pair_commit", "commitment": _commitment(self.fingerprint, n_b)})
+        nonce = self._recv(conn)
+        assert nonce["type"] == "pair_nonce", nonce
+        self.code = pairing_code(fp_initiator, self.fingerprint, bytes.fromhex(nonce["nonce"]), n_b)
+        self._send(conn, {"type": "pair_reveal", "nonce": n_b.hex()})
+        confirm = self._recv(conn)
+        assert confirm["type"] == "pair_confirm", confirm
+        self._send(conn, {"type": "pair_confirm"})
+
+    @staticmethod
+    def _wait_peer_close(conn) -> None:
+        while True:
+            try:
+                data = conn.recv(65536)
+            except OSError:  # reset, abort, lỗi SSL
+                return
+            if not data:  # close_notify
+                return
+
+    @staticmethod
+    def _send(conn, msg: dict) -> None:
+        from teleport.core.framing import encode_message
+
+        conn.sendall(encode_message(msg))
+
+    def _recv(self, conn) -> dict:
+        (size,) = struct.unpack("!I", self._exact(conn, 4))
+        msg = json.loads(self._exact(conn, size))
+        self.received.append(msg)
+        return msg
+
+    @staticmethod
+    def _exact(conn, n: int) -> bytes:
+        buf = b""
+        while len(buf) < n:
+            chunk = conn.recv(n - len(buf))
+            if not chunk:
+                raise ConnectionError("máy kia đóng kết nối giữa chừng")
+            buf += chunk
+        return buf
+
+
+def write_x400_san_cert(directory) -> tuple[str, str, str]:
+    """Chứng chỉ tự ký P-256, CN đúng dạng `teleport-<device_id>` nhưng SAN chứa x400Address (M1).
+
+    `cryptography` ném lỗi không phải ValueError khi đọc SAN này. Trả (file cert, file khóa, device_id).
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import ExtensionOID, NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    device_id = secrets.token_hex(16)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "teleport-" + device_id)])
+    san = x509.UnrecognizedExtension(ExtensionOID.SUBJECT_ALTERNATIVE_NAME, b"\x30\x02\xa3\x00")
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC))
+        .not_valid_after(datetime.datetime(9999, 12, 31, tzinfo=datetime.UTC))
+        .add_extension(san, critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    cert_path, key_path = directory / "x400.crt", directory / "x400.key"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+    return str(cert_path), str(key_path), device_id
+
+
+def _ctrl_c_if_running(task: asyncio.Task, sent: list[bool]) -> None:
+    """Chạy trong vòng lặp của lệnh (thread chính): Ctrl+C thật nếu lệnh còn chạy."""
+    if task.done():
+        sent.append(False)
+        return
+    sent.append(True)
+    signal.raise_signal(signal.SIGINT)
+
+
+class StdinStub:
+    """Thay `teleport.cli.StdinReader` cho test gọi `main()`: không đọc stdin thật; nhớ vòng lặp, task
+    chính và hàng đợi dòng của lệnh; tự gõ `answer` ngay sau khi lời hỏi hiện ra."""
+
+    def __init__(self) -> None:
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.task: asyncio.Task | None = None
+        self.lines: asyncio.Queue | None = None
+        self.answer: str | None = "c"
+        self.ctrl_c_sent: list[bool] = []
+
+    def ctrl_c_from_thread(self) -> None:
+        """Gọi từ thread khác: Ctrl+C tới lệnh (bỏ qua nếu vòng lặp đã đóng)."""
+        try:
+            self.loop.call_soon_threadsafe(_ctrl_c_if_running, self.task, self.ctrl_c_sent)
+        except RuntimeError:
+            self.ctrl_c_sent.append(False)
+
+
+@pytest.fixture
+def stdin_stub(monkeypatch):
+    from teleport import cli
+
+    stub = StdinStub()
+
+    class Reader:
+        def __init__(self, loop, lines) -> None:
+            stub.loop, stub.lines, stub.task = loop, lines, asyncio.current_task()
+
+        def start(self) -> None:
+            pass
+
+    real_on_prompt = cli._Prompter.on_prompt
+
+    def on_prompt(self, prompt):
+        real_on_prompt(self, prompt)
+        if stub.answer is not None:
+            stub.lines.put_nowait((time.perf_counter(), stub.answer))
+
+    monkeypatch.setattr(cli, "StdinReader", Reader)
+    monkeypatch.setattr(cli._Prompter, "on_prompt", on_prompt)
+    return stub
+
+
+def pair_results(out: str) -> list[dict]:
+    events = [json.loads(line) for line in out.splitlines() if line.strip()]
+    return [e for e in events if e.get("event") == "pair_result"]
+
+
+def main_pair_argv(d, port: int, *, json_mode: bool) -> list[str]:
+    mode = ["--json"] if json_mode else []
+    return ["--config-dir", str(d), "pair", f"{LOCAL}:{port}", *mode, "--name", "A", *NODE_OPTS]
+
+
+# --- H1: đầu-cuối --------------------------------------------------------------------------------------
+
+
+@with_marks(socket_test)
+async def test_h1_listen_shows_real_code_before_name_with_fake_code(tmp_path, fast_cli, cli_runs):
+    """Kế hoạch H1, E2E: raw client tên “PC-A:   382 104” tới `listen`: dòng mã thật đứng trước mọi
+    dòng có “PC-A”, mã giả chỉ nằm trong “…” ở dòng tên."""
+    b_dir = tmp_path / "B"
+    load_or_create_identity(b_dir)
+    listen = cli_runs("listen", listen_argv(b_dir, json_mode=False))
+    port = await listen_port_text(listen)
+    head = len(listen.text())
+    raw = load_or_create_identity(tmp_path / "R")
+    name = "PC-A:   382 104"
+    client = await RawInitiator.connect(port)
+    try:
+        await client.start(raw.device_id, name, raw.cert_pem())
+        code = await client.to_code(raw.fingerprint)
+        await listen.wait_text(ASK)
+        lines = listen.text()[head:].split("\n")
+        code_line = f"Mã ghép đôi:   {_spaced(code)}"
+        name_line = f"Máy kia tự xưng là “{name}” (mã máy {raw.device_id[:8]}, 127.0.0.1)."
+        assert lines == [HEADER_LISTEN, code_line, name_line, ASK]
+        check_code_first(lines, code, name_is_distinctive=True)
+        code_at = lines.index(code_line)
+        assert all(k > code_at for k, line in enumerate(lines) if "PC-A" in line)
+        if code != "382104":
+            assert [line for line in lines if "382 104" in line] == [name_line]
+    finally:
+        client.abort()
+
+
+@with_marks(socket_test)
+async def test_h1_pair_shows_real_code_before_name_with_fake_code(tmp_path, fast_cli, cli_runs):
+    """H1 ở vai khởi xướng: máy trả lời (kẻ đứng giữa) tự xưng “PC-A:   382 104” với `teleport pair`."""
+    m = load_or_create_identity(tmp_path / "M")
+    name = "PC-A:   382 104"
+    with ThreadResponder(m.cert_path, m.key_path, m.device_id, name=name) as peer:
+        pair = cli_runs("pair", pair_argv(tmp_path / "A", peer.port, json_mode=False))
+        await pair.wait_text(ASK)
+        assert peer.code is not None
+        text = pair.text()
+        code_line = f"Mã ghép đôi:   {_spaced(peer.code)}"
+        lines = text[text.index(HEADER_PAIR) :].split("\n")
+        assert lines == [
+            HEADER_PAIR,
+            code_line,
+            f"Máy kia tự xưng là “{name}” (mã máy {m.device_id[:8]}, 127.0.0.1).",
+            ASK,
+        ]
+        assert "PC-A" not in text[: text.index(code_line)]
+        pair.say("k")
+        assert await asyncio.wait_for(pair.task, 10) == 1
+
+
+# --- M5: tên đã lưu ------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("listening", "role"), PROMPT_MODES, ids=PROMPT_MODE_IDS)
+async def test_m5_prompt_shows_saved_name_line_by_role(listening, role):
+    prompt = _prompt(role, 0, peer_name="Laptop-Bob", known_name="PC-Nha")
+    text, err = render_prompt(prompt, listening=listening)
+    known = KNOWN_RESPONDER if role == "responder" else KNOWN_INITIATOR
+    assert text.split("\n") == [
+        HEADER_LISTEN if listening else HEADER_PAIR,
+        "Mã ghép đôi:   123 456",
+        "Máy kia tự xưng là “Laptop-Bob” (mã máy abababab, 192.168.1.5).",
+        known.format(id8="abababab", name="PC-Nha"),
+        ASK,
+    ]
+    assert err == ""
+
+
+@pytest.mark.parametrize(("listening", "role"), PROMPT_MODES, ids=PROMPT_MODE_IDS)
+async def test_m5_prompt_without_saved_name_has_no_saved_name_line(listening, role):
+    text, _ = render_prompt(_prompt(role, 0, peer_name="Laptop-Bob"), listening=listening)
+    assert "tên đã lưu" not in text
+    assert "Máy này đã ghép đôi" not in text
+
+
+@pytest.mark.parametrize(
+    ("known", "shown"),
+    [("PC\u2800\u2800Nha 382 104", "PC··Nha 382 104"), ("K" * 64, "K" * 31 + "…")],
+    ids=["blank-chars", "64-chars"],
+)
+async def test_m5_saved_name_is_shown_like_peer_name(known, shown):
+    text, _ = render_prompt(_prompt("responder", 0, known_name=known), listening=True)
+    assert KNOWN_RESPONDER.format(id8="abababab", name=shown) in text.split("\n")
+
+
+@pytest.mark.parametrize("known", [None, "PC-Nha"])
+async def test_m5_json_prompt_has_known_name(known):
+    text, _ = render_prompt(_prompt("initiator", 0, known_name=known), listening=False, json_mode=True)
+    [ev] = [json.loads(line) for line in text.splitlines() if line.strip()]
+    assert "known_name" in ev
+    assert ev["known_name"] == known
+
+
+def _finished(
+    role: str,
+    outcome: str,
+    *,
+    code_shown: bool,
+    peer_name: str | None = "A",
+    known_name: str | None = None,
+    device=None,
+    address: str = "192.168.1.5",
+):
+    from teleport.app.pairing import PairingFinished, PairingOutcome
+    from teleport.core.pairing import Role
+
+    return PairingFinished(
+        session_id=3,
+        role=Role(role),
+        outcome=PairingOutcome(outcome),
+        address=address,
+        port=None if role == "responder" else 47474,
+        peer_name=peer_name,
+        peer_device_id="ab" * 16,
+        peer_reason=None,
+        device=device,
+        known_name=known_name,
+        code_shown=code_shown,
+    )
+
+
+def _trusted(name: str):
+    from teleport.trust.store import TrustedDevice
+
+    return TrustedDevice(
+        device_id="ab" * 16,
+        name=name,
+        fingerprint="cd" * 32,
+        cert_pem="-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n",
+        paired_at=datetime.datetime(2026, 10, 23, tzinfo=datetime.UTC),
+    )
+
+
+@pytest.mark.parametrize("role", ["responder", "initiator"])
+def test_m5_paired_message_uses_saved_device_name(role):
+    from teleport.cli import outcome_message
+
+    result = _finished(role, "paired", code_shown=True, peer_name="Laptop-Bob", device=_trusted("PC-Nha"))
+    assert outcome_message(result) == ["Đã ghép đôi với PC-Nha."]
+
+
+def test_m5_paired_message_without_device_uses_peer_name():
+    from teleport.cli import outcome_message
+
+    assert outcome_message(_finished("initiator", "paired", code_shown=True)) == ["Đã ghép đôi với A."]
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_m5_listen_repair_with_stolen_public_cert_keeps_saved_name(
+    tmp_path, fast_cli, cli_runs, json_mode
+):
+    """Kế hoạch M5: B tin V tên “PC-Nha”; máy lạ gửi chứng chỉ CÔNG KHAI của V với tên “Laptop-Bob”,
+    hai bên xác nhận → B vẫn lưu “PC-Nha” (cả trên đĩa), lời hỏi và câu kết quả dùng tên đã lưu."""
+    b_dir = tmp_path / "B"
+    load_or_create_identity(b_dir)
+    v = load_or_create_identity(tmp_path / "V")
+    TrustStore.load(b_dir).add(peer_cert_from_pem(v.cert_pem()), "PC-Nha")
+    before = TrustStore.load(b_dir).get(v.device_id)
+    listen = cli_runs("listen", listen_argv(b_dir, json_mode=json_mode))
+    if json_mode:
+        port = (await listen.wait_event("listening"))["port"]
+    else:
+        port = await listen_port_text(listen)
+    v8 = v.device_id[:8]
+    client = await RawInitiator.connect(port)
+    try:
+        await client.start(v.device_id, "Laptop-Bob", v.cert_pem())  # không có khóa riêng của V
+        code = await client.to_code(v.fingerprint)
+        if json_mode:
+            prompt = await listen.wait_event("pair_prompt")
+            assert (prompt["peer_name"], prompt["known_name"]) == ("Laptop-Bob", "PC-Nha")
+            assert (prompt["peer_device_id"], prompt["code"]) == (v.device_id, code)
+        else:
+            await listen.wait_text(ASK)
+            lines = listen.text().split("\n")
+            assert f"Máy kia tự xưng là “Laptop-Bob” (mã máy {v8}, 127.0.0.1)." in lines
+            assert KNOWN_RESPONDER.format(id8=v8, name="PC-Nha") in lines
+        listen.say("c")
+        await client.recv_type("pair_confirm")
+        client.send({"type": "pair_confirm"})
+        await client.writer.drain()
+        if json_mode:
+            result = await listen.wait_event("pair_result")
+            assert result["outcome"] == "paired"
+            assert result["message"] == "Đã ghép đôi với PC-Nha."
+        else:
+            await listen.wait_text("Đã ghép đôi với PC-Nha.")
+            assert "Đã ghép đôi với Laptop-Bob" not in listen.text()
+    finally:
+        client.abort()
+    saved = TrustStore.load(b_dir).get(v.device_id)
+    assert saved is not None
+    assert (saved.name, saved.fingerprint, saved.cert_pem) == ("PC-Nha", v.fingerprint, before.cert_pem)
+    assert "Laptop-Bob" not in (b_dir / "trusted.json").read_text("utf-8")
+
+
+# --- L4: câu báo đúng ngữ cảnh ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("outcome", UNFINISHED)
+@pytest.mark.parametrize("role", ["initiator", "responder"])
+def test_l4_unfinished_after_code_was_shown_keeps_mismatch_warning(role, outcome):
+    from teleport.cli import outcome_message
+
+    assert outcome_message(_finished(role, outcome, code_shown=True)) == [MVP_NOT_DONE.format(x="A")]
+
+
+@pytest.mark.parametrize("outcome", UNFINISHED)
+def test_l4_initiator_stopped_before_code_asks_to_retry(outcome):
+    from teleport.cli import outcome_message
+
+    msg = outcome_message(_finished("initiator", outcome, code_shown=False))
+    assert msg == [NOT_SHOWN_INITIATOR.format(x="A")]
+
+
+@pytest.mark.parametrize("outcome", UNFINISHED)
+def test_l4_responder_stopped_before_code_names_unverified_peer(outcome):
+    from teleport.cli import outcome_message
+
+    msg = outcome_message(_finished("responder", outcome, code_shown=False, peer_name="Raw-X"))
+    assert msg == [NOT_SHOWN_RESPONDER.format(x="Raw-X")]
+
+
+@pytest.mark.parametrize("code_shown", [False, True])
+def test_l4_identity_conflict_as_responder_is_one_line_without_unpair(code_shown):
+    from teleport.cli import outcome_message
+
+    result = _finished(
+        "responder", "identity_conflict", code_shown=code_shown, peer_name="Laptop-Bob", known_name="PC-Nha"
+    )
+    msg = outcome_message(result)
+    assert msg == [CONFLICT_RESPONDER.format(known="PC-Nha")]
+    assert "unpair" not in " ".join(msg)
+
+
+def test_l4_identity_conflict_as_initiator_keeps_unpair_hint():
+    from teleport.cli import outcome_message
+
+    result = _finished(
+        "initiator", "identity_conflict", code_shown=False, peer_name="PC-Moi", known_name="PC-Nha"
+    )
+    assert outcome_message(result) == [
+        CONFLICT_INITIATOR[0].format(known="PC-Nha"),
+        CONFLICT_INITIATOR[1].format(id8="abababab"),
+    ]
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_l4_listen_session_closed_before_code_says_code_was_not_shown(
+    tmp_path, fast_cli, cli_runs, json_mode
+):
+    """Kế hoạch L4, E2E: raw client đóng ngay sau `pair_commit` → `listen` in câu vai trả lời, không
+    có “Nếu mã trên hai máy khác nhau”."""
+    listen = cli_runs("listen", listen_argv(tmp_path / "B", json_mode=json_mode))
+    if json_mode:
+        port = (await listen.wait_event("listening"))["port"]
+    else:
+        port = await listen_port_text(listen)
+    raw = load_or_create_identity(tmp_path / "R")
+    client = await RawInitiator.connect(port)
+    try:
+        await client.start(raw.device_id, "Raw-X", raw.cert_pem())
+        await client.recv_type("pair_commit")
+    finally:
+        client.abort()
+    expected = NOT_SHOWN_RESPONDER.format(x="Raw-X")
+    if json_mode:
+        result = await listen.wait_event("pair_result")
+        assert result["message"] == expected
+        assert result["outcome"] in UNFINISHED
+        assert listen.events_of("pair_prompt") == []
+    else:
+        await listen.wait_text(expected)
+        assert "Nếu mã trên hai máy khác nhau" not in listen.text()
+        assert ASK not in listen.text()
+    assert not listen.task.done()
+
+
+# --- M1: máy kia gửi chứng chỉ có SAN lạ ------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+def test_m1_pair_with_server_sending_x400_san_cert_reports_invalid_identity(
+    tmp_path, capsys, caplog, fast_cli, json_mode
+):
+    """Kế hoạch M1 (CLI): `teleport pair` tới server mang chứng chỉ SAN x400Address → mã 1, câu mvp
+    mục 8 “gửi danh tính không hợp lệ”, không traceback, không lưu gì."""
+    cert_path, key_path, device_id = write_x400_san_cert(tmp_path / "evil")
+    d = tmp_path / "A"
+    with ThreadResponder(cert_path, key_path, device_id, pair=False) as evil:
+        with caplog.at_level(logging.WARNING):
+            code = run_main(main_pair_argv(d, evil.port, json_mode=json_mode))
+        port = evil.port
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    expected = MVP_INVALID_IDENTITY.format(target=f"{LOCAL}:{port}")
+    assert code == 1, text
+    assert "Traceback" not in text and "Traceback" not in caplog.text
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR or r.exc_info] == []
+    assert CANCELLED_TEXT not in text
+    if json_mode:
+        [result] = pair_results(captured.out)
+        assert (result["outcome"], result["message"]) == ("identity_mismatch", expected)
+    else:
+        assert expected in text, text
+    assert TrustStore.load(d).devices() == []
+    assert lock_is_free(d)
+
+
+@pytest.mark.integration
+def test_m1_pair_subprocess_with_x400_san_cert_has_no_traceback_on_stderr(tmp_path, procs):
+    """Như trên nhưng với tiến trình thật: stderr thật không có “Traceback”."""
+    cert_path, key_path, device_id = write_x400_san_cert(tmp_path / "evil")
+    with ThreadResponder(cert_path, key_path, device_id, pair=False) as evil:
+        proc = procs(main_pair_argv(tmp_path / "A", evil.port, json_mode=False))
+        code = proc.finish(30)
+        port = evil.port
+    out = "\n".join(proc.out)
+    err = proc.err_text()
+    assert code == 1, out + err
+    assert MVP_INVALID_IDENTITY.format(target=f"{LOCAL}:{port}") in out, out + err
+    assert "Traceback" not in err and "Traceback" not in out
+
+
+# --- M4: Ctrl+C sau khi đã có kết quả ---------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+def test_m4_ctrl_c_while_closing_after_paired_reports_paired(
+    tmp_path, capsys, fast_cli, monkeypatch, stdin_stub, json_mode
+):
+    """Kế hoạch M4 (CLI): hai bên đã xác nhận, máy kia không trả close_notify nên lệnh đang chờ đóng gọn;
+    Ctrl+C lúc đó → mã 0, “Đã ghép đôi với …”, không có “Đã hủy ghép đôi.”; `--json` đúng một
+    `pair_result` `paired`."""
+    from teleport.net import connection
+
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", 3.0)  # cửa sổ đóng gọn đủ rộng để Ctrl+C rơi vào
+    m = load_or_create_identity(tmp_path / "M")
+    d = tmp_path / "A"
+    responder = ThreadResponder(
+        m.cert_path,
+        m.key_path,
+        m.device_id,
+        close_notify=False,
+        on_peer_closing=stdin_stub.ctrl_c_from_thread,
+    )
+    with responder as peer:
+        code = run_main(main_pair_argv(d, peer.port, json_mode=json_mode))
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert peer.errors == [], peer.errors
+    assert stdin_stub.ctrl_c_sent == [True], "Ctrl+C phải tới lúc lệnh còn chạy (đang đóng kết nối)"
+    assert TrustStore.load(d).get(m.device_id) is not None, "hai bên đã xác nhận: A đã lưu M"
+    assert code == 0, text
+    assert CANCELLED_TEXT not in text
+    if json_mode:
+        assert [r["outcome"] for r in pair_results(captured.out)] == ["paired"], captured.out
+    else:
+        assert text.count("Đã ghép đôi với M.") == 1, text
+    assert "Traceback" not in text
+    assert lock_is_free(d)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+@pytest.mark.parametrize("outcome", ["paired", "unreachable"])
+def test_m4_ctrl_c_in_node_close_after_result_prints_nothing_more(
+    tmp_path, capsys, fast_cli, monkeypatch, stdin_stub, outcome, json_mode
+):
+    """Kế hoạch M4 (CLI, cửa sổ K4 gốc): Ctrl+C trong `node.close()` sau khi đã in kết quả → mã theo kết
+    quả, không in thêm dòng nào."""
+    from teleport.app import node as node_mod
+
+    real_close = node_mod.Node.close
+    sent: list[bool] = []
+
+    async def close(self):
+        if not sent:
+            asyncio.get_running_loop().call_soon(_ctrl_c_if_running, stdin_stub.task, sent)
+        return await real_close(self)
+
+    monkeypatch.setattr(node_mod.Node, "close", close)
+    d = tmp_path / "A"
+    if outcome == "paired":
+        m = load_or_create_identity(tmp_path / "M")
+        with ThreadResponder(m.cert_path, m.key_path, m.device_id) as peer:
+            code = run_main(main_pair_argv(d, peer.port, json_mode=json_mode))
+        last = "Đã ghép đôi với M."
+    else:
+        s = socket.socket()
+        s.bind((LOCAL, 0))
+        port = s.getsockname()[1]
+        s.close()
+        code = run_main(main_pair_argv(d, port, json_mode=json_mode))
+        last = (
+            f"Không kết nối được tới 127.0.0.1:{port}. Hãy kiểm tra Teleport đang chạy trên máy đó, "
+            "hai máy dùng chung một mạng, và tường lửa cho phép Teleport."
+        )
+    captured = capsys.readouterr()
+    assert sent == [True], "Ctrl+C phải tới lúc node.close() đang chạy"
+    assert code == (0 if outcome == "paired" else 1), captured.out + captured.err
+    assert CANCELLED_TEXT not in captured.out + captured.err
+    if json_mode:
+        [result] = pair_results(captured.out)
+        assert result["outcome"] == outcome
+        assert json.loads(captured.out.splitlines()[-1])["event"] == "pair_result"
+    else:
+        assert captured.out.splitlines()[-1] == last, captured.out
+        assert captured.out.count(last) == 1
+    assert lock_is_free(d)
+
+
+def _fake_run_pair(monkeypatch, *, result, seen_name=None, emitted=False):
+    """Thay `teleport.cli.run_pair`: ghi `_PairState` như kế hoạch M4 rồi nhận Ctrl+C thật.
+
+    `emitted=True`: giả như `run_pair` đã in kết quả (in một dòng đánh dấu)."""
+    from teleport import cli
+
+    async def fake(args, lines, out, err, *, state=None):
+        assert state is not None, "cmd_pair phải truyền _PairState cho run_pair (kế hoạch M4)"
+        state.seen_name = seen_name
+        state.result = result
+        if emitted:
+            print("<đã in kết quả>", file=out, flush=True)
+            state.emitted = True
+        asyncio.get_running_loop().call_soon(_ctrl_c_if_running, asyncio.current_task(), [])
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(cli, "run_pair", fake)
+
+
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+def test_m4_cmd_pair_prints_result_recorded_before_ctrl_c(capsys, monkeypatch, tmp_path, json_mode):
+    _fake_run_pair(monkeypatch, result=_finished("initiator", "paired", code_shown=True, peer_name="B"))
+    argv = ["--config-dir", str(tmp_path), "pair", f"{LOCAL}:47474", *(["--json"] if json_mode else [])]
+    assert run_main(argv) == 0
+    captured = capsys.readouterr()
+    assert CANCELLED_TEXT not in captured.out + captured.err
+    if json_mode:
+        [result] = pair_results(captured.out)
+        assert (result["outcome"], result["message"]) == ("paired", "Đã ghép đôi với B.")
+    else:
+        assert captured.out.count("Đã ghép đôi với B.") == 1
+
+
+def test_m4_cmd_pair_uses_seen_name_for_recorded_failure(capsys, monkeypatch, tmp_path):
+    result = _finished("initiator", "unreachable", code_shown=False, peer_name=None, address="192.0.2.10")
+    _fake_run_pair(monkeypatch, result=result, seen_name="B")
+    assert run_main(["--config-dir", str(tmp_path), "pair", "B"]) == 1
+    out = capsys.readouterr().out
+    assert MVP_SEEN_UNREACHABLE.format(x="B") in out
+    assert HOTSPOT_HINT in out
+    assert CANCELLED_TEXT not in out
+
+
+@pytest.mark.parametrize("outcome", ["paired", "unreachable"])
+def test_m4_cmd_pair_after_result_was_printed_adds_nothing(capsys, monkeypatch, tmp_path, outcome):
+    _fake_run_pair(monkeypatch, result=_finished("initiator", outcome, code_shown=True), emitted=True)
+    code = run_main(["--config-dir", str(tmp_path), "pair", f"{LOCAL}:47474"])
+    assert code == (0 if outcome == "paired" else 1)
+    captured = capsys.readouterr()
+    assert captured.out == "<đã in kết quả>\n"
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("recorded", [None, "cancelled"])
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+def test_m4_cmd_pair_without_real_result_still_says_cancelled(
+    capsys, monkeypatch, tmp_path, recorded, json_mode
+):
+    result = None if recorded is None else _finished("initiator", recorded, code_shown=False)
+    _fake_run_pair(monkeypatch, result=result)
+    argv = ["--config-dir", str(tmp_path), "pair", f"{LOCAL}:47474", *(["--json"] if json_mode else [])]
+    assert run_main(argv) == 1
+    captured = capsys.readouterr()
+    if json_mode:
+        [obj] = pair_results(captured.out)
+        assert (obj["outcome"], obj["message"]) == ("cancelled", CANCELLED_TEXT)
+    else:
+        assert captured.out.count(CANCELLED_TEXT) == 1
+
+
+# --- H1 (nên làm thêm trong kế hoạch): tên trong sự kiện của `listen` và dòng “Đang kết nối tới” ---
+
+
+WEIRD_NAME = "PC-A" + chr(0x2800) * 3 + "382 104" + "x" * 50  # 64 ký tự
+WEIRD_SHOWN = "PC-A" + "·" * 3 + "382 104" + "x" * 17 + "…"  # 31 cột + …
+
+
+def _view(name: str, *, online: bool = True):
+    from teleport.app.devices import DeviceView
+
+    return DeviceView(
+        device_id="ab" * 16,
+        name=name,
+        os="windows",
+        paired=False,
+        online=online,
+        connected=False,
+        addresses=("192.0.2.30",) if online else (),
+        port=47474 if online else None,
+    )
+
+
+@pytest.mark.parametrize("kind", ["online", "offline", "connected", "disconnected"])
+def test_h1_listen_device_events_show_name_through_display_name(kind):
+    from teleport.app.node import DeviceConnected, DeviceDisconnected, DeviceOffline, DeviceOnline
+    from teleport.cli import _Output, _print_event
+
+    assert _valid_name(WEIRD_NAME) and len(WEIRD_NAME) == 64
+    view = _view(WEIRD_NAME, online=kind != "offline")
+    event = {
+        "online": lambda: DeviceOnline(view),
+        "offline": lambda: DeviceOffline(view),
+        "connected": lambda: DeviceConnected(view, outgoing=True),
+        "disconnected": lambda: DeviceDisconnected(view),
+    }[kind]()
+    out, err = io.StringIO(), io.StringIO()
+    _print_event(_Output(out, err, False), event)
+    text = out.getvalue()
+    assert f"“{WEIRD_SHOWN}” (abababab" in text, text
+    assert WEIRD_NAME not in text
+    assert not set(text) & _BLANKS
+
+
+@with_marks(socket_test)
+async def test_h1_pair_by_name_connecting_line_shows_name_through_display_name(
+    tmp_path, fast_links, cli_mdns, fake_open_pairing, browse_instant, cli_runs
+):
+    c = load_or_create_identity(tmp_path / "peer-C")
+    cli_mdns.seed = {c.device_id: discovered(c.device_id, WEIRD_NAME, 47474, addresses=("192.0.2.30",))}
+    pair = cli_runs("pair", name_pair_argv(tmp_path / "A", c.device_id[:8]))
+    assert await asyncio.wait_for(pair.task, 15) == 1, pair.text()
+    expected = f"Đang kết nối tới “{WEIRD_SHOWN}” ({c.device_id[:8]}) tại 192.0.2.30:47474…"
+    assert expected in pair.text().split("\n"), pair.text()
+    assert fake_open_pairing == [(["192.0.2.30"], 47474)]
