@@ -73,7 +73,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*`, `control_open`, `ping`/`pong`); bảng loại kết nối (`ConnectionKind`, `allowed_types`, `opening_kind`) | ✅ |
 | core | `keepalive.py` | Keepalive sans-IO: khi nào gửi ping, khi nào coi là mất kết nối ([protocol.md](protocol.md) mục 2.3) | ✅ |
 | core | `pairing_code.py` | Cam kết nonce và mã ghép đôi 6 số từ hai fingerprint + hai nonce | ✅ |
-| core | `pairing.py` | Máy trạng thái ghép đôi sans-IO: thứ tự `pair_*`, hết giờ, lý do hủy (`InitiatorSession`, `ResponderSession`); chống làm phiền: một phiên tại một thời điểm, chờ tăng dần theo IP, hai bên cùng chủ động (`PairingGate`) | ✅ |
+| core | `pairing.py` | Máy trạng thái ghép đôi sans-IO: thứ tự `pair_*`, hết giờ, lý do hủy (`InitiatorSession`, `ResponderSession`); chống làm phiền: một phiên tại một thời điểm, chờ tăng dần theo IP, giới hạn số mã hiện ra, hai bên cùng chủ động (`PairingGate`) | ✅ |
 | core | `discovery.py` | Khám phá sans-IO: dựng/kiểm bản ghi TXT, cắt tên ≤ 200 byte, lọc địa chỉ, nhận ra card ảo, chọn địa chỉ quảng bá; máy trạng thái `DiscoveryTracker` (thiết bị thêm/sửa/xóa, kiểm còn sống và probe thưa dần cho thiết bị đã biến mất, ưu tiên thiết bị đã ghép đôi, danh sách tràn khi đã đủ 256; protocol mục 8); phát hiện mạng đổi / máy thức dậy (`NetworkWatch`) | ✅ |
 | core | `links.py` | Máy trạng thái giữ kết nối điều khiển (sans-IO): chống trùng §6.1, lịch nối lại và chặn §6.2, giới hạn tốc độ, báo lỗi một lần | ✅ |
 | core | `blocks.py` | Khung khối nhị phân kèm SHA-256, chia khối | ⬜ |
@@ -87,7 +87,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | net | `connection.py` | Listener một cổng (TCP trần + `start_tls` theo context hiện tại); trao `hello`; phân loại ghép đôi / điều khiển; giới hạn đang mở đầu 4/IP · 64 và ẩn danh 1/IP · 8; thời gian chờ; `Connection`, `ControlChannel` (keepalive); `open_pairing` / `open_control` thử song song mọi địa chỉ | ✅ (kết nối dữ liệu ⬜, Giai đoạn 2) |
 | app | `settings.py` | `settings.json`: cổng dự phòng; giữ trường lạ; file hỏng → mặc định + `.bak` trước khi ghi đè | ✅ |
 | app | `devices.py` | Đọc địa chỉ nhập tay (`ip[:cổng]`); tìm thiết bị tin cậy theo tên hoặc tiền tố `device_id` (mvp F12); `DeviceView`/`DeviceRegistry` (gộp mDNS + `trusted.json` + trạng thái kết nối), `resolve_device` | ✅ |
-| app | `pairing.py` | Dịch vụ ghép đôi (`PairingService`): sinh nonce, chạy `core.pairing` trên `Connection`, `PairingGate`, lưu thiết bị, nhường phiên khi hai bên cùng chủ động | ✅ |
+| app | `pairing.py` | Dịch vụ ghép đôi (`PairingService`): sinh nonce, chạy `core.pairing` trên `Connection`, `PairingGate`, lưu thiết bị, nhường phiên khi hai bên cùng chủ động; không hiện được mã thì hủy phiên; báo số mã vừa hiện cho giao diện cảnh báo | ✅ |
 | app | `node.py` | Ghép các thành phần lại (`Node`): giữ `node.lock`, lắng nghe, khám phá, kết nối điều khiển tới thiết bị tin cậy, điều phối | ✅ lắng nghe, cổng dự phòng, ghép đôi, hủy ghép đôi đóng kết nối ngay; mDNS (quảng bá, duyệt, ưu tiên thiết bị đã ghép đôi, quảng bá lại khi mạng đổi/thức dậy), tự giữ kết nối điều khiển (`core.links`), sự kiện `NodeEvent`, `scan_devices` |
 | app | `transfers.py`, `clipboard.py` | Quản lý lượt truyền, đồng bộ clipboard | ⬜ |
 | cli | `cli.py`, `__main__.py` | Lệnh `teleport` / `python -m teleport` | ✅ `identity`, `list`, `listen`, `pair <tên \| tiền tố \| ip[:cổng]>`, `unpair` |

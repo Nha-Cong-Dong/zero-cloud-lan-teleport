@@ -33,14 +33,16 @@ Bên trả lời (B) cam kết nonce trước, kiểu Bluetooth numeric comparis
 thuần logic (CN khớp `hello`, tự ghép với chính mình, ghép đè danh tính) nằm ở đây.
 
 `PairingGate` quyết định có nhận một yêu cầu ghép đôi tới hay không (một phiên
-tại một thời điểm, chờ tăng dần theo IP, hai bên cùng chủ động; protocol mục 5.3).
-Giới hạn số kết nối ẩn danh (1 mỗi IP, 8 tổng) là việc của tầng `net`.
+tại một thời điểm, chờ tăng dần theo IP, giới hạn số mã hiện ra, hai bên cùng chủ
+động; protocol mục 5.3). Giới hạn số kết nối ẩn danh (1 mỗi IP, 8 tổng) là việc của
+tầng `net`.
 """
 
 from __future__ import annotations
 
 import math
 import re
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -71,12 +73,20 @@ BACKOFF_BASE = 10.0  # lần thất bại đầu: chờ 10 s, rồi gấp đôi
 BACKOFF_MAX = 600.0  # tối đa 10 phút
 BACKOFF_FORGET_AFTER = 600.0  # quên một IP sau 600 s yên lặng kể từ khi hết thời gian chờ
 MAX_TRACKED_IPS = 1024  # giới hạn bộ nhớ cho bộ đếm theo IP
+# Giới hạn số mã hiện ra ở vai trả lời (docs/mvp.md F3): mỗi mã là một lần kẻ giả mạo
+# được đoán, nên chặn số lần đoán bất kể đổi IP; từ mã thứ WARN_RECENT_CODES thì cảnh báo.
+CODE_WINDOW = 60.0  # cửa sổ đếm mã, giây
+MAX_CODES_PER_WINDOW = 5  # đủ số mã này trong cửa sổ → yêu cầu mới nhận pair_abort{busy}
+WARN_RECENT_CODES = 3  # giao diện cảnh báo khi số mã trong cửa sổ (kể cả mã đang hiện) ≥ số này
 
 _FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
 # Số mũ tối đa khi tính thời gian chờ: 2**32 · 10 s đã vượt xa BACKOFF_MAX, và chặn
 # OverflowError khi đổi số nguyên khổng lồ sang float.
 _MAX_BACKOFF_EXPONENT = 32
 _MAX_ALIASES = 15  # địa chỉ khác của máy đích (net mở tới tối đa 16 địa chỉ)
+# Số mốc hiện mã giữ trong bộ nhớ (cố định lúc tạo gate). MAX_CODES_PER_WINDOW lớn hơn số
+# này thì bộ đếm không bao giờ đạt giới hạn, nên `admit` báo ValueError thay vì âm thầm tắt nó.
+_MAX_CODE_TIMES = 64
 
 
 class PairingUsageError(RuntimeError):
@@ -115,7 +125,7 @@ class Outcome(StrEnum):
     PEER_INVALID = "peer_invalid"  # nhận pair_abort{invalid}
     PEER_ABORTED = "peer_aborted"  # nhận pair_abort với reason lạ nhưng đúng dạng
     CONNECTION_LOST = "connection_lost"
-    CANCELLED = "cancelled"  # app hủy: Ctrl+C, tắt node, nhường khi hai bên cùng chủ động
+    CANCELLED = "cancelled"  # app hủy: Ctrl+C, tắt node, nhường phiên, không hiện được mã
 
 
 _PEER_ABORT_OUTCOMES: dict[str, Outcome] = {
@@ -202,7 +212,11 @@ class ConnectionLost:
 
 @dataclass(frozen=True, slots=True)
 class Cancel:
-    """`app` hủy phiên. `reason` chỉ là `user` (Ctrl+C, tắt node) hoặc `busy` (nhường phiên)."""
+    """`app` hủy phiên. `reason` chỉ là `user` hoặc `busy`.
+
+    `user`: Ctrl+C, tắt node, hoặc vai khởi xướng không hiện được mã. `busy`: nhường phiên
+    (hai bên cùng chủ động), hoặc vai trả lời không hiện được mã (protocol mục 5.1).
+    """
 
     reason: str = AbortReason.USER
 
@@ -640,7 +654,8 @@ class PairingGate:
     """Cửa vào cho các phiên ghép đôi của một node: một phiên tại một thời điểm, chờ tăng dần.
 
     `accepting`: giao diện luôn True; CLI chỉ True khi đang chạy `teleport listen`.
-    Bộ đếm theo IP chỉ nằm trong bộ nhớ, chỉ tính phiên mà máy này là bên trả lời.
+    Bộ đếm theo IP và bộ đếm mã hiện ra chỉ nằm trong bộ nhớ, chỉ tính phiên mà máy
+    này là bên trả lời.
     """
 
     def __init__(self, own_device_id: str, *, accepting: bool = False) -> None:
@@ -649,6 +664,7 @@ class PairingGate:
         self._active: Slot | None = None
         self._next_id = 1
         self._records: dict[str, _IpRecord] = {}
+        self._codes: deque[float] = deque(maxlen=_MAX_CODE_TIMES)  # mốc hiện mã (vai trả lời), tăng dần
         self._last_now: float | None = None
 
     @property
@@ -699,11 +715,16 @@ class PairingGate:
         động (máy này đang khởi xướng tới `ip`, hoặc `ip` nằm trong `aliases` của phiên
         đó) → bên có `device_id` lớn hơn nhường phiên khởi xướng; không nhận ghép đôi →
         BUSY; đang có phiên → BUSY; IP đang bị chờ → BUSY (không kéo dài thời gian chờ);
-        còn lại → ACCEPT.
+        đã hiện đủ MAX_CODES_PER_WINDOW mã trong CODE_WINDOW giây qua → BUSY (không ghi
+        gì vào bộ đếm theo IP); còn lại → ACCEPT. Luật hai bên cùng chủ động đứng trước
+        nên không bị giới hạn số mã chặn, nhưng mã của phiên đó vẫn được đếm.
 
         `ip` phải ở cùng một dạng chuẩn do `net` bảo đảm (IPv4 dạng chấm, không tiền tố
         `::ffff:`): bộ đếm và luật hai bên cùng chủ động so `ip` theo chuỗi.
+        MAX_CODES_PER_WINDOW lớn hơn số mốc gate giữ được (64) → ValueError, gate giữ nguyên.
         """
+        if MAX_CODES_PER_WINDOW > _MAX_CODE_TIMES:
+            raise ValueError(f"MAX_CODES_PER_WINDOW không được lớn hơn {_MAX_CODE_TIMES}")
         _check_ip(ip)
         validate_device_id(peer_device_id)
         self._last_now = _check_now(now, self._last_now)
@@ -723,7 +744,33 @@ class PairingGate:
         blocked = self.blocked_until(ip)
         if blocked is not None and now < blocked:
             return busy
+        if self._count_codes(now) >= MAX_CODES_PER_WINDOW:
+            return busy
         return Admission(Decision.ACCEPT, self._new_slot(Role.RESPONDER, ip))
+
+    def code_shown(self, slot: Slot, now: float) -> int:
+        """Báo phiên của `slot` vừa hiện mã; trả số mã đã hiện trong CODE_WINDOW giây qua.
+
+        Chỉ ghi khi `slot` là phiên đang chạy và máy này là bên trả lời; slot khởi xướng
+        hoặc slot đã xong thì không ghi, chỉ trả số đếm hiện tại. Số trả về gồm cả mã vừa
+        ghi; một mã thôi được đếm đúng tại `t + CODE_WINDOW`. `slot` không phải Slot →
+        ValueError; `now` như `admit`.
+        """
+        if not isinstance(slot, Slot):
+            raise ValueError("slot phải là Slot")
+        self._last_now = _check_now(now, self._last_now)
+        if slot == self._active and slot.role is Role.RESPONDER:
+            self._codes.append(self._last_now)
+        return self._count_codes(now)
+
+    def recent_codes(self, now: float) -> int:
+        """Số mã đã hiện (vai trả lời) trong CODE_WINDOW giây qua.
+
+        Không ghi mốc mới (chỉ bỏ các mốc đã ra khỏi cửa sổ); `now` được kiểm và đẩy đồng
+        hồ của gate như `admit`.
+        """
+        self._last_now = _check_now(now, self._last_now)
+        return self._count_codes(now)
 
     def finish(self, slot: Slot, outcome: Outcome, now: float) -> None:
         """Báo phiên của `slot` đã kết thúc với `outcome`; slot không còn active → bỏ qua.
@@ -752,6 +799,13 @@ class PairingGate:
         """Số lần thất bại liên tiếp đang tính cho IP."""
         record = self._records.get(ip)
         return 0 if record is None else record.failures
+
+    def _count_codes(self, now: float) -> int:
+        """Bỏ các mốc đã ra khỏi cửa sổ (`t + CODE_WINDOW <= now`) rồi đếm phần còn lại."""
+        codes = self._codes
+        while codes and codes[0] + CODE_WINDOW <= now:
+            codes.popleft()
+        return len(codes)
 
     def _new_slot(self, role: Role, ip: str, aliases: frozenset[str] = frozenset()) -> Slot:
         slot = Slot(self._next_id, role, ip, aliases)

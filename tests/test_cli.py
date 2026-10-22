@@ -2131,3 +2131,195 @@ async def test_cl30_listen_reports_identity_mismatch(tmp_path, fast_links, cli_m
             await listen.wait_text(f"teleport unpair {ib.device_id[:8]}")
     finally:
         await c.close()
+
+
+# =================================================================================================
+# L1/L4 (kế hoạch "L1 và L4", mục cli.py): cảnh báo khi máy đang chờ đã hiện nhiều mã, `--json` có
+# `recent_codes` + `warning`, câu báo `prompt_failed`. Câu chữ so nguyên văn với kế hoạch.
+# =================================================================================================
+
+WARN_CODES = (
+    "Cảnh báo: máy này đã hiện {n} mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần "
+    "như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k)."
+)
+MVP_PROMPT_FAILED = "Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại."
+ASK = "Trùng khớp? [c/k]: "
+
+
+def _prompt(role: str, recent_codes: int):
+    from teleport.app.pairing import PairingPrompt
+    from teleport.core.pairing import Role
+
+    return PairingPrompt(
+        session_id=7,
+        role=Role(role),
+        address="192.168.1.5",
+        peer_name="A",
+        peer_device_id="ab" * 16,
+        code="123456",
+        expires_at=asyncio.get_running_loop().time() + 60,
+        recent_codes=recent_codes,
+    )
+
+
+def _prompter(*, json_mode: bool, listening: bool = True):
+    from teleport.cli import _Output, _Prompter
+
+    out, err = io.StringIO(), io.StringIO()
+    return _Prompter(_Output(out, err, json_mode), listening=listening), out, err
+
+
+@pytest.mark.parametrize("n", [0, 1, 2])
+async def test_responder_prompt_below_threshold_has_no_warning(n):
+    p, out, err = _prompter(json_mode=False)
+    p.on_prompt(_prompt("responder", n))
+    text = out.getvalue()
+    assert "Cảnh báo" not in text and "mã ghép đôi trong 1 phút qua" not in text
+    lines = text.split("\n")
+    assert lines[-1] == ASK
+    assert "123 456" in lines[-2]
+    assert err.getvalue() == ""
+
+
+@pytest.mark.parametrize("n", [3, 5, 64])
+async def test_responder_prompt_at_threshold_warns_between_code_and_question(n):
+    p, out, err = _prompter(json_mode=False)
+    p.on_prompt(_prompt("responder", n))
+    lines = out.getvalue().split("\n")
+    assert lines[-1] == ASK
+    assert lines[-2] == WARN_CODES.format(n=n)
+    assert "123 456" in lines[-3]
+    assert out.getvalue().count("Cảnh báo") == 1
+    assert err.getvalue() == ""
+
+
+async def test_warning_mentions_exactly_three_codes():
+    p, out, _ = _prompter(json_mode=False)
+    p.on_prompt(_prompt("responder", 3))
+    assert "đã hiện 3 mã ghép đôi trong 1 phút qua" in out.getvalue()
+
+
+@pytest.mark.parametrize("listening", [False, True], ids=["pair", "listen"])
+@pytest.mark.parametrize("n", [0, 3, 10])
+async def test_initiator_prompt_never_warns(n, listening):
+    p, out, _ = _prompter(json_mode=False, listening=listening)
+    p.on_prompt(_prompt("initiator", n))
+    text = out.getvalue()
+    assert "Cảnh báo" not in text and "mã ghép đôi trong 1 phút qua" not in text
+    assert text.endswith(ASK)
+
+
+@pytest.mark.parametrize(
+    ("role", "n", "warn"),
+    [
+        ("responder", 0, False),
+        ("responder", 2, False),
+        ("responder", 3, True),
+        ("responder", 7, True),
+        ("initiator", 0, False),
+        ("initiator", 5, False),
+    ],
+)
+async def test_json_pair_prompt_has_recent_codes_and_warning(role, n, warn):
+    p, out, err = _prompter(json_mode=True)
+    p.on_prompt(_prompt(role, n))
+    events = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+    assert [e["event"] for e in events] == ["pair_prompt"]
+    ev = events[0]
+    assert type(ev["recent_codes"]) is int and ev["recent_codes"] == n
+    assert "warning" in ev
+    assert ev["warning"] == (WARN_CODES.format(n=n) if warn else None)
+    assert ev["code"] == "123456" and ev["role"] == role
+    assert err.getvalue() == ""
+
+
+@pytest.mark.parametrize("role", ["responder", "initiator"])
+def test_outcome_message_prompt_failed(role):
+    from teleport.app.pairing import PairingFinished, PairingOutcome
+    from teleport.cli import outcome_message
+    from teleport.core.pairing import Role
+
+    result = PairingFinished(
+        session_id=3,
+        role=Role(role),
+        outcome=PairingOutcome.PROMPT_FAILED,
+        address="192.168.1.5",
+        port=None if role == "responder" else 47474,
+        peer_name="A",
+        peer_device_id="ab" * 16,
+        peer_reason=None,
+        device=None,
+        known_name=None,
+    )
+    assert outcome_message(result) == [MVP_PROMPT_FAILED]
+
+
+async def _pair_once(cli_runs, a_dir, port: int, *, json_mode: bool = True) -> CliRun:
+    """Một lần `pair` tới `listen` ở `port`, hai bên trả lời “c”; trả lần chạy `pair` (đã xong)."""
+    pair = cli_runs("pair", pair_argv(a_dir, port, json_mode=json_mode))
+    if json_mode:
+        await pair.wait_event("pair_prompt")
+    else:
+        await pair.wait_text(ASK)
+    pair.say("c")
+    return pair
+
+
+@with_marks(socket_test)
+async def test_listen_json_recent_codes_and_warning_end_to_end(tmp_path, fast_cli, cli_runs):
+    listen = cli_runs("listen", listen_argv(tmp_path / "B"))
+    ev = await listen.wait_event("listening")
+    for n in (1, 2, 3):
+        pair = await _pair_once(cli_runs, tmp_path / "A", ev["port"])
+        await listen.wait_event("pair_prompt", n=n)
+        listen.say("c")
+        assert await asyncio.wait_for(pair.task, 10) == 0
+        await listen.wait_event("pair_result", n=n)
+        pa = pair.events_of("pair_prompt")[0]
+        assert pa["recent_codes"] == 0 and pa["warning"] is None
+    prompts = listen.events_of("pair_prompt")
+    assert [p["recent_codes"] for p in prompts] == [1, 2, 3]
+    assert [p["warning"] for p in prompts] == [None, None, WARN_CODES.format(n=3)]
+    assert [r["outcome"] for r in listen.events_of("pair_result")] == ["paired"] * 3
+    assert not listen.task.done()  # listen không dừng sau một mã
+
+
+@with_marks(socket_test)
+async def test_listen_text_warns_on_third_code(tmp_path, fast_cli, cli_runs):
+    listen = cli_runs("listen", listen_argv(tmp_path / "B", json_mode=False))
+    port = await listen_port_text(listen)
+    for n in (1, 2, 3):
+        pair = await _pair_once(cli_runs, tmp_path / "A", port, json_mode=False)
+        await listen.wait_text(ASK, n=n)
+        listen.say("c")
+        assert await asyncio.wait_for(pair.task, 10) == 0
+        await listen.wait_text("Đã ghép đôi với A.", n=n)
+        assert "Cảnh báo" not in pair.text()
+    text = listen.text()
+    assert text.count("mã ghép đôi trong 1 phút qua") == 1
+    assert WARN_CODES.format(n=3) + "\n" + ASK in text
+
+
+@with_marks(socket_test)
+async def test_listen_over_code_limit_answers_busy_without_prompt(tmp_path, fast_cli, cli_runs, monkeypatch):
+    """L4: quá giới hạn mã thì `listen` không hỏi, không in kết quả, vẫn chạy; `pair` nhận câu
+    “chưa sẵn sàng” (mã thoát 1). Giới hạn rút còn 1 mã để test nhanh."""
+    from teleport.core import pairing as core_pairing
+
+    monkeypatch.setattr(core_pairing, "MAX_CODES_PER_WINDOW", 1)
+    listen = cli_runs("listen", listen_argv(tmp_path / "B"))
+    ev = await listen.wait_event("listening")
+    first = await _pair_once(cli_runs, tmp_path / "A", ev["port"])
+    await listen.wait_event("pair_prompt")
+    listen.say("c")
+    assert await asyncio.wait_for(first.task, 10) == 0
+    await listen.wait_event("pair_result")
+
+    second = cli_runs("pair", pair_argv(tmp_path / "C", ev["port"], json_mode=False, name="C"))
+    assert await asyncio.wait_for(second.task, 10) == 1
+    assert "B chưa sẵn sàng ghép đôi" in second.text()
+    assert ASK not in second.text()
+    await asyncio.sleep(0.3)
+    assert len(listen.events_of("pair_prompt")) == 1
+    assert len(listen.events_of("pair_result")) == 1
+    assert not listen.task.done()

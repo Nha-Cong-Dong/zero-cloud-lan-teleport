@@ -367,6 +367,8 @@ class Node:
         phải `MdnsOptions` → TypeError. `auto_connect`: tự mở và giữ kết nối điều khiển
         tới thiết bị tin cậy thấy qua mDNS (không phải bool → ValueError). `on_event`
         nhận `NodeEvent`, gọi đồng bộ trên loop; raise thì chỉ ghi log.
+        `on_pairing_prompt=None`: node không hiện mã được nên không ghép đôi được;
+        khi đó `accept_pairing=True` → ValueError.
         """
         if name is not None:
             validate_device_name(name)
@@ -374,6 +376,8 @@ class Node:
             raise ValueError("port phải là None hoặc số nguyên 0–65535")
         if type(accept_pairing) is not bool:
             raise ValueError("accept_pairing phải là bool")
+        if accept_pairing and on_pairing_prompt is None:
+            raise ValueError("accept_pairing=True cần on_pairing_prompt để hiện mã ghép đôi")
         if mdns is not None and not isinstance(mdns, MdnsOptions):
             raise TypeError("mdns phải là None hoặc MdnsOptions")
         if type(auto_connect) is not bool:
@@ -383,7 +387,7 @@ class Node:
         self._port_arg = port
         self._host = host
         self._accept_pairing = accept_pairing
-        self._on_pairing_prompt = on_pairing_prompt or _ignore
+        self._on_pairing_prompt = on_pairing_prompt  # None: không ghép đôi được (PairingService)
         self._on_pairing_finished = on_pairing_finished or _ignore
         self._mdns_opts = mdns
         self._auto_connect = auto_connect
@@ -684,7 +688,10 @@ class Node:
 
     @property
     def accept_pairing(self) -> bool:
-        """Có nhận yêu cầu ghép đôi tới không; đổi lúc chạy có hiệu lực với yêu cầu kế tiếp."""
+        """Có nhận yêu cầu ghép đôi tới không; đổi lúc chạy có hiệu lực với yêu cầu kế tiếp.
+
+        Đặt True khi node không có `on_pairing_prompt` → ValueError.
+        """
         return self.pairing.accepting
 
     @accept_pairing.setter

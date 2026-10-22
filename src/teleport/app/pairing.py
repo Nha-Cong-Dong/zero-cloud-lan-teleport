@@ -7,8 +7,12 @@ nằm ở `teleport.core.pairing`; module này chỉ:
 - mở kết nối ghép đôi (bên khởi xướng) hoặc nhận kết nối từ `Listener` (bên trả lời);
 - đưa sự kiện vào phiên (message, hết giờ, quyết định của người dùng, lệnh hủy) và
   thực hiện các hành động nó trả về (gửi, hiện mã, lưu thiết bị, đóng);
-- giữ `PairingGate` (một phiên tại một thời điểm, chờ tăng dần theo IP, nhường phiên
-  khi hai bên cùng chủ động).
+- giữ `PairingGate` (một phiên tại một thời điểm, chờ tăng dần theo IP, giới hạn số mã
+  hiện ra, nhường phiên khi hai bên cùng chủ động).
+
+Không hiện được mã (`on_prompt` raise) thì hủy phiên ngay, không để n_B rời máy: vai
+trả lời gửi `pair_abort{busy}`, vai khởi xướng gửi `pair_abort{user}`; kết quả là
+`PROMPT_FAILED` và không tính vào chờ tăng dần theo IP (protocol mục 5.1, 5.3).
 
 Mỗi phiên chỉ có tối đa **một** `conn.receive()` đang chờ: message kế tiếp chỉ được đọc
 khi message trước đã xử lý xong, nên máy kia gửi dồn cũng không làm phình RAM.
@@ -105,9 +109,16 @@ class PairingOutcome(StrEnum):
     BUSY = "busy"  # máy này đang có phiên khác (begin_outgoing → None)
     SELF = "self"  # máy kia chính là máy này
     SAVE_FAILED = "save_failed"  # hai bên đã xác nhận nhưng store.add lỗi
+    PROMPT_FAILED = "prompt_failed"  # on_prompt raise: không hiện được mã nên đã hủy phiên
 
 
 _CONFIRMED = frozenset({PairingOutcome.PAIRED, PairingOutcome.SAVE_FAILED})  # hai bên đã xác nhận
+
+# Lý do gửi cho máy kia khi máy này không hiện được mã (protocol mục 5.1).
+_PROMPT_FAILED_REASONS: dict[Role, str] = {
+    Role.RESPONDER: AbortReason.BUSY,
+    Role.INITIATOR: AbortReason.USER,
+}
 
 _CONNECT_OUTCOMES: tuple[tuple[type[Exception], PairingOutcome], ...] = (
     (Unreachable, PairingOutcome.UNREACHABLE),
@@ -128,6 +139,9 @@ class PairingPrompt:
     peer_device_id: str
     code: str  # 6 chữ số thô; giao diện tự gọi format_code
     expires_at: float  # loop.time(): hạn người dùng phải quyết (= session.deadline ngay sau ShowCode)
+    # Số mã máy này đã hiện ở vai trả lời trong CODE_WINDOW giây qua, kể cả mã này
+    # (`PairingGate.code_shown`); vai khởi xướng luôn 0. Giao diện cảnh báo khi ≥ WARN_RECENT_CODES.
+    recent_codes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +179,7 @@ class _Run:
         self.decided = False
         self.cancelled = False
         self.save_failed = False
+        self.prompt_failed = False  # on_prompt raise: phiên bị hủy, kết quả PROMPT_FAILED
         self.device: TrustedDevice | None = None
         self.replaced_by: _Run | None = None  # phiên trả lời thay phiên khởi xướng này
         self.result: PairingFinished | None = None
@@ -225,7 +240,8 @@ class PairingService:
     """Ghép đôi của một node: khởi xướng (`pair_with`) và trả lời (`handle_incoming`).
 
     Mọi phương thức phải gọi trên thread của event loop. Callback được gọi đồng bộ trên
-    loop; callback raise thì ghi log, phiên vẫn chạy tiếp.
+    loop; callback raise thì ghi log, phiên vẫn chạy tiếp, trừ `on_prompt`: không hiện
+    được mã thì phiên bị hủy (`PROMPT_FAILED`).
     """
 
     def __init__(
@@ -234,16 +250,22 @@ class PairingService:
         identity: Identity,
         hello: Hello,
         store: TrustStore,
-        on_prompt: Callable[[PairingPrompt], None],
+        on_prompt: Callable[[PairingPrompt], None] | None,
         on_finished: Callable[[PairingFinished], None],
         on_trust_changed: Callable[[], None],
         accepting: bool = False,
     ) -> None:
-        """`hello.device_id` khác danh tính → ValueError."""
+        """`hello.device_id` khác danh tính → ValueError.
+
+        `on_prompt=None`: node không hiện mã được nên không ghép đôi được; khi đó
+        `accepting=True` → ValueError, và `pair_with` → ValueError.
+        """
         if not isinstance(hello, Hello):
             raise ValueError("hello phải là Hello")
         if hello.device_id != identity.device_id:
             raise ValueError("hello.device_id phải là device_id của danh tính này")
+        if on_prompt is None and accepting is True:
+            raise ValueError("không có on_prompt thì không nhận ghép đôi được (accepting=True)")
         own = peer_cert_from_pem(identity.cert_pem())  # PEM đã chuẩn hóa, giống bản máy kia nhận
         self._local = _device_cert(own)
         self._identity = identity
@@ -264,11 +286,16 @@ class PairingService:
 
     @property
     def accepting(self) -> bool:
-        """Có nhận yêu cầu ghép đôi tới không (= `gate.accepting`)."""
+        """Có nhận yêu cầu ghép đôi tới không (= `gate.accepting`).
+
+        Đặt True khi không có `on_prompt` → ValueError (giữ nguyên giá trị cũ).
+        """
         return self._gate.accepting
 
     @accepting.setter
     def accepting(self, value: bool) -> None:
+        if value is True and self._on_prompt is None:
+            raise ValueError("không có on_prompt thì không nhận ghép đôi được (accepting=True)")
         self._gate.accepting = value
 
     # ---- Bên khởi xướng --------------------------------------------------------------------
@@ -276,9 +303,10 @@ class PairingService:
     async def pair_with(self, addresses: Sequence[str], port: int) -> PairingFinished:
         """Ghép đôi với máy ở `addresses:port` (máy này khởi xướng); trả kết quả cuối.
 
-        Tham số sai → ValueError (trước mọi I/O, không gọi `on_finished`). `on_finished`
-        được gọi đúng một lần với cùng kết quả, trừ khi phiên bị nhường cho phiên trả lời
-        của cùng máy kia (hai bên cùng chủ động): khi đó trả kết quả của phiên thay thế.
+        Tham số sai, hoặc không có `on_prompt` → ValueError (trước mọi I/O, không gọi
+        `on_finished`). `on_finished` được gọi đúng một lần với cùng kết quả, trừ khi
+        phiên bị nhường cho phiên trả lời của cùng máy kia (hai bên cùng chủ động): khi
+        đó trả kết quả của phiên thay thế.
         Bị hủy (task bị `cancel()`) → gửi `pair_abort{user}`, đóng, `on_finished(CANCELLED)`
         rồi để CancelledError bay ra; đang chờ phiên thay thế thì hủy phiên đó
         (`pair_abort{user}`), và chính phiên đó gọi `on_finished`.
@@ -286,6 +314,8 @@ class PairingService:
         addrs = _check_addresses(addresses)
         if type(port) is not int or not 1 <= port <= 65535:
             raise ValueError("port phải là số nguyên 1–65535")
+        if self._on_prompt is None:
+            raise ValueError("không có on_prompt thì không ghép đôi được")
         ip = addrs[0]
         if self._closed:
             return self._report_early(PairingOutcome.CANCELLED, ip, port)
@@ -546,6 +576,13 @@ class PairingService:
                 # FAILED_CLOSE_TIMEOUT, để máy kia không đọc cũng không giữ được gate lâu hơn.
                 deadline = loop.time() + FAILED_CLOSE_TIMEOUT if _ends_unpaired(actions) else None
                 close = await self._perform(run, conn, actions, deadline)
+                if close is None and run.prompt_failed and session.state is not State.DONE:
+                    # Không hiện được mã: phần còn lại của lô (pair_reveal) đã bị bỏ, n_B
+                    # không rời máy. Hủy phiên; vòng sau gửi pair_abort và đóng như mọi
+                    # phiên kết thúc không ghép đôi.
+                    reason = _PROMPT_FAILED_REASONS[run.slot.role]
+                    actions = session.handle(Cancel(reason), loop.time())
+                    continue
                 if close is not None:
                     run.outcome = self._outcome_of(run, close)
                     recv = await _stop(recv)
@@ -601,6 +638,7 @@ class PairingService:
         """Thực hiện hành động đúng thứ tự; trả `Close` nếu có (luôn là hành động cuối).
 
         Mỗi lần gửi chờ tối đa SEND_TIMEOUT, và không quá `deadline` (`loop.time()`) nếu có.
+        Không hiện được mã → đặt `run.prompt_failed`, bỏ mọi hành động còn lại, trả None.
         """
         loop = asyncio.get_running_loop()
         for action in actions:
@@ -615,23 +653,44 @@ class PairingService:
                     # Lần receive kế tiếp sẽ ra ConnectionLost; vẫn làm tiếp các hành động sau.
                     log.debug("ghép đôi: gửi %s thất bại (%s)", action.message.TYPE, type(e).__name__)
             elif isinstance(action, ShowCode):
-                session = run.session
-                assert session is not None and session.deadline is not None
-                prompt = PairingPrompt(
-                    session_id=run.slot.id,
-                    role=run.slot.role,
-                    address=run.address,
-                    peer_name=conn.peer.hello.name,
-                    peer_device_id=conn.peer.hello.device_id,
-                    code=action.code,
-                    expires_at=session.deadline,
-                )
-                self._call(self._on_prompt, prompt)
+                if not self._show_code(run, conn, action):
+                    run.prompt_failed = True
+                    return None
             elif isinstance(action, SavePeer):
                 self._save(run, action)
             elif isinstance(action, Close):
                 return action
         return None
+
+    def _show_code(self, run: _Run, conn: Connection, action: ShowCode) -> bool:
+        """Gọi `on_prompt`; False nếu không hiện được mã (callback raise hoặc không có).
+
+        Mã của vai trả lời được đếm (`gate.code_shown`) trước khi gọi callback, nên vẫn
+        tính kể cả khi callback lỗi.
+        """
+        loop = asyncio.get_running_loop()
+        session = run.session
+        assert session is not None and session.deadline is not None
+        recent = self._gate.code_shown(run.slot, loop.time()) if run.slot.role is Role.RESPONDER else 0
+        prompt = PairingPrompt(
+            session_id=run.slot.id,
+            role=run.slot.role,
+            address=run.address,
+            peer_name=conn.peer.hello.name,
+            peer_device_id=conn.peer.hello.device_id,
+            code=action.code,
+            expires_at=session.deadline,
+            recent_codes=recent,
+        )
+        try:
+            if self._on_prompt is None:
+                raise RuntimeError("không có on_prompt")
+            self._on_prompt(prompt)
+        except Exception:
+            # Như _call: không ghi mã hay nonce vào log (mvp N9).
+            log.exception("ghép đôi: không hiện được mã của phiên %d, hủy phiên", run.slot.id)
+            return False
+        return True
 
     def _save(self, run: _Run, action: SavePeer) -> None:
         peer = action.peer
@@ -654,6 +713,8 @@ class PairingService:
     @staticmethod
     def _outcome_of(run: _Run, close: Close) -> PairingOutcome:
         run.peer_reason = close.peer_reason
+        if run.prompt_failed:
+            return PairingOutcome.PROMPT_FAILED
         if run.save_failed:
             return PairingOutcome.SAVE_FAILED
         return PairingOutcome(close.outcome.value)

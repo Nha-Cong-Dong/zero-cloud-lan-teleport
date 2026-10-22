@@ -71,8 +71,10 @@ from teleport.app.node import (
 )
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt
 from teleport.app.settings import Settings
+from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc lúc dùng
 from teleport.core.links import ConnectResult
 from teleport.core.messages import MessageError
+from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
 from teleport.lock import NodeLockedError
 from teleport.net.connection import DEFAULT_PORT
@@ -239,6 +241,8 @@ def outcome_message(result: PairingFinished, *, seen_name: str | None = None) ->
             f"Đã xác nhận ghép đôi với {x} nhưng không lưu được vào trusted.json. "
             "Hãy kiểm tra quyền ghi thư mục cấu hình rồi ghép đôi lại."
         ]
+    if outcome is PairingOutcome.PROMPT_FAILED:
+        return ["Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại."]
     return ["Đã hủy ghép đôi."]  # CANCELLED
 
 
@@ -353,6 +357,17 @@ def _emit_result(output: _Output, result: PairingFinished, *, seen_name: str | N
 # ---- Hỏi người dùng ------------------------------------------------------------------------
 
 
+def _code_warning(prompt: PairingPrompt) -> str | None:
+    """Cảnh báo khi máy này (vai trả lời) đã hiện nhiều mã trong 1 phút (docs/mvp.md mục 8)."""
+    if prompt.role is not Role.RESPONDER or prompt.recent_codes < core_pairing.WARN_RECENT_CODES:
+        return None
+    return (
+        f"Cảnh báo: máy này đã hiện {prompt.recent_codes} mã ghép đôi trong 1 phút qua. "
+        "Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: "
+        "hãy từ chối (gõ k)."
+    )
+
+
 class _Prompter:
     """Hiện lời hỏi ghép đôi và chuyển câu trả lời từ stdin tới `PairingService.decide`."""
 
@@ -375,7 +390,10 @@ class _Prompter:
         else:
             first = f"Ghép đôi với “{prompt.peer_name}” {where}."
         code = format_code(prompt.code)
+        warning = _code_warning(prompt)
         out.text(first, f"Kiểm tra mã này trùng với màn hình của {prompt.peer_name}:   {code}")
+        if warning is not None:
+            out.text(warning)
         out.ask("Trùng khớp? [c/k]: ")
         out.event(
             "pair_prompt",
@@ -386,6 +404,8 @@ class _Prompter:
             address=prompt.address,
             code=prompt.code,
             expires_in=round(max(0.0, prompt.expires_at - asyncio.get_running_loop().time()), 3),
+            recent_codes=prompt.recent_codes,
+            warning=warning,
         )
         if self._stdin_closed:
             self._decide(False)

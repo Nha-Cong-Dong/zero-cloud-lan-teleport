@@ -751,6 +751,7 @@ async def node_factory(fast, tmp_path):
     xong; sau đó kiểm `node.lock` của mọi thư mục đã chạy đều lấy lại được ngay.
     `answer=True/False` → trong `on_prompt` gọi `decide`; `answer=callable` → gọi với prompt.
     `hostname=True` → truyền `name=None` cho Node (tên lấy từ hostname).
+    `prompt=False` → truyền `on_pairing_prompt=None` (node không ghép đôi được; kế hoạch L1).
     """
     from teleport.app.node import Node
 
@@ -772,6 +773,7 @@ async def node_factory(fast, tmp_path):
         mdns=None,
         auto_connect: bool = True,
         raise_in_event: bool = False,
+        prompt: bool = True,
     ) -> AppNode:
         directory = tmp_path / label
         rec = Recorder(
@@ -792,7 +794,7 @@ async def node_factory(fast, tmp_path):
             port=port,
             host=host,
             accept_pairing=accept_pairing,
-            on_pairing_prompt=rec.on_prompt,
+            on_pairing_prompt=rec.on_prompt if prompt else None,
             on_pairing_finished=rec.on_finished,
             **extra,
         )

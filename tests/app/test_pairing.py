@@ -67,7 +67,8 @@ def gates_idle(*nodes) -> bool:
 
 
 def test_outcome_values_cover_core_outcome_plus_app_only():
-    """`PairingOutcome` = mọi giá trị của `core.pairing.Outcome` + 7 kết quả chỉ `app` biết."""
+    """`PairingOutcome` = mọi giá trị của `core.pairing.Outcome` + 8 kết quả chỉ `app` biết
+    (`prompt_failed`: kế hoạch L1)."""
     core_values = {o.value for o in Outcome}
     app_only = {
         "unreachable",
@@ -77,6 +78,7 @@ def test_outcome_values_cover_core_outcome_plus_app_only():
         "busy",
         "self",
         "save_failed",
+        "prompt_failed",
     }
     assert {o.value for o in PairingOutcome} == core_values | app_only
     for value in core_values:
@@ -87,8 +89,21 @@ def test_prompt_and_finished_are_frozen_dataclasses():
     import dataclasses
 
     assert dataclasses.is_dataclass(PairingPrompt) and dataclasses.is_dataclass(PairingFinished)
-    names = {f.name for f in dataclasses.fields(PairingPrompt)}
-    assert names == {"session_id", "role", "address", "peer_name", "peer_device_id", "code", "expires_at"}
+    names = [f.name for f in dataclasses.fields(PairingPrompt)]
+    assert set(names) == {
+        "session_id",
+        "role",
+        "address",
+        "peer_name",
+        "peer_device_id",
+        "code",
+        "expires_at",
+        "recent_codes",
+    }
+    assert names[-1] == "recent_codes"  # kế hoạch L4: trường mới đặt cuối
+    recent = next(f for f in dataclasses.fields(PairingPrompt) if f.name == "recent_codes")
+    no_default = (recent.default is dataclasses.MISSING) and (recent.default_factory is dataclasses.MISSING)
+    assert no_default, "recent_codes là trường bắt buộc"
     names = {f.name for f in dataclasses.fields(PairingFinished)}
     assert names == {
         "session_id",
@@ -119,7 +134,7 @@ def make_service(parts, **kwargs) -> PairingService:
         identity=identity,
         hello=kwargs.pop("hello", hello),
         store=store,
-        on_prompt=lambda p: None,
+        on_prompt=kwargs.pop("on_prompt", lambda p: None),
         on_finished=finished.append,
         on_trust_changed=lambda: None,
         **kwargs,
@@ -223,6 +238,45 @@ def test_decide_rejects_non_bool(service_parts):
             await svc.close()
 
     asyncio.run(run())
+
+
+# --- L1: thiếu `on_prompt` (kế hoạch L1, "Thiếu on_prompt") -------------------------------------------
+
+
+async def test_service_without_prompt_cannot_be_created_accepting(service_parts):
+    with pytest.raises(ValueError):
+        make_service(service_parts, on_prompt=None, accepting=True)
+
+
+async def test_service_without_prompt_rejects_accepting_setter(service_parts):
+    svc = make_service(service_parts, on_prompt=None)
+    try:
+        assert svc.accepting is False
+        with pytest.raises(ValueError):
+            svc.accepting = True
+        assert svc.accepting is False and svc.gate.accepting is False
+        svc.accepting = False  # tắt thì luôn được
+        assert svc.accepting is False
+    finally:
+        await svc.close()
+
+
+async def test_pair_with_without_prompt_raises_before_io(service_parts, monkeypatch):
+    from teleport.app import pairing as app_pairing
+
+    async def no_io(*args, **kwargs):
+        raise AssertionError("không được mở kết nối khi không có on_prompt")
+
+    if hasattr(app_pairing, "open_pairing"):
+        monkeypatch.setattr(app_pairing, "open_pairing", no_io)
+    svc = make_service(service_parts, on_prompt=None)
+    try:
+        with pytest.raises(ValueError):
+            await svc.pair_with([LOCAL], 47474)
+        assert service_parts[3] == []  # không gọi on_finished
+        assert svc.gate.active is None
+    finally:
+        await svc.close()
 
 
 # --- P1, P2: đường thành công ---------------------------------------------------------------------
@@ -1140,26 +1194,290 @@ async def test_p24_decide_rules(node_factory):
     assert A.pairing.decide(A.rec.prompts[0].session_id, False) is False
 
 
+def _app_errors(caplog) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name.startswith("teleport.app") and r.levelno >= logging.ERROR]
+
+
+def _no_trusted_devices(directory) -> bool:
+    return not (directory / "trusted.json").exists() or TrustStore.load(directory).devices() == []
+
+
 @integration
-async def test_p25_raising_callbacks_do_not_break_session(node_factory, caplog):
+async def test_p25_responder_prompt_raises_cancels_session(node_factory, caplog, fast):
+    """L1: `on_prompt` của B raise (sau khi đã gọi `decide(True)`) → B hủy phiên, không tiết lộ n_B.
+
+    B: `prompt_failed`, `decide` vẫn trả True nhưng quyết định bị bỏ; A: `peer_busy` (B gửi
+    `pair_abort{busy}`), A không hiện lời hỏi; không bên nào ghi `trusted.json`; phiên B tự hủy nên
+    không tính vào chờ tăng dần (`failures == 0`, thử lại ngay được); log ERROR không chứa mã.
+    """
     caplog.set_level(logging.DEBUG)
-    B = await node_factory(
-        "B", accept_pairing=True, answer=True, raise_in_prompt=True, raise_in_finished=True
-    )
-    A = await node_factory("A", answer=True, raise_in_prompt=True, raise_in_finished=True)
+    B = await node_factory("B", accept_pairing=True, answer=True, raise_in_prompt=True)
+    A = await node_factory("A", answer=True)
+    t0 = time.monotonic()
+    result = await pair(A, B)
+    took = time.monotonic() - t0
+    await B.rec.wait_finished(1)
+
+    assert result.outcome == PairingOutcome.PEER_BUSY
+    assert result.peer_reason == "busy"
+    assert A.rec.prompts == []
+    assert A.rec.finished == [result]
+    assert took < fast.CONFIRM_TIMEOUT, f"A chờ {took:.2f} s: B không hủy phiên ngay"
+
+    assert outcomes(B.rec) == ["prompt_failed"]
+    rb = B.rec.finished[0]
+    assert rb.role == Role.RESPONDER and rb.device is None
+    assert (rb.peer_name, rb.peer_device_id) == ("A", A.id)
+    assert len(B.rec.prompts) == 1
+    assert B.rec.decide_results == [True]  # decide trước khi raise vẫn nhận, nhưng phiên đã DONE
+
+    assert A.store.devices() == [] and B.store.devices() == []
+    assert _no_trusted_devices(A.dir) and _no_trusted_devices(B.dir)
+    assert B.pairing.gate.failures(LOCAL) == 0
+    assert B.pairing.gate.blocked_until(LOCAL) is None
+    assert gates_idle(A, B)
+
+    errors = _app_errors(caplog)
+    assert errors, "on_prompt raise phải được ghi log mức ERROR"
+    code = B.rec.prompts[0].code
+    assert not re.search(rf"(?<!\d){code}(?!\d)", caplog.text)
+    assert format_code(code) not in caplog.text
+
+    # Không bị chờ tăng dần: thử lại ngay (trong BACKOFF_BASE) thì được hỏi và ghép đôi được.
+    B.rec.raise_in_prompt = False
+    again = await pair(A, B)
+    assert again.outcome == PairingOutcome.PAIRED
+    assert len(B.rec.prompts) == 2
+
+
+@integration
+async def test_p25_raising_on_finished_does_not_break_pairing(node_factory, caplog):
+    caplog.set_level(logging.DEBUG)
+    B = await node_factory("B", accept_pairing=True, answer=True, raise_in_finished=True)
+    A = await node_factory("A", answer=True, raise_in_finished=True)
     result = await pair(A, B)
     await B.rec.wait_finished(1)
     assert result.outcome == PairingOutcome.PAIRED
     assert outcomes(B.rec) == ["paired"]
     assert len(A.rec.finished) == 1 and len(B.rec.finished) == 1
     assert A.store.get(B.id) is not None and B.store.get(A.id) is not None
-    logged = [
-        r
-        for r in caplog.records
-        if r.name.startswith("teleport.app") and r.levelno >= logging.ERROR and r.exc_info is not None
-    ]
-    assert len(logged) >= 4, [r.getMessage() for r in logged]
+    logged = [r for r in _app_errors(caplog) if r.exc_info is not None]
+    assert len(logged) >= 2, [r.getMessage() for r in logged]
     assert gates_idle(A, B)
+
+
+@integration
+@pytest.mark.parametrize("answer", [None, True], ids=["khong_quyet", "quyet_roi_raise"])
+async def test_responder_prompt_raises_raw_client_never_gets_reveal(
+    node_factory, raw_pairing_client, tmp_path, answer
+):
+    """L1 (mấu chốt): B không hiện được mã thì KHÔNG frame `pair_reveal` nào lên dây.
+
+    Client thô (vai A) gửi `pair_nonce` hợp lệ rồi đọc mọi frame tới khi kết nối đóng: chỉ có
+    đúng một `pair_abort{busy}`; kết nối đóng trong FAILED_CLOSE_TIMEOUT (1 s) + 0,5 s.
+    """
+    B = await node_factory("B", accept_pairing=True, answer=answer, raise_in_prompt=True)
+    raw_id = load_or_create_identity(tmp_path / "raw")
+    c = await raw_pairing_client(B.port)
+    await c.begin(raw_id)
+    await c.read_commit()
+    await c.send_nonce()
+    t0 = time.monotonic()
+    msgs = await c.read_until_closed(5)
+    took = time.monotonic() - t0
+    assert all(m.get("type") != "pair_reveal" for m in msgs), f"n_B bị lộ: {msgs!r}"
+    assert msgs == [{"type": "pair_abort", "reason": "busy"}], msgs
+    assert took <= 1.0 + 0.5, f"kết nối đóng sau {took:.2f} s"
+
+    await B.rec.wait_finished(1, timeout=3)
+    assert outcomes(B.rec) == ["prompt_failed"]
+    assert len(B.rec.prompts) == 1
+    assert B.store.devices() == []
+    await wait_until(lambda: B.pairing.gate.active is None, 1.0)
+    assert B.pairing.gate.failures(LOCAL) == 0
+
+
+@integration
+async def test_responder_prompt_raises_frees_gate_quickly_when_peer_never_reads(
+    node_factory, raw_pairing_client, tmp_path, monkeypatch
+):
+    """L1: hủy vì không hiện được mã cũng gửi `pair_abort` + đóng trong FAILED_CLOSE_TIMEOUT, kể cả
+    khi máy kia không đọc, không đóng (dùng CLOSE_TIMEOUT thật 5 s như test F4)."""
+    from teleport.net import connection
+
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", 5.0)
+    B = await node_factory("B", accept_pairing=True, raise_in_prompt=True)
+    raw_id = load_or_create_identity(tmp_path / "raw")
+    c = await raw_pairing_client(B.port)
+    await c.begin(raw_id)
+    await c.read_commit()
+    c.writer.transport.pause_reading()
+    await c.send_nonce()
+    t0 = time.monotonic()
+    await wait_until(
+        lambda: B.pairing.gate.active is None, GATE_FREE_AFTER_FAILURE + 1.0, "gate chưa được nhả"
+    )
+    freed_after = time.monotonic() - t0
+    assert freed_after <= GATE_FREE_AFTER_FAILURE, f"gate bị giữ {freed_after:.2f} s"
+    await B.rec.wait_finished(1, timeout=1)
+    assert outcomes(B.rec) == ["prompt_failed"]
+
+
+@integration
+async def test_initiator_prompt_raises_cancels_with_user_abort(node_factory, caplog, fast):
+    """L1: `on_prompt` của A (vai khởi xướng) raise → A `prompt_failed` ngay (không đợi hết giờ),
+    B nhận `pair_abort{user}` → `peer_rejected`; không ai lưu gì."""
+    caplog.set_level(logging.DEBUG)
+    B = await node_factory("B", accept_pairing=True)  # B không trả lời
+    A = await node_factory("A", answer=True, raise_in_prompt=True)
+    t0 = time.monotonic()
+    result = await pair(A, B)
+    took = time.monotonic() - t0
+    assert result.outcome == PairingOutcome.PROMPT_FAILED
+    assert result.role == Role.INITIATOR
+    assert result.device is None
+    assert A.rec.finished == [result]
+    assert len(A.rec.prompts) == 1
+    assert A.rec.decide_results == [True]
+    assert took < fast.CONFIRM_TIMEOUT, f"A mất {took:.2f} s: phiên không bị hủy ngay"
+
+    await B.rec.wait_finished(1, timeout=3)
+    assert outcomes(B.rec) == ["peer_rejected"]
+    assert B.rec.finished[0].peer_reason == "user"
+    assert A.store.devices() == [] and B.store.devices() == []
+    assert _no_trusted_devices(A.dir) and _no_trusted_devices(B.dir)
+    assert A.pairing.gate.failures(LOCAL) == 0
+    assert gates_idle(A, B)
+    assert _app_errors(caplog)
+
+
+@integration
+async def test_initiator_prompt_raises_sends_user_abort_and_never_confirms(
+    node_factory, fake_server, tmp_path
+):
+    """L1, trên dây: bên trả lời giả trung thực; A không hiện được mã → gửi `pair_abort{user}`,
+    không bao giờ gửi `pair_confirm`."""
+    A = await node_factory("A", answer=True, raise_in_prompt=True)
+    srv = load_or_create_identity(tmp_path / "srv")
+    log: list = []
+    port = await fake_server(srv, _fake_responder_script(srv, "honest", log))
+    result = await asyncio.wait_for(A.pairing.pair_with([LOCAL], port), 10)
+    assert result.outcome == PairingOutcome.PROMPT_FAILED
+    await wait_until(lambda: {"type": "pair_abort", "reason": "user"} in log, 3, "chưa nhận pair_abort{user}")
+    assert all(m.get("type") != "pair_confirm" for m in log), log
+    assert log[-1] == {"type": "pair_abort", "reason": "user"}
+    assert A.store.devices() == []
+    assert A.pairing.gate.active is None
+
+
+@integration
+async def test_replacement_responder_prompt_failure_is_returned_by_pair_with(node_factory):
+    """L1, ca biên: hai bên cùng chủ động, bên lớn nhường; phiên trả lời thay thế của nó không hiện
+    được mã → `pair_with` của bên lớn trả `prompt_failed` (vai RESPONDER), bên nhỏ `peer_busy`."""
+    A = await node_factory("A", answer=True)
+    B = await node_factory("B", answer=True)
+    lo, hi = sorted([A, B], key=lambda n: n.id)
+    hi.rec.raise_in_prompt = True
+    r_lo, r_hi = await asyncio.wait_for(
+        asyncio.gather(lo.pairing.pair_with([LOCAL], hi.port), hi.pairing.pair_with([LOCAL], lo.port)),
+        20,
+    )
+    await asyncio.sleep(0.1)
+    assert r_hi.outcome == PairingOutcome.PROMPT_FAILED, (r_lo.outcome, r_hi.outcome, r_hi.role)
+    assert r_hi.role == Role.RESPONDER
+    assert r_lo.outcome == PairingOutcome.PEER_BUSY
+    assert hi.rec.finished == [r_hi], outcomes(hi.rec)
+    assert lo.rec.finished == [r_lo], outcomes(lo.rec)
+    assert len(hi.rec.prompts) == 1 and lo.rec.prompts == []
+    assert TrustStore.load(lo.dir).get(hi.id) is None
+    assert TrustStore.load(hi.dir).get(lo.id) is None
+    assert gates_idle(A, B)
+
+
+# --- L4: số mã đã hiện gần đây (`PairingPrompt.recent_codes`) và giới hạn 5 mã / 60 s -----------------
+
+
+@integration
+async def test_prompt_recent_codes_counts_responder_codes_only(node_factory):
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    A = await node_factory("A", accept_pairing=True, answer=True)
+    for n in range(1, 4):
+        assert (await pair(A, B)).outcome == PairingOutcome.PAIRED
+        await B.rec.wait_finished(n)
+    assert [p.recent_codes for p in B.rec.prompts] == [1, 2, 3]
+    assert all(type(p.recent_codes) is int for p in B.rec.prompts)
+    assert [p.recent_codes for p in A.rec.prompts] == [0, 0, 0]
+
+    # Đổi vai: B khởi xướng (vẫn 0 dù B đã hiện 3 mã ở vai trả lời); A trả lời lần đầu → 1.
+    assert (await pair(B, A)).outcome == PairingOutcome.PAIRED
+    await A.rec.wait_finished(4)
+    assert B.rec.prompts[-1].role == Role.INITIATOR and B.rec.prompts[-1].recent_codes == 0
+    assert A.rec.prompts[-1].role == Role.RESPONDER and A.rec.prompts[-1].recent_codes == 1
+
+
+@integration
+async def test_code_is_counted_even_when_prompt_raises(node_factory):
+    B = await node_factory("B", accept_pairing=True, answer=True, raise_in_prompt=True)
+    A = await node_factory("A", answer=True)
+    assert (await pair(A, B)).outcome == PairingOutcome.PEER_BUSY
+    await B.rec.wait_finished(1)
+    loop = asyncio.get_running_loop()
+    assert B.pairing.gate.recent_codes(loop.time()) == 1
+    B.rec.raise_in_prompt = False
+    assert (await pair(A, B)).outcome == PairingOutcome.PAIRED
+    assert [p.recent_codes for p in B.rec.prompts] == [1, 2]
+
+
+@integration
+async def test_sixth_code_in_window_is_busy_without_prompt(node_factory, raw_pairing_client, tmp_path):
+    """L4: B đã hiện 5 mã trong 60 s → yêu cầu kế tiếp nhận `pair_abort{busy}`, B không hỏi, không
+    gọi `on_finished`, không tính vào bộ đếm theo IP. Hằng số thật (5 mã / 60 s)."""
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    A = await node_factory("A", answer=True)
+    for n in range(1, 6):
+        assert (await pair(A, B)).outcome == PairingOutcome.PAIRED
+        await B.rec.wait_finished(n)
+    assert [p.recent_codes for p in B.rec.prompts] == [1, 2, 3, 4, 5]
+
+    sixth = await pair(A, B)
+    assert sixth.outcome == PairingOutcome.PEER_BUSY
+    assert sixth.peer_reason == "busy"
+
+    raw_id = load_or_create_identity(tmp_path / "raw")
+    c = await raw_pairing_client(B.port)
+    await c.begin(raw_id)
+    msgs = await c.read_until_closed(3)
+    assert msgs == [{"type": "pair_abort", "reason": "busy"}], msgs
+
+    await asyncio.sleep(0.2)
+    assert len(B.rec.prompts) == 5 and len(B.rec.finished) == 5
+    assert B.pairing.gate.failures(LOCAL) == 0
+    assert B.store.get(raw_id.device_id) is None
+    assert B.pairing.gate.active is None
+
+
+@integration
+async def test_code_limit_frees_after_window_on_loop_clock(node_factory, monkeypatch):
+    """L4: cửa sổ tính theo `loop.time()` của node; hết cửa sổ thì lại được nhận (hằng số rút ngắn)."""
+    from teleport.core import pairing as core_pairing
+
+    window = 3.0  # đủ rộng để 2,5 lần ghép đôi xong trong cửa sổ cả trên CI chậm
+    monkeypatch.setattr(core_pairing, "MAX_CODES_PER_WINDOW", 2)
+    monkeypatch.setattr(core_pairing, "CODE_WINDOW", window)
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    A = await node_factory("A", answer=True)
+    for n in (1, 2):
+        assert (await pair(A, B)).outcome == PairingOutcome.PAIRED
+        await B.rec.wait_finished(n)
+    loop = asyncio.get_running_loop()
+    assert loop.time() < B.rec.prompt_loop_times[0] + window, "máy test quá chậm: mã đầu đã ra khỏi cửa sổ"
+    assert (await pair(A, B)).outcome == PairingOutcome.PEER_BUSY
+    assert len(B.rec.prompts) == 2
+
+    wait = B.rec.prompt_loop_times[1] + window + 0.1 - loop.time()
+    await asyncio.sleep(max(0.0, wait))
+    assert (await pair(A, B)).outcome == PairingOutcome.PAIRED
+    assert [p.recent_codes for p in B.rec.prompts] == [1, 2, 1]
 
 
 @integration

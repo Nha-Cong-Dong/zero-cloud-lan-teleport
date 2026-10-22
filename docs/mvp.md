@@ -109,6 +109,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Có danh sách “Thiết bị tin cậy” trong cài đặt, có nút hủy ghép đôi. Hủy ghép đôi có hiệu lực ngay: kết nối đang mở với máy đó bị đóng; máy đó thấy thông báo “từ chối kết nối từ máy này” (mục 8).
   - Máy đã ghép đôi cài lại Teleport hiện như một thiết bị mới chưa ghép đôi; app gợi ý ghép đôi lại và đề nghị xóa mục cũ trùng tên (mục 8).
   - Hạn chế máy lạ làm phiền: chỉ một phiên ghép đôi tại một thời điểm; sau mỗi lần từ chối hay hết giờ, máy đó phải chờ lâu dần (10 giây, 20 giây… tối đa 10 phút) mới gửi được yêu cầu mới. Đây là mức tốt nhất có thể trong LAN, không chống được máy cố tình đổi địa chỉ liên tục; ghép đôi vẫn an toàn vì cần xác nhận mã ở cả hai máy.
+  - Máy đang chờ ghép đôi hiện tối đa **5 mã mỗi phút** (gộp mọi máy gửi yêu cầu); quá thì yêu cầu mới nhận “chưa sẵn sàng ghép đôi” (mục 8). Từ mã thứ **3** trong 1 phút, máy đó cảnh báo có thể có người đang thử giả mạo (mục 8). Nhờ vậy kẻ đứng giữa chỉ thử được vài mã trong lúc người dùng chờ xác nhận.
   - Không ghép đôi đè lên một thiết bị tin cậy có cùng mã thiết bị nhưng danh tính khác; phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa.
 
 ### F4. Gửi file
@@ -289,6 +290,8 @@ Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì
 | Ghép đôi với chính máy này | “Đó là chính máy này. Hãy nhập địa chỉ của máy kia.” | — |
 | Danh tính của chính máy này bị hỏng | “Không đọc được danh tính của máy này. Teleport sẽ không tự tạo danh tính mới để khỏi mất các ghép đôi.” | Nút “Tạo danh tính mới” (cảnh báo phải ghép đôi lại) |
 | Mã ghép đôi không trùng / hết giờ | “Ghép đôi với *MacBook* chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo.” | Nút “Thử lại” |
+| Máy đang chờ ghép đôi đã hiện từ 3 mã trở lên trong 1 phút | “Cảnh báo: máy này đã hiện *3* mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).” | Hiện ngay dưới mã; từ chối nếu không tự ghép đôi. Câu trên là bản CLI; giao diện thay “(gõ k)” bằng nút “Từ chối” |
+| Không hiện được mã ghép đôi (giao diện lỗi) | “Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại.” | Nút “Thử lại” |
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |
 | File nguồn bị sửa khi đang gián đoạn | “*video.mp4* đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại.” | Nút “Gửi lại” |
 | Người nhận từ chối | “*PC-Nha* đã từ chối nhận file.” | — |
