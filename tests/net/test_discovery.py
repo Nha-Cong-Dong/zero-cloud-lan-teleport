@@ -934,7 +934,7 @@ async def test_close_never_started_twice_returns():
 
 # --- Bước 1.3 mục 2a: địa chỉ nguồn ưu tiên (socket giả, không mở socket thật) ------------------
 
-MDNS_GROUP = ("224.0.0.251", 5353)
+MDNS_GROUP = ("224.0.0.251", 5353)  # chỉ để chứng minh tuyến multicast mDNS không còn được hỏi
 DEFAULT_ROUTE = ("192.0.2.1", 9)  # TEST-NET-1 (RFC 5737)
 
 
@@ -1024,50 +1024,39 @@ def test_route_source_socket_creation_error_is_none(fake_routes):
     assert net_discovery._route_source(DEFAULT_ROUTE) is None
 
 
-@pytest.mark.parametrize("loop_ip", ["127.0.0.1", "127.5.6.7"])
-def test_preferred_source_uses_default_route_when_multicast_route_is_loopback(fake_routes, loop_ip):
-    # Windows: tuyến multicast cho 127.0.0.1 (lỗi (b) của review).
-    fake = fake_routes({MDNS_GROUP: loop_ip, DEFAULT_ROUTE: "192.168.1.7"})
+def test_preferred_source_asks_only_the_route_out_of_the_lan(fake_routes):
+    fake = fake_routes({MDNS_GROUP: "10.0.0.5", DEFAULT_ROUTE: "192.168.1.7"})
     assert net_discovery._preferred_source() == "192.168.1.7"
-    assert fake.connects == [MDNS_GROUP, DEFAULT_ROUTE]
+    assert fake.connects == [DEFAULT_ROUTE], "không được hỏi tuyến multicast mDNS"
+    assert fake.closed == fake.opened
 
 
-def test_preferred_source_uses_multicast_route_when_it_is_a_lan_address(fake_routes):
+def test_preferred_source_ignores_multicast_route_with_lan_address(fake_routes):
+    # Tuyến multicast trên Windows chỉ phản ánh InterfaceMetric, không cho biết card nối LAN.
     fake = fake_routes({MDNS_GROUP: "192.168.1.7", DEFAULT_ROUTE: "10.0.0.5"})
-    assert net_discovery._preferred_source() == "192.168.1.7"
-    assert fake.connects == [MDNS_GROUP], "không được hỏi tuyến mặc định khi tuyến multicast đã dùng được"
-
-
-@pytest.mark.parametrize(
-    "mcast", ["0.0.0.0", OSError("không có tuyến multicast")], ids=["unspecified", "oserror"]
-)
-def test_preferred_source_falls_back_when_multicast_route_unknown(fake_routes, mcast):
-    fake = fake_routes({MDNS_GROUP: mcast, DEFAULT_ROUTE: "10.0.0.5"})
     assert net_discovery._preferred_source() == "10.0.0.5"
-    assert fake.connects == [MDNS_GROUP, DEFAULT_ROUTE]
+    assert MDNS_GROUP not in fake.connects
 
 
 @pytest.mark.parametrize(
-    ("mcast", "default"),
-    [
-        (OSError("x"), OSError("y")),
-        ("127.0.0.1", "127.0.0.1"),
-        ("127.0.0.1", "127.0.1.1"),
-        ("127.0.0.1", OSError("y")),
-        ("0.0.0.0", "0.0.0.0"),
-        (OSError("x"), "127.0.0.1"),
-    ],
-    ids=[
-        "both_error",
-        "both_loopback",
-        "loopback_8",
-        "loop_then_error",
-        "both_unspecified",
-        "error_then_loop",
-    ],
+    "default",
+    [OSError("mạng không tới được"), "0.0.0.0"],
+    ids=["oserror", "unspecified"],
 )
-def test_preferred_source_none_when_no_usable_route(fake_routes, mcast, default):
-    fake_routes({MDNS_GROUP: mcast, DEFAULT_ROUTE: default})
+def test_preferred_source_none_without_route_out_even_if_multicast_route_is_lan(fake_routes, default):
+    # LAN không gateway: không có địa chỉ ưu tiên, không quay về tuyến multicast.
+    fake = fake_routes({MDNS_GROUP: "192.168.1.7", DEFAULT_ROUTE: default})
+    assert net_discovery._preferred_source() is None
+    assert MDNS_GROUP not in fake.connects
+
+
+@pytest.mark.parametrize(
+    "default",
+    [OSError("y"), "127.0.0.1", "127.0.1.1", "0.0.0.0"],
+    ids=["error", "loopback", "loopback_8", "unspecified"],
+)
+def test_preferred_source_none_when_route_out_is_unusable(fake_routes, default):
+    fake_routes({DEFAULT_ROUTE: default})
     assert net_discovery._preferred_source() is None
 
 
@@ -1089,24 +1078,48 @@ WIN_ADAPTERS = [
     fake_adapter("{GUID-LO}", "Software Loopback Interface 1", "127.0.0.1"),
 ]
 
+# Hyper-V External vSwitch: card vật lý được nối vào switch ảo, máy ra ngoài LAN qua card
+# "Hyper-V Virtual Ethernet Adapter #2" — trông như card ảo nhưng mang IP LAN thật.
+EXTERNAL_VSWITCH_ADAPTERS = [
+    fake_adapter("{GUID-WSL}", "Hyper-V Virtual Ethernet Adapter", "172.18.96.1"),
+    fake_adapter("{GUID-EXT}", "Hyper-V Virtual Ethernet Adapter #2", "192.168.1.20"),
+    fake_adapter("{GUID-LO}", "Software Loopback Interface 1", "127.0.0.1"),
+]
+
+
+def test_local_ipv4_addresses_keeps_preferred_source_on_external_vswitch(monkeypatch, fake_routes):
+    # Nguồn của tuyến ra ngoài LAN nằm trên card trông như card ảo: vẫn được giữ; card WSL bị lọc.
+    monkeypatch.setattr(net_discovery.ifaddr, "get_adapters", lambda *a, **k: EXTERNAL_VSWITCH_ADAPTERS)
+    fake_routes({DEFAULT_ROUTE: "192.168.1.20"})
+    assert local_ipv4_addresses() == ("192.168.1.20",)
+
 
 def test_local_ipv4_addresses_puts_preferred_source_first(monkeypatch):
     monkeypatch.setattr(net_discovery.ifaddr, "get_adapters", lambda *a, **k: WIN_ADAPTERS)
-    monkeypatch.setattr(net_discovery, "_preferred_source", lambda: "172.20.0.1")
-    # Nguồn ưu tiên được giữ dù nằm trên card ảo, và đứng đầu.
-    assert local_ipv4_addresses() == ("172.20.0.1", "10.0.0.5", "192.168.1.7")
-
-
-def test_local_ipv4_addresses_windows_multicast_loopback_uses_default_route(monkeypatch, fake_routes):
-    # Toàn chuỗi trên Windows: tuyến multicast cho 127.0.0.1 → địa chỉ của tuyến mặc định (Wi-Fi) đứng đầu.
-    monkeypatch.setattr(net_discovery.ifaddr, "get_adapters", lambda *a, **k: WIN_ADAPTERS)
-    fake_routes({MDNS_GROUP: "127.0.0.1", DEFAULT_ROUTE: "192.168.1.7"})
+    monkeypatch.setattr(net_discovery, "_preferred_source", lambda: "192.168.1.7")
     assert local_ipv4_addresses() == ("192.168.1.7", "10.0.0.5")
+
+
+def test_local_ipv4_addresses_ignores_hyperv_multicast_route_wsl_leak(monkeypatch, fake_routes):
+    # Hồi quy (lần đo N1, 2026-10-23): trên Windows mọi card có tuyến 224.0.0.0/4 cùng metric,
+    # tuyến multicast đi qua vEthernet (WSL) nên 172.18.96.1 từng lọt vào danh sách quảng bá.
+    adapters = [
+        fake_adapter(
+            "{1CC8A943-F91D-43D3-BE42-BECA33EEC5C1}", "Hyper-V Virtual Ethernet Adapter", "172.18.96.1"
+        ),
+        fake_adapter(
+            "{4E5C1AF5-793B-461A-BD72-8D9FF0719255}", "Intel(R) Wi-Fi 6 AX201 160MHz", "192.168.1.7"
+        ),
+    ]
+    monkeypatch.setattr(net_discovery.ifaddr, "get_adapters", lambda *a, **k: adapters)
+    fake = fake_routes({MDNS_GROUP: "172.18.96.1", DEFAULT_ROUTE: "192.168.1.7"})
+    assert local_ipv4_addresses() == ("192.168.1.7",)
+    assert fake.connects == [DEFAULT_ROUTE], "không được hỏi tuyến multicast mDNS"
 
 
 def test_local_ipv4_addresses_without_preferred_source(monkeypatch, fake_routes):
     monkeypatch.setattr(net_discovery.ifaddr, "get_adapters", lambda *a, **k: WIN_ADAPTERS)
-    fake_routes({MDNS_GROUP: OSError("x"), DEFAULT_ROUTE: OSError("y")})
+    fake_routes({MDNS_GROUP: "192.168.1.7", DEFAULT_ROUTE: OSError("y")})
     assert local_ipv4_addresses() == ("10.0.0.5", "192.168.1.7")
 
 
