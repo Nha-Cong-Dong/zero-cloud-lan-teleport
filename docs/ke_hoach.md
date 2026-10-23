@@ -209,7 +209,7 @@ teleport/                      # ← gốc repo
   .github/workflows/ci.yml
   docs/                        # mọi tài liệu .md: README (mục lục, thuật ngữ), y_tuong, mvp, ke_hoach,
                                #   architecture, protocol, CONTRIBUTING, SECURITY, CHANGELOG,
-                               #   (sau này) benchmark, hướng dẫn người dùng
+                               #   benchmark, (sau này) hướng dẫn người dùng
   src/teleport/                # core/ trust/ net/ app/ ui/ + tiện ích dùng chung và cli.py
   tests/                       # core/, trust/, net/, app/, … theo tầng
   tools/                       # (tùy chọn) cpp-receiver/, java-client/
@@ -229,7 +229,7 @@ Nguyên tắc: **làm bằng dòng lệnh (CLI) trước, giao diện sau.** Ph�
 | # | Giai đoạn | Thời lượng | Hết tuần | Bản phát hành | Tính năng (mvp) | Người dùng làm được gì | Trạng thái |
 |---|---|---|---|---|---|---|---|
 | 0 | Nền tảng, repo, CI | 1 tuần | 1 | — | — | — | ✅ Đã xong |
-| 1 | Khám phá & ghép đôi | 2 tuần | 3 | — | F2, F3 (lõi + CLI), F12 một phần | Thấy máy khác và ghép đôi qua CLI | ⏳ Đang làm (đã có khám phá, ghép đôi và tự giữ kết nối qua CLI; còn đo N1 trên 2 máy thật) |
+| 1 | Khám phá & ghép đôi | 2 tuần | 3 | — | F2, F3 (lõi + CLI), F12 một phần | Thấy máy khác và ghép đôi qua CLI | ✅ Đã xong (N1 đạt khi đo trên máy ảo bridged, [benchmark.md](benchmark.md) mục 3.3; đo lại trên 2 máy thật ở Giai đoạn 4) |
 | 2 | Truyền file, backpressure, an toàn khi nhận | 3 tuần | 6 | `v0.1.0-alpha` | F4, F5 (CLI), F12 | Gửi file lớn qua CLI giữa 2 máy đã ghép đôi | ⬜ Chưa làm |
 | 3 | Merkle & tự nối lại | 3 tuần | 9 | `v0.2.0-alpha` | F6, F7 | Rớt mạng vẫn tự nối lại, chỉ gửi phần còn thiếu. **Bản CLI đầu tiên đáng cho người dùng kỹ thuật dùng thử** | ⬜ Chưa làm |
 | 4 | Giao diện, khay hệ thống, đa ngôn ngữ | 2 tuần | 11 | `v0.3.0-beta` | F2–F5 (giao diện), F9, F10, F11 | Dùng hoàn toàn bằng giao diện: radar, kéo thả, ghép đôi | ⬜ Chưa làm |
@@ -246,7 +246,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Dựng `pyproject.toml`, cấu trúc thư mục, repo GitHub, CI chạy `ruff` + `pytest` trên Windows/macOS/Linux.
 - **Xong khi:** 2 máy chat được với nhau qua TLS; CI xanh trên cả 3 hệ điều hành.
 
-#### Giai đoạn 1 — Khám phá & ghép đôi ⏳
+#### Giai đoạn 1 — Khám phá & ghép đôi ✅
 - ✅ mTLS với chứng chỉ tự ký được kiểm chứng (`net/tls.py`).
 - ✅ Nền ghép đôi không mạng (PR #1): `core/messages.py` (`hello`, `pair_*`), `core/pairing_code.py` (nonce cam kết), `trust/identity.py` (kiểm tra chứng chỉ máy khác), `trust/store.py` (`trusted.json`), `lock.py` (một node mỗi thư mục cấu hình).
 - ✅ Chốt đặc tả kết nối (`protocol.md` mục 2, 5–9): một cổng `CERT_OPTIONAL` (đã kiểm chứng bằng test), ba loại kết nối, giới hạn và thời gian chờ, chống làm phiền khi ghép đôi, hủy ghép đôi, `hello.os`. Danh tính hỏng hoặc thiếu một nửa báo lỗi thay vì tự tạo lại.
@@ -258,8 +258,8 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - ✅ `app/node.py` phần còn lại: giữ kết nối điều khiển tới thiết bị tin cậy (`core/links.py`: chống trùng, nối lại theo lịch, chặn khi bị từ chối), mDNS trong node; quảng bá lại khi card mạng/địa chỉ đổi hoặc máy thức dậy, để máy khác thấy lại ngay (`protocol.md` mục 6, 8).
 - ✅ CLI: `teleport listen`, `teleport pair <ip[:cổng]>`, `teleport unpair <thiết bị>`; `--json`; mã thoát 0/1/2.
 - ✅ CLI còn lại: `teleport list`, `teleport pair <thiết bị>`; `<thiết bị>` là tên hoặc tiền tố `device_id` (mvp F12).
-- Đo N1 trên 2 máy (`docs/benchmark.md`): việc còn lại của Giai đoạn 1.
-- **Xong khi:** đạt N1 trên 2 máy thật; ghép đôi xong thì tự nhận ra nhau sau khi khởi động lại; máy chưa ghép đôi không mở được kết nối điều khiển hay dữ liệu theo cả hai chiều (chỉ mở được kết nối ghép đôi).
+- ✅ Đo N1 giữa host và máy ảo bridged: đạt ([benchmark.md](benchmark.md) mục 3.3). Tiêu chí tự nhận ra nhau sau khi khởi động lại và từ chối máy chưa ghép đôi có test integration (`tests/app/test_pairing.py`, `tests/app/test_node.py`, `tests/net/test_tls.py`).
+- **Xong khi:** đạt N1 (đo trên máy ảo bridged được chấp nhận ở giai đoạn này; đo lại trên 2 máy thật ở Giai đoạn 4); ghép đôi xong thì tự nhận ra nhau sau khi khởi động lại; máy chưa ghép đôi không mở được kết nối điều khiển hay dữ liệu theo cả hai chiều (chỉ mở được kết nối ghép đôi).
 
 #### Giai đoạn 2 — Truyền file, backpressure, an toàn khi nhận
 - `core/blocks.py`: khung khối nhị phân kèm hash; `core/messages.py`: thêm `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
@@ -284,6 +284,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
   - Lưu ý khi làm IPC: tới `v0.2`, CLI in ra stdout đồng bộ ngay trên event loop của node, nên terminal ngừng đọc (ví dụ đang tạm dừng cuộn) có thể làm cả node đứng chờ. Máy khác trong LAN không gây ra được việc này. Khi node chạy trong tiến trình giao diện, việc in hay gửi sự kiện cho CLI qua IPC không được chặn event loop của node.
 - Tiếng Việt và English bằng Qt Linguist (F11); dùng được bằng bàn phím, theo chế độ sáng/tối (N12).
 - Đo RAM khi rảnh (N3) ngay ở bản này.
+- Đo lại N1 trên 2 máy thật (Wi-Fi qua điểm phát thật và mạng dây), kèm kịch bản mất gói ở hai lần resolve đầu (`protocol.md` mục 8); ghi vào [benchmark.md](benchmark.md).
 - **Xong khi:** dùng trọn vẹn không cần dòng lệnh; đạt AC giao diện của F2–F5, F9–F11. → **`v0.3.0-beta`**.
 
 #### Giai đoạn 5 — Đồng bộ clipboard
@@ -293,7 +294,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 #### Giai đoạn 6 — Hoàn thiện & phát hành v1.0
 - Bộ cài: Inno Setup (Windows, tự tạo rule tường lửa cho mạng Private), `.dmg` (macOS), AppImage (Linux), build tự động bằng GitHub Actions khi gắn tag; lần chạy đầu theo F1; đạt N11.
 - Ký mã (code signing) cho Windows để giảm cảnh báo SmartScreen. Chi phí chứng chỉ cần cân nhắc; chưa có thì ghi rõ hướng dẫn “More info → Run anyway”.
-- Benchmark công bố ở `docs/benchmark.md` (file mới): tốc độ (so với SMB và Google Drive), RAM theo thời gian, thời gian phát hiện, lượng dữ liệu gửi lại khi nối lại. (Tùy chọn) so sánh với bộ nhận C++.
+- Benchmark công bố ở [benchmark.md](benchmark.md): tốc độ (so với SMB và Google Drive), RAM theo thời gian, thời gian phát hiện, lượng dữ liệu gửi lại khi nối lại. (Tùy chọn) so sánh với bộ nhận C++.
 - Tài liệu người dùng: cài đặt, ghép đôi, khắc phục sự cố (tường lửa, cô lập Wi-Fi). `SECURITY.md`, chính sách quyền riêng tư.
 - Thử nghiệm với người dùng thật (mvp mục 9.1), sửa lỗi; test soak (N7).
 - Tuân thủ giấy phép khi đóng gói: dùng PyInstaller `--onedir` (không `--onefile`) để người dùng thay được thư viện LGPL (Qt/PySide6, zeroconf); bộ cài kèm `LICENSE` (GPL-3.0), văn bản giấy phép các thư viện bên thứ ba, và chỉ dẫn lấy mã nguồn đúng phiên bản.
@@ -348,13 +349,13 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | Vi phạm điều kiện LGPL/GPL khi đóng gói | Đóng gói `--onedir`, không sửa mã thư viện LGPL, kèm văn bản giấy phép và chỉ dẫn lấy mã nguồn; kiểm lại trong Giai đoạn 6 |
 | Bộ cài PyInstaller nặng (N11) hoặc bị antivirus báo nhầm | Build thử từ Giai đoạn 2; gửi mẫu cho các hãng antivirus nếu bị báo nhầm |
 | Windows Firewall chặn | Bộ cài tạo rule; app phát hiện và hướng dẫn khi bị chặn |
-| python-zeroconf nâng TTL bản ghi PTR nhận được lên ≥ 1125 s, nên máy tắt đột ngột không tự biến mất trong thời hạn mvp N1 | Bên nhận tự kiểm còn sống bằng cách resolve lại SRV/TXT/A theo chu kỳ (`protocol.md` mục 8); đo N1 trên 2 máy thật; kiểm lại hành vi này mỗi khi nâng phiên bản zeroconf |
+| python-zeroconf nâng TTL bản ghi PTR nhận được lên ≥ 1125 s, nên máy tắt đột ngột không tự biến mất trong thời hạn mvp N1 | Bên nhận tự kiểm còn sống bằng cách resolve lại SRV/TXT/A theo chu kỳ (`protocol.md` mục 8); đo N1 ([benchmark.md](benchmark.md), đo lại trên 2 máy thật ở Giai đoạn 4); kiểm lại hành vi này mỗi khi nâng phiên bản zeroconf |
 | VPN full-tunnel chiếm tuyến ra ngoài LAN: IP của card VPN thành địa chỉ nguồn ưu tiên (`protocol.md` mục 2.1), nên được quảng bá ra LAN dù là card ảo và được `teleport listen` gợi ý | Việc sau: ngoại lệ “luôn giữ địa chỉ nguồn ưu tiên” không áp cho card dạng đường hầm (tun, wg, utun, ppp, ipsec, wintun, wireguard, openvpn, vpn, tailscale, zt…), vẫn áp cho Hyper-V/bridge (External vSwitch) |
 | `NetworkWatch` so cả thứ tự địa chỉ quảng bá: địa chỉ ưu tiên đổi (ví dụ tuyến ra ngoài chuyển từ Wi-Fi sang Ethernet) mà tập địa chỉ giữ nguyên vẫn bị coi là đổi mạng: khởi động lại mDNS và báo `network_changed` cho các kết nối điều khiển, không cần thiết | Việc sau: `NetworkWatch` so tập địa chỉ thay vì dãy có thứ tự (`protocol.md` mục 8) |
 | Từ chối dịch vụ ghép đôi trong LAN (giữ phiên, đổi IP, làm đầy giới hạn kết nối ẩn danh) | Chờ tăng dần theo IP, giới hạn số mã hiện ra, hạn chờ `pair_nonce` ngắn (`protocol.md` mục 2.3); phần còn lại chấp nhận theo `protocol.md` mục 5.3. Giới hạn kết nối ẩn danh và kết nối đang mở đầu ở tầng `net` (`protocol.md` mục 2.3) chưa có chờ tăng dần, sẽ xem ở việc sau |
 | Lỗ hổng bảo mật (path traversal, dữ liệu độc hại từ máy khác) | Kiểm tra hợp lệ mọi trường nhận được; fuzz test; `SECURITY.md` để nhận báo lỗi |
 | Làm một mình, không có hạn → kéo dài, ôm thêm tính năng | Bám các bản phát hành ở mục 5.1; ý tưởng mới ghi Issues nhãn `after-1.0`; nếu trễ thì cắt theo thứ tự ở mvp mục 14 |
-| Chỉ có 1 máy để thử | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật |
+| Chỉ có 1 máy để thử | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật; N1 đã đo theo cách này ([benchmark.md](benchmark.md) mục 3.3) |
 
 ---
 
