@@ -721,7 +721,8 @@ class _IpRecord:
 class PairingGate:
     """Cửa vào cho các phiên ghép đôi của một node: một phiên tại một thời điểm, chờ tăng dần.
 
-    `accepting`: giao diện luôn True; CLI chỉ True khi đang chạy `teleport listen`.
+    `accepting`: giao diện True khi máy đang hiện, hoặc khi máy đang ẩn mà màn hình
+    “Chờ ghép đôi” đang mở (mvp F3); CLI chỉ True khi đang chạy `teleport listen`.
     Bộ đếm theo IP và bộ đếm mã hiện ra chỉ nằm trong bộ nhớ, chỉ tính phiên mà máy
     này là bên trả lời.
     """

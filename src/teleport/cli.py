@@ -243,8 +243,8 @@ def outcome_message(result: PairingFinished, *, seen_name: str | None = None) ->
         ]
     if outcome in (PairingOutcome.PEER_BUSY, PairingOutcome.REJECTED):
         return [
-            f"{x} chưa sẵn sàng ghép đôi: máy đó đang ghép đôi với máy khác, chưa mở chế độ chờ ghép đôi, "
-            "hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau.",
+            f"{x} chưa sẵn sàng ghép đôi: máy đó đang ẩn, đang ghép đôi với máy khác, "
+            "chưa mở chế độ chờ ghép đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau.",
             "Trên máy đó, hãy chạy: `teleport listen`",
         ]
     if outcome is PairingOutcome.UNREACHABLE:

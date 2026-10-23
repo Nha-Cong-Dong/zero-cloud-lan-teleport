@@ -825,8 +825,8 @@ async def test_pair_peer_busy_message(tmp_path, fast_cli, cli_runs):
     assert await asyncio.wait_for(second.task, 10) == 1
     text = second.text()
     assert (
-        "B chưa sẵn sàng ghép đôi: máy đó đang ghép đôi với máy khác, chưa mở chế độ chờ ghép đôi, "
-        "hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau."
+        "B chưa sẵn sàng ghép đôi: máy đó đang ẩn, đang ghép đôi với máy khác, "
+        "chưa mở chế độ chờ ghép đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau."
     ) in text
     assert "Trên máy đó, hãy chạy: `teleport listen`" in text
     first.say("k")
