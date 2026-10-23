@@ -79,6 +79,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | core | `links.py` | Máy trạng thái giữ kết nối điều khiển (sans-IO): chống trùng §6.1, lịch nối lại và chặn §6.2, giới hạn tốc độ, báo lỗi một lần | ✅ |
 | core | `blocks.py` | Khung khối nhị phân kèm SHA-256, chia khối | ⬜ |
 | core | `merkle.py`, `bitfield.py` | Cây băm SHA-256; bảng khối đã nhận và đã xác minh | ⬜ |
+| core | `resume_state.py` | Nhật ký nối lại `.state` (sans-IO): mã hóa header và các bản ghi `MARK`/`CLEAR`/`CLEAR_ALL`/`TARGET`/`RESERVED`, đọc lại nhật ký theo từng đoạn bytes (dừng ở bản ghi hỏng đầu tiên, báo vị trí cần cắt), dựng bitfield + hash, quyết định khi nào gộp và cách phục hồi tên đích (mục 4); đọc/ghi file ở `app` | ⬜ |
 | core | `transfer.py` | Máy trạng thái gửi/nhận, nối lại, gửi lại khối lỗi | ⬜ |
 | trust | `identity.py` | Khóa ECDSA P-256, chứng chỉ tự ký, fingerprint; kiểm tra chứng chỉ của máy khác (`PeerCert`; mọi lỗi phân tích → `InvalidCertificate`); danh tính hỏng → `IdentityError`, không tự tạo lại; ký chứng minh giữ khóa khi ghép đôi (`load_pairing_signer` → `PairingSigner`) và kiểm chữ ký của máy kia (`verify_pairing_proof`, không bao giờ ném) | ✅ |
 | trust | `store.py` | `trusted.json`: thiết bị đã ghép đôi | ✅ |
@@ -106,9 +107,9 @@ Module chỉ được tạo khi có code thật, không tạo file rỗng trư�
 | `<config_dir>/identity.lock` | Khóa trong lúc tạo danh tính, để nhiều tiến trình chạy lần đầu cùng lúc nhận cùng một danh tính ✅ |
 | `<config_dir>/settings.json` | Cài đặt người dùng: cổng dự phòng khi 47474 bận ([protocol.md](protocol.md) mục 2.1) ✅; sau này cả cài đặt theo từng thiết bị tin cậy (“Hỏi trước khi nhận”, “Đồng bộ clipboard”), theo `device_id` ⬜. Không đưa vào `trusted.json`: file đó bỏ trường lạ khi ghi và bị bản cũ từ chối nếu tăng `version`. Chi tiết bên dưới |
 | `<config_dir>/history.json` | 100 lượt truyền gần nhất (mvp F5), ghi nguyên tử ⬜ |
-| `<thư mục nhận>/.teleport/<transfer_id>/transfer.json` | Trạng thái mức lượt truyền, còn sau khi khởi động lại: manifest của `offer`, thiết bị gửi (`device_id`), đã chấp nhận, file hiện tại, các file đã `verified`; ghi nguyên tử; xóa 24 giờ sau khi file cuối xong ([protocol.md](protocol.md) mục 6.3) ⬜ |
+| `<thư mục nhận>/.teleport/<transfer_id>/transfer.json` | Trạng thái mức lượt truyền, còn sau khi khởi động lại: manifest của `offer` (chỉ nằm ở đây; `.state` chỉ đối chiếu), thiết bị gửi (`device_id`), đã chấp nhận, file hiện tại, các file đã `verified`; ghi nguyên tử; xóa 24 giờ sau khi file cuối xong ([protocol.md](protocol.md) mục 6.3) ⬜ |
 | `<thư mục nhận>/.teleport/<transfer_id>/<file_index>.part` | Dữ liệu đang nhận, ghi đúng vị trí từng khối ⬜ |
-| `<thư mục nhận>/.teleport/<transfer_id>/<file_index>.state` | Trạng thái nối lại: manifest, bitfield, hash các khối đã đánh dấu; cứ 16 khối: `fsync` `.part` rồi mới ghi state nguyên tử ([protocol.md](protocol.md) mục 4.3) ⬜ |
+| `<thư mục nhận>/.teleport/<transfer_id>/<file_index>.state` | Trạng thái nối lại của file đó, dạng nhật ký chỉ ghi thêm. Quy tắc bền vững: [protocol.md](protocol.md) mục 4.3; định dạng: bên dưới ⬜ |
 
 `config_dir` mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Library/Application Support/Teleport`, Linux `$XDG_CONFIG_HOME/teleport` (hoặc `~/.config/teleport`).
 
@@ -166,6 +167,88 @@ Do `teleport.lock.NodeLock` giữ (tiện ích dùng chung như `paths.py`, vì 
 - Lấy khóa không chờ. Đã có node khác giữ (kể cả trong cùng tiến trình) → `NodeLockedError` (“Teleport đang chạy với thư mục cấu hình này”), lệnh CLI thoát với mã ≠ 0.
 - Tiến trình chết, kể cả bị kill, thì hệ điều hành tự nhả khóa: không có khóa treo phải xóa tay.
 - File không chứa gì (không ghi PID) và được giữ lại sau khi nhả khóa.
+
+### `<file_index>.state` (nhật ký nối lại) ⬜
+
+Sẽ do `teleport.core.resume_state` (sans-IO) mã hóa và đọc lại; `app` đọc/ghi file. Quy tắc bền vững (thứ tự `fsync`, khi nào một khối được tính là đã có): [protocol.md](protocol.md) mục 4.3, 4.4. Nhật ký **chỉ ghi thêm**: không bao giờ ghi lại toàn bộ trạng thái ở mỗi lần đánh dấu (lý do: [ke_hoach.md](ke_hoach.md) mục 3.4).
+
+Mọi số nguyên là số không dấu, big-endian (như khung khối, [protocol.md](protocol.md) mục 4.2). `crc32` là CRC-32 IEEE (`zlib.crc32`) của mọi byte đứng trước nó trong cùng header hay cùng bản ghi.
+
+**Header** (41 byte), ghi một lần bằng `teleport.atomic.write_atomic` khi bắt đầu nhận file:
+
+| Trường | Byte | Ghi chú |
+|---|---|---|
+| `magic` | 4 | `TPRS` (ASCII) |
+| `version` | 1 | Phiên bản định dạng, hiện là 1 |
+| `transfer_id` | 16 | 32 hex của `transfer_id` đổi sang byte |
+| `file_index` | 4 | |
+| `size` | 8 | Kích thước file, byte |
+| `block_size` | 4 | |
+| `crc32` | 4 | |
+
+Header chỉ để đối chiếu: manifest chỉ nằm ở `transfer.json`. Thiếu byte, sai `magic`, `version` lạ, sai `crc32`, hay một trường khác `transfer.json` → coi như chưa có trạng thái: ghi header mới (đè `.state` cũ bằng `write_atomic`) và gửi `resume` với bitfield toàn 0. Các bản ghi `TARGET`/`RESERVED` cũ bị quên theo, nên không file nào mang tên đích được coi là của lượt truyền này (bảng phục hồi bên dưới).
+
+**Bản ghi**, nối liền nhau sau header:
+
+| Loại | Mã | Bố cục | Khi nào nối |
+|---|---|---|---|
+| `MARK` | `0x01` | `[u8 loại][u16 n][n × (u32 index ‖ 32 byte sha256)][u32 crc32]`, n ≥ 1 | Mỗi lần đánh dấu (16 khối, hoặc khi đã nhận đủ khối của file): `fsync` `.part` thành công → nối `MARK` → `fsync` `.state` |
+| `CLEAR` | `0x02` | `[u8 loại][u16 n][n × u32 index][u32 crc32]`, n ≥ 1 | Lượt đọc lại thấy khối sai ([protocol.md](protocol.md) mục 4.4, bước 3) |
+| `CLEAR_ALL` | `0x03` | `[u8 loại][u32 crc32]` | Merkle root sai ([protocol.md](protocol.md) mục 4.4, bước 4) |
+| `TARGET` | `0x04` | `[u8 loại][u16 len][len byte tên đích, UTF-8][u32 crc32]` | Đã chọn tên đích: nối `TARGET` → `fsync` `.state` → rồi mới tạo file giữ chỗ bằng `O_CREAT \| O_EXCL` ([protocol.md](protocol.md) mục 4.4, bước 6). Chỉ là ý định, chưa chứng minh file mang tên đó là của mình |
+| `RESERVED` | `0x05` | Như `TARGET` | `O_CREAT \| O_EXCL` đã tạo được file giữ chỗ: nối `RESERVED` mang đúng tên đó → `fsync` `.state` |
+
+- `TARGET` và `RESERVED`: 1 ≤ `len` ≤ giới hạn `name` ở [protocol.md](protocol.md) mục 3.3. Bước chọn tên đích bảo đảm tên **kèm hậu tố** ` (n)` vẫn trong giới hạn đó, bằng cách cắt bớt phần tên trước đuôi file. Bộ đọc coi `len` ngoài khoảng này là bản ghi hỏng.
+- `CLEAR` và `CLEAR_ALL` không cần `fsync` riêng: mất chúng thì lượt đọc lại cuối hay phép so Merkle root lại bắt đúng lỗi đó, và `fsync` của `MARK` kế tiếp làm chúng bền theo. Cái giá: mất `CLEAR_ALL` thì tốn thêm một lượt đọc lại cả file.
+
+Một `MARK` 16 khối dài 583 byte, tức khoảng 36,4 byte mỗi khối: nhật ký của file 100 GiB chừng 3,6 MiB, tăng tỉ lệ thuận với số khối.
+
+**Lỗi khi đang nhận:**
+
+- `fsync` `.part` lỗi → các khối ghi từ lần `fsync` `.part` thành công trước đó coi như chưa nhận: không nối `MARK` cho chúng, kể cả khi `fsync` lần sau thành công (Linux có thể đã bỏ các trang chưa ghi được, rồi không báo lỗi lần nữa). Các khối đó vẫn có bit = 0 nên được gửi lại.
+- Ghi hay `fsync` `.state` lỗi → dừng lượt truyền và báo người dùng lỗi ghi đĩa (mvp mục 8 chưa có dòng riêng cho lỗi này). Không bao giờ nối tiếp sau một bản ghi có thể đã cụt: lần tiếp tục đọc lại nhật ký từ đầu và cắt về bản ghi tốt cuối (bên dưới) rồi mới nối.
+
+**Đọc lại** (khi mở lại app): kiểm header, rồi phát lần lượt từng bản ghi từ đầu, bắt đầu từ bitfield toàn 0. Đọc theo từng đoạn, không nạp cả nhật ký vào RAM.
+
+- `MARK`: bật bit và lưu hash của từng index. Index đã có thì bản ghi sau thắng.
+- `CLEAR`: tắt bit các index đó. `CLEAR_ALL`: tắt mọi bit.
+- `TARGET`: nhớ tên đích và quên mọi `RESERVED` trước đó. `RESERVED`: ghi nhận đã giữ chỗ, chỉ khi tên trùng `TARGET` cuối cùng; khác tên thì bỏ qua.
+- Gặp bản ghi đầu tiên bị cụt, sai `crc32`, có loại lạ, `n` = 0, index ≥ số khối của file, `len` ngoài khoảng ở trên, hoặc tên không phải UTF-8 hợp lệ hay đổi đi khi qua bộ làm sạch tên file ([ke_hoach.md](ke_hoach.md) mục 3.3) → dừng ở đó, bỏ phần còn lại: cắt file về cuối bản ghi tốt cuối cùng rồi `fsync`, để bản ghi nối sau không nằm sau rác. Mất điện chỉ làm cụt bản ghi đang ghi dở, nên mất tối đa một `MARK` (≤ 16 khối), vẫn trong giới hạn gửi lại ở [protocol.md](protocol.md) mục 4.3.
+- `.state` nằm trên đĩa của chính máy nhận nhưng vẫn được kiểm như dữ liệu không tin cậy, vì chương trình khác cũng ghi được vào thư mục nhận.
+
+**Kết thúc một file**, sau khi lượt đọc lại và Merkle root đều khớp ([protocol.md](protocol.md) mục 4.4, bước 6), theo đúng thứ tự:
+
+1. Nối `TARGET` → `fsync` `.state`.
+2. Tạo file giữ chỗ bằng `O_CREAT | O_EXCL`; tên đã có thì chọn tên kế tiếp (` (1)`, ` (2)`…) và quay lại bước 1.
+3. `fsync` thư mục nhận, để tên file giữ chỗ bền trên đĩa.
+4. Nối `RESERVED` → `fsync` `.state`.
+5. `os.replace` `.part` lên file giữ chỗ.
+6. `fsync` thư mục nhận.
+7. Ghi file đó là đã `verified` vào `transfer.json` (`write_atomic`).
+8. Xóa `.state`.
+9. Gửi `verified`.
+
+`transfer.json` đã ghi file là `verified` thì thắng mọi thứ khác: lần chạy sau không nhận lại file đó, dù `.state` còn hay đã mất (sập giữa bước 7 và 8 thì chỉ còn việc xóa `.state`).
+
+Ghi chú nền tảng, cần kiểm khi cài (Giai đoạn 2–3): trên macOS `os.fsync` không xả cache của ổ đĩa, nên các `fsync` ở trên dùng `fcntl.F_FULLFSYNC`; Windows không `fsync` được thư mục từ Python, nên bước 3 thay bằng `os.fsync` (FlushFileBuffers) trên handle của chính file giữ chỗ vừa tạo rồi mới đóng handle, còn bước 5 và 6 gộp thành một lần `MoveFileExW(.part, đích, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`, vẫn thử lại khi `PermissionError` như `os.replace`; mọi handle tới file giữ chỗ phải đóng trước khi đổi tên. Chưa chắc FlushFileBuffers trên file làm bền được mục thư mục trên NTFS và FAT/exFAT.
+
+**Phục hồi tên đích** sau khi đọc lại (khi `transfer.json` chưa ghi file là `verified`). Không bao giờ xóa hay ghi đè một file mà `.state` không chứng minh được là của mình. Xét bảng từ trên xuống và dùng dòng đầu tiên khớp; dòng “đúng `size` byte, không còn `.part`” đứng trước dòng “0 byte” vì thiếu `.part` thì phải xét nó trước (file rỗng có `size` = 0):
+
+| `.state` cho biết | File mang tên đích trên đĩa | Làm gì |
+|---|---|---|
+| Không có `TARGET` | — | Chọn tên khi tới bước đổi tên, như bình thường |
+| `TARGET` không có `RESERVED` khớp | Bất kỳ | Không đụng file mang tên đó; tới bước đổi tên thì chọn tên mới |
+| `TARGET` + `RESERVED` | Đúng `size` byte, và không còn `.part` | Đã sập sau `os.replace`: đọc lại file đó, kiểm từng khối theo hash đã lưu; khớp hết thì coi như file đã `verified` và làm tiếp từ bước 6 ở trên |
+| `TARGET` + `RESERVED` | 0 byte, và còn `.part` | Dùng lại làm file giữ chỗ; làm lại lượt đọc lại ([protocol.md](protocol.md) mục 4.4, bước 3) rồi mới làm tiếp từ bước 5 (`.part` có thể đã bị sửa trong lúc app tắt) |
+| `TARGET` + `RESERVED` | 0 byte, và không còn `.part` | File đó là của máy này: coi như chưa có khối nào (ghi lại header mới, gửi `resume` với bitfield toàn 0) và nhận xong thì dùng lại nó làm file giữ chỗ, không chọn tên mới |
+| Mọi trường hợp còn lại (kể cả kiểm ở dòng “đúng `size`” có khối sai) | Bất kỳ | Không đụng file đó, chọn tên mới; còn thiếu `.part` thì coi như chưa có khối nào: ghi lại header mới (để `.state` khớp trạng thái trong RAM) và gửi `resume` với bitfield toàn 0 |
+
+Còn một khe được chấp nhận: sập sau khi `O_CREAT | O_EXCL` tạo file giữ chỗ nhưng trước khi `RESERVED` bền trên đĩa thì file 0 byte mang tên thật bị bỏ lại. Việc dọn file tạm cũ chỉ dọn trong `.teleport/`, nên không đụng file này; nó được để lại cho người dùng.
+
+**Gộp:** kích thước gọn là độ dài của header, cộng `TARGET` cuối cùng (nếu có) rồi `RESERVED` (chỉ khi trùng tên với `TARGET` đó), cộng các `MARK` chứa đúng các khối đang có bit bật (mỗi `MARK` tối đa 65 535 khối). Sau mỗi lần nối và khi đọc lại, nếu `.state` dài hơn 2 × kích thước gọn + 64 KiB thì ghi lại bản gọn bằng `write_atomic`. Nhật ký chỉ dài hơn bản gọn khi có `CLEAR`, `CLEAR_ALL`, khối được đánh dấu lại, hay nhiều `TARGET`/`RESERVED`, nên hiếm khi phải gộp.
+
+- Đóng handle đang nối thêm vào `.state` trước khi gọi `write_atomic` (khi gộp hay khi ghi lại header), vì Windows không `os.replace` được lên file đang mở; xong thì mở lại để nối tiếp.
+- Bản gọn ghi `TARGET` trước, rồi mới tới `RESERVED` khớp tên, để đọc lại bản gọn cho đúng kết quả như nhật ký cũ. Bản gọn được sinh từ bitfield và hash đang giữ trong RAM rồi ghi ra theo từng đoạn, không dựng cả bản gọn thành một khối bytes (RAM: [ke_hoach.md](ke_hoach.md) mục 8). `write_atomic` hiện nhận cả nội dung một lần, nên sẽ cần thêm cách ghi theo đoạn.
 
 ## 5. Bất đồng bộ
 

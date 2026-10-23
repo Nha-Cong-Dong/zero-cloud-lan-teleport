@@ -43,9 +43,12 @@ Mọi tài liệu của dự án nằm trong thư mục này. Giới thiệu d�
 | **Ghép đôi** (pairing) | Bước xác nhận mã 6 số ở cả hai máy để hai máy tin nhau. |
 | **Thiết bị tin cậy** | Thiết bị đã ghép đôi, lưu trong `trusted.json`. |
 | **Fingerprint** | SHA-256 của chứng chỉ thiết bị; là định danh được tin cậy (tên thiết bị chỉ để hiển thị). |
-| **Bitfield** | Bảng bit đánh dấu khối đã nhận, **đã khớp hash và đã ghi bền xuống đĩa**. |
+| **Bitfield** | Bảng bit đánh dấu khối đã nhận, **đã khớp hash, đã ghi bền xuống đĩa và đã được đánh dấu bền trong `.state`**. |
 | **Merkle root** | Hash đại diện cho cả file, tính từ hash các khối. |
 | **File tạm** | `.part` (dữ liệu đang nhận) và `.state` (trạng thái nối lại), nằm trong `<thư mục nhận>/.teleport/<transfer_id>/`. |
+| **Nhật ký `.state`** | Trạng thái nối lại của một file, chỉ ghi thêm: mỗi **lần đánh dấu** (16 khối) nối một bản ghi các khối vừa ghi bền kèm hash. Định dạng: [architecture.md](architecture.md) mục 4. |
+| **Máy đang ẩn / đang hiện** | Công tắc “Cho máy chưa ghép đôi thấy máy này” đang tắt / đang bật ([mvp.md](mvp.md) F10). |
+| **Chế độ chờ ghép đôi** | Màn hình “Chờ ghép đôi” đang mở, hoặc đang chạy `teleport listen` ([mvp.md](mvp.md) F3). |
 | **Kết nối ghép đôi / điều khiển / dữ liệu** | Ba loại kết nối trên cùng một cổng (`protocol.md` mục 2). |
 | **Node** | Một tiến trình Teleport đang chạy, gắn với một thư mục cấu hình. |
 | **Cô lập thiết bị** (AP isolation) | Wi-Fi chặn các máy trong mạng nói chuyện với nhau. |

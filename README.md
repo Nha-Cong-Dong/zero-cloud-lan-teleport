@@ -127,6 +127,7 @@ Mọi quyết định đều dựa trên sáu nguyên tắc: **riêng tư tuyệ
 | File độc hại cố ghi đè hệ thống (`..\..\Windows\…`) | Làm sạch tên file, chỉ ghi trong thư mục nhận, không bao giờ ghi đè |
 | Lộ mật khẩu qua clipboard | Đồng bộ clipboard mặc định tắt; bỏ qua nội dung mà trình quản lý mật khẩu đánh dấu nhạy cảm |
 | Thu thập dữ liệu người dùng | Không telemetry, không tài khoản, không máy chủ. Kiểm tra cập nhật là tùy chọn, mặc định tắt |
+| Theo dõi thiết bị qua nhiều mạng | Lần chạy đầu nói rõ tên máy hiện với mọi máy trong mạng; có công tắc ẩn máy khỏi máy chưa ghép đôi ([mvp mục 11](docs/mvp.md)) |
 
 Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -153,7 +154,7 @@ Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 | `v0.4.0-beta` | Đồng bộ clipboard |
 | `v1.0.0` | Bộ cài cho Windows, macOS, Linux; tài liệu người dùng |
 
-**Sau v1.0:** app Android, chế độ khách qua trình duyệt cho điện thoại, gửi tới nhiều thiết bị cùng lúc, gửi và đồng bộ thư mục, app iOS.
+**Sau v1.0:** app Android, chế độ khách qua trình duyệt cho điện thoại, gửi tới nhiều thiết bị cùng lúc, gửi và đồng bộ thư mục, app iOS, quảng bá ẩn danh.
 
 Lộ trình chi tiết theo tuần: [docs/ke_hoach.md](docs/ke_hoach.md) mục 5. Trạng thái chi tiết từng module: [docs/architecture.md](docs/architecture.md#3-bản-đồ-module).
 
@@ -258,7 +259,7 @@ Không. Teleport chỉ cần các máy cùng một mạng Wi-Fi/LAN. Bạn có t
 <details>
 <summary><b>Có giới hạn dung lượng file không?</b></summary>
 
-Không có giới hạn từ phía Teleport; giới hạn duy nhất là dung lượng trống của ổ nhận. Dữ liệu được ghi thẳng ra đĩa theo từng khối, nên file 50GB cũng không làm tăng RAM.
+Mỗi file tối đa 4 TB; ổ nhận FAT32 (USB cũ) chỉ chứa được file nhỏ hơn 4 GB ([mvp F4](docs/mvp.md)). Ngoài ra chỉ giới hạn bởi chỗ trống của ổ nhận. Dữ liệu được ghi thẳng ra đĩa theo từng khối, nên file 50GB cũng không làm tăng RAM.
 </details>
 
 <details>

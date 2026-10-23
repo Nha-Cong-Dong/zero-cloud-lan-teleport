@@ -78,7 +78,7 @@
 
 ### 3.2. Truyền file & backpressure
 *(mvp F4, F5, N3)*
-- **Khối:** 1 MiB, là đơn vị băm, nối lại và ghi bitfield. File 10GB ≈ 10.240 khối, bitfield ≈ 1,3KB.
+- **Khối:** 1 MiB, là đơn vị băm, nối lại và ghi bitfield. File 10 GiB = 10 240 khối, bitfield 1,25 KiB.
 - **Bên gửi:** băm từng khối và gửi hash **ngay trong header của khung khối** (`protocol.md` mục 4.2):
   ```python
   while block := f.read(BLOCK_SIZE):  # chỉ giữ 1 khối trong RAM
@@ -102,15 +102,16 @@
   - chuẩn hóa NFC (macOS lưu NFD), giới hạn 255 byte UTF-8 và đường dẫn đầy đủ không vượt giới hạn của hệ điều hành;
   - tên rỗng sau khi làm sạch → `file`.
 - Kiểm tra dung lượng trống trước khi nhận; không đủ thì tự trả `reject{no_space, needed, available}`.
-- Trùng tên (với file đã có, hoặc giữa hai file trong cùng `offer`, không phân biệt hoa thường) thì tự đặt `ten (1).ext`, không bao giờ ghi đè. Bước đổi tên cuối cùng **không bao giờ ghi đè** và chạy được trên mọi hệ file (kể cả ổ USB FAT/exFAT): ghi tên đích vào trạng thái nối lại, tạo file đích rỗng bằng `O_CREAT | O_EXCL` để giữ chỗ tên (đã có thì thử ` (1)`, ` (2)`…), rồi `os.replace` file tạm đè lên chính file giữ chỗ đó (thử lại khi Windows báo `PermissionError` vì antivirus đang mở file). Bị ngắt giữa chừng thì trạng thái chỉ ra file giữ chỗ để dùng lại hoặc xóa. Không dùng `os.rename` trần (trên POSIX nó ghi đè không báo) hay `os.link` (FAT/exFAT không hỗ trợ).
+- Trùng tên (với file đã có, hoặc giữa hai file trong cùng `offer`, không phân biệt hoa thường) thì tự đặt `ten (1).ext`, không bao giờ ghi đè; tên kèm hậu tố ` (n)` vẫn phải nằm trong giới hạn độ dài ở trên, nên phần tên trước đuôi file được cắt bớt khi cần. Bước đổi tên cuối cùng **không bao giờ ghi đè** và chạy được trên mọi hệ file (kể cả ổ USB FAT/exFAT): ghi tên đích vào trạng thái nối lại, tạo file đích rỗng bằng `O_CREAT | O_EXCL` để giữ chỗ tên (đã có thì thử ` (1)`, ` (2)`…), ghi vào trạng thái nối lại rằng đã giữ được chỗ, rồi `os.replace` file tạm đè lên chính file giữ chỗ đó (thử lại khi Windows báo `PermissionError` vì antivirus đang mở file). Bị ngắt giữa chừng thì chỉ dùng lại file giữ chỗ mà trạng thái nối lại chứng minh là của mình; file khác mang tên đó không bao giờ bị xóa hay ghi đè (`protocol.md` mục 4.4). Không dùng `os.rename` trần (trên POSIX nó ghi đè không báo) hay `os.link` (FAT/exFAT không hỗ trợ).
 - File tạm **không** nằm cạnh file thật mà trong thư mục ẩn `<thư mục nhận>/.teleport/<transfer_id>/`, để tên file nhận được (ví dụ `x.mp4.part.state`) không bao giờ đụng file tạm của lượt truyền khác.
 - Luôn hỏi người nhận chấp nhận, trừ khi họ đã tắt “Hỏi trước khi nhận” cho thiết bị đó.
 - Mọi message nhận từ máy khác đều không được tin: sai một trường là cả message bị từ chối; có giới hạn kích thước, thời gian chờ và fuzz test.
 
 ### 3.4. Toàn vẹn & nối lại
 *(mvp F6, F7, N4, N5)*
-- Bên gửi băm từng khối **trong khi gửi** và gửi hash trong header của chính khối đó; cuối file gửi `complete{merkle_root}`. Nhờ vậy không phải băm cả file 10GB trước khi bắt đầu, và hash không bao giờ tới sau dữ liệu.
-- Bên nhận băm lại khối khi nhận và so ngay. Cứ 16 khối: `fsync` file `.part` → bật bit các khối đó (bitfield chỉ chứa khối **đã khớp hash và đã nằm trên đĩa**) → ghi trạng thái (JSON: manifest, bitfield dạng base64, hash các khối đã đánh dấu) bằng ghi nguyên tử. Mỗi 16 MiB một lần `fsync`, chi phí nhỏ so với thời gian truyền (đo ở Giai đoạn 2; nếu ảnh hưởng N2 thì nới chu kỳ và tính lại N4).
+- Bên gửi băm từng khối **trong khi gửi** và gửi hash trong header của chính khối đó; cuối file gửi `complete{merkle_root}`. Nhờ vậy không phải băm cả file 10 GiB trước khi bắt đầu, và hash không bao giờ tới sau dữ liệu.
+- Bên nhận băm lại khối khi nhận và so ngay. Cứ 16 khối: `fsync` file `.part` → nối một bản ghi đánh dấu các khối đó, kèm hash, vào nhật ký `.state` → `fsync` `.state` (bitfield chỉ chứa khối **đã khớp hash và đã nằm trên đĩa**; `protocol.md` mục 4.3). Mỗi 16 MiB một lần `fsync` `.part` và một lần `fsync` `.state`, chi phí nhỏ so với thời gian truyền (đo ở Giai đoạn 2; nếu ảnh hưởng N2 thì nới chu kỳ và tính lại N4).
+- **Vì sao `.state` là nhật ký chỉ ghi thêm:** thiết kế cũ ghi nguyên tử lại *toàn bộ* trạng thái ở mỗi lần đánh dấu (manifest, bitfield, hash mọi khối đã đánh dấu), nên tổng byte ghi tăng theo bình phương số khối, cỡ 2N² byte với N khối: file 100 GiB tốn khoảng 20 GiB ghi đĩa chỉ cho trạng thái. Nhật ký chỉ nối thêm bản ghi của các khối vừa đánh dấu, nên tổng byte ghi tỉ lệ thuận với số khối; manifest chỉ nằm ở `transfer.json`. Định dạng, cách đọc lại và gộp: [architecture.md](architecture.md) mục 4.
 - **Vì sao không gửi hash theo lô trên kênh điều khiển** (thiết kế cũ): kết nối điều khiển và kết nối dữ liệu không có thứ tự với nhau, nên hash có thể tới sau dữ liệu; bên nhận phải dừng đọc ở mỗi ranh giới lô để chờ hash, và giới hạn gửi lại phụ thuộc vào thứ tự giữa hai kết nối. Hash nằm trong header khung (32 byte cho mỗi 1 MiB, ~0,003%) xóa bỏ cả hai vấn đề mà không tốn thêm RAM hay đọc file hai lần.
 - **Giới hạn dữ liệu gửi lại:** khối đã nhận nhưng chưa được đánh dấu có bit = 0 nên sẽ được gửi lại. Số khối đó ≤ 16 + 8 (hàng đợi) + 1, cộng bộ đệm socket (giới hạn ≤ 8 MiB mỗi bên), tổng ≤ 41 MiB, nên đạt ngưỡng mvp N4 cả khi rớt mạng lẫn khi tắt hẳn app nhận. “Phần chưa nhận” tính theo bitfield của bên nhận (`protocol.md` mục 4.3).
 - **Kiểm tra cuối:** khi có `complete` và đủ mọi bit, bên nhận **đọc lại toàn bộ `.part` từ đĩa** và so từng khối với hash đã lưu, rồi mới so Merkle root. Không có bước này thì byte bị sửa trong `.part` lúc tạm dừng (mvp F7) sẽ lọt qua, vì bitfield và hash đã lưu vẫn nói khối đó đúng. Khối sai → xóa bit, gửi `resume` → bên gửi gửi lại đúng khối đó. Quá 3 lần vẫn sai (ví dụ ổ hỏng) → `cancel{error}`. Bước này là trạng thái “đang kiểm tra” ở mvp F5; tốn một lần đọc file ở tốc độ đĩa.
@@ -167,6 +168,7 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 - Không telemetry, không tài khoản, không gọi bất kỳ máy chủ nào ngoài LAN.
 - Kiểm tra bản cập nhật (đọc GitHub Releases) là **tùy chọn, mặc định tắt**, và là kết nối Internet duy nhất app có thể tạo ra.
 - Log chỉ lưu trên máy, không ghi nội dung file hay clipboard. Có nút “Xuất log” để người dùng tự gửi khi báo lỗi.
+- **Theo dõi thiết bị qua nhiều mạng:** `device_id` cố định và tên thiết bị lộ cho mọi máy trong mạng (qua mDNS) và cho máy nào kết nối tới cổng (qua chứng chỉ và `hello`), nên người lạ nhận ra được cùng một máy ở nhiều mạng; chi tiết những gì lộ: `protocol.md` mục 8. Giảm thiểu ở v1.0: lần chạy đầu nói rõ tên hiện với mọi máy (mvp F1) và công tắc ẩn máy khỏi máy chưa ghép đôi (mvp F10, Giai đoạn 4). Quảng bá ẩn danh để sau v1.0 (mục 5.3); tự ẩn khi Windows ở mạng Public: mục 9.
 
 ---
 
@@ -262,16 +264,19 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - **Xong khi:** đạt N1 (đo trên máy ảo bridged được chấp nhận ở giai đoạn này; đo lại trên 2 máy thật ở Giai đoạn 4); ghép đôi xong thì tự nhận ra nhau sau khi khởi động lại; máy chưa ghép đôi không mở được kết nối điều khiển hay dữ liệu theo cả hai chiều (chỉ mở được kết nối ghép đôi).
 
 #### Giai đoạn 2 — Truyền file, backpressure, an toàn khi nhận
+- Làm trước khi bắt đầu giai đoạn này (không đổi trạng thái ✅ của Giai đoạn 1): giới hạn tốc độ bắt tay mới ở `Listener`, theo IP và ngân sách chung (`protocol.md` mục 2.3), và client kết nối ra dùng `CERT_REQUIRED` với đúng chứng chỉ đã lưu của máy kia (`protocol.md` mục 2.3, 8; mục 8 bên dưới).
 - `core/blocks.py`: khung khối nhị phân kèm hash; `core/messages.py`: thêm `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
 - `core/transfer.py`: máy trạng thái gửi/nhận (`offer`/`accept`, nhiều file, hủy), không I/O.
 - `app/transfers.py`: chạy máy trạng thái trên kết nối thật, đọc/ghi `.part` theo khối.
 - An toàn khi nhận (mục 3.3): làm sạch tên, file tạm trong `.teleport/`, đổi tên không ghi đè; hủy ở cả hai bên (máy nhận xóa file tạm); giới hạn tốc độ gửi.
+- Kiểm hệ file của thư mục nhận trước `accept` (FAT32, mục 8): có file không chứa được thì tự `reject` cả lượt với một lý do mới, sửa `protocol.md` mục 3.2 khi cài.
+- Thêm thông báo lỗi ghi đĩa (ghi hay `fsync` `.state`/`.part` lỗi, [architecture.md](architecture.md) mục 4) vào mvp mục 8: trưởng nhóm soạn nguyên văn, người dùng duyệt.
 - CLI: `teleport send <file...> --to <tên>` kèm tiến độ và tốc độ, `teleport receive`; mã thoát khác 0 khi lỗi; `--json`.
 - Build thử CLI bằng PyInstaller để sớm phát hiện vấn đề đóng gói / antivirus.
-- **Xong khi:** truyền file 10GB thành công; đạt N3 (biểu đồ RSS phẳng, ổ đích chậm mà RAM không tăng); test path traversal và tên đặc biệt (`../../x`, `C:\Windows\x`, `CON`, `NUL.txt`, `a.txt:ads`, `x.`, `x.part.state`) đều bị chặn hoặc đổi tên; không có trường hợp nào ghi đè file sẵn có. → **`v0.1.0-alpha`**.
+- **Xong khi:** truyền file 10 GiB thành công; đạt N3 (biểu đồ RSS phẳng, ổ đích chậm mà RAM không tăng); test path traversal và tên đặc biệt (`../../x`, `C:\Windows\x`, `CON`, `NUL.txt`, `a.txt:ads`, `x.`, `x.part.state`) đều bị chặn hoặc đổi tên; không có trường hợp nào ghi đè file sẵn có. → **`v0.1.0-alpha`**.
 
 #### Giai đoạn 3 — Merkle & tự nối lại
-- `core/merkle.py`, `core/bitfield.py`; mở rộng `core/transfer.py` với `complete`, `resume`, `verified`, lượt đọc lại cuối và giới hạn số lần gửi lại; lưu trạng thái nối lại ở `app/transfers.py`.
+- `core/merkle.py`, `core/bitfield.py`, `core/resume_state.py` (nhật ký `.state`, [architecture.md](architecture.md) mục 4); mở rộng `core/transfer.py` với `complete`, `resume`, `verified`, lượt đọc lại cuối và giới hạn số lần gửi lại; lưu trạng thái nối lại ở `app/transfers.py`.
 - Tự kết nối lại với backoff; phát hiện file nguồn thay đổi (khi nối lại và trước `complete`); `cancel{unknown_transfer}` khi bên gửi đã tắt; dọn file tạm cũ.
 - **Xong khi:** đạt mọi AC của F6, F7 và N4, N5, cụ thể: (a) tắt Wi-Fi ở 85% → bật lại → hoàn tất, lượng gửi lại trong ngưỡng mvp N4; (b) sửa 1 byte trong `.part` → phát hiện và gửi lại đúng 1 khối; (c) tắt hẳn app nhận rồi mở lại → vẫn nối lại được; (d) test `hypothesis` ngắt kết nối ngẫu nhiên → file cuối luôn đúng. → **`v0.2.0-alpha`**.
 
@@ -279,6 +284,8 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Cửa sổ chính theo wireframe mvp mục 7: radar có vòng quét động, mỗi thiết bị là một chấm có tên, biểu tượng hệ điều hành và trạng thái; nút “Nhập IP thủ công”.
 - Kéo thả file vào chấm (hoặc chuột phải → “Gửi file…”); hộp thoại chấp nhận ở máy nhận; danh sách lượt truyền với tiến độ/tốc độ/thời gian còn lại/trạng thái và nút hủy; thông báo hệ thống khi nhận xong; lịch sử 100 lượt.
 - Hộp thoại ghép đôi; màn hình cài đặt đủ các mục F10.
+- Công tắc “Cho máy chưa ghép đôi thấy máy này” (mvp F10, mặc định bật): tắt thì node ngừng quảng bá mDNS nhưng vẫn duyệt và tự kết nối ra tới thiết bị tin cậy; đang ẩn mà không ở chế độ chờ ghép đôi (mvp F3) thì cắt kết nối ẩn danh ngay sau bắt tay TLS, không gửi `hello` (`protocol.md` mục 2.3, 8).
+- Nút và màn hình “Chờ ghép đôi” (mvp F3, mục 7.5). Node phải bật/tắt việc nhận ghép đôi trong lúc đang chạy, theo công tắc ở F10 và việc mở/đóng màn hình đó: hiện `PairingService` đã có `accepting`, nhưng `Node` chỉ nhận `accept_pairing` lúc tạo.
 - Các thông báo lỗi theo mvp mục 8.
 - Khay hệ thống, chạy nền (F9); chuyển node sang tiến trình giao diện, CLI nói chuyện qua IPC cục bộ.
   - Lưu ý khi làm IPC: tới `v0.2`, CLI in ra stdout đồng bộ ngay trên event loop của node, nên terminal ngừng đọc (ví dụ đang tạm dừng cuộn) có thể làm cả node đứng chờ. Máy khác trong LAN không gây ra được việc này. Khi node chạy trong tiến trình giao diện, việc in hay gửi sự kiện cho CLI qua IPC không được chặn event loop của node.
@@ -305,6 +312,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 2. Chế độ khách qua trình duyệt cho điện thoại không cài app (thứ tự với mục 1 chưa chốt, xem mục 9).
 3. Gửi tới nhiều thiết bị cùng lúc, gửi/đồng bộ thư mục.
 4. App iOS.
+5. Quảng bá mDNS ẩn danh: người nghe thụ động không còn đọc được `device_id` cố định (mục 3.7).
 
 Ý tưởng mới trong lúc làm v1.0 ghi vào GitHub Issues với nhãn `after-1.0`.
 
@@ -352,7 +360,10 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | python-zeroconf nâng TTL bản ghi PTR nhận được lên ≥ 1125 s, nên máy tắt đột ngột không tự biến mất trong thời hạn mvp N1 | Bên nhận tự kiểm còn sống bằng cách resolve lại SRV/TXT/A theo chu kỳ (`protocol.md` mục 8); đo N1 ([benchmark.md](benchmark.md), đo lại trên 2 máy thật ở Giai đoạn 4); kiểm lại hành vi này mỗi khi nâng phiên bản zeroconf |
 | VPN full-tunnel chiếm tuyến ra ngoài LAN: IP của card VPN thành địa chỉ nguồn ưu tiên (`protocol.md` mục 2.1), nên được quảng bá ra LAN dù là card ảo và được `teleport listen` gợi ý | Việc sau: ngoại lệ “luôn giữ địa chỉ nguồn ưu tiên” không áp cho card dạng đường hầm (tun, wg, utun, ppp, ipsec, wintun, wireguard, openvpn, vpn, tailscale, zt…), vẫn áp cho Hyper-V/bridge (External vSwitch) |
 | `NetworkWatch` so cả thứ tự địa chỉ quảng bá: địa chỉ ưu tiên đổi (ví dụ tuyến ra ngoài chuyển từ Wi-Fi sang Ethernet) mà tập địa chỉ giữ nguyên vẫn bị coi là đổi mạng: khởi động lại mDNS và báo `network_changed` cho các kết nối điều khiển, không cần thiết | Việc sau: `NetworkWatch` so tập địa chỉ thay vì dãy có thứ tự (`protocol.md` mục 8) |
-| Từ chối dịch vụ ghép đôi trong LAN (giữ phiên, đổi IP, làm đầy giới hạn kết nối ẩn danh) | Chờ tăng dần theo IP, giới hạn số mã hiện ra, hạn chờ `pair_nonce` ngắn (`protocol.md` mục 2.3); phần còn lại chấp nhận theo `protocol.md` mục 5.3. Giới hạn kết nối ẩn danh và kết nối đang mở đầu ở tầng `net` (`protocol.md` mục 2.3) chưa có chờ tăng dần, sẽ xem ở việc sau |
+| Từ chối dịch vụ ghép đôi trong LAN (giữ phiên, đổi IP, làm đầy giới hạn kết nối ẩn danh, bắt tay TLS với chuỗi chứng chỉ client lớn) | Chờ tăng dần theo IP, giới hạn số mã hiện ra, hạn chờ `pair_nonce` ngắn (`protocol.md` mục 2.3); phần còn lại chấp nhận theo `protocol.md` mục 5.3. Giới hạn kết nối đang mở đầu ở tầng `net` không đủ giữ event loop nhanh khi máy lạ gửi chuỗi chứng chỉ client lớn (đã đo, `protocol.md` mục 2.3): sẽ thêm giới hạn tốc độ bắt tay mới theo IP và ngân sách chung (`protocol.md` mục 2.3) ở `Listener`, trước `start_tls`, trước Giai đoạn 2 |
+| **Cả hai bên** giữ hash mọi khối của file đang truyền trong RAM (bên gửi để tính Merkle root, `protocol.md` mục 4.2; bên nhận để đọc lại và tính Merkle root): 32 byte mỗi khối, tới 128 MiB cho file 4 TiB (trần `size`, `protocol.md` mục 3.3). Gộp `.state` của file 4 TiB mà dựng cả bản gọn trong RAM thì thêm khoảng 144 MiB | Lưu hash dồn trong một `bytearray` 32·N byte, không dùng `list[bytes]` (khoảng 80 byte mỗi khối); gộp và đọc lại `.state` theo từng đoạn ([architecture.md](architecture.md) mục 4). Vẫn trong ngưỡng mvp N3 ở các cỡ file N3 đo, nhưng RAM tăng theo kích thước file (trái mục 2, dòng RAM). Nếu đo thấy vượt mvp N3, phương án là đọc hash từ `.state` theo từng đoạn thay vì giữ cả danh sách trong RAM (xem lại khi viết `core/resume_state.py`, Giai đoạn 3) |
+| Thư mục nhận nằm trên FAT32 (mỗi file phải nhỏ hơn 4 GiB) mà lượt truyền có file lớn hơn: ghi `.part` thất bại giữa chừng | Giai đoạn 2: bên nhận kiểm hệ file của thư mục nhận trước `accept`; có file không chứa được thì tự `reject` cả lượt, không hỏi người dùng (mvp F4, thông báo ở mvp mục 8). Lý do `reject` cho trường hợp này chưa có trong `protocol.md` mục 3.2, chốt khi cài; nó phải kèm `file_index` của file vi phạm và giới hạn kích thước file của ổ nhận, để máy gửi hiện được thông báo ở mvp mục 8 |
+| Kết nối điều khiển (sau này cả dữ liệu) **đi ra** dùng `CERT_NONE` nhưng vẫn gửi chứng chỉ client trong lúc bắt tay, trước khi so fingerprint của server: máy giả bản ghi mDNS (SRV/A) của một thiết bị tin cậy thu được `device_id` và fingerprint cố định của máy này, kể cả khi máy này đang ẩn (`protocol.md` mục 8) | Trước Giai đoạn 2, cùng việc giới hạn tốc độ bắt tay: client kiểm chứng chỉ server ngay trong bắt tay bằng đúng chứng chỉ đã lưu, nên từ chối server sai trước khi gửi chứng chỉ client; lỗi kiểm chứng chỉ đó tính là danh tính không khớp, không phải không kết nối được (cách làm: `protocol.md` mục 8) |
 | Lỗ hổng bảo mật (path traversal, dữ liệu độc hại từ máy khác) | Kiểm tra hợp lệ mọi trường nhận được; fuzz test; `SECURITY.md` để nhận báo lỗi |
 | Làm một mình, không có hạn → kéo dài, ôm thêm tính năng | Bám các bản phát hành ở mục 5.1; ý tưởng mới ghi Issues nhãn `after-1.0`; nếu trễ thì cắt theo thứ tự ở mvp mục 14 |
 | Chỉ có 1 máy để thử | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật; N1 đã đo theo cách này ([benchmark.md](benchmark.md) mục 3.3) |
@@ -367,3 +378,4 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 2. **Ngân sách ký mã** cho Windows/macOS.
 3. **Chế độ khách cho điện thoại** (qua trình duyệt) có làm ngay sau v1.0, trước app Android, hay không.
 4. **App iOS và CLA** (sau v1.0): điều khoản App Store xung đột với GPL. Muốn đưa app lên App Store thì chủ bản quyền phải cấp thêm giấy phép riêng, nên cần người đóng góp ký thỏa thuận chuyển quyền (CLA) **trước khi** nhận code của họ. Chưa có người đóng góp ngoài nên chưa cần; cần quyết trước khi nhận Pull Request đầu tiên từ bên ngoài.
+5. **Tự ẩn khi Windows ở mạng Public:** có tự ngừng quảng bá mDNS (như tắt công tắc ẩn ở mvp F10) khi Windows đang đặt mạng hiện tại là Public hay không. Lợi: ở quán cà phê, khách sạn, người lạ không đọc được `device_id` và tên máy (mục 3.7). Hại: Windows hay đặt nhầm mạng nhà là Public, và khi đó máy này biến mất khỏi radar của máy khác. Chỉ áp cho Windows. Chốt ở Giai đoạn 6.
