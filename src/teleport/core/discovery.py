@@ -353,9 +353,14 @@ def select_local_addresses(
     """Chọn địa chỉ IPv4 của máy này để quảng bá (protocol mục 2.1).
 
     Ứng viên là địa chỉ qua bộ lọc của `filter_addresses`. Bỏ địa chỉ chỉ nằm trên
-    card ảo, với hai ngoại lệ: luôn giữ `preferred` (địa chỉ nguồn của tuyến
-    multicast) nếu nó là ứng viên; và nếu mọi ứng viên đều trên card ảo thì dùng
-    tất cả. `preferred` đứng đầu, còn lại tăng dần; tối đa `MAX_ADDRESSES`.
+    card ảo, với hai ngoại lệ: luôn giữ `preferred` nếu nó là ứng viên; và nếu mọi
+    ứng viên đều trên card ảo thì dùng tất cả.
+
+    `preferred` là địa chỉ nguồn của tuyến ra ngoài LAN do `net` cung cấp. Nó được
+    giữ dù card trông như card ảo vì máy ra ngoài qua chính card đó (Hyper-V External
+    vSwitch, máy khách Hyper-V). `preferred` đứng đầu, còn lại tăng dần; tối đa
+    `MAX_ADDRESSES`. Thứ tự này chỉ ảnh hưởng gợi ý của `teleport listen` và phép so
+    sánh của `NetworkWatch`; bên nhận sắp lại tăng dần qua `filter_addresses`.
     """
     real: dict[ipaddress.IPv4Address, bool] = {}
     for iface in interfaces:
