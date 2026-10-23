@@ -40,4 +40,4 @@ Test giao diện (nếu đã có `pytest-qt`) đặt trong `tests/ui/`. Chụp m
 3. Kết quả ruff và pytest; đã chạy thử giao diện thật chưa, trên hệ điều hành nào.
 4. Chưa làm, giả định, điểm cần soát kỹ (trợ năng, chuỗi chưa dịch, khác biệt giữa các hệ điều hành).
 
-Không `git commit`, không `git push`, không sửa `docs/CHANGELOG.md`.
+Được sửa dòng của tầng `ui` (và module `ui` mới) trong bản đồ module ở `docs/architecture.md`; không sửa tài liệu khác. Không `git commit`, không `git push`, không sửa `docs/CHANGELOG.md`.

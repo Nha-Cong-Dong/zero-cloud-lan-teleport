@@ -1086,7 +1086,7 @@ _PEER_HELLO = Hello(protocol=1, device_id=PEER, name="Kẻ lạ", app_version="0
 
 
 def _verify_never_true(payload: bytes, signature: bytes) -> bool:
-    """`verify_proof` giả: máy lạ không có khóa, chữ ký luôn sai (đặc tả 9.5)."""
+    """`verify_proof` giả: máy lạ không có khóa, chữ ký luôn sai (protocol 5.1–5.2)."""
     return False
 
 
@@ -1167,7 +1167,7 @@ def test_late_nonce_after_nonce_timeout_never_reaches_code_shown():
 
 
 # =================================================================================================
-# Chữ ký sai trong `pair_nonce` (đặc tả 9.5, D4): PROTOCOL_ERROR như mọi message sai, tính một lần
+# Chữ ký sai trong `pair_nonce` (protocol 5.1): PROTOCOL_ERROR như mọi message sai, tính một lần
 # thất bại cho IP đó (chờ tăng dần), không có mã nào được hiện hay đếm.
 # =================================================================================================
 

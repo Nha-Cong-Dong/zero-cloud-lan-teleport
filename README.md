@@ -139,7 +139,7 @@ Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 | **Tường lửa** | Cho phép Teleport trên mạng **Private**. Bộ cài sẽ tự tạo rule |
 
 > [!TIP]
-> Wi-Fi ở quán cà phê, khách sạn hay văn phòng thường bật **cô lập thiết bị** (client isolation): các máy thấy nhau nhưng không kết nối được. Khi đó hãy phát hotspot từ điện thoại và cho hai máy cùng vào.
+> Wi-Fi ở quán cà phê, khách sạn hay văn phòng thường bật **cô lập thiết bị** (AP isolation): các máy thấy nhau nhưng không kết nối được. Khi đó hãy phát hotspot từ điện thoại và cho hai máy cùng vào.
 
 ## Lộ trình
 

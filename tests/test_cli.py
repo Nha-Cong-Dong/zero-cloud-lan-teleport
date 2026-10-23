@@ -2366,7 +2366,7 @@ async def test_listen_over_code_limit_answers_busy_without_prompt(tmp_path, fast
 
 HEADER_LISTEN = "Có yêu cầu ghép đôi. Hãy so mã dưới đây với mã trên màn hình máy kia."
 HEADER_PAIR = "Hãy so mã dưới đây với mã trên màn hình máy kia."
-# Đặc tả 9.5 (mvp mục 7.2): một dòng chung cho cả hai vai khi đã ghép đôi trước đây; thêm dòng đổi tên
+# mvp mục 7.2: một dòng chung cho cả hai vai khi đã ghép đôi trước đây; thêm dòng đổi tên
 # khi tên đã lưu khác tên máy kia tự xưng (ghép đôi lại ở cả hai vai cập nhật tên, D2).
 KNOWN = "Máy này đã ghép đôi với mã máy {id8} trước đây, tên đã lưu: “{name}”."
 RENAME = "Ghép đôi xong, tên sẽ đổi thành “{name}”."
@@ -2634,7 +2634,7 @@ def _commitment(fp_responder: str, nonce: bytes) -> str:
 
 
 def _proof_payload(fp_initiator: str, fp_responder: str, n_a: bytes, commitment: str) -> bytes:
-    """Payload ký trong `pair_nonce` (đặc tả 9.5, protocol 5.2), tính độc lập."""
+    """Payload ký trong `pair_nonce` (protocol 5.2), tính độc lập."""
     return (
         b"teleport-initiator-proof-v1"
         + bytes.fromhex(fp_initiator)
@@ -2717,7 +2717,7 @@ class RawInitiator:
         await self.writer.drain()
 
     async def send_signed_nonce(self, own_fingerprint: str, key_path) -> dict:
-        """Đọc `pair_commit`, gửi `pair_nonce` ký bằng khóa ở `key_path` (đặc tả 9.5); trả pair_commit."""
+        """Đọc `pair_commit`, gửi `pair_nonce` ký bằng khóa ở `key_path` (protocol 5.2); trả pair_commit."""
         commit = await self.recv_type("pair_commit")
         payload = _proof_payload(own_fingerprint, self.server_fp, self.nonce, commit["commitment"])
         self.send(
@@ -3038,7 +3038,7 @@ async def test_h1_pair_shows_real_code_before_name_with_fake_code(tmp_path, fast
 
 @pytest.mark.parametrize(("listening", "role"), PROMPT_MODES, ids=PROMPT_MODE_IDS)
 async def test_m5_prompt_shows_saved_name_and_rename_lines_in_both_roles(listening, role):
-    """mvp mục 7.2 (đặc tả 9.5): cùng một dòng tên đã lưu cho cả hai vai, rồi dòng đổi tên."""
+    """mvp mục 7.2: cùng một dòng tên đã lưu cho cả hai vai, rồi dòng đổi tên."""
     prompt = _prompt(role, 0, peer_name="Laptop-Bob", known_name="PC-Nha")
     text, err = render_prompt(prompt, listening=listening)
     assert text.split("\n") == [
@@ -3171,7 +3171,7 @@ def test_m5_paired_message_without_device_uses_peer_name():
 async def test_m5_listen_stranger_with_stolen_public_cert_is_rejected_before_code(
     tmp_path, fast_cli, cli_runs, json_mode
 ):
-    """Đặc tả 9.5: B tin V tên “PC-Nha”; máy lạ M gửi chứng chỉ CÔNG KHAI của V với tên “Laptop-Bob”
+    """Protocol 5.1, 5.5: B tin V tên “PC-Nha”; máy lạ M gửi chứng chỉ CÔNG KHAI của V với tên “Laptop-Bob”
     nhưng chỉ ký được bằng khóa của chính nó → `listen` không hiện mã, không hỏi, báo phiên dừng
     trước khi hiện mã; M nhận `pair_abort{invalid}`; `trusted.json` không đổi; `listen` vẫn chạy."""
     b_dir = tmp_path / "B"
@@ -3263,7 +3263,7 @@ async def test_m5_listen_real_repair_with_new_name_updates_saved_name(
     assert "PC-Nha" not in (b_dir / "trusted.json").read_text("utf-8")
 
 
-# --- Đặc tả 9.5: danh tính có khóa không khớp chứng chỉ → `listen` / `pair` thoát 1 -------------------
+# --- Chứng minh giữ khóa: danh tính có khóa không khớp chứng chỉ → `listen` / `pair` thoát 1 ----------
 
 
 def _break_key(directory, tmp_path) -> None:

@@ -358,7 +358,7 @@ def test_protocol_md_role_and_nonce_swap_codes():
     assert pairing_code(fp_a, fp_b, n_b, n_a) == swapped_nonces
 
 
-# --- Chứng minh giữ khóa riêng của bên khởi xướng (protocol 5.2, 5.4; đặc tả 9.5) -----------------
+# --- Chứng minh giữ khóa riêng của bên khởi xướng (protocol 5.2, 5.4) -----------------------------
 #
 # payload (155 byte) = b"teleport-initiator-proof-v1" ‖ fp_khởi_xướng(32B) ‖ fp_trả_lời(32B) ‖ n_A(32B)
 #                      ‖ C_B(32B), với C_B là `commitment` của `pair_commit` (hex → 32 byte).

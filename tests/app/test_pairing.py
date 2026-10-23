@@ -49,7 +49,7 @@ def ref_commitment(fp_responder: str, nonce: bytes) -> str:
 
 
 def ref_proof_payload(fp_initiator: str, fp_responder: str, n_a: bytes, commitment: str) -> bytes:
-    """Payload ký trong `pair_nonce` (đặc tả 9.5), tính độc lập."""
+    """Payload ký trong `pair_nonce` (protocol 5.1–5.2), tính độc lập."""
     return (
         b"teleport-initiator-proof-v1"
         + bytes.fromhex(fp_initiator)
@@ -827,7 +827,7 @@ async def test_p17_save_only_after_both_confirm(node_factory, raw_pairing_client
     assert c.responder_nonce.hex() not in text
     assert c.commitment not in text
     assert c.last_signature is not None
-    assert c.last_signature.hex() not in text  # đặc tả 9.5: không ghi chữ ký, payload (mvp N9)
+    assert c.last_signature.hex() not in text  # không ghi chữ ký, payload (mvp N9)
     assert c.last_payload.hex() not in text
 
 
@@ -912,7 +912,7 @@ BAD_AFTER_COMMIT = {
     "nonce_hoa": lambda c, ident: c.send_dict({**c.nonce_message(), "nonce": "AB" * 32}),
     "nonce_ngan": lambda c, ident: c.send_dict({**c.nonce_message(), "nonce": "ab" * 31}),
     "header_qua_lon": lambda c, ident: c.send_bytes(HEADER.pack(16 * 1024 + 1)),
-    # Đặc tả 9.5: chữ ký trong pair_nonce sai dạng hoặc không qua kiểm → invalid, không hiện mã.
+    # Protocol 5.1: chữ ký trong pair_nonce sai dạng hoặc không qua kiểm → invalid, không hiện mã.
     "thieu_chu_ky": lambda c, ident: c.send_dict({"type": "pair_nonce", "nonce": c.nonce.hex()}),
     "chu_ky_hoa": lambda c, ident: c.send_dict(
         {**c.nonce_message(), "signature": c.nonce_message()["signature"].upper()}
@@ -1156,7 +1156,7 @@ async def test_initiator_with_honest_fake_responder_prompts_with_spec_code(
     assert log[1] == {"type": "pair_request", "cert": A.identity.cert_pem()}
     await wait_until(lambda: {"type": "pair_abort", "reason": "user"} in log, 3, "chưa nhận pair_abort{user}")
 
-    # Đặc tả 9.5: pair_nonce mang đúng hai trường; chữ ký là ECDSA P-256 + SHA-256 bằng khóa của A
+    # Protocol 5.2: pair_nonce mang đúng hai trường; chữ ký là ECDSA P-256 + SHA-256 bằng khóa của A
     # trên payload (fp_A ‖ fp_B từ TLS ‖ n_A ‖ C_B), kiểm độc lập bằng chứng chỉ A gửi.
     nonce_msg = log[2]
     assert set(nonce_msg) == {"type", "nonce", "signature"}, nonce_msg
@@ -2380,7 +2380,7 @@ async def test_l2_cancel_pair_with_while_yielding_cancels_replacement(
     assert hi.store.get(lo.device_id) is None
 
 
-# --- M5 lật lại (đặc tả 9.5, D1/D2): máy lạ bị chặn trước khi hiện mã; ghép đôi lại thì đổi tên ---
+# --- M5 lật lại (protocol 5.1, 5.5): máy lạ bị chặn trước khi hiện mã; ghép đôi lại thì đổi tên ---
 
 
 @integration
@@ -2544,7 +2544,7 @@ async def test_fake_cert_helper_key_signs_valid_pair_nonce(
     assert B.rec.finished[0].code_shown is True
 
 
-# --- Danh tính hỏng ở `PairingService` (đặc tả 9.5: `load_pairing_signer` khi khởi tạo) -----------
+# --- Danh tính hỏng ở `PairingService` (`load_pairing_signer` khi khởi tạo) -----------------------
 
 
 async def test_service_with_key_not_matching_cert_raises_identity_error(service_parts, tmp_path):

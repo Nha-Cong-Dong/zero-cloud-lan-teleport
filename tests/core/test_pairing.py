@@ -8,7 +8,7 @@ Luồng (bên trả lời cam kết trước, kiểu Bluetooth), A = khởi xư�
     B → A  pair_commit{commitment = C_B}
     A → B  pair_nonce{nonce = n_A, signature = sign_proof(payload)}
     B: verify_proof(payload, signature) đúng thì hiện mã, rồi gửi pair_reveal{nonce = n_B};
-       sai → pair_abort{invalid}, không hiện mã (đặc tả 9.5, bất biến 5 của protocol 5.1).
+       sai → pair_abort{invalid}, không hiện mã (bất biến 5 của protocol 5.1).
     A: kiểm C_B bằng fp_B; sai → pair_abort{invalid}, không hiện mã; đúng → hiện mã.
 
 payload = b"teleport-initiator-proof-v1" ‖ fp_A ‖ fp_B ‖ n_A ‖ C_B (155 byte). `core` coi chữ ký là
@@ -72,7 +72,7 @@ from teleport.core.pairing import (
 )
 from teleport.core.pairing_code import NONCE_SIZE, check_commitment, make_commitment, pairing_code
 
-# --- Bộ ký / kiểm giả (đặc tả 9.5: `sign_proof`, `verify_proof` do app truyền vào) ---------------
+# --- Bộ ký / kiểm giả (protocol 5.1: `sign_proof`, `verify_proof` do app truyền vào) -------------
 
 PROOF_LABEL = b"teleport-initiator-proof-v1"
 
@@ -1530,7 +1530,7 @@ def test_connection_lost_between_confirms_does_not_save(role):
     assert_closed(actions, Outcome.CONNECTION_LOST)
 
 
-# --- M5 lật lại (đặc tả 9.5, D1/D2): bên trả lời có bằng chứng giữ khóa, nên đổi tên như bên kia ----
+# --- M5 lật lại (protocol 5.1, 5.5): bên trả lời có bằng chứng giữ khóa, nên đổi tên như bên kia ----
 #
 # Bên khởi xướng ký payload trong `pair_nonce`; bên trả lời kiểm trước khi hiện mã. Máy lạ dùng
 # chứng chỉ công khai của một máy V đã tin cậy mà không có khóa của V thì bị `invalid` trước khi
@@ -1687,7 +1687,7 @@ def test_abort_reason_table(build, trigger, reason):
     assert isinstance(actions[-1], Close)
 
 
-# --- Chứng minh giữ khóa (đặc tả 9.5): A ký payload, B kiểm trước khi hiện mã --------------------
+# --- Chứng minh giữ khóa (protocol 5.1–5.2): A ký payload, B kiểm trước khi hiện mã --------------
 
 
 def test_proof_callable_aliases_are_public():
@@ -2211,7 +2211,7 @@ def check_event_sequence(session, role: Role, expected_peer, expected_name, even
         is_msg = isinstance(event, MessageReceived)
         msg = event.message if is_msg else None
 
-        # Ký / kiểm chữ ký: đúng một lần, chỉ ở đúng cổng, đúng payload (đặc tả 9.5).
+        # Ký / kiểm chữ ký: đúng một lần, chỉ ở đúng cổng, đúng payload (protocol 5.1–5.2).
         if role == Role.INITIATOR:
             at_gate = not timed_out and before_state == State.AWAIT_COMMIT and isinstance(msg, PairCommit)
             if at_gate:
@@ -2382,7 +2382,7 @@ def test_property_noisy_happy_path_keeps_guarantees(role, variant, peer_first, s
 #   (b) B luôn ShowCode trước khi gửi pair_reveal (người dùng thấy mã → có dấu vết);
 #   (c) n_A không rời A trước khi A nhận pair_commit; pair_request không mang nonce/commitment;
 #   (d) A chỉ ShowCode khi pair_reveal khớp cam kết đã nhận với fp của B.
-#   (e) đặc tả 9.5: B chỉ ShowCode / gửi pair_reveal khi chữ ký trong pair_nonce hợp lệ.
+#   (e) bất biến 5 của protocol 5.1: B chỉ ShowCode / gửi pair_reveal khi chữ ký trong pair_nonce hợp lệ.
 
 
 def check_secrecy(session, role: Role, events) -> None:

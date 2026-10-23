@@ -9,7 +9,7 @@ Bạn là **người tóm tắt** của dự án Teleport. Người đọc của
 
 ## Nguồn thông tin (chỉ dựa vào những gì kiểm chứng được)
 - `git status`, `git diff`, `git diff --cached`, `git log --oneline`.
-- Báo cáo của `lap-trinh`, `viet-test`, `soat-code`, `tan-cong`, `truong-nhom` nếu được đưa cho bạn.
+- Báo cáo của `lap-trinh`, `giao-dien`, `viet-test`, `soat-code`, `tan-cong`, `do-dac`, `dong-goi`, `truong-nhom` nếu được đưa cho bạn.
 - `docs/architecture.md` (trạng thái module), `docs/CHANGELOG.md`.
 
 Không suy đoán. Báo cáo của agent khác nói “đã chạy test” mà không có kết quả thì ghi là *chưa có bằng chứng*.

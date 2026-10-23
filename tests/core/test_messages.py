@@ -552,7 +552,7 @@ def test_pair_request_constructor_rejects_commitment_argument():
     [(PairCommit, ["commitment"]), (PairNonce, ["nonce", "signature"]), (PairReveal, ["nonce"])],
 )
 def test_new_pairing_messages_have_exactly_their_hex_fields(cls, fields):
-    # pair_nonce mang thêm chữ ký của bên khởi xướng (đặc tả 9.5, D1).
+    # pair_nonce mang thêm chữ ký của bên khởi xướng (protocol 3.2, 5.2).
     assert [f.name for f in dataclasses.fields(cls)] == fields
 
 
@@ -629,7 +629,7 @@ def test_good_hex64_accepted(value):
     assert parse_message({"type": "pair_reveal", "nonce": value}).nonce == value
 
 
-# --- pair_nonce.signature (đặc tả 9.5: đúng 128 ký tự [0-9a-f], re.fullmatch ASCII) ------------
+# --- pair_nonce.signature (protocol 3.3: đúng 128 ký tự [0-9a-f], re.fullmatch ASCII) ----------
 
 BAD_SIG128 = [
     "",

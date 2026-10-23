@@ -144,7 +144,7 @@ def fake_cert_with_cn(device_id: str, *, ca: bool = False) -> tuple[str, bytes]:
     """Chứng chỉ tự ký P-256 mới, CN `teleport-<device_id>`: danh tính khác, cùng device_id (P12).
 
     Trả (PEM chứng chỉ, PEM khóa riêng PKCS8): có khóa thì ký được `pair_nonce` bằng danh tính này
-    (đặc tả 9.5), hoặc dựng `Identity` qua `identity_from_pem`.
+    (protocol 5.1–5.2), hoặc dựng `Identity` qua `identity_from_pem`.
     `ca=True` thêm BasicConstraints CA=true (P21: phải bị từ chối).
     """
     key = ec.generate_private_key(ec.SECP256R1())
@@ -321,7 +321,7 @@ PROOF_LABEL = b"teleport-initiator-proof-v1"
 
 
 def ref_proof_payload(fp_initiator: str, fp_responder: str, n_a: bytes, commitment: str) -> bytes:
-    """Payload bên khởi xướng ký trong `pair_nonce` (đặc tả 9.5, protocol 5.2), tính độc lập."""
+    """Payload bên khởi xướng ký trong `pair_nonce` (protocol 5.2), tính độc lập."""
     return (
         PROOF_LABEL
         + bytes.fromhex(fp_initiator)
@@ -367,7 +367,7 @@ def ref_verify(cert_pem: str, payload: bytes, signature: bytes) -> bool:
 class PairingClient(RawPeer):
     """Client ghép đôi thô (đóng vai bên khởi xướng A), theo luồng bên trả lời cam kết trước:
 
-    `begin` (hello + `pair_request{cert}`) → `read_commit` → `send_nonce` (ký payload, đặc tả 9.5)
+    `begin` (hello + `pair_request{cert}`) → `read_commit` → `send_nonce` (ký payload, protocol 5.2)
     → `read_reveal` (tự kiểm cam kết bằng fp của server, tính mã). `run_to_code` làm cả chuỗi sau
     `begin`.
 

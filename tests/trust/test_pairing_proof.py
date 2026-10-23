@@ -1,4 +1,4 @@
-"""Test chữ ký chứng minh giữ khóa khi ghép đôi (đặc tả 9.5, phần V2 trust).
+"""Test chữ ký chứng minh giữ khóa khi ghép đôi (protocol 5.2, phần trust).
 
 `PairingSigner.sign(payload)` ký bằng khóa danh tính: ECDSA P-256 + SHA-256, mã hóa r ‖ s (mỗi số
 32 byte big-endian, IEEE P1363) = 64 byte. `verify_pairing_proof(peer, payload, signature)` kiểm
