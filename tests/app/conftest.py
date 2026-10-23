@@ -211,16 +211,19 @@ def identity_from_pem(directory: Path, device_id: str, cert_pem: str, key_pem: b
     return Identity(device_id, cert_path, key_path, hashlib.sha256(der).hexdigest())
 
 
-def identity_below(directory: Path, device_id: str, tries: int = 64) -> Identity:
-    """Một danh tính mới (trong `directory/<i>`) có `device_id` nhỏ hơn `device_id` cho trước.
+def identity_below(directory: Path, device_id: str) -> Identity:
+    """Một danh tính mới (trong `directory`) có `device_id` nhỏ hơn `device_id` cho trước.
 
-    Dùng để dựng "bên nhỏ hơn" trong luật hai bên cùng chủ động (protocol §5.3).
+    Dùng để dựng "bên nhỏ hơn" trong luật hai bên cùng chủ động (protocol §5.3). `device_id` được
+    chọn thẳng (bằng `device_id` − 1) thay vì sinh ngẫu nhiên tới khi gặp số nhỏ hơn: với
+    `device_id` như `02…`, 64 lần sinh ngẫu nhiên vẫn hỏng khoảng một nửa số lần chạy.
     """
-    for i in range(tries):
-        identity = load_or_create_identity(directory / str(i))
-        if identity.device_id < device_id:
-            return identity
-    raise AssertionError(f"{tries} lần không sinh được device_id nhỏ hơn {device_id}")
+    value = int(device_id, 16)
+    if value == 0:
+        raise AssertionError("không có device_id nào nhỏ hơn 000…0")
+    below = f"{value - 1:032x}"
+    cert_pem, key_pem = fake_cert_with_cn(below)
+    return identity_from_pem(directory, below, cert_pem, key_pem)
 
 
 def ensure_identity(directory: Path) -> Identity:
