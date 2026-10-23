@@ -759,6 +759,23 @@ def test_select_keeps_preferred_even_on_virtual_card():
     assert select_local_addresses([WIFI, WSL], preferred="172.20.0.1") == ("172.20.0.1", "192.168.1.10")
 
 
+WSL_HYPERV = iface("172.18.96.1", "{GUID-3}", "Hyper-V Virtual Ethernet Adapter")
+EXTERNAL_VSWITCH = iface("192.168.1.20", "{GUID-4}", "Hyper-V Virtual Ethernet Adapter #2")
+
+
+def test_select_external_vswitch_keeps_only_preferred_lan_address():
+    # Hyper-V External vSwitch: máy ra ngoài LAN qua card "#2" (trông như card ảo).
+    # preferred = nguồn của tuyến ra ngoài LAN → giữ nó, card WSL vẫn bị lọc.
+    assert select_local_addresses([WSL_HYPERV, EXTERNAL_VSWITCH], preferred="192.168.1.20") == (
+        "192.168.1.20",
+    )
+
+
+def test_select_external_vswitch_without_preferred_uses_all_ascending():
+    # LAN không gateway → không có preferred; mọi ứng viên đều trên card ảo → dùng tất cả, tăng dần.
+    assert select_local_addresses([EXTERNAL_VSWITCH, WSL_HYPERV]) == ("172.18.96.1", "192.168.1.20")
+
+
 def test_select_puts_preferred_first_then_ascending():
     assert select_local_addresses([ETH, WIFI], preferred="192.168.1.10") == ("192.168.1.10", "10.0.0.5")
     assert select_local_addresses([WIFI, ETH]) == ("10.0.0.5", "192.168.1.10")

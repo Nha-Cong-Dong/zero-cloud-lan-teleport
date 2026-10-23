@@ -123,11 +123,11 @@ Không có lần nào quá hạn hay lỗi đo (0 / 0 ở mọi ca). Ở bốn c
 
 **Kết luận mvp N1: ĐẠT trên máy ảo bridged** (cả ba phần: xuất hiện, thoát app, mất mạng đột ngột hoặc ngủ; 10 lần hợp lệ mỗi ca). Kết luận này chỉ có giá trị trong giới hạn dưới đây; chưa thay được phép đo trên hai máy thật (mục 3.4).
 
-**Ghi nhận** (không phải yêu cầu, không có ngưỡng; chưa điều tra nguyên nhân)
+**Ghi nhận** (không phải yêu cầu, không có ngưỡng)
 
 - Thấy lại sau khi cắm lại mạng (`link_down_reappear`): trung vị 10,044 s, trong khoảng 7,683–12,442 s.
 - Thấy lại sau khi VM chạy tiếp (`pause_vm_reappear`): 9/10 lần nằm sát nhau trong 17,003–17,011 s (cận dưới 16,933–16,980 s); một lần (lần 5) chỉ 0,379 s. Giá trị gần như cố định này là quan sát cần tìm hiểu; lần đo này chưa có dữ liệu để biết nó đến từ đâu (node trên VM, zeroconf, hay đồng hồ VM sau khi chạy tiếp).
-- Host quảng bá cả `172.18.96.1` dù node lọc card ảo (protocol mục 2.1). Theo danh sách card trong `results.jsonl`, `172.18.96.1/20` nằm trên card “Hyper-V Virtual Ethernet Adapter”, tên Windows `vEthernet (WSL (Hyper-V firewall))`. Chưa điều tra vì sao địa chỉ này không bị lọc. VM vẫn thấy host đúng hạn (`appear_host`), nhưng địa chỉ này đi vào danh sách địa chỉ máy kia sẽ thử kết nối.
+- Host quảng bá cả `172.18.96.1` dù node lọc card ảo (protocol mục 2.1). Theo danh sách card trong `results.jsonl`, `172.18.96.1/20` nằm trên card “Hyper-V Virtual Ethernet Adapter”, tên Windows `vEthernet (WSL (Hyper-V firewall))`. Nguyên nhân và cách sửa ghi ở mục `### Fixed` của [CHANGELOG.md](CHANGELOG.md) (địa chỉ ưu tiên lấy theo tuyến multicast); lần đo này chạy trên mã trước khi sửa (commit `efa9d5b`), nên chưa có số đo với bản đã sửa. VM vẫn thấy host đúng hạn (`appear_host`), nhưng địa chỉ này đi vào danh sách địa chỉ máy kia sẽ thử kết nối.
 
 **Giới hạn của lần đo này**
 

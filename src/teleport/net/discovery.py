@@ -51,9 +51,8 @@ MAX_CONCURRENT_RESOLVES = 16  # resolve chạy cùng lúc; hàng `resolve` đư�
 # làm bỏ đói việc kiểm thiết bị đã biết.
 PROBE_RESERVED_SLOTS = 4
 
-# Nhóm multicast mDNS IPv4: địa chỉ nguồn của tuyến tới đây là card zeroconf sẽ dùng chính.
-_MDNS_GROUP = ("224.0.0.251", 5353)
-# Đích bất kỳ ngoài LAN (TEST-NET-1, RFC 5737) để hỏi tuyến mặc định; không có gói nào được gửi.
+# Đích bất kỳ ngoài LAN (TEST-NET-1, RFC 5737) để hỏi tuyến ra ngoài (thường là tuyến mặc định);
+# không có gói nào được gửi.
 _DEFAULT_ROUTE_PROBE = ("192.0.2.1", 9)
 
 log = logging.getLogger(__name__)
@@ -107,16 +106,18 @@ def _is_loopback(ip: str) -> bool:
 
 
 def _preferred_source() -> str | None:
-    """Địa chỉ nên quảng bá đầu tiên (protocol mục 2.1); không xác định được → None.
+    """Địa chỉ nguồn ưu tiên (protocol mục 2.1); không xác định được hoặc loopback → None.
 
-    Thử nguồn của tuyến tới nhóm mDNS; nếu không có hoặc là loopback (Windows
-    thường chọn 127.0.0.1 cho tuyến multicast) thì thử nguồn của tuyến mặc định.
+    Là địa chỉ nguồn hệ điều hành chọn cho tuyến tới một địa chỉ ngoài LAN
+    (`_DEFAULT_ROUTE_PROBE`), thường là tuyến mặc định. Không dùng tuyến tới nhóm
+    multicast mDNS: trên Windows mọi card (cả card ảo, card đã ngắt) đều có tuyến
+    224.0.0.0/4 cùng metric, nên nguồn của nó chỉ phản ánh InterfaceMetric, không cho
+    biết card nào nối LAN (card vEthernet 10 Gbps của WSL có thể thắng Wi-Fi).
     """
-    for dest in (_MDNS_GROUP, _DEFAULT_ROUTE_PROBE):
-        ip = _route_source(dest)
-        if ip is not None and not _is_loopback(ip):
-            return ip
-    return None
+    ip = _route_source(_DEFAULT_ROUTE_PROBE)
+    if ip is None or _is_loopback(ip):
+        return None
+    return ip
 
 
 def local_ipv4_addresses() -> tuple[str, ...]:
