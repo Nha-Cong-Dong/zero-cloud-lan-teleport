@@ -97,7 +97,7 @@ Planned design invariants from the roadmap:
 
 ## Team of subagents
 
-`.claude/agents/` defines eleven project subagents. Their names and prompts are in Vietnamese (don't name an agent after a built-in command such as `review`: the old `review` agent never loaded, so it is now `soat-code`). They load only when Claude Code is started in this folder (the repo root), not in a parent folder, and only at session start, so a new or renamed agent needs a new session.
+`.claude/agents/` defines eleven project subagents. Their names and prompts are in Vietnamese. The frontmatter is YAML, so a `description` that contains `": "` must be in double quotes; otherwise the agent silently never loads (this is why the old `review` agent, now `soat-code`, never loaded). They load only when Claude Code is started in this folder (the repo root), not in a parent folder, and only at session start, so a new or renamed agent needs a new session.
 
 | Agent | Role | Edits files? |
 |---|---|---|

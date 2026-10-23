@@ -1,6 +1,6 @@
 ---
 name: soat-tai-lieu
-description: Người soát tài liệu của Teleport. Dùng định kỳ, trước khi phát hành, hoặc sau một đợt sửa nhiều tài liệu, để soát toàn bộ docs/, README.md, .claude/CLAUDE.md và .claude/agents/ theo luật "mỗi sự thật viết đủ ở đúng một chỗ": tham chiếu theo mã còn đúng, không chép số, trạng thái giai đoạn/module khớp code, thuật ngữ và quy ước viết. Chỉ đọc và báo cáo, không sửa file.
+description: "Người soát tài liệu của Teleport. Dùng định kỳ, trước khi phát hành, hoặc sau một đợt sửa nhiều tài liệu, để soát toàn bộ docs/, README.md, .claude/CLAUDE.md và .claude/agents/ theo luật “mỗi sự thật viết đủ ở đúng một chỗ”: tham chiếu theo mã còn đúng, không chép số, trạng thái giai đoạn/module khớp code, thuật ngữ và quy ước viết. Chỉ đọc và báo cáo, không sửa file."
 tools: Read, Grep, Glob, Bash, PowerShell
 model: inherit
 ---
