@@ -348,7 +348,7 @@ Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì
 | Mã | Nhóm | Yêu cầu | Cách đo |
 |---|---|---|---|
 | N1 | Khám phá | Thiết bị mới xuất hiện < 3 giây; thoát app thì biến mất < 10 giây; mất mạng đột ngột hoặc ngủ thì biến mất < 2 phút | Log thời điểm mDNS |
-| N2 | Hiệu năng | ≥ 70% tốc độ copy qua chia sẻ thư mục Windows (SMB) trên cùng mạng | Benchmark mỗi bản phát hành, công bố ở `benchmark.md` (sẽ có trong `docs/`) |
+| N2 | Hiệu năng | ≥ 70% tốc độ copy qua chia sẻ thư mục Windows (SMB) trên cùng mạng | Benchmark mỗi bản phát hành, công bố ở [benchmark.md](benchmark.md) |
 | N3 | Bộ nhớ | Khi truyền: RSS tăng < 50MB so với lúc rảnh với file 1GB, 5GB, 10GB (đường RAM phẳng). Khi rảnh: RAM < 150MB, CPU ~0% | `psutil` + biểu đồ RSS, mỗi bản phát hành |
 | N4 | Nối lại | Rớt mạng hoặc tắt app nhận ở bất kỳ điểm nào → gửi lại ≤ phần chưa nhận + 64 MiB (ở 85%: ≤ 15% + 64 MiB) | Test tự động, đếm byte gửi lại |
 | N5 | Toàn vẹn | 100% file nhận khớp Merkle root; sửa 1 byte bất kỳ đều bị phát hiện | Test tự động |
@@ -415,7 +415,7 @@ Báo lỗ hổng bảo mật theo [SECURITY.md](SECURITY.md) (đã có từ Giai
 ## 12. Tiêu chí phát hành MVP (Definition of Done)
 
 - [ ] Mọi tiêu chí chấp nhận F1–F12 đều đạt.
-- [ ] Mọi yêu cầu phi chức năng N1–N12 đều đạt, có số liệu trong `benchmark.md`.
+- [ ] Mọi yêu cầu phi chức năng N1–N12 đều đạt, có số liệu trong [benchmark.md](benchmark.md).
 - [ ] Đạt các chỉ số thử nghiệm người dùng ở mục 9.1.
 - [ ] CI xanh trên Windows, macOS, Linux.
 - [ ] Bộ cài cho 3 hệ điều hành được build tự động khi gắn tag `v1.0.0` (nếu trễ tiến độ, bộ cài macOS/Linux có thể hoãn theo mục 14; khi đó ghi rõ ở đây); bộ cài kèm `LICENSE`, giấy phép các thư viện bên thứ ba và chỉ dẫn lấy mã nguồn.

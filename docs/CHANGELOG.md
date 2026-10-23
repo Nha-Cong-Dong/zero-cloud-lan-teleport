@@ -6,6 +6,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ## [Unreleased]
 
 ### Added
+- `docs/benchmark.md`: số đo thực tế của các yêu cầu chất lượng. Lần đo đầu: mvp N1 (thiết bị xuất hiện, biến mất khi thoát app, mất mạng đột ngột, tạm dừng máy, app bị giết) đạt khi đo giữa Windows 11 và máy ảo Ubuntu bridged; đo lại trên hai máy thật ở Giai đoạn 4. Giai đoạn 1 (khám phá & ghép đôi) xong.
 - Giấy phép GPL-3.0-or-later (`LICENSE`), khai báo trong `pyproject.toml`.
 - Khung dự án Python, CI chạy ruff + pytest trên Windows, macOS, Linux.
 - `teleport.core.framing`: mã hóa/giải mã khung message điều khiển `[4 byte độ dài][JSON]` (sans-IO).
@@ -27,7 +28,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Giới hạn message 16 KiB cho kết nối ghép đôi (`MAX_PAIRING_MESSAGE_SIZE`, `read_message(..., max_size)`).
 - `teleport.core.pairing`: máy trạng thái ghép đôi sans-IO cho bên khởi xướng (`InitiatorSession`) và bên trả lời (`ResponderSession`): thứ tự message `pair_*`, hết giờ cho từng bước (protocol mục 2.3), lý do hủy, không ghép đôi đè danh tính khác; `PairingGate` chống làm phiền: một phiên ghép đôi tại một thời điểm, chờ tăng dần theo IP (10 s → 10 phút), phân xử khi hai bên cùng chủ động ghép đôi.
 - `teleport.core.messages`: kiểu và kiểm tra hợp lệ các message kết nối điều khiển `control_open`, `ping`, `pong`; hằng số `MAX_SAFE_INTEGER` (2⁵³ − 1).
-- Khám phá thiết bị trong LAN qua mDNS (`_teleport._tcp.local.`, `teleport.core.discovery` và `teleport.net.discovery`): thiết bị hiện ra khi mở app, biến mất khi tắt app hoặc mất mạng đột ngột (thiết kế để đạt mvp N1, sẽ đo trên 2 máy thật); thiết bị đã ghép đôi luôn được theo dõi, kể cả khi danh sách đã đầy (protocol mục 8).
+- Khám phá thiết bị trong LAN qua mDNS (`_teleport._tcp.local.`, `teleport.core.discovery` và `teleport.net.discovery`): thiết bị hiện ra khi mở app, biến mất khi tắt app hoặc mất mạng đột ngột (đạt mvp N1 khi đo trên máy ảo bridged, `docs/benchmark.md`); thiết bị đã ghép đôi luôn được theo dõi, kể cả khi danh sách đã đầy (protocol mục 8).
 - Phụ thuộc chạy `zeroconf` (LGPL-2.1-or-later, `>=0.148,<0.152`) và `ifaddr` (MIT).
 - `teleport.net.connection`: node lắng nghe trên một cổng (mặc định 47474), nhận kết nối ghép đôi và điều khiển, giới hạn kết nối và thời gian chờ chống lũ, keepalive `ping`/`pong`, đổi danh sách tin cậy có hiệu lực ngay mà không mở lại cổng; client thử song song mọi địa chỉ.
 - `teleport.core.keepalive`: keepalive sans-IO (khi nào gửi `ping`, khi nào coi là mất kết nối).

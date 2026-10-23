@@ -18,7 +18,7 @@
 > [!NOTE]
 > **Teleport đang được phát triển và chưa có bản phát hành.**
 > - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khung message điều khiển, khám phá thiết bị qua mDNS, ghép đôi qua mạng bằng mã 6 số có nonce cam kết, kho thiết bị tin cậy, tự giữ kết nối điều khiển tới thiết bị đã ghép đôi, khóa một node mỗi thư mục cấu hình, các lệnh `teleport identity` / `list` / `listen` / `pair` / `unpair`.
-> - **Đang làm:** đo thời gian tìm thấy nhau (mvp N1) trên hai máy thật để khép lại giai đoạn khám phá & ghép đôi.
+> - **Tiếp theo:** gửi file lớn qua dòng lệnh (`v0.1.0-alpha`). Thời gian tìm thấy nhau (mvp N1) đã đạt khi đo trên máy ảo ([docs/benchmark.md](docs/benchmark.md)).
 > - **Chưa có:** gửi file, nối lại, clipboard, giao diện.
 >
 > Các tính năng bên dưới là **mục tiêu của v1.0**. Tiến độ xem ở [Lộ trình](#lộ-trình); lịch sử thay đổi ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
@@ -146,7 +146,7 @@ Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 | Phiên bản | Nội dung |
 |---|---|
 | — | ✅ Nền tảng: khung dự án, CI 3 hệ điều hành, danh tính thiết bị, TLS 1.3 + mTLS |
-| — | ⏳ Khám phá thiết bị & ghép đôi (đã có mDNS, ghép đôi qua mạng, tự giữ kết nối, lệnh `teleport list` / `listen` / `pair` / `unpair`; còn đo N1 trên hai máy thật) |
+| — | ✅ Khám phá thiết bị & ghép đôi: mDNS, ghép đôi qua mạng, tự giữ kết nối, lệnh `teleport list` / `listen` / `pair` / `unpair`; đạt mvp N1 |
 | `v0.1.0-alpha` | Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi |
 | `v0.2.0-alpha` | Kiểm tra toàn vẹn, tự nối lại |
 | `v0.3.0-beta` | Giao diện radar, khay hệ thống, Tiếng Việt / English |
@@ -242,6 +242,7 @@ Mục lục, thuật ngữ và quy tắc đồng bộ tài liệu: [docs/README.
 | [docs/ke_hoach.md](docs/ke_hoach.md) | Làm thế nào, khi nào: thiết kế kỹ thuật, lộ trình và trạng thái, kiểm thử, rủi ro |
 | [docs/architecture.md](docs/architecture.md) | Phân tầng, mô hình tiến trình, bản đồ module và trạng thái, dữ liệu trên đĩa |
 | [docs/protocol.md](docs/protocol.md) | Đặc tả giao thức trên dây (phiên bản 1, dự thảo) |
+| [docs/benchmark.md](docs/benchmark.md) | Số đo thực tế của các yêu cầu chất lượng |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Nhánh, commit, kiểm tra trước Pull Request, phát hành |
 | [docs/SECURITY.md](docs/SECURITY.md) | Cách báo lỗ hổng bảo mật |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Lịch sử thay đổi |
