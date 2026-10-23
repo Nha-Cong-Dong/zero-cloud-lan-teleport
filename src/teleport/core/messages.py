@@ -20,6 +20,8 @@ from dataclasses import dataclass, fields
 from enum import StrEnum
 from typing import ClassVar
 
+from teleport.core.pairing_code import PROOF_SIGNATURE_SIZE
+
 PROTOCOL_VERSION = 1
 MAX_NAME_LEN = 64
 MAX_APP_VERSION_LEN = 32
@@ -34,6 +36,8 @@ CERT_PEM_HEADER = "-----BEGIN CERTIFICATE-----"
 # `\d`/`isdigit` nhận cả chữ số Unicode (ví dụ chữ số toàn chiều rộng).
 _DEVICE_ID_RE = re.compile(r"[0-9a-f]{32}")
 _HEX32_BYTES_RE = re.compile(r"[0-9a-f]{64}")
+_SIGNATURE_HEX_LEN = 2 * PROOF_SIGNATURE_SIZE  # 128 ký tự hex = 64 byte r ‖ s
+_SIGNATURE_RE = re.compile(rf"[0-9a-f]{{{_SIGNATURE_HEX_LEN}}}")
 _REASON_RE = re.compile(r"[a-z_]{1,32}")
 _OS_RE = re.compile(r"[a-z0-9_]{1,16}")
 
@@ -194,14 +198,21 @@ class PairCommit:
 
 @dataclass(frozen=True, slots=True)
 class PairNonce:
-    """Bên khởi xướng gửi nonce n_A của mình, sau khi đã nhận `pair_commit`."""
+    """Bên khởi xướng gửi nonce n_A của mình, sau khi đã nhận `pair_commit`.
+
+    `signature`: chữ ký của bên khởi xướng trên `proof_payload` (protocol mục 5.2), chứng
+    minh nó giữ khóa riêng của chứng chỉ trong `pair_request`. Ở đây chỉ kiểm dạng.
+    """
 
     TYPE: ClassVar[str] = "pair_nonce"
 
     nonce: str
+    signature: str  # 128 ký tự hex thường = 64 byte r ‖ s
 
     def __post_init__(self) -> None:
         _validate_hex32(self.nonce, "nonce")
+        if not isinstance(self.signature, str) or not _SIGNATURE_RE.fullmatch(self.signature):
+            raise MessageError(f"signature phải là đúng {_SIGNATURE_HEX_LEN} ký tự hex thường")
 
 
 @dataclass(frozen=True, slots=True)

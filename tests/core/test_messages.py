@@ -50,6 +50,7 @@ from teleport.core.messages import (
 DEVICE_ID = "3f2a" + "0123456789abcdef" * 1 + "0" * 12
 HEX64 = "0123456789abcdef" * 4
 HEX64_B = "fedcba9876543210" * 4
+SIG128 = "0123456789abcdef" * 8  # chữ ký r ‖ s: 64 byte = 128 ký tự hex thường
 CERT_HEADER = "-----BEGIN CERTIFICATE-----"
 CERT = CERT_HEADER + "\nMIIBfake\n-----END CERTIFICATE-----\n"
 
@@ -69,7 +70,7 @@ def valid_dicts() -> dict[str, dict]:
         },
         "pair_request": {"type": "pair_request", "cert": CERT},
         "pair_commit": {"type": "pair_commit", "commitment": HEX64},
-        "pair_nonce": {"type": "pair_nonce", "nonce": HEX64_B},
+        "pair_nonce": {"type": "pair_nonce", "nonce": HEX64_B, "signature": SIG128},
         "pair_reveal": {"type": "pair_reveal", "nonce": HEX64},
         "pair_confirm": {"type": "pair_confirm"},
         "pair_abort": {"type": "pair_abort", "reason": "user"},
@@ -84,7 +85,7 @@ VALID_MESSAGES = [
     Hello(protocol=7, device_id=DEVICE_ID, name="Máy của Minh 🚀", app_version="1.2.3-dev+abc", os="windows"),
     PairRequest(cert=CERT),
     PairCommit(commitment=HEX64),
-    PairNonce(nonce=HEX64_B),
+    PairNonce(nonce=HEX64_B, signature=SIG128),
     PairReveal(nonce=HEX64),
     PairConfirm(),
     PairAbort(reason="user"),
@@ -201,11 +202,12 @@ def test_parse_does_not_mutate_input():
     ("msg", "field"),
     [
         (PairCommit(commitment=HEX64), "commitment"),
-        (PairNonce(nonce=HEX64), "nonce"),
+        (PairNonce(nonce=HEX64, signature=SIG128), "nonce"),
+        (PairNonce(nonce=HEX64, signature=SIG128), "signature"),
         (PairReveal(nonce=HEX64), "nonce"),
         (PairRequest(cert=CERT), "cert"),
     ],
-    ids=["PairCommit", "PairNonce", "PairReveal", "PairRequest"],
+    ids=["PairCommit", "PairNonce", "PairNonce-signature", "PairReveal", "PairRequest"],
 )
 def test_messages_are_frozen(msg, field):
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -546,25 +548,33 @@ def test_pair_request_constructor_rejects_commitment_argument():
 
 
 @pytest.mark.parametrize(
-    ("cls", "field"), [(PairCommit, "commitment"), (PairNonce, "nonce"), (PairReveal, "nonce")]
+    ("cls", "fields"),
+    [(PairCommit, ["commitment"]), (PairNonce, ["nonce", "signature"]), (PairReveal, ["nonce"])],
 )
-def test_new_pairing_messages_have_exactly_one_hex_field(cls, field):
-    assert [f.name for f in dataclasses.fields(cls)] == [field]
+def test_new_pairing_messages_have_exactly_their_hex_fields(cls, fields):
+    # pair_nonce mang thêm chữ ký của bên khởi xướng (protocol 3.2, 5.2).
+    assert [f.name for f in dataclasses.fields(cls)] == fields
 
 
 def test_pair_commit_nonce_reveal_wire_format():
     assert to_dict(PairCommit(commitment=HEX64)) == {"type": "pair_commit", "commitment": HEX64}
-    assert to_dict(PairNonce(nonce=HEX64)) == {"type": "pair_nonce", "nonce": HEX64}
+    assert to_dict(PairNonce(nonce=HEX64, signature=SIG128)) == {
+        "type": "pair_nonce",
+        "nonce": HEX64,
+        "signature": SIG128,
+    }
     assert to_dict(PairReveal(nonce=HEX64)) == {"type": "pair_reveal", "nonce": HEX64}
     assert parse_message({"type": "pair_commit", "commitment": HEX64}) == PairCommit(commitment=HEX64)
-    assert parse_message({"type": "pair_nonce", "nonce": HEX64}) == PairNonce(nonce=HEX64)
+    assert parse_message({"type": "pair_nonce", "nonce": HEX64, "signature": SIG128}) == PairNonce(
+        nonce=HEX64, signature=SIG128
+    )
 
 
 def test_pairing_messages_use_their_own_field_names():
     # `pair_commit` mang `commitment`; `pair_nonce`/`pair_reveal` mang `nonce`. Tên khác → thiếu trường.
     for wire in (
         {"type": "pair_commit", "nonce": HEX64},
-        {"type": "pair_nonce", "commitment": HEX64},
+        {"type": "pair_nonce", "commitment": HEX64, "signature": SIG128},
         {"type": "pair_reveal", "commitment": HEX64},
     ):
         with pytest.raises(MessageError):
@@ -596,8 +606,9 @@ BAD_HEX64 = [
     [("pair_commit", "commitment"), ("pair_nonce", "nonce"), ("pair_reveal", "nonce")],
 )
 def test_bad_hex64_field_rejected(type_name, field, value):
+    # Các trường khác đúng (pair_nonce có chữ ký hợp lệ): lỗi chỉ do trường đang thử.
     with pytest.raises(MessageError) as exc:
-        parse_message({"type": type_name, field: value})
+        parse_message({**valid_dicts()[type_name], field: value})
     assert not isinstance(exc.value, UnknownMessageType)
 
 
@@ -606,15 +617,121 @@ def test_bad_hex64_field_rejected(type_name, field, value):
     ("cls", "field"), [(PairCommit, "commitment"), (PairNonce, "nonce"), (PairReveal, "nonce")]
 )
 def test_bad_hex64_rejected_when_constructing(cls, field, value):
+    extra = {"signature": SIG128} if cls is PairNonce else {}
     with pytest.raises(MessageError):
-        cls(**{field: value})
+        cls(**{field: value, **extra})
 
 
 @pytest.mark.parametrize("value", ["0" * 64, "f" * 64, HEX64, HEX64_B])
 def test_good_hex64_accepted(value):
     assert parse_message({"type": "pair_commit", "commitment": value}).commitment == value
-    assert parse_message({"type": "pair_nonce", "nonce": value}).nonce == value
+    assert parse_message({"type": "pair_nonce", "nonce": value, "signature": SIG128}).nonce == value
     assert parse_message({"type": "pair_reveal", "nonce": value}).nonce == value
+
+
+# --- pair_nonce.signature (protocol 3.3: đúng 128 ký tự [0-9a-f], re.fullmatch ASCII) ----------
+
+BAD_SIG128 = [
+    "",
+    SIG128[:126],
+    SIG128[:127],
+    SIG128 + "0",
+    SIG128 + "00",
+    SIG128[:64],  # 64 ký tự: độ dài của nonce, không phải của chữ ký
+    SIG128.upper(),
+    "A" + SIG128[1:],
+    "g" + SIG128[1:],
+    SIG128[:127] + "\n",
+    SIG128 + "\n",
+    " " + SIG128[1:],
+    SIG128[:127] + " ",
+    "０" * 128,  # chữ số toàn chiều rộng
+    "٠" * 128,  # chữ số Ả Rập-Ấn
+    "0x" + SIG128[2:],
+    ":".join([SIG128[i : i + 2] for i in range(0, 128, 2)])[:128],
+]
+NON_STRING_SIG = [None, 0, 12345, True, bytes(64), bytes.fromhex(SIG128), [SIG128], {"r": 1}, 1.5]
+
+
+@pytest.mark.parametrize("value", BAD_SIG128, ids=repr)
+def test_pair_nonce_bad_signature_rejected_on_parse(value):
+    with pytest.raises(MessageError) as exc:
+        parse_message({**valid_dicts()["pair_nonce"], "signature": value})
+    assert not isinstance(exc.value, UnknownMessageType)
+
+
+@pytest.mark.parametrize("value", BAD_SIG128, ids=repr)
+def test_pair_nonce_bad_signature_rejected_when_constructing(value):
+    with pytest.raises(MessageError):
+        PairNonce(nonce=HEX64, signature=value)
+
+
+@pytest.mark.parametrize("value", NON_STRING_SIG, ids=repr)
+def test_pair_nonce_non_string_signature_rejected(value):
+    with pytest.raises(MessageError):
+        parse_message({**valid_dicts()["pair_nonce"], "signature": value})
+    with pytest.raises(MessageError):
+        PairNonce(nonce=HEX64, signature=value)
+
+
+def test_pair_nonce_missing_signature_rejected():
+    wire = valid_dicts()["pair_nonce"]
+    del wire["signature"]
+    with pytest.raises(MessageError) as exc:
+        parse_message(wire)
+    assert not isinstance(exc.value, UnknownMessageType)
+
+
+def test_pair_nonce_constructor_requires_signature():
+    with pytest.raises(TypeError):
+        PairNonce(nonce=HEX64)  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("value", ["0" * 128, "f" * 128, SIG128, "ab" * 64, HEX64 + HEX64_B])
+def test_pair_nonce_good_signature_accepted_and_roundtrips(value):
+    msg = parse_message({"type": "pair_nonce", "nonce": HEX64, "signature": value})
+    assert msg == PairNonce(nonce=HEX64, signature=value)
+    assert msg.signature == value
+    assert type(msg.signature) is str
+    assert to_dict(msg) == {"type": "pair_nonce", "nonce": HEX64, "signature": value}
+    assert parse_message(to_dict(msg)) == msg
+
+
+def test_pair_nonce_unknown_fields_still_ignored():
+    # protocol 3.1: trường lạ bỏ qua; không lẫn với `signature`.
+    wire = {"type": "pair_nonce", "nonce": HEX64, "signature": SIG128, "sig": "x", "proof": 1}
+    msg = parse_message(wire)
+    assert msg == PairNonce(nonce=HEX64, signature=SIG128)
+    assert set(to_dict(msg)) == {"type", "nonce", "signature"}
+
+
+def test_pair_nonce_signature_and_nonce_are_not_interchangeable():
+    # Đổi chỗ hai trường: nonce 128 ký tự và chữ ký 64 ký tự đều sai.
+    with pytest.raises(MessageError):
+        parse_message({"type": "pair_nonce", "nonce": SIG128, "signature": HEX64})
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.text(max_size=140))
+def test_property_signature_accepts_only_128_lowercase_hex(value):
+    import re as _re
+
+    good = _re.fullmatch(r"[0-9a-f]{128}", value, flags=_re.ASCII) is not None
+    try:
+        msg = parse_message({"type": "pair_nonce", "nonce": HEX64, "signature": value})
+    except MessageError:
+        assert not good, f"chữ ký hợp lệ bị từ chối: {value!r}"
+        return
+    assert good, f"chữ ký sai dạng được nhận: {value!r}"
+    assert parse_message(to_dict(msg)) == msg
+
+
+@settings(max_examples=200, deadline=None)
+@given(st.binary(min_size=64, max_size=64), st.binary(min_size=32, max_size=32))
+def test_property_pair_nonce_roundtrip(sig, nonce):
+    msg = PairNonce(nonce=nonce.hex(), signature=sig.hex())
+    assert parse_message(to_dict(msg)) == msg
+    assert parse_message(decode_body(encode_message(to_dict(msg))[4:])) == msg
 
 
 # --- reason ------------------------------------------------------------------------------------
@@ -758,8 +875,10 @@ def test_property_validate_os_agrees_with_hello_os(value):
         lambda: PairRequest(cert=_cert_of_length(8193)),
         lambda: PairCommit(commitment=HEX64.upper()),
         lambda: PairCommit(commitment=bytes(32)),
-        lambda: PairNonce(nonce="x"),
-        lambda: PairNonce(nonce=bytes(32)),
+        lambda: PairNonce(nonce="x", signature=SIG128),
+        lambda: PairNonce(nonce=bytes(32), signature=SIG128),
+        lambda: PairNonce(nonce=HEX64, signature=SIG128.upper()),
+        lambda: PairNonce(nonce=HEX64, signature=bytes(64)),
         lambda: PairReveal(nonce=HEX64[:62]),
         lambda: PairAbort(reason="USER"),
         lambda: PairAbort(reason=""),
@@ -989,6 +1108,7 @@ tricky_text = st.lists(
 field_values = (
     st.just(DEVICE_ID)
     | st.just(HEX64)
+    | st.just(SIG128)
     | st.just(CERT)
     | st.sampled_from(["user", "busy", "PC-Nha", "0.1.0"])
     | st.integers(-3, 3)
@@ -1009,6 +1129,7 @@ near_valid_messages = st.builds(
                 "cert",
                 "commitment",
                 "nonce",
+                "signature",
                 "reason",
                 "t",
                 "x",
@@ -1193,7 +1314,7 @@ def test_check_message_kind_error_is_catchable_as_message_error():
 
 @pytest.mark.parametrize(
     "msg",
-    [PairCommit(commitment=HEX64), PairNonce(nonce=HEX64), PairReveal(nonce=HEX64)],
+    [PairCommit(commitment=HEX64), PairNonce(nonce=HEX64, signature=SIG128), PairReveal(nonce=HEX64)],
     ids=lambda m: type(m).__name__,
 )
 def test_new_pairing_messages_only_on_pairing_and_cannot_open(msg):

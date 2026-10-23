@@ -2366,11 +2366,10 @@ async def test_listen_over_code_limit_answers_busy_without_prompt(tmp_path, fast
 
 HEADER_LISTEN = "Có yêu cầu ghép đôi. Hãy so mã dưới đây với mã trên màn hình máy kia."
 HEADER_PAIR = "Hãy so mã dưới đây với mã trên màn hình máy kia."
-KNOWN_RESPONDER = (
-    "Máy này đã ghép đôi với mã máy {id8} trước đây, tên đã lưu: “{name}”. "
-    "Ghép đôi lại sẽ giữ nguyên tên đã lưu."
-)
-KNOWN_INITIATOR = "Máy này đã ghép đôi với mã máy {id8} trước đây, tên đã lưu: “{name}”."
+# mvp mục 7.2: một dòng chung cho cả hai vai khi đã ghép đôi trước đây; thêm dòng đổi tên
+# khi tên đã lưu khác tên máy kia tự xưng (ghép đôi lại ở cả hai vai cập nhật tên, D2).
+KNOWN = "Máy này đã ghép đôi với mã máy {id8} trước đây, tên đã lưu: “{name}”."
+RENAME = "Ghép đôi xong, tên sẽ đổi thành “{name}”."
 NOT_SHOWN_INITIATOR = "Ghép đôi với {x} chưa xong vì phiên dừng trước khi hiện mã. Hãy thử lại."
 NOT_SHOWN_RESPONDER = "Một máy tự xưng là {x} đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã."
 CONFLICT_RESPONDER = (
@@ -2478,8 +2477,9 @@ def expected_prompt_lines(prompt, *, listening: bool) -> list[str]:
         lines.append(WARN_CODES.format(n=prompt.recent_codes))
     lines.append(f"Máy kia tự xưng là “{display_name(prompt.peer_name)}” (mã máy {id8}, {prompt.address}).")
     if prompt.known_name is not None:
-        template = KNOWN_RESPONDER if responder else KNOWN_INITIATOR
-        lines.append(template.format(id8=id8, name=display_name(prompt.known_name)))
+        lines.append(KNOWN.format(id8=id8, name=display_name(prompt.known_name)))
+        if prompt.known_name != prompt.peer_name:
+            lines.append(RENAME.format(name=display_name(prompt.peer_name)))
     lines.append(ASK)
     return lines
 
@@ -2491,7 +2491,8 @@ def check_code_first(lines: list[str], code: str, *, name_is_distinctive: bool =
     - Trước dòng mã chỉ có tiêu đề cố định: không chữ số, không chữ nào do máy kia đặt.
     - Tên máy kia nằm trong “…” ở đúng một dòng `Máy kia tự xưng là …`, sau dòng mã; phần trong
       ngoặc ≤ 32 cột và không còn ký tự trống.
-    - `name_is_distinctive`: phần tên đó không xuất hiện ở dòng nào khác (trừ dòng tên đã lưu).
+    - `name_is_distinctive`: phần tên đó không xuất hiện ở dòng nào khác (trừ dòng tên đã lưu và
+      dòng “tên sẽ đổi thành”, cả hai đều sau dòng mã).
     """
     code_line = f"Mã ghép đôi:   {_spaced(code)}"
     assert [line for line in lines if line.startswith("Mã ghép đôi")] == [code_line], lines
@@ -2506,9 +2507,12 @@ def check_code_first(lines: list[str], code: str, *, name_is_distinctive: bool =
     shown = m.group(1)
     assert _columns(shown) <= 32, shown
     assert not set(shown) & _BLANKS, shown
+    for k, line in enumerate(lines):
+        if line.startswith(("Máy này đã ghép đôi", "Ghép đôi xong, tên sẽ đổi thành")):
+            assert k > i, f"dòng có tên đứng trước dòng mã: {line!r}"
     if name_is_distinctive:
         for k, line in enumerate(lines):
-            if k != j and not line.startswith("Máy này đã ghép đôi"):
+            if k != j and not line.startswith(("Máy này đã ghép đôi", "Ghép đôi xong, tên sẽ đổi thành")):
                 assert shown not in line, f"tên máy kia ở ngoài “…”: {line!r}"
     return shown
 
@@ -2629,6 +2633,49 @@ def _commitment(fp_responder: str, nonce: bytes) -> str:
     return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_responder) + nonce).hexdigest()
 
 
+def _proof_payload(fp_initiator: str, fp_responder: str, n_a: bytes, commitment: str) -> bytes:
+    """Payload ký trong `pair_nonce` (protocol 5.2), tính độc lập."""
+    return (
+        b"teleport-initiator-proof-v1"
+        + bytes.fromhex(fp_initiator)
+        + bytes.fromhex(fp_responder)
+        + n_a
+        + bytes.fromhex(commitment)
+    )
+
+
+def _sign(key_path, payload: bytes) -> bytes:
+    """ECDSA P-256 + SHA-256, r ‖ s (64 byte), bằng khóa PEM ở `key_path`."""
+    from pathlib import Path
+
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    key = serialization.load_pem_private_key(Path(key_path).read_bytes(), password=None)
+    r, s_ = decode_dss_signature(key.sign(payload, ec.ECDSA(hashes.SHA256())))
+    return r.to_bytes(32, "big") + s_.to_bytes(32, "big")
+
+
+def _verify(cert_pem: str, payload: bytes, signature: bytes) -> bool:
+    """Kiểm chữ ký r ‖ s bằng khóa công khai trong `cert_pem` (độc lập với trust)."""
+    from cryptography import x509
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+    if len(signature) != 64:
+        return False
+    r, s_ = int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")
+    public = x509.load_pem_x509_certificate(cert_pem.encode("ascii")).public_key()
+    try:
+        public.verify(encode_dss_signature(r, s_), payload, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        return False
+    return True
+
+
 class RawInitiator:
     """Bên khởi xướng thô (TLS ẩn danh, asyncio) gửi tới `listen`: tự đặt `hello.name` và chứng chỉ
     trong `pair_request` (có thể là chứng chỉ công khai của máy khác, như ở M5)."""
@@ -2669,13 +2716,21 @@ class RawInitiator:
         self.send({"type": "pair_request", "cert": cert_pem})
         await self.writer.drain()
 
-    async def to_code(self, own_fingerprint: str) -> str:
-        """`pair_commit` → gửi `pair_nonce` → `pair_reveal` (kiểm cam kết); trả mã thật."""
+    async def send_signed_nonce(self, own_fingerprint: str, key_path) -> dict:
+        """Đọc `pair_commit`, gửi `pair_nonce` ký bằng khóa ở `key_path` (protocol 5.2); trả pair_commit."""
+        commit = await self.recv_type("pair_commit")
+        payload = _proof_payload(own_fingerprint, self.server_fp, self.nonce, commit["commitment"])
+        self.send(
+            {"type": "pair_nonce", "nonce": self.nonce.hex(), "signature": _sign(key_path, payload).hex()}
+        )
+        await self.writer.drain()
+        return commit
+
+    async def to_code(self, own_fingerprint: str, key_path) -> str:
+        """`pair_commit` → gửi `pair_nonce` (ký bằng `key_path`) → `pair_reveal` (kiểm cam kết); trả mã."""
         from teleport.core.pairing_code import pairing_code
 
-        commit = await self.recv_type("pair_commit")
-        self.send({"type": "pair_nonce", "nonce": self.nonce.hex()})
-        await self.writer.drain()
+        commit = await self.send_signed_nonce(own_fingerprint, key_path)
         reveal = await self.recv_type("pair_reveal")
         n_b = bytes.fromhex(reveal["nonce"])
         assert _commitment(self.server_fp, n_b) == commit["commitment"]
@@ -2727,6 +2782,7 @@ class ThreadResponder:
         self.sock.settimeout(0.1)
         self.port: int = self.sock.getsockname()[1]
         self.code: str | None = None
+        self.proof_ok: bool | None = None  # chữ ký trong pair_nonce của máy kia có hợp lệ không
         self.received: list[dict] = []
         self.errors: list[BaseException] = []
         self.stop = threading.Event()
@@ -2780,6 +2836,9 @@ class ThreadResponder:
         self._send(conn, {"type": "pair_commit", "commitment": _commitment(self.fingerprint, n_b)})
         nonce = self._recv(conn)
         assert nonce["type"] == "pair_nonce", nonce
+        commitment = _commitment(self.fingerprint, n_b)
+        payload = _proof_payload(fp_initiator, self.fingerprint, bytes.fromhex(nonce["nonce"]), commitment)
+        self.proof_ok = _verify(request["cert"], payload, bytes.fromhex(nonce.get("signature", "")))
         self.code = pairing_code(fp_initiator, self.fingerprint, bytes.fromhex(nonce["nonce"]), n_b)
         self._send(conn, {"type": "pair_reveal", "nonce": n_b.hex()})
         confirm = self._recv(conn)
@@ -2935,7 +2994,7 @@ async def test_h1_listen_shows_real_code_before_name_with_fake_code(tmp_path, fa
     client = await RawInitiator.connect(port)
     try:
         await client.start(raw.device_id, name, raw.cert_pem())
-        code = await client.to_code(raw.fingerprint)
+        code = await client.to_code(raw.fingerprint, raw.key_path)
         await listen.wait_text(ASK)
         lines = listen.text()[head:].split("\n")
         code_line = f"Mã ghép đôi:   {_spaced(code)}"
@@ -2969,6 +3028,7 @@ async def test_h1_pair_shows_real_code_before_name_with_fake_code(tmp_path, fast
             ASK,
         ]
         assert "PC-A" not in text[: text.index(code_line)]
+        assert peer.proof_ok is True, "chữ ký của `teleport pair` trong pair_nonce phải hợp lệ"
         pair.say("k")
         assert await asyncio.wait_for(pair.task, 10) == 1
 
@@ -2977,18 +3037,54 @@ async def test_h1_pair_shows_real_code_before_name_with_fake_code(tmp_path, fast
 
 
 @pytest.mark.parametrize(("listening", "role"), PROMPT_MODES, ids=PROMPT_MODE_IDS)
-async def test_m5_prompt_shows_saved_name_line_by_role(listening, role):
+async def test_m5_prompt_shows_saved_name_and_rename_lines_in_both_roles(listening, role):
+    """mvp mục 7.2: cùng một dòng tên đã lưu cho cả hai vai, rồi dòng đổi tên."""
     prompt = _prompt(role, 0, peer_name="Laptop-Bob", known_name="PC-Nha")
     text, err = render_prompt(prompt, listening=listening)
-    known = KNOWN_RESPONDER if role == "responder" else KNOWN_INITIATOR
     assert text.split("\n") == [
         HEADER_LISTEN if listening else HEADER_PAIR,
         "Mã ghép đôi:   123 456",
         "Máy kia tự xưng là “Laptop-Bob” (mã máy abababab, 192.168.1.5).",
-        known.format(id8="abababab", name="PC-Nha"),
+        "Máy này đã ghép đôi với mã máy abababab trước đây, tên đã lưu: “PC-Nha”.",
+        "Ghép đôi xong, tên sẽ đổi thành “Laptop-Bob”.",
         ASK,
     ]
+    assert "giữ nguyên tên" not in text
     assert err == ""
+
+
+@pytest.mark.parametrize(("listening", "role"), PROMPT_MODES, ids=PROMPT_MODE_IDS)
+async def test_m5_prompt_without_rename_line_when_saved_name_equals_claimed(listening, role):
+    prompt = _prompt(role, 0, peer_name="PC-Nha", known_name="PC-Nha")
+    text, err = render_prompt(prompt, listening=listening)
+    assert text.split("\n") == [
+        HEADER_LISTEN if listening else HEADER_PAIR,
+        "Mã ghép đôi:   123 456",
+        "Máy kia tự xưng là “PC-Nha” (mã máy abababab, 192.168.1.5).",
+        KNOWN.format(id8="abababab", name="PC-Nha"),
+        ASK,
+    ]
+    assert "tên sẽ đổi thành" not in text
+    assert err == ""
+
+
+@pytest.mark.parametrize(
+    ("name", "shown"),
+    [
+        ("PC-A" + "\u2800" * 20 + "382 104", "PC-A" + "·" * 20 + "382 104"),
+        ("B" * 64, "B" * 31 + "…"),
+        ("Mã ghép đôi:   111 222", "Mã ghép đôi:   111 222"),
+    ],
+    ids=["braille-blank", "64-chars", "code-label"],
+)
+async def test_m5_rename_line_shows_claimed_name_through_display_name(name, shown):
+    prompt = _prompt("responder", 0, peer_name=name, known_name="PC-Nha")
+    text, _ = render_prompt(prompt, listening=True)
+    lines = text.split("\n")
+    assert RENAME.format(name=shown) in lines
+    # Dòng đổi tên (tên do máy kia chọn) vẫn nằm sau dòng mã; chỉ có đúng một dòng mã thật.
+    check_code_first(lines, "123456")
+    assert lines.index(RENAME.format(name=shown)) > lines.index("Mã ghép đôi:   123 456")
 
 
 @pytest.mark.parametrize(("listening", "role"), PROMPT_MODES, ids=PROMPT_MODE_IDS)
@@ -3005,7 +3101,7 @@ async def test_m5_prompt_without_saved_name_has_no_saved_name_line(listening, ro
 )
 async def test_m5_saved_name_is_shown_like_peer_name(known, shown):
     text, _ = render_prompt(_prompt("responder", 0, known_name=known), listening=True)
-    assert KNOWN_RESPONDER.format(id8="abababab", name=shown) in text.split("\n")
+    assert KNOWN.format(id8="abababab", name=shown) in text.split("\n")
 
 
 @pytest.mark.parametrize("known", [None, "PC-Nha"])
@@ -3072,16 +3168,60 @@ def test_m5_paired_message_without_device_uses_peer_name():
 
 @with_marks(socket_test)
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
-async def test_m5_listen_repair_with_stolen_public_cert_keeps_saved_name(
+async def test_m5_listen_stranger_with_stolen_public_cert_is_rejected_before_code(
     tmp_path, fast_cli, cli_runs, json_mode
 ):
-    """Kế hoạch M5: B tin V tên “PC-Nha”; máy lạ gửi chứng chỉ CÔNG KHAI của V với tên “Laptop-Bob”,
-    hai bên xác nhận → B vẫn lưu “PC-Nha” (cả trên đĩa), lời hỏi và câu kết quả dùng tên đã lưu."""
+    """Protocol 5.1, 5.5: B tin V tên “PC-Nha”; máy lạ M gửi chứng chỉ CÔNG KHAI của V với tên “Laptop-Bob”
+    nhưng chỉ ký được bằng khóa của chính nó → `listen` không hiện mã, không hỏi, báo phiên dừng
+    trước khi hiện mã; M nhận `pair_abort{invalid}`; `trusted.json` không đổi; `listen` vẫn chạy."""
+    b_dir = tmp_path / "B"
+    load_or_create_identity(b_dir)
+    v = load_or_create_identity(tmp_path / "V")
+    m = load_or_create_identity(tmp_path / "M")
+    TrustStore.load(b_dir).add(peer_cert_from_pem(v.cert_pem()), "PC-Nha")
+    before = (b_dir / "trusted.json").read_bytes()
+    listen = cli_runs("listen", listen_argv(b_dir, json_mode=json_mode))
+    if json_mode:
+        port = (await listen.wait_event("listening"))["port"]
+    else:
+        port = await listen_port_text(listen)
+    head = len(listen.text())
+    client = await RawInitiator.connect(port)
+    try:
+        await client.start(v.device_id, "Laptop-Bob", v.cert_pem())  # không có khóa riêng của V
+        await client.send_signed_nonce(v.fingerprint, m.key_path)
+        abort = await client.recv_type("pair_abort")
+        assert abort == {"type": "pair_abort", "reason": "invalid"}
+    finally:
+        client.abort()
+    if json_mode:
+        result = await listen.wait_event("pair_result")
+        assert result["outcome"] == "protocol_error"
+        assert "đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã" in result["message"]
+        assert listen.events_of("pair_prompt") == []
+    else:
+        await listen.wait_text("đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã.")
+        tail = listen.text()[head:]
+        assert ASK not in tail
+        assert "Mã ghép đôi:" not in tail
+        assert "Nếu mã trên hai máy khác nhau" not in tail
+    assert not listen.task.done()
+    assert (b_dir / "trusted.json").read_bytes() == before
+    saved = TrustStore.load(b_dir).get(v.device_id)
+    assert (saved.name, saved.fingerprint) == ("PC-Nha", v.fingerprint)
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_m5_listen_real_repair_with_new_name_updates_saved_name(
+    tmp_path, fast_cli, cli_runs, json_mode
+):
+    """Chính V (có khóa riêng) ghép đôi lại với tên mới “Laptop-Mới”: lời hỏi có dòng tên đã lưu và
+    dòng “tên sẽ đổi thành”; xác nhận xong B lưu tên mới (cả trên đĩa) và báo “Đã ghép đôi với Laptop-Mới.”"""
     b_dir = tmp_path / "B"
     load_or_create_identity(b_dir)
     v = load_or_create_identity(tmp_path / "V")
     TrustStore.load(b_dir).add(peer_cert_from_pem(v.cert_pem()), "PC-Nha")
-    before = TrustStore.load(b_dir).get(v.device_id)
     listen = cli_runs("listen", listen_argv(b_dir, json_mode=json_mode))
     if json_mode:
         port = (await listen.wait_event("listening"))["port"]
@@ -3090,17 +3230,22 @@ async def test_m5_listen_repair_with_stolen_public_cert_keeps_saved_name(
     v8 = v.device_id[:8]
     client = await RawInitiator.connect(port)
     try:
-        await client.start(v.device_id, "Laptop-Bob", v.cert_pem())  # không có khóa riêng của V
-        code = await client.to_code(v.fingerprint)
+        await client.start(v.device_id, "Laptop-Mới", v.cert_pem())
+        code = await client.to_code(v.fingerprint, v.key_path)
         if json_mode:
             prompt = await listen.wait_event("pair_prompt")
-            assert (prompt["peer_name"], prompt["known_name"]) == ("Laptop-Bob", "PC-Nha")
+            assert (prompt["peer_name"], prompt["known_name"]) == ("Laptop-Mới", "PC-Nha")
             assert (prompt["peer_device_id"], prompt["code"]) == (v.device_id, code)
         else:
             await listen.wait_text(ASK)
             lines = listen.text().split("\n")
-            assert f"Máy kia tự xưng là “Laptop-Bob” (mã máy {v8}, 127.0.0.1)." in lines
-            assert KNOWN_RESPONDER.format(id8=v8, name="PC-Nha") in lines
+            i = lines.index(f"Mã ghép đôi:   {_spaced(code)}")
+            assert lines[i + 1 :] == [
+                f"Máy kia tự xưng là “Laptop-Mới” (mã máy {v8}, 127.0.0.1).",
+                KNOWN.format(id8=v8, name="PC-Nha"),
+                RENAME.format(name="Laptop-Mới"),
+                ASK,
+            ]
         listen.say("c")
         await client.recv_type("pair_confirm")
         client.send({"type": "pair_confirm"})
@@ -3108,16 +3253,82 @@ async def test_m5_listen_repair_with_stolen_public_cert_keeps_saved_name(
         if json_mode:
             result = await listen.wait_event("pair_result")
             assert result["outcome"] == "paired"
-            assert result["message"] == "Đã ghép đôi với PC-Nha."
+            assert result["message"] == "Đã ghép đôi với Laptop-Mới."
         else:
-            await listen.wait_text("Đã ghép đôi với PC-Nha.")
-            assert "Đã ghép đôi với Laptop-Bob" not in listen.text()
+            await listen.wait_text("Đã ghép đôi với Laptop-Mới.")
     finally:
         client.abort()
     saved = TrustStore.load(b_dir).get(v.device_id)
-    assert saved is not None
-    assert (saved.name, saved.fingerprint, saved.cert_pem) == ("PC-Nha", v.fingerprint, before.cert_pem)
-    assert "Laptop-Bob" not in (b_dir / "trusted.json").read_text("utf-8")
+    assert (saved.name, saved.fingerprint) == ("Laptop-Mới", v.fingerprint)
+    assert "PC-Nha" not in (b_dir / "trusted.json").read_text("utf-8")
+
+
+# --- Chứng minh giữ khóa: danh tính có khóa không khớp chứng chỉ → `listen` / `pair` thoát 1 ----------
+
+
+def _break_key(directory, tmp_path) -> None:
+    other = load_or_create_identity(tmp_path / "khoa-khac")
+    (directory / "device.key").write_bytes(other.key_path.read_bytes())
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+@pytest.mark.parametrize("command", ["listen", "pair"])
+async def test_key_not_matching_cert_makes_listen_and_pair_exit_1(
+    tmp_path, fast_cli, cli_runs, command, json_mode
+):
+    d = tmp_path / "X"
+    load_or_create_identity(d)
+    _break_key(d, tmp_path)
+    argv = (
+        listen_argv(d, json_mode=json_mode) if command == "listen" else pair_argv(d, 9, json_mode=json_mode)
+    )
+    run = cli_runs(command, argv)
+    assert await asyncio.wait_for(run.task, 10) == 1
+    text = run.text()
+    assert "Traceback" not in text
+    if json_mode:
+        errors = [e for e in run.events() if "error" in e]
+        assert errors and errors[-1]["error"] == "identity_error", text
+    else:
+        assert run.err.getvalue().startswith("Lỗi: "), text
+    assert lock_is_free(d)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("command", ["listen", "pair"])
+async def test_signer_identity_error_at_node_start_exits_1(
+    tmp_path, fast_cli, cli_runs, monkeypatch, command
+):
+    """`load_pairing_signer` ném IdentityError (khóa bị thay sau khi danh tính đã nạp) → xử lý như
+    lỗi danh tính hiện có: in câu lỗi, thoát 1, nhả `node.lock`. Hàm thật được gọi với một khóa khác
+    để lỗi là lỗi thật của trust."""
+    import dataclasses
+
+    from teleport.trust import identity as trust_identity
+
+    real = trust_identity.load_pairing_signer
+    foreign = load_or_create_identity(tmp_path / "khoa-khac")
+    calls: list[int] = []
+
+    def broken(identity):
+        calls.append(1)
+        return real(dataclasses.replace(identity, key_path=foreign.key_path))
+
+    monkeypatch.setattr(trust_identity, "load_pairing_signer", broken)
+    from teleport.app import pairing as app_pairing
+
+    if hasattr(app_pairing, "load_pairing_signer"):
+        monkeypatch.setattr(app_pairing, "load_pairing_signer", broken)
+    d = tmp_path / "X"
+    argv = listen_argv(d, json_mode=True) if command == "listen" else pair_argv(d, 9, json_mode=True)
+    run = cli_runs(command, argv)
+    assert await asyncio.wait_for(run.task, 10) == 1
+    assert calls, "PairingService phải nạp bộ ký lúc khởi tạo node"
+    errors = [e for e in run.events() if "error" in e]
+    assert errors and errors[-1]["error"] == "identity_error", run.text()
+    assert "Traceback" not in run.text()
+    assert lock_is_free(d)
 
 
 # --- L4: câu báo đúng ngữ cảnh ---------------------------------------------------------------------------

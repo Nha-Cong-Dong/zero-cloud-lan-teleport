@@ -26,7 +26,7 @@ pytest
 
 CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check .`, `ruff format --check .` và `pytest` trên Windows, macOS, Linux × Python 3.12 và 3.14. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
 
-Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (`tests/net/test_discovery.py`).
+Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (`tests/net/test_discovery.py`, `tests/app/test_node_mdns.py`).
 
 ## Phát hành
 1. Chuyển mục `[Unreleased]` trong `CHANGELOG.md` thành `[X.Y.Z] - YYYY-MM-DD`.

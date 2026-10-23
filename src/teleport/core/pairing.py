@@ -19,19 +19,24 @@ kết nối thật:
   kết nối thì bỏ `SavePeer` (protocol mục 5.1: chỉ lưu khi đã GỬI và đã NHẬN).
 
 Bên trả lời (B) cam kết nonce trước, kiểu Bluetooth numeric comparison (protocol mục
-5.1). Bốn bất biến mà máy trạng thái giữ:
+5.1). Năm bất biến mà máy trạng thái giữ:
 
-1. Bên khởi xướng (A) chỉ gửi n_A (`pair_nonce`) sau khi đã nhận `pair_commit`.
+1. Bên khởi xướng (A) chỉ ký và gửi n_A (`pair_nonce`) sau khi đã nhận `pair_commit`.
 2. B chỉ gửi n_B (`pair_reveal`) sau khi đã nhận n_A, và mã đã hiện trong cùng bước
    (`ShowCode` đứng trước `SendMessage(PairReveal)`).
 3. A chỉ hiện mã khi cam kết của B đúng với n_B và fingerprint của B.
 4. A không bao giờ tự thử lại một phiên thất bại: mỗi phiên khởi xướng là một thao tác
    của người dùng. Nhường phiên (hai bên cùng chủ động) thì máy này chuyển sang vai
    trả lời, và vai này vẫn cam kết trước.
+5. B chỉ hiện mã (và chỉ gửi `pair_reveal`) sau khi chữ ký trong `pair_nonce` đã hợp lệ:
+   A chứng minh giữ khóa riêng của chứng chỉ trong `pair_request` bằng cách ký
+   `proof_payload` (protocol mục 5.2). B đã được bắt tay TLS chứng minh.
 
-`core` không phân tích chứng chỉ: `app` gọi `trust.peer_cert_from_pem` /
-`peer_cert_from_der` rồi đưa kết quả vào dưới dạng `DeviceCert`. Các kiểm tra
-thuần logic (CN khớp `hello`, tự ghép với chính mình, ghép đè danh tính) nằm ở đây.
+`core` không phân tích chứng chỉ và không làm mật mã khóa công khai: `app` gọi
+`trust.peer_cert_from_pem` / `peer_cert_from_der` rồi đưa kết quả vào dưới dạng
+`DeviceCert`, và đưa vào hàm ký (`ProofSigner`, vai khởi xướng) hoặc hàm kiểm
+(`ProofVerifier`, vai trả lời) của `trust`. Các kiểm tra thuần logic (CN khớp `hello`,
+tự ghép với chính mình, ghép đè danh tính) nằm ở đây.
 
 `PairingGate` quyết định có nhận một yêu cầu ghép đôi tới hay không (một phiên
 tại một thời điểm, chờ tăng dần theo IP, giới hạn số mã hiện ra, hai bên cùng chủ
@@ -45,7 +50,7 @@ from __future__ import annotations
 import math
 import re
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -63,7 +68,20 @@ from teleport.core.messages import (
     PairReveal,
     validate_device_id,
 )
-from teleport.core.pairing_code import NONCE_SIZE, check_commitment, make_commitment, pairing_code
+from teleport.core.pairing_code import (
+    NONCE_SIZE,
+    PROOF_SIGNATURE_SIZE,
+    check_commitment,
+    make_commitment,
+    pairing_code,
+    proof_payload,
+)
+
+# Vai khởi xướng: ký `proof_payload` bằng khóa danh tính, trả 64 byte r ‖ s.
+ProofSigner = Callable[[bytes], bytes]
+# Vai trả lời: (payload, chữ ký 64 byte) → True chỉ khi chữ ký đúng với khóa trong
+# chứng chỉ của máy kia. Phiên chỉ coi là đúng khi kết quả `is True`.
+ProofVerifier = Callable[[bytes, bytes], bool]
 
 # Thời gian tính bằng giây (protocol mục 2.3, 5.1, 5.3).
 MESSAGE_TIMEOUT = 10.0  # bên khởi xướng chờ pair_commit, rồi chờ pair_reveal
@@ -120,7 +138,7 @@ class Outcome(StrEnum):
     PAIRED = "paired"
     USER_REJECTED = "user_rejected"  # người dùng máy này bấm “Không trùng”
     TIMEOUT = "timeout"  # máy này hết giờ
-    PROTOCOL_ERROR = "protocol_error"  # message sai, sai thứ tự, cam kết sai, cert sai, tự ghép
+    PROTOCOL_ERROR = "protocol_error"  # message sai, sai thứ tự, cam kết/chữ ký sai, cert sai, tự ghép
     IDENTITY_CONFLICT = "identity_conflict"  # device_id đã tin cậy nhưng fingerprint khác
     PEER_REJECTED = "peer_rejected"  # nhận pair_abort{user}
     PEER_BUSY = "peer_busy"  # nhận pair_abort{busy}
@@ -254,16 +272,13 @@ class ShowCode:
 class SavePeer:
     """Lưu máy kia vào `trusted.json`. Luôn đứng ngay trước `Close(PAIRED)`.
 
-    `keep_known_name` True khi ghép đôi lại ở vai trả lời (máy kia đã có trong
-    `trusted.json` với cùng fingerprint): chứng chỉ lấy từ `pair_request`, máy kia chưa
-    chứng minh giữ khóa riêng, nên `app` giữ tên đã lưu thay vì `name`, chỉ cập nhật thời
-    điểm ghép đôi (protocol mục 5.5). Vai khởi xướng luôn False: chứng chỉ của máy kia đã
-    được bắt tay TLS xác thực.
+    Ghép đôi lại (máy kia đã có trong `trusted.json` với cùng fingerprint) cũng ghi đè
+    mục cũ, cập nhật tên theo `name`, ở cả hai vai: máy kia đã chứng minh giữ khóa riêng
+    (bắt tay TLS ở vai khởi xướng, chữ ký trong `pair_nonce` ở vai trả lời; protocol mục 5.5).
     """
 
     peer: DeviceCert
     name: str  # tên trong hello của máy kia
-    keep_known_name: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,9 +512,7 @@ class PairingSession:
         assert self._peer is not None
         # Tới đây thì known_fingerprint (nếu có) trùng fingerprint của máy kia: khác thì
         # phiên đã dừng với IDENTITY_CONFLICT trước khi hiện mã.
-        keep = self._role is Role.RESPONDER and self._known_fingerprint is not None
-        save = SavePeer(self._peer, self._peer_hello.name, keep_known_name=keep)
-        return [save, *self._close(Outcome.PAIRED)]
+        return [SavePeer(self._peer, self._peer_hello.name), *self._close(Outcome.PAIRED)]
 
     def _abort(self, reason: str, outcome: Outcome, detail: str = "") -> list[Action]:
         return [SendMessage(PairAbort(reason)), *self._close(outcome, detail=detail)]
@@ -517,6 +530,11 @@ class InitiatorSession(PairingSession):
     `peer` là chứng chỉ của B lấy từ bắt tay TLS; cam kết của B được kiểm bằng
     `peer.fingerprint`. `known_fingerprint` là fingerprint đã lưu cho `peer.device_id`
     trong `trusted.json` (nếu có).
+
+    `sign_proof` ký `proof_payload` bằng khóa danh tính của máy này (`trust`), gọi đúng
+    một lần khi nhận `pair_commit`, trước mọi thay đổi trạng thái. Không gọi được →
+    ValueError lúc tạo phiên; trả về thứ không phải `bytes` dài PROOF_SIGNATURE_SIZE →
+    PairingUsageError (lỗi lập trình); hàm ký raise thì lỗi bay ra nguyên vẹn.
     """
 
     def __init__(
@@ -526,10 +544,13 @@ class InitiatorSession(PairingSession):
         peer: DeviceCert,
         peer_hello: Hello,
         nonce: bytes,
+        sign_proof: ProofSigner,
         known_fingerprint: str | None = None,
     ) -> None:
         if not isinstance(peer, DeviceCert):
             raise ValueError("peer phải là DeviceCert")
+        if not callable(sign_proof):
+            raise ValueError("sign_proof phải gọi được")
         super().__init__(
             role=Role.INITIATOR,
             local=local,
@@ -538,6 +559,7 @@ class InitiatorSession(PairingSession):
             nonce=nonce,
             known_fingerprint=known_fingerprint,
         )
+        self._sign_proof = sign_proof
         self._commitment: str | None = None  # cam kết của B, nhận trong pair_commit
 
     def _start(self, now: float) -> list[Action]:
@@ -555,11 +577,19 @@ class InitiatorSession(PairingSession):
 
     def _on_message(self, msg: Message, now: float) -> list[Action] | None:
         if self._state is State.AWAIT_COMMIT and isinstance(msg, PairCommit):
-            # Bất biến 1: n_A chỉ rời máy sau khi đã có cam kết của B.
+            # Bất biến 1: n_A chỉ rời máy (và chỉ ký) sau khi đã có cam kết của B. Ký trước
+            # mọi thay đổi trạng thái: hàm ký lỗi thì phiên giữ nguyên.
+            assert self._peer is not None
+            payload = proof_payload(
+                self._local.fingerprint, self._peer.fingerprint, self._nonce, msg.commitment
+            )
+            signature = self._sign_proof(payload)
+            if not isinstance(signature, bytes) or len(signature) != PROOF_SIGNATURE_SIZE:
+                raise PairingUsageError(f"sign_proof phải trả đúng {PROOF_SIGNATURE_SIZE} byte")
             self._commitment = msg.commitment
             self._state = State.AWAIT_REVEAL
             self._deadline = now + MESSAGE_TIMEOUT
-            return [SendMessage(PairNonce(self._nonce.hex()))]
+            return [SendMessage(PairNonce(nonce=self._nonce.hex(), signature=signature.hex()))]
         if self._state is State.AWAIT_REVEAL and isinstance(msg, PairReveal):
             assert self._peer is not None and self._commitment is not None
             peer_nonce = bytes.fromhex(msg.nonce)
@@ -577,10 +607,15 @@ class InitiatorSession(PairingSession):
 class ResponderSession(PairingSession):
     """Bên trả lời (B): tạo sau khi đã đọc `pair_request` và `PairingGate.admit` trả ACCEPT.
 
-    Gửi `pair_commit`, chờ `pair_nonce` tối đa NONCE_TIMEOUT, rồi hiện mã và gửi
-    `pair_reveal`.
+    Gửi `pair_commit`, chờ `pair_nonce` tối đa NONCE_TIMEOUT, kiểm chữ ký trong đó, rồi
+    hiện mã và gửi `pair_reveal`.
     `peer` là kết quả `peer_cert_from_pem(request.cert)`, hoặc None nếu chứng chỉ hỏng
     (phiên sẽ gửi `pair_abort{invalid}` khi Start). `known_fingerprint` như bên khởi xướng.
+
+    `verify_proof(payload, signature)` kiểm chữ ký bằng khóa trong chứng chỉ `peer`
+    (`trust`), gọi đúng một lần khi nhận `pair_nonce`. Chỉ kết quả `is True` mới là đúng;
+    còn lại → `pair_abort{invalid}`, PROTOCOL_ERROR, không hiện mã. Không gọi được →
+    ValueError lúc tạo phiên; hàm kiểm raise thì lỗi bay ra nguyên vẹn.
     """
 
     def __init__(
@@ -590,8 +625,11 @@ class ResponderSession(PairingSession):
         peer: DeviceCert | None,
         peer_hello: Hello,
         nonce: bytes,
+        verify_proof: ProofVerifier,
         known_fingerprint: str | None = None,
     ) -> None:
+        if not callable(verify_proof):
+            raise ValueError("verify_proof phải gọi được")
         super().__init__(
             role=Role.RESPONDER,
             local=local,
@@ -600,6 +638,8 @@ class ResponderSession(PairingSession):
             nonce=nonce,
             known_fingerprint=known_fingerprint,
         )
+        self._verify_proof = verify_proof
+        self._commitment: str | None = None  # cam kết máy này gửi trong pair_commit
 
     def _start(self, now: float) -> list[Action]:
         peer = self._peer
@@ -615,12 +655,22 @@ class ResponderSession(PairingSession):
         # Hạn ngắn hơn MESSAGE_TIMEOUT: trước khi hiện mã, máy lạ giữ slot duy nhất của
         # PairingGate lâu nhất là chừng này (protocol mục 5.3).
         self._deadline = now + NONCE_TIMEOUT
-        return [SendMessage(PairCommit(make_commitment(self._local.fingerprint, self._nonce)))]
+        self._commitment = make_commitment(self._local.fingerprint, self._nonce)
+        return [SendMessage(PairCommit(self._commitment))]
 
     def _on_message(self, msg: Message, now: float) -> list[Action] | None:
         if self._state is State.AWAIT_NONCE and isinstance(msg, PairNonce):
+            assert self._peer is not None and self._commitment is not None
+            peer_nonce = bytes.fromhex(msg.nonce)
+            # Bất biến 5: máy kia chưa chứng minh giữ khóa riêng thì không hiện mã.
+            payload = proof_payload(
+                self._peer.fingerprint, self._local.fingerprint, peer_nonce, self._commitment
+            )
+            if self._verify_proof(payload, bytes.fromhex(msg.signature)) is not True:
+                # Không ghi chữ ký hay payload vào detail (mvp N9).
+                return self._abort(AbortReason.INVALID, Outcome.PROTOCOL_ERROR, "chữ ký trong pair_nonce sai")
             # Bất biến 2: hiện mã TRƯỚC, rồi mới để n_B rời máy.
-            show = self._show_code(bytes.fromhex(msg.nonce), now)
+            show = self._show_code(peer_nonce, now)
             return [show, SendMessage(PairReveal(self._nonce.hex()))]
         return None
 

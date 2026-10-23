@@ -9,6 +9,7 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 - Mỗi thiết bị có một khóa **ECDSA P-256** và một **chứng chỉ X.509 tự ký** (chữ ký ECDSA-SHA256), hiệu lực từ `2000-01-01T00:00:00Z` tới `9999-12-31T23:59:59Z` (“không hết hạn”, RFC 5280 mục 4.1.2.5). OpenSSL kiểm ngày hiệu lực khi bắt tay mTLS, nên không ngày nào được phụ thuộc đồng hồ của máy tạo danh tính.
 - `CN` của chứng chỉ là `teleport-<device_id>`, trong đó `device_id` là 32 ký tự hex (UUID4).
 - **Fingerprint** = SHA-256 của chứng chỉ ở dạng DER, viết dưới dạng 64 ký tự hex thường. Đây là định danh duy nhất được tin cậy; tên thiết bị chỉ để hiển thị.
+- **Chữ ký bằng khóa danh tính** (ngoài chữ ký tự ký của chứng chỉ): mọi payload được ký phải bắt đầu bằng một **nhãn riêng** dạng `teleport-…-vN` (ví dụ `teleport-initiator-proof-v1`, mục 5.2), mỗi mục đích một nhãn, để chữ ký làm cho việc này không bao giờ dùng lại được cho việc khác.
 - **Pin ngắn** = 8 byte đầu của fingerprint, dạng `AB:CD:EF:…`. Chỉ để hiển thị (so bằng mắt); máy không bao giờ xác thực bằng pin ngắn.
 - **Danh tính gắn với thư mục cấu hình, không gắn với máy.** Xóa thư mục cấu hình (gỡ cài đặt không giữ cài đặt, hoặc cài lại sạch) sinh `device_id` và fingerprint mới: với các máy khác, đó là một **thiết bị mới**, chưa ghép đôi (mục 7).
 - File danh tính thiếu một nửa, hỏng, khóa không khớp chứng chỉ, hoặc mất danh tính mà vẫn còn `trusted.json` → app báo lỗi và dừng, **không bao giờ** tự tạo danh tính mới (làm vậy sẽ âm thầm làm hỏng mọi ghép đôi). Cách tạo và lưu: [architecture.md](architecture.md) mục 4.
@@ -39,7 +40,7 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 - **Client kiểm tra server:** không dùng CA hay hostname (`CERT_NONE`). Sau khi bắt tay, client so **toàn bộ** fingerprint chứng chỉ server với fingerprint đã lưu trong `trusted.json` (`verify_fingerprint`) ✅, và kiểm `CN` khớp `hello.device_id` của server ✅. Không khớp → đóng kết nối, báo người dùng (mvp mục 8, “Danh tính thiết bị thay đổi”).
 - **Server kiểm tra client:** OpenSSL đã kiểm chứng chỉ trong lúc bắt tay; server còn kiểm `CN` khớp `hello.device_id` của client ✅.
 - **Không có session ticket** ✅ (`num_tickets = 0`): kết nối dùng lại session sẽ bỏ qua bước kiểm chứng chỉ client, nên máy vừa bị hủy ghép đôi có thể vào lại bằng session cũ. Mỗi kết nối đều bắt tay đầy đủ với danh sách tin cậy hiện tại.
-- Ghép đôi (kết nối ẩn danh): client lấy chứng chỉ server từ bắt tay TLS; server nhận chứng chỉ client trong `pair_request` (mục 5).
+- Ghép đôi (kết nối ẩn danh): client lấy chứng chỉ server từ bắt tay TLS; server nhận chứng chỉ client trong `pair_request`, và client chứng minh giữ khóa riêng của chứng chỉ đó bằng chữ ký trong `pair_nonce` (mục 5.1, 5.2).
 - **Lưu ý TLS 1.3:** client bị từ chối vẫn thấy kết nối mở thành công; lỗi chỉ lộ ra ở lần đọc đầu tiên. Vì vậy client chỉ coi là đã kết nối khi **đọc được `hello` của server**, trên **mọi** loại kết nối ✅. Nhận EOF, lỗi SSL hoặc reset trước `hello` → máy kia từ chối máy này. “Bị từ chối” chỉ tính khi lỗi tới **sau khi bắt tay TLS xong**; lỗi trong lúc TCP/TLS là “không kết nối được”, vì server đóng ngay các kết nối vượt giới hạn trước cả TLS (mục 2.3), và nếu coi đó là bị từ chối thì một máy làm lũ kết nối sẽ khiến node ngừng tự nối lại (mục 6.2). Trên thực tế client thường chỉ thấy EOF, không thấy loại cảnh báo TLS, nên **không phân biệt được lý do** (bị hủy ghép đôi, ghép đôi một phía…); thông báo cho người dùng phải chung chung (mục 7).
 
 ### 2.3. Giới hạn và thời gian chờ
@@ -90,7 +91,7 @@ Mỗi message:
 | `hello` | ↔ | mọi loại | `protocol` (int ≥ 1), `device_id`, `name`, `app_version`, `os` |
 | `pair_request` | khởi xướng → trả lời | ghép đôi | `cert` (PEM) |
 | `pair_commit` | trả lời → khởi xướng | ghép đôi | `commitment` (64 hex) — cam kết cho n_B |
-| `pair_nonce` | khởi xướng → trả lời | ghép đôi | `nonce` (64 hex = 32 byte) — n_A |
+| `pair_nonce` | khởi xướng → trả lời | ghép đôi | `nonce` (64 hex = 32 byte) — n_A; `signature` (128 hex = 64 byte) — chữ ký chứng minh giữ khóa (mục 5.2) |
 | `pair_reveal` | trả lời → khởi xướng | ghép đôi | `nonce` (64 hex = 32 byte) — n_B đã cam kết |
 | `pair_confirm` | ↔ | ghép đôi | (không có trường) |
 | `pair_abort` | ↔ | ghép đôi | `reason` |
@@ -122,7 +123,8 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 - **`os`**: 1–16 ký tự `[a-z0-9_]`. Giá trị chuẩn: `windows`, `macos`, `linux`. Giá trị lạ đúng dạng vẫn được nhận và hiển thị như hệ điều hành không rõ.
 - **`cert`**: chuỗi ≤ 8192 ký tự, bắt đầu đúng bằng `-----BEGIN CERTIFICATE-----`. Bên nhận còn phân tích và kiểm tra chứng chỉ (mục 5).
 - **`commitment`**, **`nonce`**: đúng 64 ký tự hex thường (32 byte).
-- **`reason`** (`pair_abort`): 1–32 ký tự `[a-z_]`. Giá trị chuẩn: `user` (người dùng từ chối), `busy` (đang có phiên ghép đôi khác, node không nhận ghép đôi lúc này, hoặc không hiện được mã), `timeout` (hết giờ), `invalid` (message, chứng chỉ hoặc cam kết sai). Giá trị lạ đúng dạng vẫn được nhận, để bản mới thêm lý do được.
+- **`signature`** (`pair_nonce`): đúng 128 ký tự hex thường `[0-9a-f]` (64 byte). Thiếu trường thì lỗi như mọi trường bắt buộc. Bên nhận còn kiểm chữ ký (mục 5.1, 5.2).
+- **`reason`** (`pair_abort`): 1–32 ký tự `[a-z_]`. Giá trị chuẩn: `user` (người dùng từ chối), `busy` (đang có phiên ghép đôi khác, node không nhận ghép đôi lúc này, hoặc không hiện được mã), `timeout` (hết giờ), `invalid` (message, chứng chỉ, cam kết hoặc chữ ký sai). Giá trị lạ đúng dạng vẫn được nhận, để bản mới thêm lý do được.
 - Kiểm tra hex, chữ số, `os` và `reason` chỉ dùng lớp ký tự ASCII trên **toàn bộ** chuỗi: `"user\n"` hay chữ số toàn chiều rộng đều sai.
 - `type` là chuỗi nhưng chưa biết thì bên nhận phân biệt được với message hỏng (để bản cũ bỏ qua message mới).
 - Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức ✅ (`teleport.core.messages.allowed_types`).
@@ -170,7 +172,7 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 - Luồng ghi đĩa nhận khối qua hàng đợi có giới hạn **8 khối**. Hàng đợi đầy → bên nhận ngừng đọc socket → TCP làm bên gửi chậm lại (backpressure).
 - **Mỗi 16 khối** (và khi đã nhận đủ khối của file): `fsync` file `.part` → bật bit các khối đó trong bitfield → ghi file trạng thái nguyên tử (file tạm, `fsync`, đổi tên). Một bit chỉ bật khi khối đã khớp hash **và** đã nằm bền trên đĩa, nên mất điện ở bước nào thì trạng thái cũng không đánh dấu khối chưa có trên đĩa.
 - Trong lúc `fsync`, luồng ghi tạm dừng, nên số khối đã nhận mà chưa được đánh dấu luôn ≤ 16 + 8 + 1 (khối đang đọc).
-- **Giới hạn gửi lại (mvp N4).** “Phần chưa nhận” tính theo bitfield của bên nhận lúc mất kết nối. Phần gửi thừa gồm các khối đã nhận mà chưa đánh dấu (≤ 25 MiB) cộng dữ liệu còn trong bộ đệm socket hai bên. Bên nhận đặt `SO_RCVBUF` ≤ 8 MiB và bên gửi đặt `SO_SNDBUF` ≤ 8 MiB, nên tổng ≤ 41 MiB, dưới ngưỡng **64 MiB**.
+- **Giới hạn gửi lại (mvp N4).** “Phần chưa nhận” tính theo bitfield của bên nhận lúc mất kết nối. Phần gửi thừa gồm các khối đã nhận mà chưa đánh dấu (≤ 25 MiB) cộng dữ liệu còn trong bộ đệm socket hai bên. Bên nhận đặt `SO_RCVBUF` ≤ 8 MiB và bên gửi đặt `SO_SNDBUF` ≤ 8 MiB, nên tổng ≤ 41 MiB, dưới ngưỡng của mvp N4.
 - Trạng thái nối lại gồm: manifest từ `offer`, bitfield, hash (từ header khung) của mọi khối đã đánh dấu. Vị trí file: [architecture.md](architecture.md) mục 4.
 
 ### 4.4. Hoàn tất và kiểm tra toàn vẹn
@@ -209,7 +211,9 @@ hello ────────────────────────�
       ◄─────────────────────────────────── hello
 pair_request{cert}               ────────►  B: kiểm cert, CN khớp hello.device_id của A
       ◄─────────────────────────────────── pair_commit{commitment = C_B}  (hoặc pair_abort{busy})
-pair_nonce{nonce = n_A}          ────────►  B: tính mã, HIỆN MÃ, rồi mới gửi n_B
+pair_nonce{nonce = n_A,          ────────►  B: kiểm chữ ký bằng khóa trong cert của A;
+           signature}                       sai → pair_abort{invalid}, không hiện mã.
+                                            Đúng → tính mã, HIỆN MÃ, rồi mới gửi n_B
       ◄─────────────────────────────────── pair_reveal{nonce = n_B}
 A: kiểm C_B bằng fp_B (từ bắt tay TLS); sai → pair_abort{invalid}, không hiện mã.
    Đúng → tính mã và hiện mã.
@@ -218,17 +222,19 @@ pair_confirm ◄─────────────────────�
 Mỗi bên: đã GỬI pair_confirm VÀ đã NHẬN pair_confirm của bên kia → lưu trusted.json, đóng.
 ```
 
-Bốn bất biến ✅ (`teleport.core.pairing`):
+Năm bất biến ✅ (`teleport.core.pairing`):
 
-1. A chỉ gửi n_A (`pair_nonce`) sau khi đã nhận `pair_commit`.
+1. A chỉ ký và gửi n_A (`pair_nonce`) sau khi đã nhận `pair_commit`.
 2. B chỉ gửi n_B (`pair_reveal`) sau khi đã nhận n_A, và mã đã hiện trong cùng bước đó: n_B không bao giờ rời B khi B chưa hiện mã. Không hiện được mã (giao diện lỗi) → B gửi `pair_abort{busy}`, không gửi n_B; A không hiện được mã → `pair_abort{user}` (trừ khi phiên đã hết giờ: khi đó là `timeout` và tính như hết giờ).
 3. A chỉ hiện mã khi cam kết của B đúng (kiểm bằng fingerprint của B lấy từ bắt tay TLS và n_B).
 4. A không bao giờ tự thử lại một phiên thất bại: mỗi phiên khởi xướng là một thao tác của người dùng. Phiên khởi xướng bị nhường (hai bên cùng chủ động, mục 5.3) thì máy đó chuyển sang vai trả lời, và vai này vẫn cam kết trước.
+5. B chỉ hiện mã (và chỉ gửi `pair_reveal`) sau khi chữ ký trong `pair_nonce` đã hợp lệ. Chữ ký sai → `pair_abort{invalid}`, tính là thất bại trong chờ tăng dần theo IP (mục 5.3), như mọi message sai.
 
 - n_A, n_B: mỗi nonce 32 byte ngẫu nhiên, sinh mới cho mỗi lần ghép đôi.
-- Chứng chỉ của B: A lấy từ bắt tay TLS (đã được TLS xác thực là B giữ khóa riêng). A kiểm CN chứng chỉ đó khớp `hello.device_id` của B.
+- Chứng chỉ của B: A lấy từ bắt tay TLS (đã được TLS xác thực là B giữ khóa riêng). A kiểm CN chứng chỉ đó khớp `hello.device_id` của B. Lập luận “TLS đã xác thực B” dựa vào các điều kiện **phía client (A)**: TLS 1.3 tối thiểu (`teleport.net.tls`); A không bao giờ dùng lại session (không truyền `session=`, nên không có PSK/resumption bỏ qua bước ký của server); fp_B lấy từ `getpeercert(binary_form=True)` của **chính kết nối đó** (`teleport.net.connection`); OpenSSL ≥ 1.1.1 vẫn kiểm `CertificateVerify` của server khi client dùng `CERT_NONE`. (`num_tickets = 0` ở mục 2.2 là cấu hình server, không phải điều kiện ở đây.)
 - **A phát hiện lỗi trước khi gửi `pair_request`** (chứng chỉ của B không hợp lệ, CN không khớp `hello`, tự ghép với chính mình, trùng danh tính bên dưới): A chỉ đóng kết nối, không gửi gì. B thấy EOF trước message mở đầu thì không tạo phiên và không tính vào thời gian chờ của IP đó (mục 5.3).
-- Chứng chỉ của A: B lấy từ `pair_request.cert`. Về sau, mTLS buộc A chứng minh giữ khóa riêng ở mỗi kết nối. Còn trong lúc ghép đôi, B **chưa có bằng chứng** bên gửi `pair_request` giữ khóa riêng của chứng chỉ đó. Chứng chỉ không bí mật (ai bắt tay TLS với một máy cũng lấy được chứng chỉ của máy đó), nên một máy lạ M gửi được chứng chỉ công khai của một máy V khác. Nếu người dùng B xác nhận mã với M, B lưu chứng chỉ của V: ghép đôi lại nếu B đã tin V, hoặc tin một phía nếu chưa. M vẫn không kết nối được bằng danh tính đó, vì mTLS đòi khóa riêng; còn tên M tự xưng không ghi đè được tên B đã lưu cho V (mục 5.5). Bước chứng minh giữ khóa trong lúc ghép đôi là việc cần chốt ([ke_hoach.md](ke_hoach.md) mục 9).
+- Chứng chỉ của A: B lấy từ `pair_request.cert`. Chứng chỉ không bí mật (ai bắt tay TLS với một máy cũng lấy được chứng chỉ của máy đó), nên B không tin nó chỉ vì nó đúng dạng: A **chứng minh giữ khóa riêng** bằng cách ký payload ở mục 5.2 bằng khóa danh tính và gửi chữ ký trong `pair_nonce`. Payload gắn nhãn riêng, fingerprint của cả hai bên, n_A và cam kết C_B mà B vừa gửi trong **phiên này**, nên chữ ký không dùng lại được ở phiên khác hay với máy khác. Chỉ A ký, chỉ B kiểm (B đã được TLS chứng minh, gạch trên). B kiểm chữ ký bằng khóa công khai trong `pair_request.cert` **trước khi hiện mã** (bất biến 5). Vì vậy một máy lạ M gửi chứng chỉ công khai của một máy V khác mà không có khóa của V thì bị dừng ở `pair_nonce`: B không hiện mã, không lưu gì, và IP của M bị tính chờ tăng dần (mục 5.3). Về sau, mTLS buộc A chứng minh giữ khóa riêng ở mỗi kết nối.
+- Rủi ro còn lại: lập luận ở hai gạch trên dựa vào các điều kiện phía client đã nêu; vào việc B chỉ chạy đúng một phiên tại một thời điểm và sinh n_B mới (nên C_B mới) cho mỗi phiên; còn lộ khóa riêng của một máy nằm ngoài mô hình đe dọa. Không dùng channel binding của TLS: `tls-exporter` (RFC 9266) không có trong `ssl` của Python 3.12–3.14, còn `tls-unique` không định nghĩa cho TLS 1.3; cũng không cần, vì payload đã gắn fp_B và C_B mới mỗi phiên.
 - Chứng chỉ nhận được phải: phân tích được; ≤ 8192 ký tự PEM, chỉ ASCII, đúng một khối `CERTIFICATE`; X.509 v3; subject có đúng một CN dạng `teleport-<32 hex thường>`; issuer trùng subject và chữ ký tự ký hợp lệ; khóa ECDSA P-256; chữ ký ECDSA-SHA256; không có dấu hiệu chứng chỉ CA: từ chối `BasicConstraints CA=true`, `KeyUsage` có `keyCertSign` hoặc `cRLSign`, và mọi chứng chỉ có extension Netscape Cert Type (OID `2.16.840.1.113730.1.1`). Lý do: chứng chỉ tin cậy được nạp làm trust anchor cho mTLS, nên không được phép ký ra chứng chỉ khác. Ngày hiệu lực không được kiểm khi ghép đôi (chứng chỉ của Teleport không hết hạn, mục 1). Mọi lỗi khi phân tích hay kiểm chứng chỉ, kể cả kiểu dữ liệu mà thư viện không hỗ trợ (ví dụ SAN kiểu x400Address hay EDIPartyName), đều tính là chứng chỉ không hợp lệ: B gửi `pair_abort{invalid}` (tính là thất bại trong chờ tăng dần theo IP, mục 5.3); A chỉ đóng kết nối (gạch “A phát hiện lỗi…” ở trên) và báo danh tính không hợp lệ (mvp mục 8).
 - **Không ghép đôi đè danh tính:** `device_id` của bên kia đã có trong `trusted.json` với fingerprint **khác** → mỗi bên tự hủy phiên trước khi hiện mã (B gửi `pair_abort{invalid}`; A chỉ đóng, như ở trên), và báo người dùng (mục 7). Muốn ghép đôi lại thì phải hủy ghép đôi mục cũ trước. Cùng `device_id` và cùng fingerprint (ghép đôi lại sau ghép đôi một phía) thì được, và lưu theo mục 5.5.
 - Message sai thứ tự, message không phải `pair_*` (kể cả `hello` thứ hai; message có `type` chưa biết cũng không được bỏ qua trên kết nối ghép đôi), `pair_confirm` nhận lần hai, hay message lỗi → `pair_abort{invalid}` và đóng. Nhận `pair_abort` thì đóng, không trả lời.
@@ -244,9 +250,17 @@ Bốn bất biến ✅ (`teleport.core.pairing`):
 commitment = hex(SHA-256(b"teleport-commit-v1" ‖ fp_trả_lời ‖ n_B))
 digest     = SHA-256(b"teleport-pair-v1" ‖ fp_khởi_xướng ‖ fp_trả_lời ‖ n_A ‖ n_B)
 mã         = int.from_bytes(digest[0:4], "big") mod 1 000 000, viết đủ 6 chữ số (có số 0 đầu)
+payload    = b"teleport-initiator-proof-v1" ‖ fp_khởi_xướng ‖ fp_trả_lời ‖ n_A ‖ C_B   (155 byte)
+signature  = hex(ECDSA-P256-SHA256(khóa danh tính của bên khởi xướng, payload)), dạng r ‖ s
 ```
 
 Mã hiển thị thành hai nhóm 3 chữ số, ví dụ `048 213`. Hai fingerprint giống nhau (một máy tự ghép với chính nó) thì không tính mã.
+
+Chữ ký chứng minh giữ khóa (`pair_nonce.signature`, mục 5.1) ✅ (`teleport.core.pairing_code.proof_payload`, `teleport.trust.identity`):
+
+- C_B là `commitment` trong `pair_commit` của phiên này, đổi từ hex sang 32 byte. Bên khởi xướng lấy fp_trả_lời từ bắt tay TLS của chính kết nối này; bên trả lời dùng fingerprint của chính nó và fingerprint của `pair_request.cert`.
+- ECDSA trên đường cong P-256 với SHA-256, bằng khóa danh tính (mục 1). Chữ ký mã hóa **r ‖ s, mỗi số 32 byte big-endian** (IEEE P1363), tổng 64 byte, trong JSON là 128 ký tự hex thường. Không dùng DER.
+- Bên kiểm: độ dài khác 64 byte, r hoặc s ngoài 1 … n − 1 (n là bậc của nhóm P-256), hay chữ ký không khớp → chữ ký sai. Không chặn chữ ký có s lớn (high-s): chữ ký không dùng làm định danh, nên việc một chữ ký có hai dạng hợp lệ không gây hại.
 
 ### 5.3. Chống làm phiền
 
@@ -273,18 +287,26 @@ Kết nối ghép đôi không cần chứng chỉ, nên bất kỳ máy nào tr
 | `commitment` (cam kết của bên trả lời cho n_B) | `a3fd58883a0ae9e63ebc321d164eeaf743173032ba03c44aefc333753e314e69` |
 | `digest` | `4a58a291a77f5de3163a28b02a8ca6c465aac3805851f1f3f2477c87232d3e64` |
 | **mã** | `322769` (hiển thị `322 769`) |
+| `payload` (chứng minh giữ khóa, 155 byte; C_B = `commitment` ở trên) | `74656c65706f72742d696e69746961746f722d70726f6f662d76315ee5afc087437e85ae8430c657e73fe6fd7c87fe5064b77eb6537a133ee3b2902846c2e746ec2e9bb0dbcfad4873a0e81d82f256f89fb6b0e2bca91890b498f3000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa3fd58883a0ae9e63ebc321d164eeaf743173032ba03c44aefc333753e314e69` |
 
 Hai fingerprint ở trên là SHA-256 của chuỗi ASCII `teleport test vector A` và `teleport test vector B`. Đổi vai trò (đảo hai fingerprint) cho mã `488828`; đảo hai nonce cho mã `682735`.
+
+ECDSA dùng số ngẫu nhiên k, nên chữ ký không có test vector cố định; ví dụ dưới chỉ để test bên **kiểm** chữ ký. Khóa test không gắn với hai fingerprint ở trên (chúng không phải fingerprint của chứng chỉ thật):
+
+| Đại lượng | Giá trị (hex) |
+|---|---|
+| `d` (khóa riêng P-256 test = SHA-256 của chuỗi ASCII `teleport test vector A key`) | `d7482011631edcff51c30d35c66198ebfef2a332250180e7bb0e4638726f3006` |
+| `Q` (khóa công khai, dạng không nén `04 ‖ x ‖ y`) | `0439390e2245eec503026763deedb561da31191fc173c7f0cebcc2b1f75c9da044ca2716a45d26999d21f0bc87a313402e594bd79eafbbd911aa29fd6cb27dc287` |
+| `signature` (r ‖ s, một chữ ký hợp lệ của `d` trên `payload` ở trên) | `a64c0dcb5ec6ee7dc8acc45acbc3d240684b8e8136f20b87213ed20fdcae2724436c0d36d1bbb51bc79fb260ffcd9096f8066a16ccd506c3a934fcc2129bfa6e` |
 
 ### 5.5. Lưu trữ
 
 Mỗi bên lưu `device_id`, tên, fingerprint và chứng chỉ PEM của bên kia vào `trusted.json` (định dạng ở [architecture.md](architecture.md) mục 4). Thay đổi danh sách tin cậy có hiệu lực ngay với kết nối mới (mục 7).
 
-Ghép đôi lại cùng `device_id` và cùng fingerprint ✅ (`teleport.core.pairing.SavePeer.keep_known_name`, `teleport.app.pairing`):
+Ghép đôi lại cùng `device_id` và cùng fingerprint ✅ (`teleport.app.pairing`):
 
-- **Bên khởi xướng** ghi đè mục cũ, cập nhật tên theo `hello` của bên kia. Chứng chỉ của bên trả lời đến từ bắt tay TLS, nên `hello` đó do chính máy giữ khóa riêng gửi.
-- **Bên trả lời** giữ tên đã lưu, chỉ cập nhật `paired_at`, vì nó chưa có bằng chứng bên gửi `pair_request` giữ khóa riêng (mục 5.1). Nhờ vậy máy lạ dùng chứng chỉ công khai của một thiết bị đã tin cậy không đổi được tên của thiết bị đó, nên không làm người dùng gửi nhầm hay hủy ghép đôi nhầm máy.
-- Lời hỏi ghép đôi ở cả hai vai hiện tên đã lưu (mvp mục 7.2).
+- **Cả hai bên** ghi đè mục cũ, cập nhật tên theo `hello` của bên kia và cập nhật `paired_at`. Bên kia đã chứng minh giữ khóa riêng trên chính kết nối đó: bên trả lời qua bắt tay TLS, bên khởi xướng qua chữ ký trong `pair_nonce` (mục 5.1). Máy lạ dùng chứng chỉ công khai của một thiết bị đã tin cậy bị dừng trước khi hiện mã, nên không đổi được tên của thiết bị đó.
+- Lời hỏi ghép đôi ở cả hai vai hiện tên đã lưu, và cả tên mới nếu tên sẽ đổi (mvp mục 7.2).
 
 ## 6. Kết nối giữa các thiết bị tin cậy & nối lại
 
@@ -359,7 +381,7 @@ Cài đặt ở `teleport.core.discovery` (bản ghi, lọc, theo dõi thiết b
     - Hệ quả: thiết bị đã biến mất rồi quay lại **mà không quảng bá lại** (ngủ rồi thức, Wi-Fi nối lại) có thể chỉ hiện lại ở lần probe kế tiếp, tức chậm tối đa 240 s + 5 s nhịp hẹn giờ + 3 s resolve ≈ 248 s. Thiết bị quảng bá lại (zeroconf báo `Updated`) thì được resolve và hiện ngay; vì vậy node quảng bá lại khi card mạng/địa chỉ đổi hoặc khi máy thức dậy ✅. Cách phát hiện (`teleport.core.discovery.NetworkWatch`): mỗi 5 s node đọc địa chỉ quảng bá và hai đồng hồ (monotonic, giờ hệ thống); địa chỉ đổi → khởi động lại mDNS (zeroconf chỉ tham gia nhóm multicast trên các địa chỉ có lúc khởi động); đồng hồ nhảy quá 15 s (khoảng monotonic quá dài, hoặc giờ hệ thống lệch khỏi monotonic) → quảng bá lại.
   - Resolve lần đầu (thiết bị mới hoặc vừa đổi) được ưu tiên hơn kiểm còn sống; tối đa 16 resolve chạy cùng lúc, luôn dành 4 trong 16 chỗ cho kiểm còn sống, và mỗi thiết bị có tối đa một resolve đang chạy.
   - Resolve của **thiết bị đã ghép đôi** được xếp lên **đầu** hàng chờ resolve, trước mọi dịch vụ chưa ghép đôi đang chờ. Nhờ vậy khi có lũ dịch vụ giả, thiết bị đã ghép đôi chỉ chờ một chỗ trống, và vẫn hiện sau khoảng một lần hết giờ resolve (vài giây).
-  - Cận trên, khi không có hàng đợi resolve: ≈ 60 s (TTL, bản ghi còn trong cache) + 2 × (15 s chu kỳ + 5 s nhịp hẹn giờ + 3 s resolve) ≈ 106 s < 2 phút (mvp N1). Đo trên 2 máy thật ở Giai đoạn 1.
+  - Cận trên, khi không có hàng đợi resolve: ≈ 60 s (TTL, bản ghi còn trong cache) + 2 × (15 s chu kỳ + 5 s nhịp hẹn giờ + 3 s resolve) ≈ 106 s, trong thời hạn mvp N1. Đo trên 2 máy thật ở Giai đoạn 1.
   - Giới hạn đã biết: máy thật mà 2 lần resolve đầu đều mất gói (Wi-Fi xấu) bị bỏ như bản ghi chưa từng hợp lệ, và chỉ hiện lại khi zeroconf nạp lại SRV/TXT/A (máy đó quảng bá lại, hoặc bên duyệt làm mới PTR ở mốc 75 % TTL, có thể tới ~14 phút). Kiểm kịch bản này khi đo N1.
 - Bên nhận theo dõi tối đa **256** dịch vụ cùng lúc; dịch vụ của chính máy này bị bỏ qua.
   - **Ưu tiên thiết bị đã ghép đôi:** dịch vụ có `device_id` nằm trong `trusted.json` luôn được theo dõi và **không tính vào 256** (số này bị chặn bởi số thiết bị tin cậy). Một dịch vụ đang theo dõi trở thành tin cậy (vừa ghép đôi) thì nhả một chỗ trong 256, nên mục cũ nhất của danh sách tràn bên dưới được nhận ngay. Thiết bị thôi tin cậy mà đang được theo dõi thì vẫn giữ, nhưng từ đó tính vào 256.

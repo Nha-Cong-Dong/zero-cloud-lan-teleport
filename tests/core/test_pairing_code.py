@@ -356,3 +356,169 @@ def test_protocol_md_role_and_nonce_swap_codes():
     assert f"đảo hai nonce cho mã `{swapped_nonces}`" in text
     assert pairing_code(fp_b, fp_a, n_a, n_b) == swapped_roles
     assert pairing_code(fp_a, fp_b, n_b, n_a) == swapped_nonces
+
+
+# --- Chứng minh giữ khóa riêng của bên khởi xướng (protocol 5.2, 5.4) -----------------------------
+#
+# payload (155 byte) = b"teleport-initiator-proof-v1" ‖ fp_khởi_xướng(32B) ‖ fp_trả_lời(32B) ‖ n_A(32B)
+#                      ‖ C_B(32B), với C_B là `commitment` của `pair_commit` (hex → 32 byte).
+# Chữ ký (ECDSA P-256 + SHA-256, r ‖ s) không có vector cố định vì k ngẫu nhiên; chỉ payload có.
+
+PROOF_LABEL = b"teleport-initiator-proof-v1"
+
+
+def ref_proof_payload(fp_initiator: str, fp_responder: str, n_a: bytes, commitment: str) -> bytes:
+    """Tham chiếu độc lập theo đặc tả, không dùng code `core`."""
+    return (
+        PROOF_LABEL
+        + bytes.fromhex(fp_initiator)
+        + bytes.fromhex(fp_responder)
+        + n_a
+        + bytes.fromhex(commitment)
+    )
+
+
+def _proof_api():
+    """Import trễ: khi `proof_payload` chưa có, chỉ các test dưới đây hỏng."""
+    from teleport.core.pairing_code import PROOF_SIGNATURE_SIZE, proof_payload
+
+    return PROOF_SIGNATURE_SIZE, proof_payload
+
+
+def test_proof_label_and_payload_size():
+    assert len(PROOF_LABEL) == 27
+    assert len(ref_proof_payload(FP_A, FP_B, N_A, VECTOR_COMMITMENT)) == 155
+
+
+def test_proof_signature_size_is_64():
+    size, _ = _proof_api()
+    assert size == 64
+
+
+def test_proof_payload_matches_formula_and_is_155_bytes():
+    _, proof_payload = _proof_api()
+    payload = proof_payload(FP_A, FP_B, N_A, VECTOR_COMMITMENT)
+    assert type(payload) is bytes
+    assert len(payload) == 155
+    assert payload == ref_proof_payload(FP_A, FP_B, N_A, VECTOR_COMMITMENT)
+    # Từng phần ở đúng chỗ.
+    assert payload[:27] == PROOF_LABEL
+    assert payload[27:59] == bytes.fromhex(FP_A)
+    assert payload[59:91] == bytes.fromhex(FP_B)
+    assert payload[91:123] == N_A
+    assert payload[123:] == bytes.fromhex(VECTOR_COMMITMENT)
+
+
+def test_proof_payload_swapping_roles_changes_payload():
+    _, proof_payload = _proof_api()
+    assert proof_payload(FP_A, FP_B, N_A, VECTOR_COMMITMENT) != proof_payload(
+        FP_B, FP_A, N_A, VECTOR_COMMITMENT
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "args"),
+    [
+        ("fp_khởi_xướng", (FP_C, FP_B, N_A, VECTOR_COMMITMENT)),
+        ("fp_trả_lời", (FP_A, FP_C, N_A, VECTOR_COMMITMENT)),
+        ("n_A", (FP_A, FP_B, flip(N_A, 31), VECTOR_COMMITMENT)),
+        ("commitment", (FP_A, FP_B, N_A, make_commitment(FP_B, N_A))),
+    ],
+)
+def test_proof_payload_depends_on_every_input(label, args):
+    _, proof_payload = _proof_api()
+    assert proof_payload(*args) != proof_payload(FP_A, FP_B, N_A, VECTOR_COMMITMENT), label
+    assert proof_payload(*args) == ref_proof_payload(*args)
+
+
+def test_proof_label_is_separate_from_commit_and_code_labels():
+    # Luật nhãn (protocol mục 1): mọi chữ ký bằng khóa danh tính có nhãn riêng `teleport-…-vN`.
+    _, proof_payload = _proof_api()
+    payload = proof_payload(FP_A, FP_B, N_A, VECTOR_COMMITMENT)
+    assert re.fullmatch(rb"teleport-[a-z-]+-v[0-9]+", PROOF_LABEL)
+    assert payload.startswith(PROOF_LABEL)
+    for other in (b"teleport-commit-v1", b"teleport-pair-v1"):
+        assert not payload.startswith(other)
+        assert not PROOF_LABEL.startswith(other)
+    # Không trùng tiền ảnh của mã hay của cam kết với cùng dữ liệu.
+    assert payload != b"teleport-pair-v1" + bytes.fromhex(FP_A) + bytes.fromhex(FP_B) + N_A + N_B
+
+
+BAD_COMMITMENTS = [
+    "",
+    VECTOR_COMMITMENT.upper(),
+    VECTOR_COMMITMENT[:63],
+    VECTOR_COMMITMENT + "0",
+    VECTOR_COMMITMENT + "\n",
+    VECTOR_COMMITMENT[:63] + "\n",
+    " " + VECTOR_COMMITMENT[1:],
+    "０" * 64,
+    "g" * 64,
+    bytes.fromhex(VECTOR_COMMITMENT),
+    None,
+    0,
+]
+
+
+@pytest.mark.parametrize("fp", BAD_FPS, ids=repr)
+def test_proof_payload_rejects_bad_fingerprints(fp):
+    _, proof_payload = _proof_api()
+    with pytest.raises(ValueError):
+        proof_payload(fp, FP_B, N_A, VECTOR_COMMITMENT)
+    with pytest.raises(ValueError):
+        proof_payload(FP_A, fp, N_A, VECTOR_COMMITMENT)
+
+
+@pytest.mark.parametrize("fp", [None, 0, bytes.fromhex(FP_A)], ids=repr)
+def test_proof_payload_rejects_non_string_fingerprints(fp):
+    _, proof_payload = _proof_api()
+    with pytest.raises(ValueError):
+        proof_payload(fp, FP_B, N_A, VECTOR_COMMITMENT)
+    with pytest.raises(ValueError):
+        proof_payload(FP_A, fp, N_A, VECTOR_COMMITMENT)
+
+
+def test_proof_payload_rejects_same_fingerprints():
+    _, proof_payload = _proof_api()
+    with pytest.raises(ValueError):
+        proof_payload(FP_A, FP_A, N_A, VECTOR_COMMITMENT)
+
+
+@pytest.mark.parametrize(
+    "nonce", [*BAD_NONCES, bytearray(N_A), N_A.hex(), None, list(N_A)], ids=lambda n: repr(n)[:20]
+)
+def test_proof_payload_rejects_bad_nonce(nonce):
+    _, proof_payload = _proof_api()
+    with pytest.raises(ValueError):
+        proof_payload(FP_A, FP_B, nonce, VECTOR_COMMITMENT)
+
+
+@pytest.mark.parametrize("commitment", BAD_COMMITMENTS, ids=repr)
+def test_proof_payload_rejects_bad_commitment(commitment):
+    _, proof_payload = _proof_api()
+    with pytest.raises(ValueError):
+        proof_payload(FP_A, FP_B, N_A, commitment)
+
+
+@settings(max_examples=200)
+@given(fingerprints, fingerprints, nonces, fingerprints)
+def test_property_proof_payload_matches_reference(fp_a, fp_b, n_a, commitment):
+    assume(fp_a != fp_b)
+    _, proof_payload = _proof_api()
+    payload = proof_payload(fp_a, fp_b, n_a, commitment)
+    assert payload == ref_proof_payload(fp_a, fp_b, n_a, commitment)
+    assert len(payload) == 155
+
+
+def test_protocol_md_has_proof_payload_vector():
+    """protocol 5.4: một dòng mang payload 155 byte (310 hex), tính từ các giá trị có sẵn trong bảng."""
+    rows = _doc_vector()
+    long_rows = {k: v for k, v in rows.items() if len(v) == 310}
+    assert len(long_rows) == 1, f"mục 5.4 cần đúng một dòng payload 155 byte, thấy {list(long_rows)}"
+    (payload_hex,) = long_rows.values()
+    fp_a, fp_b = rows["fp_khởi_xướng"], rows["fp_trả_lời"]
+    n_a = bytes.fromhex(rows["n_A"])
+    expected = ref_proof_payload(fp_a, fp_b, n_a, rows["commitment"])
+    assert payload_hex == expected.hex()
+    _, proof_payload = _proof_api()
+    assert proof_payload(fp_a, fp_b, n_a, rows["commitment"]).hex() == payload_hex

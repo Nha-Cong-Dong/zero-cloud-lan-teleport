@@ -2,6 +2,10 @@
 
 Fingerprint = SHA-256 của chứng chỉ ở dạng DER. Đây là "số căn cước" của máy:
 ghép đôi thực chất là hai máy lưu chứng chỉ (và fingerprint) của nhau.
+
+Khi ghép đôi, bên khởi xướng ký `core.pairing_code.proof_payload` bằng khóa danh tính
+(`PairingSigner`) và bên trả lời kiểm chữ ký đó bằng chứng chỉ trong `pair_request`
+(`verify_pairing_proof`), protocol mục 5.1, 5.2.
 """
 
 from __future__ import annotations
@@ -19,11 +23,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
 from cryptography.x509.oid import NameOID, SignatureAlgorithmOID
 
+from teleport.core.pairing_code import PROOF_SIGNATURE_SIZE
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.paths import TRUSTED_FILE
 
@@ -43,6 +49,10 @@ PEM_END = "-----END CERTIFICATE-----"
 _NETSCAPE_CERT_TYPE = x509.ObjectIdentifier("2.16.840.1.113730.1.1")
 
 _CN_RE = re.compile(re.escape(CN_PREFIX) + r"[0-9a-f]{32}")
+
+# Bậc n của nhóm điểm P-256 (SEC 2): r và s của chữ ký hợp lệ nằm trong 1…n−1.
+_P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+_SCALAR_SIZE = PROOF_SIGNATURE_SIZE // 2  # 32 byte mỗi số r, s
 
 
 @dataclass(frozen=True)
@@ -297,6 +307,17 @@ def _load_identity(config_dir: Path, cert_path: Path, key_path: Path) -> Identit
         own = _peer_cert(cert)
     except InvalidCertificate as e:
         raise _identity_error(config_dir, f"{CERT_FILE}: {e}") from e
+    _load_key(config_dir, key_bytes, cert)
+    return Identity(
+        device_id=own.device_id,
+        cert_path=cert_path,
+        key_path=key_path,
+        fingerprint=own.fingerprint,
+    )
+
+
+def _load_key(config_dir: Path, key_bytes: bytes, cert: x509.Certificate) -> ec.EllipticCurvePrivateKey:
+    """Khóa riêng PEM, phải là ECDSA P-256 và khớp khóa công khai của `cert`; sai → IdentityError."""
     try:
         key = serialization.load_pem_private_key(key_bytes, password=None)
     except (ValueError, TypeError, UnsupportedAlgorithm) as e:
@@ -305,12 +326,91 @@ def _load_identity(config_dir: Path, cert_path: Path, key_path: Path) -> Identit
         raise _identity_error(config_dir, f"{KEY_FILE} không phải khóa ECDSA P-256")
     if key.public_key() != cert.public_key():
         raise _identity_error(config_dir, f"{KEY_FILE} không khớp {CERT_FILE}")
-    return Identity(
-        device_id=own.device_id,
-        cert_path=cert_path,
-        key_path=key_path,
-        fingerprint=own.fingerprint,
-    )
+    return key
+
+
+# ---- Chứng minh giữ khóa khi ghép đôi (protocol mục 5.1, 5.2) ------------------------------
+
+
+class PairingSigner:
+    """Ký payload chứng minh giữ khóa (`core.pairing_code.proof_payload`) bằng khóa danh tính.
+
+    Tạo bằng `load_pairing_signer`. Chữ ký là ECDSA P-256 + SHA-256, dạng r ‖ s, mỗi số
+    32 byte big-endian (IEEE P1363). `repr` không lộ khóa.
+    """
+
+    __slots__ = ("_key", "device_id")
+
+    def __init__(self, key: ec.EllipticCurvePrivateKey, device_id: str) -> None:
+        self._key = key
+        self.device_id = device_id
+
+    def sign(self, payload: bytes) -> bytes:
+        """Chữ ký PROOF_SIGNATURE_SIZE (64) byte trên `payload`; `payload` không phải bytes → TypeError."""
+        if not isinstance(payload, bytes):
+            raise TypeError("payload phải là bytes")
+        r, s = decode_dss_signature(self._key.sign(payload, ec.ECDSA(hashes.SHA256())))
+        return r.to_bytes(_SCALAR_SIZE, "big") + s.to_bytes(_SCALAR_SIZE, "big")
+
+    def __repr__(self) -> str:
+        return f"PairingSigner(device_id={self.device_id!r})"
+
+
+def load_pairing_signer(identity: Identity) -> PairingSigner:
+    """Đọc khóa riêng của `identity` để ký khi ghép đôi.
+
+    Đọc lại cả hai file: chứng chỉ phải đúng là chứng chỉ của `identity` (cùng
+    fingerprint), khóa phải là ECDSA P-256 và khớp khóa công khai trong chứng chỉ. Không
+    đọc được, file hỏng, khóa sai hay không khớp → IdentityError.
+    """
+    config_dir = identity.key_path.parent
+    try:
+        cert_text = identity.cert_path.read_text(encoding="ascii")
+        key_bytes = identity.key_path.read_bytes()
+    except (OSError, UnicodeDecodeError) as e:
+        raise _identity_error(config_dir, f"không đọc được: {e}") from e
+    try:
+        cert = _parse_pem(cert_text)
+        own = _peer_cert(cert)
+    except InvalidCertificate as e:
+        raise _identity_error(config_dir, f"{CERT_FILE}: {e}") from e
+    if own.fingerprint != identity.fingerprint:
+        raise _identity_error(config_dir, f"{CERT_FILE} đã đổi từ lúc nạp danh tính")
+    return PairingSigner(_load_key(config_dir, key_bytes, cert), identity.device_id)
+
+
+def verify_pairing_proof(peer: PeerCert, payload: bytes, signature: bytes) -> bool:
+    """True chỉ khi `signature` (64 byte r ‖ s) là chữ ký đúng trên `payload` bằng khóa của `peer`.
+
+    Không bao giờ raise: sai kiểu, chữ ký khác 64 byte, r hoặc s ngoài 1…n−1, chứng chỉ
+    không đọc được hay khóa không phải P-256, chữ ký sai, hay bất kỳ lỗi nào khác → False.
+    Không chặn chữ ký high-s (protocol mục 5.2).
+    """
+    try:
+        if (
+            not isinstance(peer, PeerCert)
+            or not isinstance(payload, bytes)
+            or not isinstance(signature, bytes)
+        ):
+            return False
+        if len(signature) != PROOF_SIGNATURE_SIZE:
+            return False
+        r = int.from_bytes(signature[:_SCALAR_SIZE], "big")
+        s = int.from_bytes(signature[_SCALAR_SIZE:], "big")
+        if not (0 < r < _P256_ORDER and 0 < s < _P256_ORDER):
+            return False
+        cert = x509.load_pem_x509_certificate(peer.pem.encode("ascii"))
+        if fingerprint_of_der(cert.public_bytes(serialization.Encoding.DER)) != peer.fingerprint:
+            return False
+        key = cert.public_key()
+        if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
+            return False
+        key.verify(encode_dss_signature(r, s), payload, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        return False
+    except Exception:  # mọi lỗi của `cryptography` (xem InvalidCertificate): coi là chữ ký sai
+        return False
+    return True
 
 
 def _create_identity(cert_path: Path, key_path: Path) -> None:

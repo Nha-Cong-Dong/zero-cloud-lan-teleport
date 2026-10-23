@@ -15,19 +15,23 @@ trả lời gửi `pair_abort{busy}`, vai khởi xướng gửi `pair_abort{user
 `PROMPT_FAILED` và không tính vào chờ tăng dần theo IP (protocol mục 5.1, 5.3).
 
 `pair_confirm` của máy này chưa ghi xong vào kết nối thì không lưu thiết bị, kết quả là
-`CONNECTION_LOST` (protocol mục 5.1). Ghép đôi lại ở vai trả lời giữ tên đã lưu, chỉ cập
-nhật thời điểm ghép đôi, vì máy kia chưa chứng minh giữ khóa riêng (protocol mục 5.5).
+`CONNECTION_LOST` (protocol mục 5.1). Ghép đôi lại ở cả hai vai cập nhật tên theo `hello`
+của máy kia và thời điểm ghép đôi (protocol mục 5.5).
+
+Vai khởi xướng ký payload chứng minh giữ khóa bằng `trust.PairingSigner`; vai trả lời kiểm
+bằng `trust.verify_pairing_proof` với chứng chỉ trong `pair_request` (protocol mục 5.1).
 
 Mỗi phiên chỉ có tối đa **một** `conn.receive()` đang chờ: message kế tiếp chỉ được đọc
 khi message trước đã xử lý xong, nên máy kia gửi dồn cũng không làm phình RAM.
 
 Câu chữ cho người dùng không nằm ở đây: `app` chỉ trả mã kết quả (`PairingOutcome`).
-Không bao giờ ghi mã 6 số, nonce, PEM hay nội dung message vào log (mvp N9).
+Không bao giờ ghi mã 6 số, nonce, chữ ký, payload, PEM hay nội dung message vào log (mvp N9).
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import ipaddress
 import logging
 import secrets
@@ -50,6 +54,7 @@ from teleport.core.pairing import (
     Outcome,
     PairingGate,
     PairingSession,
+    ProofVerifier,
     ResponderSession,
     Role,
     SavePeer,
@@ -71,7 +76,13 @@ from teleport.net.connection import (
     VersionMismatch,
     open_pairing,
 )
-from teleport.trust.identity import Identity, PeerCert, peer_cert_from_pem
+from teleport.trust.identity import (
+    Identity,
+    PeerCert,
+    load_pairing_signer,
+    peer_cert_from_pem,
+    verify_pairing_proof,
+)
 from teleport.trust.store import TrustedDevice, TrustStore, TrustStoreError
 
 # Thời gian tính bằng giây; đọc lúc dùng để test rút ngắn được bằng monkeypatch.
@@ -147,7 +158,7 @@ class PairingPrompt:
     # (`PairingGate.code_shown`); vai khởi xướng luôn 0. Giao diện cảnh báo khi ≥ WARN_RECENT_CODES.
     recent_codes: int
     # Tên đã lưu trong trusted.json cho peer_device_id lúc phiên bắt đầu; khác None nghĩa là
-    # máy này đã ghép đôi với máy đó (ghép đôi lại). Vai trả lời giữ tên này khi lưu.
+    # máy này đã ghép đôi với máy đó (ghép đôi lại). Ghép đôi xong thì tên đổi thành peer_name.
     known_name: str | None
 
 
@@ -279,6 +290,9 @@ class PairingService:
 
         `on_prompt=None`: node không hiện mã được nên không ghép đôi được; khi đó
         `accepting=True` → ValueError, và `pair_with` → ValueError.
+
+        Đọc khóa riêng để ký khi ghép đôi (`load_pairing_signer`): không đọc được, hỏng hay
+        không khớp chứng chỉ → IdentityError.
         """
         if not isinstance(hello, Hello):
             raise ValueError("hello phải là Hello")
@@ -288,6 +302,7 @@ class PairingService:
             raise ValueError("không có on_prompt thì không nhận ghép đôi được (accepting=True)")
         own = peer_cert_from_pem(identity.cert_pem())  # PEM đã chuẩn hóa, giống bản máy kia nhận
         self._local = _device_cert(own)
+        self._signer = load_pairing_signer(identity)
         self._identity = identity
         self._hello = hello
         self._store = store
@@ -460,6 +475,7 @@ class PairingService:
             peer=remote,
             peer_hello=peer.hello,
             nonce=secrets.token_bytes(NONCE_SIZE),
+            sign_proof=self._signer.sign,
             known_fingerprint=known.fingerprint if known is not None else None,
         )
         return await self._drive(run, conn, session)
@@ -495,8 +511,13 @@ class PairingService:
                 outgoing.cancel(AbortReason.BUSY)
 
         try:
+            # Hàm kiểm chữ ký chỉ dựng từ chứng chỉ đã kiểm; chứng chỉ hỏng thì phiên tự hủy
+            # khi Start, và hàm luôn trả False.
+            verify: ProofVerifier = _reject_proof
             try:
-                remote: DeviceCert | None = _device_cert(peer_cert_from_pem(request.cert))
+                peer_cert = peer_cert_from_pem(request.cert)
+                remote: DeviceCert | None = _device_cert(peer_cert)
+                verify = functools.partial(verify_pairing_proof, peer_cert)
             except Exception as e:
                 # Mọi lỗi khi phân tích chứng chỉ của máy kia đều là chứng chỉ không hợp lệ
                 # (protocol mục 5.1), kể cả lỗi lạ của thư viện: phiên gửi pair_abort{invalid}
@@ -512,6 +533,7 @@ class PairingService:
                 peer=remote,
                 peer_hello=hello,
                 nonce=secrets.token_bytes(NONCE_SIZE),
+                verify_proof=verify,
                 known_fingerprint=known.fingerprint if known is not None else None,
             )
             run.outcome = await self._drive(run, conn, session)
@@ -769,15 +791,9 @@ class PairingService:
             log.warning("ghép đôi: bỏ lưu thiết bị %s vì node đang dừng", peer.device_id[:8])
             run.save_failed = True
             return
-        name = action.name
-        if action.keep_known_name:
-            # Ghép đôi lại ở vai trả lời: máy kia chưa chứng minh giữ khóa riêng nên không
-            # được đổi tên đã lưu; chỉ cập nhật paired_at (protocol mục 5.5).
-            known = self._store.get(peer.device_id)
-            if known is not None and known.fingerprint == peer.fingerprint:
-                name = known.name
         try:
-            run.device = self._store.add(PeerCert(peer.device_id, peer.fingerprint, peer.pem), name)
+            # Ghép đôi lại cũng ghi đè mục cũ: tên theo hello, paired_at mới (protocol mục 5.5).
+            run.device = self._store.add(PeerCert(peer.device_id, peer.fingerprint, peer.pem), action.name)
         except (TrustStoreError, ValueError) as e:
             log.error("ghép đôi: không lưu được thiết bị %s: %s", peer.device_id[:8], type(e).__name__)
             run.save_failed = True
@@ -875,6 +891,11 @@ class PairingService:
             callback(arg)
         except Exception:
             log.exception("callback ghép đôi raise")
+
+
+def _reject_proof(payload: bytes, signature: bytes) -> bool:
+    """Hàm kiểm chữ ký khi chứng chỉ trong `pair_request` hỏng: luôn sai."""
+    return False
 
 
 def _ends_unpaired(actions: list[Action]) -> bool:

@@ -1085,11 +1085,21 @@ _PEER_CERT = core_pairing.DeviceCert(device_id=PEER, fingerprint="a" * 64, pem=_
 _PEER_HELLO = Hello(protocol=1, device_id=PEER, name="Kẻ lạ", app_version="0.1.0", os="linux")
 
 
-def _admit_responder(g: PairingGate, ip: str, now: float):
+def _verify_never_true(payload: bytes, signature: bytes) -> bool:
+    """`verify_proof` giả: máy lạ không có khóa, chữ ký luôn sai (protocol 5.1–5.2)."""
+    return False
+
+
+def _admit_responder(g: PairingGate, ip: str, now: float, verify_proof=_verify_never_true):
     """admit → ACCEPT → tạo phiên trả lời và Start (gửi pair_commit) ở `now`."""
     slot = assert_accept(g.admit(ip, PEER, now), ip)
     session = core_pairing.ResponderSession(
-        local=_LOCAL_CERT, peer=_PEER_CERT, peer_hello=_PEER_HELLO, nonce=bytes(32), known_fingerprint=None
+        local=_LOCAL_CERT,
+        peer=_PEER_CERT,
+        peer_hello=_PEER_HELLO,
+        nonce=bytes(32),
+        known_fingerprint=None,
+        verify_proof=verify_proof,
     )
     out = session.handle(core_pairing.Start(), now)
     assert [type(a.message).__name__ for a in out] == ["PairCommit"]
@@ -1145,9 +1155,60 @@ def test_silent_peer_slot_is_not_held_until_message_timeout():
 def test_late_nonce_after_nonce_timeout_never_reaches_code_shown():
     g = gate()
     slot, session = _admit_responder(g, IP, 0.0)
-    out = session.handle(core_pairing.MessageReceived(PairNonce("11" * 32)), core_pairing.NONCE_TIMEOUT)
+    out = session.handle(
+        core_pairing.MessageReceived(PairNonce(nonce="11" * 32, signature="22" * 64)),
+        core_pairing.NONCE_TIMEOUT,
+    )
     assert not any(isinstance(a, core_pairing.ShowCode) for a in out)
     assert out[-1].outcome == Outcome.TIMEOUT
     g.finish(slot, out[-1].outcome, core_pairing.NONCE_TIMEOUT)
     assert g.recent_codes(core_pairing.NONCE_TIMEOUT) == 0
     assert g.active is None
+
+
+# =================================================================================================
+# Chữ ký sai trong `pair_nonce` (protocol 5.1): PROTOCOL_ERROR như mọi message sai, tính một lần
+# thất bại cho IP đó (chờ tăng dần), không có mã nào được hiện hay đếm.
+# =================================================================================================
+
+
+def test_bad_signature_counts_as_failure_for_backoff_without_code():
+    g = gate()
+    calls: list[tuple[bytes, bytes]] = []
+
+    def verify(payload: bytes, signature: bytes) -> bool:
+        calls.append((payload, signature))
+        return False
+
+    slot, session = _admit_responder(g, IP, 0.0, verify_proof=verify)
+    out = session.handle(core_pairing.MessageReceived(PairNonce(nonce="11" * 32, signature="22" * 64)), 1.0)
+    assert len(calls) == 1
+    assert [a.message for a in out[:-1]] == [PairAbort("invalid")]
+    assert not any(isinstance(a, core_pairing.ShowCode) for a in out)
+    close = out[-1]
+    assert isinstance(close, core_pairing.Close)
+    assert close.outcome == Outcome.PROTOCOL_ERROR
+    g.finish(slot, close.outcome, 1.0)
+    assert g.active is None
+    assert g.failures(IP) == 1
+    assert g.blocked_until(IP) == 1.0 + BACKOFF_BASE
+    assert g.recent_codes(1.0) == 0
+    other = assert_accept(g.admit(IP2, PEER, 1.0), IP2)  # IP khác không bị ảnh hưởng
+    g.finish(other, Outcome.CANCELLED, 1.0)
+    assert_busy(g.admit(IP, PEER, 1.0 + BACKOFF_BASE - 0.001))
+
+
+def test_repeated_bad_signatures_grow_backoff():
+    g = gate()
+    now = 0.0
+    for i in range(1, 4):
+        slot, session = _admit_responder(g, IP, now)
+        out = session.handle(
+            core_pairing.MessageReceived(PairNonce(nonce="11" * 32, signature="22" * 64)), now
+        )
+        g.finish(slot, out[-1].outcome, now)
+        assert g.failures(IP) == i
+        until = g.blocked_until(IP)
+        assert until == now + min(BACKOFF_BASE * 2 ** (i - 1), BACKOFF_MAX)
+        now = until
+    assert g.recent_codes(now) == 0

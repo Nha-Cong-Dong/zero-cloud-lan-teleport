@@ -111,7 +111,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Hạn chế máy lạ làm phiền: chỉ một phiên ghép đôi tại một thời điểm; sau mỗi lần từ chối hay hết giờ, máy đó phải chờ lâu dần (10 giây, 20 giây… tối đa 10 phút) mới gửi được yêu cầu mới. Đây là mức tốt nhất có thể trong LAN, không chống được máy cố tình đổi địa chỉ liên tục; ghép đôi vẫn an toàn vì cần xác nhận mã ở cả hai máy.
   - Máy đang chờ ghép đôi hiện tối đa **5 mã mỗi phút** (gộp mọi máy gửi yêu cầu); quá thì yêu cầu mới nhận “chưa sẵn sàng ghép đôi” (mục 8). Từ mã thứ **3** trong 1 phút, máy đó cảnh báo có thể có người đang thử giả mạo (mục 8). Nhờ vậy kẻ đứng giữa chỉ thử được vài mã trong lúc người dùng chờ xác nhận.
   - Không ghép đôi đè lên một thiết bị tin cậy có cùng mã thiết bị nhưng danh tính khác; phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa.
-  - Ghép đôi lại với một thiết bị tin cậy (cùng mã thiết bị, cùng danh tính, ví dụ sau khi ghép đôi một phía): lời hỏi hiện thêm tên đã lưu (mục 7.2). Máy nhận yêu cầu ghép đôi giữ nguyên tên đã lưu, chỉ máy gửi yêu cầu cập nhật tên theo tên máy kia đang dùng, vì lúc ghép đôi máy nhận yêu cầu chưa xác minh được máy kia đúng là thiết bị đó ([protocol.md](protocol.md) mục 5.1, 5.5).
+  - Ghép đôi lại với một thiết bị tin cậy (cùng mã thiết bị, cùng danh tính, ví dụ sau khi ghép đôi một phía): lời hỏi hiện thêm tên đã lưu, và tên mới nếu tên sẽ đổi (mục 7.2). Ghép đôi xong, **cả hai máy** cập nhật tên theo tên máy kia đang dùng, vì lúc ghép đôi mỗi máy đã xác minh máy kia giữ đúng khóa của thiết bị đó ([protocol.md](protocol.md) mục 5.1, 5.5). Máy lạ chỉ có chứng chỉ công khai của thiết bị đó thì bị chặn trước khi hiện mã.
 
 ### F4. Gửi file
 - **US-06:** Tôi muốn kéo một hoặc nhiều file thả vào thiết bị trên radar để gửi.
@@ -260,15 +260,16 @@ Tên máy kia do chính máy đó tự đặt và chưa được xác thực ([p
 - Tên máy kia nằm sau mã, luôn trong ngoặc “…”, kèm mã máy (8 ký tự đầu của `device_id`) và địa chỉ:
   - dài quá **32 cột** thì bị cắt và thêm `…`, tổng vẫn ≤ 32 cột; chữ rộng (CJK, phần lớn emoji) tính 2 cột, dấu kết hợp và ZWJ (U+200D) tính 0 cột, ký tự khác 1 cột;
   - ký tự trông như khoảng trắng mà không phải dấu cách thường U+0020 được hiện thành `·`: các khoảng trắng Unicode khác (U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000) và các ký tự trống U+2800, U+3164, U+115F, U+1160, U+FFA0.
-- Máy kia đã ghép đôi với máy này (F3, ghép đôi lại) thì hiện thêm tên đã lưu, theo cùng cách hiện tên ở trên.
+- Máy kia đã ghép đôi với máy này (F3, ghép đôi lại) thì hiện thêm tên đã lưu, theo cùng cách hiện tên ở trên; tên đã lưu khác tên máy kia tự xưng thì hiện thêm tên mới mà máy này sẽ lưu khi ghép đôi xong.
 
 Bản CLI, ví dụ ở `teleport listen` với đủ các dòng tùy chọn:
 ```
 Có yêu cầu ghép đôi. Hãy so mã dưới đây với mã trên màn hình máy kia.
 Mã ghép đôi:   382 104
 Cảnh báo: máy này đã hiện 3 mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).
-Máy kia tự xưng là “MacBook” (mã máy 3f2a9c1e, 192.168.1.5).
-Máy này đã ghép đôi với mã máy 3f2a9c1e trước đây, tên đã lưu: “MacBook”. Ghép đôi lại sẽ giữ nguyên tên đã lưu.
+Máy kia tự xưng là “MacBook Pro” (mã máy 3f2a9c1e, 192.168.1.5).
+Máy này đã ghép đôi với mã máy 3f2a9c1e trước đây, tên đã lưu: “MacBook”.
+Ghép đôi xong, tên sẽ đổi thành “MacBook Pro”.
 Trùng khớp? [c/k]:
 ```
 
@@ -279,12 +280,12 @@ Trùng khớp? [c/k]:
 | 2 | Luôn có | `Mã ghép đôi:   <mã>` (nhãn, ba dấu cách, mã dạng `382 104`) |
 | 3 | Máy nhận yêu cầu ghép đôi đã hiện từ 3 mã trong 1 phút | Câu cảnh báo ở mục 8, giữ nguyên |
 | 4 | Luôn có | `Máy kia tự xưng là “<tên>” (mã máy <mã máy>, <địa chỉ>).` |
-| 5 | Máy kia đã ghép đôi; máy này nhận yêu cầu ghép đôi | `Máy này đã ghép đôi với mã máy <mã máy> trước đây, tên đã lưu: “<tên đã lưu>”. Ghép đôi lại sẽ giữ nguyên tên đã lưu.` |
-| 5 | Máy kia đã ghép đôi; máy này gửi yêu cầu ghép đôi | `Máy này đã ghép đôi với mã máy <mã máy> trước đây, tên đã lưu: “<tên đã lưu>”.` |
-| 6 | Luôn có | `Trùng khớp? [c/k]: ` |
+| 5 | Máy kia đã ghép đôi (cả hai vai) | `Máy này đã ghép đôi với mã máy <mã máy> trước đây, tên đã lưu: “<tên đã lưu>”.` |
+| 6 | Máy kia đã ghép đôi và tên đã lưu khác tên máy kia tự xưng | `Ghép đôi xong, tên sẽ đổi thành “<tên>”.` |
+| 7 | Luôn có | `Trùng khớp? [c/k]: ` |
 
 - `<tên>` và `<tên đã lưu>` hiện theo cách ở trên (≤ 32 cột, ký tự trống thành `·`); `<mã máy>` là 8 ký tự đầu của `device_id`.
-- Máy gửi yêu cầu là bên khởi xướng, máy nhận yêu cầu là bên trả lời ([protocol.md](protocol.md) mục 5.1). Thường `teleport pair` là bên khởi xướng; khi hai máy cùng ghép đôi với nhau thì một bên `teleport pair` chuyển sang vai trả lời ([protocol.md](protocol.md) mục 5.3). Vì vậy dòng 1 xét theo lệnh, còn dòng 3 và dòng 5 xét theo vai.
+- Máy gửi yêu cầu là bên khởi xướng, máy nhận yêu cầu là bên trả lời ([protocol.md](protocol.md) mục 5.1). Thường `teleport pair` là bên khởi xướng; khi hai máy cùng ghép đôi với nhau thì một bên `teleport pair` chuyển sang vai trả lời ([protocol.md](protocol.md) mục 5.3). Vì vậy dòng 1 xét theo lệnh, còn dòng 3 xét theo vai.
 
 ### 7.3. Có file gửi tới
 ```

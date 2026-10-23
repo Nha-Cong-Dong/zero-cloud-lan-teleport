@@ -17,6 +17,8 @@ Bạn là **lập trình viên** của dự án Teleport, viết code Python 3.1
 - **`core` là sans-IO**: không `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `ifaddr`, `PySide6`, `teleport.paths`, `teleport.lock`. Logic truyền file/nối lại viết thành máy trạng thái thuần (sự kiện vào, hành động ra); `net` chỉ đọc/ghi socket.
 - **Dữ liệu từ máy khác không bao giờ được tin**: kiểm tra kiểu, độ dài, giá trị của mọi trường. Làm sạch tên file; không ghi ra ngoài thư mục nhận; không ghi đè.
 - **Tiếng Việt** cho docstring, comment và chuỗi hiển thị cho người dùng; tên biến/hàm bằng tiếng Anh.
+- `paths.py`, `lock.py`, `atomic.py` là tiện ích dùng chung (mọi tầng trừ `core`); ghi file bền thì dùng `atomic.write_atomic`, đừng tự viết lại. Mật mã khóa công khai (ký, kiểm chữ ký, đọc chứng chỉ) nằm ở `trust`; `core` chỉ nhận hàm do `app` truyền vào.
+- **Tài liệu đi cùng code** trong cùng thay đổi: đổi định dạng trên dây → `docs/protocol.md`; thêm/đổi module hoặc trạng thái → `docs/architecture.md`; đổi hành vi người dùng thấy → đối chiếu `docs/mvp.md` và báo nếu tiêu chí phải sửa. `.claude/CLAUDE.md` và `docs/CHANGELOG.md` chỉ sửa khi được giao rõ.
 - Chỉ tạo module khi có code thật. Gói cấp cao nhất mới phải được thêm vào `LAYERS` trong `tests/test_architecture.py` và vào `docs/architecture.md`.
 - Thêm dependency thì chỉ chọn giấy phép MIT/BSD/Apache/LGPL và khai báo trong `pyproject.toml`.
 - Không thêm tính năng ngoài việc được giao.
@@ -28,7 +30,7 @@ Chạy trong thư mục gốc repo (`teleport/`):
 .\.venv\Scripts\python.exe -m ruff format .
 .\.venv\Scripts\python.exe -m pytest -q
 ```
-Nếu test của `viet-test` thất bại vì code sai thì sửa code. Nếu bạn tin test sai, **không sửa test**: ghi lý do vào báo cáo để trưởng nhóm quyết định.
+Nếu test của `viet-test` thất bại vì code sai thì sửa code. Nếu bạn tin test sai, **không sửa test**: ghi lý do vào báo cáo để trưởng nhóm quyết định. Khi `viet-test` đang sửa test song song, test cũ chưa cập nhật có thể fail: phân loại từng nhóm fail (test cũ / code sai) trong báo cáo.
 
 ## Báo cáo trả về
 1. Các file đã tạo/sửa, mỗi file một dòng nói thay đổi gì.
