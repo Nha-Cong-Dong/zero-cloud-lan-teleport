@@ -205,7 +205,7 @@ Repo Git: GitHub `Nha-Cong-Dong/zero-cloud-lan-teleport` (public, GPL-3.0-or-lat
 teleport/                      # ← gốc repo
   README.md  LICENSE  pyproject.toml   # gốc repo chỉ có 3 file này (ngoài .gitignore)
   .claude/CLAUDE.md            # hướng dẫn cho Claude Code
-  .claude/agents/              # đội subagent: truong-nhom, hoi-lai, lap-trinh, viet-test, review, tan-cong, tom-tat
+  .claude/agents/              # đội subagent (danh sách: .claude/CLAUDE.md)
   .github/workflows/ci.yml
   docs/                        # mọi tài liệu .md: README (mục lục, thuật ngữ), y_tuong, mvp, ke_hoach,
                                #   architecture, protocol, CONTRIBUTING, SECURITY, CHANGELOG,
@@ -320,7 +320,7 @@ Bản chính thức: [CONTRIBUTING.md](CONTRIBUTING.md). Tóm tắt:
 - **Nhánh:** `main` luôn chạy được và được bảo vệ (chỉ merge qua Pull Request khi CI xanh). Mỗi việc làm trên nhánh riêng `feat/...`, `fix/...`.
 - **Commit:** theo [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `chore:`), giúp viết `CHANGELOG.md` dễ dàng.
 - **CI** (`.github/workflows/ci.yml`): `ruff check`, `ruff format --check`, `pytest` trên Windows/macOS/Linux × Python 3.12/3.14 (bản thấp nhất và mới nhất được hỗ trợ). Từ Giai đoạn 2 thêm `mypy`.
-- **Đội subagent** trong `.claude/agents/`: lập kế hoạch → làm rõ → lập trình + viết test song song → review → chốt → tóm tắt. Chỉ commit và push khi người dùng đồng ý.
+- **Đội subagent** trong `.claude/agents/` (vai trò và quy trình: `.claude/CLAUDE.md`): lập kế hoạch → làm rõ → lập trình + viết test song song → soát code ∥ tấn công thử (∥ đo đạc khi chạm yêu cầu N) → chốt → tóm tắt. Có thêm người soát tài liệu, giao diện và đóng gói cho các giai đoạn sau. Chỉ commit và push khi người dùng đồng ý.
 - **Phát hành:** gắn tag `vX.Y.Z` → GitHub Actions build bộ cài và tạo GitHub Release kèm ghi chú từ `CHANGELOG.md`.
 - **Theo dõi công việc:** GitHub Issues + Milestones tương ứng từng bản phát hành ở mục 5.1.
 

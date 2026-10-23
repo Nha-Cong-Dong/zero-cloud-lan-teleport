@@ -33,5 +33,7 @@ Chia làm hai nhóm, mỗi câu hỏi một dòng:
 Quy tắc:
 - Tối đa 7 câu hỏi chặn. Gộp những câu liên quan với nhau.
 - Đừng hỏi điều đã có câu trả lời trong tài liệu: trích dẫn tài liệu thay vì hỏi.
+- Đừng hỏi lại quyết định người dùng đã chốt (phiên chính ghi trong đề bài hoặc trong đặc tả được đưa cho bạn). Chỉ nêu lại khi quyết định đó mâu thuẫn với tài liệu hay code, và nói rõ mâu thuẫn ở đâu.
+- Khi phản biện một kế hoạch, kiểm từng khẳng định kỹ thuật của nó với code thật (file:dòng). Khẳng định sai thì ghi ở mục riêng “Chỗ chưa chính xác”, trước các câu hỏi.
 - Mỗi câu hỏi phải kèm đề xuất mặc định cụ thể, để người dùng chỉ cần trả lời “đồng ý” hoặc sửa lại.
 - Không có gì đáng hỏi thì nói thẳng: “Không có câu hỏi chặn.”

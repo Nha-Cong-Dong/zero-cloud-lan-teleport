@@ -97,27 +97,31 @@ Planned design invariants from the roadmap:
 
 ## Team of subagents
 
-`.claude/agents/` defines seven project subagents. Their prompts are in Vietnamese. They load only when Claude Code is started in this folder (the repo root), not in a parent folder.
+`.claude/agents/` defines eleven project subagents. Their names and prompts are in Vietnamese (don't name an agent after a built-in command such as `review`: the old `review` agent never loaded, so it is now `soat-code`). They load only when Claude Code is started in this folder (the repo root), not in a parent folder, and only at session start, so a new or renamed agent needs a new session.
 
 | Agent | Role | Edits files? |
 |---|---|---|
-| `truong-nhom` | Lead. Plans the work (design, task table, done criteria), then gives the final ĐẠT / CHƯA ĐẠT verdict | No |
-| `hoi-lai` | Clarifier. Finds ambiguity, conflicts and risks, and drafts questions for the user with suggested defaults | No |
-| `lap-trinh` | Coder. Implements one assigned task in `src/` and runs ruff + pytest. Never commits | Yes |
+| `truong-nhom` | Lead. Plans the work (design, task table, done criteria), then gives the final ĐẠT / CHƯA ĐẠT verdict against the spec the user approved | No |
+| `hoi-lai` | Clarifier. Checks the plan's claims against the code, finds ambiguity, conflicts and risks, and drafts questions for the user with suggested defaults; never re-asks what the user decided | No |
+| `lap-trinh` | Coder. Implements one assigned task in `src/` plus the docs that go with it (`protocol.md`, `architecture.md`), runs ruff + pytest. Never commits | Yes |
 | `viet-test` | Test writer. Writes tests in `tests/` from the spec, not from the code; never edits `src/` | Yes, `tests/` only |
-| `review` | Reviewer. Reviews the uncommitted diff for correctness, security, layering and docs, with severity levels | No |
+| `soat-code` | Reviewer. Reviews the uncommitted diff for correctness, security, layering and docs, with severity levels | No |
 | `tan-cong` | Attack tester. For code that takes input from other machines, writes and runs real attack scripts against a node on 127.0.0.1 (floods, starvation, slow peers, malformed or oversized data, spoofing, filesystem tricks) and reports only what it reproduced, with measurements | Scripts in the scratchpad only; never `src/` or `tests/` |
-| `tom-tat` | Summarizer. Summarizes verified changes and drafts the CHANGELOG entry and commit message | No |
+| `do-dac` | Benchmarker. Measures the N requirements (mvp N1–N12) with repeatable scripts and records results in `docs/benchmark.md`; writes "chưa đo", never estimates | `docs/benchmark.md` only; scripts in the scratchpad |
+| `soat-tai-lieu` | Docs auditor. Audits all docs, `README.md` and this file for the one-fact-one-place rule, dead references, copied numbers and drift from the code | No |
+| `giao-dien` | UI coder (phase 4+). Writes the PySide6 `ui` layer through `app`, with i18n (F11) and accessibility (N12); uses the user-level `design-taste-frontend` skill only as reference for app screens, never its web scripts or network assets | Yes, `src/teleport/ui/` and `tests/ui/` |
+| `dong-goi` | Packager (trial builds from phase 2, mainly phase 6). Installers, release workflow, dependency licence audit; never tags, releases or pushes | Packaging files and `.github/workflows/` |
+| `tom-tat` | Summarizer. After the verdict, summarizes verified changes, writes the CHANGELOG entry (fixing contradicting `[Unreleased]` lines) and drafts the commit message | `docs/CHANGELOG.md` only |
 
 Subagents cannot call each other, so **the main session orchestrates**. For any non-trivial feature, run this pipeline:
 1. `truong-nhom` makes the plan.
-2. If the plan has open questions, run `hoi-lai`, then ask the user the blocking questions.
-3. Run `lap-trinh` and `viet-test` in parallel, from the plan's API and done criteria.
-4. Loop `review` and fixes until no **nghiêm trọng** or **cao** issues remain. When the change takes input from other machines (`net`, pairing, discovery, receiving files), run `tan-cong` in parallel with `review`; its reproduced findings count the same as review findings.
-5. `truong-nhom` gives the verdict, fed with the review and test results.
-6. `tom-tat` writes the summary and commit message.
+2. Run `hoi-lai` on the plan (always for wire, security or user-visible changes; otherwise when the plan has open questions), then ask the user the blocking questions. Write the approved decisions into one spec file and hand that to every later agent.
+3. Run `lap-trinh` and `viet-test` in parallel, from the spec's API and done criteria (`giao-dien` instead of `lap-trinh` for `ui`).
+4. Loop `soat-code` and fixes until no **nghiêm trọng** or **cao** issues remain. When the change takes input from other machines (`net`, pairing, discovery, receiving files), run `tan-cong` in parallel with `soat-code`; its reproduced findings count the same as review findings. When it may affect an N requirement, run `do-dac` before and after.
+5. Re-run ruff and the full pytest after the last fix, then `truong-nhom` gives the verdict, fed with those results and the reports.
+6. `tom-tat` writes the CHANGELOG entry, the summary and the commit message.
 
-Commit and push only after the user approves. Small fixes of a few lines can skip the pipeline.
+Run `soat-tai-lieu` before each release and after large doc changes. Commit and push only after the user approves. Small fixes of a few lines can skip the pipeline.
 
 ## Conventions
 

@@ -1,6 +1,6 @@
 ---
 name: tan-cong
-description: Người kiểm thử tấn công của Teleport. Dùng cho mọi thay đổi có code nhận dữ liệu từ máy khác (mDNS, cổng TLS, ghép đôi, kết nối điều khiển/dữ liệu, nhận file), sau khi lập trình xong và trước hoặc song song với review. Viết và chạy script tấn công thật trên 127.0.0.1 để tái hiện lỗi; chỉ báo những gì đã tái hiện được. Không sửa src/ hay tests/.
+description: Người kiểm thử tấn công của Teleport. Dùng cho mọi thay đổi có code nhận dữ liệu từ máy khác (mDNS, cổng TLS, ghép đôi, kết nối điều khiển/dữ liệu, nhận file), sau khi lập trình xong và trước hoặc song song với soat-code. Viết và chạy script tấn công thật trên 127.0.0.1 để tái hiện lỗi; chỉ báo những gì đã tái hiện được. Không sửa src/ hay tests/.
 tools: Read, Grep, Glob, Write, Bash, PowerShell
 model: inherit
 ---
@@ -36,6 +36,6 @@ Bảng kết quả, xếp từ nặng tới nhẹ:
 | Mức | Hướng tấn công | File:dòng nghi lỗi | Cách tái hiện (script, lệnh) | Số đo | Hậu quả | Đề xuất sửa |
 |---|---|---|---|---|---|---|
 
-Mức dùng chung với `review`: **nghiêm trọng** (ghi ra ngoài thư mục nhận, ghi đè file, tin nhầm thiết bị, chạy mã) · **cao** (máy lạ làm node treo, tốn tài nguyên không giới hạn, hoặc chặn máy thật lâu) · **trung bình** (tấn công cần điều kiện khó hoặc hậu quả có giới hạn) · **thấp** (khó khai thác, hậu quả nhỏ).
+Mức dùng chung với `soat-code`: **nghiêm trọng** (ghi ra ngoài thư mục nhận, ghi đè file, tin nhầm thiết bị, chạy mã) · **cao** (máy lạ làm node treo, tốn tài nguyên không giới hạn, hoặc chặn máy thật lâu) · **trung bình** (tấn công cần điều kiện khó hoặc hậu quả có giới hạn) · **thấp** (khó khai thác, hậu quả nhỏ).
 
 Cuối báo cáo: danh sách hướng đã thử / bỏ qua (kèm lý do bỏ qua), và một dòng kết luận **“Không tái hiện được lỗi mức cao trở lên”** hoặc **“Có lỗi phải sửa trước khi commit”**.
