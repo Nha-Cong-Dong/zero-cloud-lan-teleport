@@ -537,7 +537,7 @@ async def test_open_pairing_end_to_end(fast, listener_factory, ids):
         commit = PairCommit(commitment=HEX64)
         await server.send(commit)
         assert await asyncio.wait_for(conn.receive(), 2) == commit
-        nonce = PairNonce(nonce=HEX64)
+        nonce = PairNonce(nonce=HEX64, signature=HEX64 + HEX64)
         await conn.send(nonce)
         assert await asyncio.wait_for(server.receive(), 2) == nonce
         reveal = PairReveal(nonce=HEX64)
@@ -910,6 +910,7 @@ FUZZ_FIELDS = [
     "cert",
     "commitment",
     "nonce",
+    "signature",
     "reason",
     "t",
     "transfer_id",
@@ -924,7 +925,7 @@ fuzz_values = st.recursive(
     | st.integers()
     | st.floats(allow_nan=False, allow_infinity=False)
     | st.text(max_size=40)
-    | st.sampled_from([HEX64, FAKE_CERT, "0123456789abcdef" * 2, "user", 1]),
+    | st.sampled_from([HEX64, HEX64 + HEX64, FAKE_CERT, "0123456789abcdef" * 2, "user", 1]),
     lambda children: (
         st.lists(children, max_size=3) | st.dictionaries(st.text(max_size=5), children, max_size=3)
     ),
@@ -1630,7 +1631,7 @@ async def test_m1_unexpected_error_parsing_server_cert_is_identity_mismatch(
         hello_of(SimpleNamespace(device_id="0" * 32)),
         ControlOpen(),
         PairCommit(commitment=HEX64),
-        PairNonce(nonce=HEX64),
+        PairNonce(nonce=HEX64, signature=HEX64 + HEX64),
         PairReveal(nonce=HEX64),
     ],
     ids=lambda m: type(m).__name__,
@@ -1695,7 +1696,7 @@ async def test_receive_on_control_reports_wrong_kind_and_unknown_type(
     await peer.drain()
     with pytest.raises(WrongConnectionKind):
         await asyncio.wait_for(server.receive(), 2)
-    peer.send_dict({"type": "pair_nonce", "nonce": HEX64})
+    peer.send_dict({"type": "pair_nonce", "nonce": HEX64, "signature": HEX64 + HEX64})
     await peer.drain()
     with pytest.raises(WrongConnectionKind):
         await asyncio.wait_for(server.receive(), 2)

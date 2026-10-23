@@ -29,6 +29,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.x509.oid import ExtensionOID, NameOID
 
 from teleport.core.framing import HEADER, MAX_PAIRING_MESSAGE_SIZE, FramingError, encode_message
@@ -139,9 +140,11 @@ def frame(body: bytes) -> bytes:
     return HEADER.pack(len(body)) + body
 
 
-def fake_cert_with_cn(device_id: str, *, ca: bool = False) -> str:
+def fake_cert_with_cn(device_id: str, *, ca: bool = False) -> tuple[str, bytes]:
     """Chứng chỉ tự ký P-256 mới, CN `teleport-<device_id>`: danh tính khác, cùng device_id (P12).
 
+    Trả (PEM chứng chỉ, PEM khóa riêng PKCS8): có khóa thì ký được `pair_nonce` bằng danh tính này
+    (đặc tả 9.5), hoặc dựng `Identity` qua `identity_from_pem`.
     `ca=True` thêm BasicConstraints CA=true (P21: phải bị từ chối).
     """
     key = ec.generate_private_key(ec.SECP256R1())
@@ -158,7 +161,10 @@ def fake_cert_with_cn(device_id: str, *, ca: bool = False) -> str:
     if ca:
         builder = builder.add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
     cert = builder.sign(key, hashes.SHA256())
-    return cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
+    return cert.public_bytes(serialization.Encoding.PEM).decode("ascii"), key_pem
 
 
 # SAN thô mà `cryptography` không đọc được (UnsupportedGeneralNameType, không phải ValueError):
@@ -311,29 +317,115 @@ def ref_commitment(fp_responder: str, nonce: bytes) -> str:
     return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_responder) + nonce).hexdigest()
 
 
+PROOF_LABEL = b"teleport-initiator-proof-v1"
+
+
+def ref_proof_payload(fp_initiator: str, fp_responder: str, n_a: bytes, commitment: str) -> bytes:
+    """Payload bên khởi xướng ký trong `pair_nonce` (đặc tả 9.5, protocol 5.2), tính độc lập."""
+    return (
+        PROOF_LABEL
+        + bytes.fromhex(fp_initiator)
+        + bytes.fromhex(fp_responder)
+        + n_a
+        + bytes.fromhex(commitment)
+    )
+
+
+def _private_key(key) -> ec.EllipticCurvePrivateKey:
+    """`key`: Identity, đường dẫn file khóa, PEM khóa (bytes) hoặc đối tượng khóa."""
+    if isinstance(key, ec.EllipticCurvePrivateKey):
+        return key
+    if isinstance(key, Identity):
+        key = key.key_path
+    data = key.read_bytes() if isinstance(key, Path) else key
+    return serialization.load_pem_private_key(data, password=None)
+
+
+def ref_sign(key, payload: bytes) -> bytes:
+    """Chữ ký theo đặc tả: ECDSA P-256 + SHA-256, r ‖ s mỗi số 32 byte big-endian (64 byte)."""
+    der = _private_key(key).sign(payload, ec.ECDSA(hashes.SHA256()))
+    r, s = decode_dss_signature(der)
+    return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
+
+def ref_verify(cert_pem: str, payload: bytes, signature: bytes) -> bool:
+    """Kiểm chữ ký r ‖ s bằng khóa công khai trong `cert_pem`, độc lập với code của trust."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+    if not isinstance(signature, bytes) or len(signature) != 64:
+        return False
+    r, s = int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")
+    public = x509.load_pem_x509_certificate(cert_pem.encode("ascii")).public_key()
+    try:
+        public.verify(encode_dss_signature(r, s), payload, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        return False
+    return True
+
+
 class PairingClient(RawPeer):
     """Client ghép đôi thô (đóng vai bên khởi xướng A), theo luồng bên trả lời cam kết trước:
 
-    `begin` (hello + `pair_request{cert}`) → `read_commit` → `send_nonce` → `read_reveal` (tự kiểm
-    cam kết bằng fp của server, tính mã). `run_to_code` làm cả chuỗi sau `begin`.
+    `begin` (hello + `pair_request{cert}`) → `read_commit` → `send_nonce` (ký payload, đặc tả 9.5)
+    → `read_reveal` (tự kiểm cam kết bằng fp của server, tính mã). `run_to_code` làm cả chuỗi sau
+    `begin`.
+
+    `begin(..., signing_key=...)`: khóa dùng để ký `pair_nonce` (mặc định khóa của `identity`).
+    Máy lạ gửi chứng chỉ công khai của máy khác thì truyền khóa của chính nó ở đây.
     """
 
     identity: Identity
     nonce: bytes
     commitment: str | None = None
     responder_nonce: bytes | None = None
+    signing_key: object = None
+    last_signature: bytes | None = None
+    last_payload: bytes | None = None
 
-    async def begin(self, identity: Identity, name: str = "Raw", *, nonce: bytes | None = None) -> None:
+    async def begin(
+        self, identity: Identity, name: str = "Raw", *, nonce: bytes | None = None, signing_key: object = None
+    ) -> None:
         """Đọc hello server, gửi hello và `pair_request` hợp lệ (chỉ có `cert`)."""
         self.identity = identity
         self.nonce = nonce if nonce is not None else secrets.token_bytes(NONCE_SIZE)
         self.commitment = None
         self.responder_nonce = None
+        self.signing_key = identity if signing_key is None else signing_key
+        self.last_signature = None
+        self.last_payload = None
         if self.server_hello is None:
             await self.read_hello()
         self.send_dict(hello_dict(identity, name))
         self.send_dict({"type": "pair_request", "cert": identity.cert_pem()})
         await self.drain()
+
+    @property
+    def server_fingerprint(self) -> str:
+        """fp của server lấy từ bắt tay TLS của chính kết nối này."""
+        der = self.writer.get_extra_info("ssl_object").getpeercert(binary_form=True)
+        return hashlib.sha256(der).hexdigest()
+
+    def proof_payload(self, nonce: bytes | None = None) -> bytes:
+        commitment = self.commitment if self.commitment is not None else "00" * 32
+        n_a = self.nonce if nonce is None else nonce
+        return ref_proof_payload(self.identity.fingerprint, self.server_fingerprint, n_a, commitment)
+
+    def nonce_message(self, nonce_hex: str | None = None, *, signature_hex: str | None = None) -> dict:
+        """`pair_nonce` đã ký bằng `signing_key` (trên payload của chính n_A gửi đi)."""
+        nonce_hex = nonce_hex if nonce_hex is not None else self.nonce.hex()
+        if signature_hex is None:
+            try:
+                n_a = bytes.fromhex(nonce_hex)
+            except (ValueError, TypeError):
+                n_a = self.nonce
+            if len(n_a) != NONCE_SIZE:
+                n_a = self.nonce
+            payload = self.proof_payload(n_a)
+            signature = ref_sign(self.signing_key, payload)
+            self.last_payload, self.last_signature = payload, signature
+            signature_hex = signature.hex()
+        return {"type": "pair_nonce", "nonce": nonce_hex, "signature": signature_hex}
 
     async def read_commit(self, timeout: float = 3.0) -> str:
         """Đọc `pair_commit` của bên trả lời; trả và nhớ `commitment`."""
@@ -342,11 +434,9 @@ class PairingClient(RawPeer):
         self.commitment = msg["commitment"]
         return self.commitment
 
-    async def send_nonce(self, nonce_hex: str | None = None) -> None:
-        """Gửi `pair_nonce` (mặc định n_A của client)."""
-        self.send_dict(
-            {"type": "pair_nonce", "nonce": nonce_hex if nonce_hex is not None else self.nonce.hex()}
-        )
+    async def send_nonce(self, nonce_hex: str | None = None, *, signature_hex: str | None = None) -> None:
+        """Gửi `pair_nonce` (mặc định n_A của client, ký bằng `signing_key`)."""
+        self.send_dict(self.nonce_message(nonce_hex, signature_hex=signature_hex))
         await self.drain()
 
     async def read_reveal(self, responder_fingerprint: str, timeout: float = 3.0) -> str:
@@ -1043,6 +1133,9 @@ def app_helpers():
         encode_message=encode_message,
         dev=make_discovered,
         ref_commitment=ref_commitment,
+        ref_proof_payload=ref_proof_payload,
+        ref_sign=ref_sign,
+        ref_verify=ref_verify,
     )
 
 

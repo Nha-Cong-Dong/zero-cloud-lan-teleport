@@ -17,6 +17,9 @@ import secrets
 import time
 
 import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt, PairingService
 from teleport.core.framing import HEADER, encode_message
@@ -25,7 +28,7 @@ from teleport.core.pairing import Outcome, Role
 from teleport.core.pairing_code import format_code, pairing_code
 from teleport.net.connection import ConnectionLostError
 from teleport.net.stream import read_message
-from teleport.trust.identity import load_or_create_identity, peer_cert_from_pem
+from teleport.trust.identity import IdentityError, load_or_create_identity, peer_cert_from_pem
 from teleport.trust.store import TrustStore, TrustStoreError
 
 pytestmark = [
@@ -43,6 +46,24 @@ GARBAGE_PEM = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
 def ref_commitment(fp_responder: str, nonce: bytes) -> str:
     """Cam kết của bên trả lời, tính độc lập theo docs/protocol.md §5."""
     return hashlib.sha256(b"teleport-commit-v1" + bytes.fromhex(fp_responder) + nonce).hexdigest()
+
+
+def ref_proof_payload(fp_initiator: str, fp_responder: str, n_a: bytes, commitment: str) -> bytes:
+    """Payload ký trong `pair_nonce` (đặc tả 9.5), tính độc lập."""
+    return (
+        b"teleport-initiator-proof-v1"
+        + bytes.fromhex(fp_initiator)
+        + bytes.fromhex(fp_responder)
+        + n_a
+        + bytes.fromhex(commitment)
+    )
+
+
+def ref_sign(key_path, payload: bytes) -> bytes:
+    """ECDSA P-256 + SHA-256 bằng khóa trong `key_path`, mã hóa r ‖ s (64 byte)."""
+    key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    r, s_ = decode_dss_signature(key.sign(payload, ec.ECDSA(hashes.SHA256())))
+    return r.to_bytes(32, "big") + s_.to_bytes(32, "big")
 
 
 async def pair(a, b, timeout: float = 15.0) -> PairingFinished:
@@ -533,7 +554,7 @@ async def test_p11_pairing_with_self(node_factory):
 async def test_p12a_initiator_knows_other_identity_for_device_id(node_factory, app_helpers):
     B = await node_factory("B", accept_pairing=True, answer=True)
     A = await node_factory("A", answer=True)
-    fake = peer_cert_from_pem(app_helpers.fake_cert_with_cn(B.id))
+    fake = peer_cert_from_pem(app_helpers.fake_cert_with_cn(B.id)[0])
     assert fake.fingerprint != B.identity.fingerprint
     A.store.add(fake, "B-cũ")
 
@@ -554,7 +575,7 @@ async def test_p12a_initiator_knows_other_identity_for_device_id(node_factory, a
 async def test_p12b_responder_knows_other_identity_for_device_id(node_factory, app_helpers):
     B = await node_factory("B", accept_pairing=True, answer=True)
     A = await node_factory("A", answer=True)
-    fake = peer_cert_from_pem(app_helpers.fake_cert_with_cn(A.id))
+    fake = peer_cert_from_pem(app_helpers.fake_cert_with_cn(A.id)[0])
     B.store.add(fake, "A-cũ")
 
     result = await pair(A, B)
@@ -727,8 +748,11 @@ def _blocking_pairing_client(port: int, identity, out: dict) -> None:
         s.sendall(encode_message({"type": "pair_request", "cert": identity.cert_pem()}))
         commit = read_frame(s)
         assert commit["type"] == "pair_commit", commit
+        server_fp = hashlib.sha256(s.getpeercert(binary_form=True)).hexdigest()
+        payload = ref_proof_payload(identity.fingerprint, server_fp, n_a, commit["commitment"])
+        signature = ref_sign(identity.key_path, payload)
         out["sent_nonce_at"] = time.monotonic()
-        s.sendall(encode_message({"type": "pair_nonce", "nonce": n_a.hex()}))
+        s.sendall(encode_message({"type": "pair_nonce", "nonce": n_a.hex(), "signature": signature.hex()}))
         reveal = read_frame(s)
         out["reveal_read_at"] = time.monotonic()
         assert reveal["type"] == "pair_reveal", reveal
@@ -802,6 +826,9 @@ async def test_p17_save_only_after_both_confirm(node_factory, raw_pairing_client
     assert c.nonce.hex() not in text
     assert c.responder_nonce.hex() not in text
     assert c.commitment not in text
+    assert c.last_signature is not None
+    assert c.last_signature.hex() not in text  # đặc tả 9.5: không ghi chữ ký, payload (mvp N9)
+    assert c.last_payload.hex() not in text
 
 
 # --- P18: hai bên cùng chủ động ------------------------------------------------------------------------
@@ -881,11 +908,49 @@ BAD_AFTER_COMMIT = {
     "confirm_truoc_nonce": lambda c, ident: c.send_dict({"type": "pair_confirm"}),
     "type_la": lambda c, ident: c.send_dict({"type": "chao_tu_tuong_lai"}),
     "challenge_cu": lambda c, ident: c.send_dict({"type": "pair_challenge", "nonce": secrets.token_hex(32)}),
-    "nonce_sai_kieu": lambda c, ident: c.send_dict({"type": "pair_nonce", "nonce": 5}),
-    "nonce_hoa": lambda c, ident: c.send_dict({"type": "pair_nonce", "nonce": "AB" * 32}),
-    "nonce_ngan": lambda c, ident: c.send_dict({"type": "pair_nonce", "nonce": "ab" * 31}),
+    "nonce_sai_kieu": lambda c, ident: c.send_dict({**c.nonce_message(), "nonce": 5}),
+    "nonce_hoa": lambda c, ident: c.send_dict({**c.nonce_message(), "nonce": "AB" * 32}),
+    "nonce_ngan": lambda c, ident: c.send_dict({**c.nonce_message(), "nonce": "ab" * 31}),
     "header_qua_lon": lambda c, ident: c.send_bytes(HEADER.pack(16 * 1024 + 1)),
+    # Đặc tả 9.5: chữ ký trong pair_nonce sai dạng hoặc không qua kiểm → invalid, không hiện mã.
+    "thieu_chu_ky": lambda c, ident: c.send_dict({"type": "pair_nonce", "nonce": c.nonce.hex()}),
+    "chu_ky_hoa": lambda c, ident: c.send_dict(
+        {**c.nonce_message(), "signature": c.nonce_message()["signature"].upper()}
+    ),
+    "chu_ky_ngan": lambda c, ident: c.send_dict({**c.nonce_message(), "signature": "ab" * 63}),
+    "chu_ky_dai": lambda c, ident: c.send_dict({**c.nonce_message(), "signature": "ab" * 65}),
+    "chu_ky_sai_kieu": lambda c, ident: c.send_dict({**c.nonce_message(), "signature": 5}),
+    "chu_ky_rac": lambda c, ident: c.send_dict(c.nonce_message(signature_hex="ab" * 64)),
+    "chu_ky_r_s_0": lambda c, ident: c.send_dict(c.nonce_message(signature_hex="00" * 64)),
+    "chu_ky_khoa_khac": lambda c, ident: _send_signed_with(c, ec.generate_private_key(ec.SECP256R1())),
+    "chu_ky_cho_n_a_khac": lambda c, ident: c.send_dict(
+        {**c.nonce_message(secrets.token_hex(32)), "nonce": c.nonce.hex()}
+    ),
+    "chu_ky_cam_ket_khac": lambda c, ident: c.send_dict(
+        c.nonce_message(
+            signature_hex=_sign_payload(
+                ident, ref_proof_payload(ident.fingerprint, c.server_fingerprint, c.nonce, "00" * 32)
+            )
+        )
+    ),
+    "chu_ky_dao_vai": lambda c, ident: c.send_dict(
+        c.nonce_message(
+            signature_hex=_sign_payload(
+                ident, ref_proof_payload(c.server_fingerprint, ident.fingerprint, c.nonce, c.commitment)
+            )
+        )
+    ),
 }
+
+
+def _sign_payload(identity, payload: bytes) -> str:
+    return ref_sign(identity.key_path, payload).hex()
+
+
+def _send_signed_with(c, key) -> None:
+    """Ký `pair_nonce` bằng một khóa khác khóa trong chứng chỉ đã gửi ở `pair_request`."""
+    c.signing_key = key
+    c.send_dict(c.nonce_message())
 
 
 @integration
@@ -1016,6 +1081,7 @@ def _fake_responder_script(identity, mode: str, log: list, initiator_fp: str | N
                 nonce_msg = await read_message(reader, 16384)
                 log.append(nonce_msg)
                 state["n_a"] = nonce_msg["nonce"]
+                state["signature"] = nonce_msg.get("signature")
                 revealed = n_b_other if mode == "doi_n_b" else n_b
                 writer.write(encode_message({"type": "pair_reveal", "nonce": revealed.hex()}))
             await writer.drain()
@@ -1065,13 +1131,15 @@ async def test_initiator_rejects_fake_responder_without_prompt(
         secrets_seen.append(script.state["commitment"])
     if "n_a" in script.state:
         secrets_seen.append(script.state["n_a"])
+    if script.state.get("signature"):
+        secrets_seen.append(script.state["signature"])  # mvp N9: không ghi chữ ký vào log
     for value in secrets_seen:
         assert value not in text
 
 
 @integration
 async def test_initiator_with_honest_fake_responder_prompts_with_spec_code(
-    node_factory, fake_server, tmp_path
+    node_factory, fake_server, tmp_path, app_helpers
 ):
     """Đối chứng cho bên giả ở trên: cùng kịch bản nhưng trung thực → A hiện mã đúng công thức."""
     A = await node_factory("A", answer=False)
@@ -1088,13 +1156,23 @@ async def test_initiator_with_honest_fake_responder_prompts_with_spec_code(
     assert log[1] == {"type": "pair_request", "cert": A.identity.cert_pem()}
     await wait_until(lambda: {"type": "pair_abort", "reason": "user"} in log, 3, "chưa nhận pair_abort{user}")
 
+    # Đặc tả 9.5: pair_nonce mang đúng hai trường; chữ ký là ECDSA P-256 + SHA-256 bằng khóa của A
+    # trên payload (fp_A ‖ fp_B từ TLS ‖ n_A ‖ C_B), kiểm độc lập bằng chứng chỉ A gửi.
+    nonce_msg = log[2]
+    assert set(nonce_msg) == {"type", "nonce", "signature"}, nonce_msg
+    assert re.fullmatch(r"[0-9a-f]{128}", nonce_msg["signature"])
+    payload = ref_proof_payload(A.identity.fingerprint, srv.fingerprint, n_a, script.state["commitment"])
+    assert app_helpers.ref_verify(A.identity.cert_pem(), payload, bytes.fromhex(nonce_msg["signature"]))
+    wrong = ref_proof_payload(srv.fingerprint, A.identity.fingerprint, n_a, script.state["commitment"])
+    assert not app_helpers.ref_verify(A.identity.cert_pem(), wrong, bytes.fromhex(nonce_msg["signature"]))
+
 
 @integration
 @pytest.mark.parametrize("cert_kind", ["ca", "pem_rac"])
 async def test_p21_bad_cert_in_pair_request(node_factory, raw_pairing_client, app_helpers, cert_kind):
     B = await node_factory("B", accept_pairing=True, answer=True)
     device_id = app_helpers.new_device_id()
-    pem = app_helpers.fake_cert_with_cn(device_id, ca=True) if cert_kind == "ca" else GARBAGE_PEM
+    pem = app_helpers.fake_cert_with_cn(device_id, ca=True)[0] if cert_kind == "ca" else GARBAGE_PEM
     c = await raw_pairing_client(B.port)
     c.send_dict(app_helpers.hello_dict(device_id))
     c.send_dict({"type": "pair_request", "cert": pem})
@@ -1189,7 +1267,7 @@ async def test_stranger_after_commit_holds_gate_only_until_nonce_timeout(
     sent = [0]
     frame_len = 0
     if case == "nho_giot_nonce":
-        data = encode_message({"type": "pair_nonce", "nonce": c.nonce.hex()})
+        data = encode_message(c.nonce_message())
         frame_len = len(data)
         drip = asyncio.create_task(_drip(c, data, sent), name="test.drip")
     try:
@@ -2273,7 +2351,7 @@ async def test_l2_cancel_pair_with_while_yielding_cancels_replacement(
     assert outgoing.id in hi.pairing._runs and not task.done(), "phải đang trong cửa sổ nhường phiên"
 
     if nonce_at == "cung_luc_huy":
-        c.send_dict({"type": "pair_nonce", "nonce": c.nonce.hex()})  # chưa nhường loop
+        c.send_dict(c.nonce_message())  # chưa nhường loop
     t0 = time.monotonic()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -2302,24 +2380,94 @@ async def test_l2_cancel_pair_with_while_yielding_cancels_replacement(
     assert hi.store.get(lo.device_id) is None
 
 
-# --- M5: ghép đôi lại ở vai trả lời không đổi tên đã lưu -------------------------------------------
+# --- M5 lật lại (đặc tả 9.5, D1/D2): máy lạ bị chặn trước khi hiện mã; ghép đôi lại thì đổi tên ---
 
 
 @integration
-async def test_m5_stranger_with_public_cert_of_trusted_device_cannot_rename_it(
-    node_factory, raw_pairing_client, app_helpers, tmp_path
+@pytest.mark.parametrize("forgery", ["khoa_may_la", "chu_ky_rac"])
+async def test_m5_stranger_with_public_cert_of_trusted_device_is_invalid_before_code(
+    node_factory, raw_pairing_client, tmp_path, forgery
 ):
-    """M5: B tin V tên “PC-Nha”. Một máy lạ (kết nối ẩn danh, không có khóa riêng của V) gửi chứng
-    chỉ công khai của V với tên “Laptop-Bob”, hai bên xác nhận → B vẫn lưu V tên “PC-Nha” (trong
-    RAM và trên đĩa), fingerprint không đổi, chỉ cập nhật thời điểm ghép đôi; kết quả và lời hỏi
-    cho giao diện thấy tên đã lưu."""
+    """B tin V tên “PC-Nha”. Một máy lạ M (kết nối ẩn danh) gửi chứng chỉ công khai của V với tên
+    “Laptop-Bob” nhưng không có khóa riêng của V: ký bằng khóa của chính M, hoặc chữ ký rác.
+
+    → B kết thúc `protocol_error` ngay khi nhận `pair_nonce`: không hiện mã (`code_shown=False`,
+    không có lời hỏi), không gửi `pair_reveal`, M nhận `pair_abort{invalid}`; `trusted.json` không
+    đổi (tên, fingerprint, `paired_at`); IP của M bị tính một lần thất bại (chờ tăng dần)."""
     victim = load_or_create_identity(tmp_path / "V")
-    app_helpers.ensure_identity(tmp_path / "B")
+    stranger = load_or_create_identity(tmp_path / "M")
+    load_or_create_identity(tmp_path / "B")
+    TrustStore.load(tmp_path / "B").add(peer_cert_from_pem(victim.cert_pem()), "PC-Nha", now=OLD_PAIRED_AT)
+    trusted = tmp_path / "B" / "trusted.json"
+    before = trusted.read_bytes()
+    B = await node_factory("B", accept_pairing=True, answer=True)
+
+    c = await raw_pairing_client(B.port)
+    await c.begin(victim, "Laptop-Bob", signing_key=stranger)
+    await c.read_commit()
+    if forgery == "khoa_may_la":
+        await c.send_nonce()
+    else:
+        await c.send_nonce(signature_hex=secrets.token_hex(64))
+    msgs = await c.read_until_closed(5)
+    assert msgs == [INVALID], msgs
+    assert all(m.get("type") != "pair_reveal" for m in msgs)
+
+    await B.rec.wait_finished(1)
+    result = B.rec.finished[0]
+    assert result.outcome == PairingOutcome.PROTOCOL_ERROR
+    assert result.code_shown is False
+    assert result.device is None
+    assert B.rec.prompts == []
+    await wait_until(lambda: B.pairing.gate.active is None, 1.0)
+    assert B.pairing.gate.failures(LOCAL) == 1
+    assert B.pairing.gate.blocked_until(LOCAL) is not None
+    assert B.pairing.gate.recent_codes(asyncio.get_running_loop().time()) == 0, "không có mã nào được hiện"
+    assert trusted.read_bytes() == before, "trusted.json bị ghi"
+    for store in (B.store, TrustStore.load(B.dir)):
+        device = store.get(victim.device_id)
+        assert (device.name, device.fingerprint, device.paired_at) == (
+            "PC-Nha",
+            victim.fingerprint,
+            OLD_PAIRED_AT,
+        )
+        assert len(store.devices()) == 1
+
+
+@integration
+async def test_m5_stranger_after_bad_signature_is_backed_off(node_factory, raw_pairing_client, tmp_path):
+    """Sau một chữ ký sai, IP đó nhận `pair_abort{busy}` trong thời gian chờ tăng dần (protocol 5.3)."""
+    victim = load_or_create_identity(tmp_path / "V")
+    stranger = load_or_create_identity(tmp_path / "M")
+    B = await node_factory("B", accept_pairing=True, answer=True)
+    c = await raw_pairing_client(B.port)
+    await c.begin(victim, "Laptop-Bob", signing_key=stranger)
+    await c.read_commit()
+    await c.send_nonce()
+    assert await c.read_until_closed(5) == [INVALID]
+    await wait_until(lambda: B.pairing.gate.active is None, 1.0)
+    assert B.pairing.gate.failures(LOCAL) == 1
+
+    again = await raw_pairing_client(B.port)
+    await again.begin(stranger, "M")
+    assert await again.read_until_closed(5) == [{"type": "pair_abort", "reason": "busy"}]
+    assert B.rec.prompts == []
+
+
+@integration
+async def test_m5_real_repair_by_trusted_device_updates_name_as_responder(
+    node_factory, raw_pairing_client, tmp_path
+):
+    """Ngược lại với máy lạ: chính V (có khóa riêng) ghép đôi lại với tên mới “Laptop-Mới” → B hiện
+    mã, hai bên xác nhận, B cập nhật tên thành “Laptop-Mới” (RAM và đĩa), fingerprint giữ nguyên,
+    `paired_at` mới; lời hỏi vẫn cho thấy tên đã lưu cũ (`known_name`)."""
+    victim = load_or_create_identity(tmp_path / "V")
+    load_or_create_identity(tmp_path / "B")
     TrustStore.load(tmp_path / "B").add(peer_cert_from_pem(victim.cert_pem()), "PC-Nha", now=OLD_PAIRED_AT)
     B = await node_factory("B", accept_pairing=True, answer=True)
 
     c = await raw_pairing_client(B.port)
-    await c.begin(victim, "Laptop-Bob")
+    await c.begin(victim, "Laptop-Mới")
     code = await c.run_to_code(B.identity.fingerprint)
     assert await c.read_type("pair_confirm") == {"type": "pair_confirm"}
     c.send_dict({"type": "pair_confirm"})
@@ -2329,37 +2477,30 @@ async def test_m5_stranger_with_public_cert_of_trusted_device_cannot_rename_it(
 
     prompt = B.rec.prompts[0]
     assert prompt.code == code
-    assert (prompt.peer_name, prompt.peer_device_id) == ("Laptop-Bob", victim.device_id)
-    assert prompt.known_name == "PC-Nha"
+    assert (prompt.peer_name, prompt.known_name) == ("Laptop-Mới", "PC-Nha")
     result = B.rec.finished[0]
     assert result.outcome == PairingOutcome.PAIRED
-    assert result.known_name == "PC-Nha"
-    assert result.device is not None
-    assert (result.device.name, result.device.fingerprint) == ("PC-Nha", victim.fingerprint)
+    assert result.code_shown is True
+    assert (result.device.name, result.device.fingerprint) == ("Laptop-Mới", victim.fingerprint)
     for store in (B.store, TrustStore.load(B.dir)):
         device = store.get(victim.device_id)
-        assert device is not None
-        assert (device.name, device.fingerprint) == ("PC-Nha", victim.fingerprint)
-        assert device.paired_at > OLD_PAIRED_AT, "ghép đôi lại vẫn cập nhật paired_at"
+        assert (device.name, device.fingerprint) == ("Laptop-Mới", victim.fingerprint)
+        assert device.paired_at > OLD_PAIRED_AT
         assert len(store.devices()) == 1
-    assert "Laptop-Bob" not in (B.dir / "trusted.json").read_text(encoding="utf-8")
 
 
 @integration
-@pytest.mark.parametrize("known_by", ["responder", "initiator"])
-async def test_m5_repair_keeps_name_as_responder_updates_name_as_initiator(
-    node_factory, app_helpers, tmp_path, known_by
-):
-    """Ghép đôi lại với máy thật (cùng danh tính), mỗi lần chỉ một bên đã lưu máy kia:
-    - bên trả lời đã lưu A là “A-cũ” → giữ “A-cũ”;
-    - bên khởi xướng đã lưu B là “B-cũ” → đổi thành “B” (hồi quy test_p13).
-    `PairingPrompt.known_name` = tên đã lưu ở bên đã ghép đôi, None ở bên ghép đôi lần đầu."""
+@pytest.mark.parametrize("known_by", ["responder", "initiator", "both"])
+async def test_m5_repair_updates_name_in_both_roles(node_factory, app_helpers, tmp_path, known_by):
+    """D2: ghép đôi lại với máy thật (cùng danh tính) thì bên nào đã lưu cũng cập nhật tên theo
+    `hello` (“A-cũ” → “A”, “B-cũ” → “B”) và `paired_at`. `PairingPrompt.known_name` = tên đã lưu ở bên
+    đã ghép đôi, None ở bên ghép đôi lần đầu. Hai bên thật vẫn ghép đôi được (chữ ký đúng)."""
     id_a = app_helpers.ensure_identity(tmp_path / "A")
     id_b = app_helpers.ensure_identity(tmp_path / "B")
-    if known_by == "responder":
-        app_helpers.seed_trust(tmp_path / "B", id_a.cert_pem(), "A-cũ")
-    else:
-        app_helpers.seed_trust(tmp_path / "A", id_b.cert_pem(), "B-cũ")
+    if known_by in ("responder", "both"):
+        TrustStore.load(tmp_path / "B").add(peer_cert_from_pem(id_a.cert_pem()), "A-cũ", now=OLD_PAIRED_AT)
+    if known_by in ("initiator", "both"):
+        TrustStore.load(tmp_path / "A").add(peer_cert_from_pem(id_b.cert_pem()), "B-cũ", now=OLD_PAIRED_AT)
     B = await node_factory("B", accept_pairing=True, answer=True)
     A = await node_factory("A", answer=True)
     assert (A.id, B.id) == (id_a.device_id, id_b.device_id)
@@ -2371,18 +2512,56 @@ async def test_m5_repair_keeps_name_as_responder_updates_name_as_initiator(
     assert rb.outcome == PairingOutcome.PAIRED
     pa, pb = A.rec.prompts[0], B.rec.prompts[0]
     assert (pa.peer_name, pb.peer_name) == ("B", "A")
-    if known_by == "responder":
-        assert pb.known_name == "A-cũ" and pa.known_name is None
-        assert rb.device.name == "A-cũ"
-        assert B.store.get(A.id).name == "A-cũ"
-        assert TrustStore.load(B.dir).get(A.id).name == "A-cũ"
-        assert result.device.name == "B" and A.store.get(B.id).name == "B"
-    else:
-        assert pa.known_name == "B-cũ" and pb.known_name is None
-        assert result.device.name == "B"
-        assert A.store.get(B.id).name == "B"
-        assert TrustStore.load(A.dir).get(B.id).name == "B"
-        assert rb.device.name == "A" and B.store.get(A.id).name == "A"
+    assert pb.known_name == ("A-cũ" if known_by in ("responder", "both") else None)
+    assert pa.known_name == ("B-cũ" if known_by in ("initiator", "both") else None)
+    assert rb.device.name == "A" and result.device.name == "B"
+    for store in (B.store, TrustStore.load(B.dir)):
+        assert store.get(A.id).name == "A"
+        assert store.get(A.id).paired_at > OLD_PAIRED_AT
+    for store in (A.store, TrustStore.load(A.dir)):
+        assert store.get(B.id).name == "B"
+        assert store.get(B.id).paired_at > OLD_PAIRED_AT
+    assert "A-cũ" not in (B.dir / "trusted.json").read_text(encoding="utf-8")
+    assert "B-cũ" not in (A.dir / "trusted.json").read_text(encoding="utf-8")
+
+
+@integration
+async def test_fake_cert_helper_key_signs_valid_pair_nonce(
+    node_factory, raw_pairing_client, app_helpers, tmp_path
+):
+    """`fake_cert_with_cn` trả kèm khóa: danh tính dựng từ đó ký được `pair_nonce` hợp lệ, nên B
+    (chưa từng ghép đôi với nó) hiện mã."""
+    B = await node_factory("B", accept_pairing=True)
+    pem, key_pem = app_helpers.fake_cert_with_cn(app_helpers.new_device_id())
+    own = app_helpers.identity_from_pem(tmp_path / "own", peer_cert_from_pem(pem).device_id, pem, key_pem)
+    c = await raw_pairing_client(B.port)
+    await c.begin(own, "Own")
+    code = await c.run_to_code(B.identity.fingerprint)
+    await B.rec.wait_prompts(1)
+    assert B.rec.prompts[0].code == code
+    c.abort()
+    await B.rec.wait_finished(1, timeout=3)
+    assert B.rec.finished[0].code_shown is True
+
+
+# --- Danh tính hỏng ở `PairingService` (đặc tả 9.5: `load_pairing_signer` khi khởi tạo) -----------
+
+
+async def test_service_with_key_not_matching_cert_raises_identity_error(service_parts, tmp_path):
+    import dataclasses
+
+    identity, hello, store, finished = service_parts
+    other = load_or_create_identity(tmp_path / "khac")
+    broken = dataclasses.replace(identity, key_path=other.key_path)
+    with pytest.raises(IdentityError):
+        make_service((broken, hello, store, finished))
+
+
+async def test_service_with_corrupt_key_file_raises_identity_error(service_parts):
+    identity, hello, store, finished = service_parts
+    identity.key_path.write_bytes(b"rac")
+    with pytest.raises(IdentityError):
+        make_service((identity, hello, store, finished))
 
 
 # --- L3: gửi `pair_confirm` lỗi thì không lưu -----------------------------------------------------
@@ -2554,9 +2733,9 @@ async def test_l4_code_shown_false_for_identity_conflict(node_factory, app_helpe
     B = await node_factory("B", accept_pairing=True, answer=True)
     A = await node_factory("A", answer=True)
     if known_by == "initiator":
-        A.store.add(peer_cert_from_pem(app_helpers.fake_cert_with_cn(B.id)), "B-cũ")
+        A.store.add(peer_cert_from_pem(app_helpers.fake_cert_with_cn(B.id)[0]), "B-cũ")
     else:
-        B.store.add(peer_cert_from_pem(app_helpers.fake_cert_with_cn(A.id)), "A-cũ")
+        B.store.add(peer_cert_from_pem(app_helpers.fake_cert_with_cn(A.id)[0]), "A-cũ")
     result = await pair(A, B)
     assert result.code_shown is False
     if known_by == "initiator":

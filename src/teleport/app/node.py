@@ -427,7 +427,8 @@ class Node:
         """Lấy `node.lock`, nạp danh tính và kho tin cậy, mở cổng, bật mDNS (nếu có).
 
         Lỗi bay ra sau khi đã dọn (đóng cổng, đóng mDNS, nhả khóa): NodeLockedError,
-        IdentityError, TrustStoreError, ConfigDirError (OSError khi lấy khóa, nạp danh
+        IdentityError (cả khi `PairingService` không đọc được khóa để ký lúc ghép đôi),
+        TrustStoreError, ConfigDirError (OSError khi lấy khóa, nạp danh
         tính hay kho tin cậy), OSError (không mở được cổng), ValueError (`host` sai). Bị
         hủy lần nữa trong lúc dọn thì cổng vẫn đóng đồng bộ trước khi nhả khóa, còn mDNS
         đóng nền sau khi đã nhả khóa. Lỗi mDNS không làm `start` thất bại (xem

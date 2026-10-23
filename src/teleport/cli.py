@@ -205,8 +205,8 @@ def outcome_message(result: PairingFinished, *, seen_name: str | None = None) ->
     `seen_name`: tên của đích thấy qua mDNS (`pair <tên>`); khi có, “không kết nối được”
     đổi thành câu “Thấy X nhưng không kết nối được…”.
 
-    Đã ghép đôi: dùng tên vừa lưu (`device.name`); ghép đôi lại ở vai trả lời thì đó là tên
-    đã lưu từ trước, không phải tên máy kia tự xưng. Phiên chưa xong mà chưa hiện mã
+    Đã ghép đôi: dùng tên vừa lưu (`device.name`, tên máy kia gửi trong `hello`, ở cả hai
+    vai, kể cả khi ghép đôi lại). Phiên chưa xong mà chưa hiện mã
     (`code_shown` False) thì không nhắc so mã, câu theo vai. Danh tính khác ở vai trả lời:
     `pair_request` chưa được xác minh nên không gợi ý hủy ghép đôi máy thật.
     """
@@ -404,8 +404,9 @@ def _prompt_lines(prompt: PairingPrompt, *, listening: bool) -> list[str]:
     """Các dòng của lời hỏi ghép đôi trước câu “Trùng khớp?” (mvp mục 7.2).
 
     Thứ tự bắt buộc: tiêu đề cố định, dòng mã (chỉ nhãn và mã), cảnh báo số mã (nếu có),
-    tên máy kia tự xưng, tên đã lưu (nếu đã ghép đôi). Tên chỉ hiện qua `display_name`,
-    trong “…”, sau dòng mã: kẻ đứng giữa đặt tên trông như mã cũng không chen được lên trước.
+    tên máy kia tự xưng, tên đã lưu (nếu đã ghép đôi), tên mới (nếu ghép đôi lại sẽ đổi tên).
+    Tên chỉ hiện qua `display_name`, trong “…”, sau dòng mã: kẻ đứng giữa đặt tên trông
+    như mã cũng không chen được lên trước.
     """
     short_id = prompt.peer_device_id[:8]
     lines = [
@@ -419,10 +420,10 @@ def _prompt_lines(prompt: PairingPrompt, *, listening: bool) -> list[str]:
     lines.append(f"Máy kia tự xưng là “{name}” (mã máy {short_id}, {prompt.address}).")
     if prompt.known_name is not None:
         known = display_name(prompt.known_name)
-        line = f"Máy này đã ghép đôi với mã máy {short_id} trước đây, tên đã lưu: “{known}”."
-        if prompt.role is Role.RESPONDER:  # vai trả lời giữ tên đã lưu (protocol mục 5.5)
-            line += " Ghép đôi lại sẽ giữ nguyên tên đã lưu."
-        lines.append(line)
+        lines.append(f"Máy này đã ghép đôi với mã máy {short_id} trước đây, tên đã lưu: “{known}”.")
+        # Ghép đôi lại cập nhật tên theo hello ở cả hai vai (protocol mục 5.5).
+        if prompt.known_name != prompt.peer_name:
+            lines.append(f"Ghép đôi xong, tên sẽ đổi thành “{name}”.")
     return lines
 
 
