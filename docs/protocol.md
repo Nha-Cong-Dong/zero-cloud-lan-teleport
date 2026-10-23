@@ -50,18 +50,19 @@ Phần ở tầng mạng đã cài ở `teleport.net.connection` ✅; những ch
 | | Kết nối ghép đôi | Kết nối điều khiển | Kết nối dữ liệu |
 |---|---|---|---|
 | Bắt tay TLS + `hello` + message mở đầu | 10 s ✅ | 10 s ✅ | 10 s 📝 |
-| Kích thước message tối đa | **16 KiB** (`MAX_PAIRING_MESSAGE_SIZE`) ✅ | 16 MiB (`MAX_MESSAGE_SIZE`) ✅; `hello` và `control_open` 16 KiB ✅ | 16 KiB cho `hello`/`data_open`; khung khối theo mục 4 📝 |
+| Kích thước message tối đa | **16 KiB** (`MAX_PAIRING_MESSAGE_SIZE`) ✅ | **1 MiB** (`MAX_MESSAGE_SIZE`) ✅; `hello` và `control_open` 16 KiB ✅ | 16 KiB cho `hello`/`data_open`; khung khối theo mục 4 📝 |
 | Sau khi mở đầu | Bên trả lời chờ `pair_nonce` **5 s** kể từ khi gửi `pair_commit` ✅ (bên dưới); chờ mỗi message khác 10 s; riêng lúc chờ người dùng xác nhận: 60 s, cộng 10 s chờ `pair_confirm` của máy kia (bên dưới) | Keepalive (bên dưới) ✅; một đoạn gửi không xong (`drain()`) trong 30 s → đóng ✅ | Bên nhận file: không nhận được byte nào trong 30 s → đóng. Bên gửi file: `drain()` không xong trong 30 s, hoặc mất kết nối điều khiển với máy đó → đóng 📝 |
 | Số kết nối đồng thời | 1 phiên ghép đôi ✅ (`PairingGate`, nối vào node ở `teleport.app.pairing`); yêu cầu bị từ chối nhận `pair_abort{busy}` rồi bị đóng, tổng cộng tối đa 1 s ✅; phiên kết thúc mà không ghép đôi được cũng gửi `pair_abort` (nếu có) rồi đóng trong tổng cộng tối đa 1 s, nên máy kia không đọc cũng không giữ được phiên lâu hơn ✅; kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng ✅ (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) ✅ (`teleport.core.links`, `teleport.app.node`) | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác xếp hàng 📝 |
 
 - **Kết nối đang mở đầu** (từ lúc nhận TCP tới khi xác định loại): tối đa **4 mỗi IP, 64 tổng**; quá thì đóng ngay, trước cả bắt tay TLS ✅. Kết nối đã xác định loại không còn tính vào giới hạn này.
 - Kết nối ẩn danh vượt 1 mỗi IP hoặc 8 tổng bị đóng ngay sau bắt tay TLS, không nhận `hello` ✅. Kết nối ẩn danh thôi tính khi đã gửi `pair_request` (lúc đó node quyết định ngay có nhận phiên hay không, mục 5.3) hoặc khi đóng.
 - Từ chối trong lúc mở đầu luôn là đóng ngay (TCP reset), không đóng gọn, để máy không đọc dữ liệu không giữ được socket.
-- Header vượt giới hạn → đóng kết nối ngay, không đọc thân (`read_message(reader, max_size)`) ✅.
+- Header vượt giới hạn → đóng kết nối ngay, không đọc thân (`read_message(reader, max_size)`, `Connection.receive`) ✅.
+- **Giới hạn đã biết** của kết nối điều khiển: thân message được giải mã JSON ngay trên event loop, nên một thiết bị đã ghép đôi gửi liên tục message 1 MiB hợp lệ vẫn làm loop bận. Chấp nhận được: chỉ thiết bị tin cậy mới mở được kết nối điều khiển, và trần 1 MiB giữ mỗi lần giải mã ở mức ngắn.
 - `read_message` không tự đặt thời gian chờ; tầng gọi nó bọc trong `asyncio.timeout`.
 - **Xác nhận ghép đôi** ✅ (`teleport.core.pairing`): mỗi máy tính 60 s từ lúc hiện mã; người dùng máy này phải quyết trong 60 s đó. Máy đã gửi `pair_confirm` mà chưa nhận `pair_confirm` của máy kia thì chờ thêm 10 s (`CONFIRM_GRACE`, tới 70 s kể từ lúc hiện mã), vì người dùng máy kia có thể bấm sát giây thứ 60 và message còn phải đi qua mạng. Hết giờ → `pair_abort{timeout}`; quyết định tới sau hạn chót vẫn là hết giờ.
 - **Chờ `pair_nonce`** ✅ (`teleport.core.pairing.NONCE_TIMEOUT`): hạn của bên trả lời ngắn hơn các bước khác vì đây là lúc máy lạ giữ được phiên ghép đôi duy nhất mà chưa làm hiện mã nào (mục 5.3). Hạn này vẫn chịu được khoảng 3 lần mất gói liên tiếp: TCP gửi lại sau ít nhất 200–300 ms rồi nhân đôi (0,3 → 0,6 → 1,2 s), Wi-Fi tiết kiệm điện thêm 100–300 ms. Hết hạn → `pair_abort{timeout}`, tính là hết giờ trong chờ tăng dần theo IP (mục 5.3).
-- **Keepalive** trên kết nối điều khiển ✅ (`teleport.core.keepalive`, `teleport.net.connection.ControlChannel`): bên nào không gửi gì trong 10 s (mọi message đều tính, kể cả `pong`) thì gửi `ping`; không nhận được byte nào trong 30 s → coi là mất kết nối (mục 6.2). Tính theo **byte**: đọc được một phần message cũng là “nhận”, nên message lớn đi chậm trên mạng yếu không bị coi là mất kết nối. Nhận `ping` thì bắt buộc trả `pong` với đúng `t` đó; `pong` không cần trả lời.
+- **Keepalive** trên kết nối điều khiển ✅ (`teleport.core.keepalive`, `teleport.net.connection.ControlChannel`): bên nào không gửi gì trong 10 s (mọi message đều tính, kể cả `pong`) thì gửi `ping`; không nhận được byte nào trong 30 s → coi là mất kết nối (mục 6.2). Tính theo **byte**: đọc được một phần message cũng là “nhận”, nên message lớn đi chậm trên mạng yếu không bị coi là mất kết nối. Nhận `ping` thì bắt buộc trả `pong` mang `t` của `ping` **mới nhất chưa trả**: `ping` dồn lại trong lúc `pong` trước chưa gửi được thì gộp thành một `pong` (mỗi kết nối có tối đa một `pong` đang chờ gửi), nên máy gửi lũ `ping` mà không đọc không làm bên kia phình bộ nhớ. `pong` không cần trả lời.
 - **Gửi không tiến triển** trên kết nối điều khiển ✅: message được ghi theo đoạn 64 KiB; một đoạn không gửi xong (`drain()`) trong 30 s → đóng kết nối. Nếu không, máy kia chỉ gửi mà không bao giờ đọc sẽ làm bên gửi treo mãi, vì keepalive vẫn thấy có byte tới.
 
 ## 3. Kênh điều khiển
@@ -78,6 +79,7 @@ Mỗi message:
 
 - Độ dài tối đa theo loại kết nối (mục 2.3). Header lớn hơn thì đóng kết nối ngay, không đọc thân.
 - Thân phải là một **JSON object**. Mảng, số hay chuỗi ở cấp ngoài cùng đều bị coi là lỗi.
+- Thân mã hóa đúng **UTF-8, không BOM**; UTF-16, UTF-32, BOM UTF-8 hay chuỗi byte UTF-8 sai đều là lỗi khung ✅.
 - JSON có số nguyên quá dài (hơn 4300 chữ số) hoặc lồng sâu hơn **64 cấp** (object ngoài cùng tính là cấp 1) cũng là lỗi khung.
 - Đóng kết nối đúng ở ranh giới giữa hai message là kết thúc bình thường. Đóng giữa chừng một message là lỗi.
 - Mọi message có trường `"type"`. Trường không biết thì bỏ qua (để mở rộng về sau); thiếu trường bắt buộc thì là lỗi.
@@ -104,7 +106,7 @@ Mỗi message:
 | `complete` | gửi → nhận | điều khiển | `transfer_id`, `file_index`, `merkle_root` (64 hex); gửi lại được (mục 6.3) |
 | `verified` | nhận → gửi | điều khiển | `transfer_id`, `file_index`; gửi lại được (mục 6.3) |
 | `cancel` | ↔ | điều khiển | `transfer_id`, `reason`: `user` · `source_changed` · `unknown_transfer` · `error` |
-| `clipboard` | ↔ | điều khiển | `kind`: `text` · `image/png`, `sha256`, `data` (văn bản UTF-8 hoặc base64; dữ liệu gốc trước base64 ≤ 10 MiB) |
+| `clipboard` | ↔ | điều khiển | `kind`: `text` · `image/png`, `sha256`, `data` (văn bản UTF-8 hoặc base64). Cả văn bản lẫn ảnh đều chia thành nhiều mảnh, mỗi message sau mã hóa ≤ 768 KiB để luôn vừa trần 1 MiB (mục 2.3); cách chia chốt ở Giai đoạn 5 |
 | `ping` / `pong` | ↔ | điều khiển | `t` (số nguyên, mili giây, 0 … 2⁵³ − 1) |
 
 Hai bên gửi `hello` ngay sau khi bắt tay TLS, trên mọi loại kết nối. Khác `protocol` thì đóng kết nối và báo người dùng cập nhật app.
@@ -131,7 +133,7 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 - Trên kết nối điều khiển ✅: `type` chưa biết thì bỏ qua; khung sai, message sai trường, hoặc message sai loại kết nối → đóng kết nối điều khiển (nối lại theo mục 6.2).
 - **`t`** (`ping`/`pong`): số nguyên JSON 0 … 2⁵³ − 1; không nhận `true`/`false` hay số thực (kể cả `1.0`, `1e3`). Mili giây theo đồng hồ của bên gửi `ping` (chỉ để đo độ trễ, không so giữa hai máy). Trả lời `ping`: mục 2.3.
 - 📝 **`seq`**, **`resume_seq`**: số nguyên JSON 1 … 2⁵³ − 1; không nhận `true`/`false` hay số thực. Phạm vi của `seq`: mục 4.1.
-- 📝 Quy tắc cho message truyền file (chốt khi cài đặt ở Giai đoạn 2): `transfer_id` đúng 32 hex thường; `file_index` < số file trong `offer`; `size` và `mtime` là số nguyên ≥ 0, `size` ≤ 2⁵²; `name` qua bộ làm sạch tên file (mục 4.4); `bitfield` dài đúng ⌈số khối / 8⌉ byte, các bit thừa ở cuối bằng 0.
+- 📝 Quy tắc cho message truyền file (chốt khi cài đặt ở Giai đoạn 2): `transfer_id` đúng 32 hex thường; `file_index` < số file trong `offer`; `size` và `mtime` là số nguyên ≥ 0, `size` ≤ 2⁴² (4 TiB; bên gửi chặn file lớn hơn ngay lúc chọn, và `resume` của file lớn nhất có bitfield 512 KiB nên vẫn vừa trần 1 MiB); `name` dài ≤ 255 byte UTF-8, không chứa ký tự loại `Cc`, và qua bộ làm sạch tên file (mục 4.4); `bitfield` dài đúng ⌈số khối / 8⌉ byte, các bit thừa ở cuối bằng 0. Bên gửi tự cắt tên dài hơn (giữ đuôi file); tên có ký tự điều khiển thì bên gửi từ chối và báo lỗi trên máy mình, không gửi gì. Nhờ vậy `offer` 1000 file luôn vừa trần 1 MiB. Bên nhận vẫn kiểm đủ các luật trên, vì dữ liệu từ máy khác không được tin.
 
 ## 4. Kênh dữ liệu 📝
 
