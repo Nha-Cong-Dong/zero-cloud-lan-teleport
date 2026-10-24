@@ -2398,12 +2398,18 @@ def types_in(data: bytes) -> list[str]:
 
 async def control_pair(side: str, h, ids, raw_client):
     """Kết nối điều khiển phía `side` (client: open_control; server: Listener giao) và hàm
-    `other_side_sees_close()` khẳng định máy kia thấy kết nối bị đóng."""
+    `other_side_sees_close()` khẳng định máy kia thấy kết nối bị đóng.
+
+    Trước lúc đóng máy kia chỉ được thấy `ping` keepalive: máy bận (GC thế hệ 2 khi chạy cả bộ,
+    thiếu CPU) làm vòng lặp dừng lâu hơn PI ngay trước lần hủy, nên `run` gửi `ping` một cách
+    hợp lệ trước khi bị hủy. Mọi message khác, hoặc kết nối không đóng trong 2 s, đều là lỗi.
+    """
     if side == "server":
         peer, conn = await raw_control(raw_client, h, ids)
 
         async def other_side_sees_close() -> None:
-            await peer.expect_closed(2.0)
+            _, data = await peer.expect_closed(2.0)
+            assert set(types_in(data)) <= {"ping"}, f"còn nhận được message: {frames_in(data)!r}"
 
         return conn, other_side_sees_close
 
@@ -2411,7 +2417,15 @@ async def control_pair(side: str, h, ids, raw_client):
     server = await h.next()
 
     async def other_side_sees_close() -> None:
-        await receive_closed(server, 2.0)
+        async with asyncio.timeout(2.0):
+            while True:
+                try:
+                    msg = await server.receive()
+                except ConnectionLostError:
+                    return
+                if msg is None:
+                    return
+                assert isinstance(msg, Ping), f"còn nhận được message: {msg!r}"
 
     return conn, other_side_sees_close
 
@@ -2430,13 +2444,15 @@ def new_live_tasks(before: set[asyncio.Task]) -> list[str]:
 @pytest.mark.parametrize("yields", [1, 2, 3, 5])
 @pytest.mark.parametrize("side", ["client", "server"])
 async def test_cancelling_run_twice_still_closes_connection(
-    fast, listener_factory, raw_client, ids, side, yields
+    fast, monkeypatch, listener_factory, raw_client, ids, side, yields
 ):
     """F1 / mục 3.4 bước 5: hủy `run`, rồi hủy lần nữa khi nó đang dọn → kết nối vẫn đóng.
 
     Móc keepalive phải được gỡ, máy kia thấy EOF/reset, không task nào sống lâu hơn `run`,
     và gửi tiếp qua kết nối chỉ ra ConnectionLostError.
     """
+    # Test này không kiểm hạn mở kết nối: 0,5 s của `fast` hụt khi GC dừng vòng lặp lúc dựng kết nối.
+    monkeypatch.setattr(connection, "OPENING_TIMEOUT", 5.0)
     h = await listener_factory(ids.server, trusted=[ids.b])
     conn, other_side_sees_close = await control_pair(side, h, ids, raw_client)
     before = asyncio.all_tasks()
