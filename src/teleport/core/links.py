@@ -5,7 +5,7 @@ tầng `app` đưa sự kiện (mDNS thấy/mất thiết bị, danh sách tin c
 lần mở kết nối, kết nối vào, kết nối mất, mạng đổi, hẹn giờ) cùng thời gian monotonic
 `now` vào `LinkTracker`, rồi thực hiện các hành động nó trả về:
 
-- `Connect`: mở kết nối điều khiển (luôn so fingerprint đã lưu trong `trusted.json`),
+- `Connect`: mở kết nối điều khiển (luôn kiểm với chứng chỉ đã lưu trong `trusted.json`),
   rồi báo kết quả qua `connect_finished`;
 - `CancelConnect`: hủy lần mở đang chạy (không báo `connect_finished` cho lần đó);
 - `CloseConnection`: đóng một kết nối;

@@ -8,14 +8,17 @@ keepalive ở `teleport.core.keepalive`. Không có quyết định nghiệp v�
 - `Listener` nhận **TCP trần** rồi gọi `start_tls` cho từng kết nối với `SSLContext`
   hiện tại, nên đổi danh sách tin cậy (`update_trusted`) có hiệu lực ngay mà không
   mở lại cổng. Kết nối đã bắt đầu bắt tay bằng context cũ được kiểm lại lúc nhận
-  `control_open` (protocol mục 7).
+  `control_open` (protocol mục 7). Nhận hay từ chối một kết nối (số kết nối đang mở
+  đầu, tốc độ bắt tay, pool ưu tiên cho IP đã xác thực mTLS) do
+  `teleport.core.admission.AdmissionGate` quyết định; `Listener` chỉ thực thi.
 - `open_pairing` / `open_control` thử song song mọi địa chỉ của một máy và giữ kết
-  nối thành công đầu tiên.
+  nối thành công đầu tiên. `open_control` kiểm chứng chỉ server ngay trong bắt tay.
 - `Connection` gửi/nhận message đã kiểm theo loại kết nối; `ControlChannel` giữ kết
   nối điều khiển sống bằng `ping`/`pong`.
 
-Các hằng số thời gian và giới hạn được đọc **lúc dùng** (biến toàn cục của module), để
-test rút ngắn được bằng `monkeypatch.setattr`.
+Các hằng số thời gian được đọc **lúc dùng** (biến toàn cục của module), để test rút
+ngắn được bằng `monkeypatch.setattr`; các giới hạn số kết nối và tốc độ nằm ở
+`teleport.core.admission`, cũng đọc lúc dùng.
 
 Không bao giờ ghi nội dung message hay chứng chỉ vào log (mvp N9): chỉ ghi `type`,
 địa chỉ, fingerprint và lý do. Các lần từ chối theo từng kết nối ghi ở mức DEBUG, để
@@ -27,7 +30,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
-import re
 import ssl
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
@@ -35,6 +37,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Self, cast
 
+from teleport.core.admission import AdmissionGate, Refusal, Ticket
 from teleport.core.framing import (
     HEADER,
     MAX_MESSAGE_SIZE,
@@ -71,14 +74,11 @@ from teleport.trust.identity import (
     PeerCert,
     fingerprint_of_der,
     peer_cert_from_der,
+    peer_cert_from_pem,
 )
 
 DEFAULT_PORT = 47474  # protocol §2.1
 OPENING_TIMEOUT = 10.0  # protocol §2.3: TCP/TLS + hello + message mở đầu, cả chuỗi
-MAX_OPENING_PER_IP = 4  # protocol §2.3: kết nối đang mở đầu (chưa biết loại) mỗi IP
-MAX_OPENING_TOTAL = 64  # protocol §2.3: tổng
-MAX_ANONYMOUS_PER_IP = 1  # protocol §2.3/§5.3: ẩn danh chưa vào phiên, mỗi IP
-MAX_ANONYMOUS_TOTAL = 8  # protocol §2.3/§5.3: tổng
 DRAIN_TIMEOUT = 30.0  # một đoạn gửi không xong trong 30 s → đóng
 CLOSE_TIMEOUT = 5.0  # đóng gọn (TLS close_notify) tối đa 5 s, quá thì abort
 _SEND_CHUNK = 64 * 1024
@@ -86,7 +86,6 @@ _READ_CHUNK = 64 * 1024
 _MAX_ADDRESSES = 16  # số địa chỉ tối đa cho mỗi lần mở kết nối (bằng số địa chỉ mDNS quảng bá)
 
 _TASK_NAME = "teleport.connection"
-_FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
 _BROADCAST = ipaddress.IPv4Address("255.255.255.255")
 _CONTROL_OPEN_FRAME = encode_message(to_dict(ControlOpen()))
 
@@ -116,7 +115,14 @@ class Rejected(ConnectError):
 
 
 class IdentityMismatch(ConnectError):
-    """Sai fingerprint, chứng chỉ server không hợp lệ, hoặc CN ≠ `hello.device_id` (“Danh tính thay đổi”)."""
+    """Chứng chỉ server khác chứng chỉ đã lưu hay không hợp lệ, hoặc CN ≠ `hello.device_id`.
+
+    Thông báo: “Danh tính thay đổi”.
+
+    Khác chứng chỉ đã lưu: hỏng ngay trong bắt tay (kết nối điều khiển), hoặc sai
+    fingerprint sau bắt tay. `actual_fingerprint`: fingerprint chứng chỉ server đã đưa;
+    None khi bắt tay hỏng (không lấy được chứng chỉ của máy kia).
+    """
 
     def __init__(
         self, message: str, *, address: str | None = None, actual_fingerprint: str | None = None
@@ -647,38 +653,6 @@ class _Refused(Exception):
     """Từ chối một kết nối trong lúc mở đầu (chỉ dùng nội bộ, để ghi log lý do)."""
 
 
-class _Counter:
-    """Đếm kết nối theo IP và tổng; mục của một IP bị xóa khi về 0 để dict không phình."""
-
-    def __init__(self) -> None:
-        self.per_ip: dict[str, int] = {}
-        self.total = 0
-
-    def full(self, ip: str, per_ip_limit: int, total_limit: int) -> bool:
-        return self.per_ip.get(ip, 0) >= per_ip_limit or self.total >= total_limit
-
-    def add(self, ip: str) -> None:
-        self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
-        self.total += 1
-
-    def remove(self, ip: str) -> None:
-        count = self.per_ip[ip] - 1
-        if count:
-            self.per_ip[ip] = count
-        else:
-            del self.per_ip[ip]
-        self.total -= 1
-
-
-@dataclass(slots=True)
-class _Slot:
-    """Các bộ đếm một kết nối đang giữ; mỗi bộ được trả đúng một lần."""
-
-    ip: str
-    opening: bool = False
-    anonymous: bool = False
-
-
 def _other_protocol(obj: dict) -> int | None:
     """`protocol` của một dict `hello` khác phiên bản của máy này; None nếu không phải trường hợp đó.
 
@@ -698,6 +672,22 @@ def _server_context(identity: Identity, trusted_certs: Iterable[str]) -> ssl.SSL
         if not isinstance(pem, str) or not pem.isascii():
             raise ValueError("chứng chỉ tin cậy phải là chuỗi PEM ASCII")
     return tls.server_context(identity, pems, allow_anonymous=True)
+
+
+def _pem_fingerprints(trusted_certs: Iterable[str]) -> list[str]:
+    """Fingerprint của các PEM tin cậy đọc được; PEM sai bị bỏ qua (mất ưu tiên là chiều an toàn)."""
+    result: list[str] = []
+    for pem in trusted_certs:
+        try:
+            result.append(peer_cert_from_pem(pem).fingerprint)
+        except InvalidCertificate:
+            log.debug("bỏ qua một chứng chỉ tin cậy không đọc được khi cập nhật ưu tiên")
+    return result
+
+
+def _now() -> float:
+    """Đồng hồ monotonic đưa vào `AdmissionGate` (giờ của loop đang chạy)."""
+    return asyncio.get_running_loop().time()
 
 
 def _check_hello(hello: object) -> Hello:
@@ -732,6 +722,12 @@ class Listener:
 
     Mỗi kết nối hợp lệ được giao cho `on_connection(conn)`; khi coroutine đó kết thúc
     (trả về, raise hay bị hủy), Listener đóng kết nối. Dùng một lần: `start()`, rồi `close()`.
+
+    Mỗi kết nối TCP mới qua `AdmissionGate.admit` trước mọi `await`; bị từ chối thì
+    `transport.abort()` trước TLS (protocol mục 2.3). IP được ưu tiên khi có kết nối điều
+    khiển vào đã qua kiểm `is_trusted`, hoặc khi node báo kết nối điều khiển ra thành
+    công (`note_outgoing_control`); mất ưu tiên khi các kết nối từ IP đó dùng pool ưu
+    tiên mà không bắt tay xong bằng chứng chỉ còn tin cậy vượt ngân sách lỗi (hạ ưu tiên).
     """
 
     def __init__(
@@ -765,8 +761,7 @@ class Listener:
         # Task của mọi kết nối (đang mở đầu hoặc đã giao), kèm writer để abort khi đóng.
         self._tasks: dict[asyncio.Task, asyncio.StreamWriter] = {}
         self._connections: set[Connection] = set()
-        self._opening = _Counter()
-        self._anonymous = _Counter()
+        self._gate = AdmissionGate()
 
     async def start(self, host: str = "0.0.0.0", port: int = DEFAULT_PORT) -> int:
         """Bắt đầu lắng nghe; trả về cổng thật (`port=0` để hệ điều hành chọn).
@@ -810,8 +805,35 @@ class Listener:
 
     @property
     def opening_count(self) -> int:
-        """Số kết nối đang mở đầu (chưa biết loại)."""
-        return self._opening.total
+        """Số kết nối đang mở đầu (chưa biết loại), cả hai pool."""
+        return self._gate.opening_count
+
+    @property
+    def refusals(self) -> dict[Refusal, int]:
+        """Số kết nối bị từ chối trước TLS, theo lý do (bản sao; chẩn đoán, test, đo)."""
+        return self._gate.refusals
+
+    def is_priority(self, ip: str) -> bool:
+        """Kết nối mới từ `ip` có vào pool ưu tiên không (chẩn đoán, test). `ip` sai → ValueError."""
+        return self._gate.is_priority(ip, _now())
+
+    def note_outgoing_control(self, ip: str, fingerprint: str) -> int:
+        """Node vừa mở xong kết nối điều khiển **ra** tới `ip` (thiết bị `fingerprint`).
+
+        Chứng chỉ server đã được kiểm trong bắt tay (`open_control`), nên `ip` được ưu tiên
+        như khi có kết nối điều khiển vào: tới khi `release_outgoing_control(handle)`, rồi
+        thêm `PRIORITY_TTL`. Gọi đồng bộ ngay khi `open_control` trả về (không `await` ở
+        giữa), trong loop đang chạy. Trả handle; 0 nghĩa là không cấp (IP đang bị hạ ưu
+        tiên, hoặc bảng ưu tiên đầy). `ip` / `fingerprint` sai → ValueError.
+        """
+        handle = self._gate.control_opened(ip, fingerprint, _now())
+        if handle == 0:
+            log.debug("%s: không cấp ưu tiên (IP bị hạ ưu tiên hoặc bảng đầy)", ip)
+        return handle
+
+    def release_outgoing_control(self, handle: int) -> None:
+        """Kết nối ra của `handle` đã kết thúc; gọi lại, hay handle 0: không làm gì."""
+        self._gate.control_closed(handle, _now())
 
     @property
     def connection_count(self) -> int:
@@ -822,11 +844,15 @@ class Listener:
         """Thay danh sách tin cậy: mọi kết nối mới từ giờ dùng context mới; cổng không đổi.
 
         Dựng context mới trước rồi mới thay: lỗi (`ssl.SSLError`, ValueError) thì giữ
-        context cũ và raise. Không đụng tới kết nối đang mở. Sau `close()` thì không làm gì.
+        context cũ và raise. Không đụng tới kết nối đang mở. Trước khi dựng context, IP của
+        thiết bị không còn trong danh sách mất ưu tiên ngay (kể cả khi kết nối của nó còn
+        sống, và kể cả khi dựng context lỗi). Sau `close()` thì không làm gì.
         """
         if self._closed:
             return
-        ctx = _server_context(self._identity, trusted_certs)
+        pems = list(trusted_certs)
+        self._gate.retain_trusted(_pem_fingerprints(pems))
+        ctx = _server_context(self._identity, pems)
         self._ctx = ctx
 
     async def close(self) -> None:
@@ -875,15 +901,6 @@ class Listener:
 
     # ---- Một kết nối -----------------------------------------------------------------------
 
-    def _release(self, slot: _Slot) -> None:
-        """Trả mọi bộ đếm `slot` còn giữ (gọi nhiều lần không sao)."""
-        if slot.opening:
-            slot.opening = False
-            self._opening.remove(slot.ip)
-        if slot.anonymous:
-            slot.anonymous = False
-            self._anonymous.remove(slot.ip)
-
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         # Không được có điểm dừng (await thật) nào trước `start_tls` (trong `_handshake`):
         # ClientHello tới trước khi start_tls tạm dừng đọc có thể rơi vào bộ đệm StreamReader
@@ -896,29 +913,40 @@ class Listener:
         if self._closed:
             _abort(writer)
             return
-        if self._opening.full(ip, MAX_OPENING_PER_IP, MAX_OPENING_TOTAL):
-            log.debug("%s: quá giới hạn kết nối đang mở đầu, đóng ngay", ip)
+        try:
+            decision = self._gate.admit(ip, _now())
+        except ValueError:  # peername không phải địa chỉ IP
+            log.debug("địa chỉ máy kia không hợp lệ (%.60r), đóng ngay", peername)
             _abort(writer)
             return
-
-        self._tasks[task] = writer
+        if not isinstance(decision, Ticket):
+            # DEBUG: lũ kết nối không được làm ngập log; số đếm ở `refusals`.
+            log.debug("%s: từ chối trước TLS (%s)", ip, decision.value)
+            _abort(writer)
+            return
+        # Vé cấp ngay trước try/finally: mọi đường ra đều trả chỗ (finish gọi lại không sao).
+        ticket = decision
         try:
-            await self._serve(reader, writer, ip, port)
+            self._tasks[task] = writer
+            await self._serve(reader, writer, ticket, port)
         finally:
             self._tasks.pop(task, None)
+            self._gate.finish(ticket, _now())
 
     async def _serve(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ip: str, port: int
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ticket: Ticket, port: int
     ) -> None:
-        """Mở đầu kết nối rồi giao cho `on_connection`; luôn đóng kết nối và trả bộ đếm khi xong."""
-        slot = _Slot(ip)
-        self._opening.add(ip)
-        slot.opening = True
+        """Mở đầu kết nối rồi giao cho `on_connection`; luôn đóng kết nối khi xong.
+
+        Vé được trả lúc giao kết nối (đã biết loại), và lần nữa trong `_handle`.
+        """
+        ip = ticket.ip
         conn: Connection | None = None
+        handle = 0  # kết nối điều khiển vào: handle ưu tiên của gate
         try:
             try:
                 async with asyncio.timeout(OPENING_TIMEOUT):
-                    kind, cert, hello, opening = await self._handshake(reader, writer, slot)
+                    kind, cert, hello, opening = await self._handshake(reader, writer, ticket)
             except _Refused as e:
                 log.debug("%s: từ chối kết nối: %s", ip, e)
                 return
@@ -934,8 +962,8 @@ class Listener:
 
             # Giao kết nối. Không có await nào giữa lần gọi is_trusted (trong _handshake) và
             # on_connection: app ghi nhận được kết nối trước khi lệnh hủy ghép đôi nào chạy xen.
-            self._release(slot)
             loop = asyncio.get_running_loop()
+            self._gate.finish(ticket, loop.time())
             conn = Connection(
                 kind=kind,
                 peer=PeerInfo(address=ip, port=port, hello=hello, cert=cert),
@@ -946,12 +974,19 @@ class Listener:
                 writer=writer,
             )
             self._connections.add(conn)
+            if kind is ConnectionKind.CONTROL:
+                assert cert is not None
+                # Cùng khối đồng bộ với lần kiểm is_trusted: IP vừa chứng minh bằng mTLS.
+                handle = self._gate.control_opened(ip, cert.fingerprint, loop.time())
+                if handle == 0:
+                    log.debug("%s: không cấp ưu tiên (IP bị hạ ưu tiên hoặc bảng đầy)", ip)
             try:
                 await self._on_connection(conn)
             except Exception:
                 log.exception("on_connection raise với %r", conn)
         finally:
-            self._release(slot)
+            if handle:
+                self._gate.control_closed(handle, _now())
             if conn is None:
                 _abort(writer)  # từ chối: không đóng gọn, kẻ tấn công không giữ được socket
             else:
@@ -961,7 +996,7 @@ class Listener:
                     self._connections.discard(conn)
 
     async def _handshake(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, slot: _Slot
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ticket: Ticket
     ) -> tuple[ConnectionKind, PeerCert | None, Hello, PairRequest | ControlOpen]:
         """Bắt tay TLS, trao `hello`, đọc message mở đầu.
 
@@ -975,11 +1010,14 @@ class Listener:
         cert: PeerCert | None = None
         if der is not None:
             cert = peer_cert_from_der(der)
-        else:
-            if self._anonymous.full(slot.ip, MAX_ANONYMOUS_PER_IP, MAX_ANONYMOUS_TOTAL):
-                raise _Refused("quá giới hạn kết nối ẩn danh")
-            self._anonymous.add(slot.ip)
-            slot.anonymous = True
+            # Máy kia đã ký CertificateVerify bằng khóa riêng của một chứng chỉ mà context chấp
+            # nhận; context có thể cũ (vừa hủy ghép đôi) nên kiểm lại danh sách hiện tại. Còn tin
+            # cậy thì lần bắt tay này không tiêu ngân sách tốc độ, và vé ưu tiên không tính là
+            # một lần lỗi của IP (protocol mục 2.3).
+            if self._still_trusted(cert.fingerprint):
+                self._gate.trusted(ticket, _now())
+        elif not self._gate.anonymous(ticket, _now()):
+            raise _Refused("quá giới hạn kết nối ẩn danh")
 
         # Trước message mở đầu, server không gửi gì ngoài hello (protocol mục 2.1).
         await _write_chunks(writer, self._hello_frame)
@@ -990,7 +1028,7 @@ class Listener:
         peer_protocol = _other_protocol(obj)
         if peer_protocol is not None:
             shown = peer_protocol if 0 <= peer_protocol < 1_000_000 else "?"
-            log.info("%s: khác phiên bản giao thức (protocol %s), đóng", slot.ip, shown)
+            log.info("%s: khác phiên bản giao thức (protocol %s), đóng", ticket.ip, shown)
             raise _Refused("khác phiên bản giao thức")
         hello = parse_message(obj)
         if not isinstance(hello, Hello):
@@ -1059,23 +1097,29 @@ async def open_pairing(addresses: Sequence[str], port: int, hello: Hello) -> Con
 
 
 async def open_control(
-    addresses: Sequence[str], port: int, identity: Identity, hello: Hello, expected_fingerprint: str
+    addresses: Sequence[str], port: int, identity: Identity, hello: Hello, expected_cert_pem: str
 ) -> Connection:
     """Mở kết nối điều khiển (mTLS) tới một thiết bị tin cậy; thử song song mọi địa chỉ.
 
-    Fingerprint của server được so với `expected_fingerprint` trước khi gửi bất kỳ byte
-    nào. Tham số sai → ValueError (trước mọi I/O). Mọi địa chỉ thất bại → lỗi đáng báo
-    nhất (`most_relevant_error`).
+    `expected_cert_pem`: chứng chỉ đã lưu khi ghép đôi (`TrustedDevice.cert_pem`). Server
+    phải đưa đúng chứng chỉ đó ngay trong bắt tay (`tls.trusted_client_context`); nếu
+    không, bắt tay hỏng trước khi máy này gửi chứng chỉ của mình → IdentityMismatch. Sau
+    bắt tay fingerprint vẫn được so toàn bộ trước khi gửi bất kỳ byte nào. Tham số sai,
+    kể cả PEM không phải chứng chỉ thiết bị hợp lệ → ValueError (trước mọi I/O). Mọi địa
+    chỉ thất bại → lỗi đáng báo nhất (`most_relevant_error`).
     """
     addrs = _check_addresses(addresses)
     _check_port(port, 1)
     _check_hello(hello)
     if hello.device_id != identity.device_id:
         raise ValueError("hello.device_id phải là device_id của danh tính này")
-    if not isinstance(expected_fingerprint, str) or not _FINGERPRINT_RE.fullmatch(expected_fingerprint):
-        raise ValueError("expected_fingerprint phải là đúng 64 ký tự hex thường")
-    ctx = tls.client_context(identity)
-    return await _open_any(addrs, port, ctx, hello, ConnectionKind.CONTROL, expected_fingerprint)
+    try:
+        expected = peer_cert_from_pem(expected_cert_pem)
+    except InvalidCertificate as e:
+        raise ValueError(f"expected_cert_pem không phải chứng chỉ thiết bị hợp lệ: {e}") from e
+    # PEM đã chuẩn hóa: đúng một chứng chỉ làm anchor, fingerprint không lệch PEM.
+    ctx = tls.trusted_client_context(identity, expected.pem)
+    return await _open_any(addrs, port, ctx, hello, ConnectionKind.CONTROL, expected.fingerprint)
 
 
 async def _open_any(
@@ -1175,7 +1219,10 @@ async def _attempt(
     Chỉ đi tới khi đã đọc và kiểm xong `hello` của server; không gửi message mở đầu
     (`_open_any` gửi `control_open` trên kết nối thắng). Ranh giới Unreachable / Rejected
     là lúc bắt tay TLS xong: server đóng ngay các kết nối vượt giới hạn trước TLS, nên
-    lỗi trước đó không được coi là “bị từ chối” (protocol §6.2).
+    lỗi trước đó không được coi là “bị từ chối” (protocol §6.2). Ngoại lệ duy nhất trước
+    ranh giới đó: chứng chỉ server không qua kiểm trong bắt tay (`ssl.SSLCertVerificationError`,
+    chỉ có ở kết nối điều khiển) → IdentityMismatch. Máy kia đưa đúng chứng chỉ đã lưu mà
+    không có khóa riêng thì bắt tay hỏng với lỗi SSL khác → Unreachable.
     """
     writer: asyncio.StreamWriter | None = None
     try:
@@ -1184,6 +1231,11 @@ async def _attempt(
                 reader, writer = await asyncio.open_connection(
                     address, port, ssl=ctx, ssl_shutdown_timeout=CLOSE_TIMEOUT
                 )
+            except ssl.SSLCertVerificationError as e:  # lớp con của OSError: phải đứng trước
+                # Chứng chỉ server khác chứng chỉ đã lưu: hỏng ở máy này, trước khi gửi chứng chỉ client.
+                raise IdentityMismatch(
+                    "chứng chỉ của máy kia khác chứng chỉ đã lưu", address=address, actual_fingerprint=None
+                ) from e
             except OSError as e:  # gồm ssl.SSLError
                 raise Unreachable(f"không mở được TCP/TLS: {type(e).__name__}", address=address) from e
 

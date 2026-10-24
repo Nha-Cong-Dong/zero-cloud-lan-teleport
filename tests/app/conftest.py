@@ -246,6 +246,26 @@ def lock_is_free(directory: Path) -> bool:
     return True
 
 
+def cert_client_context(identity: Identity) -> ssl.SSLContext:
+    """Client gửi chứng chỉ của `identity` nhưng KHÔNG kiểm chứng chỉ server (`CERT_NONE`).
+
+    Chỉ để thử phía server. Sản phẩm không còn đường nào như vậy (`docs/protocol.md` mục 2.1:
+    chứng chỉ client chỉ đi tới server đã được kiểm bằng `tls.trusted_client_context`). Bản chép
+    của `tests/net/conftest.py`.
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ctx.load_cert_chain(identity.cert_path, identity.key_path)
+    return ctx
+
+
+def fingerprint_of_pem(pem: str) -> str:
+    der = x509.load_pem_x509_certificate(pem.encode("ascii")).public_bytes(serialization.Encoding.DER)
+    return hashlib.sha256(der).hexdigest()
+
+
 class RawPeer:
     """Client TLS (ẩn danh hoặc có chứng chỉ) hay TCP trần, tự soạn từng byte gửi đi."""
 
@@ -258,7 +278,9 @@ class RawPeer:
     async def connect(
         cls, port: int, identity: Identity | None = None, *, use_tls: bool = True, timeout: float = 5.0
     ) -> RawPeer:
-        ctx = tls.client_context(identity) if use_tls else None
+        ctx = None
+        if use_tls:
+            ctx = tls.client_context() if identity is None else cert_client_context(identity)
         reader, writer = await asyncio.wait_for(asyncio.open_connection(LOCAL, port, ssl=ctx), timeout)
         return cls(reader, writer)
 
@@ -722,7 +744,8 @@ class FakeMdns:
 class OpenControlCounter:
     """Bọc `teleport.app.node.open_control`: ghi mọi lời gọi (đặc tả PR-4 mục 4.1).
 
-    Mỗi bản ghi: `SimpleNamespace(t, caller, fingerprint, addresses, port)`; `t` = time.monotonic().
+    Mỗi bản ghi: `SimpleNamespace(t, caller, fingerprint, cert_pem, addresses, port)`; `t` =
+    time.monotonic(); `fingerprint` tính từ `expected_cert_pem` (`docs/protocol.md` mục 2.1).
     `rewrite_to="127.0.0.1"` → gọi hàm thật với địa chỉ đó thay cho địa chỉ mDNS (M2).
     """
 
@@ -739,7 +762,8 @@ class OpenControlCounter:
             SimpleNamespace(
                 t=time.monotonic(),
                 caller=a["identity"].device_id,
-                fingerprint=a["expected_fingerprint"],
+                fingerprint=fingerprint_of_pem(a["expected_cert_pem"]),
+                cert_pem=a["expected_cert_pem"],
                 addresses=tuple(a["addresses"]),
                 port=a["port"],
             )
@@ -1040,7 +1064,7 @@ async def control_client(node_factory):
         node_from, node_to, *, ping_interval: float = 0.2, dead_after: float = 5.0
     ) -> ControlClient:
         conn = await open_control(
-            [LOCAL], node_to.port, node_from.identity, node_from.hello, node_to.identity.fingerprint
+            [LOCAL], node_to.port, node_from.identity, node_from.hello, node_to.identity.cert_pem()
         )
         received: list = []
         channel = ControlChannel(conn, ping_interval=ping_interval, dead_after=dead_after)
@@ -1125,6 +1149,8 @@ def app_helpers():
         SAN_X400=SAN_X400,
         SAN_EDI=SAN_EDI,
         cert_with_raw_san=cert_with_raw_san,
+        cert_client_context=cert_client_context,
+        fingerprint_of_pem=fingerprint_of_pem,
         identity_from_pem=identity_from_pem,
         identity_below=identity_below,
         ensure_identity=ensure_identity,

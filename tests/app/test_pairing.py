@@ -728,7 +728,7 @@ def _blocking_pairing_client(port: int, identity, out: dict) -> None:
 
     n_a = secrets.token_bytes(32)
     raw = socket_mod.create_connection((LOCAL, port), timeout=5)
-    s = tls.client_context(None).wrap_socket(raw)
+    s = tls.client_context().wrap_socket(raw)
     try:
         s.settimeout(5)
         hello = read_frame(s)

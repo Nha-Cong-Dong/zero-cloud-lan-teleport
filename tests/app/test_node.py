@@ -374,7 +374,7 @@ async def test_n7_untrusted_device_is_rejected(node_factory):
     A = await node_factory("A")
     B = await node_factory("B")
     with pytest.raises(Rejected):
-        await open_control([LOCAL], A.port, B.identity, B.hello, A.identity.fingerprint)
+        await open_control([LOCAL], A.port, B.identity, B.hello, A.identity.cert_pem())
     assert A.connected_devices() == frozenset()
 
 
@@ -442,7 +442,7 @@ async def test_n8_unpair_closes_connection_fast(node_factory, trust_each_other, 
     assert TrustStore.load(A.dir).get(B.id) is None
     assert TrustStore.load(A.dir).get(C.id) is not None
     with pytest.raises(Rejected):
-        await open_control([LOCAL], A.port, B.identity, B.hello, A.identity.fingerprint)
+        await open_control([LOCAL], A.port, B.identity, B.hello, A.identity.cert_pem())
     assert B.id not in A.connected_devices()
 
 

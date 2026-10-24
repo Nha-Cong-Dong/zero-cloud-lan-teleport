@@ -42,7 +42,7 @@ tự ghép với chính mình, ghép đè danh tính) nằm ở đây.
 tại một thời điểm, chờ tăng dần theo IP, giới hạn số mã hiện ra, hai bên cùng chủ
 động; protocol mục 5.3). Bên trả lời chờ `pair_nonce` với hạn riêng NONCE_TIMEOUT, ngắn
 hơn MESSAGE_TIMEOUT, để một máy lạ không giữ được phiên lâu trước khi mã hiện ra.
-Giới hạn số kết nối ẩn danh (1 mỗi IP, 8 tổng) là việc của tầng `net`.
+Giới hạn số kết nối ẩn danh là việc của `core.admission` (tầng `net` thực thi).
 """
 
 from __future__ import annotations
