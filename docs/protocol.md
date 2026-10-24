@@ -53,9 +53,9 @@ Phần ở tầng mạng đã cài ở `teleport.net.connection` ✅, với lu�
 | | Kết nối ghép đôi | Kết nối điều khiển | Kết nối dữ liệu |
 |---|---|---|---|
 | Bắt tay TLS + `hello` + message mở đầu | 10 s ✅ | 10 s ✅ | 10 s 📝 |
-| Kích thước message tối đa | **16 KiB** (`MAX_PAIRING_MESSAGE_SIZE`) ✅ | **1 MiB** (`MAX_MESSAGE_SIZE`) ✅; `hello` và `control_open` 16 KiB ✅ | 16 KiB cho `hello`/`data_open`; khung khối theo mục 4 📝 |
+| Kích thước message tối đa | **16 KiB** (`MAX_PAIRING_MESSAGE_SIZE`) ✅ | **1 MiB** (`MAX_MESSAGE_SIZE`) ✅; `hello` và `control_open` 16 KiB ✅ | 16 KiB cho `hello`/`data_open` ✅; khung khối: header 41 byte + payload ≤ 1 MiB (mục 4.2) 📝 |
 | Sau khi mở đầu | Bên trả lời chờ `pair_nonce` **5 s** kể từ khi gửi `pair_commit` ✅ (bên dưới); chờ mỗi message khác 10 s; riêng lúc chờ người dùng xác nhận: 60 s, cộng 10 s chờ `pair_confirm` của máy kia (bên dưới) | Keepalive (bên dưới) ✅; một đoạn gửi không xong (`drain()`) trong 30 s → đóng ✅ | Bên nhận file: không nhận được byte nào trong 30 s → đóng. Bên gửi file: `drain()` không xong trong 30 s, hoặc mất kết nối điều khiển với máy đó → đóng 📝 |
-| Số kết nối đồng thời | 1 phiên ghép đôi ✅ (`PairingGate`, nối vào node ở `teleport.app.pairing`); yêu cầu bị từ chối nhận `pair_abort{busy}` rồi bị đóng, tổng cộng tối đa 1 s ✅; phiên kết thúc mà không ghép đôi được cũng gửi `pair_abort` (nếu có) rồi đóng trong tổng cộng tối đa 1 s, nên máy kia không đọc cũng không giữ được phiên lâu hơn ✅; kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng ✅ (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) ✅ (`teleport.core.links`, `teleport.app.node`) | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác xếp hàng 📝 |
+| Số kết nối đồng thời | 1 phiên ghép đôi ✅ (`PairingGate`, nối vào node ở `teleport.app.pairing`); yêu cầu bị từ chối nhận `pair_abort{busy}` rồi bị đóng, tổng cộng tối đa 1 s ✅; phiên kết thúc mà không ghép đôi được cũng gửi `pair_abort` (nếu có) rồi đóng trong tổng cộng tối đa 1 s, nên máy kia không đọc cũng không giữ được phiên lâu hơn ✅; kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng ✅ (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) ✅ (`teleport.core.links`, `teleport.app.node`) | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác **xếp hàng**, tối đa 8 `offer` chưa trả lời mỗi thiết bị mỗi chiều, quá thì `reject{busy}` (mục 4.1); tối đa 2 kết nối dữ liệu đang chờ `resume` cho mỗi thiết bị (mục 4.1) 📝 |
 
 - **Nhận kết nối mới** ✅ (`AdmissionGate`): mỗi kết nối TCP được xét ngay khi nhận, trước mọi bước khác; bị từ chối thì đóng ngay (TCP reset), trước cả bắt tay TLS. Có hai **pool**:
   - **Pool chung** cho IP lạ: kết nối đang mở đầu (từ lúc nhận TCP tới khi xác định loại) tối đa **4 mỗi IP, 64 tổng**; tốc độ bắt tay mới **1/s mỗi IP (burst 2)** và **4/s tổng (burst 4)**.
@@ -116,7 +116,7 @@ Mỗi message:
 
 ### 3.2. Các loại message
 
-`hello`, các message `pair_*`, `control_open`, `ping` và `pong` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅. `hello`, `control_open`, `ping` và `pong` đã được gửi trên mạng (`teleport.net.connection`) ✅; `pair_*` trên mạng ✅ (`teleport.app.pairing`). Các message còn lại là dự thảo 📝.
+Mọi message trong bảng trừ `clipboard` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅, kể cả `data_open` và các message truyền file. `hello`, `control_open`, `ping` và `pong` đã được gửi trên mạng (`teleport.net.connection`) ✅; `pair_*` trên mạng ✅ (`teleport.app.pairing`). Message truyền file chưa được gửi hay xử lý trên mạng, và `Listener` còn từ chối mọi `data_open` (đóng ngay, sau khi kiểm lại danh sách tin cậy như với `control_open`, mục 7) 📝. `clipboard` là dự thảo 📝.
 
 | `type` | Hướng | Kết nối | Trường |
 |---|---|---|---|
@@ -129,13 +129,13 @@ Mỗi message:
 | `pair_abort` | ↔ | ghép đôi | `reason` |
 | `control_open` | client → server | điều khiển | (không có trường) — mở đầu kết nối điều khiển |
 | `data_open` | client → server | dữ liệu | `transfer_id`, `file_index`, `resume_seq` — mở đầu kết nối dữ liệu phục vụ `resume` có `seq` này (mục 4.1) |
-| `offer` | gửi → nhận | điều khiển | `transfer_id` (32 hex thường, UUID4), `block_size` (= 1 048 576), `files`: `[{name, size, mtime}]` (1–1000 file) |
-| `accept` | nhận → gửi | điều khiển | `transfer_id` (nhận **tất cả** file trong `offer`). Ngay sau đó bên nhận gửi `resume` cho file đầu tiên |
-| `reject` | nhận → gửi | điều khiển | `transfer_id`, `reason`: `user` · `no_space` · `busy`; với `no_space` thêm `needed`, `available` (byte) |
-| `resume` | nhận → gửi | điều khiển | `transfer_id`, `file_index`, `seq` (số nguyên tăng dần trên mỗi kết nối điều khiển, dùng chung cho mọi lượt truyền, bắt đầu từ 1), `bitfield` (base64) — các khối bên nhận **đã có**; gửi lúc nào cũng được (mục 4.1, 4.4, 6.3) |
+| `offer` | gửi → nhận | điều khiển | `transfer_id` (32 hex thường, UUID4), `block_size` (= 1 048 576), `files`: `[{name, size, mtime}]` (1–1000 file; `mtime` tính bằng mili giây) |
+| `accept` | nhận → gửi | điều khiển | `transfer_id` (nhận **tất cả** file trong `offer`). Ngay sau đó bên nhận gửi `resume` cho file đầu tiên; bên gửi phục vụ `resume` của lượt chưa kết thúc cả khi chưa nhận `accept` (mục 6.3) |
+| `reject` | nhận → gửi | điều khiển | `transfer_id`, `reason`: `user` · `no_space` · `busy` · `file_too_large` · `not_receiving`; với `no_space` thêm `needed`, `available` (byte); với `file_too_large` thêm `file_index`, `max_size` (byte) |
+| `resume` | nhận → gửi | điều khiển | `transfer_id`, `file_index`, `seq` (số nguyên tăng dần trên mỗi kết nối điều khiển, dùng chung cho mọi lượt truyền, bắt đầu từ 1), `bitfield` (base64, thứ tự bit ở mục 3.3) — các khối bên nhận **đã có**; gửi lúc nào cũng được (mục 4.1, 4.4, 6.3) |
 | `complete` | gửi → nhận | điều khiển | `transfer_id`, `file_index`, `merkle_root` (64 hex); gửi lại được (mục 6.3) |
 | `verified` | nhận → gửi | điều khiển | `transfer_id`, `file_index`; gửi lại được (mục 6.3) |
-| `cancel` | ↔ | điều khiển | `transfer_id`, `reason`: `user` · `source_changed` · `unknown_transfer` · `error` |
+| `cancel` | ↔ | điều khiển | `transfer_id`, `reason`: `user` · `source_changed` · `unknown_transfer` · `error` · `expired` |
 | `clipboard` | ↔ | điều khiển | `kind`: `text` · `image/png`, `sha256`, `data` (văn bản UTF-8 hoặc base64). Cả văn bản lẫn ảnh đều chia thành nhiều mảnh, mỗi message sau mã hóa ≤ 768 KiB để luôn vừa trần 1 MiB (mục 2.3); cách chia và tổng dung lượng tối đa chốt ở Giai đoạn 5 |
 | `ping` / `pong` | ↔ | điều khiển | `t` (số nguyên, mili giây, 0 … 2⁵³ − 1) |
 
@@ -160,16 +160,31 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 - Kiểm tra hex, chữ số, `os` và `reason` chỉ dùng lớp ký tự ASCII trên **toàn bộ** chuỗi: `"user\n"` hay chữ số toàn chiều rộng đều sai.
 - `type` là chuỗi nhưng chưa biết thì bên nhận phân biệt được với message hỏng (để bản cũ bỏ qua message mới).
 - Message chỉ hợp lệ trên loại kết nối ghi ở bảng mục 3.2; sai loại kết nối là lỗi giao thức ✅ (`teleport.core.messages.allowed_types`).
-- Trên kết nối điều khiển ✅: `type` chưa biết thì bỏ qua; khung sai, message sai trường, hoặc message sai loại kết nối → đóng kết nối điều khiển (nối lại theo mục 6.2).
+- Trên kết nối điều khiển ✅: `type` chưa biết thì bỏ qua; khung sai, message sai trường, hoặc message sai loại kết nối → đóng kết nối điều khiển (nối lại theo mục 6.2). Chỉ lỗi phát hiện được từ **riêng một message** mới đóng kết nối; message truyền file chỉ sai khi so với `offer` hay trạng thái của lượt truyền thì không đóng kết nối mà hủy lượt đó (mục 6.3).
 - **`t`** (`ping`/`pong`): số nguyên JSON 0 … 2⁵³ − 1; không nhận `true`/`false` hay số thực (kể cả `1.0`, `1e3`). Mili giây theo đồng hồ của bên gửi `ping` (chỉ để đo độ trễ, không so giữa hai máy). Trả lời `ping`: mục 2.3.
-- 📝 **`seq`**, **`resume_seq`**: số nguyên JSON 1 … 2⁵³ − 1; không nhận `true`/`false` hay số thực. Phạm vi của `seq`: mục 4.1.
-- 📝 Quy tắc cho message truyền file (chốt khi cài đặt ở Giai đoạn 2): `transfer_id` đúng 32 hex thường; `file_index` < số file trong `offer`; `size` và `mtime` là số nguyên ≥ 0, `size` ≤ 2⁴² (4 TiB; bên gửi chặn file lớn hơn ngay lúc chọn, và `resume` của file lớn nhất có bitfield 512 KiB nên vẫn vừa trần 1 MiB); `name` dài ≤ 255 byte UTF-8, không chứa ký tự loại `Cc`, và qua bộ làm sạch tên file (mục 4.4); `bitfield` dài đúng ⌈số khối / 8⌉ byte, các bit thừa ở cuối bằng 0. Bên gửi tự cắt tên dài hơn (giữ đuôi file); tên có ký tự điều khiển thì bên gửi từ chối và báo lỗi trên máy mình, không gửi gì. Nhờ vậy `offer` 1000 file luôn vừa trần 1 MiB. Bên nhận vẫn kiểm đủ các luật trên, vì dữ liệu từ máy khác không được tin.
+- **`seq`**, **`resume_seq`**: số nguyên JSON 1 … 2⁵³ − 1; không nhận `true`/`false` hay số thực. Phạm vi của `seq`: mục 4.1.
+- **Message truyền file** ✅ (`teleport.core.messages`). Phần kiểm được từ riêng một message nằm ở đó; phần cần biết `offer` tương ứng (ghi “so với `offer`” bên dưới) do máy trạng thái truyền file kiểm, và sai thì lượt truyền đó bị hủy bằng `cancel{error}` mà kết nối điều khiển vẫn giữ (mục 6.3).
+  - **`transfer_id`**: đúng 32 ký tự hex thường. Bên gửi sinh bằng UUID4; bên nhận không kiểm các bit phiên bản của UUID. Một lượt truyền được nhận diện bằng `(device_id, chiều, transfer_id)` (mục 6.3): cùng `transfer_id` từ thiết bị khác là một lượt khác.
+  - **`file_index`**: số nguyên JSON 0 … 999; so với `offer`: nhỏ hơn số file của `offer`.
+  - **`block_size`**: đúng số nguyên 1 048 576; giá trị khác làm cả `offer` sai.
+  - **`files`**: mảng JSON 1 … 1000 phần tử, mỗi phần tử là object có đủ `name`, `size`, `mtime` (trường lạ bị bỏ qua).
+  - **`size`**: số nguyên JSON 0 … 2⁴² (4 TiB). Bên gửi chặn file lớn hơn ngay lúc chọn; `resume` của file lớn nhất có bitfield 512 KiB, mã hóa base64 khoảng 683 KiB, nên vẫn vừa trần 1 MiB.
+  - **`mtime`**: thời điểm sửa file, **mili giây** Unix, số nguyên JSON 0 … 2⁵³ − 1. Bên gửi đổi giá trị âm (file có ngày trước 1970) thành 0.
+  - **`name`** (tên file trong `offer`): dài ≤ 255 byte UTF-8 và không chứa ký tự loại `Cc` (điều khiển) hay `Cs` (surrogate lẻ, không mã hóa được UTF-8). Đó là **mọi** luật làm `offer` bị từ chối vì tên: chuỗi rỗng, `..`, đường dẫn tuyệt đối, tên thiết bị Windows, ký tự hướng chữ… vẫn hợp lệ trên dây, vì bên nhận luôn đưa tên qua bộ làm sạch tên file trước khi dùng (mục 4.4), và bộ làm sạch **biến đổi** tên (bỏ hay thay ký tự, thêm hậu tố) chứ không bao giờ từ chối. Bên gửi tự cắt tên dài hơn (giữ đuôi file); tên có ký tự điều khiển thì bên gửi từ chối và báo lỗi trên máy mình, không gửi gì. Nhờ vậy `offer` 1000 file luôn vừa trần 1 MiB.
+  - **`bitfield`**: base64 chuẩn (RFC 4648 mục 4, có `=` đệm), đúng dạng mà bộ mã hóa chuẩn sinh ra: không khoảng trắng, không xuống dòng, bit đệm bằng 0. Khối `i` là bit `0x80 >> (i mod 8)` của byte `⌊i / 8⌋` (bit cao nhất trước). So với `offer`: dài đúng ⌈số khối / 8⌉ byte, các bit thừa ở byte cuối bằng 0; file rỗng (0 khối) có bitfield là chuỗi rỗng `""`. Riêng message chỉ được dài tới bitfield của file 4 TiB.
+  - **`merkle_root`**: đúng 64 ký tự hex thường (32 byte, mục 4.4).
+  - **`reason`** của `reject`: cùng dạng với `reason` của `pair_abort` (ở trên); giá trị lạ đúng dạng vẫn được nhận. Giá trị chuẩn: `user` (người dùng máy nhận từ chối), `no_space` (ổ nhận không đủ chỗ; kèm `needed`, `available`: số byte cần và còn trống), `busy` (hàng chờ `offer` của thiết bị gửi theo chiều này đã đầy: đã có 8 `offer` chưa trả lời, mục 4.1; lượt thứ hai cùng chiều khi hàng chờ chưa đầy thì xếp hàng, không nhận `busy`), `file_too_large` (hệ file của thư mục nhận không chứa được một file, ví dụ FAT32 chỉ chứa file ≤ 4 294 967 295 byte; kèm `file_index` của file vi phạm đầu tiên và `max_size`: số byte lớn nhất một file được có; máy nhận tự từ chối, không hỏi người dùng, và lý do này xét trước `no_space`), `not_receiving` (máy kia không ở chế độ nhận file, ví dụ CLI đang chạy `teleport listen` hay `teleport send`). Trường kèm theo là bắt buộc với lý do của nó; với lý do khác chúng được vắng mặt, nhưng có mặt thì vẫn phải đúng luật: `needed`, `available`, `max_size` là số nguyên JSON 0 … 2⁵³ − 1, `file_index` như trên.
+  - **`reason`** của `cancel`: cùng dạng; giá trị lạ đúng dạng vẫn được nhận. Giá trị chuẩn: `user` (người dùng hủy), `source_changed` (file nguồn đổi, mục 4.4), `unknown_transfer` (không biết lượt truyền này, mục 6.2, 6.3), `error` (lỗi trên máy hủy: lỗi đọc file nguồn, lỗi ghi đĩa, khối sai quá số lần cho phép ở mục 4.2, 4.4, message của máy kia sai khi so với `offer`, mục 6.3), `expired` (lượt đã thất bại vì mất kết nối quá lâu, hãy gửi lại; mục 6.3).
+  - Trường **tùy chọn** (hiện chỉ có các trường kèm theo của `reject`) mang giá trị `null` là sai, như mọi trường sai kiểu.
+  - Bên nhận vẫn kiểm đủ các luật trên, vì dữ liệu từ máy khác không được tin.
 
-## 4. Kênh dữ liệu 📝
+## 4. Kênh dữ liệu 📝 (trừ chỗ đánh ✅)
 
 ### 4.1. Mở kết nối
 
 - Mỗi lượt truyền có tối đa **một kết nối dữ liệu** tại một thời điểm; các file được gửi lần lượt. Kết nối dữ liệu mới cho cùng lượt truyền thay kết nối cũ (kết nối cũ bị đóng).
+- **Mỗi chiều giữa hai máy chạy 1 lượt truyền.** Lượt khác cùng chiều **xếp hàng**: bên nhận để `offer` thứ hai chưa trả lời (không `accept`, không `reject`) tới khi lượt trước kết thúc, rồi mới xét nó như một `offer` mới. Bên gửi chờ trả lời như thường; trong lúc đó `offer` gửi lại (mục 6.3) vẫn bị bỏ qua.
+- **Trần hàng chờ:** mỗi thiết bị, mỗi chiều, bên nhận giữ tối đa **8 `offer` chưa trả lời** (đang chờ người dùng hoặc đang xếp hàng; `offer` gửi lại của cùng lượt không tính thêm). `offer` mới vượt trần → `reject{busy}` ngay, để máy kia không làm bên nhận phình bộ nhớ bằng lũ `offer`.
 - Kết nối dữ liệu được mở **theo cùng chiều với kết nối điều khiển hiện tại**: bên đang là client của kết nối điều khiển mở kết nối dữ liệu. Chiều đó đã đi qua được tường lửa, nên một máy chỉ cho phép kết nối ra (ví dụ Windows đang ở hồ sơ mạng Public) vẫn gửi và nhận file được.
 - Kết nối dữ liệu chỉ mở tới **đúng địa chỉ (IP và cổng) của kết nối điều khiển hiện tại**, một lần thử mỗi kết nối, không thử song song mọi địa chỉ như `open_control`: lần thử thua bị hủy giữa bắt tay tính là một lần lỗi của IP đó ở bên kia (mục 2.3, “Ngân sách lỗi và hạ ưu tiên”).
 - Sau bắt tay TLS và trao `hello`, client gửi `data_open{transfer_id, file_index, resume_seq}`. Từ đó **bên gửi file** (dù là client hay server của kết nối này) ghi các khung khối; bên nhận file không gửi gì trên kết nối này, mọi phản hồi đi trên kết nối điều khiển.
@@ -180,9 +195,16 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
   - Bên gửi gửi xong các khối được yêu cầu thì đóng gọn kết nối dữ liệu.
 - **Phạm vi của `seq` là một kết nối điều khiển:** bên nhận đánh `seq` lại từ 1 trên mỗi kết nối điều khiển mới, và bên gửi quên mọi `seq` cũ khi kết nối điều khiển đổi. Vì vậy `seq` không phải lưu xuống đĩa, và bên nhận vừa khởi động lại không bao giờ bị coi là đang gửi `seq` cũ.
 - Hai kết nối không có thứ tự với nhau, nên `data_open` có thể tới trước `resume` tương ứng. Bên gửi chỉ gửi khối sau khi đã có, trên kết nối điều khiển hiện tại, `resume` với đúng `seq` đó và đúng `transfer_id`/`file_index` (chờ tối đa 10 s, quá thì đóng kết nối dữ liệu). `resume_seq` nhỏ hơn `seq` **lớn nhất** mà bên gửi đã nhận trên kết nối điều khiển hiện tại → kết nối cũ, đóng. Không nhét bitfield vào `data_open`, vì file 100 GiB có bitfield 12,5 KiB, mã hóa base64 thành khoảng 16,7 KiB, vượt giới hạn 16 KiB.
+- **Server của kết nối dữ liệu kiểm `data_open`** trước khi dùng kết nối, sai thì đóng ngay (như mọi lần từ chối khi mở đầu, mục 2.3):
+  - thiết bị của kết nối (fingerprint chứng chỉ client) phải là thiết bị của lượt truyền `transfer_id`, và lượt đó chưa kết thúc (với bên gửi file: đã gửi `offer`, kể cả khi chưa nhận `accept`, mục 6.3); lượt có bia mộ hay không biết thì xử lý theo mục 6.3;
+  - kết nối phải đi **đúng chiều**: máy này là server của kết nối điều khiển hiện tại với thiết bị đó (gạch thứ hai của mục này);
+  - server là bên nhận file: `transfer_id`, `file_index`, `resume_seq` phải khớp đúng `resume` **gần nhất** mà nó đã gửi trên kết nối điều khiển hiện tại; server là bên gửi file: luật chờ `resume` ở gạch trên.
+- Mỗi thiết bị có tối đa **2 kết nối dữ liệu đang chờ `resume`** (đã nhận `data_open` mà chưa có `resume` khớp) ở bên gửi file. Đã đủ 2 mà có `data_open` mới: `resume_seq` mới lớn hơn `resume_seq` nhỏ nhất đang chờ → đóng kết nối chờ có `resume_seq` nhỏ nhất (nó phục vụ một `resume` cũ hơn) và giữ kết nối mới; không thì đóng kết nối mới.
 - Không mở được kết nối dữ liệu trong 10 s trong khi kết nối điều khiển vẫn sống → thử lại theo lịch ở mục 6.2; sau 3 lần thất bại liên tiếp thì báo lỗi tường lửa (mvp mục 8) và giữ lượt truyền ở trạng thái “Đang nối lại…”.
 
 ### 4.2. Khung khối
+
+Định dạng khung, chia khối và kiểm header ✅ (`teleport.core.blocks`); đọc/ghi trên kết nối dữ liệu 📝.
 
 ```
 ┌──────────────┬────────────────────┬──────────────────┬───────────────────┬──────────────┐
@@ -194,10 +216,12 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 Đóng gói bằng `struct.pack("!BII32s", ...)` (41 byte header).
 
 - Kích thước khối cố định **1 MiB** (`block_size` trong `offer`). Khối `i` nằm ở vị trí `i × block_size` trong file. File `size` byte có `⌈size / block_size⌉` khối; file rỗng có 0 khối.
-- `length` phải **đúng bằng** độ dài của khối đó suy ra từ `size` (mọi khối 1 MiB, khối cuối có thể ngắn hơn). `type` lạ, `block_index` ngoài phạm vi hay `length` sai → đóng kết nối dữ liệu.
+- `length` phải **đúng bằng** độ dài của khối đó suy ra từ `size` (mọi khối 1 MiB, khối cuối có thể ngắn hơn; không khối nào rỗng). `type` lạ, `block_index` ngoài phạm vi hay `length` sai → đóng kết nối dữ liệu, và tính là một lần sai vào bộ đếm ở gạch “Bên nhận đếm…” bên dưới. Header được kiểm trước khi đọc payload, nên máy kia không bắt được bên nhận đọc quá 1 MiB cho một khối.
 - Bên gửi đọc khối, băm, rồi gửi hash **trong header của chính khối đó**: chỉ giữ một khối trong RAM, không phải đọc file hai lần, và hash không bao giờ tới sau dữ liệu. Bên gửi giữ hash các khối đã gửi trong RAM (32 byte mỗi khối, 320 KiB cho file 10 GiB) để tính Merkle root.
 - Giới hạn tốc độ gửi được áp theo từng đoạn 64 KiB của payload, không phải theo cả khối, để dòng byte không ngưng quá lâu (thời gian chờ 30 s ở mục 2.3).
 - Bên nhận băm lại payload và so với `sha256` trong header ngay khi nhận. Không khớp → bỏ khối, đóng kết nối dữ liệu, gửi `resume` (khối đó vẫn có bit = 0 nên được gửi lại). Khớp → giữ hash để ghi vào trạng thái nối lại ở lần đánh dấu kế tiếp (mục 4.3) và chuyển khối cho luồng ghi đĩa.
+- Bên nhận đếm số lần **liên tiếp** một file nhận khối sai: sai hash, hoặc header đúng dạng mà sai so với `offer` (`type` lạ, `block_index` ngoài phạm vi, `length` khác độ dài của khối đó), cả hai loại chung một bộ đếm (một khối khớp thì đếm lại từ 0). Quá **3 lần** liên tiếp (lần sai thứ 4) → `cancel{error}` và báo người dùng: đường truyền hay một bên đang làm hỏng dữ liệu, gửi lại mãi không có ích. Đếm cả header sai để bên gửi có lỗi không làm hai máy mở kết nối dữ liệu, đóng rồi gửi `resume` lặp mãi.
+- Kết nối dữ liệu đứt vì lý do khác không tính vào luật trên, và cũng không làm lượt truyền thất bại: bên nhận gửi `resume` như thường. Kể cả khi bên gửi đóng kết nối vì một đoạn không gửi xong trong 30 s (mục 2.3) do đĩa bên nhận chậm làm hàng đợi ghi đầy (mục 4.3): bên gửi vẫn áp hạn đó cả khi nguyên nhân là đĩa chậm, và với bên nhận đó là một lần đứt kết nối dữ liệu bình thường.
 - Bên gửi gửi các khối còn thiếu theo thứ tự tăng dần.
 
 ### 4.3. Ghi đĩa và trạng thái nối lại
@@ -223,9 +247,21 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
    - Bị ngắt giữa chừng → lần sau, bên nhận chỉ dùng lại một file mang tên đích khi `.state` có bản ghi đã giữ chỗ cho đúng tên đó; file nào `.state` không chứng minh được là của mình thì không bao giờ bị xóa hay ghi đè. Bảng phục hồi: [architecture.md](architecture.md) mục 4.
    - Không dùng `os.rename` trần trên POSIX, vì nó âm thầm ghi đè file đích. Cũng không dùng `os.link`, vì FAT/exFAT không hỗ trợ.
 
-**Merkle root:** lá là hash SHA-256 của từng khối theo thứ tự; nút cha = SHA-256(con trái ‖ con phải); tầng có số nút lẻ thì nút cuối được đẩy thẳng lên tầng trên; root là nút còn lại cuối cùng. File rỗng (0 khối): root = SHA-256 của chuỗi rỗng.
+**Merkle root** ✅ (`teleport.core.merkle`): lá là hash SHA-256 của từng khối theo thứ tự; nút cha = SHA-256(con trái ‖ con phải); tầng có số nút lẻ thì nút cuối được đẩy thẳng lên tầng trên (không băm lại, không nhân đôi); root là nút còn lại cuối cùng, nên file 1 khối có root bằng chính hash của khối đó. File rỗng (0 khối): root = SHA-256 của chuỗi rỗng.
 
-**Tên file nhận được** được làm sạch trước khi dùng (chi tiết: [ke_hoach.md](ke_hoach.md) mục 3.3). Hai file trùng tên trong cùng `offer`, hoặc trùng với file đã có (không phân biệt hoa thường), đều được đặt tên ` (1)`, ` (2)`…
+Test vector Merkle: lá thứ `i` (đếm từ 0) là SHA-256 của khối dài 1 byte có giá trị `i`, tức `SHA-256(bytes([i]))`; file `n` khối có các lá 0 … n − 1.
+
+| Số lá | Root (hex) |
+|---|---|
+| 0 | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+| 1 | `6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d` |
+| 2 | `30e1867424e66e8b6d159246db94e3486778136f7e386ff5f001859d6b8484ab` |
+| 3 | `773a93ac37ea78b3f14ac31872c83886b0a0f1fec562c4e848e023c889c2ce9f` |
+| 5 | `5174b138f822e56503c04bce38e368672593b4a2694466c2e60f1216caf234be` |
+
+Với 5 lá L0 … L4: tầng 1 là SHA-256(L0 ‖ L1), SHA-256(L2 ‖ L3), L4 (đẩy thẳng lên); tầng 2 là SHA-256 của hai nút đầu, rồi L4; root = SHA-256(tầng 2 nút đầu ‖ L4).
+
+**Tên file nhận được** được làm sạch trước khi dùng (chi tiết: [ke_hoach.md](ke_hoach.md) mục 3.3); bộ làm sạch chỉ biến đổi tên, không bao giờ từ chối (mục 3.3). Hai file trùng tên trong cùng `offer`, hoặc trùng với file đã có (không phân biệt hoa thường), đều được đặt tên ` (1)`, ` (2)`…
 
 ## 5. Ghép đôi
 
@@ -373,16 +409,23 @@ Cài đặt ở `teleport.core.links` (máy trạng thái) và `teleport.app.nod
 
 ### 6.3. Đồng bộ lại sau mỗi kết nối điều khiển mới 📝
 
-Message điều khiển có thể mất khi kết nối đứt hoặc bị thay (mục 6.1). Vì vậy mọi message của lượt truyền đều **gửi lại được, và nhận trùng không gây hại** (nhận diện bằng `transfer_id` + `file_index`). Ngay khi có kết nối điều khiển mới với một máy, cho mọi lượt truyền chưa kết thúc giữa hai máy:
+Message điều khiển có thể mất khi kết nối đứt hoặc bị thay (mục 6.1). Vì vậy mọi message của lượt truyền đều **gửi lại được, và nhận trùng không gây hại** (nhận diện bằng lượt truyền, gạch “Khóa của lượt truyền” bên dưới, và `file_index`). Ngay khi có kết nối điều khiển mới với một máy, cho mọi lượt truyền chưa kết thúc giữa hai máy:
 
-| Bên | Việc làm khi có kết nối mới | Khi nhận message trùng hoặc lạ |
+| Bên | Việc làm khi có kết nối mới | Khi nhận message trùng hoặc lạ (xét theo thứ tự) |
 |---|---|---|
-| Gửi | Gửi lại `offer` của lượt truyền chưa nhận được `accept`/`reject` | `resume` có đủ mọi bit → gửi lại `complete`. `resume`/`data_open` của lượt truyền đã hủy hoặc không biết → `cancel{unknown_transfer}` |
-| Nhận | Gửi `resume` (với `seq` mới) cho file hiện tại của mọi lượt truyền đã chấp nhận | `offer` đã trả lời → gửi lại `accept`/`reject`; `offer` đang chờ người dùng → bỏ qua. `complete` của file đã xong → gửi lại `verified`. `complete`/`offer` của lượt truyền đã hủy → `cancel` |
+| Gửi | Gửi lại `offer` của **mọi** lượt truyền chưa kết thúc, kể cả lượt đã nhận `accept`; rồi gửi lại `complete` cho mọi file đã gửi `complete` mà chưa nhận `verified` | 1. `resume`/`data_open` của lượt có bia mộ → gửi lại `cancel` cùng lý do. 2. `resume`/`data_open` của lượt không biết → `cancel{unknown_transfer}`. 3. `accept`/`reject`/`verified` trùng, hoặc của lượt không biết hay đã kết thúc → bỏ qua. 4. `resume` của lượt chưa kết thúc → phục vụ như thường, **kể cả khi chưa nhận `accept`** (coi như `accept` đã mất: chỉ bên nhận mới gửi được `resume` cho lượt nó nhận) và kể cả khi chưa nhận `verified` của file trước (`verified` đó sẽ tới khi `complete` được gửi lại); `resume` có đủ mọi bit → gửi lại `complete` |
+| Nhận | Với mỗi lượt truyền đã chấp nhận mà còn file chưa `verified`: gửi `accept` **rồi** `resume` (với `seq` mới) cho file hiện tại | 1. `offer`/`complete` của lượt có bia mộ → gửi lại `cancel` cùng lý do. 2. `offer` của lượt đã biết mà nội dung khác `offer` đầu tiên (gạch “Manifest cố định”) → `cancel{error}` + bia mộ. 3. `offer` đã trả lời → gửi lại **đúng** câu trả lời cũ: `reject` còn nhớ (gạch “Nhớ lượt đã kết thúc”) thì gửi lại `reject` đó; đã `accept` thì gửi lại `accept`, và chỉ kèm `resume` (với `seq` mới) cho file hiện tại nếu lượt còn file chưa `verified` mà trên kết nối điều khiển hiện tại chưa gửi `resume` nào cho lượt đó (theo cột bên trái thì `resume` đó thường đã được gửi lúc kết nối mở, nên thường chỉ gửi lại `accept`; lượt đã `verified` mọi file thì chỉ gửi lại `accept`). 4. `offer` đang chờ người dùng hoặc đang xếp hàng (mục 4.1) → bỏ qua. 5. `complete` của lượt chưa chấp nhận (`offer` còn đang chờ người dùng hoặc đang xếp hàng) → lỗi khi so với trạng thái: `cancel{error}` + bia mộ, bỏ lời hỏi đang chờ. 6. `complete` của file đã xong → gửi lại `verified`. 7. `complete` của lượt không biết → `cancel{unknown_transfer}`. 8. `offer` có `transfer_id` trùng một lượt chiều ngược lại với cùng thiết bị (lượt còn chạy hoặc còn bia mộ) → `cancel{error}` + bia mộ (gạch “Khóa của lượt truyền”). 9. `offer` không biết (không có bia mộ, không có `reject` còn nhớ) là `offer` mới |
 
-- Bên nhận giữ trạng thái mức lượt truyền (đã chấp nhận, file hiện tại, các file đã `verified`) trong `transfer.json` trên đĩa ([architecture.md](architecture.md) mục 4) cho tới 24 giờ sau khi file cuối xong, để trả lời `complete` gửi lại cả sau khi khởi động lại. `reject` chỉ cần nhớ trong bộ nhớ: khởi động lại thì `offer` gửi lại sẽ được hỏi lại người dùng. Bên gửi coi lượt truyền kết thúc khi đã nhận `verified` của file cuối.
-- `cancel` bị mất được sửa ở lần đồng bộ sau: bên kia gửi lại `offer` hoặc `resume`, bên đã hủy trả `cancel`.
-- Nhờ vậy, không message nào bị mất mà làm lượt truyền treo khi hai máy vẫn còn kết nối được với nhau.
+- Bên nhận giữ trạng thái mức lượt truyền (đã chấp nhận, file hiện tại, các file đã `verified`) trong `transfer.json` trên đĩa ([architecture.md](architecture.md) mục 4) cho tới 24 giờ sau khi file cuối xong, để trả lời `complete` gửi lại cả sau khi khởi động lại. Bên gửi coi lượt truyền kết thúc khi đã nhận `verified` của file cuối, hoặc khi nhận `reject`/`cancel`.
+- **Manifest cố định:** manifest của một lượt truyền (danh sách file, `size`, `mtime` của từng file, `block_size`) cố định theo `offer` **đầu tiên** bên nhận nhận được. `offer` gửi lại chỉ dùng để nhận diện lượt; nội dung khác `offer` đầu là lỗi khi so với `offer` (gạch “Lỗi khi so với `offer`”) → `cancel{error}` + bia mộ.
+- Lượt truyền **chưa kết thúc** (với bên gửi) là lượt đã gửi `offer` mà chưa nhận `reject`, `cancel` hay `verified` của file cuối, và chưa tự hủy. Vì bên gửi gửi lại `offer` của mọi lượt như vậy, bên nhận luôn có dịp trả lời lại: `cancel` của bên nhận bị mất được sửa ở lần đồng bộ sau (bên nhận trả lại `cancel` cùng lý do cho `offer` gửi lại), kể cả khi bên gửi đang chờ `resume` và không còn gì khác để gửi. `cancel` của bên gửi bị mất cũng vậy: bên nhận gửi `resume` trên kết nối mới, bên gửi trả lại `cancel` cùng lý do.
+- `verified` bị mất được sửa nhờ bên gửi gửi lại `complete` của file đó; bên nhận trả lại `verified`. Trong lúc đó bên gửi vẫn phục vụ `resume` của file kế tiếp (bảng trên), nên lượt truyền không phải chờ.
+- **Khóa của lượt truyền** là `(device_id, chiều, transfer_id)`. `device_id` lấy từ chứng chỉ của kết nối mà message đi trên đó (với `data_open` là kết nối dữ liệu). Chiều suy ra từ loại message: `offer`, `complete` là lượt máy kia gửi cho máy này; `accept`, `reject`, `resume`, `verified` là lượt máy này gửi cho máy kia. Bên nhận coi `offer` có `transfer_id` trùng một lượt truyền chiều ngược lại với cùng thiết bị là sai khi so với trạng thái (bảng trên, cột “Nhận”, bước 8), nên hai chiều không bao giờ cùng có lượt chưa kết thúc mang một `transfer_id`. Bên gửi cũng không sinh `transfer_id` đã có trong bảng của thiết bị đó (lượt chưa kết thúc, bia mộ hay `reject` còn nhớ), ở bất kỳ chiều nào. `cancel` và `data_open` (đi được cả hai chiều) thuộc lượt **chưa kết thúc** mang `transfer_id` đó, máy này ở vai nào cũng vậy; không có lượt như vậy thì xét bia mộ; vẫn không có thì là lượt không biết. Message mang `transfer_id` của một lượt truyền với thiết bị khác được xử lý như lượt truyền không biết, nên một thiết bị không đọc, trả lời hay hủy được lượt truyền của thiết bị khác.
+- **Lỗi khi so với `offer`:** message đúng mọi luật ở mục 3.3 nhưng sai khi so với `offer` hay trạng thái của lượt truyền (`file_index` không nhỏ hơn số file, bitfield sai độ dài theo số khối hay có bit thừa khác 0, `complete` của file chưa bắt đầu hay của lượt chưa được chấp nhận, `offer` gửi lại có nội dung khác `offer` đầu…) → bên phát hiện gửi `cancel{error}` cho lượt đó và lập bia mộ, **không** đóng kết nối điều khiển. Đóng kết nối thì máy kia nối lại, đồng bộ lại, gửi lại đúng message đó, và hai máy lặp mãi; với bia mộ, lần gửi lại chỉ nhận lại `cancel{error}`.
+- **Bia mộ** (không đổi gì trên dây): mỗi bên, cả bên gửi lẫn bên nhận, nhớ `(khóa của lượt truyền, lý do)` của mọi lượt truyền đã hủy hoặc thất bại, trong 24 giờ, bằng thời hạn bên kia còn thử nối lại (mục 6.2), trừ khi bị đẩy ra vì bảng đầy (gạch “Nhớ lượt đã kết thúc”). Lý do là lý do của `cancel` đã gửi hoặc đã nhận; lượt thất bại vì chờ nối lại quá hạn (không có `cancel` nào) lưu lý do `expired`. Bia mộ được xét **trước mọi luật khác** cho `offer`, `complete`, `resume` và `data_open`: message như vậy của lượt có bia mộ luôn được trả lại `cancel` **cùng lý do** (với `data_open`: gửi `cancel` trên kết nối điều khiển rồi đóng kết nối dữ liệu), nên máy kia báo đúng lý do cho người dùng dù `cancel` đầu tiên bị mất. Chỉ khi bia mộ đã hết hạn hoặc bị bỏ thì lượt truyền mới bị coi là không biết; khi đó `offer` gửi lại là `offer` mới, có thể hỏi lại người dùng (máy nhận đang tự nhận mọi lượt, ví dụ `teleport receive --yes`, thì tự nhận lại). Bia mộ hiện chỉ nằm trong bộ nhớ, mất khi khởi động lại; lưu trên đĩa để còn sau khi khởi động lại 📝 ([ke_hoach.md](ke_hoach.md) Giai đoạn 3).
+- **Nhớ lượt đã kết thúc:** bia mộ và `reject` đã gửi (để gửi lại đúng `reject` cho `offer` gửi lại) nằm chung một bảng, tối đa **1024** mục mỗi thiết bị, để bộ nhớ có trần; mỗi mục được giữ 24 giờ, trừ khi bị đẩy ra vì bảng đầy (khi đó bỏ mục cũ nhất trước). `reject` đã nhớ **chỉ nằm trong bộ nhớ**, kể cả ở các giai đoạn sau; bia mộ thì theo gạch “Bia mộ” (từ Giai đoạn 3 lưu trên đĩa). `reject{busy}` **không** được nhớ: `offer` gửi lại sau `busy` được xét lại như `offer` mới, và việc đó vô hại. `reject` đã bị bỏ khỏi bảng hay mất khi khởi động lại thì `offer` gửi lại sẽ hỏi lại người dùng.
+- `cancel` không bao giờ được trả lời, kể cả `cancel` của lượt truyền đã hủy hay không biết (bỏ qua), để hai máy không gửi `cancel` qua lại mãi.
+- TCP không làm mất message trên một kết nối điều khiển còn sống: message chỉ mất khi kết nối đứt hoặc bị thay, và khi đó lần đồng bộ trên kết nối mới gửi lại mọi thứ hai bên còn chờ. Nhờ vậy, khi hai máy còn kết nối lại được với nhau (trong thời hạn nối lại của mục 6.2), không message nào bị mất mà làm lượt truyền treo. Bên nhận im lặng với `offer` đang xếp hàng hay đang chờ người dùng là chủ ý, không phải treo.
 
 ## 7. Hủy ghép đôi & danh tính đổi 📝
 
@@ -390,7 +433,7 @@ Message điều khiển có thể mất khi kết nối đứt hoặc bị thay 
   - Listener nhận TCP trần và bắt đầu TLS cho từng kết nối với `SSLContext` **hiện tại** (mục 2.1). Khi danh sách tin cậy đổi, node dựng context mới; từ đó mọi kết nối mới dùng context mới, listener không đóng hay mở lại ✅ (`Listener.update_trusted`).
   - Đóng kết nối đang mở với máy bị hủy (các kết nối khác giữ nguyên) ✅ (`Node.unpair`: xóa khỏi kho, đổi context, đóng kết nối điều khiển của máy đó, không có `await` xen giữa).
   - Khi không có node nào chạy, `teleport unpair` chỉ sửa `trusted.json` ✅.
-- Kết nối đã bắt đầu bắt tay bằng context cũ vẫn bắt tay xong với context đó. Vì vậy khi nhận `control_open` (✅) hay `data_open` (📝), node còn kiểm fingerprint của client có trong danh sách tin cậy **hiện tại** không; không có thì đóng.
+- Kết nối đã bắt đầu bắt tay bằng context cũ vẫn bắt tay xong với context đó. Vì vậy khi nhận `control_open` (✅) hay `data_open` (✅; `data_open` qua được bước này hiện vẫn bị từ chối, mục 3.2), node còn kiểm fingerprint của client có trong danh sách tin cậy **hiện tại** không; không có thì đóng.
 - **Máy kia từ chối máy này** (đã hủy ghép đôi, hoặc ghép đôi một phía): lần kết nối sau nhận EOF hoặc lỗi SSL trước `hello` (mục 2.2) → báo “*X* từ chối kết nối từ máy này” và gợi ý ghép đôi lại. Không đoán lý do, vì client không phân biệt được. ✅ (`teleport listen` in thông báo)
 - **Cùng `device_id`, khác fingerprint** (mDNS, `hello` hay `pair_request` báo `device_id` của một máy tin cậy nhưng chứng chỉ khác): không có lý do hợp lệ, vì danh tính mới luôn có `device_id` mới (mục 1). Chặn kết nối, không cho ghép đôi đè (mục 5.1), cảnh báo có thể có giả mạo. Phần ghép đôi ✅ (từ chối trước khi hiện mã; ở bên trả lời, `pair_request` chưa được xác minh nên chỉ cảnh báo, không gợi ý hủy ghép đôi máy thật, mvp mục 8); phần kết nối điều khiển và mDNS ✅ (`IdentityMismatch` → cảnh báo một lần, không tự thử lại theo lịch). Muốn ghép đôi lại thì người dùng phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa, nên máy giả không thừa hưởng “Luôn nhận” hay “Đồng bộ clipboard”.
 - **Máy tin cậy xóa thư mục cấu hình** (cài lại sạch): xuất hiện như một thiết bị mới chưa ghép đôi, có thể trùng tên với mục cũ. App gợi ý ghép đôi lại; ghép đôi xong thì đề nghị xóa mục cũ cùng tên (mục cũ không bao giờ kết nối lại được).
