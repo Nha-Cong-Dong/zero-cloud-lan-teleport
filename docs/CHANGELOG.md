@@ -8,7 +8,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ### Added
 - `docs/benchmark.md`: số đo thực tế của các yêu cầu chất lượng. Lần đo đầu: mvp N1 (thiết bị xuất hiện, biến mất khi thoát app, mất mạng đột ngột, tạm dừng máy, app bị giết) đạt khi đo giữa Windows 11 và máy ảo Ubuntu bridged; đo lại trên hai máy thật ở Giai đoạn 4. Giai đoạn 1 (khám phá & ghép đôi) xong.
 - Giấy phép GPL-3.0-or-later (`LICENSE`), khai báo trong `pyproject.toml`.
-- Khung dự án Python, CI chạy ruff + pytest trên Windows, macOS, Linux.
+- Khung dự án Python, CI chạy ruff, mypy và pytest trên Windows, macOS, Linux.
 - `teleport.core.framing`: mã hóa/giải mã khung message điều khiển `[4 byte độ dài][JSON]` (sans-IO).
 - `teleport.net.stream`: đọc/ghi message điều khiển trên kết nối asyncio.
 - `teleport.trust.identity`: danh tính thiết bị gồm khóa ECDSA P-256, chứng chỉ tự ký và fingerprint SHA-256.
@@ -82,6 +82,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `docs/protocol.md` mục 8 thêm tiểu mục “Những gì máy này để lộ”: mDNS và chứng chỉ server lộ `device_id` cố định; `hello` lộ tên, phiên bản app và hệ điều hành trước khi xác thực. Hành vi khi máy đang ẩn (mục 2.3, 5.3, 8) là dự thảo, chưa có code; không đổi định dạng khung hay trường message.
 - `docs/ke_hoach.md`: mục 3.7 thêm gạch theo dõi thiết bị qua nhiều mạng; Giai đoạn 2 thêm hai việc làm trước (giới hạn tốc độ bắt tay theo IP; client kiểm chứng chỉ server trước khi gửi chứng chỉ client) và kiểm hệ file FAT32 trước khi nhận; Giai đoạn 4 thêm công tắc ẩn và nút “Chờ ghép đôi”; mục 5.3 thêm quảng bá ẩn danh sau v1.0; mục 9 thêm việc tự ẩn khi Windows ở mạng Public (chốt ở Giai đoạn 6).
 - `docs/ke_hoach.md` mục 8 thêm rủi ro RAM giữ hash khối (cả hai bên), FAT32 và lộ chứng chỉ client khi kết nối đi ra; cập nhật rủi ro từ chối dịch vụ với bắt tay có chuỗi chứng chỉ lớn.
+- CI chạy `mypy src` (kiểm kiểu, công cụ phát triển MIT) sau ruff và trước pytest; sửa các lỗi kiểu có sẵn mà không đổi hành vi chương trình. Chỉ ảnh hưởng người đóng góp.
 
 ### Fixed
 - Thân message điều khiển phải là UTF-8 không BOM (protocol mục 3.1). Trước đây UTF-16, UTF-32 và BOM UTF-8 vẫn được nhận. Bản cũ chỉ gửi UTF-8 không BOM nên hai bản vẫn làm việc cùng nhau.
