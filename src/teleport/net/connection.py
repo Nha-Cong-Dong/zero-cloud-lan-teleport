@@ -10,7 +10,8 @@ keepalive ở `teleport.core.keepalive`. Không có quyết định nghiệp v�
   mở lại cổng. Kết nối đã bắt đầu bắt tay bằng context cũ được kiểm lại lúc nhận
   `control_open` (protocol mục 7). Nhận hay từ chối một kết nối (số kết nối đang mở
   đầu, tốc độ bắt tay, pool ưu tiên cho IP đã xác thực mTLS) do
-  `teleport.core.admission.AdmissionGate` quyết định; `Listener` chỉ thực thi.
+  `teleport.core.admission.AdmissionGate` quyết định; `Listener` chỉ thực thi. Kết nối
+  dữ liệu (`data_open`) chưa được nhận: bị từ chối như mọi lần từ chối khi mở đầu.
 - `open_pairing` / `open_control` thử song song mọi địa chỉ của một máy và giữ kết
   nối thành công đầu tiên. `open_control` kiểm chứng chỉ server ngay trong bắt tay.
 - `Connection` gửi/nhận message đã kiểm theo loại kết nối; `ControlChannel` giữ kết
@@ -1041,11 +1042,15 @@ class Listener:
             raise _Refused("EOF trước message mở đầu")
         opening = parse_message(obj)
         kind = opening_kind(opening, has_client_cert=cert is not None)
-        if kind is ConnectionKind.CONTROL:
+        if kind is not ConnectionKind.PAIRING:
             assert cert is not None
             # Bắt tay có thể đã dùng context cũ, trước khi máy này bị hủy ghép đôi (protocol mục 7).
             if not self._still_trusted(cert.fingerprint):
                 raise _Refused(f"{cert.fingerprint} không còn trong danh sách tin cậy")
+        if kind is ConnectionKind.DATA:
+            # Chưa nhận kết nối dữ liệu: từ chối tường minh (abort, như mọi lần từ chối khi mở
+            # đầu) tới khi tầng mạng của kết nối dữ liệu được cài.
+            raise _Refused("chưa nhận kết nối dữ liệu")
         return kind, cert, hello, cast(PairRequest | ControlOpen, opening)
 
     def _still_trusted(self, fingerprint: str) -> bool:

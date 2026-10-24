@@ -1228,7 +1228,11 @@ def test_property_device_id_is_exactly_32_lowercase_hex(value):
 PAIRING_TYPES = frozenset(
     {"pair_request", "pair_commit", "pair_nonce", "pair_reveal", "pair_confirm", "pair_abort"}
 )
-CONTROL_TYPES = frozenset({"ping", "pong"})
+# GĐ2 P2-1 thêm message truyền file vào kết nối điều khiển (protocol §3.2; test riêng ở
+# tests/core/test_transfer_messages.py).
+CONTROL_TYPES = frozenset(
+    {"ping", "pong", "offer", "accept", "reject", "resume", "complete", "verified", "cancel"}
+)
 EXPECTED_ALLOWED = {"pairing": PAIRING_TYPES, "control": CONTROL_TYPES, "data": frozenset()}
 KIND_INPUTS = [*ConnectionKind, "pairing", "control", "data"]
 

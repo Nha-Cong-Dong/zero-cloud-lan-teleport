@@ -10,16 +10,23 @@ bằng tay với giá trị sai cũng raise `MessageError`.
 
 Bảng loại kết nối (`ConnectionKind`, `allowed_types`, `opening_kind`,
 `check_message_kind`) quy định message nào hợp lệ trên loại kết nối nào (mục 2.1, 3.3).
+
+Message truyền file (`data_open`, `offer`, `accept`, `reject`, `resume`, `complete`,
+`verified`, `cancel`) chỉ được kiểm những gì kiểm được từ riêng message đó; các luật
+cần trạng thái (`file_index` < số file của `offer`, độ dài bitfield theo số khối, `seq`
+khớp `resume` gần nhất…) là việc của máy trạng thái truyền file.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass, fields
+from dataclasses import MISSING, dataclass, fields
 from enum import StrEnum
-from typing import ClassVar
+from typing import Any, ClassVar
 
+from teleport.core.bitfield import MAX_BITFIELD_BASE64_LEN, MAX_BITFIELD_BYTES, decode_base64
+from teleport.core.blocks import BLOCK_SIZE, MAX_FILE_SIZE
 from teleport.core.pairing_code import PROOF_SIGNATURE_SIZE
 
 PROTOCOL_VERSION = 1
@@ -27,8 +34,10 @@ MAX_NAME_LEN = 64
 MAX_APP_VERSION_LEN = 32
 MAX_CERT_PEM_LEN = 8192
 # Số nguyên lớn nhất mà JSON trao đổi an toàn giữa mọi bộ giải mã (số thực 64 bit
-# biểu diễn chính xác). Cận trên của `t` (ping/pong), sau này của seq/resume_seq.
+# biểu diễn chính xác). Cận trên của `t` (ping/pong), `seq`/`resume_seq`, `mtime`.
 MAX_SAFE_INTEGER = 2**53 - 1
+MAX_OFFER_FILES = 1000
+MAX_FILE_NAME_BYTES = 255  # độ dài tên file trong `offer`, tính bằng byte UTF-8
 
 CERT_PEM_HEADER = "-----BEGIN CERTIFICATE-----"
 
@@ -54,6 +63,12 @@ _FORBIDDEN_CHARS = frozenset(
     "\u2066\u2067\u2068\u2069"  # LRI, RLI, FSI, PDI
 )
 _FORBIDDEN_CATEGORIES = frozenset({"Cc", "Cs"})
+# Tên file chỉ bị từ chối vì Cc/Cs (Cs không mã hóa được UTF-8); ký tự hướng chữ, ký tự
+# vô hình… là việc của bộ làm sạch tên file bên nhận, vốn biến đổi chứ không từ chối.
+# Regex biên dịch sẵn thay cho `unicodedata.category` từng ký tự, vì `offer` 1000 tên được
+# kiểm ngay trên event loop. Cc là U+0000–U+001F và U+007F–U+009F, Cs là U+D800–U+DFFF;
+# Unicode cam kết không đổi hai tập này (test so với `unicodedata` trên mọi code point).
+_FILE_NAME_FORBIDDEN_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\ud800-\\udfff]")
 
 
 class MessageError(ValueError):
@@ -79,6 +94,26 @@ class AbortReason(StrEnum):
     BUSY = "busy"
     TIMEOUT = "timeout"
     INVALID = "invalid"
+
+
+class RejectReason(StrEnum):
+    """Các lý do từ chối `offer` chuẩn. Chỉ dùng để so sánh: `Reject.reason` luôn là `str`."""
+
+    USER = "user"
+    NO_SPACE = "no_space"  # kèm `needed`, `available`
+    BUSY = "busy"
+    FILE_TOO_LARGE = "file_too_large"  # kèm `file_index`, `max_size`
+    NOT_RECEIVING = "not_receiving"
+
+
+class CancelReason(StrEnum):
+    """Các lý do hủy lượt truyền chuẩn. Chỉ dùng để so sánh: `Cancel.reason` luôn là `str`."""
+
+    USER = "user"
+    SOURCE_CHANGED = "source_changed"
+    UNKNOWN_TRANSFER = "unknown_transfer"
+    ERROR = "error"
+    EXPIRED = "expired"  # lượt đã thất bại vì mất kết nối quá lâu (protocol mục 6.3)
 
 
 def _validate_text(value: object, field: str, max_len: int) -> str:
@@ -113,6 +148,48 @@ def _validate_hex32(value: object, field: str) -> str:
     if not isinstance(value, str) or not _HEX32_BYTES_RE.fullmatch(value):
         raise MessageError(f"{field} phải là đúng 64 ký tự hex thường")
     return value
+
+
+def _validate_reason(value: object) -> str:
+    """Lý do (`pair_abort`, `reject`, `cancel`): 1–32 ký tự a-z hoặc _; giá trị lạ đúng dạng vẫn hợp lệ.
+
+    Trả về `str` thuần (ví dụ `AbortReason.USER` → "user") để so sánh và mã hóa nhất quán.
+    """
+    if not isinstance(value, str) or not _REASON_RE.fullmatch(value):
+        raise MessageError("reason phải gồm 1–32 ký tự a-z hoặc _")
+    return value if type(value) is str else str.__str__(value)
+
+
+def _validate_transfer_id(value: object) -> str:
+    """Mã lượt truyền: đúng 32 ký tự hex thường (không kiểm các bit phiên bản của UUID4)."""
+    if not isinstance(value, str) or not _DEVICE_ID_RE.fullmatch(value):
+        raise MessageError("transfer_id phải là đúng 32 ký tự hex thường")
+    return value
+
+
+def _validate_file_index(value: object) -> int:
+    """Chỉ số file trong `offer`: 0…MAX_OFFER_FILES − 1. So với số file thật là việc của máy trạng thái."""
+    return _validate_int(value, "file_index", 0, MAX_OFFER_FILES - 1)
+
+
+def validate_file_name(value: object) -> str:
+    """Tên file trong `offer` như máy kia gửi: ≤ 255 byte UTF-8, không có ký tự loại Cc hay Cs.
+
+    Chuỗi rỗng vẫn hợp lệ. Ở đây **không** làm sạch tên: bên nhận luôn làm sạch trước khi
+    dùng (protocol mục 3.3, 4.4). Trả về `str` thuần; sai thì raise MessageError.
+    """
+    if not isinstance(value, str):
+        raise MessageError("name phải là chuỗi")
+    # Mỗi code point tốn ít nhất 1 byte: chặn chuỗi quá dài trước khi tìm ký tự cấm.
+    if len(value) > MAX_FILE_NAME_BYTES:
+        raise MessageError(f"name dài quá {MAX_FILE_NAME_BYTES} byte UTF-8")
+    bad = _FILE_NAME_FORBIDDEN_RE.search(value)
+    if bad is not None:
+        raise MessageError(f"name chứa ký tự không được phép: U+{ord(bad.group()):04X}")
+    # Không còn surrogate lẻ nên encode không ném UnicodeEncodeError.
+    if len(value.encode("utf-8")) > MAX_FILE_NAME_BYTES:
+        raise MessageError(f"name dài quá {MAX_FILE_NAME_BYTES} byte UTF-8")
+    return value if type(value) is str else str.__str__(value)
 
 
 def validate_device_id(value: object) -> str:
@@ -243,11 +320,8 @@ class PairAbort:
     reason: str
 
     def __post_init__(self) -> None:
-        if not isinstance(self.reason, str) or not _REASON_RE.fullmatch(self.reason):
-            raise MessageError("reason phải gồm 1–32 ký tự a-z hoặc _")
-        if type(self.reason) is not str:
-            # Ví dụ AbortReason.USER: đổi về str thuần để so sánh và mã hóa nhất quán.
-            object.__setattr__(self, "reason", str.__str__(self.reason))
+        # Ví dụ AbortReason.USER: đổi về str thuần để so sánh và mã hóa nhất quán.
+        object.__setattr__(self, "reason", _validate_reason(self.reason))
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +355,212 @@ class Pong:
         _validate_int(self.t, "t", 0, MAX_SAFE_INTEGER)
 
 
+# ---- Truyền file (protocol mục 3.2, 3.3, 4) ------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DataOpen:
+    """Client mở đầu kết nối dữ liệu phục vụ `resume` có `seq` = `resume_seq` (protocol mục 4.1)."""
+
+    TYPE: ClassVar[str] = "data_open"
+
+    transfer_id: str
+    file_index: int
+    resume_seq: int
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        _validate_file_index(self.file_index)
+        _validate_int(self.resume_seq, "resume_seq", 1, MAX_SAFE_INTEGER)
+
+
+@dataclass(frozen=True, slots=True)
+class FileEntry:
+    """Một file trong `offer`. Không phải message: chỉ nằm trong `Offer.files`.
+
+    `name` là tên máy kia gửi, **chưa** làm sạch (xem `validate_file_name`). `mtime`:
+    mili giây Unix, số nguyên (bên gửi ép giá trị âm thành 0).
+    """
+
+    name: str
+    size: int
+    mtime: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", validate_file_name(self.name))
+        _validate_int(self.size, "size", 0, MAX_FILE_SIZE)
+        _validate_int(self.mtime, "mtime", 0, MAX_SAFE_INTEGER)
+
+    @classmethod
+    def from_dict(cls, obj: object) -> FileEntry:
+        """Một phần tử của `offer.files`: object có `name`, `size`, `mtime`; trường lạ bị bỏ qua."""
+        if not isinstance(obj, dict):
+            raise MessageError("mỗi phần tử của files phải là một JSON object")
+        for name in ("name", "size", "mtime"):
+            if name not in obj:
+                raise MessageError(f"phần tử của files thiếu trường {name}")
+        return cls(name=obj["name"], size=obj["size"], mtime=obj["mtime"])
+
+    def to_dict(self) -> dict[str, object]:
+        return {"name": self.name, "size": self.size, "mtime": self.mtime}
+
+
+@dataclass(frozen=True, slots=True)
+class Offer:
+    """Bên gửi đề nghị gửi 1–1000 file. `files` luôn là tuple `FileEntry` (dict cũng nhận)."""
+
+    TYPE: ClassVar[str] = "offer"
+
+    transfer_id: str
+    block_size: int  # luôn = BLOCK_SIZE (1 MiB)
+    files: tuple[FileEntry, ...]
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        if type(self.block_size) is not int or self.block_size != BLOCK_SIZE:
+            raise MessageError(f"block_size phải là {BLOCK_SIZE}")
+        files: object = self.files
+        if not isinstance(files, list | tuple):
+            raise MessageError("files phải là một mảng")
+        if not 1 <= len(files) <= MAX_OFFER_FILES:
+            raise MessageError(f"files phải có 1–{MAX_OFFER_FILES} phần tử")
+        entries = tuple(f if isinstance(f, FileEntry) else FileEntry.from_dict(f) for f in files)
+        object.__setattr__(self, "files", entries)
+
+
+@dataclass(frozen=True, slots=True)
+class Accept:
+    """Bên nhận nhận **tất cả** file trong `offer`; ngay sau đó gửi `resume` cho file đầu."""
+
+    TYPE: ClassVar[str] = "accept"
+
+    transfer_id: str
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+
+
+@dataclass(frozen=True, slots=True)
+class Reject:
+    """Bên nhận từ chối cả `offer`. `reason` lạ đúng dạng vẫn được nhận.
+
+    Trường kèm theo lý do: `no_space` bắt buộc có `needed`, `available` (byte);
+    `file_too_large` bắt buộc có `file_index` (file vi phạm đầu tiên), `max_size` (byte,
+    file lớn nhất mà hệ file nhận chứa được). Các trường này là tùy chọn với lý do khác,
+    nhưng có mặt thì vẫn phải đúng kiểu; vắng mặt là None.
+    """
+
+    TYPE: ClassVar[str] = "reject"
+
+    transfer_id: str
+    reason: str
+    needed: int | None = None
+    available: int | None = None
+    file_index: int | None = None
+    max_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        object.__setattr__(self, "reason", _validate_reason(self.reason))
+        for name in ("needed", "available", "max_size"):
+            value = getattr(self, name)
+            if value is not None:
+                _validate_int(value, name, 0, MAX_SAFE_INTEGER)
+        if self.file_index is not None:
+            _validate_file_index(self.file_index)
+        required = _REJECT_REQUIRED.get(self.reason, ())
+        for name in required:
+            if getattr(self, name) is None:
+                raise MessageError(f"reject{{{self.reason}}} thiếu trường {name}")
+
+
+_REJECT_REQUIRED: dict[str, tuple[str, ...]] = {
+    RejectReason.NO_SPACE: ("needed", "available"),
+    RejectReason.FILE_TOO_LARGE: ("file_index", "max_size"),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Resume:
+    """Bên nhận báo các khối đã có của một file (protocol mục 4.1); gửi lúc nào cũng được.
+
+    `bitfield` giữ nguyên dạng base64 trên dây. Ở đây chỉ kiểm là base64 chuẩn và không dài
+    quá bitfield của file lớn nhất; độ dài đúng theo số khối và bit thừa = 0 được kiểm khi
+    đọc bằng `Bitfield.from_base64(bitfield, n)`, vì cần biết `size` từ `offer`.
+    """
+
+    TYPE: ClassVar[str] = "resume"
+
+    transfer_id: str
+    file_index: int
+    seq: int
+    bitfield: str
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        _validate_file_index(self.file_index)
+        _validate_int(self.seq, "seq", 1, MAX_SAFE_INTEGER)
+        if not isinstance(self.bitfield, str):
+            raise MessageError("bitfield phải là chuỗi base64")
+        # Chặn độ dài chuỗi trước khi giải mã (rẻ), rồi chặn số byte sau khi giải mã:
+        # 524 289 byte cũng ra đúng MAX_BITFIELD_BASE64_LEN ký tự (524 290 byte thì dài
+        # hơn, đã bị kiểm độ dài chuỗi chặn).
+        if len(self.bitfield) > MAX_BITFIELD_BASE64_LEN:
+            raise MessageError("bitfield dài quá bitfield của file lớn nhất")
+        try:
+            raw = decode_base64(self.bitfield)
+        except ValueError as e:
+            raise MessageError(f"bitfield: {e}") from None
+        if len(raw) > MAX_BITFIELD_BYTES:
+            raise MessageError("bitfield dài quá bitfield của file lớn nhất")
+        if type(self.bitfield) is not str:
+            object.__setattr__(self, "bitfield", str.__str__(self.bitfield))
+
+
+@dataclass(frozen=True, slots=True)
+class Complete:
+    """Bên gửi đã gửi mọi khối của file ít nhất một lần; `merkle_root` 64 hex thường (mục 4.4)."""
+
+    TYPE: ClassVar[str] = "complete"
+
+    transfer_id: str
+    file_index: int
+    merkle_root: str
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        _validate_file_index(self.file_index)
+        _validate_hex32(self.merkle_root, "merkle_root")
+
+
+@dataclass(frozen=True, slots=True)
+class Verified:
+    """Bên nhận đã kiểm xong và đổi tên file sang tên thật (protocol mục 4.4)."""
+
+    TYPE: ClassVar[str] = "verified"
+
+    transfer_id: str
+    file_index: int
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        _validate_file_index(self.file_index)
+
+
+@dataclass(frozen=True, slots=True)
+class Cancel:
+    """Một bên hủy lượt truyền. `reason` lạ đúng dạng vẫn được nhận."""
+
+    TYPE: ClassVar[str] = "cancel"
+
+    transfer_id: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        object.__setattr__(self, "reason", _validate_reason(self.reason))
+
+
 Message = (
     Hello
     | PairRequest
@@ -292,6 +572,14 @@ Message = (
     | ControlOpen
     | Ping
     | Pong
+    | DataOpen
+    | Offer
+    | Accept
+    | Reject
+    | Resume
+    | Complete
+    | Verified
+    | Cancel
 )
 
 _MESSAGE_TYPES: dict[str, type[Message]] = {
@@ -307,6 +595,14 @@ _MESSAGE_TYPES: dict[str, type[Message]] = {
         ControlOpen,
         Ping,
         Pong,
+        DataOpen,
+        Offer,
+        Accept,
+        Reject,
+        Resume,
+        Complete,
+        Verified,
+        Cancel,
     )
 }
 
@@ -314,8 +610,10 @@ _MESSAGE_TYPES: dict[str, type[Message]] = {
 def parse_message(obj: object) -> Message:
     """Đổi dict nhận từ khung thành message đã kiểm tra.
 
-    Không phải dict, thiếu `type`, `type` không phải chuỗi, thiếu trường hay trường
-    sai → MessageError. `type` chưa biết → UnknownMessageType. Trường lạ bị bỏ qua.
+    Không phải dict, thiếu `type`, `type` không phải chuỗi, thiếu trường bắt buộc hay
+    trường sai → MessageError. Trường tùy chọn (có giá trị mặc định, ví dụ `Reject.needed`)
+    được vắng mặt, nhưng có mặt mà là `null` cũng là sai. `type` chưa biết →
+    UnknownMessageType. Trường lạ bị bỏ qua.
     """
     if not isinstance(obj, dict):
         raise MessageError("message phải là một JSON object")
@@ -328,19 +626,41 @@ def parse_message(obj: object) -> Message:
     if cls is None:
         raise UnknownMessageType(f"loại message chưa biết: {msg_type!r}")
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     for f in fields(cls):
+        optional = f.default is not MISSING
         if f.name not in obj:
+            if optional:
+                continue
             raise MessageError(f"message {msg_type} thiếu trường {f.name}")
+        if optional and obj[f.name] is None:
+            raise MessageError(f"trường {f.name} của message {msg_type} không được là null")
         kwargs[f.name] = obj[f.name]
     return cls(**kwargs)
 
 
+def _wire_value(value: object) -> object:
+    if isinstance(value, FileEntry):
+        return value.to_dict()
+    if isinstance(value, tuple):
+        return [_wire_value(v) for v in value]
+    return value
+
+
 def to_dict(msg: Message) -> dict:
-    """Dict để mã hóa thành khung; luôn có `type`. Bảo đảm `parse_message(to_dict(m)) == m`."""
+    """Dict để mã hóa thành khung; luôn có `type`. Bảo đảm `parse_message(to_dict(m)) == m`.
+
+    Trường tùy chọn đang là None thì không ghi ra.
+    """
     if type(msg) not in _MESSAGE_TYPES.values():
         raise TypeError(f"không phải message: {type(msg).__name__}")
-    return {"type": msg.TYPE, **{f.name: getattr(msg, f.name) for f in fields(msg)}}
+    result: dict[str, object] = {"type": msg.TYPE}
+    for f in fields(msg):
+        value = getattr(msg, f.name)
+        if value is None and f.default is not MISSING:
+            continue
+        result[f.name] = _wire_value(value)
+    return result
 
 
 # ---- Loại kết nối --------------------------------------------------------------------------
@@ -364,8 +684,9 @@ _ALLOWED_TYPES: dict[ConnectionKind, frozenset[str]] = {
     ConnectionKind.PAIRING: frozenset(
         cls.TYPE for cls in (PairRequest, PairCommit, PairNonce, PairReveal, PairConfirm, PairAbort)
     ),
-    # Giai đoạn 2 sẽ thêm offer, accept, resume…
-    ConnectionKind.CONTROL: frozenset(cls.TYPE for cls in (Ping, Pong)),
+    ConnectionKind.CONTROL: frozenset(
+        cls.TYPE for cls in (Ping, Pong, Offer, Accept, Reject, Resume, Complete, Verified, Cancel)
+    ),
     # Sau `data_open` chỉ có khung khối nhị phân (protocol.md mục 4.2).
     ConnectionKind.DATA: frozenset(),
 }
@@ -383,14 +704,15 @@ def opening_kind(msg: Message, *, has_client_cert: bool) -> ConnectionKind:
     """Loại kết nối do message mở đầu của client khai báo (protocol.md mục 2.1).
 
     `pair_request` chỉ hợp lệ khi client không gửi chứng chỉ (kết nối ẩn danh),
-    `control_open` chỉ khi có. Mọi trường hợp khác → WrongConnectionKind (kể cả
-    `data_open`, vì chưa có kiểu nên `parse_message` đã báo UnknownMessageType từ trước).
+    `control_open` và `data_open` chỉ khi có. Mọi trường hợp khác → WrongConnectionKind.
     Không kiểm danh sách tin cậy: đó là việc của tầng `net`.
     """
     if isinstance(msg, PairRequest) and not has_client_cert:
         return ConnectionKind.PAIRING
     if isinstance(msg, ControlOpen) and has_client_cert:
         return ConnectionKind.CONTROL
+    if isinstance(msg, DataOpen) and has_client_cert:
+        return ConnectionKind.DATA
     msg_type = getattr(msg, "TYPE", type(msg).__name__)
     cert_note = "có" if has_client_cert else "không có"
     raise WrongConnectionKind(f"{msg_type} không mở được kết nối khi client {cert_note} chứng chỉ")

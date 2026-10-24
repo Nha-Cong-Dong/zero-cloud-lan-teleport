@@ -137,11 +137,11 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 | `pair_request` / `pair_commit` / `pair_nonce` / `pair_reveal` / `pair_confirm` / `pair_abort` | ↔ | ghép đôi: chứng chỉ, cam kết của bên trả lời, hai nonce, chữ ký của bên khởi xướng (trong `pair_nonce`), xác nhận, lý do hủy — chỉ trên kết nối ghép đôi |
 | `control_open` / `data_open` | client → server | mở đầu kết nối điều khiển / dữ liệu (`transfer_id`, `file_index`, `resume_seq`) |
 | `offer` | gửi → nhận | `transfer_id`, danh sách file (tên, kích thước, mtime), `block_size` |
-| `accept` / `reject` | nhận → gửi | nhận tất cả / lý do từ chối (`user`, `no_space` kèm số byte cần và còn, `busy`) |
-| `resume` | nhận → gửi | `transfer_id`, `file_index`, bitfield các khối đã có; gửi lúc nào cũng được (nối lại, gửi lại khối thiếu hoặc sai) |
+| `accept` / `reject` | nhận → gửi | nhận tất cả / lý do từ chối (danh sách lý do và trường kèm theo: `protocol.md` mục 3.3) |
+| `resume` | nhận → gửi | `transfer_id`, `file_index`, `seq`, bitfield các khối đã có; gửi lúc nào cũng được (nối lại, gửi lại khối thiếu hoặc sai) |
 | `complete` | gửi → nhận | `transfer_id`, `file_index`, `merkle_root` |
 | `verified` | nhận → gửi | file đã kiểm tra xong và mang tên thật |
-| `cancel` | ↔ | `transfer_id`, lý do (`user`, `source_changed`, `unknown_transfer`, `error`) |
+| `cancel` | ↔ | `transfer_id`, lý do (danh sách: `protocol.md` mục 3.3) |
 | `clipboard` | ↔ | `kind` (`text` / `image/png`), `sha256`, dữ liệu (văn bản hoặc base64), chia thành nhiều mảnh |
 | `ping` / `pong` | ↔ | giữ kết nối, phát hiện mất kết nối |
 
@@ -265,19 +265,21 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 
 #### Giai đoạn 2 — Truyền file, backpressure, an toàn khi nhận
 - Làm trước khi bắt đầu giai đoạn này (không đổi trạng thái ✅ của Giai đoạn 1), đã xong ✅: giới hạn tốc độ bắt tay mới, theo IP và ngân sách chung, cùng pool ưu tiên cho IP đã xác thực mTLS (`teleport.core.admission`, `protocol.md` mục 2.3); client kết nối ra dùng `CERT_REQUIRED` với đúng chứng chỉ đã lưu của máy kia (`protocol.md` mục 2.1, 2.2, 8; mục 8 bên dưới).
-- `core/blocks.py`: khung khối nhị phân kèm hash; `core/messages.py`: thêm `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
-- `core/transfer.py`: máy trạng thái gửi/nhận (`offer`/`accept`, nhiều file, hủy), không I/O.
+- `core/blocks.py`: khung khối nhị phân kèm hash; `core/merkle.py`, `core/bitfield.py` (dời lên từ Giai đoạn 3, vì định dạng trên dây của protocol 1 được chốt đủ ở `v0.1.0-alpha`); `core/messages.py`: thêm `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
+- `core/transfer.py`: máy trạng thái gửi/nhận, không I/O: `offer`/`accept`/`reject`, nhiều file, hủy; `resume`/`complete`/`verified`; toàn vẹn trong một phiên (kiểm hash từng khối, `resume` xin lại khối sai hay thiếu khi kết nối dữ liệu đứt, lượt đọc lại `.part` cuối, so Merkle root, giới hạn số lần gửi lại → `cancel{error}`); kiểm file nguồn đổi trước `complete` (`cancel{source_changed}`); `cancel{unknown_transfer}` và bia mộ trong bộ nhớ (`protocol.md` mục 6.3).
+- Đồng bộ lại trong bộ nhớ khi kết nối điều khiển bị thay hoặc có lại (`protocol.md` mục 6.3): mất kết nối điều khiển thì chờ nối lại tối đa 30 s, quá hạn thì lượt truyền thất bại, xóa file tạm, giữ các file đã `verified`.
+- Giới hạn của Giai đoạn 2: trạng thái lượt truyền và bia mộ chỉ nằm trong bộ nhớ, nên bên nhận khởi động lại thì mất hết; `offer` gửi lại sau đó được coi là `offer` mới (hỏi lại người dùng; với `receive --yes` thì tự nhận lại, và file đã nhận xong sẽ có thêm một bản ` (1)`). Giai đoạn 3 sửa bằng `transfer.json` và bia mộ trên đĩa.
 - `app/transfers.py`: chạy máy trạng thái trên kết nối thật, đọc/ghi `.part` theo khối.
 - An toàn khi nhận (mục 3.3): làm sạch tên, file tạm trong `.teleport/`, đổi tên không ghi đè; hủy ở cả hai bên (máy nhận xóa file tạm); giới hạn tốc độ gửi.
-- Kiểm hệ file của thư mục nhận trước `accept` (FAT32, mục 8): có file không chứa được thì tự `reject` cả lượt với một lý do mới, sửa `protocol.md` mục 3.2 khi cài.
+- Kiểm hệ file của thư mục nhận trước `accept` (FAT32, mục 8): có file không chứa được thì tự `reject` cả lượt với lý do `file_too_large` (`protocol.md` mục 3.3).
 - Thêm thông báo lỗi ghi đĩa (ghi hay `fsync` `.state`/`.part` lỗi, [architecture.md](architecture.md) mục 4) vào mvp mục 8: trưởng nhóm soạn nguyên văn, người dùng duyệt.
 - CLI: `teleport send <file...> --to <tên>` kèm tiến độ và tốc độ, `teleport receive`; mã thoát khác 0 khi lỗi; `--json`.
 - Build thử CLI bằng PyInstaller để sớm phát hiện vấn đề đóng gói / antivirus.
 - **Xong khi:** truyền file 10 GiB thành công; đạt N3 (biểu đồ RSS phẳng, ổ đích chậm mà RAM không tăng); test path traversal và tên đặc biệt (`../../x`, `C:\Windows\x`, `CON`, `NUL.txt`, `a.txt:ads`, `x.`, `x.part.state`) đều bị chặn hoặc đổi tên; không có trường hợp nào ghi đè file sẵn có. → **`v0.1.0-alpha`**.
 
 #### Giai đoạn 3 — Merkle & tự nối lại
-- `core/merkle.py`, `core/bitfield.py`, `core/resume_state.py` (nhật ký `.state`, [architecture.md](architecture.md) mục 4); mở rộng `core/transfer.py` với `complete`, `resume`, `verified`, lượt đọc lại cuối và giới hạn số lần gửi lại; lưu trạng thái nối lại ở `app/transfers.py`.
-- Tự kết nối lại với backoff; phát hiện file nguồn thay đổi (khi nối lại và trước `complete`); `cancel{unknown_transfer}` khi bên gửi đã tắt; dọn file tạm cũ.
+- Trạng thái bền trên đĩa: `core/resume_state.py` (nhật ký `.state`, [architecture.md](architecture.md) mục 4) và `transfer.json`, đọc/ghi ở `app/transfers.py`; bia mộ của lượt truyền đã hủy lưu trên đĩa (`protocol.md` mục 6.3).
+- Nối lại tới 24 giờ sau khi mất kết nối điều khiển (lịch thử lại `protocol.md` mục 6.2, trạng thái “Đang nối lại…”); tắt app nhận rồi mở lại vẫn nối tiếp; phát hiện file nguồn thay đổi khi nối lại; dọn file tạm cũ.
 - **Xong khi:** đạt mọi AC của F6, F7 và N4, N5, cụ thể: (a) tắt Wi-Fi ở 85% → bật lại → hoàn tất, lượng gửi lại trong ngưỡng mvp N4; (b) sửa 1 byte trong `.part` → phát hiện và gửi lại đúng 1 khối; (c) tắt hẳn app nhận rồi mở lại → vẫn nối lại được; (d) test `hypothesis` ngắt kết nối ngẫu nhiên → file cuối luôn đúng. → **`v0.2.0-alpha`**.
 
 #### Giai đoạn 4 — Giao diện, khay hệ thống, đa ngôn ngữ
