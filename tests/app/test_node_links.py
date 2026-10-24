@@ -1193,10 +1193,35 @@ async def test_sc4_corrupt_store_and_config_dir_file(scan_dir, fake_mdns, tmp_pa
     assert fake_mdns.instances == []
 
 
-async def test_sc5_scan_duration(scan_dir, fake_mdns):
+class _AsyncioSpy:
+    """Thay `asyncio` trong `teleport.app.node`: ghi lại mỗi lần `sleep` (lúc gọi, đang duyệt chưa)."""
+
+    def __init__(self, fake_mdns) -> None:
+        self.fake_mdns = fake_mdns
+        self.sleeps: list[tuple[float, list[str]]] = []
+
+    def __getattr__(self, name: str):
+        return getattr(asyncio, name)
+
+    async def sleep(self, delay, *args, **kwargs):
+        self.sleeps.append((delay, list(self.fake_mdns.last.calls)))
+        return await asyncio.sleep(delay, *args, **kwargs)
+
+
+async def test_sc5_scan_duration(scan_dir, fake_mdns, monkeypatch):
+    """Quét đúng `timeout` giây: chờ đúng một lần, đúng `timeout`, giữa `start_browsing` và `close`.
+
+    Không chặn trên bằng đồng hồ thật: khi chạy cả bộ, máy bận (GC thế hệ 2, thiếu CPU) làm phần
+    dựng/dọn quanh lần chờ đó dài thêm quá 1 s. Đồng hồ thật chỉ kiểm không xong sớm và không treo.
+    """
     d, _ident, _ids = scan_dir
     for timeout in (0.3, 1.0):
-        t0 = time.monotonic()
-        await scan_devices(d, timeout=timeout)
-        took = time.monotonic() - t0
-        assert 0.8 * timeout <= took <= timeout + 1, took
+        spy = _AsyncioSpy(fake_mdns)
+        with monkeypatch.context() as m:
+            m.setattr(node_mod, "asyncio", spy)
+            t0 = time.monotonic()
+            await asyncio.wait_for(scan_devices(d, timeout=timeout), timeout + 30)
+            took = time.monotonic() - t0
+        assert spy.sleeps == [(timeout, ["start", "set_priority", "start_browsing"])], spy.sleeps
+        assert fake_mdns.last.calls[-1] == "close" and fake_mdns.last.closed
+        assert took >= 0.8 * timeout, took

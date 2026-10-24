@@ -1259,6 +1259,10 @@ async def test_stranger_after_commit_holds_gate_only_until_nonce_timeout(
     C = await node_factory("C", accept_pairing=True, answer=True)
     raw_id = load_or_create_identity(tmp_path / "raw")
     c = await raw_pairing_client(B.port)
+    # Mốc trước khi gửi pair_request: bên trả lời chỉ đặt hạn (loop.time(), cùng đồng hồ với
+    # time.monotonic()) sau khi nhận nó, nên pair_abort không thể tới trước t_req + NONCE_TIMEOUT
+    # dù vòng lặp bị dừng (GC, máy bận) giữa lúc gửi pair_commit và lúc test đọc được nó.
+    t_req = time.monotonic()
     await c.begin(raw_id)
     await c.read_commit()
     t0 = time.monotonic()
@@ -1271,22 +1275,28 @@ async def test_stranger_after_commit_holds_gate_only_until_nonce_timeout(
         frame_len = len(data)
         drip = asyncio.create_task(_drip(c, data, sent), name="test.drip")
     try:
-        # Trong hạn: slot của gate bị phiên này chiếm → node B không khởi xướng được phiên khác.
-        busy = await asyncio.wait_for(B.pairing.pair_with([LOCAL], C.port), 0.8 * fast.NONCE_TIMEOUT)
-        assert time.monotonic() - t0 < 0.8 * fast.NONCE_TIMEOUT, "máy test quá chậm để kiểm hạn"
+        # Slot của gate bị phiên này chiếm → node B không khởi xướng được phiên khác. Phiên của
+        # kẻ lạ chưa kết thúc (B chỉ báo đúng kết quả BUSY này), nên BUSY là do nó, không cần
+        # đo giờ để biết.
+        busy = await asyncio.wait_for(B.pairing.pair_with([LOCAL], C.port), fast.SLACK)
         assert busy.outcome == PairingOutcome.BUSY
+        assert [f.outcome for f in B.rec.finished] == [PairingOutcome.BUSY]
         assert B.pairing.gate.active is not None
         assert C.rec.prompts == [] and C.rec.finished == []
 
         msg = await c.read(timeout=fast.NONCE_TIMEOUT + fast.SLACK)
-        waited = time.monotonic() - t0
+        t_msg = time.monotonic()
     finally:
         if drip is not None:
             drip.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await drip
     assert msg == {"type": "pair_abort", "reason": "timeout"}, msg
-    assert 0.8 * fast.NONCE_TIMEOUT <= waited <= fast.NONCE_TIMEOUT + fast.SLACK, f"chờ {waited:.2f} s"
+    # Không bỏ cuộc sớm (so với mốc trước pair_request, không cần biên dưới nới tay), và byte nhỏ
+    # giọt không gia hạn (so với lúc đọc được pair_commit, mốc muộn hơn lúc bên trả lời đặt hạn).
+    assert t_msg >= t_req + fast.NONCE_TIMEOUT, f"pair_abort tới sớm: {t_msg - t_req:.2f} s sau pair_request"
+    waited = t_msg - t0
+    assert waited <= fast.NONCE_TIMEOUT + fast.SLACK, f"chờ {waited:.2f} s"
     if case == "nho_giot_nonce":
         assert 0 < sent[0] < frame_len, "pair_nonce phải bị cắt khi còn đang nhỏ giọt"
 
