@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from teleport.app.node import ConnectFailed, DeviceConnected, MdnsOptions
+from teleport.app.node import ConnectFailed, MdnsOptions
 from teleport.app.pairing import PairingOutcome
 from teleport.core.admission import Refusal
 from teleport.core.discovery import DeviceAdded, DeviceUpdated
@@ -55,6 +55,21 @@ def no_refusals() -> dict[str, int]:
     return {str(r): 0 for r in Refusal}
 
 
+def shared_link(a, b) -> tuple[bool, int] | None:
+    """Kết nối điều khiển hiện tại mà **cả hai** node cùng giữ (hai đầu của một kết nối TCP).
+
+    Trả (A là client?, cổng nguồn của client), hoặc None khi chưa có, hoặc mỗi bên còn giữ một kết
+    nối khác nhau: lúc hai bên cùng gọi nhau, luật chống trùng (`docs/protocol.md` mục 6.1) chưa
+    xử lý xong ở cả hai bên.
+    """
+    ca, cb = a.control_connection(b.id), b.control_connection(a.id)
+    if ca is None or cb is None or ca.closed or cb.closed or ca.is_server == cb.is_server:
+        return None
+    client, server = (cb, ca) if ca.is_server else (ca, cb)
+    port = client._writer.get_extra_info("sockname")[1]
+    return (client is ca, port) if server.peer.port == port else None
+
+
 @pytest.mark.real_admission_limits
 async def test_pairing_then_auto_connect_then_reconnect_with_real_default_limits(
     node_factory, fake_mdns, app_helpers, count_open_control
@@ -68,22 +83,16 @@ async def test_pairing_then_auto_connect_then_reconnect_with_real_default_limits
     fake_mdns.of(B).emit(DeviceAdded(app_helpers.dev(A)))
     result = await asyncio.wait_for(A.pairing.pair_with([LOCAL], B.port), 15)
     assert result.outcome == PairingOutcome.PAIRED
-    await wait_until(
-        lambda: A.connected_devices() == {B.id} and B.connected_devices() == {A.id},
-        3,
-        "chưa tự nối sau ghép đôi",
-    )
+    await wait_until(lambda: shared_link(A, B) is not None, 3, "chưa tự nối sau ghép đôi")
     for round_no in range(3):
-        n = len(A.rec.events_of(DeviceConnected, B.id))
+        # Chờ cả hai bên giữ cùng một kết nối rồi mới cắt: nếu cắt lúc luật chống trùng còn dở,
+        # có thể cắt đúng kết nối sắp bị bỏ, kết nối còn lại vẫn sống và không có lần nối lại nào.
+        old = shared_link(A, B)
         side = B if round_no % 2 else A
         other = A if side is B else B
         await side.control_connection(other.id).close()
         await wait_until(
-            lambda n=n: (
-                len(A.rec.events_of(DeviceConnected, B.id)) > n
-                and A.connected_devices() == {B.id}
-                and B.connected_devices() == {A.id}
-            ),
+            lambda old=old: shared_link(A, B) not in (None, old),
             5,
             f"lần {round_no + 1}: chưa nối lại sau khi đứt",
         )
