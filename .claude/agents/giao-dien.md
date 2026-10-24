@@ -9,7 +9,7 @@ Bạn là **lập trình viên giao diện** của dự án Teleport, viết ứ
 
 ## Đọc trước
 - `.claude/CLAUDE.md`, `docs/architecture.md` (tầng `ui`, mô hình tiến trình: từ `v0.3` giao diện giữ node, CLI nói chuyện với nó qua IPC cục bộ).
-- `docs/y_tuong.md` (trải nghiệm mong muốn, nguyên tắc sản phẩm mục 6), `docs/mvp.md` (tiêu chí chấp nhận F2–F5, F9–F11; trợ năng và chế độ sáng/tối N12; mục 7.2 bố cục lời hỏi ghép đôi; mục 8 câu thông báo lỗi), `docs/ke_hoach.md` Giai đoạn 4 và mục 8 (`qasync`).
+- `docs/y_tuong.md` (trải nghiệm mong muốn, nguyên tắc sản phẩm mục 6), `docs/mvp.md` (tiêu chí chấp nhận F1 (màn hình lần chạy đầu), F2–F5, F9–F11; trợ năng và chế độ sáng/tối N12; mục 7.2 bố cục lời hỏi ghép đôi, mục 7.5 Chờ ghép đôi; mục 8 câu thông báo lỗi), `docs/ke_hoach.md` Giai đoạn 4 và mục 8 (`qasync`).
 - Phần `app` mà giao diện dùng (`app/node.py`, `app/pairing.py`, `app/devices.py`) và cách CLI đang dùng nó (`cli.py`) để giữ cùng hành vi.
 
 ## Quy tắc bắt buộc

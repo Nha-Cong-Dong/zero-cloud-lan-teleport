@@ -86,6 +86,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **AC:**
   - Bộ cài Windows ≤ 80MB, cài xong không cần khởi động lại máy; bộ cài tự tạo rule tường lửa cho mạng Private.
   - Lần chạy đầu chỉ hỏi 2 thứ: **tên thiết bị** (mặc định = tên máy) và **thư mục nhận** (mặc định = `Downloads/Teleport`), kèm câu hỏi có khởi động cùng hệ điều hành không.
+  - Ngay dưới ô tên thiết bị có dòng: “Tên này hiện với mọi máy trong cùng mạng, kể cả máy lạ chưa ghép đôi. Nếu không muốn lộ tên mình, hãy đặt tên khác.” Muốn ẩn máy này khỏi máy chưa ghép đôi thì dùng công tắc ở F10; những gì máy này để lộ: mục 11.
   - Từ lúc mở bộ cài tới lúc gửi xong file đầu tiên mất < 2 phút với người chưa từng dùng.
 
 ### F2. Radar khám phá thiết bị
@@ -108,8 +109,16 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Chứng chỉ của một thiết bị đã ghép đôi bị thay đổi → chặn kết nối và cảnh báo (mục 8).
   - Có danh sách “Thiết bị tin cậy” trong cài đặt, có nút hủy ghép đôi. Hủy ghép đôi có hiệu lực ngay: kết nối đang mở với máy đó bị đóng; máy đó thấy thông báo “từ chối kết nối từ máy này” (mục 8).
   - Máy đã ghép đôi cài lại Teleport hiện như một thiết bị mới chưa ghép đôi; app gợi ý ghép đôi lại và đề nghị xóa mục cũ trùng tên (mục 8).
+  - Máy này nhận yêu cầu ghép đôi từ máy khác khi:
+    - giao diện, máy này đang *hiện* (F10): luôn nhận;
+    - giao diện, máy này đang *ẩn* (F10): chỉ trong lúc mở màn hình “Chờ ghép đôi” (nút “Chờ ghép đôi” ở cửa sổ chính, mục 7.1, 7.5); đóng màn hình thì thôi nhận;
+    - CLI: chỉ trong lúc chạy `teleport listen`.
+
+    Mở màn hình “Chờ ghép đôi” hoặc chạy `teleport listen` gọi là **chế độ chờ ghép đôi**. Ngoài các trường hợp trên, máy gửi yêu cầu thấy “chưa sẵn sàng ghép đôi” (mục 8).
+
+    Đóng màn hình “Chờ ghép đôi” hay chuyển sang ẩn không hủy phiên ghép đôi đã nhận (kể cả phiên chưa hiện mã); chỉ yêu cầu mới bị từ chối.
   - Hạn chế máy lạ làm phiền: chỉ một phiên ghép đôi tại một thời điểm; sau mỗi lần từ chối hay hết giờ, máy đó phải chờ lâu dần (10 giây, 20 giây… tối đa 10 phút) mới gửi được yêu cầu mới. Đây là mức tốt nhất có thể trong LAN, không chống được máy cố tình đổi địa chỉ liên tục; ghép đôi vẫn an toàn vì cần xác nhận mã ở cả hai máy.
-  - Máy đang chờ ghép đôi hiện tối đa **5 mã mỗi phút** (gộp mọi máy gửi yêu cầu); quá thì yêu cầu mới nhận “chưa sẵn sàng ghép đôi” (mục 8). Từ mã thứ **3** trong 1 phút, máy đó cảnh báo có thể có người đang thử giả mạo (mục 8). Nhờ vậy kẻ đứng giữa chỉ thử được vài mã trong lúc người dùng chờ xác nhận.
+  - Khi nhận yêu cầu ghép đôi, máy này hiện tối đa **5 mã mỗi phút** (gộp mọi máy gửi yêu cầu); quá thì yêu cầu mới nhận “chưa sẵn sàng ghép đôi” (mục 8). Từ mã thứ **3** trong 1 phút, máy này cảnh báo có thể có người đang thử giả mạo (mục 8). Nhờ vậy kẻ đứng giữa chỉ thử được vài mã trong lúc người dùng chờ xác nhận.
   - Không ghép đôi đè lên một thiết bị tin cậy có cùng mã thiết bị nhưng danh tính khác; phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa.
   - Ghép đôi lại với một thiết bị tin cậy (cùng mã thiết bị, cùng danh tính, ví dụ sau khi ghép đôi một phía): lời hỏi hiện thêm tên đã lưu, và tên mới nếu tên sẽ đổi (mục 7.2). Ghép đôi xong, **cả hai máy** cập nhật tên theo tên máy kia đang dùng, vì lúc ghép đôi mỗi máy đã xác minh máy kia giữ đúng khóa của thiết bị đó ([protocol.md](protocol.md) mục 5.1, 5.5). Máy lạ chỉ có chứng chỉ công khai của thiết bị đó thì bị chặn trước khi hiện mã.
 
@@ -121,6 +130,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Mỗi file tối đa 4 TB (2⁴² byte, [protocol.md](protocol.md) mục 3.3). File lớn hơn bị chặn ngay lúc chọn, trước khi gửi gì cho máy kia (mục 8).
   - Máy nhận hiện hộp thoại: tên người gửi, danh sách file, tổng dung lượng, nút **Nhận** / **Từ chối**. Có tùy chọn “Luôn nhận từ thiết bị này” (tương đương tắt “Hỏi trước khi nhận” của thiết bị đó trong cài đặt).
   - Không đủ dung lượng trống → máy nhận tự từ chối ngay, máy gửi được báo cần bao nhiêu và còn bao nhiêu.
+  - Thư mục nhận nằm trên ổ không chứa được file lớn như vậy (ổ FAT32, thường là USB cũ: mỗi file phải nhỏ hơn 4 GB) → máy nhận tự từ chối ngay cả lượt gửi, không hỏi người dùng; hai máy đều được báo lý do (mục 8).
   - Trùng tên file → tự đặt `ten (1).ext`, không bao giờ ghi đè.
   - Tên file chứa `..`, đường dẫn tuyệt đối, ký tự cấm hay tên thiết bị đặc biệt của Windows (`CON`, `NUL`…) → được làm sạch, file luôn nằm trong thư mục nhận.
   - Máy gửi kiểm tên file trước khi gửi: tên chứa ký tự điều khiển (ví dụ dấu xuống dòng, hay gặp trên macOS/Linux) thì không gửi và báo người dùng đổi tên (mục 8); tên quá dài thì máy gửi tự cắt ngắn, giữ đuôi file (giới hạn: [protocol.md](protocol.md) mục 3.3), và máy nhận thấy tên đã cắt trong hộp thoại nhận.
@@ -173,9 +183,16 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 ### F10. Cài đặt
 - **AC:** có đủ các mục sau, đổi xong có hiệu lực ngay:
   - Tên thiết bị · Thư mục nhận · Ngôn ngữ · Khởi động cùng hệ điều hành
+  - Cho máy chưa ghép đôi thấy máy này (**mặc định bật**)
   - Theo từng thiết bị tin cậy: Hỏi trước khi nhận · Đồng bộ clipboard · Hủy ghép đôi
   - Giới hạn tốc độ gửi · Dọn file tạm sau N ngày (mặc định 7)
   - Kiểm tra cập nhật (**mặc định tắt**) · Xuất log
+- **AC của “Cho máy chưa ghép đôi thấy máy này”** (bật: máy này đang *hiện*; tắt: đang *ẩn*):
+  - Tắt thì máy này ngừng quảng bá trên mạng và biến mất khỏi radar của máy khác như khi thoát app (N1). Bật lại thì máy này quảng bá lại ngay.
+  - Đang ẩn, máy này vẫn thấy máy khác trên radar, vẫn tự kết nối tới thiết bị tin cậy đang hiện, và gửi/nhận file, clipboard như thường.
+  - Ngay dưới công tắc có dòng: “Máy đã ghép đôi chỉ tự kết nối được khi ít nhất một trong hai máy đang hiện.”
+  - Đang ẩn và không ở chế độ chờ ghép đôi (F3): máy chưa ghép đôi kết nối tới cổng của Teleport bị cắt ngay sau bắt tay, trước khi máy này gửi tên, phiên bản app hay hệ điều hành, trừ máy mà máy này đang chủ động ghép đôi tới ([protocol.md](protocol.md) mục 2, 8).
+  - Đang ẩn vẫn ghép đôi được: máy này chủ động ghép đôi tới máy kia, hoặc mở màn hình “Chờ ghép đôi” (F3, mục 7.5) để máy kia nhập IP thủ công. Khi đang ẩn, màn hình đó có dòng: “Máy này đang ẩn nên máy kia không tự thấy. Hãy nhập IP của máy này ở máy kia.”
 
 ### F11. Đa ngôn ngữ
 - **AC:** Toàn bộ chuỗi giao diện có bản Tiếng Việt và English; mặc định theo ngôn ngữ hệ điều hành; đổi ngôn ngữ không cần khởi động lại.
@@ -234,8 +251,9 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 │ │       ·        Bạn   (chưa ghép) │ ├───────────────────────┤ │
 │ │            ·    ·    ·           │ │ Gần đây               │ │
 │ └──────────────────────────────────┘ │ ✔ report.pdf ← PC-Nha │ │
-│   Kéo file thả vào một thiết bị       │ ✔ build.zip → PC-Nha  │ │
-│   [ Nhập IP thủ công ]                └───────────────────────┘ │
+│   Kéo file thả vào một thiết bị      │ ✔ build.zip → PC-Nha  │ │
+│   [ Nhập IP thủ công ]               └───────────────────────┘ │
+│   [ Chờ ghép đôi ]                                             │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -309,6 +327,26 @@ Trùng khớp? [c/k]:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### 7.5. Chờ ghép đôi
+```
+┌─ Chờ ghép đôi ────────────────────────────┐
+│  Đang chờ máy khác gửi yêu cầu ghép đôi.  │
+│                                           │
+│  Tên:      Laptop-Minh                    │
+│  Mã máy:   a71c04d2                       │
+│  Địa chỉ:  192.168.1.20                   │
+│                                           │
+│  Máy này đang ẩn nên máy kia không tự     │
+│  thấy. Hãy nhập IP của máy này ở máy kia. │
+│                                           │
+│                                 [ Đóng ]  │
+└───────────────────────────────────────────┘
+```
+- Mở bằng nút “Chờ ghép đôi” ở cửa sổ chính; máy này nhận yêu cầu ghép đôi thế nào khi màn hình mở hay đóng: F3.
+- “Địa chỉ”: mọi địa chỉ IPv4 của máy này, kèm `:cổng` khi cổng khác cổng mặc định (protocol mục 2), giống `teleport listen`.
+- Hai dòng “Máy này đang ẩn…” chỉ hiện khi máy này đang ẩn (F10).
+- Có yêu cầu ghép đôi thì lời hỏi hiện theo mục 7.2.
+
 ---
 
 ## 8. Thông báo lỗi & tình huống đặc biệt
@@ -324,18 +362,19 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Tường lửa chặn | “Tường lửa của Windows đang chặn Teleport nhận kết nối.” (máy bị chặn tự phát hiện và hiện; nếu chiều ngược lại vẫn kết nối được thì Teleport vẫn chạy, chỉ hiện gợi ý) | Nút “Mở hướng dẫn” |
 | macOS chưa cho quyền mạng cục bộ | “Teleport chưa được phép dùng mạng cục bộ nên không thấy máy khác.” | Nút “Mở Cài đặt hệ thống” |
 | Không đủ dung lượng | “Không đủ chỗ trống: cần 12,4 GB, ổ D: còn 8,1 GB.” | Nút “Đổi thư mục nhận” |
+| Thư mục nhận nằm trên ổ không chứa được file lớn như vậy (FAT32: mỗi file phải nhỏ hơn 4 GB) | Máy nhận: “Đã từ chối 3 file từ *Laptop-Minh*: ổ *E:* chỉ chứa được file nhỏ hơn 4 GB, mà *video.mp4* nặng 8,0 GB.” Máy gửi: “*PC-Nha* không nhận được *video.mp4* (8,0 GB): ổ lưu file trên máy đó chỉ chứa được file nhỏ hơn 4 GB.” | Máy nhận: nút “Đổi thư mục nhận” (chọn ổ khác). Máy gửi: nút “Gửi lại” sau khi máy kia đổi thư mục nhận |
 | Danh tính thiết bị thay đổi (cùng mã thiết bị, khác chứng chỉ), khi máy này kết nối hoặc gửi yêu cầu ghép đôi tới máy đó | “*PC-Nha* đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. Kết nối đã bị chặn.” | Không cho ghép đôi đè; nút “Hủy ghép đôi *PC-Nha*” (kèm cảnh báo), sau đó mới ghép đôi lại được |
 | Một máy gửi yêu cầu ghép đôi tới máy này, tự xưng là một thiết bị đã ghép đôi (cùng mã thiết bị) nhưng dùng danh tính khác | “Một máy chưa xác minh tự xưng là *PC-Nha* nhưng dùng danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy đó. Yêu cầu ghép đôi đã bị chặn.” | Không gợi ý hủy ghép đôi: máy thật có thể không liên quan |
 | Máy đã ghép đôi cài lại Teleport | “Có một *PC-Nha* mới chưa ghép đôi. Nếu máy đó vừa cài lại Teleport, hãy ghép đôi lại.” | Nút “Ghép đôi”; ghép xong thì hỏi xóa mục *PC-Nha* cũ |
 | Máy kia từ chối máy này | “*PC-Nha* từ chối kết nối từ máy này. Có thể máy đó đã hủy ghép đôi.” | Nút “Ghép đôi lại” |
-| Máy kia chưa sẵn sàng ghép đôi | “*PC-Nha* chưa sẵn sàng ghép đôi: máy đó đang ghép đôi với máy khác, chưa mở chế độ chờ ghép đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau.” | Nút “Thử lại”; CLI gợi ý `teleport listen` |
+| Máy kia chưa sẵn sàng ghép đôi | “*PC-Nha* chưa sẵn sàng ghép đôi: máy đó đang ẩn, đang ghép đôi với máy khác, chưa mở chế độ chờ ghép đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau.” (chưa biết tên thì hiện IP, ví dụ *192.168.1.5*) | Nút “Thử lại”; CLI gợi ý `teleport listen` |
 | Nhập IP thủ công nhưng không kết nối được | “Không kết nối được tới *192.168.1.5:47474*. Hãy kiểm tra Teleport đang chạy trên máy đó, hai máy dùng chung một mạng, và tường lửa cho phép Teleport.” | Nút “Thử lại” |
 | Thiết bị trả lời bằng danh tính không hợp lệ khi ghép đôi | “Thiết bị ở *192.168.1.5:47474* gửi danh tính không hợp lệ nên kết nối đã bị chặn. Có thể có người đang giả mạo.” | — |
 | Ghép đôi với chính máy này | “Đó là chính máy này. Hãy nhập địa chỉ của máy kia.” | — |
 | Danh tính của chính máy này bị hỏng | “Không đọc được danh tính của máy này. Teleport sẽ không tự tạo danh tính mới để khỏi mất các ghép đôi.” | Nút “Tạo danh tính mới” (cảnh báo phải ghép đôi lại) |
 | Mã ghép đôi không trùng / hết giờ (sau khi đã hiện mã) | “Ghép đôi với *MacBook* chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo.” | Nút “Thử lại” |
 | Phiên ghép đôi dừng trước khi hiện mã (máy kia ngắt kết nối, gửi dữ liệu sai hoặc quá hạn chờ) | Máy gửi yêu cầu ghép đôi: “Ghép đôi với *MacBook* chưa xong vì phiên dừng trước khi hiện mã. Hãy thử lại.” Máy nhận yêu cầu ghép đôi: “Một máy tự xưng là *MacBook* đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã.” | Máy gửi yêu cầu: nút “Thử lại”. Máy nhận yêu cầu: không cần làm gì |
-| Máy đang chờ ghép đôi đã hiện từ 3 mã trở lên trong 1 phút | “Cảnh báo: máy này đã hiện *3* mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).” | Hiện ngay dưới mã; từ chối nếu không tự ghép đôi. Câu trên là bản CLI; giao diện thay “(gõ k)” bằng nút “Từ chối” |
+| Máy nhận yêu cầu ghép đôi đã hiện từ 3 mã trở lên trong 1 phút | “Cảnh báo: máy này đã hiện *3* mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).” | Hiện ngay dưới mã; từ chối nếu không tự ghép đôi. Câu trên là bản CLI; giao diện thay “(gõ k)” bằng nút “Từ chối” |
 | Không hiện được mã ghép đôi (giao diện lỗi) | “Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại.” | Nút “Thử lại” |
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |
 | Chọn gửi file lớn hơn 4 TB | “Không gửi được *backup.img* (5,2 TB): Teleport chỉ gửi được file tối đa 4 TB. Hãy chia file thành nhiều phần nhỏ hơn rồi gửi.” | Lượt gửi không bắt đầu; bỏ file đó ra rồi gửi lại các file còn lại |
@@ -413,6 +452,7 @@ App không có telemetry, nên trải nghiệm được đo bằng thử nghiệ
 | Dữ liệu điều khiển độc hại | Message cực lớn hoặc sai định dạng | Giới hạn kích thước, kiểm tra hợp lệ từng trường, fuzz test |
 | Lộ mật khẩu qua clipboard | Copy mật khẩu từ trình quản lý mật khẩu | Clipboard mặc định tắt; bỏ qua nội dung đánh dấu nhạy cảm |
 | Thu thập dữ liệu người dùng | — | Không telemetry, không tài khoản, không máy chủ |
+| Theo dõi thiết bị qua nhiều mạng | Người lạ ở quán cà phê, khách sạn ghi lại mã thiết bị và tên máy mà Teleport quảng bá, rồi nhận ra cùng chiếc laptop đó ở mạng khác | Lần chạy đầu nói rõ tên thiết bị hiện với mọi máy trong mạng và cho đặt tên khác (F1, F10); công tắc “Cho máy chưa ghép đôi thấy máy này” (F10): tắt thì máy này không quảng bá, và khi không ở chế độ chờ ghép đôi (F3) thì máy chưa ghép đôi kết nối tới cũng không nhận được tên, phiên bản app hay hệ điều hành. Chưa chặn trong MVP: mã thiết bị cố định, và máy nào kết nối tới cổng của Teleport vẫn đọc được nó trong chứng chỉ; quảng bá ẩn danh để sau v1.0, việc tự ẩn khi Windows ở mạng Public còn đang cân nhắc ([ke_hoach.md](ke_hoach.md) mục 3.7, 9). Những gì máy này để lộ: [protocol.md](protocol.md) mục 8 |
 
 Báo lỗ hổng bảo mật theo [SECURITY.md](SECURITY.md) (đã có từ Giai đoạn 0; bản hoàn chỉnh cho v1.0).
 
@@ -464,4 +504,4 @@ Rủi ro kỹ thuật và thực thi: [ke_hoach.md](ke_hoach.md) mục 8.
 ## 15. Lộ trình & việc cần chốt
 
 - Lộ trình, các bản phát hành và **trạng thái hiện tại**: [ke_hoach.md](ke_hoach.md) mục 5.
-- Các câu hỏi còn mở (tên thương mại, ngân sách ký mã, chế độ khách cho điện thoại, App Store và CLA): [ke_hoach.md](ke_hoach.md) mục 9.
+- Các câu hỏi còn mở: [ke_hoach.md](ke_hoach.md) mục 9.
