@@ -88,18 +88,27 @@ async def test_m2_trusted_nodes_connect_and_goodbye(node_factory, trust_each_oth
     await B.rec.wait_event(DeviceDisconnected, A.id, timeout=3)
 
 
+# Thời gian quét của M3. B đã quảng bá xong trước khi quét, nên máy quét chỉ thấy B khi B trả lời
+# truy vấn của nó. zeroconf gửi truy vấn lúc ~0,1 s, ~1,1 s, ~5,1 s (STARTUP_QUERIES, giãn n² giây).
+# Lần đầu không có kết quả ở đây (đo: luôn thấy B từ ~1,1 s): B vừa multicast bản ghi lúc khởi
+# động nên không multicast lại trong 1 s (RFC 6762 §6), còn trả lời unicast cho câu hỏi QU đi về
+# 127.0.0.1:5353, nơi nhiều socket zeroconf cùng bind. Lần ~1,1 s có thể hỏng khi tiến trình khác
+# cũng dùng mDNS trên loopback (đo: thấy B tới 2,35 s, quá hạn 2 s cũ). 6 s chứa cả lần ~5,1 s.
+M3_SCAN_TIMEOUT = 6.0
+
+
 async def test_m3_scan_sees_node_without_advertising_or_locking(node_factory, tmp_path):
     B = await node_factory("B", mdns=opts(31))
     dir_x = tmp_path / "X"
     scan = asyncio.create_task(
-        scan_devices(dir_x, timeout=2, mdns=MdnsOptions(interfaces=(LOCAL,), advertise=False)),
+        scan_devices(dir_x, timeout=M3_SCAN_TIMEOUT, mdns=MdnsOptions(interfaces=(LOCAL,), advertise=False)),
         name="test.scan",
     )
     await asyncio.sleep(0.5)
     lock = NodeLock(dir_x)
     lock.acquire()  # list không giữ node.lock
     lock.release()
-    result = await asyncio.wait_for(scan, 10)
+    result = await asyncio.wait_for(scan, M3_SCAN_TIMEOUT + 10)
     views = {v.device_id: v for v in result.devices}
     assert B.id in views, "scan_devices không thấy B"
     vb = views[B.id]
