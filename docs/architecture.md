@@ -69,7 +69,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | — | `paths.py` | Thư mục cấu hình theo hệ điều hành; `TELEPORT_HOME` ghi đè | ✅ |
 | — | `lock.py` | Khóa file của hệ điều hành: `node.lock` (một node cho mỗi thư mục cấu hình), `identity.lock` (khi tạo danh tính) | ✅ |
 | — | `atomic.py` | Ghi file nguyên tử (`.tmp` → fsync → `os.replace`, thử lại khi bị khóa); dùng cho `trusted.json`, `settings.json` | ✅ |
-| core | `framing.py` | Mã hóa/giải mã khung `[uint32 độ dài][JSON]`; giới hạn 16 MiB, riêng kết nối ghép đôi 16 KiB | ✅ |
+| core | `framing.py` | Mã hóa/giải mã khung `[uint32 độ dài][JSON]`; giới hạn 1 MiB, riêng kết nối ghép đôi 16 KiB | ✅ |
 | core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*` gồm `pair_nonce.signature`, `control_open`, `ping`/`pong`); bảng loại kết nối (`ConnectionKind`, `allowed_types`, `opening_kind`) | ✅ |
 | core | `keepalive.py` | Keepalive sans-IO: khi nào gửi ping, khi nào coi là mất kết nối ([protocol.md](protocol.md) mục 2.3) | ✅ |
 | core | `pairing_code.py` | Cam kết nonce và mã ghép đôi 6 số từ hai fingerprint + hai nonce; payload chứng minh giữ khóa mà bên khởi xướng ký (`proof_payload`) | ✅ |
@@ -85,7 +85,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | net | `tls.py` | `SSLContext` TLS 1.3; server một cổng (`CERT_OPTIONAL` + thiết bị tin cậy làm trust anchor); client so toàn bộ fingerprint | ✅ |
 | net | `stream.py` | Đọc/ghi message trên `asyncio` stream | ✅ |
 | net | `discovery.py` | Quảng bá & tìm `_teleport._tcp.local.` (zeroconf, `MdnsDiscovery`): đăng ký/cập nhật/goodbye, duyệt và resolve theo `core.discovery`, đặt tập thiết bị ưu tiên (`set_priority`), đọc card mạng (ifaddr) và địa chỉ nguồn ưu tiên | ✅ |
-| net | `connection.py` | Listener một cổng (TCP trần + `start_tls` theo context hiện tại); trao `hello`; phân loại ghép đôi / điều khiển; giới hạn đang mở đầu 4/IP · 64 và ẩn danh 1/IP · 8; thời gian chờ; `Connection`, `ControlChannel` (keepalive); `open_pairing` / `open_control` thử song song mọi địa chỉ | ✅ (kết nối dữ liệu ⬜, Giai đoạn 2) |
+| net | `connection.py` | Listener một cổng (TCP trần + `start_tls` theo context hiện tại); trao `hello`; phân loại ghép đôi / điều khiển; giới hạn đang mở đầu 4/IP · 64 và ẩn danh 1/IP · 8; thời gian chờ; `Connection`, `ControlChannel` (keepalive; `pong` gửi ở task riêng, gộp `ping` dồn); `open_pairing` / `open_control` thử song song mọi địa chỉ | ✅ (kết nối dữ liệu ⬜, Giai đoạn 2) |
 | app | `settings.py` | `settings.json`: cổng dự phòng; giữ trường lạ; file hỏng → mặc định + `.bak` trước khi ghi đè | ✅ |
 | app | `devices.py` | Đọc địa chỉ nhập tay (`ip[:cổng]`); tìm thiết bị tin cậy theo tên hoặc tiền tố `device_id` (mvp F12); `DeviceView`/`DeviceRegistry` (gộp mDNS + `trusted.json` + trạng thái kết nối), `resolve_device` | ✅ |
 | app | `pairing.py` | Dịch vụ ghép đôi (`PairingService`): sinh nonce, ký/kiểm chữ ký chứng minh giữ khóa qua `trust`, chạy `core.pairing` trên `Connection`, `PairingGate`, lưu thiết bị (ghép đôi lại ở cả hai vai cập nhật tên; gửi `pair_confirm` lỗi thì không lưu), nhường phiên khi hai bên cùng chủ động; không hiện được mã thì hủy phiên; báo cho giao diện số mã vừa hiện, tên đã lưu (`PairingPrompt.known_name`) và phiên đã hiện mã chưa (`PairingFinished.code_shown`); `pair_with` bị hủy sau khi hai bên đã xác nhận thì trả kết quả thật thay vì ném `CancelledError` | ✅ |

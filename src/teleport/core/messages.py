@@ -271,7 +271,7 @@ class Ping:
 
 @dataclass(frozen=True, slots=True)
 class Pong:
-    """Trả lời `ping` với đúng `t` của nó; `pong` không cần trả lời."""
+    """Trả lời `ping` với `t` của `ping` mới nhất chưa trả (protocol mục 2.3); `pong` không cần trả lời."""
 
     TYPE: ClassVar[str] = "pong"
 

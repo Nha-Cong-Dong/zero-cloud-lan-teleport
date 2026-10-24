@@ -721,6 +721,15 @@ async def sc_oversized_opening_header(env):
     return peer
 
 
+async def sc_oversized_hello_header_trusted(env):
+    """PR-1 D1: máy tin cậy (sẽ mở kết nối điều khiển, trần 1 MiB) vẫn chỉ được gửi `hello` ≤ 16 KiB."""
+    peer = await env.raw_client(env.h.port, env.ids.b)
+    await peer.read_hello()
+    peer.send_bytes(HEADER.pack(MAX_PAIRING_MESSAGE_SIZE + 1) + b"x" * 8)  # header + vài byte thân
+    await peer.drain()
+    return peer
+
+
 async def sc_control_open_instead_of_hello(env):
     peer = await env.raw_client(env.h.port, env.ids.b)
     await peer.read_hello()
@@ -782,6 +791,7 @@ IMMEDIATE_REJECTIONS = {
     "R7-protocol-2-trusted": sc_hello_protocol_2_trusted,
     "R11-hello-header-16385": sc_oversized_hello_header,
     "R11-opening-header-16385": sc_oversized_opening_header,
+    "R11-trusted-hello-header-16385": sc_oversized_hello_header_trusted,
     "R12-control_open-first": sc_control_open_instead_of_hello,
     "R12-garbage-first": sc_garbage_instead_of_hello,
     "R12-json-array-first": sc_json_array_instead_of_hello,
@@ -2337,10 +2347,13 @@ async def test_on_message_sees_messages_in_order(fast, listener_factory, raw_cli
 
 
 @pytest.mark.integration
-async def test_ping_reply_is_sent_before_on_message(fast, listener_factory, raw_client, ids):
-    """Mục 3.4 bước 3: với Ping, Pong được gửi trước rồi mới gọi on_message.
+async def test_ping_reply_is_scheduled_before_on_message_and_flushed_on_close(
+    fast, listener_factory, raw_client, ids
+):
+    """PR-1 D3 (thay cho “Pong đã gửi xong trước on_message”): Pong được *xếp lịch* trước on_message.
 
-    on_message raise ngay khi nhận Ping: kênh đóng, nhưng Pong phải đã đi ra trước đó.
+    on_message raise ngay khi nhận Ping: kênh đóng, nhưng Pong đã xếp lịch và kết nối còn tốt,
+    nên lúc dọn Pong phải được gửi nốt trước khi đóng (tối đa CLOSE_TIMEOUT).
     """
     h = await listener_factory(ids.server, trusted=[ids.b])
     peer, server = await raw_control(raw_client, h, ids)
@@ -2901,3 +2914,490 @@ async def test_close_during_start_at_any_tick_closes_port(fast, listener_factory
     assert "refused" in outcomes, outcomes
     assert outcomes[-1] == "done", f"{_SWEEP_TICKS} nhịp chưa phủ hết start(): {outcomes}"
     assert _serving(server_tracker) == []
+
+
+# =================================================================================================
+# PR-1: trần khung điều khiển 1 MiB (D1) và `pong` không chặn vòng đọc (D3)
+# =================================================================================================
+#
+# Con số lấy từ đặc tả, không từ hằng số của code: kết nối điều khiển 1 MiB (1024 × 1024 byte),
+# `hello` / message mở đầu / kết nối ghép đôi 16 KiB (protocol mục 2.3).
+
+ONE_MIB = 1024 * 1024
+SIXTEEN_KIB = 16 * 1024
+
+
+def raw_frame(obj: dict) -> bytes:
+    """Khung `[uint32][JSON]` dựng tay, không qua `encode_message` (để dựng được khung vượt trần)."""
+    return frame(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+def padded(obj: dict, body_size: int) -> dict:
+    """`obj` thêm trường lạ `pad` sao cho thân JSON dài đúng `body_size` byte (trường lạ bị bỏ qua)."""
+    overhead = len(raw_frame({**obj, "pad": ""})) - HEADER.size
+    out = {**obj, "pad": "x" * (body_size - overhead)}
+    assert len(raw_frame(out)) - HEADER.size == body_size
+    return out
+
+
+@pytest.mark.integration
+async def test_control_receive_accepts_frame_of_exactly_one_mib(fast, listener_factory, raw_client, ids):
+    """D1: kết nối điều khiển nhận khung có thân đúng 1 MiB."""
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    peer.send_bytes(raw_frame(padded({"type": "ping", "t": 21}, ONE_MIB)))
+    await peer.drain()
+    assert await asyncio.wait_for(server.receive(), 5) == Ping(t=21)
+    assert not server.closed
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("length", [ONE_MIB + 1, 16 * ONE_MIB, 0xFFFFFFFF], ids=["1MiB+1", "16MiB", "4GiB-1"])
+async def test_control_receive_rejects_oversized_header_without_reading_body(
+    fast, listener_factory, raw_client, ids, length
+):
+    """D1: header > 1 MiB (kể cả 16 MiB, trần cũ) → FramingError ngay khi đọc header.
+
+    Chỉ có header + vài byte thân, kết nối vẫn mở: nếu bên nhận chờ đọc thân thì `receive` treo.
+    """
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    peer.send_bytes(HEADER.pack(length) + b'{"type":"pi')
+    await peer.drain()
+    with pytest.raises(FramingError):
+        await asyncio.wait_for(server.receive(), 1.0)
+
+
+@pytest.mark.integration
+async def test_client_side_control_receive_rejects_header_over_one_mib(slow_opening, fake_server, ids):
+    """D1, chiều ngược lại: phía client (`open_control`) cũng cắt khung > 1 MiB ở header."""
+    data = encode_message(wire_hello(ids.server, "Server")) + HEADER.pack(ONE_MIB + 1) + b"xxxxxxxx"
+    server = await fake_server(ids.server, send_then_hold(data), trusted_certs=[ids.b.cert_pem()])
+    conn = await open_control([LOCAL], server.port, ids.b, hello_of(ids.b), ids.server.fingerprint)
+    try:
+        with pytest.raises(FramingError):
+            await asyncio.wait_for(conn.receive(), 1.0)
+    finally:
+        await conn.close()
+
+
+@pytest.mark.integration
+async def test_channel_closes_on_header_over_one_mib_without_waiting_for_body(
+    fast, listener_factory, raw_client, ids
+):
+    """D1: trong `ControlChannel`, header 1 MiB + 1 → PROTOCOL_ERROR ngay và kết nối bị đóng."""
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    _, task = start_channel(server, [], ping_interval=5.0, dead_after=10.0)
+    try:
+        peer.send_bytes(HEADER.pack(ONE_MIB + 1) + b"x" * 16)
+        await peer.drain()
+        assert await asyncio.wait_for(task, 1.5) is CloseReason.PROTOCOL_ERROR
+        assert server.closed
+        await peer.expect_closed(2.0)
+    finally:
+        await cancel_wait(task)
+
+
+@pytest.mark.integration
+async def test_pairing_receive_still_accepts_exactly_16_kib(fast, listener_factory, raw_client, ids):
+    """D1: kết nối ghép đôi giữ trần 16 KiB: đúng 16 KiB nhận được (16 KiB + 1 ở test A2 ở trên)."""
+    h = await listener_factory(ids.server)
+    peer, server = await raw_pairing(raw_client, h, ids)
+    peer.send_bytes(raw_frame(padded({"type": "pair_abort", "reason": "user"}, SIXTEEN_KIB)))
+    await peer.drain()
+    assert await asyncio.wait_for(server.receive(), 2) == PairAbort(reason="user")
+
+
+@pytest.mark.integration
+async def test_hello_and_control_open_of_exactly_16_kib_are_accepted(
+    slow_opening, listener_factory, raw_client, ids
+):
+    """D1: trần 16 KiB của `hello` / message mở đầu là bao gồm (16 KiB + 1 bị từ chối ở R11)."""
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer = await raw_client(h.port, ids.b)
+    await peer.read_hello()
+    peer.send_bytes(raw_frame(padded(wire_hello(ids.b), SIXTEEN_KIB)))
+    peer.send_bytes(raw_frame(padded({"type": "control_open"}, SIXTEEN_KIB)))
+    await peer.drain()
+    server = await h.next(3.0)
+    assert server.kind is ConnectionKind.CONTROL
+
+
+@pytest.mark.integration
+async def test_control_receive_hands_read_buffer_to_decoder_without_copy(
+    fast, monkeypatch, listener_factory, raw_client, ids
+):
+    """D1: đường đọc không chép thân sang `bytes` trước khi giải mã: decoder nhận `bytearray`.
+
+    Thân 200 KB để phải ghép từ nhiều lần đọc. Patch sau khi mở đầu xong, nên chỉ ghi thân của
+    message đọc qua `Connection.receive`.
+    """
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    real = connection.decode_body
+    seen: list[type] = []
+
+    def spy(body):
+        seen.append(type(body))
+        return real(body)
+
+    monkeypatch.setattr(connection, "decode_body", spy)
+    peer.send_bytes(raw_frame(padded({"type": "ping", "t": 3}, 200_000)))
+    await peer.drain()
+    assert await asyncio.wait_for(server.receive(), 3) == Ping(t=3)
+    assert seen, "Connection.receive không còn gọi decode_body: không kiểm được đường đọc"
+    assert seen == [bytearray], f"decoder nhận {seen}: thân đã bị chép sang bytes"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"\xff\xfe\xfd\xfc\xfb",
+        b'{"type":"ping","t":1,"x":"\xc3"}',
+        b"[1,2,3]",
+        b'"ping"',
+        b'{"type":"ping","t":1,"a":' + b"[" * 64 + b"]" * 64 + b"}",
+        b'{"type":"ping","t":' + b"1" * 5000 + b"}",
+        b'\xef\xbb\xbf{"type":"ping","t":1}',
+        b'{"type":"ping","t":1,"a":"\xed\xa0\x80"}',
+        '{"type":"ping","t":1}'.encode("utf-16"),
+    ],
+    ids=[
+        "rac",
+        "utf8-dang-do",
+        "mang",
+        "chuoi",
+        "long-65-cap",
+        "so-5000-chu-so",
+        "bom-utf8",
+        "surrogate",
+        "utf16",
+    ],
+)
+async def test_control_receive_keeps_body_checks_on_bytearray_path(
+    fast, listener_factory, raw_client, ids, body
+):
+    """D1: bỏ bản chép `bytes(buf)` mà vẫn giữ mọi kiểm tra thân (UTF-8, object, độ sâu, số quá dài)."""
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    peer.send_bytes(frame(body))
+    await peer.drain()
+    with pytest.raises(FramingError):
+        await asyncio.wait_for(server.receive(), 2)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "body",
+    [b'\xef\xbb\xbf{"type":"ping","t":1}', b'{"type":"ping","t":1,"a":"\xed\xa0\x80"}'],
+    ids=["bom-utf8", "surrogate-byte"],
+)
+async def test_channel_closes_with_protocol_error_on_body_not_strict_utf8(
+    fast, listener_factory, raw_client, ids, body
+):
+    """protocol §3.1: thân có BOM UTF-8 hay surrogate mã hóa thành byte là lỗi khung → PROTOCOL_ERROR.
+
+    Ping hợp lệ đi trước để chắc kênh đang chạy bình thường; message xấu không được tới on_message.
+    """
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    received: list = []
+    _, task = start_channel(server, received, ping_interval=5.0, dead_after=10.0)
+    try:
+        peer.send_dict({"type": "ping", "t": 2})
+        peer.send_bytes(frame(body))
+        await peer.drain()
+        assert await asyncio.wait_for(task, 3) is CloseReason.PROTOCOL_ERROR
+        assert received == [Ping(t=2)]
+        assert server.closed
+    finally:
+        await cancel_wait(task)
+
+
+# --- D3: `pong` ở task riêng ---------------------------------------------------------------------
+
+
+async def hold_send_lock(server, gate: DrainGate) -> asyncio.Task:
+    """Một lần gửi của app (`Ping(t=1)`) kẹt ở drain, giữ khóa gửi tới khi `gate.open()`.
+
+    Gỡ cò ngay sau khi kẹt, để drain của client thô và các lần gửi sau không bị giữ nữa (chúng vẫn
+    phải chờ khóa gửi).
+    """
+    gate.armed = True
+    task = asyncio.create_task(server.send(Ping(t=1)))
+    await asyncio.wait_for(gate.blocked.wait(), 2)
+    gate.armed = False
+    return task
+
+
+async def pong_ts_until(peer, last_t: int, timeout: float = 3.0) -> list[int]:
+    """`t` của mọi `pong` máy kia nhận, theo thứ tự, tới và gồm `pong` có `t == last_t`."""
+    out: list[int] = []
+    async with asyncio.timeout(timeout):
+        while not out or out[-1] != last_t:
+            msg = await peer.read(timeout=timeout)
+            assert msg is not None, f"kết nối đóng trước pong t={last_t}; đã nhận {out}"
+            if msg["type"] == "pong":
+                out.append(msg["t"])
+    return out
+
+
+@pytest.mark.integration
+async def test_reader_keeps_delivering_while_send_lock_is_held(
+    fast, monkeypatch, listener_factory, raw_client, ids
+):
+    """D3: một lần gửi đang giữ khóa gửi không chặn vòng đọc.
+
+    Ping tới trong lúc đó: message đến sau nó vẫn tới on_message dù pong còn chờ khóa; khi khóa
+    được nhả, pong mang đúng `t` đi ra sau lần gửi đang dở.
+    """
+    monkeypatch.setattr(connection, "DRAIN_TIMEOUT", 10.0)
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    received: list = []
+    _, task = start_channel(server, received, ping_interval=5.0, dead_after=10.0)
+    gate = DrainGate(monkeypatch, block_from=1)
+    app_send = await hold_send_lock(server, gate)
+    try:
+        peer.send_bytes(encode_message({"type": "ping", "t": 7}) + encode_message({"type": "pong", "t": 8}))
+        await wait_until(lambda: len(received) >= 2, 2.0, "on_message nhận message tới sau Ping")
+        assert received == [Ping(t=7), Pong(t=8)]
+        assert not app_send.done(), "phép thử vô nghĩa: khóa gửi đã được nhả"
+        assert not task.done()
+
+        gate.open()
+        await asyncio.wait_for(app_send, 2)
+        assert await peer.read() == {"type": "ping", "t": 1}
+        assert await pong_ts_until(peer, 7) == [7]
+    finally:
+        gate.open()
+        await cancel_wait(task, app_send)
+
+
+@pytest.mark.integration
+async def test_reader_keeps_delivering_under_real_backpressure(fast, monkeypatch, listener_factory, ids):
+    """D3 trên socket thật: máy kia không đọc nên lần gửi của app kẹt ở drain (không vá drain).
+
+    Trong lúc đó máy kia vẫn gửi `ping` + `pong`: cả hai phải tới on_message.
+
+    Bộ đệm được giữ nhỏ ở cả hai đầu (SO_RCVBUF của máy kia đặt trước khi kết nối, SO_SNDBUF của
+    socket phía server) để Linux/macOS không tự giãn bộ đệm: lượng byte cần để làm đầy có cận rõ
+    (`FILL_LIMIT`), và việc làm đầy có hạn thời gian. “Kẹt” nghĩa là 0,5 s liền không lần gửi nào xong.
+    """
+    FILL_LIMIT = 8 * 1024 * 1024  # bộ đệm nhỏ + mức cao 64 KiB của asyncio: thực tế chỉ vài trăm KiB
+    monkeypatch.setattr(connection, "DRAIN_TIMEOUT", 10.0)
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    sock = await asyncio.to_thread(sync_open_control, h.port, ids.b, rcvbuf=4096)
+    stuck: asyncio.Task | None = None
+    task = None
+    inflight: dict[asyncio.Task, int] = {}
+    try:
+        server = await h.next()
+        server._writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        received: list = []
+        _, task = start_channel(server, received, ping_interval=5.0, dead_after=10.0)
+        frame_size = len(encode_message(to_dict(Ping(t=1))))
+        created = completed = 0
+        async with asyncio.timeout(10):
+            while stuck is None:
+                while len(inflight) < 256:
+                    inflight[asyncio.create_task(server.send(Ping(t=1)))] = created
+                    created += 1
+                done, _ = await asyncio.wait(inflight, timeout=0.5)
+                for t in done:
+                    del inflight[t]
+                    t.result()
+                completed += len(done)
+                assert completed * frame_size <= FILL_LIMIT, "đã gửi quá FILL_LIMIT mà chưa kẹt"
+                if not done:
+                    # Khóa gửi FIFO: lần gửi tạo sớm nhất đang giữ khóa (đã ghi xuống transport); các
+                    # lần khác chỉ đang chờ khóa nên hủy được mà kết nối không sao (F4).
+                    stuck = min(inflight, key=inflight.__getitem__)
+                    del inflight[stuck]
+                    await cancel_wait(*inflight)
+                    inflight.clear()
+        assert not server.closed
+        await asyncio.to_thread(
+            sock.sendall, encode_message({"type": "ping", "t": 7}) + encode_message({"type": "pong", "t": 8})
+        )
+        await wait_until(lambda: Pong(t=8) in received, 3.0, "on_message nhận message tới sau Ping")
+        assert [m for m in received if m in (Ping(t=7), Pong(t=8))] == [Ping(t=7), Pong(t=8)]
+        assert not stuck.done(), "phép thử vô nghĩa: lần gửi kẹt đã xong"
+        assert not task.done()
+    finally:
+        await cancel_wait(*inflight, *(t for t in (task, stuck) if t is not None))
+        sock.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("arrival", ["mot-lan-ghi", "tung-cai"])
+@pytest.mark.parametrize("n", [2, 50])
+async def test_queued_pings_are_answered_by_one_pong_with_latest_t(
+    fast, monkeypatch, listener_factory, raw_client, ids, n, arrival
+):
+    """D3: `ping` dồn khi pong chưa gửi được → đúng một pong, mang `t` của ping mới nhất.
+
+    `mot-lan-ghi`: mọi ping tới trong một lần ghi. `tung-cai`: ping tới lần lượt, mỗi cái sau khi
+    on_message đã nhận cái trước và vòng lặp đã được nhường, nên bên gửi pong đã kịp thấy ping đầu
+    và đang chờ khóa gửi khi các ping sau tới; pong vẫn phải mang `t` mới nhất lúc được gửi.
+    Sau đó một ping mốc (t = 999) chứng minh không còn pong nào khác đang chờ: mọi pong của đợt
+    dồn phải tới trước pong mốc.
+    """
+    monkeypatch.setattr(connection, "DRAIN_TIMEOUT", 10.0)
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    received: list = []
+    _, task = start_channel(server, received, ping_interval=5.0, dead_after=10.0)
+    gate = DrainGate(monkeypatch, block_from=1)
+    app_send = await hold_send_lock(server, gate)
+    try:
+        ts = [100 + i for i in range(1, n + 1)]
+        if arrival == "mot-lan-ghi":
+            peer.send_bytes(b"".join(encode_message({"type": "ping", "t": t}) for t in ts))
+        else:
+            for i, t in enumerate(ts, 1):
+                peer.send_dict({"type": "ping", "t": t})
+                await peer.drain()
+                await wait_until(lambda i=i: len(received) >= i, 2.0, f"on_message nhận Ping thứ {i}")
+                for _ in range(5):
+                    await asyncio.sleep(0)  # nhường vòng lặp: bên gửi pong chạy tới chỗ chờ khóa
+        await wait_until(lambda: len(received) >= n, 2.0, "on_message nhận đủ các Ping dồn")
+        assert received == [Ping(t=t) for t in ts]
+        assert not app_send.done(), "phép thử vô nghĩa: khóa gửi đã được nhả"
+
+        gate.open()
+        await asyncio.wait_for(app_send, 2)
+        first = await pong_ts_until(peer, ts[-1])
+        peer.send_dict({"type": "ping", "t": 999})
+        await peer.drain()
+        rest = await pong_ts_until(peer, 999)
+        assert first + rest == [ts[-1], 999], f"pong nhận được: {first + rest}"
+    finally:
+        gate.open()
+        await cancel_wait(task, app_send)
+
+
+def fail_pongs_on(monkeypatch, conn) -> list[bytes]:
+    """Làm mọi lần gửi `pong` trên `conn` thất bại như socket hỏng (drain → ConnectionResetError)."""
+    real_write = asyncio.StreamWriter.write
+    real_drain = asyncio.StreamWriter.drain
+    failing: list[bytes] = []
+
+    def write(writer, data):
+        if writer is conn._writer and b'"pong"' in bytes(data):
+            failing.append(bytes(data))
+            return None
+        return real_write(writer, data)
+
+    async def drain(writer):
+        if writer is conn._writer and failing:
+            raise ConnectionResetError("giả lập socket hỏng khi gửi pong")
+        await real_drain(writer)
+
+    monkeypatch.setattr(asyncio.StreamWriter, "write", write)
+    monkeypatch.setattr(asyncio.StreamWriter, "drain", drain)
+    return failing
+
+
+@pytest.mark.integration
+async def test_pong_send_failure_ends_run_as_connection_lost(
+    fast, monkeypatch, listener_factory, raw_client, ids
+):
+    """D3: lỗi gửi pong → `run` trả CONNECTION_LOST (không LOCAL, không treo), đóng kết nối, không rò task."""
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    failing = fail_pongs_on(monkeypatch, server)
+    before = asyncio.all_tasks()
+    received: list = []
+    _, task = start_channel(server, received, ping_interval=5.0, dead_after=10.0)
+    peer.send_dict({"type": "ping", "t": 5})
+    await peer.drain()
+    assert await asyncio.wait_for(task, 3) is CloseReason.CONNECTION_LOST
+    assert failing, "phép thử vô nghĩa: pong chưa từng được gửi"
+    assert received == [Ping(t=5)]
+    assert server.closed
+    await peer.expect_closed(2.0)
+    await wait_until(lambda: not new_live_tasks(before), 0.5, "task con của run đã kết thúc")
+
+
+@pytest.mark.integration
+async def test_reader_result_wins_over_failed_pong(fast, monkeypatch, listener_factory, raw_client, ids):
+    """D3, thứ tự ưu tiên: vòng đọc thấy lỗi giao thức ngay sau Ping, còn gửi pong thì hỏng.
+
+    Ping và khung rác tới trong cùng một lần ghi, nên vòng đọc xử lý cả hai liền một mạch; lần gửi
+    pong hỏng ngay sau đó. Kết quả phải là lý do của vòng đọc (PROTOCOL_ERROR).
+    """
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    fail_pongs_on(monkeypatch, server)
+    before = asyncio.all_tasks()
+    _, task = start_channel(server, [], ping_interval=5.0, dead_after=10.0)
+    peer.send_bytes(encode_message({"type": "ping", "t": 5}) + frame(b"\xff\xfe\xfd"))
+    await peer.drain()
+    assert await asyncio.wait_for(task, 3) is CloseReason.PROTOCOL_ERROR
+    assert server.closed
+    await wait_until(lambda: not new_live_tasks(before), 0.5, "task con của run đã kết thúc")
+
+
+@pytest.mark.integration
+async def test_pending_pong_is_flushed_before_close_on_protocol_error(
+    fast, listener_factory, raw_client, ids
+):
+    """D3, dọn dẹp: Ping rồi khung rác ngay sau → run kết thúc vì lỗi giao thức khi pong còn chờ.
+
+    Kết nối chưa hỏng nên pong phải được gửi nốt trước khi đóng.
+    """
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    peer, server = await raw_control(raw_client, h, ids)
+    _, task = start_channel(server, [], ping_interval=5.0, dead_after=10.0)
+    peer.send_bytes(encode_message({"type": "ping", "t": 41}) + frame(b"\xff\xfe\xfd"))
+    await peer.drain()
+    assert await asyncio.wait_for(task, 3) is CloseReason.PROTOCOL_ERROR
+    _, data = await peer.expect_closed(2.0)
+    assert {"type": "pong", "t": 41} in frames_in(data)
+
+
+@pytest.mark.integration
+async def test_pong_flush_and_close_share_one_close_timeout(fast, monkeypatch, listener_factory, ids):
+    """D3, dọn dẹp: gửi nốt pong và đóng gọn dùng **chung một** hạn CLOSE_TIMEOUT, quá thì abort.
+
+    Pong còn chờ mà khóa gửi bị giữ mãi (lần gửi của app kẹt ở drain), và máy kia không bao giờ
+    đọc nên cũng không trả close_notify: cả hai bước dọn đều treo nếu không có hạn. CLOSE_TIMEOUT =
+    1 s, DRAIN_TIMEOUT = 10 s: từ lúc on_message raise tới khi `run` kết thúc phải ≤ CLOSE_TIMEOUT
+    cộng biên nhỏ (không phải 2 × CLOSE_TIMEOUT, cũng không chờ tới DRAIN_TIMEOUT).
+    """
+    # Biên rộng cho CI chậm; cài sai (hai hạn riêng) thì mất ~2 × close_timeout, vẫn bắt được.
+    close_timeout, margin = 1.0, 0.7
+    monkeypatch.setattr(connection, "DRAIN_TIMEOUT", 10.0)
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", close_timeout)
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    sock = await asyncio.to_thread(sync_open_control, h.port, ids.b)
+    raised_at: list[float] = []
+
+    def explode(msg):
+        raised_at.append(time.monotonic())
+        raise Boom(msg)
+
+    gate = DrainGate(monkeypatch, block_from=1)
+    task = app_send = None
+    try:
+        server = await h.next()
+        raw = server._writer.get_extra_info("socket")
+        task = asyncio.create_task(ControlChannel(server, ping_interval=5.0, dead_after=10.0).run(explode))
+        app_send = await hold_send_lock(server, gate)
+        await asyncio.to_thread(sock.sendall, encode_message({"type": "ping", "t": 9}))
+        with pytest.raises(Boom):
+            await asyncio.wait_for(task, 5)
+        cleanup = time.monotonic() - raised_at[0]
+        assert cleanup <= close_timeout + margin, (
+            f"dọn mất {cleanup:.2f} s > CLOSE_TIMEOUT ({close_timeout} s) + {margin} s: "
+            "gửi nốt pong và đóng gọn không dùng chung một hạn"
+        )
+        assert server.closed
+        await wait_until(lambda: raw.fileno() == -1, 1.0, "socket phía server đã bị abort")
+    finally:
+        gate.open()
+        await cancel_wait(*(t for t in (task, app_send) if t is not None))
+        sock.close()

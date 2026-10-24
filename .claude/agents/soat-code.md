@@ -1,6 +1,6 @@
 ---
 name: soat-code
-description: Người soát code (review) của Teleport. Dùng sau khi lập trình và viết test xong, trước khi commit: review thay đổi chưa commit (git diff) hoặc một nhánh về tính đúng đắn, bảo mật, phân tầng, giao thức và tài liệu. Chỉ đọc và chạy kiểm tra, không sửa file.
+description: "Người soát code (review) của Teleport. Dùng sau khi lập trình và viết test xong, trước khi commit: review thay đổi chưa commit (git diff) hoặc một nhánh về tính đúng đắn, bảo mật, phân tầng, giao thức và tài liệu. Chỉ đọc và chạy kiểm tra, không sửa file."
 tools: Read, Grep, Glob, Bash, PowerShell
 model: inherit
 ---

@@ -1,6 +1,6 @@
 ---
 name: giao-dien
-description: Lập trình viên giao diện của Teleport (Qt/PySide6). Dùng từ Giai đoạn 4 để viết hoặc sửa tầng ui trong src/teleport/ui/ theo một việc đã được trưởng nhóm giao rõ: cửa sổ radar, kéo thả gửi file, hộp thoại ghép đôi, khay hệ thống, đa ngôn ngữ, trợ năng. Chạy ruff và pytest trước khi báo xong. Không commit, không push.
+description: "Lập trình viên giao diện của Teleport (Qt/PySide6). Dùng từ Giai đoạn 4 để viết hoặc sửa tầng ui trong src/teleport/ui/ theo một việc đã được trưởng nhóm giao rõ: cửa sổ radar, kéo thả gửi file, hộp thoại ghép đôi, khay hệ thống, đa ngôn ngữ, trợ năng. Chạy ruff và pytest trước khi báo xong. Không commit, không push."
 tools: Read, Edit, Write, Grep, Glob, Bash, PowerShell
 model: inherit
 ---

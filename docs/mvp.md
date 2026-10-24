@@ -118,10 +118,12 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **US-07:** Là người nhận, tôi muốn biết ai gửi gì và được quyền từ chối.
 - **AC:**
   - Kéo thả, hoặc bấm chuột phải vào thiết bị → “Gửi file…”, đều được; hỗ trợ chọn nhiều file.
+  - Mỗi file tối đa 4 TB (2⁴² byte, [protocol.md](protocol.md) mục 3.3). File lớn hơn bị chặn ngay lúc chọn, trước khi gửi gì cho máy kia (mục 8).
   - Máy nhận hiện hộp thoại: tên người gửi, danh sách file, tổng dung lượng, nút **Nhận** / **Từ chối**. Có tùy chọn “Luôn nhận từ thiết bị này” (tương đương tắt “Hỏi trước khi nhận” của thiết bị đó trong cài đặt).
   - Không đủ dung lượng trống → máy nhận tự từ chối ngay, máy gửi được báo cần bao nhiêu và còn bao nhiêu.
   - Trùng tên file → tự đặt `ten (1).ext`, không bao giờ ghi đè.
   - Tên file chứa `..`, đường dẫn tuyệt đối, ký tự cấm hay tên thiết bị đặc biệt của Windows (`CON`, `NUL`…) → được làm sạch, file luôn nằm trong thư mục nhận.
+  - Máy gửi kiểm tên file trước khi gửi: tên chứa ký tự điều khiển (ví dụ dấu xuống dòng, hay gặp trên macOS/Linux) thì không gửi và báo người dùng đổi tên (mục 8); tên quá dài thì máy gửi tự cắt ngắn, giữ đuôi file (giới hạn: [protocol.md](protocol.md) mục 3.3), và máy nhận thấy tên đã cắt trong hộp thoại nhận.
   - File chỉ xuất hiện với tên thật **sau khi** đã kiểm tra toàn vẹn xong; trong lúc nhận, dữ liệu nằm trong thư mục tạm ẩn `.teleport` bên trong thư mục nhận.
 
 ### F5. Theo dõi & quản lý lượt truyền
@@ -313,6 +315,8 @@ Trùng khớp? [c/k]:
 
 Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì**, không dùng thuật ngữ kỹ thuật.
 
+Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như Windows Explorer: 1 KB = 1024 byte, 1 MB = 1024 KB, 1 GB = 1024 MB, 1 TB = 1024 GB. Mọi con số trong app (thông báo, tiến độ, giới hạn) dùng cùng cách tính này.
+
 | Tình huống | Thông báo | Hành động gợi ý |
 |---|---|---|
 | Không thấy thiết bị nào | “Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia và kiểm tra hai máy dùng chung một mạng Wi-Fi.” | Nút “Nhập IP thủ công” |
@@ -334,6 +338,8 @@ Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì
 | Máy đang chờ ghép đôi đã hiện từ 3 mã trở lên trong 1 phút | “Cảnh báo: máy này đã hiện *3* mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).” | Hiện ngay dưới mã; từ chối nếu không tự ghép đôi. Câu trên là bản CLI; giao diện thay “(gõ k)” bằng nút “Từ chối” |
 | Không hiện được mã ghép đôi (giao diện lỗi) | “Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại.” | Nút “Thử lại” |
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |
+| Chọn gửi file lớn hơn 4 TB | “Không gửi được *backup.img* (5,2 TB): Teleport chỉ gửi được file tối đa 4 TB. Hãy chia file thành nhiều phần nhỏ hơn rồi gửi.” | Lượt gửi không bắt đầu; bỏ file đó ra rồi gửi lại các file còn lại |
+| Chọn gửi file có tên chứa ký tự điều khiển (ví dụ dấu xuống dòng; [protocol.md](protocol.md) mục 3.3) | “Không gửi được *bao�cao.txt*: tên file có ký tự không hiển thị được. Hãy đổi tên file rồi gửi lại.” | Lượt gửi không bắt đầu. Trong thông báo, mỗi ký tự điều khiển hiện thành `�` (U+FFFD), không in thẳng ra màn hình |
 | File nguồn bị sửa khi đang gián đoạn | “*video.mp4* đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại.” | Nút “Gửi lại” |
 | Người nhận từ chối | “*PC-Nha* đã từ chối nhận file.” | — |
 | Đã tắt app gửi khi lượt truyền đang gián đoạn | “*Laptop-Minh* đã hủy lượt gửi *video.mp4*. Hãy nhờ gửi lại.” | — |

@@ -299,8 +299,12 @@ class Connection:
             raise ValueError(f"message quá lớn cho kết nối {self._kind.value}: {len(data)} byte")
         await self._send_frame(data)
 
-    async def _send_frame(self, data: bytes) -> None:
+    async def _send_frame(self, frame: bytes | Callable[[], bytes | None]) -> None:
         """Ghi một khung đã mã hóa (không kiểm loại; dùng cả cho `control_open`).
+
+        `frame` là hàm thì được gọi **sau khi đã giữ khóa gửi**, ngay trước đoạn ghi đầu
+        (không có await ở giữa), để nội dung khung lấy theo trạng thái lúc thật sự gửi
+        (`pong` mang `t` mới nhất); hàm trả None → không gửi gì.
 
         Ghi theo đoạn ≤ 64 KiB, mỗi đoạn `drain()` tối đa `DRAIN_TIMEOUT`, báo keepalive
         sau mỗi đoạn. Bị hủy sau khi đã ghi một đoạn → abort (xem `send`).
@@ -310,6 +314,9 @@ class Connection:
         async with self._send_lock:
             if self._closed:
                 raise ConnectionLostError("kết nối đã đóng")
+            data = frame() if callable(frame) else frame
+            if data is None:
+                return
             written = False  # đã đưa ít nhất một đoạn của khung xuống transport
             try:
                 for start in range(0, len(data), _SEND_CHUNK):
@@ -366,9 +373,10 @@ class Connection:
         finally:
             self._receiving = False
 
-    async def _read_exactly(self, n: int, *, at_boundary: bool) -> bytes | None:
+    async def _read_exactly(self, n: int, *, at_boundary: bool) -> bytearray | None:
         """Đọc đúng `n` byte; báo keepalive sau **mỗi** lần đọc được dữ liệu.
 
+        Trả về chính bộ đệm đã đọc (không chép sang `bytes`: `decode_body` nhận `bytearray`).
         EOF trước byte đầu tiên khi `at_boundary` → None; EOF giữa chừng → FramingError.
         """
         buf = bytearray()
@@ -387,7 +395,7 @@ class Connection:
             self._frame_started = True
             if self._on_received is not None:
                 self._on_received()
-        return bytes(buf)
+        return buf
 
     def _abort(self) -> None:
         self._closed = True
@@ -442,10 +450,41 @@ def _lost_reason(conn: Connection) -> CloseReason:
     return CloseReason.LOCAL if conn._close_called else CloseReason.CONNECTION_LOST
 
 
+class _PendingPong:
+    """Ô giữ `t` của `ping` mới nhất chưa trả (protocol mục 2.3).
+
+    `ping` tới dồn thì ghi đè `t`, nên mỗi kết nối có tối đa một `pong` chờ gửi và lũ
+    `ping` không làm RAM tăng. Mỗi lần `put` tăng `_gen`; `pong` chỉ tính là đã trả khi
+    gửi xong `t` của đúng lần `put` mới nhất (`ping` tới trong lúc đang gửi thì còn chờ).
+    """
+
+    __slots__ = ("_gen", "_sent_gen", "_t", "wakeup")
+
+    def __init__(self) -> None:
+        self._t = 0
+        self._gen = 0  # số lần put
+        self._sent_gen = 0  # `_gen` của pong gửi xong gần nhất
+        self.wakeup = asyncio.Event()  # được set mỗi lần put
+
+    def put(self, t: int) -> None:
+        self._t = t
+        self._gen += 1
+        self.wakeup.set()
+
+    def take(self) -> tuple[int, int] | None:
+        """`(gen, t)` của pong đang chờ; None nếu không có. Không xóa ô: gửi xong mới gọi `sent`."""
+        return None if self._gen == self._sent_gen else (self._gen, self._t)
+
+    def sent(self, gen: int) -> None:
+        self._sent_gen = max(self._sent_gen, gen)
+
+
 class ControlChannel:
     """Chạy một kết nối điều khiển: đọc message, trả `pong`, gửi `ping` đúng hạn, phát hiện chết.
 
     Dùng một lần: `run(on_message)` chạy tới khi kết nối kết thúc và luôn đóng kết nối.
+    Ba task con: vòng đọc, keepalive và `_pong_loop`; `pong` gửi ở task riêng để một lần
+    gửi lớn đang giữ khóa gửi không chặn vòng đọc.
     """
 
     def __init__(
@@ -470,9 +509,15 @@ class ControlChannel:
         """Chạy tới khi kết nối kết thúc; trả lý do. Kết nối luôn được đóng khi `run` trả về.
 
         `on_message` là hàm đồng bộ, được gọi đúng thứ tự nhận cho mọi message hợp lệ (kể
-        cả `ping`, sau khi đã trả `pong`); việc lâu thì tự tạo task. `on_message` raise →
-        đóng kết nối rồi raise lại. Gọi lần hai → RuntimeError. Bị hủy lần nữa trong lúc
-        dọn → abort kết nối ngay; hai task con kết thúc ở vòng lặp kế tiếp.
+        cả `ping`: `pong` của nó đã được *xếp lịch* cho `_pong_loop` trước khi gọi, nhưng
+        có thể chưa gửi); việc lâu thì tự tạo task. `ping` dồn khi `pong` chưa gửi được
+        thì gộp: chỉ trả `t` của `ping` mới nhất (protocol mục 2.3). `on_message` raise →
+        đóng kết nối rồi raise lại. Nhiều task con cùng xong thì ưu tiên kết quả của vòng
+        đọc, rồi keepalive, rồi `_pong_loop`. Lúc dọn, còn `pong` chờ mà kết nối chưa hỏng
+        thì gửi nốt rồi mới đóng gọn; cả hai dùng chung một hạn `CLOSE_TIMEOUT` (tổng thời
+        gian dọn ≤ `CLOSE_TIMEOUT`), quá hạn thì abort. Gọi lần hai → RuntimeError.
+        Bị hủy lần nữa trong lúc dọn → abort kết nối ngay; các task con kết thúc ở vòng
+        lặp kế tiếp.
         """
         if self._started:
             raise RuntimeError("ControlChannel.run chỉ gọi được một lần")
@@ -483,29 +528,68 @@ class ControlChannel:
 
         loop = asyncio.get_running_loop()
         keepalive = Keepalive(loop.time(), ping_interval=self._ping_interval, dead_after=self._dead_after)
+        pending = _PendingPong()
         conn._on_sent = lambda: keepalive.sent(loop.time())
         conn._on_received = lambda: keepalive.received(loop.time())
         timer = asyncio.create_task(self._keepalive_loop(keepalive), name=f"{_TASK_NAME}.keepalive")
-        reader = asyncio.create_task(self._read_loop(on_message), name=f"{_TASK_NAME}.reader")
+        reader = asyncio.create_task(self._read_loop(on_message, pending), name=f"{_TASK_NAME}.reader")
+        ponger = asyncio.create_task(self._pong_loop(pending), name=f"{_TASK_NAME}.pong")
+        tasks = (reader, timer, ponger)  # thứ tự ưu tiên kết quả
         try:
-            done, _ = await asyncio.wait({timer, reader}, return_when=asyncio.FIRST_COMPLETED)
-            # Cả hai cùng xong thì lấy kết quả của vòng đọc (nó mang lỗi của on_message).
-            return (reader if reader in done else timer).result()
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            # Vòng đọc đứng đầu vì nó mang lỗi của on_message.
+            return next(task for task in tasks if task in done).result()
         finally:
             # Gỡ móc và hủy task trước mọi await: bị hủy thêm lần nữa trong lúc dọn thì
             # keepalive cũng không còn gắn vào kết nối.
             conn._on_sent = None
             conn._on_received = None
-            for task in (timer, reader):
+            for task in tasks:
                 task.cancel()
             try:
-                await asyncio.wait({timer, reader})
+                await asyncio.wait(tasks)
+                # Gửi nốt pong và đóng gọn dùng chung **một** hạn CLOSE_TIMEOUT, để cả việc
+                # dọn không lâu hơn thời gian `Listener.close` / node chờ một kết nối.
+                async with asyncio.timeout(CLOSE_TIMEOUT):
+                    await self._flush_pong(pending)
+                    await conn.close()
+            except TimeoutError:
+                log.debug("%r: dọn quá %.1f s, abort", conn, CLOSE_TIMEOUT)
+                conn._abort()
             except BaseException:
-                # Bị hủy lần nữa trong lúc chờ: không await thêm, đóng ngay rồi để lỗi bay ra.
-                # Hai task đã bị hủy và kết thúc ở vòng lặp kế tiếp.
+                # Bị hủy lần nữa trong lúc dọn: không await thêm, đóng ngay rồi để lỗi bay ra.
+                # Các task con đã bị hủy và kết thúc ở vòng lặp kế tiếp.
                 conn._abort()
                 raise
-            await conn.close()  # bị hủy giữa chừng thì close() tự abort
+
+    async def _flush_pong(self, pending: _PendingPong) -> None:
+        """Gửi nốt `pong` còn chờ nếu kết nối chưa hỏng; lỗi gửi thì bỏ qua. Hạn do `run` đặt."""
+        if pending.take() is None or self._conn.closed:
+            return
+        try:
+            await self._send_pong(pending)
+        except ConnectionLostError:
+            log.debug("%r: không gửi nốt được pong lúc đóng", self._conn)
+
+    async def _send_pong(self, pending: _PendingPong) -> None:
+        """Gửi một `pong`; `t` chỉ được đọc khi đã giữ khóa gửi, nên luôn là `t` mới nhất.
+
+        Chờ khóa trong lúc `ping` mới tới thì pong này mang luôn `t` mới: không bao giờ có
+        một pong mang `t` cũ đang chờ khóa cộng một pong chờ nữa. Lỗi gửi → ConnectionLostError.
+        """
+        claimed: list[int] = []  # `gen` của pong đã lấy ra để gửi
+
+        def frame() -> bytes | None:
+            item = pending.take()
+            if item is None:
+                return None
+            gen, t = item
+            claimed.append(gen)
+            return encode_message(to_dict(Pong(t=t)))
+
+        await self._conn._send_frame(frame)
+        if claimed:
+            pending.sent(claimed[0])
 
     async def _keepalive_loop(self, keepalive: Keepalive) -> CloseReason:
         loop = asyncio.get_running_loop()
@@ -523,7 +607,19 @@ class ControlChannel:
                 continue
             await asyncio.sleep(max(0.0, keepalive.next_wakeup() - loop.time()))
 
-    async def _read_loop(self, on_message: Callable[[Message], None]) -> CloseReason:
+    async def _pong_loop(self, pending: _PendingPong) -> CloseReason:
+        """Gửi `pong` cho `ping` mới nhất chưa trả; chỉ kết thúc khi gửi thất bại."""
+        while True:
+            await pending.wakeup.wait()
+            pending.wakeup.clear()
+            if pending.take() is None:
+                continue
+            try:
+                await self._send_pong(pending)
+            except ConnectionLostError:
+                return _lost_reason(self._conn)
+
+    async def _read_loop(self, on_message: Callable[[Message], None], pending: _PendingPong) -> CloseReason:
         conn = self._conn
         while True:
             try:
@@ -540,10 +636,7 @@ class ControlChannel:
             if msg is None:
                 return CloseReason.PEER_CLOSED
             if isinstance(msg, Ping):
-                try:
-                    await conn.send(Pong(t=msg.t))
-                except ConnectionLostError:
-                    return _lost_reason(conn)
+                pending.put(msg.t)  # xếp lịch pong trước on_message; không await ở đây
             on_message(msg)
 
 

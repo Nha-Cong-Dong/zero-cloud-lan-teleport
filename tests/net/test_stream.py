@@ -55,7 +55,27 @@ async def test_eof_inside_body_raises():
 async def test_oversized_header_is_rejected_before_reading_body():
     reader = reader_with(HEADER.pack(MAX_MESSAGE_SIZE + 1), eof=False)
     with pytest.raises(FramingError, match="quá lớn"):
-        await read_message(reader)
+        await asyncio.wait_for(read_message(reader), 1)
+
+
+# --- PR-1 D1: trần mặc định (kết nối điều khiển) là 1 MiB --------------------------------------
+
+ONE_MIB = 1024 * 1024
+
+
+async def test_default_limit_accepts_frame_of_exactly_one_mib():
+    msg = {"x": "a" * (ONE_MIB - len(b'{"x":""}'))}
+    data = encode_message(msg)
+    assert len(data) == HEADER.size + ONE_MIB
+    assert await asyncio.wait_for(read_message(reader_with(data)), 5) == msg
+
+
+@pytest.mark.parametrize("length", [ONE_MIB + 1, 16 * ONE_MIB], ids=["1MiB+1", "16MiB"])
+async def test_default_limit_rejects_header_over_one_mib_with_partial_body(length):
+    """Header vượt 1 MiB (kể cả 16 MiB, trần cũ) + vài byte thân, stream chưa EOF → lỗi ngay ở header."""
+    reader = reader_with(HEADER.pack(length) + b'{"x":"aaaa', eof=False)
+    with pytest.raises(FramingError, match="quá lớn"):
+        await asyncio.wait_for(read_message(reader), 1)
 
 
 async def test_pairing_limit_rejects_large_header_without_reading_body():

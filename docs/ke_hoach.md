@@ -127,7 +127,7 @@
 
 Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên gửi `hello`; khác phiên bản giao thức thì đóng kết nối kèm thông báo “hãy cập nhật app”. Có 3 loại kết nối:
 - **Ghép đôi:** client không gửi chứng chỉ; chỉ có `pair_*`; message ≤ 16 KiB.
-- **Điều khiển** (mTLS, một kết nối mở sẵn cho mỗi cặp máy): message `[4 byte độ dài][JSON UTF-8]`, tối đa 16 MiB. JSON dễ đọc và dễ debug; message điều khiển ít và nhỏ nên không ảnh hưởng tốc độ.
+- **Điều khiển** (mTLS, một kết nối mở sẵn cho mỗi cặp máy): message `[4 byte độ dài][JSON UTF-8]`, tối đa 1 MiB. JSON dễ đọc và dễ debug; message điều khiển ít và nhỏ nên không ảnh hưởng tốc độ.
 - **Dữ liệu** (mTLS, một kết nối cho mỗi lượt truyền, mở cùng chiều với kết nối điều khiển): sau `hello` là `data_open{transfer_id, file_index, resume_seq}`, rồi bên gửi file ghi các khung khối nhị phân.
 
 | Message điều khiển (`type`) | Hướng | Nội dung |
@@ -141,7 +141,7 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 | `complete` | gửi → nhận | `transfer_id`, `file_index`, `merkle_root` |
 | `verified` | nhận → gửi | file đã kiểm tra xong và mang tên thật |
 | `cancel` | ↔ | `transfer_id`, lý do (`user`, `source_changed`, `unknown_transfer`, `error`) |
-| `clipboard` | ↔ | `kind` (`text` / `image/png`), `sha256`, dữ liệu (văn bản hoặc base64; dữ liệu gốc ≤ 10 MiB) |
+| `clipboard` | ↔ | `kind` (`text` / `image/png`), `sha256`, dữ liệu (văn bản hoặc base64), chia thành nhiều mảnh |
 | `ping` / `pong` | ↔ | giữ kết nối, phát hiện mất kết nối |
 
 **Khung khối nhị phân** (rút gọn từ bảng gói tin trong bản ý tưởng ban đầu), đóng gói bằng `struct.pack("!BII32s", ...)`:
@@ -160,7 +160,7 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 - **Chống vòng lặp:** nhớ hash nội dung vừa nhận; không gửi lại nội dung trùng hash.
 - Bật/tắt theo từng thiết bị đã ghép đôi, **mặc định tắt** (clipboard có thể chứa mật khẩu).
 - Bỏ qua nội dung được trình quản lý mật khẩu đánh dấu nhạy cảm (`ExcludeClipboardContentFromMonitorProcessing` trên Windows, `org.nspasteboard.ConcealedType` trên macOS, `x-kde-passwordManagerHint` trên Linux).
-- Ảnh 10 MiB thành message khoảng 13,4 MiB sau base64, chiếm kết nối điều khiển trong lúc gửi; chấp nhận được vì khối dữ liệu đi trên kết nối riêng.
+- Văn bản và ảnh lớn được chia thành nhiều message nhỏ (giới hạn: [protocol.md](protocol.md) mục 3.2), nên một lần gửi clipboard không giữ kết nối điều khiển lâu và `ping`/`pong` vẫn chen vào được giữa các mảnh; khối dữ liệu file đi trên kết nối riêng. Cách chia chốt ở Giai đoạn 5.
 
 ### 3.7. Quyền riêng tư & “Zero-Cloud”
 *(mvp N9)*
