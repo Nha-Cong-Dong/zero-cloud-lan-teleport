@@ -615,7 +615,9 @@ class DiscoveryTracker:
         if result is not None and not isinstance(result, ResolvedService):
             raise TypeError("result phải là ResolvedService hoặc None")
         device_id = device_id_from_service_name(name)
-        cand = self._candidates.get(device_id) if device_id is not None else None
+        if device_id is None:
+            return _EMPTY
+        cand = self._candidates.get(device_id)
         if cand is None or not cand.pending:
             return _EMPTY
         cand.pending = False

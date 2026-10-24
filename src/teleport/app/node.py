@@ -928,9 +928,9 @@ class Node:
                 self._link_tasks.add(task)
                 task.add_done_callback(self._link_tasks.discard)
             elif isinstance(action, CancelConnect):
-                task = self._attempts.pop(action.attempt_id, None)
-                if task is not None:
-                    task.cancel()
+                attempt = self._attempts.pop(action.attempt_id, None)
+                if attempt is not None:
+                    attempt.cancel()
             elif isinstance(action, CloseConnection):
                 conn = self._conns.pop(action.conn_id, None)
                 if conn is not None:

@@ -283,7 +283,7 @@ class PairingService:
         store: TrustStore,
         on_prompt: Callable[[PairingPrompt], None] | None,
         on_finished: Callable[[PairingFinished], None],
-        on_trust_changed: Callable[[], None],
+        on_trust_changed: Callable[[], object],  # giá trị trả về bị bỏ qua
         accepting: bool = False,
     ) -> None:
         """`hello.device_id` khác danh tính → ValueError.
@@ -657,7 +657,8 @@ class PairingService:
                     continue
                 if close is not None:
                     run.outcome = self._outcome_of(run, close)
-                    recv = await _stop(recv)
+                    await _stop(recv)
+                    recv = None
                     if deadline is None:
                         await conn.close()  # đóng gọn để pair_confirm cuối kịp tới máy kia
                     else:
@@ -697,7 +698,8 @@ class PairingService:
                 try:
                     async with asyncio.timeout(ABORT_ON_CANCEL_TIMEOUT):
                         await self._perform(run, conn, session.handle(Cancel(), loop.time()))
-                        recv = await _stop(recv)
+                        await _stop(recv)
+                        recv = None
                         await conn.close()  # bị hủy vì hết giờ thì close() tự abort
                 except TimeoutError:
                     pass

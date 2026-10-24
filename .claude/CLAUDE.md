@@ -27,11 +27,12 @@ Run from this folder on Windows/PowerShell. The venv lives at `.venv/`.
 
 ```powershell
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"                          # cryptography, zeroconf, ifaddr + pytest, pytest-asyncio, hypothesis, ruff
+pip install -e ".[dev]"                          # cryptography, zeroconf, ifaddr + pytest, pytest-asyncio, hypothesis, ruff, mypy
 pytest                                           # all tests
 pytest -m "not integration"                      # skip tests that open real sockets on 127.0.0.1
 pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal   # single test
-ruff check . ; ruff format --check .             # CI runs exactly: ruff check, ruff format --check, pytest
+ruff check . ; ruff format --check .             # CI runs exactly: ruff check, ruff format --check, mypy src, pytest
+mypy src                                         # type check; config in [tool.mypy] of pyproject.toml
 teleport identity                                # CLI entry point (also: python -m teleport)
 teleport listen                                  # wait for pairing (shows the 6-digit code, asks [c/k])
 teleport pair 192.168.1.5                        # pair with a machine by IP (ip or ip:port)
@@ -107,7 +108,7 @@ Planned design invariants from the roadmap:
 |---|---|---|
 | `truong-nhom` | Lead. Plans the work (design, task table, done criteria), then gives the final ĐẠT / CHƯA ĐẠT verdict against the spec the user approved | No |
 | `hoi-lai` | Clarifier. Checks the plan's claims against the code, finds ambiguity, conflicts and risks, and drafts questions for the user with suggested defaults; never re-asks what the user decided | No |
-| `lap-trinh` | Coder. Implements one assigned task in `src/` plus the docs that go with it (`protocol.md`, `architecture.md`), runs ruff + pytest. Never commits | Yes |
+| `lap-trinh` | Coder. Implements one assigned task in `src/` plus the docs that go with it (`protocol.md`, `architecture.md`), runs ruff + mypy + pytest. Never commits | Yes |
 | `viet-test` | Test writer. Writes tests in `tests/` from the spec, not from the code; never edits `src/` | Yes, `tests/` only |
 | `soat-code` | Reviewer. Reviews the uncommitted diff for correctness, security, layering and docs, with severity levels | No |
 | `tan-cong` | Attack tester. For code that takes input from other machines, writes and runs real attack scripts against a node on 127.0.0.1 (floods, starvation, slow peers, malformed or oversized data, spoofing, filesystem tricks) and reports only what it reproduced, with measurements | Scripts in the scratchpad only; never `src/` or `tests/` |

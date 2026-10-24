@@ -25,6 +25,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "hypothesis>=6.100",
     "ruff>=0.6",
+    "mypy>=2.4",  # MIT
 ]
 
 [project.scripts]
@@ -47,6 +48,20 @@ target-version = "py312"
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 # RUF001-003: cho phép ký tự Unicode tiếng Việt trong chuỗi, comment và docstring.
 ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+# Kiểm theo phiên bản Python thấp nhất được hỗ trợ (requires-python), để không lỡ dùng API mới hơn.
+python_version = "3.12"
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Không bật ignore_missing_imports: cryptography, zeroconf và ifaddr đều kèm py.typed. Thư viện
+# thiếu stub về sau thì thêm override riêng cho đúng module đó, đừng tắt kiểm tra cho mọi import.
+
+[[tool.mypy.overrides]]
+# core là logic thuần, nơi kiểu dữ liệu đáng tin nhất: mọi hàm phải có chú thích kiểu.
+module = ["teleport.core.*"]
+disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
