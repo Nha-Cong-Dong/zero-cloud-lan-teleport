@@ -8,6 +8,7 @@ qua module `teleport.net.connection` (fixture `fast`) trước khi tạo Listene
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import socket
@@ -18,9 +19,13 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from teleport.core import admission
 from teleport.core.framing import HEADER, MAX_PAIRING_MESSAGE_SIZE, FramingError, decode_body, encode_message
 from teleport.core.messages import (
     MAX_SAFE_INTEGER,
@@ -56,7 +61,7 @@ from teleport.net.connection import (
     open_control,
     open_pairing,
 )
-from teleport.trust.identity import load_or_create_identity
+from teleport.trust.identity import CERT_FILE, KEY_FILE, Identity, load_or_create_identity
 
 # Kiểm rò rỉ (mục 4.1): `no_leaks` bắt task còn sót; socket bị giải phóng mà chưa đóng phát
 # ResourceWarning ngay trong `__del__`, nên biến cảnh báo đó thành lỗi để test đỏ.
@@ -133,7 +138,7 @@ def slow_opening(fast, monkeypatch):
 async def b_control(h, ids, *, identity=None, expected: str | None = None, addresses=(LOCAL,)):
     identity = identity if identity is not None else ids.b
     return await open_control(
-        list(addresses), h.port, identity, hello_of(identity, "B"), expected or h.identity.fingerprint
+        list(addresses), h.port, identity, hello_of(identity, "B"), expected or h.identity.cert_pem()
     )
 
 
@@ -261,8 +266,22 @@ def sync_connect(port: int, ctx: ssl.SSLContext, *, session=None, rcvbuf: int | 
         raise
 
 
+def cert_client_context(identity) -> ssl.SSLContext:
+    """Client gửi chứng chỉ của `identity` nhưng KHÔNG kiểm chứng chỉ server (`CERT_NONE`).
+
+    Chỉ để thử phía server. Sản phẩm không còn đường nào như vậy (`docs/protocol.md` mục 2.1:
+    chứng chỉ client chỉ đi tới server đã được kiểm bằng `tls.trusted_client_context`).
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ctx.load_cert_chain(identity.cert_path, identity.key_path)
+    return ctx
+
+
 def sync_open_control(port: int, identity, *, rcvbuf: int | None = None) -> ssl.SSLSocket:
-    sock = sync_connect(port, tls.client_context(identity), rcvbuf=rcvbuf)
+    sock = sync_connect(port, cert_client_context(identity), rcvbuf=rcvbuf)
     try:
         hello = sync_read_frame(sock)
         assert hello is not None and hello["type"] == "hello"
@@ -281,10 +300,6 @@ def sync_open_control(port: int, identity, *, rcvbuf: int | None = None) -> ssl.
 def test_constants_match_spec():
     assert connection.DEFAULT_PORT == 47474
     assert connection.OPENING_TIMEOUT == 10.0
-    assert connection.MAX_OPENING_PER_IP == 4
-    assert connection.MAX_OPENING_TOTAL == 64
-    assert connection.MAX_ANONYMOUS_PER_IP == 1
-    assert connection.MAX_ANONYMOUS_TOTAL == 8
     assert connection.DRAIN_TIMEOUT == 30.0
     assert connection.CLOSE_TIMEOUT == 5.0
     assert connection._SEND_CHUNK == 64 * 1024
@@ -401,7 +416,7 @@ async def _call_open(kind: str, ids, addresses, port, **overrides):
         port,
         overrides.get("identity", ids.b),
         overrides.get("hello", hello_of(ids.b)),
-        overrides.get("expected", ids.server.fingerprint),
+        overrides.get("expected", ids.server.cert_pem()),
     )
 
 
@@ -431,14 +446,56 @@ async def test_open_control_rejects_hello_of_other_identity(no_io, ids):
         await _call_open("control", ids, [LOCAL], 47474, hello=hello_of(ids.x))
 
 
-@pytest.mark.parametrize(
-    "expected",
-    ["AB" * 32, "ab" * 31, "ab" * 33, "zz" * 32, "", "ab:" * 31 + "ab", None, b"ab" * 32, "ａ" * 64],
-    ids=repr,
-)
-async def test_open_control_rejects_malformed_fingerprint(no_io, ids, expected):
+def _ca_cert_pem() -> str:
+    """Chứng chỉ P-256 tự ký đúng mọi điều kiện của Teleport trừ BasicConstraints CA=true."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "teleport-" + "ab" * 16)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC))
+        .not_valid_after(datetime.datetime(9999, 12, 31, tzinfo=datetime.UTC))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+
+BAD_EXPECTED_PEMS = {
+    "fingerprint-instead-of-pem": HEX64,
+    "empty": "",
+    "ascii-text": "not a PEM",
+    "non-ascii": "không phải PEM",
+    "broken-base64": "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+    "ca-cert": _ca_cert_pem(),
+    "none": None,
+    "bytes": b"-----BEGIN CERTIFICATE-----",
+}
+
+
+@pytest.mark.parametrize("expected", list(BAD_EXPECTED_PEMS.values()), ids=list(BAD_EXPECTED_PEMS))
+async def test_open_control_rejects_bad_expected_cert_pem_before_io(no_io, ids, expected):
+    """`docs/protocol.md` mục 2.1: `expected_cert_pem` qua `peer_cert_from_pem`; lỗi (kể cả
+    InvalidCertificate) → ValueError, trước mọi I/O."""
     with pytest.raises(ValueError):
         await _call_open("control", ids, [LOCAL], 47474, expected=expected)
+
+
+def test_open_control_has_no_expected_fingerprint_parameter():
+    import inspect
+
+    params = list(inspect.signature(open_control).parameters)
+    assert params == ["addresses", "port", "identity", "hello", "expected_cert_pem"]
 
 
 async def _noop_handler(conn):
@@ -625,8 +682,15 @@ async def test_start_twice_raises(fast, listener_factory, ids):
 @pytest.mark.integration
 async def test_many_concurrent_openings_all_succeed(fast, monkeypatch, listener_factory, ids):
     """S5 (mục 3.6): start_tls là await đầu tiên, ClientHello tới sớm không làm treo bắt tay."""
-    for name in ("MAX_OPENING_PER_IP", "MAX_OPENING_TOTAL", "MAX_ANONYMOUS_PER_IP", "MAX_ANONYMOUS_TOTAL"):
-        monkeypatch.setattr(connection, name, 1000)
+    for name in (
+        "MAX_OPENING_PER_IP",
+        "MAX_OPENING_TOTAL",
+        "MAX_ANONYMOUS_PER_IP",
+        "MAX_ANONYMOUS_TOTAL",
+        "PRIORITY_OPENING_PER_IP",
+        "PRIORITY_OPENING_TOTAL",
+    ):
+        monkeypatch.setattr(admission, name, 1000)
     monkeypatch.setattr(connection, "OPENING_TIMEOUT", 10.0)
     h = await listener_factory(ids.server, trusted=[ids.b])
 
@@ -1085,8 +1149,8 @@ async def test_fifth_opening_from_same_ip_is_refused(fast, monkeypatch, listener
 async def test_total_opening_limit(fast, monkeypatch, listener_factory, raw_client, ids):
     """L2: MAX_OPENING_PER_IP = 100, MAX_OPENING_TOTAL = 3 → kết nối thứ 4 bị đóng ngay."""
     monkeypatch.setattr(connection, "OPENING_TIMEOUT", 5.0)
-    monkeypatch.setattr(connection, "MAX_OPENING_PER_IP", 100)
-    monkeypatch.setattr(connection, "MAX_OPENING_TOTAL", 3)
+    monkeypatch.setattr(admission, "MAX_OPENING_PER_IP", 100)
+    monkeypatch.setattr(admission, "MAX_OPENING_TOTAL", 3)
     h = await listener_factory(ids.server)
     await open_silent_tcp(raw_client, h, 3)
     await wait_until(lambda: h.listener.opening_count == 3, 2.0, "3 kết nối đang mở đầu")
@@ -1160,8 +1224,8 @@ async def test_anonymous_slot_is_freed_when_waiting_client_leaves(
 async def test_total_anonymous_limit(fast, monkeypatch, listener_factory, raw_client, ids):
     """L5: MAX_ANONYMOUS_PER_IP = 100, MAX_ANONYMOUS_TOTAL = 2 → kết nối ẩn danh thứ 3 → Rejected."""
     monkeypatch.setattr(connection, "OPENING_TIMEOUT", 5.0)
-    monkeypatch.setattr(connection, "MAX_ANONYMOUS_PER_IP", 100)
-    monkeypatch.setattr(connection, "MAX_ANONYMOUS_TOTAL", 2)
+    monkeypatch.setattr(admission, "MAX_ANONYMOUS_PER_IP", 100)
+    monkeypatch.setattr(admission, "MAX_ANONYMOUS_TOTAL", 2)
     h = await listener_factory(ids.server)
     await raw_opening(raw_client, h, None, wire_hello(ids.anon), None)
     await raw_opening(raw_client, h, None, wire_hello(ids.anon), None)
@@ -1193,11 +1257,8 @@ async def sc_slowloris(env):
 
 
 def assert_no_counter_entries(listener) -> None:
-    """Bất biến mục 3.5 (white-box): mọi bộ đếm về 0 và dict theo IP không giữ mục đếm bằng 0."""
-    assert listener._opening.per_ip == {}
-    assert listener._opening.total == 0
-    assert listener._anonymous.per_ip == {}
-    assert listener._anonymous.total == 0
+    """Bất biến mục 3.5: không còn vé nào đang mở đầu (chỗ ẩn danh được kiểm bằng hành vi ở dưới)."""
+    assert listener.opening_count == 0
 
 
 ALL_REJECTIONS = {
@@ -1320,7 +1381,7 @@ async def test_tls_session_is_never_resumed(fast, listener_factory, ids):
     """T4: không có session ticket, nên session cũ không đưa máy vừa bị hủy ghép đôi vào lại."""
     h = await listener_factory(ids.server, trusted=[ids.b])
     port = h.port
-    ctx = tls.client_context(ids.b)
+    ctx = tls.trusted_client_context(ids.b, ids.server.cert_pem())
 
     def first():
         s = sync_connect(port, ctx)
@@ -1411,23 +1472,83 @@ def send_then_hold(data: bytes):
 async def _open_kind(kind: str, port: int, ids, expected: str | None = None):
     if kind == "pairing":
         return await open_pairing([LOCAL], port, hello_of(ids.anon))
-    return await open_control([LOCAL], port, ids.b, hello_of(ids.b), expected or ids.server.fingerprint)
+    return await open_control([LOCAL], port, ids.b, hello_of(ids.b), expected or ids.server.cert_pem())
 
 
 @pytest.mark.integration
-async def test_wrong_fingerprint_sends_nothing(slow_opening, fake_server, ids):
-    """C1: sai fingerprint → IdentityMismatch, và client không gửi byte nào cho máy chưa xác minh."""
+async def test_wrong_server_identity_fails_handshake_and_sends_nothing(slow_opening, fake_server, ids):
+    """C1 (`docs/protocol.md` mục 2.2): server mang danh tính khác ở địa chỉ máy tin cậy, lại tin
+    chứng chỉ client → client từ chối ngay trong bắt tay: IdentityMismatch (không có fingerprint
+    thật); phía server bắt tay không xong nên handler không bao giờ chạy và không nhận được byte ứng
+    dụng nào."""
 
     async def record(server, reader, writer):
         await server.record_until_closed(reader, timeout=5)
 
     server = await fake_server(ids.server, record, trusted_certs=[ids.b.cert_pem()])
+    start = time.monotonic()
     with pytest.raises(IdentityMismatch) as exc:
-        await open_control([LOCAL], server.port, ids.b, hello_of(ids.b), ids.x.fingerprint)
-    assert exc.value.actual_fingerprint == ids.server.fingerprint
+        await open_control([LOCAL], server.port, ids.b, hello_of(ids.b), ids.x.cert_pem())
+    assert time.monotonic() - start < 2.0, "phải báo ngay khi bắt tay, không chờ hết giờ"
+    assert exc.value.actual_fingerprint is None
     assert exc.value.address == LOCAL
-    await wait_until(lambda: not server._tasks, 3.0, "server giả thấy client đóng")
-    assert server.connections == 1, "server giả không thấy kết nối nào: phép kiểm vô nghĩa"
+    await asyncio.sleep(0.2)
+    assert server.connections == 0, "server giả đã bắt tay xong (đã nhận chứng chỉ client)"
+    assert bytes(server.received) == b""
+
+
+def forge_same_name_identity(real, directory):
+    """Danh tính giả mạo `real`: cùng subject, issuer (CN `teleport-<device_id>`), serial, hạn và
+    extension, nhưng khóa khác. Chép ở `tests/net/test_tls.py` (không import được giữa file test)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    real_cert = x509.load_pem_x509_certificate(real.cert_path.read_bytes())
+    key = ec.generate_private_key(ec.SECP256R1())
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(real_cert.subject)
+        .issuer_name(real_cert.issuer)
+        .public_key(key.public_key())
+        .serial_number(real_cert.serial_number)
+        .not_valid_before(real_cert.not_valid_before_utc)
+        .not_valid_after(real_cert.not_valid_after_utc)
+    )
+    for ext in real_cert.extensions:
+        builder = builder.add_extension(ext.value, ext.critical)
+    cert = builder.sign(key, hashes.SHA256())
+    cert_path, key_path = directory / CERT_FILE, directory / KEY_FILE
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
+    der = cert.public_bytes(serialization.Encoding.DER)
+    return Identity(real.device_id, cert_path, key_path, hashlib.sha256(der).hexdigest())
+
+
+@pytest.mark.integration
+async def test_impostor_with_same_cn_and_serial_but_other_key_is_identity_mismatch(
+    slow_opening, fake_server, ids, tmp_path
+):
+    """Server giả dùng chứng chỉ cùng subject/issuer/serial (cùng CN `teleport-<device_id>`) với máy tin
+    cậy, khóa khác, và tin chứng chỉ client: `open_control` → IdentityMismatch ngay trong bắt tay (không
+    có fingerprint thật); server giả không bắt tay xong nên handler không chạy, không nhận byte nào."""
+    fake = forge_same_name_identity(ids.server, tmp_path / "fake")
+    assert fake.device_id == ids.server.device_id
+    assert fake.fingerprint != ids.server.fingerprint
+
+    async def record(server, reader, writer):
+        await server.record_until_closed(reader, timeout=5)
+
+    server = await fake_server(fake, record, trusted_certs=[ids.b.cert_pem()])
+    start = time.monotonic()
+    with pytest.raises(IdentityMismatch) as exc:
+        await open_control([LOCAL], server.port, ids.b, hello_of(ids.b), ids.server.cert_pem())
+    assert time.monotonic() - start < 2.0, "phải báo ngay khi bắt tay, không chờ hết giờ"
+    assert exc.value.actual_fingerprint is None
+    assert exc.value.address == LOCAL
+    await asyncio.sleep(0.2)
+    assert server.connections == 0, "server giả đã bắt tay xong (đã nhận chứng chỉ client)"
     assert bytes(server.received) == b""
 
 
@@ -1548,10 +1669,10 @@ async def test_all_addresses_fail_reports_most_relevant_error(fast, monkeypatch,
     h = await listener_factory(ids.server, trusted=[ids.b])
     start = time.monotonic()
     with pytest.raises(IdentityMismatch) as exc:
-        await b_control(h, ids, expected=ids.x.fingerprint, addresses=(TEST_NET, LOCAL))
+        await b_control(h, ids, expected=ids.x.cert_pem(), addresses=(TEST_NET, LOCAL))
     assert time.monotonic() - start <= 2.5
     assert exc.value.address == LOCAL
-    assert exc.value.actual_fingerprint == ids.server.fingerprint
+    assert exc.value.actual_fingerprint is None  # lỗi ngay trong bắt tay (protocol mục 2.2)
     assert h.calls == 0
 
 
@@ -1561,7 +1682,7 @@ async def test_cancelling_open_leaves_nothing_behind(fast, monkeypatch, fake_ser
     monkeypatch.setattr(connection, "OPENING_TIMEOUT", 10.0)
     server = await fake_server(None, _hold, use_tls=False)
     task = asyncio.create_task(
-        open_control([TEST_NET, LOCAL], server.port, ids.b, hello_of(ids.b), ids.server.fingerprint)
+        open_control([TEST_NET, LOCAL], server.port, ids.b, hello_of(ids.b), ids.server.cert_pem())
     )
     await wait_until(lambda: server.connections == 1, 2.0, "client đã nối TCP tới server câm")
     task.cancel()
@@ -1586,21 +1707,25 @@ async def test_m1_server_cert_with_unsupported_general_name_is_identity_mismatch
 ):
     """Chứng chỉ server có SAN x400Address/EDIPartyName → IdentityMismatch ngay, không lọt lỗi lạ.
 
-    Với kết nối điều khiển, fingerprint mong đợi khớp đúng chứng chỉ đó, nên chỉ bước phân tích
-    chứng chỉ chặn được; client cũng không gửi byte nào cho máy chưa xác minh (protocol §2.1).
+    Kết nối điều khiển: chứng chỉ mong đợi chính là chứng chỉ đó, nên `open_control` từ chối nó
+    bằng ValueError trước mọi I/O (`peer_cert_from_pem`, protocol mục 2.1).
     """
     evil = make_san_identity(san)
     server = await fake_server(evil, _record, trusted_certs=[ids.b.cert_pem()])
     start = time.monotonic()
+    if kind == "control":
+        with pytest.raises(ValueError):
+            await _open_kind(kind, server.port, ids, expected=evil.cert_pem())
+        await asyncio.sleep(0.1)
+        assert server.connections == 0
+        return
     with pytest.raises(IdentityMismatch) as exc:
-        await _open_kind(kind, server.port, ids, expected=evil.fingerprint)
+        await _open_kind(kind, server.port, ids)
     assert time.monotonic() - start < 2.0, "phải báo ngay, không chờ hết giờ"
     assert exc.value.address == LOCAL
     assert exc.value.actual_fingerprint == evil.fingerprint
     await wait_until(lambda: not server._tasks, 3.0, "server giả thấy client đóng")
     assert server.connections == 1, "server giả không thấy kết nối nào: phép kiểm vô nghĩa"
-    if kind == "control":
-        assert bytes(server.received) == b""
 
 
 @pytest.mark.integration
@@ -2253,21 +2378,26 @@ async def test_connection_tasks_are_named(slow_opening, listener_factory, raw_cl
 
 @pytest.mark.integration
 async def test_no_suspension_between_trust_check_and_handler(slow_opening, listener_factory, ids):
-    """Mục 3.1 bước 8: giữa `is_trusted` và phần đồng bộ đầu `on_connection` không có điểm dừng.
+    """Mục 3.1 bước 8: giữa lần kiểm `is_trusted` **cuối** và phần đồng bộ đầu `on_connection` không có
+    điểm dừng.
 
     Một callback xếp bằng `call_soon` trong `is_trusted` chỉ chạy được khi vòng lặp được nhường;
-    nếu nó đã chạy lúc handler bắt đầu thì có một `await` thật ở giữa.
+    nếu nó đã chạy lúc handler bắt đầu thì có một `await` thật ở giữa. `is_trusted` có thể được gọi
+    nhiều lần cho một kết nối (sau bắt tay để quyết hoàn token, rồi lúc `control_open`; protocol mục 2.3),
+    nên mỗi lần gọi đặt cờ mới; chỉ cờ của lần gọi cuối được xét.
     """
     loop = asyncio.get_running_loop()
-    flag = {"ran": False}
+    flags: list[dict] = []
     seen: list = []
 
     def is_trusted(fp):
+        flag = {"ran": False}
+        flags.append(flag)
         loop.call_soon(flag.__setitem__, "ran", True)
         return fp == ids.b.fingerprint
 
     async def on_connection(conn):
-        seen.append(flag["ran"])
+        seen.append((len(flags), flags[-1]["ran"]))
 
     h = await listener_factory(
         ids.server, trusted=[ids.b], is_trusted=is_trusted, on_connection=on_connection
@@ -2275,7 +2405,9 @@ async def test_no_suspension_between_trust_check_and_handler(slow_opening, liste
     conn = await b_control(h, ids)
     try:
         await wait_until(lambda: seen, 2.0, "on_connection được gọi")
-        assert seen == [False]
+        [(calls, ran)] = seen
+        assert calls >= 1, "is_trusted chưa từng được gọi trước on_connection"
+        assert ran is False, "có await thật giữa lần kiểm is_trusted cuối và on_connection"
     finally:
         await conn.close()
 
@@ -2689,7 +2821,7 @@ async def test_losing_attempt_never_sends_control_open(slow_opening, monkeypatch
         return streams
 
     monkeypatch.setattr(asyncio, "open_connection", open_connection)
-    conn = await open_control([LOCAL, OTHER_ADDRESS], s1.port, ids.b, hello_of(ids.b), ids.server.fingerprint)
+    conn = await open_control([LOCAL, OTHER_ADDRESS], s1.port, ids.b, hello_of(ids.b), ids.server.cert_pem())
     try:
         assert len(opened) == 2, "phép thử vô nghĩa: không có hai lần thử song song"
         winner, loser = (s1, s2) if conn.peer.address == LOCAL else (s2, s1)
@@ -2723,7 +2855,7 @@ async def test_error_sending_control_open_is_unreachable(slow_opening, monkeypat
     monkeypatch.setattr(asyncio.StreamWriter, "write", write)
     monkeypatch.setattr(asyncio.StreamWriter, "drain", drain)
     with pytest.raises(Unreachable) as exc:
-        await open_control([LOCAL], server.port, ids.b, hello_of(ids.b), ids.server.fingerprint)
+        await open_control([LOCAL], server.port, ids.b, hello_of(ids.b), ids.server.cert_pem())
     assert exc.value.address == LOCAL
     assert failing, "phép thử vô nghĩa: control_open chưa từng được gửi"
     await wait_until(lambda: not server._tasks, 3.0, "server giả thấy kết nối bị đóng")
@@ -2973,7 +3105,7 @@ async def test_client_side_control_receive_rejects_header_over_one_mib(slow_open
     """D1, chiều ngược lại: phía client (`open_control`) cũng cắt khung > 1 MiB ở header."""
     data = encode_message(wire_hello(ids.server, "Server")) + HEADER.pack(ONE_MIB + 1) + b"xxxxxxxx"
     server = await fake_server(ids.server, send_then_hold(data), trusted_certs=[ids.b.cert_pem()])
-    conn = await open_control([LOCAL], server.port, ids.b, hello_of(ids.b), ids.server.fingerprint)
+    conn = await open_control([LOCAL], server.port, ids.b, hello_of(ids.b), ids.server.cert_pem())
     try:
         with pytest.raises(FramingError):
             await asyncio.wait_for(conn.receive(), 1.0)

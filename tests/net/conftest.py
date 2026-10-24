@@ -143,8 +143,28 @@ async def expect_closed(reader: asyncio.StreamReader, within: float) -> tuple[fl
     return time.monotonic() - start, bytes(data)
 
 
+def cert_client_context(identity: Identity) -> ssl.SSLContext:
+    """Client gửi chứng chỉ của `identity` nhưng KHÔNG kiểm chứng chỉ server (`CERT_NONE`).
+
+    Chỉ để thử phía server (mTLS, giới hạn, message mở đầu sai). Sản phẩm không còn đường nào như
+    vậy: chứng chỉ client chỉ đi tới server đã được kiểm bằng `tls.trusted_client_context`
+    (`docs/protocol.md` mục 2.1). Chép ở `tests/app/conftest.py` và `tests/net/test_connection.py`
+    (không import được conftest).
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ctx.load_cert_chain(identity.cert_path, identity.key_path)
+    return ctx
+
+
 class RawPeer:
-    """Client (TLS hoặc TCP trần) tự soạn từng byte gửi đi, để thử phía server."""
+    """Client (TLS hoặc TCP trần) tự soạn từng byte gửi đi, để thử phía server.
+
+    Có `identity` thì gửi chứng chỉ đó mà không kiểm server (`cert_client_context`); không có thì
+    ẩn danh (`tls.client_context()`).
+    """
 
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, started: float) -> None:
         self.reader = reader
@@ -164,7 +184,12 @@ class RawPeer:
         started = time.monotonic()
         ssl_ctx = None
         if use_tls:
-            ssl_ctx = ctx if ctx is not None else tls.client_context(identity)
+            if ctx is not None:
+                ssl_ctx = ctx
+            elif identity is not None:
+                ssl_ctx = cert_client_context(identity)
+            else:
+                ssl_ctx = tls.client_context()
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection("127.0.0.1", port, ssl=ssl_ctx), timeout
         )
@@ -350,6 +375,12 @@ def make_san_identity(tmp_path):
 
 
 @pytest.fixture
+def cert_client():
+    """`cert_client(identity)` → context client gửi chứng chỉ mà không kiểm server (chỉ thử phía server)."""
+    return cert_client_context
+
+
+@pytest.fixture
 def hello_for():
     """`hello_for(identity, name="A")` → `Hello` hợp lệ của danh tính đó."""
     return make_hello
@@ -459,6 +490,7 @@ def net_helpers():
         ListenerHarness=ListenerHarness,
         make_hello=make_hello,
         hello_dict=hello_dict,
+        cert_client_context=cert_client_context,
         expect_closed=expect_closed,
         wait_until=wait_until,
         find_leaks=find_leaks,

@@ -13,8 +13,10 @@ cậy thấy qua mDNS và nối lại theo lịch §6.2. Node chỉ thực hiệ
 về. `DeviceRegistry` gộp mDNS + `trusted.json` + trạng thái kết nối thành `DeviceView`
 cho giao diện, và `on_event` báo `NodeEvent` (thiết bị lên/xuống, kết nối được/mất/lỗi).
 
-mDNS là tùy chọn (`mdns=None`: tắt) và chỉ là gợi ý địa chỉ: kết nối luôn so fingerprint
-đã lưu. Lỗi mDNS không làm `start()` thất bại. Khi quảng bá, node cứ
+mDNS là tùy chọn (`mdns=None`: tắt) và chỉ là gợi ý địa chỉ: kết nối luôn kiểm chứng
+chỉ server với chứng chỉ đã lưu ngay trong bắt tay. Kết nối ra mở xong thì node báo
+`Listener.note_outgoing_control`, để kết nối vào từ IP đó được ưu tiên khi cổng bị lũ
+(protocol §2.3). Lỗi mDNS không làm `start()` thất bại. Khi quảng bá, node cứ
 NETWORK_CHECK_INTERVAL giây đọc địa chỉ và đồng hồ (`core.discovery.NetworkWatch`):
 địa chỉ đổi → khởi động lại mDNS; máy vừa thức dậy → quảng bá lại.
 
@@ -855,7 +857,7 @@ class Node:
             try:
                 # Gọi trực tiếp (không bọc task): không có khe hở giữa lúc trả về và lúc đăng ký.
                 conn = await open_control(
-                    list(action.addresses), action.port, self._identity, self._hello, device.fingerprint
+                    list(action.addresses), action.port, self._identity, self._hello, device.cert_pem
                 )
             except ConnectError as e:
                 for cls, value in _CONNECT_RESULTS:
@@ -870,7 +872,9 @@ class Node:
             if not self._closing and self._links is not None:
                 self._apply(self._links.connect_finished(device_id, attempt_id, result, None, self._now()))
             return
-        # Thành công: không await cho tới khi đăng ký xong.
+        # Thành công: không await cho tới khi đăng ký xong. Chứng chỉ server đã được kiểm
+        # trong bắt tay, nên IP đó được ưu tiên ở cổng của máy này (protocol §2.3).
+        priority = self._note_outgoing(conn)
         try:
             self._attempts.pop(attempt_id, None)
             if self._closing or self._links is None:
@@ -885,8 +889,30 @@ class Node:
             log.debug("đã mở kết nối điều khiển %d tới %s", conn_id, device_id[:8])
             await self._run_control(device_id, conn_id, conn)
         finally:
+            self._release_outgoing(priority)
             if not conn.closed:
                 await conn.close()
+
+    def _note_outgoing(self, conn: Connection) -> int:
+        """Báo cổng có kết nối điều khiển ra tới `conn.peer.address`; trả handle (0: không cấp)."""
+        if self._listener is None:
+            return 0
+        try:
+            fingerprint = conn.peer.fingerprint
+            if fingerprint is None:  # không xảy ra: phía client luôn có chứng chỉ server
+                return 0
+            return self._listener.note_outgoing_control(conn.peer.address, fingerprint)
+        except Exception:
+            log.exception("không ghi nhận được kết nối ra cho giới hạn kết nối vào")
+            return 0
+
+    def _release_outgoing(self, handle: int) -> None:
+        if self._listener is None or not handle:
+            return
+        try:
+            self._listener.release_outgoing_control(handle)
+        except Exception:
+            log.exception("không trả được ưu tiên của kết nối ra")
 
     def _apply(self, actions: list[LinkAction]) -> list[asyncio.Task]:
         """Thực hiện hành động của tracker (đồng bộ); trả các task đóng kết nối vừa tạo."""
