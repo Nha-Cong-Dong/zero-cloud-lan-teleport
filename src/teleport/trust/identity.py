@@ -16,6 +16,7 @@ import json
 import os
 import re
 import string
+import sys
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -452,7 +453,7 @@ def _write_durable(path: Path, content: bytes, mode: int) -> None:
     """
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), mode)
     with os.fdopen(fd, "wb") as f:
-        if os.name == "posix":
+        if sys.platform != "win32":
             os.fchmod(f.fileno(), mode)  # .tmp còn sót từ lần trước có thể mang quyền khác
         f.write(content)
         f.flush()

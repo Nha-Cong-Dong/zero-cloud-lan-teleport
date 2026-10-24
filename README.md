@@ -181,7 +181,8 @@ Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope Curre
 | `pytest` | Chạy toàn bộ test |
 | `pytest -m "not integration"` | Bỏ qua test mở socket thật (nhanh hơn) |
 | `pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal` | Chạy một test |
-| `ruff check .` · `ruff format .` | Kiểm tra và định dạng code (CI chạy `ruff check`, `ruff format --check`, `pytest`) |
+| `ruff check .` · `ruff format .` | Kiểm tra và định dạng code (CI chạy `ruff check`, `ruff format --check`, `mypy src`, `pytest`) |
+| `mypy src` | Kiểm tra kiểu |
 | `teleport identity` | Tạo / xem danh tính thiết bị của máy này (hoặc `python -m teleport identity`) |
 | `teleport list` | Liệt kê các máy thấy được qua mDNS trong vài giây |
 | `teleport listen` | Chờ ghép đôi: hiện mã 6 số, hỏi xác nhận |

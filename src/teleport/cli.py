@@ -668,7 +668,7 @@ async def run_listen(args: argparse.Namespace, lines: Lines, out: TextIO, err: T
             discovery_lines.append(
                 "Máy khác trong mạng thấy máy này qua `teleport list` và tự kết nối nếu đã ghép đôi."
             )
-        elif mdns is not None:
+        elif mdns is not None and discovery_error is not None:
             discovery_lines.append(
                 f"Cảnh báo: chưa quảng bá được qua mDNS ({_error_text(discovery_error)}); "
                 "máy khác vẫn ghép đôi được bằng IP."
@@ -1072,7 +1072,11 @@ def _handle_ctrl_break(loop: asyncio.AbstractEventLoop, task: asyncio.Task | Non
         previous = signal.signal(sig, handler)
     except (ValueError, OSError):  # không ở thread chính
         return lambda: None
-    return lambda: signal.signal(sig, previous)
+
+    def restore() -> None:
+        signal.signal(sig, previous)
+
+    return restore
 
 
 def _run_async(args: argparse.Namespace, run: RunFn) -> int | None:

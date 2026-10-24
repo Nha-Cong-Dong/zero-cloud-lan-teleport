@@ -3332,9 +3332,12 @@ async def test_reader_keeps_delivering_under_real_backpressure(fast, monkeypatch
 
     Bộ đệm được giữ nhỏ ở cả hai đầu (SO_RCVBUF của máy kia đặt trước khi kết nối, SO_SNDBUF của
     socket phía server) để Linux/macOS không tự giãn bộ đệm: lượng byte cần để làm đầy có cận rõ
-    (`FILL_LIMIT`), và việc làm đầy có hạn thời gian. “Kẹt” nghĩa là 0,5 s liền không lần gửi nào xong.
+    (`FILL_LIMIT`), và việc làm đầy có hạn thời gian. “Kẹt” nghĩa là 0,5 s liền không lần gửi nào xong,
+    rồi thêm `STUCK_CONFIRM` giây nữa vẫn không lần nào xong: máy CI chậm (Windows) có lúc chỉ trễ
+    hơn 0,5 s chứ chưa kẹt, khi đó lần gửi “kẹt” xong muộn và phép thử thành vô nghĩa.
     """
     FILL_LIMIT = 8 * 1024 * 1024  # bộ đệm nhỏ + mức cao 64 KiB của asyncio: thực tế chỉ vài trăm KiB
+    STUCK_CONFIRM = 2.0
     monkeypatch.setattr(connection, "DRAIN_TIMEOUT", 10.0)
     h = await listener_factory(ids.server, trusted=[ids.b])
     sock = await asyncio.to_thread(sync_open_control, h.port, ids.b, rcvbuf=4096)
@@ -3348,12 +3351,14 @@ async def test_reader_keeps_delivering_under_real_backpressure(fast, monkeypatch
         _, task = start_channel(server, received, ping_interval=5.0, dead_after=10.0)
         frame_size = len(encode_message(to_dict(Ping(t=1))))
         created = completed = 0
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(20):
             while stuck is None:
                 while len(inflight) < 256:
                     inflight[asyncio.create_task(server.send(Ping(t=1)))] = created
                     created += 1
                 done, _ = await asyncio.wait(inflight, timeout=0.5)
+                if not done:
+                    done, _ = await asyncio.wait(inflight, timeout=STUCK_CONFIRM)
                 for t in done:
                     del inflight[t]
                     t.result()

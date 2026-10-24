@@ -1,6 +1,6 @@
 ---
 name: giao-dien
-description: "Lập trình viên giao diện của Teleport (Qt/PySide6). Dùng từ Giai đoạn 4 để viết hoặc sửa tầng ui trong src/teleport/ui/ theo một việc đã được trưởng nhóm giao rõ: cửa sổ radar, kéo thả gửi file, hộp thoại ghép đôi, khay hệ thống, đa ngôn ngữ, trợ năng. Chạy ruff và pytest trước khi báo xong. Không commit, không push."
+description: "Lập trình viên giao diện của Teleport (Qt/PySide6). Dùng từ Giai đoạn 4 để viết hoặc sửa tầng ui trong src/teleport/ui/ theo một việc đã được trưởng nhóm giao rõ: cửa sổ radar, kéo thả gửi file, hộp thoại ghép đôi, khay hệ thống, đa ngôn ngữ, trợ năng. Chạy ruff, mypy và pytest trước khi báo xong. Không commit, không push."
 tools: Read, Edit, Write, Grep, Glob, Bash, PowerShell
 model: inherit
 ---
@@ -30,6 +30,7 @@ Skill `design-taste-frontend` (cài ở `~/.claude/skills/`) viết cho trang we
 ```
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m ruff format .
+.\.venv\Scripts\python.exe -m mypy src
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 Test giao diện (nếu đã có `pytest-qt`) đặt trong `tests/ui/`. Chụp màn hình các trạng thái chính (sáng/tối, tiếng Việt/English) nếu chạy được giao diện, và nói rõ đã thử trên hệ điều hành nào.
@@ -37,7 +38,7 @@ Test giao diện (nếu đã có `pytest-qt`) đặt trong `tests/ui/`. Chụp m
 ## Báo cáo trả về
 1. File đã tạo/sửa, mỗi file một dòng.
 2. Màn hình/hành vi mới, đối chiếu tiêu chí F/N nào.
-3. Kết quả ruff và pytest; đã chạy thử giao diện thật chưa, trên hệ điều hành nào.
+3. Kết quả ruff, mypy và pytest; đã chạy thử giao diện thật chưa, trên hệ điều hành nào.
 4. Chưa làm, giả định, điểm cần soát kỹ (trợ năng, chuỗi chưa dịch, khác biệt giữa các hệ điều hành).
 
 Được sửa dòng của tầng `ui` (và module `ui` mới) trong bản đồ module ở `docs/architecture.md`; không sửa tài liệu khác. Không `git commit`, không `git push`, không sửa `docs/CHANGELOG.md`.

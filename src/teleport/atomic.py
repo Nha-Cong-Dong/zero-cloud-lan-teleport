@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def write_atomic(path: Path, content: bytes) -> None:
         # 0o600: chỉ chủ sở hữu đọc/ghi (có tác dụng trên POSIX).
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
         with os.fdopen(fd, "wb") as f:
-            if os.name == "posix":
+            if sys.platform != "win32":
                 os.fchmod(f.fileno(), 0o600)  # .tmp còn sót từ lần trước có thể mang quyền khác
             f.write(content)
             f.flush()
@@ -57,7 +58,7 @@ def write_atomic(path: Path, content: bytes) -> None:
 
 def _fsync_dir(directory: Path) -> None:
     """POSIX: fsync thư mục để việc đổi tên đã ghi xuống đĩa. Windows không hỗ trợ; lỗi bỏ qua."""
-    if os.name != "posix":
+    if sys.platform == "win32":
         return
     with contextlib.suppress(OSError):
         fd = os.open(directory, os.O_RDONLY)

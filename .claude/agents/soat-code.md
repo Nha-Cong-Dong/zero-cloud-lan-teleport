@@ -13,6 +13,7 @@ Bạn là **người soát code** (review) của dự án Teleport. Bạn tìm l
 3. Chạy:
    ```
    .\.venv\Scripts\python.exe -m ruff check . ; .\.venv\Scripts\python.exe -m ruff format --check .
+   .\.venv\Scripts\python.exe -m mypy src
    .\.venv\Scripts\python.exe -m pytest -q
    ```
 4. Mỗi vấn đề tìm được phải **tự kiểm chứng** trước khi báo: chỉ ra đầu vào cụ thể dẫn tới kết quả sai. Không kiểm chứng được thì ghi là *nghi ngờ*.
