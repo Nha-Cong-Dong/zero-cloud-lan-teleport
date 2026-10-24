@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import errno
 import os
+import sys
 import time
 from pathlib import Path
 from types import TracebackType
 
-if os.name == "nt":
+# sys.platform thay vì os.name: mypy chỉ hiểu phép so sánh sys.platform để bỏ qua nhánh của
+# hệ điều hành khác (msvcrt/fcntl chỉ có trên một phía).
+if sys.platform == "win32":
     import msvcrt
 else:
     import fcntl
@@ -114,12 +117,12 @@ class NodeLock:
 
 def _is_contended(e: BaseException) -> bool:
     """Lỗi do khóa đang bị giữ ở nơi khác (khác với lỗi I/O thật)."""
-    if os.name == "nt":
+    if sys.platform == "win32":
         return isinstance(e, OSError) and e.errno in _WINDOWS_CONTENDED
     return isinstance(e, BlockingIOError)
 
 
-if os.name == "nt":
+if sys.platform == "win32":
 
     def _lock(fd: int) -> None:
         # msvcrt.locking khóa tính từ vị trí con trỏ file hiện tại: luôn về byte 0.

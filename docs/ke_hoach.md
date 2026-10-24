@@ -322,7 +322,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 Bản chính thức: [CONTRIBUTING.md](CONTRIBUTING.md). Tóm tắt:
 - **Nhánh:** `main` luôn chạy được và được bảo vệ (chỉ merge qua Pull Request khi CI xanh). Mỗi việc làm trên nhánh riêng `feat/...`, `fix/...`.
 - **Commit:** theo [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `chore:`), giúp viết `CHANGELOG.md` dễ dàng.
-- **CI** (`.github/workflows/ci.yml`): `ruff check`, `ruff format --check`, `pytest` trên Windows/macOS/Linux × Python 3.12/3.14 (bản thấp nhất và mới nhất được hỗ trợ). Từ Giai đoạn 2 thêm `mypy`.
+- **CI** (`.github/workflows/ci.yml`): `ruff check`, `ruff format --check`, `mypy src`, `pytest` trên Windows/macOS/Linux × Python 3.12/3.14 (bản thấp nhất và mới nhất được hỗ trợ). `mypy` có từ đầu Giai đoạn 2 (cấu hình trong `pyproject.toml`).
 - **Đội subagent** trong `.claude/agents/` (vai trò và quy trình: `.claude/CLAUDE.md`): lập kế hoạch → làm rõ → lập trình + viết test song song → soát code ∥ tấn công thử (đo đạc trước và sau khi thay đổi chạm yêu cầu N) → chốt → tóm tắt. Soát tài liệu chạy trước mỗi lần phát hành và sau mỗi đợt sửa nhiều tài liệu; giao diện và đóng gói dùng ở các giai đoạn sau. Chỉ commit và push khi người dùng đồng ý.
 - **Phát hành:** gắn tag `vX.Y.Z` → GitHub Actions build bộ cài và tạo GitHub Release kèm ghi chú từ `CHANGELOG.md`.
 - **Theo dõi công việc:** GitHub Issues + Milestones tương ứng từng bản phát hành ở mục 5.1.
