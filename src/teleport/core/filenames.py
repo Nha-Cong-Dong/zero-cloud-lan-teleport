@@ -20,11 +20,19 @@ Thứ tự làm sạch (mỗi bước giữ được điều các bước trư�
    `.teleport` → thêm `_` ở đầu (rồi cắt lại nếu vượt 255 byte).
 
 Tên kiểu `x.mp4.part` hay `x.part.state` được giữ nguyên: file tạm nằm trong
-`<thư mục nhận>/.teleport/<transfer_id>/` nên không bao giờ đụng tên file nhận được
-(ke_hoach mục 3.3); chỉ chính tên `.teleport` mới trùng tên nội bộ.
+`<thư mục nhận>/.teleport/<transfer_id>/` (`TEMP_DIR_NAME`) nên không bao giờ đụng tên file
+nhận được (ke_hoach mục 3.3); chỉ chính tên `.teleport` mới trùng tên nội bộ.
 
-Giới hạn độ dài của cả đường dẫn (Windows `MAX_PATH`) không thuộc module này: tầng `app`
-lo, có thể gọi `numbered(..., max_bytes=...)` với giới hạn nhỏ hơn.
+API khác:
+- `numbered`: tên thứ `n` khi trùng (` (1)`, ` (2)`…); `dedupe_offer_names`: khử trùng các tên
+  trong một `offer`; `dedupe_key`: khóa so trùng (NFC + casefold), dùng cả khi so với file đã có.
+- `fit_filename`: tên đã làm sạch, cắt vừa một ngân sách byte nhỏ hơn 255 mà vẫn ổn định qua
+  `sanitize_filename`; `fallback_filename`: tên dự phòng chỉ gồm ASCII, ≤ `FALLBACK_MAX_BYTES`
+  byte, dùng khi hệ file từ chối tên.
+- `prepare_outgoing_name`: bên gửi kiểm và cắt tên.
+
+Giới hạn độ dài của cả đường dẫn (Windows `MAX_PATH`) và tên dự phòng khi hệ file từ chối tên
+không thuộc module này: `teleport.app.storage` lo (docs/architecture.md mục 4 “Thư mục nhận”).
 """
 
 from __future__ import annotations
@@ -35,6 +43,9 @@ from collections.abc import Sequence
 
 MAX_NAME_BYTES = 255  # protocol mục 3.3: `name` ≤ 255 byte UTF-8
 FALLBACK_NAME = "file"  # tên rỗng sau khi làm sạch
+TEMP_DIR_NAME = ".teleport"  # thư mục file tạm trong thư mục nhận (architecture mục 4)
+# Trần độ dài tên dự phòng, byte (architecture mục 4 “Thư mục nhận”).
+FALLBACK_MAX_BYTES = 64
 # Đuôi file dài hơn thì coi như không có đuôi: khi cắt tên chỉ giữ đuôi ngắn, kiểu `.mp4`,
 # `.sublime-project`; tên lạ như `a.<200 ký tự>` bị cắt ở cuối như tên không đuôi.
 MAX_EXTENSION_BYTES = 32
@@ -62,7 +73,7 @@ _TRAILING_STRIPPED = ". "  # Windows tự cắt dấu chấm và dấu cách U+0
 # viết hoa. ¹²³ (U+00B9, U+00B2, U+00B3) được Windows coi là chữ số ở COM/LPT. CONIN$, CONOUT$
 # mở console. Nhận thừa (đổi tên một tên vô hại) không sao; nhận thiếu thì không được.
 _RESERVED_STEM_RE = re.compile(r"CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|(?:COM|LPT)[0-9\u00b9\u00b2\u00b3]")
-_INTERNAL_NAMES = frozenset({".teleport"})  # so bằng casefold
+_INTERNAL_NAMES = frozenset({TEMP_DIR_NAME})  # so bằng casefold
 _RESERVED_PREFIX = "_"
 
 
@@ -158,13 +169,59 @@ def numbered(name: str, n: int, *, max_bytes: int = MAX_NAME_BYTES) -> str:
     """
     if type(n) is not int or n < 1:
         raise ValueError("n phải là số nguyên ≥ 1")
+    limit = _check_max_bytes(max_bytes)
+    return _fit(sanitize_filename(name), limit, f" ({n})")
+
+
+def _check_max_bytes(max_bytes: object) -> int:
+    # bool là lớp con của int: bị từ chối như mọi kiểu khác.
     if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_NAME_BYTES:
         raise ValueError(f"max_bytes phải là số nguyên 1…{MAX_NAME_BYTES}")
-    return _fit(sanitize_filename(name), max_bytes, f" ({n})")
+    return max_bytes
 
 
-def _dedupe_key(name: str) -> str:
-    """Khóa so trùng: không phân biệt hoa thường (casefold), sau NFC."""
+# Cắt rồi làm sạch lại hội tụ sau tối đa 3 vòng: làm sạch chỉ làm tên dài ra khi thêm `_` ở đầu
+# (một lần, vì cắt ở cuối không bỏ được ký tự đầu) hay khi tên thành rỗng → `file`.
+_FIT_ROUNDS = 8
+
+
+def fit_filename(name: str, max_bytes: int = MAX_NAME_BYTES) -> str:
+    """Tên đã làm sạch, cắt còn ≤ `max_bytes` byte UTF-8 (tầng `app` dùng khi đường dẫn dài).
+
+    Làm sạch (`sanitize_filename`), cắt như `numbered` (cắt phần trước đuôi, giữ đuôi; không đủ
+    chỗ thì bỏ đuôi và cắt ở cuối), rồi làm sạch lại tới khi ổn định: cắt có thể để lại `.` hay
+    dấu cách ở cuối, hoặc tạo ra tên thiết bị (`CONabc.txt` cắt còn 7 byte là `CON.txt`, thành
+    `_CO.txt`). Kết quả không rỗng, đi qua `sanitize_filename` không đổi, không phải tên thiết
+    bị của Windows hay `.teleport`; `fit_filename(x, MAX_NAME_BYTES) == sanitize_filename(x)`.
+    `max_bytes` không phải số nguyên 1…`MAX_NAME_BYTES`, hoặc quá nhỏ để thỏa các điều trên
+    (chỉ có thể khi < 4) → ValueError. `name` không phải chuỗi → TypeError.
+    """
+    limit = _check_max_bytes(max_bytes)
+    fitted = sanitize_filename(name)
+    for _ in range(_FIT_ROUNDS):
+        if _utf8_len(fitted) <= limit:
+            return fitted
+        fitted = sanitize_filename(_fit(fitted, limit))
+    raise ValueError(f"không cắt được tên còn ≤ {limit} byte")
+
+
+def fallback_filename(name: str, max_bytes: int = FALLBACK_MAX_BYTES) -> str:
+    """Tên dự phòng khi hệ file từ chối tên (architecture mục 4 “Thư mục nhận”).
+
+    Làm sạch, thay **mọi** ký tự ngoài ASCII bằng `_`, rồi `fit_filename` với
+    `min(max_bytes, FALLBACK_MAX_BYTES)`: kết quả chỉ gồm ASCII, ổn định qua `sanitize_filename`
+    và giữ đuôi ASCII (`Ảnh 𘷳.jpg` → `_nh _.jpg`). Ràng buộc tham số như `fit_filename`.
+    """
+    limit = _check_max_bytes(max_bytes)
+    ascii_only = "".join(ch if ch.isascii() else "_" for ch in sanitize_filename(name))
+    return fit_filename(ascii_only, min(limit, FALLBACK_MAX_BYTES))
+
+
+def dedupe_key(name: str) -> str:
+    """Khóa so trùng tên: không phân biệt hoa thường (casefold), sau NFC.
+
+    Dùng cho cả các tên trong một `offer` lẫn khi so với file đã có trong thư mục nhận.
+    """
     return unicodedata.normalize("NFC", unicodedata.normalize("NFC", name).casefold())
 
 
@@ -177,7 +234,7 @@ def dedupe_offer_names(names: Sequence[str]) -> list[str]:
     `[a.txt, a (2).txt, a (1).txt]`. Trùng với file đã có trên đĩa do `app` lo.
     """
     cleaned = [sanitize_filename(name) for name in names]
-    keys = [_dedupe_key(name) for name in cleaned]
+    keys = [dedupe_key(name) for name in cleaned]
     taken = set(keys)  # mọi tên gốc giữ chỗ trước, tên đánh số không được lấy của chúng
     seen: set[str] = set()
     next_number: dict[str, int] = {}
@@ -191,7 +248,7 @@ def dedupe_offer_names(names: Sequence[str]) -> list[str]:
         while True:
             candidate = numbered(name, n)
             n += 1
-            candidate_key = _dedupe_key(candidate)
+            candidate_key = dedupe_key(candidate)
             if candidate_key not in taken:
                 break
         next_number[key] = n
