@@ -74,8 +74,8 @@ def client_context() -> ssl.SSLContext:
 
     `CERT_NONE` và không nạp cặp khóa: chưa ghép đôi thì chưa có gì để kiểm chứng chỉ
     server (ghép đôi xác thực bằng mã 6 số, protocol mục 5), và client không bao giờ
-    gửi chứng chỉ của mình tới một server chưa được kiểm. Kết nối điều khiển dùng
-    `trusted_client_context`.
+    gửi chứng chỉ của mình tới một server chưa được kiểm. Kết nối điều khiển và kết nối
+    dữ liệu dùng `trusted_client_context`.
     """
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_3

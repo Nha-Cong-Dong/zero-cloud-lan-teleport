@@ -1,29 +1,38 @@
 """Kết nối trên một cổng: nhận/mở kết nối, trao `hello`, phân loại, giới hạn, keepalive.
 
-Đặc tả ở docs/protocol.md mục 2 và 3. Module này chỉ làm I/O và thực thi các luật đã
-có: bảng loại kết nối nằm ở `teleport.core.messages` (`opening_kind`, `allowed_types`),
-keepalive ở `teleport.core.keepalive`. Không có quyết định nghiệp vụ nào ở đây (ghép
-đôi, chống trùng, nối lại là việc của `app`).
+Đặc tả ở docs/protocol.md mục 2, 3 và 4.1–4.2. Module này chỉ làm I/O và thực thi các
+luật đã có: bảng loại kết nối nằm ở `teleport.core.messages` (`opening_kind`,
+`allowed_types`), keepalive ở `teleport.core.keepalive`, khung khối ở
+`teleport.core.blocks`. Không có quyết định nghiệp vụ nào ở đây (ghép đôi, chống trùng,
+nối lại, lượt truyền là việc của tầng trên). Trên kết nối dữ liệu, module chỉ là đường
+ống: không băm payload, không biết lượt truyền.
 
 - `Listener` nhận **TCP trần** rồi gọi `start_tls` cho từng kết nối với `SSLContext`
   hiện tại, nên đổi danh sách tin cậy (`update_trusted`) có hiệu lực ngay mà không
   mở lại cổng. Kết nối đã bắt đầu bắt tay bằng context cũ được kiểm lại lúc nhận
-  `control_open` (protocol mục 7). Nhận hay từ chối một kết nối (số kết nối đang mở
-  đầu, tốc độ bắt tay, pool ưu tiên cho IP đã xác thực mTLS) do
+  `control_open` hay `data_open` (protocol mục 7). Nhận hay từ chối một kết nối (số kết
+  nối đang mở đầu, tốc độ bắt tay, pool ưu tiên cho IP đã xác thực mTLS) do
   `teleport.core.admission.AdmissionGate` quyết định; `Listener` chỉ thực thi. Kết nối
-  dữ liệu (`data_open`) chưa được nhận: bị từ chối như mọi lần từ chối khi mở đầu.
+  ghép đôi, điều khiển và dữ liệu đều được giao qua `on_connection`; handler của kết
+  nối dữ liệu kết thúc mà chưa đóng kết nối thì kết nối bị cắt (abort).
 - `open_pairing` / `open_control` thử song song mọi địa chỉ của một máy và giữ kết
-  nối thành công đầu tiên. `open_control` kiểm chứng chỉ server ngay trong bắt tay.
-- `Connection` gửi/nhận message đã kiểm theo loại kết nối; `ControlChannel` giữ kết
-  nối điều khiển sống bằng `ping`/`pong`.
+  nối thành công đầu tiên. `open_data` mở kết nối dữ liệu tới **đúng một** địa chỉ,
+  một lần thử (protocol mục 4.1). `open_control` và `open_data` kiểm chứng chỉ server
+  ngay trong bắt tay.
+- `Connection` gửi/nhận message đã kiểm theo loại kết nối; trên kết nối dữ liệu thì
+  đọc/ghi byte thô và khung khối (`write_block` / `read_block`), có backpressure, hạn
+  “không nhận byte” (`IdleTimeout`) và hạn `drain()`. `ControlChannel` giữ kết nối
+  điều khiển sống bằng `ping`/`pong`.
 
-Các hằng số thời gian được đọc **lúc dùng** (biến toàn cục của module), để test rút
-ngắn được bằng `monkeypatch.setattr`; các giới hạn số kết nối và tốc độ nằm ở
+Các hằng số thời gian và cỡ đoạn được đọc **lúc dùng** (biến toàn cục của module), để
+test rút ngắn được bằng `monkeypatch.setattr`; riêng `ssl_shutdown_timeout` của
+transport được đặt lúc mở kết nối, nên test vá `CLOSE_TIMEOUT` / `DRAIN_TIMEOUT` trước
+khi tạo `Listener` hay gọi `open_*`. Các giới hạn số kết nối và tốc độ nằm ở
 `teleport.core.admission`, cũng đọc lúc dùng.
 
-Không bao giờ ghi nội dung message hay chứng chỉ vào log (mvp N9): chỉ ghi `type`,
-địa chỉ, fingerprint và lý do. Các lần từ chối theo từng kết nối ghi ở mức DEBUG, để
-lũ kết nối không làm ngập log.
+Không bao giờ ghi nội dung message, payload khối hay chứng chỉ vào log (mvp N9): chỉ
+ghi `type`, địa chỉ, fingerprint và lý do. Các lần từ chối theo từng kết nối ghi ở mức
+DEBUG, để lũ kết nối không làm ngập log.
 """
 
 from __future__ import annotations
@@ -31,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import math
 import ssl
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
@@ -39,6 +49,16 @@ from enum import StrEnum
 from typing import Self, cast
 
 from teleport.core.admission import AdmissionGate, Refusal, Ticket
+from teleport.core.blocks import (
+    BLOCK_HEADER,
+    BLOCK_SIZE,
+    MAX_FILE_SIZE,
+    BlockError,
+    BlockHeader,
+    check_block,
+    pack_header,
+    parse_header,
+)
 from teleport.core.framing import (
     HEADER,
     MAX_MESSAGE_SIZE,
@@ -54,6 +74,7 @@ from teleport.core.messages import (
     PROTOCOL_VERSION,
     ConnectionKind,
     ControlOpen,
+    DataOpen,
     Hello,
     Message,
     MessageError,
@@ -82,13 +103,20 @@ DEFAULT_PORT = 47474  # protocol §2.1
 OPENING_TIMEOUT = 10.0  # protocol §2.3: TCP/TLS + hello + message mở đầu, cả chuỗi
 DRAIN_TIMEOUT = 30.0  # một đoạn gửi không xong trong 30 s → đóng
 CLOSE_TIMEOUT = 5.0  # đóng gọn (TLS close_notify) tối đa 5 s, quá thì abort
-_SEND_CHUNK = 64 * 1024
+IDLE_TIMEOUT = 30.0  # protocol §2.3: kết nối dữ liệu đang chờ đọc mà không nhận byte nào → cắt
+_SEND_CHUNK = 64 * 1024  # đoạn ghi; trên kết nối dữ liệu bằng đoạn 64 KiB của protocol §4.2
 _READ_CHUNK = 64 * 1024
 _MAX_ADDRESSES = 16  # số địa chỉ tối đa cho mỗi lần mở kết nối (bằng số địa chỉ mDNS quảng bá)
 
 _TASK_NAME = "teleport.connection"
 _BROADCAST = ipaddress.IPv4Address("255.255.255.255")
 _CONTROL_OPEN_FRAME = encode_message(to_dict(ControlOpen()))
+
+# Móc giới hạn tốc độ của `write_raw` / `write_block`: nhận số byte n của đoạn payload sắp
+# ghi, luôn 1 ≤ n ≤ `_SEND_CHUNK` (đoạn 64 KiB của protocol §4.2, nên bên gọi dùng được
+# `TokenBucket` có burst 64 KiB). Được gọi trong lúc giữ khóa gửi, trước khi byte của đoạn
+# đó tới writer; header khung không tính.
+BeforeChunk = Callable[[int], Awaitable[None]]
 
 log = logging.getLogger(__name__)
 
@@ -120,9 +148,9 @@ class IdentityMismatch(ConnectError):
 
     Thông báo: “Danh tính thay đổi”.
 
-    Khác chứng chỉ đã lưu: hỏng ngay trong bắt tay (kết nối điều khiển), hoặc sai
-    fingerprint sau bắt tay. `actual_fingerprint`: fingerprint chứng chỉ server đã đưa;
-    None khi bắt tay hỏng (không lấy được chứng chỉ của máy kia).
+    Khác chứng chỉ đã lưu: hỏng ngay trong bắt tay (kết nối điều khiển và kết nối dữ
+    liệu), hoặc sai fingerprint sau bắt tay. `actual_fingerprint`: fingerprint chứng chỉ
+    server đã đưa; None khi bắt tay hỏng (không lấy được chứng chỉ của máy kia).
     """
 
     def __init__(
@@ -141,7 +169,20 @@ class VersionMismatch(ConnectError):
 
 
 class ConnectionLostError(Exception):
-    """Kết nối đã mở bị đứt hoặc đã đóng: lỗi socket/TLS, drain quá DRAIN_TIMEOUT, dùng sau close()."""
+    """Kết nối đã mở bị đứt hoặc đã đóng.
+
+    Lỗi socket/TLS, drain quá DRAIN_TIMEOUT, dùng sau `close()` hay `abort()`, máy kia
+    đóng giữa một khung của kết nối dữ liệu, hoặc hết hạn chờ đọc (`IdleTimeout`).
+    """
+
+
+class IdleTimeout(ConnectionLostError):
+    """Kết nối dữ liệu: đang chờ đọc mà không nhận được byte nào trong `idle_timeout` (protocol §2.3).
+
+    Khi lỗi này bay ra, kết nối đã bị cắt (`closed` là True). Chỉ kế thừa
+    ConnectionLostError, **không** kế thừa TimeoutError / OSError, để `except OSError`
+    không nuốt mất nó.
+    """
 
 
 # Lỗi càng đứng trước càng nên báo người dùng: sai danh tính là dấu hiệu giả mạo, bị
@@ -213,14 +254,80 @@ async def _write_chunks(writer: asyncio.StreamWriter, data: bytes) -> None:
         await _drain(writer)
 
 
+def _ssl_shutdown_timeout(kind: ConnectionKind | None) -> float:
+    """`ssl_shutdown_timeout` của transport: phải ≥ hạn `Connection.close` của loại kết nối đó.
+
+    Nhỏ hơn thì transport tự cắt giữa lúc đóng gọn và bỏ phần đuôi còn trong bộ đệm.
+    `None`: phía `Listener`, lúc `start_tls` chưa biết loại kết nối. Đọc hằng lúc dùng,
+    nên test phải vá hằng trước khi mở kết nối.
+    """
+    if kind is ConnectionKind.PAIRING or kind is ConnectionKind.CONTROL:
+        return CLOSE_TIMEOUT
+    return max(CLOSE_TIMEOUT, DRAIN_TIMEOUT)
+
+
+def _byte_view(data: object, name: str) -> memoryview:
+    """`data` thành memoryview một chiều kiểu byte, nên `nbytes` là số byte thật.
+
+    Chỉ nhận `bytes`, `bytearray`, `memoryview`; vùng nhớ không liền (C-contiguous) hay
+    memoryview đã giải phóng → ValueError. Bên gọi phải `release()` view trả về, để
+    bytearray của bên gọi đổi cỡ được ngay cả khi có ngoại lệ.
+    """
+    if not isinstance(data, bytes | bytearray | memoryview):
+        raise ValueError(f"{name} phải là bytes, bytearray hoặc memoryview")
+    view = memoryview(data)  # memoryview đã giải phóng → ValueError
+    if view.c_contiguous and view.format == "B" and view.ndim == 1:
+        return view
+    try:
+        if not view.c_contiguous:
+            raise ValueError(f"{name} phải là vùng nhớ liền (C-contiguous)")
+        try:
+            return view.cast("B")
+        except TypeError as e:
+            raise ValueError(f"{name} không đọc được thành dãy byte") from e
+    finally:
+        view.release()  # view `cast` vẫn giữ buffer tới khi chính nó được giải phóng
+
+
+def _check_before_chunk(before_chunk: object) -> None:
+    if before_chunk is not None and not callable(before_chunk):
+        raise ValueError("before_chunk phải là None hoặc hàm async nhận số byte")
+
+
+def _idle_timeout(value: object) -> float:
+    """`idle_timeout` của `read_*`: None → `IDLE_TIMEOUT` (đọc lúc gọi).
+
+    Phải là số (không phải bool) hữu hạn > 0, nếu không → ValueError.
+    """
+    if value is None:
+        value = IDLE_TIMEOUT
+    if type(value) is bool or not isinstance(value, int | float):
+        raise ValueError("idle_timeout phải là số giây dương hữu hạn")
+    try:
+        seconds = float(value)
+    except OverflowError as e:  # số nguyên quá lớn
+        raise ValueError("idle_timeout phải là số giây dương hữu hạn") from e
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError("idle_timeout phải là số giây dương hữu hạn")
+    return seconds
+
+
 def _max_size(kind: ConnectionKind) -> int:
     return MAX_MESSAGE_SIZE if kind is ConnectionKind.CONTROL else MAX_PAIRING_MESSAGE_SIZE
 
 
 class Connection:
-    """Một kết nối đã trao `hello` và đã biết loại (ghép đôi hoặc điều khiển).
+    """Một kết nối đã trao `hello` và đã biết loại (ghép đôi, điều khiển hoặc dữ liệu).
 
-    Chỉ do `Listener` hoặc `open_pairing` / `open_control` tạo ra.
+    Kết nối ghép đôi và điều khiển chở message (`send` / `receive`). Kết nối dữ liệu
+    không có message nào sau `data_open` (protocol mục 4.2): nó chở khung khối
+    (`write_block` / `read_block`) và byte thô (`write_raw` / `read_raw`). `send` /
+    `receive` trên kết nối dữ liệu, hay `read_*` / `write_*` trên loại khác → ValueError.
+
+    Quy ước đóng kết nối dữ liệu cho tầng trên: bên gửi file đã gửi xong khối cuối →
+    `close()` (đóng gọn, chờ bên nhận đọc hết, tối đa `DRAIN_TIMEOUT`); bỏ dở giữa chừng
+    → `abort()`; bên nhận file nhận None → `abort()` ở phía client, hoặc trả về từ
+    handler ở phía server (`Listener` cắt kết nối).
     """
 
     def __init__(
@@ -229,11 +336,21 @@ class Connection:
         kind: ConnectionKind,
         peer: PeerInfo,
         is_server: bool,
-        opening: PairRequest | ControlOpen | None,
+        opening: PairRequest | ControlOpen | DataOpen | None,
         opened_at: float,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        """Chỉ `Listener` và `open_pairing` / `open_control` / `open_data` gọi, trừ seam test dưới đây.
+
+        Seam không socket cho kết nối dữ liệu: test dựng thẳng `Connection(kind=DATA, ...)`
+        với `reader` là `asyncio.StreamReader` thật (tạo bên trong loop đang chạy; test
+        dùng `feed_data` / `feed_eof`) và `writer` giả. Các đường đọc, ghi, `abort` và
+        `close` của kết nối dữ liệu chỉ dùng `reader.read`, `reader.at_eof`, `writer.write`,
+        `writer.drain` (async), `writer.close`, `writer.wait_closed` (async),
+        `writer.transport.abort` và `writer.transport.is_closing`; writer giả có thêm
+        `get_extra_info(name)` trả None là đủ.
+        """
         self._kind = kind
         self._peer = peer
         self._is_server = is_server
@@ -242,8 +359,8 @@ class Connection:
         self._reader = reader
         self._writer = writer
         self._send_lock = asyncio.Lock()
-        self._receiving = False
-        self._frame_started = False  # receive() hiện tại đã đọc ít nhất một byte của khung
+        self._receiving = False  # đang có một receive() / read_*() chờ
+        self._frame_started = False  # lần đọc hiện tại đã đọc ít nhất một byte của khung
         self._closed = False
         self._close_called = False  # máy này đã gọi close() (khác với tự abort khi lỗi)
         self._close_done = asyncio.Event()
@@ -269,13 +386,20 @@ class Connection:
         return self._is_server
 
     @property
-    def opening(self) -> PairRequest | ControlOpen | None:
-        """Phía server: message mở đầu client đã gửi; phía client: None."""
+    def opening(self) -> PairRequest | ControlOpen | DataOpen | None:
+        """Phía server: message mở đầu client đã gửi (`PairRequest` / `ControlOpen` / `DataOpen`).
+
+        Phía client: None (kể cả kết nối do `open_data` mở).
+        """
         return self._opening
 
     @property
     def opened_at(self) -> float:
-        """`loop.time()` lúc xác định loại (server: lúc nhận message mở đầu; client: lúc mở xong)."""
+        """`loop.time()` lúc xác định loại.
+
+        Server: lúc nhận message mở đầu; client: lúc mở xong (đã gửi xong `control_open`
+        / `data_open` nếu có).
+        """
         return self._opened_at
 
     @property
@@ -285,10 +409,11 @@ class Connection:
     async def send(self, msg: Message) -> None:
         """Gửi một message.
 
-        Kiểu không được phép trên loại kết nối này, hoặc khung lớn hơn giới hạn →
-        ValueError (lỗi lập trình, không gửi gì). Kết nối đã đóng, lỗi socket/TLS, hoặc
-        một đoạn không gửi xong trong `DRAIN_TIMEOUT` → ConnectionLostError (kết nối bị
-        đóng ngay). Các lần gửi đồng thời không xen byte vào nhau.
+        Kiểu không được phép trên loại kết nối này (trên kết nối dữ liệu: mọi kiểu), hoặc
+        khung lớn hơn giới hạn → ValueError (lỗi lập trình, không gửi gì). Kết nối đã đóng,
+        lỗi socket/TLS, hoặc một đoạn không gửi xong trong `DRAIN_TIMEOUT` →
+        ConnectionLostError (kết nối bị đóng ngay). Các lần gửi đồng thời không xen byte
+        vào nhau.
 
         Bị hủy (ví dụ do `asyncio.timeout` của bên gọi) khi đã ghi ít nhất một đoạn của
         khung → kết nối bị đóng ngay (abort), vì máy kia có thể đã nhận nửa khung; lần gửi
@@ -349,13 +474,16 @@ class Connection:
         Trả về None khi máy kia đóng gọn ở ranh giới message. Lỗi khung → FramingError;
         message sai (kể cả UnknownMessageType, WrongConnectionKind) → MessageError;
         lỗi socket/TLS hoặc kết nối đã đóng → ConnectionLostError. Gọi khi một `receive`
-        khác đang chờ → RuntimeError.
+        khác đang chờ → RuntimeError. Trên kết nối dữ liệu → ValueError ngay, trước mọi
+        I/O (dùng `read_block` / `read_raw`).
 
         Không tự đặt thời gian chờ; bên gọi bọc trong `asyncio.timeout`. Bị hủy khi đã đọc
         một phần khung → kết nối bị đóng ngay (abort), vì phần đã đọc không trả lại được và
         đọc tiếp sẽ lệch khung; lần dùng sau → ConnectionLostError. Bị hủy khi chưa đọc
         byte nào của khung → kết nối vẫn dùng được, message kế tiếp không bị mất.
         """
+        if self._kind is ConnectionKind.DATA:
+            raise ValueError("kết nối dữ liệu không chở message: dùng read_block / read_raw")
         if self._closed:
             raise ConnectionLostError("kết nối đã đóng")
         if self._receiving:
@@ -404,13 +532,313 @@ class Connection:
                 self._on_received()
         return buf
 
+    # ---- Kết nối dữ liệu -------------------------------------------------------------------
+    # Thứ tự kiểm trong mọi `read_*` / `write_*`: sai loại kết nối → ValueError; tham số sai
+    # → ValueError; kết nối đã đóng → ConnectionLostError; đang có `read_*` khác chờ →
+    # RuntimeError (chỉ với `read_*`). Mọi lỗi đọc hay ghi khác đều để lại `closed` là True.
+
+    def _require_data(self, name: str) -> None:
+        if self._kind is not ConnectionKind.DATA:
+            raise ValueError(
+                f"{name} chỉ dùng trên kết nối dữ liệu, không dùng trên kết nối {self._kind.value}"
+            )
+
+    async def write_raw(
+        self, data: bytes | bytearray | memoryview, *, before_chunk: BeforeChunk | None = None
+    ) -> None:
+        """Ghi byte thô lên kết nối dữ liệu, theo đoạn ≤ `_SEND_CHUNK`.
+
+        Độ dài là số byte của buffer (`nbytes`), không phải `len(data)`. Móc
+        `before_chunk(n)` được gọi trước mỗi đoạn. `data` rỗng trên kết nối còn mở thì
+        không làm gì (không gọi móc). Tham số, chia đoạn, kiểm đóng, lỗi, hủy và ý nghĩa của
+        “trả về thành công”: như `write_block`, với cả lần gọi là một khung.
+        """
+        self._require_data("write_raw")
+        _check_before_chunk(before_chunk)
+        view = _byte_view(data, "data")
+        try:
+            if self._closed:
+                raise ConnectionLostError("kết nối đã đóng")
+            if view.nbytes:
+                await self._write_frame(None, view, before_chunk)
+        finally:
+            view.release()
+
+    async def write_block(
+        self,
+        index: int,
+        sha256: bytes,
+        payload: bytes | bytearray | memoryview,
+        *,
+        before_chunk: BeforeChunk | None = None,
+    ) -> None:
+        """Ghi một khung khối: header 41 byte rồi payload (protocol mục 4.2).
+
+        Không băm lại payload: `sha256` là hash bên gọi đã tính. Tham số sai (`index`
+        ngoài 0…2³²−1, `sha256` không phải đúng 32 byte kiểu `bytes`, payload không phải
+        `bytes` / `bytearray` / `memoryview` liền, rỗng hay dài hơn `BLOCK_SIZE` byte,
+        `before_chunk` không gọi được) → ValueError, trước mọi I/O. Kết nối đã đóng →
+        ConnectionLostError, kiểm cả trước và ngay sau khi lấy được khóa gửi (trước móc
+        đầu tiên).
+
+        Giữ khóa gửi cả lần gọi, nên các lần ghi đồng thời không xen byte vào nhau. Header
+        được ghi bằng **một** lần `write` (không chia đoạn, không gọi móc, không `drain`
+        riêng). Payload được ghi theo đoạn ≤ `_SEND_CHUNK` (đọc lúc dùng); với mỗi đoạn:
+        `await before_chunk(n)` (móc giới hạn tốc độ, chỉ tính payload), kiểm đóng, ghi một
+        bản chép của đoạn, rồi `drain()` tối đa `DRAIN_TIMEOUT`.
+
+        Kiểm đóng (ngay trước header và trước mỗi đoạn): kết nối đã đóng, hoặc máy kia đã
+        đóng (`transport.is_closing()`: đã nhận close_notify; `reader.at_eof()`: đã nhận
+        FIN, mà bên nhận file không bao giờ gửi gì) → abort nếu chưa, rồi
+        ConnectionLostError. Lý do: sau close_notify hay FIN, asyncio bỏ byte ghi mà không
+        báo lỗi, và `drain()` vẫn trả về ngay. Lỗi socket/TLS, hoặc một đoạn `drain()`
+        quá `DRAIN_TIMEOUT` → abort rồi ConnectionLostError (protocol mục 2.3).
+
+        Móc raise (mọi ngoại lệ, kể cả ConnectionLostError của một kết nối khác mà móc
+        dùng), hoặc bị hủy (kể cả trong lúc móc đang ngủ): đã ghi ít nhất một byte của
+        khung → abort, vì máy kia có thể đã nhận nửa khung; chưa ghi byte nào (kể cả đang
+        chờ khóa gửi) → kết nối vẫn dùng được. Ngoại lệ của móc bay ra nguyên trạng.
+
+        Trả về thành công chỉ nghĩa là byte đã giao xuống TLS và hệ điều hành, không phải
+        máy kia đã nhận: sự thật là bitfield của bên nhận. Giới hạn còn lại: máy kia gửi
+        byte rác rồi FIN thì `reader.at_eof()` còn False (`net` không đọc chỗ rác đó), nên
+        vẫn có thể có một khoảng ngắn byte bị bỏ âm thầm, tới khi transport đóng hẳn. Sau
+        khi hàm trả về, kết nối không giữ tham chiếu tới `payload` (mỗi đoạn đã được chép):
+        bên gọi sửa hay dùng lại buffer được.
+        """
+        self._require_data("write_block")
+        _check_before_chunk(before_chunk)
+        view = _byte_view(payload, "payload")
+        try:
+            header = pack_header(index, view.nbytes, sha256)  # tham số sai → ValueError
+            if self._closed:
+                raise ConnectionLostError("kết nối đã đóng")
+            await self._write_frame(header, view, before_chunk)
+        finally:
+            view.release()
+
+    async def _write_frame(
+        self, header: bytes | None, view: memoryview, before_chunk: BeforeChunk | None
+    ) -> None:
+        """Vòng ghi một khung của kết nối dữ liệu (xem `write_block`); tham số đã kiểm."""
+        async with self._send_lock:
+            # Kiểm lại sau khi chờ khóa, trước móc: không gọi móc (trừ token) cho kết nối chết.
+            if self._closed:
+                raise ConnectionLostError("kết nối đã đóng")
+            written = False  # đã đưa ít nhất một byte của khung xuống writer
+            try:
+                if header is not None:
+                    written = True
+                    self._put(header)
+                start, total = 0, view.nbytes
+                while start < total:
+                    end = min(total, start + _SEND_CHUNK)
+                    if before_chunk is not None:
+                        await before_chunk(end - start)
+                    written = True
+                    self._put(bytes(view[start:end]))  # chép: không giữ buffer của bên gọi
+                    await self._drain_data()
+                    start = end
+            except BaseException:
+                # Lỗi gửi (`_put`, `_drain_data`) đã cắt kết nối. Còn lại là móc raise (kể cả
+                # ConnectionLostError của một kết nối khác mà móc dùng) hoặc bị hủy: kết nối
+                # chưa đóng, mà máy kia có thể đã nhận nửa khung → không dùng tiếp được.
+                if written and not self._closed:
+                    log.debug("%r: ghi bị ngắt giữa khung, abort", self)
+                    self._abort()
+                raise
+            if self._closed:
+                raise ConnectionLostError("kết nối đã đóng trong lúc gửi")
+
+    def _put(self, chunk: bytes) -> None:
+        """Kiểm đóng (xem `write_block`) rồi đưa `chunk` xuống writer, không chờ."""
+        if self._closed:
+            raise ConnectionLostError("kết nối đã đóng")
+        if self._writer.transport.is_closing() or self._reader.at_eof():
+            log.debug("%r: máy kia đã đóng kết nối trong lúc gửi, abort", self)
+            self._abort()
+            raise ConnectionLostError("máy kia đã đóng kết nối")
+        try:
+            self._writer.write(chunk)
+        except OSError as e:  # gồm ssl.SSLError
+            self._abort()
+            raise ConnectionLostError(f"gửi thất bại: {type(e).__name__}") from e
+
+    async def _drain_data(self) -> None:
+        try:
+            await _drain(self._writer)
+        except OSError as e:  # gồm ssl.SSLError và TimeoutError (drain quá DRAIN_TIMEOUT)
+            self._abort()
+            raise ConnectionLostError(f"gửi thất bại: {type(e).__name__}") from e
+
+    async def read_raw(
+        self, n: int, *, at_boundary: bool, idle_timeout: float | None = None
+    ) -> bytearray | None:
+        """Đọc đúng `n` byte (1…`BLOCK_SIZE`) từ kết nối dữ liệu; trả một `bytearray` mới.
+
+        `at_boundary=True` nghĩa là đây là đầu một khung: EOF trước byte đầu → None (kết
+        nối không tự đóng; gọi lại vẫn None). None chỉ nghĩa là “không còn khung nào”, không
+        chứng minh máy kia đã gửi xong hay đã đóng gọn (asyncio coi FIN không kèm
+        close_notify là EOF sạch). EOF sau khi đã đọc ít nhất một byte, hoặc EOF khi
+        `at_boundary=False` → abort rồi ConnectionLostError: đứt giữa khung là đứt kết nối
+        bình thường, không phải khung sai (protocol mục 4.2).
+
+        Đọc theo đoạn ≤ `_READ_CHUNK` (không dùng `readexactly`), nên bộ đệm của
+        `StreamReader` vẫn có trần và backpressure vẫn chạy; bộ đệm trả về lớn dần theo byte
+        thực nhận. Đang chờ socket mà không có byte nào trong `idle_timeout` giây (None:
+        đọc `IDLE_TIMEOUT` lúc gọi) → abort rồi IdleTimeout. Đồng hồ đặt lại mỗi khi có
+        byte; thời gian không gọi đọc không tính. Hạn bắn khi kết nối đã đóng (`close()` /
+        `abort()` đang chạy) → ConnectionLostError, không phải IdleTimeout. Lỗi
+        socket/TLS → abort rồi ConnectionLostError.
+
+        Tham số sai (`n` không phải số nguyên 1…`BLOCK_SIZE`, `at_boundary` không phải
+        bool, `idle_timeout` không phải số dương hữu hạn) → ValueError. Đọc và ghi đồng
+        thời trên cùng kết nối thì được. Bị hủy khi `at_boundary=True` và chưa đọc byte nào
+        → kết nối vẫn dùng được; mọi trường hợp khác → abort.
+        """
+        self._require_data("read_raw")
+        if type(n) is not int or not 1 <= n <= BLOCK_SIZE:
+            raise ValueError(f"n phải là số nguyên 1…{BLOCK_SIZE}")
+        if type(at_boundary) is not bool:
+            raise ValueError("at_boundary phải là bool")
+        timeout = _idle_timeout(idle_timeout)
+        self._start_reading()
+        idle = asyncio.timeout(timeout)
+        try:
+            async with idle:
+                return await self._read_data(n, at_boundary=at_boundary, idle=idle, timeout=timeout)
+        except TimeoutError as e:
+            raise self._idle_error(idle, timeout) from e
+        except asyncio.CancelledError:
+            if self._frame_started or not at_boundary:
+                log.debug("%r: đọc bị hủy giữa khung, abort", self)
+                self._abort()
+            raise
+        finally:
+            self._receiving = False
+
+    async def read_block(
+        self, *, size: int, idle_timeout: float | None = None
+    ) -> tuple[BlockHeader, bytearray] | None:
+        """Đọc một khung khối của file `size` byte; trả `(header, payload)` hoặc None.
+
+        Đọc header 41 byte ở ranh giới khung, giải mã (`parse_header`) và đối chiếu với
+        `size` (`check_block`) **trước khi** đọc payload (protocol mục 4.2): sai → abort
+        rồi BlockError, payload không bị đọc. Đúng → đọc đúng `header.length` byte payload
+        vào một `bytearray` mới. Không băm payload và không kiểm thứ tự `block_index`: tầng
+        trên so `sha256` (ngoài event loop) và đếm khối sai (`teleport.core.transfer`), không
+        phải kiểm lại header.
+
+        EOF trước byte đầu của header → None (như `read_raw` với `at_boundary=True`); EOF
+        giữa header hay giữa payload → abort rồi ConnectionLostError, không phải BlockError.
+        Hạn chờ đọc, lỗi socket và thứ tự kiểm như `read_raw`; `size` không phải số nguyên
+        0…`MAX_FILE_SIZE` → ValueError. BlockError là lớp con của ValueError: bên gọi bắt
+        BlockError trước. Bị hủy khi chưa có byte nào của header → kết nối vẫn dùng được;
+        còn lại → abort.
+        """
+        self._require_data("read_block")
+        if type(size) is not int or not 0 <= size <= MAX_FILE_SIZE:
+            raise ValueError(f"size phải là số nguyên 0…{MAX_FILE_SIZE}")
+        timeout = _idle_timeout(idle_timeout)
+        self._start_reading()
+        idle = asyncio.timeout(timeout)
+        try:
+            async with idle:
+                raw = await self._read_data(BLOCK_HEADER.size, at_boundary=True, idle=idle, timeout=timeout)
+                if raw is None:
+                    return None
+                try:
+                    header = parse_header(raw)
+                    check_block(header, size)
+                except BlockError:
+                    log.debug("%r: header khối sai, cắt", self)  # không ghi nội dung header
+                    self._abort()
+                    raise
+                payload = await self._read_data(header.length, at_boundary=False, idle=idle, timeout=timeout)
+                assert payload is not None
+                return header, payload
+        except TimeoutError as e:
+            raise self._idle_error(idle, timeout) from e
+        except asyncio.CancelledError:
+            if self._frame_started:
+                log.debug("%r: đọc bị hủy giữa khung, abort", self)
+                self._abort()
+            raise
+        finally:
+            self._receiving = False
+
+    def _start_reading(self) -> None:
+        if self._closed:
+            raise ConnectionLostError("kết nối đã đóng")
+        if self._receiving:
+            raise RuntimeError("đang có một read_* khác chờ trên kết nối này")
+        self._receiving = True
+        self._frame_started = False
+
+    async def _read_data(
+        self, n: int, *, at_boundary: bool, idle: asyncio.Timeout, timeout: float
+    ) -> bytearray | None:
+        """Đọc đúng `n` byte theo đoạn ≤ `_READ_CHUNK`; mỗi lần có byte thì dời hạn `idle`.
+
+        Một hạn cho cả lần gọi `read_*`, dời bằng `reschedule` thay vì tạo một timer cho
+        mỗi đoạn. EOF: xem `read_raw`.
+        """
+        loop = asyncio.get_running_loop()
+        buf = bytearray()  # lớn dần theo byte thực nhận, không cấp sẵn `n` byte
+        while len(buf) < n:
+            try:
+                chunk = await self._reader.read(min(n - len(buf), _READ_CHUNK))
+            except OSError as e:  # gồm ssl.SSLError, ConnectionResetError
+                self._abort()
+                raise ConnectionLostError(f"đọc thất bại: {type(e).__name__}") from e
+            if self._closed:
+                raise ConnectionLostError("kết nối đã đóng")
+            if not chunk:
+                if at_boundary and not buf:
+                    return None
+                self._abort()
+                raise ConnectionLostError(f"kết nối bị cắt giữa khung: mới nhận {len(buf)}/{n} byte")
+            buf += chunk
+            self._frame_started = True
+            idle.reschedule(loop.time() + timeout)
+        return buf
+
+    def _idle_error(self, idle: asyncio.Timeout, timeout: float) -> ConnectionLostError:
+        """Lỗi cho TimeoutError vừa thoát khỏi hạn chờ đọc; cắt kết nối nếu chưa đóng."""
+        if self._closed:  # close() / abort() đang chạy: lỗi phản ánh nguyên nhân thật
+            return ConnectionLostError("kết nối đã đóng")
+        self._abort()
+        if not idle.expired():  # phòng thủ: TimeoutError không phải của hạn chờ đọc
+            return ConnectionLostError("đọc thất bại: TimeoutError")
+        log.debug("%r: không nhận được byte nào trong %.1f s, cắt", self, timeout)
+        return IdleTimeout(f"không nhận được byte nào trong {timeout:g} s")
+
+    # ---- Đóng ------------------------------------------------------------------------------
+
     def _abort(self) -> None:
         self._closed = True
         _abort(self._writer)
         self._close_done.set()
 
+    def abort(self) -> None:
+        """Cắt kết nối ngay: đóng transport, không gửi close_notify, không chờ.
+
+        Gọi nhiều lần không lỗi. Lần dùng sau → ConnectionLostError; một `read_*` /
+        `receive` đang chờ cũng ném ConnectionLostError. Không hứa gửi TCP RST: hệ điều
+        hành chỉ gửi RST khi còn dữ liệu chưa đọc. Dùng khi bỏ dở kết nối dữ liệu, hay khi
+        tầng trên từ chối nó sau khi kiểm `data_open` (protocol mục 4.1).
+        """
+        self._close_called = True
+        self._abort()
+
     async def close(self) -> None:
-        """Đóng gọn (TLS close_notify) trong tối đa `CLOSE_TIMEOUT`, quá thì abort.
+        """Đóng gọn (TLS close_notify) và chờ máy kia trả close_notify; quá hạn thì abort.
+
+        Hạn là tổng cả lần đóng: `CLOSE_TIMEOUT` với kết nối ghép đôi và điều khiển,
+        `DRAIN_TIMEOUT` với kết nối dữ liệu, để bên đọc chậm vẫn đọc hết phần đuôi còn
+        trong bộ đệm; quá hạn thì phần đuôi chưa tới được gửi lại theo `resume`, như một
+        lần đứt kết nối dữ liệu (protocol mục 2.3). `ssl_shutdown_timeout` của transport
+        được đặt lúc mở, không nhỏ hơn hạn này.
 
         Gọi nhiều lần hay đồng thời đều được, không raise; các lời gọi sau chờ lời gọi đầu.
         Bị hủy giữa chừng thì abort rồi mới để CancelledError bay ra.
@@ -420,9 +848,10 @@ class Connection:
             await self._close_done.wait()
             return
         self._closed = True
+        timeout = DRAIN_TIMEOUT if self._kind is ConnectionKind.DATA else CLOSE_TIMEOUT
         try:
             self._writer.close()
-            async with asyncio.timeout(CLOSE_TIMEOUT):
+            async with asyncio.timeout(timeout):
                 await self._writer.wait_closed()
         except Exception as e:  # hết giờ, lỗi SSL/socket khi đóng
             log.debug("%r: đóng gọn thất bại (%s), abort", self, type(e).__name__)
@@ -719,16 +1148,24 @@ def _check_ipv4(value: object, field: str) -> ipaddress.IPv4Address:
 
 
 class Listener:
-    """Lắng nghe trên một cổng, nhận kết nối ghép đôi và điều khiển (protocol mục 2).
+    """Lắng nghe trên một cổng, nhận kết nối ghép đôi, điều khiển và dữ liệu (protocol mục 2).
 
-    Mỗi kết nối hợp lệ được giao cho `on_connection(conn)`; khi coroutine đó kết thúc
-    (trả về, raise hay bị hủy), Listener đóng kết nối. Dùng một lần: `start()`, rồi `close()`.
+    Mỗi kết nối hợp lệ được giao cho `on_connection(conn)`; tầng trên phân nhánh theo
+    `conn.kind`. Khi coroutine đó kết thúc (trả về, raise hay bị hủy), Listener đóng kết
+    nối: kết nối ghép đôi và điều khiển được đóng gọn (`close`); kết nối dữ liệu chưa
+    đóng thì bị cắt (`abort`), vì handler kết thúc mà chưa đóng là bỏ dở. Handler phải
+    sống suốt thời gian dùng kết nối; muốn đóng gọn kết nối dữ liệu thì tự gọi
+    `conn.close()` trong handler. Dùng một lần: `start()`, rồi `close()`.
 
     Mỗi kết nối TCP mới qua `AdmissionGate.admit` trước mọi `await`; bị từ chối thì
     `transport.abort()` trước TLS (protocol mục 2.3). IP được ưu tiên khi có kết nối điều
     khiển vào đã qua kiểm `is_trusted`, hoặc khi node báo kết nối điều khiển ra thành
     công (`note_outgoing_control`); mất ưu tiên khi các kết nối từ IP đó dùng pool ưu
     tiên mà không bắt tay xong bằng chứng chỉ còn tin cậy vượt ngân sách lỗi (hạ ưu tiên).
+    Kết nối dữ liệu được hoàn token như kết nối điều khiển, nhưng không cấp và không giữ
+    ưu tiên. `net` chỉ kiểm phần của nó với `data_open` (chứng chỉ client còn tin cậy lúc
+    nhận, CN khớp `hello`, message đúng luật, đúng loại); các kiểm tra theo lượt truyền
+    (protocol mục 4.1) là việc của tầng trên, làm trước `await` đầu tiên của handler.
     """
 
     def __init__(
@@ -743,8 +1180,10 @@ class Listener:
 
         `trusted_certs`: PEM của thiết bị tin cậy (`TrustStore.cert_pems()`);
         `is_trusted(fingerprint)`: thiết bị còn tin cậy không (`TrustStore.is_trusted`),
-        kiểm lại lúc nhận `control_open`. Chỉ khi trả đúng `True` mới tính là còn tin cậy;
-        giá trị khác (kể cả giá trị “truthy” như `1`) hoặc raise → coi như không tin cậy.
+        kiểm lại lúc nhận `control_open` hay `data_open`, không có `await` nào từ lần kiểm
+        đó tới phần đồng bộ đầu tiên của `on_connection`. Chỉ khi trả đúng `True` mới tính
+        là còn tin cậy; giá trị khác (kể cả giá trị “truthy” như `1`) hoặc raise → coi như
+        không tin cậy.
         """
         _check_hello(hello)
         if hello.device_id != identity.device_id:
@@ -859,7 +1298,11 @@ class Listener:
     async def close(self) -> None:
         """Ngừng nhận, hủy mọi kết nối (handler của `app` nhận CancelledError), chờ có giới hạn.
 
-        Gọi nhiều lần không lỗi; lời gọi đồng thời chờ lời gọi đầu.
+        Kết nối dữ liệu đã giao bị cắt ngay (abort) trước khi hủy task, nên không có lần
+        đóng gọn nào kéo tới `DRAIN_TIMEOUT`; handler đang đọc hay ghi trên đó nhận
+        CancelledError hoặc ConnectionLostError. Kết nối ghép đôi và điều khiển được đóng
+        gọn như thường (`CLOSE_TIMEOUT`). Gọi nhiều lần không lỗi; lời gọi đồng thời chờ
+        lời gọi đầu.
         """
         if self._close_done is not None:
             await self._close_done.wait()
@@ -869,6 +1312,9 @@ class Listener:
         try:
             if self._server is not None:
                 self._server.close()
+            for delivered in list(self._connections):
+                if delivered.kind is ConnectionKind.DATA:
+                    delivered.abort()  # không đóng gọn: không chờ tới DRAIN_TIMEOUT
             tasks = dict(self._tasks)
             for task in tasks:
                 task.cancel()
@@ -906,6 +1352,9 @@ class Listener:
         # Không được có điểm dừng (await thật) nào trước `start_tls` (trong `_handshake`):
         # ClientHello tới trước khi start_tls tạm dừng đọc có thể rơi vào bộ đệm StreamReader
         # cũ và làm bắt tay treo (Python < 3.14). Các `await` trước đó không dừng thật.
+        # Sau `start_tls`, `reader` vẫn giữ transport TCP gốc (asyncio chỉ thay transport của
+        # writer): khi bộ đệm đầy, nó tạm dừng đọc ngay trên socket, nên backpressure của kết
+        # nối dữ liệu phía server vẫn chạy (đo ở test backpressure phía Listener).
         peername = writer.get_extra_info("peername")
         ip, port = (peername[0], peername[1]) if isinstance(peername, tuple) else ("", 0)
         task = asyncio.current_task()
@@ -939,7 +1388,10 @@ class Listener:
     ) -> None:
         """Mở đầu kết nối rồi giao cho `on_connection`; luôn đóng kết nối khi xong.
 
-        Vé được trả lúc giao kết nối (đã biết loại), và lần nữa trong `_handle`.
+        Vé được trả lúc giao kết nối (đã biết loại), và lần nữa trong `_handle`. Chỉ kết
+        nối điều khiển vào mới cấp ưu tiên cho IP; kết nối dữ liệu thì không. Khi handler
+        kết thúc: kết nối ghép đôi và điều khiển được đóng gọn; kết nối dữ liệu chưa đóng
+        thì bị cắt (handler đã tự gọi `close()` thì chỉ chờ lần đóng đó xong).
         """
         ip = ticket.ip
         conn: Connection | None = None
@@ -985,6 +1437,9 @@ class Listener:
                 await self._on_connection(conn)
             except Exception:
                 log.exception("on_connection raise với %r", conn)
+            else:
+                if conn.kind is ConnectionKind.DATA and not conn.closed:
+                    log.debug("%r: handler trả về mà kết nối dữ liệu chưa đóng, cắt", conn)
         finally:
             if handle:
                 self._gate.control_closed(handle, _now())
@@ -992,19 +1447,27 @@ class Listener:
                 _abort(writer)  # từ chối: không đóng gọn, kẻ tấn công không giữ được socket
             else:
                 try:
-                    await conn.close()
+                    if conn.kind is ConnectionKind.DATA and not conn.closed:
+                        # Handler kết thúc (trả về, raise hay bị hủy) mà chưa đóng: bỏ dở → cắt,
+                        # không đóng gọn (protocol mục 2.3, 4.1), không để socket sống tới DRAIN_TIMEOUT.
+                        conn.abort()
+                    await conn.close()  # kết nối dữ liệu đã đóng: chỉ chờ lần đóng đang chạy xong
                 finally:
                     self._connections.discard(conn)
 
     async def _handshake(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, ticket: Ticket
-    ) -> tuple[ConnectionKind, PeerCert | None, Hello, PairRequest | ControlOpen]:
+    ) -> tuple[ConnectionKind, PeerCert | None, Hello, PairRequest | ControlOpen | DataOpen]:
         """Bắt tay TLS, trao `hello`, đọc message mở đầu.
 
-        Từ chối → `_Refused`, hoặc lỗi I/O / khung / message bay ra nguyên trạng.
+        Với `control_open` và `data_open`, kiểm lại `is_trusted` sau khi đọc message mở
+        đầu (context bắt tay có thể đã cũ); đây là lần kiểm cuối trước khi `_serve` giao
+        kết nối, không có `await` nào ở giữa. Từ chối → `_Refused`, hoặc lỗi I/O / khung /
+        message bay ra nguyên trạng.
         """
-        # Await đầu tiên của kết nối (xem _handle). Context hiện tại lúc gọi.
-        await writer.start_tls(self._ctx, ssl_shutdown_timeout=CLOSE_TIMEOUT)
+        # Await đầu tiên của kết nối (xem _handle). Context hiện tại lúc gọi. Chưa biết loại
+        # kết nối, nên hạn tắt TLS phải đủ cho lần đóng gọn dài nhất (kết nối dữ liệu).
+        await writer.start_tls(self._ctx, ssl_shutdown_timeout=_ssl_shutdown_timeout(None))
 
         ssl_object = writer.get_extra_info("ssl_object")
         der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
@@ -1047,11 +1510,7 @@ class Listener:
             # Bắt tay có thể đã dùng context cũ, trước khi máy này bị hủy ghép đôi (protocol mục 7).
             if not self._still_trusted(cert.fingerprint):
                 raise _Refused(f"{cert.fingerprint} không còn trong danh sách tin cậy")
-        if kind is ConnectionKind.DATA:
-            # Chưa nhận kết nối dữ liệu: từ chối tường minh (abort, như mọi lần từ chối khi mở
-            # đầu) tới khi tầng mạng của kết nối dữ liệu được cài.
-            raise _Refused("chưa nhận kết nối dữ liệu")
-        return kind, cert, hello, cast(PairRequest | ControlOpen, opening)
+        return kind, cert, hello, cast(PairRequest | ControlOpen | DataOpen, opening)
 
     def _still_trusted(self, fingerprint: str) -> bool:
         try:
@@ -1178,7 +1637,7 @@ async def _open_any(
                         conn._abort()
     if winner is not None:
         if kind is ConnectionKind.CONTROL:
-            await _send_control_open(winner, deadline)
+            await _send_opening(winner, _CONTROL_OPEN_FRAME, deadline)
         winner._opened_at = loop.time()
         return winner
 
@@ -1192,8 +1651,8 @@ async def _open_any(
     raise most_relevant_error(errors)
 
 
-async def _send_control_open(conn: Connection, deadline: float) -> None:
-    """Gửi `control_open` trên kết nối thắng, trước `deadline` (giờ của loop).
+async def _send_opening(conn: Connection, frame: bytes, deadline: float) -> None:
+    """Gửi message mở đầu (`control_open` / `data_open`, đã mã hóa) trước `deadline` (giờ của loop).
 
     Lỗi socket/TLS hoặc hết giờ → abort rồi Unreachable. Bị hủy → abort rồi để
     CancelledError bay ra: kết nối không được trả về thì không được để lại socket.
@@ -1201,14 +1660,68 @@ async def _send_control_open(conn: Connection, deadline: float) -> None:
     address = conn.peer.address
     try:
         async with asyncio.timeout_at(deadline):
-            await conn._send_frame(_CONTROL_OPEN_FRAME)
+            await conn._send_frame(frame)
     except (ConnectionLostError, TimeoutError) as e:
         conn._abort()
         cause = e.__cause__ if e.__cause__ is not None else e
-        raise Unreachable(f"gửi control_open thất bại: {type(cause).__name__}", address=address) from e
+        raise Unreachable(f"gửi message mở đầu thất bại: {type(cause).__name__}", address=address) from e
     except BaseException:
         conn._abort()
         raise
+
+
+async def open_data(
+    address: str, port: int, identity: Identity, hello: Hello, expected_cert_pem: str, opening: DataOpen
+) -> Connection:
+    """Mở kết nối dữ liệu (mTLS) tới một thiết bị tin cậy: đúng một địa chỉ, một lần thử.
+
+    Kết nối dữ liệu chỉ mở tới đúng địa chỉ (IP và cổng) của kết nối điều khiển hiện tại,
+    không thử song song, không tự thử lại (protocol mục 4.1): lần thử thua bị hủy giữa
+    bắt tay tính là một lần lỗi của IP đó ở máy kia. Lịch thử lại là việc của tầng trên
+    (thực thi hành động của `teleport.core.transfer`).
+
+    `address`: một chuỗi IPv4 dạng chấm viết chuẩn (không phải danh sách; không nhận
+    0.0.0.0, multicast, 255.255.255.255; loopback được); `port` 1–65535; `hello` đúng
+    phiên bản giao thức và của chính `identity`; `expected_cert_pem`: chứng chỉ đã lưu
+    của máy kia (`TrustedDevice.cert_pem`); `opening`: `data_open` sẽ gửi. Tham số sai →
+    ValueError, trước mọi I/O.
+
+    Bắt tay với `tls.trusted_client_context` như `open_control`; cả chuỗi TCP + TLS + đọc
+    `hello` của server + gửi `data_open` nằm trong một hạn `OPENING_TIMEOUT`. Lỗi của lần
+    thử duy nhất được ném thẳng: chứng chỉ server không qua kiểm trong bắt tay →
+    IdentityMismatch (`actual_fingerprint` None; máy kia không nhận được chứng chỉ client,
+    `hello` hay `data_open`); fingerprint lệch, chứng chỉ không hợp lệ hay CN khác
+    `hello.device_id` → IdentityMismatch; EOF / lỗi SSL / reset trước `hello`, sau bắt tay
+    → Rejected; `protocol` khác → VersionMismatch; lỗi TCP/TLS khác, hết hạn, `hello` sai
+    hay gửi `data_open` lỗi → Unreachable. Bị hủy → không để lại socket hay task.
+
+    Server không xác nhận `data_open` (protocol mục 2.1, 4.1): server từ chối sau khi đọc
+    nó thì máy này chỉ thấy ở lần đọc hoặc ghi đầu tiên (None hoặc ConnectionLostError).
+    Kết nối trả về có `opening` là None; `peer.port` là `port`.
+    """
+    ip = _check_ipv4(address, "address")
+    if ip.is_unspecified or ip.is_multicast or ip == _BROADCAST:
+        raise ValueError(f"address không phải địa chỉ của một máy: {address!r}")
+    _check_port(port, 1)
+    _check_hello(hello)
+    if hello.device_id != identity.device_id:
+        raise ValueError("hello.device_id phải là device_id của danh tính này")
+    try:
+        expected = peer_cert_from_pem(expected_cert_pem)
+    except InvalidCertificate as e:
+        raise ValueError(f"expected_cert_pem không phải chứng chỉ thiết bị hợp lệ: {e}") from e
+    if not isinstance(opening, DataOpen):
+        raise ValueError("opening phải là DataOpen")
+    opening_frame = encode_message(to_dict(opening))
+    # PEM đã chuẩn hóa: đúng một chứng chỉ làm anchor, fingerprint không lệch PEM.
+    ctx = tls.trusted_client_context(identity, expected.pem)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + OPENING_TIMEOUT  # gửi data_open vẫn nằm trong thời hạn mở kết nối
+    hello_frame = encode_message(to_dict(hello))
+    conn = await _attempt(address, port, ctx, hello_frame, ConnectionKind.DATA, expected.fingerprint)
+    await _send_opening(conn, opening_frame, deadline)
+    conn._opened_at = loop.time()
+    return conn
 
 
 async def _attempt(
@@ -1222,19 +1735,20 @@ async def _attempt(
     """Một lần thử tới một địa chỉ (protocol mục 2.2). Lỗi → ConnectError; không để lại socket.
 
     Chỉ đi tới khi đã đọc và kiểm xong `hello` của server; không gửi message mở đầu
-    (`_open_any` gửi `control_open` trên kết nối thắng). Ranh giới Unreachable / Rejected
-    là lúc bắt tay TLS xong: server đóng ngay các kết nối vượt giới hạn trước TLS, nên
-    lỗi trước đó không được coi là “bị từ chối” (protocol §6.2). Ngoại lệ duy nhất trước
-    ranh giới đó: chứng chỉ server không qua kiểm trong bắt tay (`ssl.SSLCertVerificationError`,
-    chỉ có ở kết nối điều khiển) → IdentityMismatch. Máy kia đưa đúng chứng chỉ đã lưu mà
-    không có khóa riêng thì bắt tay hỏng với lỗi SSL khác → Unreachable.
+    (`_open_any` gửi `control_open` trên kết nối thắng, `open_data` gửi `data_open`).
+    Ranh giới Unreachable / Rejected là lúc bắt tay TLS xong: server đóng ngay các kết nối
+    vượt giới hạn trước TLS, nên lỗi trước đó không được coi là “bị từ chối” (protocol
+    §6.2). Ngoại lệ duy nhất trước ranh giới đó: chứng chỉ server không qua kiểm trong bắt
+    tay (`ssl.SSLCertVerificationError`, chỉ có ở kết nối điều khiển và dữ liệu) →
+    IdentityMismatch. Máy kia đưa đúng chứng chỉ đã lưu mà không có khóa riêng thì bắt
+    tay hỏng với lỗi SSL khác → Unreachable.
     """
     writer: asyncio.StreamWriter | None = None
     try:
         async with asyncio.timeout(OPENING_TIMEOUT):
             try:
                 reader, writer = await asyncio.open_connection(
-                    address, port, ssl=ctx, ssl_shutdown_timeout=CLOSE_TIMEOUT
+                    address, port, ssl=ctx, ssl_shutdown_timeout=_ssl_shutdown_timeout(kind)
                 )
             except ssl.SSLCertVerificationError as e:  # lớp con của OSError: phải đứng trước
                 # Chứng chỉ server khác chứng chỉ đã lưu: hỏng ở máy này, trước khi gửi chứng chỉ client.

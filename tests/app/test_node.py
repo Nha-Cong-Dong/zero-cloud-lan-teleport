@@ -409,6 +409,47 @@ async def test_many_control_connections_keep_at_most_one(node_factory, trust_eac
     assert A.connected_devices() == frozenset({B.id})
 
 
+# --- P2-3 AC-17: node cắt kết nối dữ liệu tới khi có quản lý lượt truyền ----------------------------
+
+
+@integration
+async def test_node_aborts_incoming_data_connection_and_keeps_control(
+    node_factory, trust_each_other, fake_mdns, app_helpers
+):
+    """Spec P2-3 mục 3.7: A nhận `data_open` hợp lệ từ B (đã ghép đôi, có kết nối điều khiển) → cắt ngay
+    kết nối dữ liệu (chưa có TransferManager); kết nối điều khiển hai bên không bị ảnh hưởng."""
+    from teleport.app.node import MdnsOptions
+    from teleport.core.discovery import DeviceAdded
+    from teleport.core.messages import DataOpen
+    from teleport.net import connection
+
+    trust_each_other("A", "B")
+    A = await node_factory("A", mdns=MdnsOptions())
+    B = await node_factory("B", mdns=MdnsOptions())
+    fake_mdns.of(B).emit(DeviceAdded(app_helpers.dev(A)))  # B là client của kết nối điều khiển
+    await wait_until(
+        lambda: B.id in A.connected_devices() and A.id in B.connected_devices(), 3, "chưa kết nối hai bên"
+    )
+    opening = DataOpen(transfer_id="0123456789abcdef" * 2, file_index=0, resume_seq=1)
+    conn = await connection.open_data(LOCAL, A.port, B.identity, B.hello, A.identity.cert_pem(), opening)
+    try:
+        start = time.monotonic()
+        try:
+            got = await asyncio.wait_for(conn.read_raw(1, at_boundary=True, idle_timeout=3), 5)
+        except connection.IdleTimeout:
+            pytest.fail("A không cắt kết nối dữ liệu: bên mở chỉ thấy hết hạn chờ")
+        except connection.ConnectionLostError:
+            got = None
+        elapsed = time.monotonic() - start
+        assert got is None, f"A gửi dữ liệu trên kết nối dữ liệu: {got!r}"
+        assert elapsed < 1.0, f"A cắt kết nối dữ liệu sau {elapsed:.2f} s"
+    finally:
+        conn.abort()
+    await asyncio.sleep(0.3)
+    assert B.id in A.connected_devices(), "cắt kết nối dữ liệu làm mất kết nối điều khiển phía A"
+    assert A.id in B.connected_devices(), "cắt kết nối dữ liệu làm mất kết nối điều khiển phía B"
+
+
 # --- N8–N10: hủy ghép đôi ---------------------------------------------------------------------------
 
 
