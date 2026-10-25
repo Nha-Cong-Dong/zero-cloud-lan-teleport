@@ -160,11 +160,17 @@ def _validate_reason(value: object) -> str:
     return value if type(value) is str else str.__str__(value)
 
 
-def _validate_transfer_id(value: object) -> str:
-    """Mã lượt truyền: đúng 32 ký tự hex thường (không kiểm các bit phiên bản của UUID4)."""
+def validate_transfer_id(value: object) -> str:
+    """Mã lượt truyền: đúng 32 ký tự hex thường (không kiểm các bit phiên bản của UUID4).
+
+    Trả về nguyên giá trị; sai thì raise MessageError.
+    """
     if not isinstance(value, str) or not _DEVICE_ID_RE.fullmatch(value):
         raise MessageError("transfer_id phải là đúng 32 ký tự hex thường")
     return value
+
+
+_validate_transfer_id = validate_transfer_id  # tên cũ, giữ cho code hiện có
 
 
 def _validate_file_index(value: object) -> int:
