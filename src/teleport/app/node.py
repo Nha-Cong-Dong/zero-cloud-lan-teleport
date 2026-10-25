@@ -9,9 +9,11 @@ từ `start()` tới `close()`, nạp danh tính và kho tin cậy, mở `Listen
 
 Kết nối điều khiển (cả vào lẫn ra) do `core.links.LinkTracker` quyết định: tối đa
 **một** kết nối cho mỗi thiết bị (chống trùng protocol §6.1), tự mở tới thiết bị tin
-cậy thấy qua mDNS và nối lại theo lịch §6.2. Node chỉ thực hiện hành động tracker trả
-về. `DeviceRegistry` gộp mDNS + `trusted.json` + trạng thái kết nối thành `DeviceView`
-cho giao diện, và `on_event` báo `NodeEvent` (thiết bị lên/xuống, kết nối được/mất/lỗi).
+cậy thấy qua mDNS (hoặc chỉ một thiết bị: `auto_connect_to`), tới địa chỉ người dùng
+đưa (`connect_hint`), và nối lại theo lịch §6.2. Node chỉ thực hiện hành động tracker
+trả về; đổi kết nối (`LinkSwitched`) không báo `NodeEvent`. `DeviceRegistry` gộp mDNS +
+`trusted.json` + trạng thái kết nối thành `DeviceView` cho giao diện, và `on_event` báo
+`NodeEvent` (thiết bị lên/xuống, kết nối được/mất/lỗi).
 
 mDNS là tùy chọn (`mdns=None`: tắt) và chỉ là gợi ý địa chỉ: kết nối luôn kiểm chứng
 chỉ server với chứng chỉ đã lưu ngay trong bắt tay. Kết nối ra mở xong thì node báo
@@ -39,7 +41,7 @@ import platform
 import re
 import ssl
 import time
-from collections.abc import Callable, Coroutine, Iterable
+from collections.abc import Callable, Coroutine, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
@@ -66,12 +68,20 @@ from teleport.core.links import (
     ConnectResult,
     LinkAction,
     LinkDown,
-    LinkFailed,
+    LinkEvent,
+    LinkSwitched,
     LinkTracker,
     LinkUp,
     Notify,
 )
-from teleport.core.messages import PROTOCOL_VERSION, ConnectionKind, Hello, validate_device_name, validate_os
+from teleport.core.messages import (
+    PROTOCOL_VERSION,
+    ConnectionKind,
+    Hello,
+    validate_device_id,
+    validate_device_name,
+    validate_os,
+)
 from teleport.lock import NodeLock
 from teleport.net import connection as net_connection
 from teleport.net import discovery as net_discovery
@@ -359,6 +369,7 @@ class Node:
         on_pairing_finished: Callable[[PairingFinished], None] | None = None,
         mdns: MdnsOptions | None = None,
         auto_connect: bool = True,
+        auto_connect_to: str | None = None,
         on_event: Callable[[NodeEvent], None] | None = None,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
@@ -367,8 +378,10 @@ class Node:
         hành chọn và lưu lại; `port` là số: đúng cổng đó, không dự phòng, không lưu.
         `host` được kiểm lúc `start()`. `mdns=None`: không dùng mDNS; khác None mà không
         phải `MdnsOptions` → TypeError. `auto_connect`: tự mở và giữ kết nối điều khiển
-        tới thiết bị tin cậy thấy qua mDNS (không phải bool → ValueError). `on_event`
-        nhận `NodeEvent`, gọi đồng bộ trên loop; raise thì chỉ ghi log.
+        tới thiết bị tin cậy thấy qua mDNS (không phải bool → ValueError).
+        `auto_connect_to`: chỉ tự mở kết nối tới thiết bị có `device_id` này (registry vẫn
+        nhận mọi thiết bị mDNS); sai → MessageError; khác None mà `auto_connect=False` →
+        ValueError. `on_event` nhận `NodeEvent`, gọi đồng bộ trên loop; raise thì chỉ ghi log.
         `on_pairing_prompt=None`: node không hiện mã được nên không ghép đôi được;
         khi đó `accept_pairing=True` → ValueError.
         """
@@ -384,6 +397,10 @@ class Node:
             raise TypeError("mdns phải là None hoặc MdnsOptions")
         if type(auto_connect) is not bool:
             raise ValueError("auto_connect phải là bool")
+        if auto_connect_to is not None:
+            validate_device_id(auto_connect_to)
+            if not auto_connect:
+                raise ValueError("auto_connect_to cần auto_connect=True")
         self._config_dir = Path(config_dir)
         self._name_arg = name
         self._port_arg = port
@@ -393,6 +410,7 @@ class Node:
         self._on_pairing_finished = on_pairing_finished or _ignore
         self._mdns_opts = mdns
         self._auto_connect = auto_connect
+        self._auto_connect_to = auto_connect_to  # None: mọi thiết bị tin cậy
         self._on_event = on_event or _ignore
 
         self._started = False  # start() đã được gọi (thành công hay không)
@@ -738,6 +756,27 @@ class Node:
             log.warning("không đọc được địa chỉ IPv4 của máy này (%s)", type(e).__name__)
             return ()
 
+    def connect_hint(self, device_id: str, addresses: Sequence[str], port: int) -> None:
+        """Nối tới thiết bị tin cậy tại `addresses:port` (người dùng đưa, không cần mDNS).
+
+        Tracker nhớ địa chỉ này (`LinkTracker.hint`): gỡ chặn, thử ngay nếu chưa có kết nối
+        (đang thử thì thử lại tới địa chỉ này khi lần đó thất bại). Không có mDNS tươi và không
+        còn lượt truyền dở thì không nối lại theo lịch: chỉ thử khi người dùng thao tác hay mạng
+        đổi (`core.links`). Chạy được cả khi
+        `auto_connect=False`. Node chưa chạy hoặc đang đóng → RuntimeError; thiết bị không
+        tin cậy → KeyError; máy này, `device_id`, địa chỉ hay cổng sai → ValueError
+        (`device_id` sai → MessageError, lớp con của ValueError).
+        """
+        if not self._running or self._closing or self._links is None or self._store is None:
+            raise RuntimeError("node chưa chạy")
+        assert self._identity is not None
+        validate_device_id(device_id)
+        if device_id == self._identity.device_id:
+            raise ValueError("không thể kết nối tới chính máy này")
+        if self._store.get(device_id) is None:
+            raise KeyError(device_id)
+        self._apply(self._links.hint(device_id, addresses, port, self._now()))
+
     # ---- Hủy ghép đôi ----------------------------------------------------------------------
 
     async def unpair(self, device_id: str) -> TrustedDevice:
@@ -944,10 +983,18 @@ class Node:
         self._wake_timer()
         return closes
 
-    def _notify(self, event: LinkUp | LinkDown | LinkFailed) -> None:
+    def _notify(self, event: LinkEvent) -> None:
         assert self._registry is not None
         registry = self._registry
-        if isinstance(event, LinkUp):
+        if isinstance(event, LinkSwitched):
+            # Thiết bị vẫn kết nối: không phát NodeEvent, chỉ ghi DEBUG.
+            log.debug(
+                "đổi kết nối điều khiển với %s: %d → %d",
+                event.device_id[:8],
+                event.old_conn_id,
+                event.conn_id,
+            )
+        elif isinstance(event, LinkUp):
             registry.set_connected(event.device_id, True)
             log.info("đã kết nối với %s", event.device_id[:8])
             view = registry.get(event.device_id)
@@ -1082,8 +1129,17 @@ class Node:
             self._mdns_error_key = None
             log.info("khám phá mDNS đã hoạt động trở lại")
 
+    def _auto_target(self, device_id: str) -> bool:
+        """Địa chỉ mDNS của thiết bị có được đưa vào tracker không (`auto_connect`, `auto_connect_to`)."""
+        return self._auto_connect and self._auto_connect_to in (None, device_id)
+
     def _on_discovery_event(self, source: MdnsDiscovery, event: DeviceEvent) -> None:
-        """Sự kiện của `MdnsDiscovery` (đồng bộ): registry, tracker, rồi `on_event`."""
+        """Sự kiện của `MdnsDiscovery` (đồng bộ): registry, tracker, rồi `on_event`.
+
+        Registry nhận mọi thiết bị; tracker chỉ nhận thiết bị `_auto_target`. Các
+        `device_gone` của `_restart_mdns` và `network_changed` vẫn chạy cho mọi thiết bị:
+        vô hại, vì tracker không có địa chỉ mDNS của thiết bị bị lọc ở đây.
+        """
         if self._closing or source is not self._mdns or self._registry is None or self._links is None:
             return  # instance cũ (sau khi khởi động lại) hoặc node đang đóng
         registry, links = self._registry, self._links
@@ -1091,7 +1147,7 @@ class Node:
         if isinstance(event, DeviceAdded | DeviceUpdated):
             device = event.device
             registry.seen(device)
-            if self._auto_connect:
+            if self._auto_target(device.device_id):
                 self._apply(links.device_seen(device.device_id, device.addresses, device.port, now))
             if isinstance(event, DeviceAdded):
                 view = registry.get(device.device_id)
@@ -1101,7 +1157,7 @@ class Node:
             device = event.device
             before = registry.get(device.device_id)
             registry.gone(device.device_id)
-            if self._auto_connect:
+            if self._auto_target(device.device_id):
                 self._apply(links.device_gone(device.device_id, now))
             self._emit(DeviceOffline(self._offline_view(device, before)))
 
