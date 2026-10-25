@@ -32,6 +32,7 @@ from teleport.core.messages import (
     PROTOCOL_VERSION,
     ConnectionKind,
     ControlOpen,
+    DataOpen,
     Hello,
     MessageError,
     PairAbort,
@@ -53,6 +54,7 @@ from teleport.net.connection import (
     ConnectionLostError,
     ControlChannel,
     IdentityMismatch,
+    IdleTimeout,
     Listener,
     Rejected,
     Unreachable,
@@ -302,7 +304,9 @@ def test_constants_match_spec():
     assert connection.OPENING_TIMEOUT == 10.0
     assert connection.DRAIN_TIMEOUT == 30.0
     assert connection.CLOSE_TIMEOUT == 5.0
+    assert connection.IDLE_TIMEOUT == 30.0
     assert connection._SEND_CHUNK == 64 * 1024
+    assert connection._READ_CHUNK == 64 * 1024
 
 
 def test_close_reason_values():
@@ -362,6 +366,10 @@ def test_exception_hierarchy():
     assert not issubclass(ConnectionLostError, ConnectError)
     assert not issubclass(ConnectionLostError, OSError)
     assert issubclass(ConnectError, Exception)
+    # IdleTimeout chỉ kế thừa ConnectionLostError, để `except OSError` không nuốt mất nó.
+    assert issubclass(IdleTimeout, ConnectionLostError)
+    for cls in (TimeoutError, OSError, ConnectError):
+        assert not issubclass(IdleTimeout, cls)
 
 
 def test_exception_attributes():
@@ -408,9 +416,26 @@ BAD_ADDRESSES = [
 ]
 
 
+# Các loại kết nối mà máy này mở được (P2-3 AC-6: test client sẵn có tham số hóa theo loại thêm `data`).
+OPEN_KINDS = ["pairing", "control", "data"]
+DATA_OPEN_MSG = DataOpen(transfer_id="0123456789abcdef" * 2, file_index=0, resume_seq=1)
+
+
 async def _call_open(kind: str, ids, addresses, port, **overrides):
     if kind == "pairing":
         return await open_pairing(addresses, port, overrides.get("hello", hello_of(ids.anon)))
+    if kind == "data":
+        # open_data nhận **một** địa chỉ; danh sách một phần tử được mở ra (danh sách là sai, ở test riêng
+        # trong test_data_connection.py).
+        address = addresses[0] if isinstance(addresses, list) and len(addresses) == 1 else addresses
+        return await connection.open_data(
+            address,
+            port,
+            overrides.get("identity", ids.b),
+            overrides.get("hello", hello_of(ids.b)),
+            overrides.get("expected", ids.server.cert_pem()),
+            DATA_OPEN_MSG,
+        )
     return await open_control(
         addresses,
         port,
@@ -427,14 +452,14 @@ async def test_open_rejects_bad_addresses_before_io(no_io, ids, kind, addresses)
         await _call_open(kind, ids, addresses, 47474)
 
 
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 @pytest.mark.parametrize("port", [0, 65536, -1, True, False, "47474", 47474.0, None], ids=repr)
 async def test_open_rejects_bad_port_before_io(no_io, ids, kind, port):
     with pytest.raises(ValueError):
         await _call_open(kind, ids, [LOCAL], port)
 
 
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 async def test_open_rejects_hello_with_other_protocol(no_io, ids, kind):
     identity = ids.anon if kind == "pairing" else ids.b
     with pytest.raises(ValueError):
@@ -748,10 +773,6 @@ async def sc_trusted_pair_request(env):
     )
 
 
-async def sc_trusted_data_open(env):
-    return await raw_opening(env.raw_client, env.h, env.ids.b, wire_hello(env.ids.b), DATA_OPEN)
-
-
 async def sc_hello_device_id_not_cn(env):
     return await raw_opening(
         env.raw_client, env.h, env.ids.b, wire_hello(env.ids.x), {"type": "control_open"}
@@ -849,7 +870,7 @@ IMMEDIATE_REJECTIONS = {
     "R2-anon-control_open": sc_anon_control_open,
     "R3-anon-data_open": sc_anon_data_open,
     "R4-trusted-pair_request": sc_trusted_pair_request,
-    "R5-trusted-data_open": sc_trusted_data_open,
+    # R5 (data_open từ máy tin cậy) không còn là lần từ chối: kết nối dữ liệu được giao (P2-3 AC-1).
     "R6-hello-device_id-not-CN": sc_hello_device_id_not_cn,
     "R7-protocol-2-anon": sc_hello_protocol_2_anon,
     "R7-protocol-2-trusted": sc_hello_protocol_2_trusted,
@@ -1018,6 +1039,14 @@ valid_openings = st.sampled_from(
         {"type": "pair_request", "cert": FAKE_CERT, "commitment": HEX64},
         {"type": "control_open"},
         {"type": "control_open", "future": True},
+        {"type": "data_open", "transfer_id": "0123456789abcdef" * 2, "file_index": 0, "resume_seq": 1},
+        {
+            "type": "data_open",
+            "transfer_id": "f" * 32,
+            "file_index": 999,
+            "resume_seq": MAX_SAFE_INTEGER,
+            "x": 1,
+        },
     ]
 )
 
@@ -1032,7 +1061,7 @@ fuzz_bodies = (
 
 
 def _expected_kind(body: bytes, trusted_client: bool):
-    """Oracle theo đặc tả: chỉ pair_request hợp lệ (ẩn danh) hoặc control_open (tin cậy) được giao."""
+    """Oracle theo đặc tả: chỉ pair_request hợp lệ (ẩn danh), control_open / data_open (tin cậy) được giao."""
     try:
         msg = parse_message(decode_body(body))
     except (FramingError, MessageError):
@@ -1041,6 +1070,9 @@ def _expected_kind(body: bytes, trusted_client: bool):
         return ConnectionKind.PAIRING
     if isinstance(msg, ControlOpen) and trusted_client:
         return ConnectionKind.CONTROL
+    if isinstance(msg, DataOpen) and trusted_client:
+        # Handler của test trả về ngay, nên Listener cắt kết nối dữ liệu (P2-3 mục 3.1 bước 8).
+        return ConnectionKind.DATA
     return None
 
 
@@ -1472,6 +1504,10 @@ def send_then_hold(data: bytes):
 async def _open_kind(kind: str, port: int, ids, expected: str | None = None):
     if kind == "pairing":
         return await open_pairing([LOCAL], port, hello_of(ids.anon))
+    if kind == "data":
+        return await connection.open_data(
+            LOCAL, port, ids.b, hello_of(ids.b), expected or ids.server.cert_pem(), DATA_OPEN_MSG
+        )
     return await open_control([LOCAL], port, ids.b, hello_of(ids.b), expected or ids.server.cert_pem())
 
 
@@ -1553,7 +1589,7 @@ async def test_impostor_with_same_cn_and_serial_but_other_key_is_identity_mismat
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 async def test_server_hello_device_id_must_match_cn(slow_opening, fake_server, ids, kind):
     """C2."""
     server = await fake_server(
@@ -1566,7 +1602,7 @@ async def test_server_hello_device_id_must_match_cn(slow_opening, fake_server, i
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 async def test_newer_protocol_is_version_mismatch(slow_opening, fake_server, ids, kind):
     """C3: hello bản mới (protocol 2, có trường lạ) → VersionMismatch, không phải lỗi parse."""
     hello = wire_hello(ids.server, protocol=2, capabilities={"quic": True}, name="")
@@ -1580,7 +1616,7 @@ async def test_newer_protocol_is_version_mismatch(slow_opening, fake_server, ids
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 @pytest.mark.parametrize("how", ["graceful", "abort"])
 async def test_close_after_handshake_is_rejected(slow_opening, fake_server, ids, kind, how):
     """C4: server đóng ngay sau bắt tay, không gửi hello → Rejected (không phải Unreachable)."""
@@ -1601,7 +1637,7 @@ async def test_close_after_handshake_is_rejected(slow_opening, fake_server, ids,
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 async def test_closed_port_is_unreachable(fast, ids, kind):
     """C5a."""
     port = free_port()
@@ -1611,7 +1647,7 @@ async def test_closed_port_is_unreachable(fast, ids, kind):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 async def test_server_that_never_handshakes_is_unreachable(fast, fake_server, ids, kind):
     """C5b: TCP nhận nhưng không bao giờ bắt tay TLS → Unreachable sau ≈ OPENING_TIMEOUT."""
     server = await fake_server(None, _hold, use_tls=False)
@@ -1636,7 +1672,7 @@ async def test_server_that_never_handshakes_is_unreachable(fast, fake_server, id
     ],
     ids=["header>16KiB", "http", "bad-utf8", "json-array", "ping", "hello-missing-fields"],
 )
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 async def test_non_teleport_server_is_unreachable(slow_opening, fake_server, ids, kind, data):
     """C6: máy kia không nói giao thức Teleport → Unreachable, ngay khi đọc (không chờ hết giờ)."""
     server = await fake_server(ids.server, send_then_hold(data), trusted_certs=[ids.b.cert_pem()])
@@ -1701,19 +1737,19 @@ async def _record(server, reader, writer):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("san", ["x400", "edi"])
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 async def test_m1_server_cert_with_unsupported_general_name_is_identity_mismatch(
     slow_opening, fake_server, make_san_identity, ids, kind, san
 ):
     """Chứng chỉ server có SAN x400Address/EDIPartyName → IdentityMismatch ngay, không lọt lỗi lạ.
 
-    Kết nối điều khiển: chứng chỉ mong đợi chính là chứng chỉ đó, nên `open_control` từ chối nó
-    bằng ValueError trước mọi I/O (`peer_cert_from_pem`, protocol mục 2.1).
+    Kết nối điều khiển và dữ liệu: chứng chỉ mong đợi chính là chứng chỉ đó, nên `open_control` /
+    `open_data` từ chối nó bằng ValueError trước mọi I/O (`peer_cert_from_pem`, protocol mục 2.1).
     """
     evil = make_san_identity(san)
     server = await fake_server(evil, _record, trusted_certs=[ids.b.cert_pem()])
     start = time.monotonic()
-    if kind == "control":
+    if kind in ("control", "data"):
         with pytest.raises(ValueError):
             await _open_kind(kind, server.port, ids, expected=evil.cert_pem())
         await asyncio.sleep(0.1)
@@ -1729,7 +1765,7 @@ async def test_m1_server_cert_with_unsupported_general_name_is_identity_mismatch
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("kind", ["pairing", "control"])
+@pytest.mark.parametrize("kind", OPEN_KINDS)
 async def test_m1_unexpected_error_parsing_server_cert_is_identity_mismatch(
     slow_opening, monkeypatch, fake_server, ids, kind
 ):

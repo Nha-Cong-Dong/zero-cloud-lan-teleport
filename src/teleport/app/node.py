@@ -817,6 +817,10 @@ class Node:
             await self.pairing.handle_incoming(conn)
         elif conn.kind is ConnectionKind.CONTROL:
             await self._serve_control(conn)
+        elif conn.kind is ConnectionKind.DATA:
+            # Chưa có TransferManager (P2-6): cắt ngay mọi kết nối dữ liệu vào, chưa gửi
+            # `cancel{unknown_transfer}`; kết nối điều khiển với thiết bị đó không bị ảnh hưởng.
+            conn.abort()
 
     async def _serve_control(self, conn: Connection) -> None:
         """Kết nối điều khiển vào: đăng ký với tracker (chống trùng), rồi chạy tới khi kết thúc."""
