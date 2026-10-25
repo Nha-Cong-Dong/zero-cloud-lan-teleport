@@ -48,8 +48,9 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport.core.blocks`: khung khối nhị phân 41 byte, SHA-256 của khối nằm trong chính header; chia file thành khối 1 MiB; kiểm header khối nhận được; trần 4 TiB cho mỗi file.
 - `teleport.core.merkle`: Merkle root của file từ hash các khối, có test vector cố định.
 - `teleport.core.bitfield`: bảng khối bên nhận đã có, mã hóa base64 cho `resume`.
-- `teleport.core.messages`: kiểu và kiểm tra hợp lệ các message truyền file `data_open`, `offer`, `accept`, `reject`, `resume`, `complete`, `verified`, `cancel`. Chưa có luồng truyền file nên người dùng chưa thấy thay đổi gì; node vẫn từ chối `data_open`.
+- `teleport.core.messages`: kiểu và kiểm tra hợp lệ các message truyền file `data_open`, `offer`, `accept`, `reject`, `resume`, `complete`, `verified`, `cancel`. Chưa có luồng truyền file nên người dùng chưa thấy thay đổi gì; Listener giao kết nối dữ liệu, node tạm cắt ngay tới khi có quản lý lượt truyền.
 - `teleport.core.filenames`: làm sạch tên file nhận được (bỏ đường dẫn, ký tự cấm trên Windows, ký tự điều khiển và ký tự đổi hướng chữ, tên thiết bị Windows như `CON`; cắt còn ≤ 255 byte, giữ đuôi), đặt số khi trùng (`a (1).txt`); bên gửi chuẩn bị tên khi gửi (cắt tên dài, từ chối tên rỗng hoặc có ký tự điều khiển). Chưa nối vào luồng nhận file, nên người dùng chưa thấy thay đổi gì.
+- `teleport.net.connection`: kết nối dữ liệu (đường truyền file; chưa có luồng truyền nên người dùng chưa thấy thay đổi gì). `open_data` mở tới đúng một địa chỉ, một lần thử; `write_block` / `read_block` ghi và đọc khung khối, kiểm header trước khi đọc payload; `write_raw` / `read_raw` cho byte thô; `abort` cắt ngay. Bên nhận cắt khi đang chờ đọc mà không nhận byte nào trong thời gian chờ (`IdleTimeout`); bên gửi cắt khi `drain()` quá hạn; đóng gọn tối đa một hạn `drain()`; handler kết thúc mà kết nối chưa đóng thì bị cắt (`docs/protocol.md` mục 2.3, 4.2).
 
 ### Changed
 - Kiểm chứng chỉ TLS (cả hai chiều) không còn kiểm ngày hiệu lực (`NO_CHECK_TIME`): chứng chỉ được ghim đúng từng cái, nên đồng hồ sai ở một máy không làm hỏng kết nối giữa các thiết bị đã ghép đôi.
@@ -92,6 +93,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `docs/protocol.md` (dự thảo): `bitfield` đánh bit cao nhất trước (MSB-first), `mtime` của `offer` tính bằng mili giây. Bản nháp cũ và mới không làm việc được với nhau ở hai điểm này; chưa có bản nào cài trên dây nên người dùng không bị ảnh hưởng.
 - `docs/protocol.md` mục 6.3 (dự thảo): đồng bộ lại khi có kết nối điều khiển mới: gửi lại `offer` và `complete` (cả lượt đã nhận `accept`), bia mộ cho lượt đã hủy, manifest cố định theo `offer` đầu tiên, `resume` được phục vụ trước `accept`.
 - Kết nối điều khiển: message truyền file sai trường giờ làm đóng kết nối như mọi message sai (protocol mục 3.3); trước đây các loại này bị bỏ qua như message lạ.
+- `docs/protocol.md` mục 4.3 (dự thảo): không còn hứa đặt `SO_RCVBUF`/`SO_SNDBUF` ≤ 8 MiB; bản hiện tại để hệ điều hành tự điều chỉnh, Giai đoạn 3 chốt theo số đo mvp N4.
 
 ### Fixed
 - Thân message điều khiển phải là UTF-8 không BOM (protocol mục 3.1). Trước đây UTF-16, UTF-32 và BOM UTF-8 vẫn được nhận. Bản cũ chỉ gửi UTF-8 không BOM nên hai bản vẫn làm việc cùng nhau.
@@ -140,3 +142,4 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Giới hạn đã biết: máy đã ghép đôi gửi liên tục khung 1 MiB hợp lệ vẫn làm vòng lặp sự kiện bận. Chấp nhận được vì chỉ máy tin cậy mới mở được kết nối điều khiển.
 - Giới hạn đã biết (chống lũ bắt tay và ưu tiên, `docs/protocol.md` mục 2.3): thiết bị tin cậy ở IP chưa được ưu tiên (IP mới, quá hạn ưu tiên, kết nối đầu sau ghép đôi) phải chờ chen vào pool chung; lũ từ cùng IP với thiết bị tin cậy có thể làm kết nối điều khiển mới của nó thất bại; kẻ có nhiều IP xoay vòng relay vẫn ép được thiết bị nối lại qua IP của nó; lũ TCP trần làm đầy hàng đợi accept của hệ điều hành trước khi node kịp từ chối. Hướng sửa ở `docs/ke_hoach.md` mục 8.
 - Message truyền file được kiểm đủ luật ngay khi nhận (`teleport.core.messages`): tên file ≤ 255 byte và không có ký tự điều khiển, kích thước ≤ 4 TiB, `file_index` 0 … 999, bitfield đúng độ dài với bit đệm bằng 0; message sai thì đóng kết nối điều khiển. Đối chiếu với `offer` sẽ do máy trạng thái truyền file làm (chưa có).
+- Kết nối dữ liệu (đường truyền file) có cùng luật chứng chỉ như kết nối điều khiển: bên gửi kiểm chứng chỉ server ngay trong bắt tay; bên nhận chỉ giao kết nối khi chứng chỉ client còn trong danh sách tin cậy, và kiểm lại sau khi đọc `data_open`.
