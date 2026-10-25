@@ -10,6 +10,7 @@ nên file này không patch hằng số (trừ test kiểm hằng được đọ
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import heapq
 import itertools
@@ -28,6 +29,7 @@ from teleport.core.links import (
     ConnectResult,
     LinkDown,
     LinkFailed,
+    LinkSwitched,
     LinkTracker,
     LinkUp,
     Notify,
@@ -656,7 +658,8 @@ def test_lk10_incoming_from_untrusted_is_closed_without_notify():
 @pytest.mark.parametrize("own", [LO, HI], ids=["own<peer", "own>peer"])
 @pytest.mark.parametrize("combo", ["in-in", "in-out", "out-in"])
 def test_lk11_old_connection_replaced_after_replace_after(own, combo):
-    """Kết nối cũ đã mở ≥ REPLACE_AFTER → kết nối mới thay, không xét bên nào mở, không Notify.
+    """Kết nối cũ đã mở ≥ REPLACE_AFTER → kết nối mới thay, không xét bên nào mở; không báo người
+    dùng, chỉ `Notify(LinkSwitched)` đứng sau `CloseConnection(cũ)` (spec P2-6 A3).
 
     Tổ hợp ra→ra không dựng được qua API công khai: tracker không bao giờ mở lần thử khi đang có
     kết nối (R1), nên kết nối ra mới chỉ tới khi kết nối cũ là kết nối vào (xem báo cáo)."""
@@ -674,14 +677,18 @@ def test_lk11_old_connection_replaced_after_replace_after(own, combo):
         c = start_attempt(t, PEER, 0.0)
         t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
         acts = t.incoming_control(PEER, 2, 0.1 + gap)
-    assert acts == [CloseConnection(PEER, 1)]
+    new_is_outgoing = combo == "in-out"
+    assert acts == [CloseConnection(PEER, 1), Notify(LinkSwitched(PEER, 1, 2, new_is_outgoing))]
     assert t.connected() == {PEER: 2}
 
 
 @pytest.mark.parametrize("order", ["local-first", "remote-first"])
 @pytest.mark.parametrize(("own", "keep_local"), [(LO, True), (HI, False)], ids=["own<peer", "own>peer"])
 def test_lk12_tie_break_by_device_id(order, own, keep_local):
-    """Hai kết nối khác bên mở, cách nhau < REPLACE_AFTER: giữ kết nối do bên có id nhỏ hơn mở."""
+    """Hai kết nối khác bên mở, cách nhau < REPLACE_AFTER: giữ kết nối do bên có id nhỏ hơn mở.
+
+    Spec P2-6 A3: luật hòa giữ kết nối MỚI → thêm `Notify(LinkSwitched)` sau `CloseConnection(cũ)`;
+    giữ kết nối cũ → chỉ `CloseConnection(mới)`."""
     t = LinkTracker(own)
     t.trusted_changed([PEER], 0.0)
     c = start_attempt(t, PEER, 0.0)
@@ -694,7 +701,11 @@ def test_lk12_tie_break_by_device_id(order, own, keep_local):
         local, remote = 2, 1
         acts = t.connect_finished(PEER, c.attempt_id, OK, 2, 0.1 + links.REPLACE_AFTER - 0.2)
     keep, drop = (local, remote) if keep_local else (remote, local)
-    assert acts == [CloseConnection(PEER, drop)]
+    old, new = 1, 2
+    if keep == new:
+        assert acts == [CloseConnection(PEER, old), Notify(LinkSwitched(PEER, old, new, new == local))]
+    else:
+        assert acts == [CloseConnection(PEER, drop)]
     assert t.connected() == {PEER: keep}
     assert t.attempting() == {}
 
@@ -702,9 +713,15 @@ def test_lk12_tie_break_by_device_id(order, own, keep_local):
 def test_lk13_same_side_new_connection_replaces_quickly():
     t = tracker(PEER)
     t.incoming_control(PEER, 1, 0.0)
-    assert t.incoming_control(PEER, 2, 0.1) == [CloseConnection(PEER, 1)]
+    assert t.incoming_control(PEER, 2, 0.1) == [
+        CloseConnection(PEER, 1),
+        Notify(LinkSwitched(PEER, 1, 2, False)),
+    ]
     assert t.connected() == {PEER: 2}
-    assert t.incoming_control(PEER, 3, 0.15) == [CloseConnection(PEER, 2)]
+    assert t.incoming_control(PEER, 3, 0.15) == [
+        CloseConnection(PEER, 2),
+        Notify(LinkSwitched(PEER, 2, 3, False)),
+    ]
     assert t.connected() == {PEER: 3}
 
 
@@ -714,7 +731,11 @@ def test_lk13_replacement_measures_age_from_the_new_connection():
     t.trusted_changed([PEER], 0.0)
     c = start_attempt(t, PEER, 0.0)
     t.incoming_control(PEER, 1, 0.1)
-    assert t.incoming_control(PEER, 2, 4.0) == [CloseConnection(PEER, 1)]  # cùng bên: thay; mốc 4.0
+    # Cùng bên: thay (kèm LinkSwitched, spec P2-6 A3); mốc 4.0.
+    assert t.incoming_control(PEER, 2, 4.0) == [
+        CloseConnection(PEER, 1),
+        Notify(LinkSwitched(PEER, 1, 2, False)),
+    ]
     # Lần thử ra xong ở 6.0: kết nối hiện tại (2) mới 2 s tuổi → hòa → giữ kết nối do máy kia mở.
     # Nếu mốc vẫn là 0.1 (của kết nối 1) thì 5.9 s ≥ REPLACE_AFTER và kết nối mới (3) bị giữ nhầm.
     assert t.connect_finished(PEER, c.attempt_id, OK, 3, 6.0) == [CloseConnection(PEER, 3)]
@@ -759,7 +780,7 @@ def test_lk15_incoming_while_attempting_then_attempt_ok_applies_tie_break():
     assert acts == [Notify(LinkUp(PEER, 1, False))], "kết nối vào không được hủy lần thử đang chạy"
     assert t.attempting() == {PEER: c.attempt_id}
     acts = t.connect_finished(PEER, c.attempt_id, OK, 2, 0.2)
-    assert acts == [CloseConnection(PEER, 1)]
+    assert acts == [CloseConnection(PEER, 1), Notify(LinkSwitched(PEER, 1, 2, True))]
     assert t.connected() == {PEER: 2}
 
 
@@ -1257,6 +1278,11 @@ def test_lk21_single_tracker_invariants(ops):
                 elif isinstance(ev, LinkDown):
                     assert up.get(ev.device_id) is not None, "LinkDown khi chưa LinkUp"
                     del up[ev.device_id]
+                elif isinstance(ev, LinkSwitched):
+                    # Spec P2-6 A3: đổi kết nối hiện tại; không phải LinkUp/LinkDown.
+                    assert up.get(ev.device_id) == ev.old_conn_id, "LinkSwitched từ kết nối không hiện tại"
+                    assert ev.conn_id != ev.old_conn_id
+                    up[ev.device_id] = ev.conn_id
                 else:
                     assert isinstance(ev, LinkFailed)
                     assert ev.result != OK
@@ -1539,3 +1565,1013 @@ def test_lk23_spoofed_mdns_unreachable_is_rate_limited(pattern, lat):
     times = [x for x in sim.connect_times() if x < 300.0]
     assert len(times) <= 300 / links.EVENT_RETRY_GAP + 1, len(times)
     assert len(sim.failed()) <= 1
+
+
+# =========================================================================================================
+# P2-6a (spec-p2-6.md mục A3, plan-p2-6.md mục 2.1): `LinkSwitched`, `hint`, `hold` — L1–L4
+# =========================================================================================================
+
+ADDR3 = ("192.0.2.30",)
+
+
+def _connected_out(t: LinkTracker, dev: str = PEER, cid: int = 1, now: float = 0.0, addrs=ADDR, port=PORT):
+    """Thiết bị đã tin cậy: thấy qua mDNS ở `now`, thử, nối được (`cid`) ở `now + 0.1`."""
+    c = start_attempt(t, dev, now, addrs, port)
+    assert notifies(t.connect_finished(dev, c.attempt_id, OK, cid, now + 0.1)) == [LinkUp(dev, cid, True)]
+
+
+# --- L1: LinkSwitched -------------------------------------------------------------------------------------
+
+
+def test_l1_link_switched_is_frozen_dataclass_with_spec_fields():
+    ev = LinkSwitched(device_id=PEER, old_conn_id=1, conn_id=2, outgoing=True)
+    assert [f.name for f in dataclasses.fields(ev)] == ["device_id", "old_conn_id", "conn_id", "outgoing"]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ev.conn_id = 3  # type: ignore[misc]
+    assert Notify(ev).event is ev
+
+
+@pytest.mark.parametrize("own", [LO, HI], ids=["own<peer", "own>peer"])
+def test_l1_same_side_switch_emits_link_switched_after_close(own):
+    """Cùng một bên mở hai kết nối (ở đây: máy kia mở cả hai) → giữ mới, ngay cả khi cũ còn trẻ."""
+    t = LinkTracker(own)
+    t.trusted_changed([PEER], 0.0)
+    t.incoming_control(PEER, 1, 0.0)
+    acts = t.incoming_control(PEER, 2, 0.01)
+    assert acts == [CloseConnection(PEER, 1), Notify(LinkSwitched(PEER, 1, 2, False))]
+    assert t.connected() == {PEER: 2}
+
+
+@pytest.mark.parametrize("combo", ["in-out", "out-in"])
+@pytest.mark.parametrize("own", [LO, HI], ids=["own<peer", "own>peer"])
+def test_l1_old_connection_past_replace_after_emits_link_switched(own, combo):
+    t = LinkTracker(own)
+    t.trusted_changed([PEER], 0.0)
+    if combo == "in-out":
+        c = start_attempt(t, PEER, 0.0)
+        t.incoming_control(PEER, 1, 0.1)
+        acts = t.connect_finished(PEER, c.attempt_id, OK, 2, 0.1 + links.REPLACE_AFTER + 0.5)
+        outgoing = True
+    else:
+        _connected_out(t, PEER, 1, 0.0)
+        acts = t.incoming_control(PEER, 2, 0.1 + links.REPLACE_AFTER + 0.5)
+        outgoing = False
+    assert acts == [CloseConnection(PEER, 1), Notify(LinkSwitched(PEER, 1, 2, outgoing))]
+    assert t.connected() == {PEER: 2}
+
+
+@pytest.mark.parametrize("order", ["local-first", "remote-first"])
+def test_l1_tie_break_keeping_old_connection_emits_no_link_switched(order):
+    """Luật hòa giữ kết nối cũ → chỉ `CloseConnection(mới)`, không `Notify` nào."""
+    # local-first: own < peer giữ kết nối ra (cũ). remote-first: own > peer giữ kết nối vào (cũ).
+    own = LO if order == "local-first" else HI
+    t = LinkTracker(own)
+    t.trusted_changed([PEER], 0.0)
+    c = start_attempt(t, PEER, 0.0)
+    if order == "local-first":
+        t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+        acts = t.incoming_control(PEER, 2, 0.5)
+    else:
+        t.incoming_control(PEER, 1, 0.1)
+        acts = t.connect_finished(PEER, c.attempt_id, OK, 2, 0.5)
+    assert acts == [CloseConnection(PEER, 2)]
+    assert notifies(acts) == []
+    assert t.connected() == {PEER: 1}
+
+
+@pytest.mark.parametrize("order", ["local-first", "remote-first"])
+def test_l1_tie_break_keeping_new_connection_emits_link_switched(order):
+    # local-first + own > peer: giữ kết nối vào (mới). remote-first + own < peer: giữ kết nối ra (mới).
+    own = HI if order == "local-first" else LO
+    t = LinkTracker(own)
+    t.trusted_changed([PEER], 0.0)
+    c = start_attempt(t, PEER, 0.0)
+    if order == "local-first":
+        t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+        acts = t.incoming_control(PEER, 2, 0.5)
+        outgoing = False
+    else:
+        t.incoming_control(PEER, 1, 0.1)
+        acts = t.connect_finished(PEER, c.attempt_id, OK, 2, 0.5)
+        outgoing = True
+    assert acts == [CloseConnection(PEER, 1), Notify(LinkSwitched(PEER, 1, 2, outgoing))]
+    assert t.connected() == {PEER: 2}
+
+
+def test_l1_after_switch_old_connection_lost_is_silent_and_new_one_gives_link_down():
+    t = tracker(PEER)
+    t.incoming_control(PEER, 1, 0.0)
+    t.incoming_control(PEER, 2, 0.1)
+    assert t.connection_lost(PEER, 1, 0.2) == []
+    assert t.connected() == {PEER: 2}
+    assert t.connection_lost(PEER, 2, 0.3) == [Notify(LinkDown(PEER, 2))]
+    assert t.connected() == {}
+
+
+def test_l1_first_connection_and_untrusted_incoming_never_emit_link_switched():
+    t = tracker(PEER)
+    assert t.incoming_control(PEER, 1, 0.0) == [Notify(LinkUp(PEER, 1, False))]
+    assert t.incoming_control(Q, 5, 0.1) == [CloseConnection(Q, 5)]
+
+
+# --- L2: hint ---------------------------------------------------------------------------------------------
+
+
+def test_l2_hint_for_trusted_device_connects_now_with_hint_address():
+    t = tracker(PEER)
+    assert t.hint(PEER, ADDR2, PORT2, 0.0) == [Connect(PEER, 1, ADDR2, PORT2)]
+    assert t.attempting() == {PEER: 1}
+
+
+def test_l2_hint_addresses_are_deduplicated_keeping_order():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ["192.0.2.2", "192.0.2.1", "192.0.2.2"], PORT, 0.0))
+    assert c.addresses == ("192.0.2.2", "192.0.2.1")
+
+
+def test_l2_hint_for_untrusted_device_only_remembers():
+    t = LinkTracker(OWN)
+    assert t.hint(PEER, ADDR2, PORT2, 0.0) == []
+    assert t.attempting() == {}
+    assert t.tick(100.0) == [] and t.network_changed(100.0) == []
+    # Được tin cậy sau đó: nối tới địa chỉ đã nhớ (plan 2.1: “chưa tin cậy thì chỉ nhớ”).
+    assert t.trusted_changed([PEER], 101.0) == [Connect(PEER, 1, ADDR2, PORT2)]
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_l2_hint_unblocks_and_counts_as_user_action(result):
+    t = tracker(PEER)
+    c = start_attempt(t)
+    assert notifies(t.connect_finished(PEER, c.attempt_id, result, None, 0.1)) == [LinkFailed(PEER, result)]
+    assert t.next_wakeup() is None
+    # Ngay sau đó (chưa đủ EVENT_RETRY_GAP): vẫn thử ngay vì là thao tác người dùng.
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.2))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+    # Đã gỡ chặn và xóa danh sách đã báo: lỗi cùng loại được báo lại.
+    assert notifies(t.connect_finished(PEER, c.attempt_id, result, None, 0.3)) == [LinkFailed(PEER, result)]
+
+
+def test_l2_hint_clears_unreachable_counter():
+    t = tracker(PEER)
+    fail_n_unreachable(t, PEER, 2)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 1.5))
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.6)) == []
+    assert t.next_wakeup() == pytest.approx(1.6 + delay(1))
+
+
+def test_l2_hint_while_attempting_or_connected_starts_nothing():
+    t = tracker(PEER)
+    c = start_attempt(t)
+    acts = t.hint(PEER, ADDR2, PORT2, 0.1)
+    assert only(acts, Connect) == [] and only(acts, CancelConnect) == []
+    assert t.attempting() == {PEER: c.attempt_id}
+    t.connect_finished(PEER, c.attempt_id, OK, 4, 0.2)
+    assert t.hint(PEER, ADDR3, PORT2, 0.3) == []
+    assert t.connected() == {PEER: 4} and t.attempting() == {}
+
+
+def test_l2_hint_survives_device_gone_but_without_schedule():
+    """Spec C1: sau `device_gone` (không held) hint vẫn được nhớ, nhưng chỉ dùng cho lần thử do người
+    dùng / sự kiện: không hẹn lịch §6.2 (lịch chỉ chạy khi mDNS tươi hoặc đang held)."""
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    assert t.device_seen(PEER, ADDR, PORT, 0.2) == []
+    assert t.device_gone(PEER, 0.3) == []
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    assert t.next_wakeup() is None, "chỉ còn hint, không held: không hẹn lịch"
+    assert t.tick(3600.0) == []
+    # Sự kiện (mạng đổi): thử tới địa chỉ hint.
+    c = the_connect(t.network_changed(3600.0))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+def test_l2_hint_survives_device_gone_for_network_event_after_failure():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.2))
+    t.device_gone(PEER, 0.3)
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.4)
+    assert notifies(acts) == [] and only(acts, Connect) == []
+    assert t.next_wakeup() is None
+    c = the_connect(t.network_changed(0.2 + links.EVENT_RETRY_GAP))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+def test_l2_hint_survives_device_gone_for_user_retry():
+    t = tracker(PEER)
+    t.hint(PEER, ADDR2, PORT2, 0.0)
+    t.connect_finished(PEER, 1, UNREACHABLE, None, 0.1)
+    c = the_connect(t.device_seen(PEER, ADDR, PORT, 5.0))  # mDNS tươi, khác cổng: thử theo mDNS
+    assert (c.addresses, c.port) == (ADDR, PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 5.1)
+    t.device_gone(PEER, 5.2)
+    c = the_connect(t.retry_now(PEER, 5.3))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+def test_l2_new_hint_replaces_old_one():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, ADDR3, PORT, 0.2))
+    assert (c.addresses, c.port) == (ADDR3, PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.3)
+    assert t.next_wakeup() is None  # C1: chỉ có hint → không lịch
+    c = the_connect(t.retry_now(PEER, 0.4))
+    assert (c.addresses, c.port) == (ADDR3, PORT), "lần thử sau phải dùng hint mới"
+
+
+# --- C1: lịch §6.2 chỉ chạy khi mDNS tươi hoặc đang held --------------------------------------------------
+
+
+def test_c1_hint_only_failure_has_no_schedule_and_no_report():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    assert t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1) == []
+    assert t.next_wakeup() is None
+    assert t.tick(3600.0) == []
+
+
+def test_c1_hint_only_connection_lost_without_hold_has_no_schedule():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))  # chưa từng có mDNS
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    assert t.next_wakeup() is None
+    assert t.tick(3600.0) == []
+    c = the_connect(t.retry_now(PEER, 3600.0))  # thao tác người dùng vẫn nối được
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+def test_c1_hint_only_connection_lost_while_held_retries_after_1s():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    assert t.hold(PEER, True, 0.2) == []
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    assert t.next_wakeup() == pytest.approx(1.0 + links.RETRY_BASE)
+    c = the_connect(t.tick(1.0 + links.RETRY_BASE))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+    # Held: lịch §6.2 tiếp tục sau thất bại.
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 2.1)
+    assert t.next_wakeup() == pytest.approx(2.1 + delay(1))
+
+
+def test_c1_hint_only_failures_while_held_follow_schedule_and_report_once():
+    t = tracker(PEER)
+    assert t.hold(PEER, True, 0.0) == []  # chưa có địa chỉ: không thử
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    now = 0.0
+    reports = []
+    for _ in range(5):
+        now += 0.1
+        reports += notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now))
+        nw = t.next_wakeup()
+        assert nw is not None, "đang held: phải có lịch"
+        c = the_connect(t.tick(nw))
+        now = nw
+    assert reports == [LinkFailed(PEER, UNREACHABLE)]
+
+
+def test_c1_fresh_mdns_keeps_schedule_when_hint_also_present():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    assert t.hint(PEER, ADDR2, PORT2, 0.2) == []
+    t.connection_lost(PEER, 1, 1.0)
+    assert t.next_wakeup() == pytest.approx(1.0 + links.RETRY_BASE)
+
+
+# --- C2: hint() khi đang thử ------------------------------------------------------------------------------
+
+
+def _next_connect_after_failure(t: LinkTracker, aid: int, now: float) -> Connect:
+    """Lần thử `aid` thất bại; trả `Connect` kế tiếp (ngay trong kết quả, hoặc ở `tick` theo lịch)."""
+    found = only(t.connect_finished(PEER, aid, UNREACHABLE, None, now), Connect)
+    if found:
+        assert len(found) == 1
+        return found[0]
+    nw = t.next_wakeup()
+    assert nw is not None, "mDNS tươi: phải có lần thử kế tiếp"
+    return the_connect(t.tick(max(nw, now)))
+
+
+def test_c2_hint_with_other_port_while_attempting_is_used_by_next_attempt():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    acts = t.hint(PEER, ADDR2, PORT2, 0.05)
+    assert only(acts, Connect) == [] and only(acts, CancelConnect) == []
+    assert t.attempting() == {PEER: c.attempt_id}
+    c = _next_connect_after_failure(t, c.attempt_id, 0.1)
+    assert (c.addresses, c.port) == (ADDR2, PORT2), "lần thử kế tiếp sau hint phải dùng địa chỉ/cổng hint"
+    # Cờ chỉ cho một lần `_start`: lần thử theo lịch sau đó dùng mDNS tươi (A3).
+    c = _next_connect_after_failure(t, c.attempt_id, 5.0)
+    assert (c.addresses, c.port) == (ADDR, PORT)
+
+
+def test_c2_hint_with_same_port_while_attempting_is_merged_into_next_attempt():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ("192.0.2.1",), PORT)
+    t.hint(PEER, ("192.0.2.9",), PORT, 0.05)
+    c = _next_connect_after_failure(t, c.attempt_id, 0.1)
+    assert (c.addresses, c.port) == (("192.0.2.9", "192.0.2.1"), PORT)
+
+
+def _hint_pending_after_failure(t: LinkTracker, *, gone_before_failure: bool) -> None:
+    """mDNS (ADDR, PORT) đang thử từ 0.0; `hint` khác cổng lúc 0.5; lần thử thất bại lúc 1.0;
+    mDNS báo thiết bị biến mất (trước hoặc sau lúc thất bại)."""
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    assert only(t.hint(PEER, ADDR2, PORT2, 0.5), Connect) == []
+    if gone_before_failure:
+        assert t.device_gone(PEER, 0.8) == []
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.0)
+    if not gone_before_failure:
+        assert t.device_gone(PEER, 1.2) == []
+
+
+@pytest.mark.parametrize("gone_before_failure", [False, True], ids=["gone-sau-that-bai", "gone-truoc"])
+def test_c2_pending_hint_attempt_survives_device_gone(gone_before_failure):
+    """Soát lần 2, ca A/A': lần thử do `hint()` gây ra (đã hẹn) không bị `device_gone` xóa mất."""
+    t = tracker(PEER)
+    _hint_pending_after_failure(t, gone_before_failure=gone_before_failure)
+    nw = t.next_wakeup()
+    assert nw is not None, "lần thử hint đã hẹn phải còn sau device_gone"
+    assert nw <= 1.0 + links.EVENT_RETRY_GAP + 1e-9
+    c = the_connect(t.tick(nw))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+def test_c2_pending_hint_is_consumed_and_later_mdns_event_uses_mdns():
+    """Soát lần 2, ca B: sau khi lần thử hint đã chạy, không còn cờ treo: mDNS thấy lại lâu sau → mDNS."""
+    t = tracker(PEER)
+    _hint_pending_after_failure(t, gone_before_failure=False)
+    c = the_connect(t.tick(t.next_wakeup()))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 5.0)
+    assert t.next_wakeup() is None, "chỉ còn hint, không held: không lịch (C1)"
+    c = the_connect(t.device_seen(PEER, ADDR, PORT, 3605.0))
+    assert (c.addresses, c.port) == (ADDR, PORT)
+
+
+def test_c2_pending_hint_runs_once_after_release_then_no_schedule():
+    """Soát lần 2, ca C: chỉ có hint, held, có lịch; đang thử thì `hint()` rồi `hold(False)` → lần thử
+    hint vẫn chạy đúng một lần, sau đó không còn lịch."""
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    assert t.hold(PEER, True, 0.1) == []
+    assert only(t.hint(PEER, ADDR3, PORT2, 0.5), Connect) == []  # đang thử → cờ cho lần kế tiếp
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.0)
+    assert t.next_wakeup() is not None  # held: có lịch
+    assert t.hold(PEER, False, 1.1) == []
+    nw = t.next_wakeup()
+    assert nw is not None, "lần thử hint đã hẹn vẫn phải chạy sau hold(False)"
+    c = the_connect(t.tick(nw))
+    assert (c.addresses, c.port) == (ADDR3, PORT2)
+    assert t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, nw + 0.1) == []
+    assert t.next_wakeup() is None
+    assert t.tick(nw + 3600.0) == []
+
+
+def test_c2_hint_while_attempting_then_attempt_ok_keeps_connection():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    t.hint(PEER, ADDR2, PORT2, 0.05)
+    assert notifies(t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)) == [LinkUp(PEER, 1, True)]
+    assert t.connected() == {PEER: 1} and t.attempting() == {}
+
+
+def test_l2_hint_is_forgotten_when_device_is_untrusted():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    assert t.trusted_changed([], 0.5) == [CancelConnect(PEER, c.attempt_id)]
+    assert t.trusted_changed([PEER], 1.0) == []
+    assert t.attempting() == {}
+    assert t.retry_now(PEER, 1.1) == []
+    assert t.network_changed(10.0) == [] and t.tick(100.0) == []
+
+
+def test_l2_fresh_mdns_beats_hint_for_scheduled_attempts_when_ports_differ():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    # Lần thử do chính hint gây ra: địa chỉ/cổng hint.
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.2))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.3)
+    # Lần thử theo lịch: mDNS tươi trước.
+    c = the_connect(t.tick(t.next_wakeup()))
+    assert (c.addresses, c.port) == (ADDR, PORT)
+
+
+def test_l2_fresh_mdns_beats_hint_for_event_attempts_when_ports_differ():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.device_seen(PEER, ADDR, PORT, links.EVENT_RETRY_GAP))
+    assert (c.addresses, c.port) == (ADDR, PORT)
+
+
+def test_l2_same_port_merges_hint_then_mdns_addresses():
+    t = tracker(PEER)
+    seen = ("192.0.2.1", "192.0.2.2")
+    hint = ("192.0.2.3", "192.0.2.1")
+    c = start_attempt(t, PEER, 0.0, seen, PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, hint, PORT, 0.2))
+    assert c.addresses == ("192.0.2.3", "192.0.2.1", "192.0.2.2")
+    assert c.port == PORT
+
+
+def test_l2_same_port_merge_also_applies_to_scheduled_attempts():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ("192.0.2.1",), PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, ("192.0.2.9",), PORT, 0.2))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.3)
+    c = the_connect(t.tick(t.next_wakeup()))
+    assert (c.addresses, c.port) == (("192.0.2.9", "192.0.2.1"), PORT)
+
+
+def test_l2_merged_addresses_are_capped_like_device_seen():
+    t = tracker(PEER)
+    seen = tuple(f"192.0.2.{i}" for i in range(1, 11))
+    hint = tuple(f"198.51.100.{i}" for i in range(1, 11))
+    c = start_attempt(t, PEER, 0.0, seen, PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, hint, PORT, 0.2))
+    assert len(c.addresses) == 16, "cùng trần 16 địa chỉ như device_seen"
+    assert c.addresses == hint + seen[:6]
+
+
+def test_l2_hint_beats_stale_mdns_address_of_held_device():
+    t = tracker(PEER)
+    _connected_out(t, PEER, 1, 0.0, ADDR, PORT)
+    assert t.hint(PEER, ADDR2, PORT2, 0.2) == []
+    assert t.hold(PEER, True, 0.3) == []
+    assert t.device_gone(PEER, 0.4) == []  # đang giữ: địa chỉ mDNS thành cũ, không bị xóa
+    t.connection_lost(PEER, 1, 1.0)
+    c = the_connect(t.tick(t.next_wakeup()))
+    assert (c.addresses, c.port) == (ADDR2, PORT2), "_target: mDNS tươi, rồi hint, rồi mDNS cũ"
+
+
+def _l2_bad_hint_calls() -> list[tuple[str, Callable[[LinkTracker], object], type | tuple]]:
+    big = 1000.0
+    return [
+        ("id_sai", lambda t: t.hint("abc", ADDR, PORT, big), MessageError),
+        ("id_hoa", lambda t: t.hint("A" * 32, ADDR, PORT, big), MessageError),
+        ("dia_chi_rong", lambda t: t.hint(Q, [], PORT, big), ValueError),
+        ("17_dia_chi", lambda t: t.hint(Q, [f"192.0.2.{i}" for i in range(1, 18)], PORT, big), ValueError),
+        ("chuoi_don", lambda t: t.hint(Q, "192.0.2.10", PORT, big), ValueError),
+        ("ipv6", lambda t: t.hint(Q, ["::1"], PORT, big), ValueError),
+        ("ten_mien", lambda t: t.hint(Q, ["localhost"], PORT, big), ValueError),
+        ("0.0.0.0", lambda t: t.hint(Q, ["0.0.0.0"], PORT, big), ValueError),
+        ("multicast", lambda t: t.hint(Q, ["224.0.0.251"], PORT, big), ValueError),
+        ("broadcast", lambda t: t.hint(Q, ["255.255.255.255"], PORT, big), ValueError),
+        ("cong_0", lambda t: t.hint(Q, ADDR, 0, big), ValueError),
+        ("cong_65536", lambda t: t.hint(Q, ADDR, 65536, big), ValueError),
+        ("cong_true", lambda t: t.hint(Q, ADDR, True, big), ValueError),
+        ("cong_chuoi", lambda t: t.hint(Q, ADDR, "47474", big), ValueError),
+        ("now_giam", lambda t: t.hint(Q, ADDR, PORT, 0.5), ValueError),
+        ("now_nan", lambda t: t.hint(Q, ADDR, PORT, math.nan), ValueError),
+    ]
+
+
+@pytest.mark.parametrize("case", [name for name, _, _ in _l2_bad_hint_calls()])
+def test_l2_bad_hint_arguments_raise_and_leave_state_unchanged(case):
+    t, _ar = _lk1_state()  # Q đang chờ lịch (2.0), R đang thử, PEER đang kết nối; `now` cuối 1.0
+    call, exc = next((fn, e) for name, fn, e in _l2_bad_hint_calls() if name == case)
+    before = (t.connected(), t.attempting(), t.next_wakeup())
+    with pytest.raises(exc):
+        call(t)
+    assert (t.connected(), t.attempting(), t.next_wakeup()) == before
+    # Lần thử kế của Q vẫn dùng địa chỉ mDNS cũ (hint sai không được nhớ), `now` không nhích lên.
+    assert t.tick(1.5) == []
+    c = the_connect(t.tick(2.0))
+    assert (c.device_id, c.addresses, c.port) == (Q, ADDR, PORT)
+
+
+def test_l2_hint_for_own_device_is_ignored():
+    t = tracker(PEER)
+    # Chấp nhận cả ValueError: node.connect_hint báo ValueError cho chính máy này (plan 2.6).
+    with contextlib.suppress(ValueError):
+        assert t.hint(OWN, ADDR, PORT, 0.0) == []
+    assert t.attempting() == {} and t.connected() == {}
+
+
+# --- L3: hold ---------------------------------------------------------------------------------------------
+
+
+def test_l3_held_device_gone_then_lost_still_retries_last_address_after_1s():
+    t = tracker(PEER)
+    _connected_out(t, PEER, 1, 0.0, ADDR2, PORT2)
+    assert t.hold(PEER, True, 0.2) == []
+    assert t.device_gone(PEER, 0.3) == []
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    assert t.next_wakeup() == pytest.approx(1.0 + links.RETRY_BASE)
+    c = the_connect(t.tick(1.0 + links.RETRY_BASE))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+    # Vẫn theo lịch §6.2 sau khi thất bại.
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 2.1)
+    assert t.next_wakeup() == pytest.approx(2.1 + delay(1))
+
+
+def test_l3_held_device_gone_keeps_pending_schedule():
+    t = tracker(PEER)
+    c = start_attempt(t)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    assert t.next_wakeup() == pytest.approx(1.1)
+    assert t.hold(PEER, True, 0.2) == []
+    assert t.device_gone(PEER, 0.3) == []
+    assert t.next_wakeup() == pytest.approx(1.1)
+    c = the_connect(t.tick(1.1))
+    assert (c.addresses, c.port) == (ADDR, PORT)
+
+
+def test_l3_release_after_gone_drops_schedule_and_forgets_address():
+    t = tracker(PEER)
+    _connected_out(t)
+    t.hold(PEER, True, 0.2)
+    t.device_gone(PEER, 0.3)
+    t.connection_lost(PEER, 1, 1.0)
+    assert t.next_wakeup() is not None
+    acts = t.hold(PEER, False, 1.5)
+    assert only(acts, CloseConnection) == [] and notifies(acts) == []
+    assert t.next_wakeup() is None
+    assert t.retry_now(PEER, 1.6) == [], "đã quên địa chỉ mDNS cũ"
+    assert t.network_changed(10.0) == [] and t.tick(100.0) == []
+
+
+def test_l3_release_while_mdns_is_fresh_keeps_address():
+    t = tracker(PEER)
+    _connected_out(t)
+    t.hold(PEER, True, 0.2)
+    assert t.hold(PEER, False, 0.3) == []
+    t.connection_lost(PEER, 1, 1.0)
+    assert t.next_wakeup() == pytest.approx(1.0 + links.RETRY_BASE)
+
+
+def test_l3_device_seen_clears_stale_mark():
+    t = tracker(PEER)
+    _connected_out(t)
+    t.hold(PEER, True, 0.2)
+    t.device_gone(PEER, 0.3)
+    assert t.device_seen(PEER, ADDR2, PORT2, 0.4) == []  # đang kết nối: chỉ nhớ địa chỉ mới
+    t.hold(PEER, False, 0.5)  # địa chỉ đã tươi lại: thả ra không xóa gì
+    t.connection_lost(PEER, 1, 1.0)
+    c = the_connect(t.tick(t.next_wakeup()))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+def test_l3_unheld_device_gone_still_stops_retries():
+    """Hành vi cũ (LK6) giữ nguyên khi không `hold`."""
+    t = tracker(PEER)
+    _connected_out(t)
+    t.device_gone(PEER, 0.3)
+    t.connection_lost(PEER, 1, 1.0)
+    assert t.next_wakeup() is None
+
+
+def _hint_only_failed(t: LinkTracker) -> None:
+    """Thiết bị chỉ có hint, lần thử ở 0.0 thất bại ở 0.1: đủ điều kiện, không có lịch (C1)."""
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    assert t.next_wakeup() is None
+
+
+def test_l3_hold_eligible_device_without_schedule_retries_after_event_gap():
+    t = tracker(PEER)
+    _hint_only_failed(t)
+    assert t.hold(PEER, True, 0.5) == []  # chưa đủ EVENT_RETRY_GAP kể từ lần thử trước
+    nw = t.next_wakeup()
+    assert nw is not None and nw >= links.EVENT_RETRY_GAP - 1e-9
+    assert t.tick(links.EVENT_RETRY_GAP - 0.01) == []
+    c = the_connect(t.tick(max(nw, links.EVENT_RETRY_GAP)))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+def test_l3_hold_eligible_device_long_after_last_attempt_retries_now():
+    t = tracker(PEER)
+    _hint_only_failed(t)
+    c = the_connect(t.hold(PEER, True, 50.0))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+# --- C4: hold(True) chỉ thử khi held đổi False→True và thiết bị không bị chặn ----------------------------
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_c4_hold_on_blocked_device_does_not_connect(result):
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0)
+    t.connect_finished(PEER, c.attempt_id, result, None, 0.1)
+    assert t.hold(PEER, True, 0.5) == []
+    assert t.next_wakeup() is None
+    assert t.hold(PEER, True, 50.0) == []
+    assert t.tick(3600.0) == []
+    assert t.attempting() == {}
+    # Sự kiện mDNS vẫn theo luật chặn cũ (LK8): đủ khoảng thì được thử.
+    the_connect(t.device_seen(PEER, ADDR, PORT, 3600.0))
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_c4_hold_on_blocked_hint_only_device_does_not_connect(result):
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    t.connect_finished(PEER, c.attempt_id, result, None, 0.1)
+    assert t.hold(PEER, True, 50.0) == []
+    assert t.next_wakeup() is None and t.attempting() == {}
+
+
+def test_c4_repeated_hold_true_is_noop():
+    t = tracker(PEER)
+    _hint_only_failed(t)
+    assert t.hold(PEER, True, 0.5) == []
+    nw = t.next_wakeup()
+    assert nw is not None
+    assert t.hold(PEER, True, 0.6) == []
+    assert t.next_wakeup() == nw
+    c = the_connect(t.tick(nw))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, nw + 0.1)
+    scheduled = t.next_wakeup()  # held: lịch §6.2
+    assert scheduled is not None
+    # Gọi lại hold(True) khi đã đủ EVENT_RETRY_GAP: không thử ngay, không đổi lịch.
+    assert t.hold(PEER, True, nw + 0.1 + links.EVENT_RETRY_GAP) == []
+    assert t.next_wakeup() == scheduled
+
+
+def test_c4_repeated_hold_true_while_eligible_does_not_retry_again():
+    t = tracker(PEER)
+    _hint_only_failed(t)
+    c = the_connect(t.hold(PEER, True, 50.0))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 50.1)
+    t.hold(PEER, False, 50.2)
+    assert only(t.hold(PEER, True, 100.0), Connect) != [], "False → True: thử lại theo sự kiện"
+    aid = t.attempting()[PEER]
+    t.connect_finished(PEER, aid, UNREACHABLE, None, 100.1)
+    scheduled = t.next_wakeup()
+    assert t.hold(PEER, True, 200.0) == [], "held vẫn True: gọi lặp là no-op"
+    assert t.next_wakeup() == scheduled
+
+
+def test_l3_hold_while_connected_or_attempting_does_nothing():
+    t = tracker(PEER, Q)
+    _connected_out(t, PEER, 1)
+    start_attempt(t, Q, 0.2)
+    assert t.hold(PEER, True, 0.5) == []
+    assert t.hold(Q, True, 0.5) == []
+    assert t.connected() == {PEER: 1} and set(t.attempting()) == {Q}
+
+
+def test_l3_hold_never_returns_close_or_notify():
+    t = tracker(PEER, Q, R)
+    _connected_out(t, PEER, 1)
+    start_attempt(t, Q, 0.2)
+    c = start_attempt(t, R, 0.2)
+    t.connect_finished(R, c.attempt_id, ConnectResult.REJECTED, None, 0.3)
+    now = 0.4
+    for held in (True, False, True, True, False, False):
+        for dev in (PEER, Q, R, HI, OWN):
+            now += 0.7
+            acts = t.hold(dev, held, now)
+            assert all(isinstance(a, Connect) for a in acts), acts
+            for a in acts:
+                t.connect_finished(a.device_id, a.attempt_id, UNREACHABLE, None, now)
+
+
+def test_l3_hold_for_unknown_untrusted_or_own_device_is_noop():
+    t = LinkTracker(OWN)
+    assert t.hold(PEER, True, 0.0) == []
+    assert t.hold(OWN, True, 0.0) == []
+    t.device_seen(Q, ADDR, PORT, 0.1)
+    assert t.hold(Q, True, 0.2) == []
+    # Không tin cậy → không “giữ”: mDNS báo đi thì quên như cũ (LK6), tin cậy sau đó không nối.
+    t.device_gone(Q, 0.3)
+    assert t.trusted_changed([Q], 0.4) == []
+    assert t.attempting() == {}
+
+
+def test_l3_held_state_does_not_survive_untrust():
+    t = tracker(PEER)
+    _connected_out(t, PEER, 1)
+    t.hold(PEER, True, 0.2)
+    t.trusted_changed([], 0.3)
+    c = the_connect(t.trusted_changed([PEER], 0.4))  # địa chỉ mDNS vẫn còn (LK16)
+    t.connect_finished(PEER, c.attempt_id, OK, 2, 0.5)
+    t.device_gone(PEER, 0.6)
+    t.connection_lost(PEER, 2, 1.0)
+    assert t.next_wakeup() is None, "hold cũ không được sống qua thôi tin cậy"
+
+
+def _l3_bad_hold_calls() -> list[tuple[str, Callable[[LinkTracker], object], type | tuple]]:
+    big = 1000.0
+    return [
+        ("id_sai", lambda t: t.hold("abc", True, big), MessageError),
+        ("id_none", lambda t: t.hold(None, True, big), MessageError),
+        ("held_int", lambda t: t.hold(Q, 1, big), (ValueError, TypeError)),
+        ("held_chuoi", lambda t: t.hold(Q, "yes", big), (ValueError, TypeError)),
+        ("held_none", lambda t: t.hold(Q, None, big), (ValueError, TypeError)),
+        ("now_giam", lambda t: t.hold(Q, True, 0.5), ValueError),
+        ("now_inf", lambda t: t.hold(Q, True, math.inf), ValueError),
+        ("now_chuoi", lambda t: t.hold(Q, True, "5"), (ValueError, TypeError)),
+    ]
+
+
+@pytest.mark.parametrize("case", [name for name, _, _ in _l3_bad_hold_calls()])
+def test_l3_bad_hold_arguments_raise_and_leave_state_unchanged(case):
+    t, _ar = _lk1_state()
+    call, exc = next((fn, e) for name, fn, e in _l3_bad_hold_calls() if name == case)
+    before = (t.connected(), t.attempting(), t.next_wakeup())
+    with pytest.raises(exc):
+        call(t)
+    assert (t.connected(), t.attempting(), t.next_wakeup()) == before
+    # Q không bị “giữ”: mDNS báo đi thì lịch bị xóa như cũ.
+    assert t.device_gone(Q, 1.5) == []
+    assert t.next_wakeup() is None
+
+
+# --- L4: hypothesis, một tracker với hint/hold ------------------------------------------------------------
+
+L4_OPS = [
+    "seen",
+    "gone",
+    "trust",
+    "network",
+    "retry",
+    "tick",
+    "wake",
+    "finish",
+    "stale",
+    "incoming",
+    "lost",
+    "hint",
+    "hold",
+    "release",
+    "bad",
+]
+L4_ADDRS = [
+    ("192.0.2.1",),
+    ("192.0.2.2", "192.0.2.3", "192.0.2.2"),
+    ("127.0.0.1",),
+    ("192.0.2.1", "10.0.0.9"),
+]
+L4_PORTS = [47474, 50000]
+# `back`: một `now` chắc chắn không hợp lệ (nhỏ hơn `now` của lời gọi hợp lệ trước, hoặc vô hạn).
+L4_BAD: list[Callable[[LinkTracker, str, float, float], object]] = [
+    lambda t, d, now, back: t.hint(d, [], 47474, now),
+    lambda t, d, now, back: t.hint(d, ["::1"], 47474, now),
+    lambda t, d, now, back: t.hint(d, "192.0.2.1", 47474, now),
+    lambda t, d, now, back: t.hint(d, ["192.0.2.1"], 0, now),
+    lambda t, d, now, back: t.hint(d, ["192.0.2.1"], True, now),
+    lambda t, d, now, back: t.hint("x" * 32, ["192.0.2.1"], 47474, now),
+    lambda t, d, now, back: t.hint(d, ["192.0.2.1"], 47474, back),
+    lambda t, d, now, back: t.hold(d, 1, now),
+    lambda t, d, now, back: t.hold(d, None, now),
+    lambda t, d, now, back: t.hold("A" * 32, True, now),
+    lambda t, d, now, back: t.hold(d, True, back),
+    lambda t, d, now, back: t.hold(d, True, math.nan),
+]
+
+_Target = tuple[tuple[str, ...], int]
+
+
+def _merge(hint: _Target, seen: _Target) -> _Target:
+    """Spec A3: cùng cổng → hint trước rồi mDNS, bỏ trùng, cắt theo trần 16 địa chỉ."""
+    return tuple(dict.fromkeys(hint[0] + seen[0]))[:16], hint[1]
+
+
+@HYPO
+@given(
+    st.lists(
+        st.tuples(st.sampled_from(L4_OPS), st.integers(0, 4), st.integers(0, 15), st.sampled_from(DTS)),
+        max_size=80,
+    )
+)
+def test_l4_tracker_with_hint_and_hold_keeps_invariants(ops):
+    """L4: chỉ `Connect` thiết bị tin cậy có địa chỉ (đúng địa chỉ theo luật `_target` / gộp hint);
+    không bao giờ có 2 kết nối hiện tại; `LinkSwitched` khi và chỉ khi kết nối hiện tại đổi giữa hai
+    kết nối; tham số sai → trạng thái giữ nguyên.
+
+    Mô hình địa chỉ: `seen` (mDNS tươi), `stale` (mDNS cũ của thiết bị đang giữ), `hints`, và `maybe`
+    (địa chỉ mDNS cũ còn sót qua thôi tin cậy, spec không chốt là tươi hay cũ: được phép, không bắt buộc).
+    """
+    t = LinkTracker(OWN)
+    now = 0.0
+    trusted: set[str] = set()
+    seen: dict[str, _Target] = {}
+    stale: dict[str, _Target] = {}
+    hints: dict[str, _Target] = {}
+    maybe: dict[str, set[_Target]] = {}
+    held: set[str] = set()
+    pending_hint: set[str] = set()  # C2: hint() trong lúc đang thử → lần `_start` kế tiếp dùng hint
+    outstanding: dict[int, str] = {}
+    finished_aids: dict[int, str] = {}
+    given_conns: dict[str, set[int]] = {}
+    conn_dev: dict[int, str] = {}
+    conn_local: dict[int, bool] = {}
+    closed: set[int] = set()
+    lost: set[int] = set()
+    last_connect: dict[str, float] = {}
+    last_now: float | None = None  # `now` của lời gọi hợp lệ gần nhất
+    conn_ids = itertools.count(1)
+
+    def give(dev: str, cid: int, local: bool) -> None:
+        given_conns.setdefault(dev, set()).add(cid)
+        conn_dev[cid] = dev
+        conn_local[cid] = local
+
+    def expected_targets(d: str, via_hint: bool) -> set[_Target]:
+        h, s, old = hints.get(d), seen.get(d), stale.get(d)
+        exp: set[_Target] = set()
+        if via_hint and h is not None:
+            exp.add(_merge(h, s) if s is not None and s[1] == h[1] else h)
+        elif s is not None and h is not None and s[1] == h[1]:
+            exp.add(_merge(h, s))
+        elif s is not None:
+            exp.add(s)
+        elif h is not None:
+            exp.add(h)
+        elif old is not None:
+            exp.add(old)
+        for m in maybe.get(d, set()):
+            exp.add(m)
+            if h is not None and h[1] == m[1]:
+                exp.add(_merge(h, m))
+        return exp
+
+    for op, i, j, dt in ops:
+        now += dt
+        dev = DEVS[i]
+        before_attempting = t.attempting()
+        before_connected = t.connected()
+        bypass: set[str] = set()
+        hinted: str | None = None
+        finishing: tuple[str, int] | None = None
+
+        if op == "seen":
+            addrs, port = L4_ADDRS[j % 4], L4_PORTS[j % 2]
+            acts = t.device_seen(dev, addrs, port, now)
+            if dev != OWN:
+                seen[dev] = (_dedup(addrs), port)
+                stale.pop(dev, None)
+                maybe.pop(dev, None)
+        elif op == "gone":
+            acts = t.device_gone(dev, now)
+            if dev != OWN:
+                if dev in trusted and dev in held:
+                    if dev in seen:
+                        stale[dev] = seen.pop(dev)
+                else:
+                    seen.pop(dev, None)
+                    stale.pop(dev, None)
+                    maybe.pop(dev, None)
+        elif op == "trust":
+            ids = {DEVS[k] for k in range(4) if j >> k & 1}
+            newly, removed = ids - trusted, trusted - ids
+            for d in removed:
+                hints.pop(d, None)
+                held.discard(d)
+                pending_hint.discard(d)
+                if d in stale:
+                    maybe.setdefault(d, set()).add(stale.pop(d))
+            bypass = newly
+            trusted = ids
+            acts = t.trusted_changed(sorted(ids | ({OWN} if i == 4 else set())), now)
+        elif op == "network":
+            acts = t.network_changed(now)
+        elif op == "retry":
+            acts = t.retry_now(dev, now)
+            bypass = {dev}
+        elif op in ("tick", "wake"):
+            if op == "wake" and t.next_wakeup() is not None:
+                now = max(now, t.next_wakeup())
+            acts = t.tick(now)
+        elif op == "finish":
+            if not outstanding:
+                continue
+            aid = sorted(outstanding)[j % len(outstanding)]
+            dev = outstanding.pop(aid)
+            r = RESULTS[i]
+            cid = next(conn_ids) if r == OK else None
+            if cid is not None:
+                give(dev, cid, True)
+            acts = t.connect_finished(dev, aid, r, cid, now)
+            finished_aids[aid] = dev
+            finishing = (dev, aid)
+        elif op == "stale":
+            if finished_aids and j % 2 == 0:
+                aid = sorted(finished_aids)[j % len(finished_aids)]
+                sdev = finished_aids[aid]
+            else:
+                aid, sdev = 100_000 + j, DEVS[i % 4]
+            if aid in outstanding:
+                continue
+            r = RESULTS[i]
+            cid = next(conn_ids) if r == OK else None
+            if cid is not None:
+                give(sdev, cid, True)
+            acts = t.connect_finished(sdev, aid, r, cid, now)
+            assert acts == ([CloseConnection(sdev, cid)] if r == OK else []), acts
+            dev = sdev
+        elif op == "incoming":
+            cid = next(conn_ids)
+            acts = t.incoming_control(dev, cid, now)
+            if dev != OWN:
+                give(dev, cid, False)
+        elif op == "lost":
+            live = [c for c in sorted(conn_dev) if c not in lost]
+            if not live:
+                continue
+            cid = live[j % len(live)]
+            dev = conn_dev[cid]
+            lost.add(cid)
+            acts = t.connection_lost(dev, cid, now)
+        elif op == "hint":
+            if dev == OWN or dev not in trusted:
+                continue
+            addrs, port = L4_ADDRS[j % 4], L4_PORTS[(j >> 2) % 2]
+            acts = t.hint(dev, addrs, port, now)
+            hints[dev] = (_dedup(addrs), port)
+            bypass = {dev}
+            hinted = dev
+            if dev in before_attempting:
+                pending_hint.add(dev)
+            assert all(isinstance(a, Connect) for a in acts), acts
+        elif op in ("hold", "release"):
+            acts = t.hold(dev, op == "hold", now)
+            assert all(isinstance(a, Connect) for a in acts), ("hold chỉ được trả Connect", acts)
+            if dev != OWN and dev in trusted:
+                if op == "hold":
+                    held.add(dev)
+                else:
+                    held.discard(dev)
+                    stale.pop(dev, None)
+        else:  # bad
+            snap = (t.connected(), t.attempting(), t.next_wakeup())
+            with pytest.raises((ValueError, TypeError)):
+                back = last_now - 1.0 if last_now is not None else math.inf
+                L4_BAD[j % len(L4_BAD)](t, dev if dev != OWN else DEVS[0], now, back)
+            assert (t.connected(), t.attempting(), t.next_wakeup()) == snap
+            continue
+        last_now = now
+
+        # --- Kiểm từng hành động -----------------------------------------------------------------------
+        switched: dict[str, list[LinkSwitched]] = {}
+        ups: dict[str, list[LinkUp]] = {}
+        downs: dict[str, list[LinkDown]] = {}
+        for a in acts:
+            if isinstance(a, Connect):
+                d = a.device_id
+                assert d in trusted, f"Connect tới thiết bị chưa tin cậy {d[:4]}"
+                exp = expected_targets(d, via_hint=d == hinted)
+                if d in pending_hint:  # C2 (không chốt cờ còn sống bao lâu: chấp nhận cả hai)
+                    exp |= expected_targets(d, via_hint=True)
+                    pending_hint.discard(d)
+                assert exp, f"Connect tới thiết bị không có địa chỉ {d[:4]}"
+                assert (a.addresses, a.port) in exp, ((a.addresses, a.port), exp)
+                assert d not in before_attempting or finishing == (d, before_attempting[d]), "hai lần thử"
+                assert d not in t.connected(), "thử khi đang có kết nối"
+                assert t.attempting().get(d) == a.attempt_id
+                if d not in bypass and d in last_connect:
+                    assert now - last_connect[d] >= links.RETRY_BASE - 1e-9, "thử lại quá sớm"
+                last_connect[d] = now
+                outstanding[a.attempt_id] = d
+            elif isinstance(a, CancelConnect):
+                assert outstanding.get(a.attempt_id) == a.device_id
+                del outstanding[a.attempt_id]
+                finished_aids[a.attempt_id] = a.device_id
+            elif isinstance(a, CloseConnection):
+                assert conn_dev.get(a.conn_id) == a.device_id, "đóng một kết nối lạ"
+                assert a.conn_id not in closed, "đóng một kết nối hai lần"
+                closed.add(a.conn_id)
+            else:
+                assert isinstance(a, Notify)
+                ev = a.event
+                if isinstance(ev, LinkSwitched):
+                    switched.setdefault(ev.device_id, []).append(ev)
+                elif isinstance(ev, LinkUp):
+                    ups.setdefault(ev.device_id, []).append(ev)
+                elif isinstance(ev, LinkDown):
+                    downs.setdefault(ev.device_id, []).append(ev)
+                else:
+                    assert isinstance(ev, LinkFailed)
+
+        # --- Kiểm trạng thái sau lời gọi -----------------------------------------------------------------
+        after = t.connected()
+        assert set(after) <= trusted
+        for d in set(before_connected) | set(after) | set(switched) | set(ups) | set(downs):
+            old, new = before_connected.get(d), after.get(d)
+            if old is not None and new is not None and old != new:
+                assert switched.get(d) == [LinkSwitched(d, old, new, conn_local[new])], (d[:4], acts)
+            else:
+                assert d not in switched, ("LinkSwitched khi kết nối hiện tại không đổi", acts)
+            assert (d in ups) == (old is None and new is not None), ("LinkUp", acts)
+            assert (d in downs) == (old is not None and new is None), ("LinkDown", acts)
+        for d, cids in given_conns.items():
+            live = cids - closed - lost
+            cur = after.get(d)
+            assert live == ({cur} if cur is not None else set()), (
+                f"thiết bị {d[:4]}: kết nối còn mở {sorted(live)}, kết nối hiện tại {cur}"
+            )
+        assert t.attempting() == {d: a for a, d in outstanding.items()}

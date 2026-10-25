@@ -105,7 +105,7 @@ from teleport.core.filenames import (
     fit_filename,
     numbered,
 )
-from teleport.core.messages import MAX_OFFER_FILES
+from teleport.core.messages import MAX_OFFER_FILES, validate_transfer_id
 
 # sys.platform thay vì os.name: mypy chỉ hiểu phép so sánh sys.platform để bỏ qua nhánh của
 # hệ điều hành khác (ctypes.WinDLL, fcntl.F_FULLFSYNC chỉ có trên một phía).
@@ -165,8 +165,6 @@ _FULLFSYNC_UNSUPPORTED_ERRNOS = frozenset({errno.EINVAL, errno.ENOTSUP, errno.EO
 # On-Demand gắn reparse point không có bit này cho thư mục bình thường.
 _REPARSE_TAG_NAME_SURROGATE = 0x20000000
 
-# Dùng re.fullmatch với lớp ký tự ASCII: `$` khớp cả trước "\n" cuối chuỗi.
-_TRANSFER_ID_RE = re.compile(r"[0-9a-f]{32}")
 _MOUNT_ESCAPE_RE = re.compile(r"\\([0-3][0-7]{2})")
 
 _PRIVATE = object()  # constructor của các lớp dưới đây không phải API công khai
@@ -544,14 +542,12 @@ class ReceiveDir:
         """Tạo `.teleport/<transfer_id>/` (`0o700`) cho một lượt nhận (architecture mục 4).
 
         `transfer_id` phải đúng 32 ký tự hex thường (protocol mục 3.3; kiểm lại ở đây vì nó thành
-        tên thư mục), sai → ValueError, không đụng gì trên đĩa. Đổi sang
-        `teleport.core.messages.validate_transfer_id` khi P2-4 đã merge (P2-6 làm; `MessageError`
-        là lớp con của `ValueError`, hành vi không đổi). Đã có → `TempExistsError`; liên kết hay
+        tên thư mục; kiểm bằng `teleport.core.messages.validate_transfer_id`), sai → `MessageError`
+        (lớp con của ValueError), không đụng gì trên đĩa. Đã có → `TempExistsError`; liên kết hay
         sai chủ trong cây `.teleport` → `UnsafeReceiveDirError`; lỗi đĩa → OSError.
         """
         self._ensure_open()
-        if not isinstance(transfer_id, str) or not _TRANSFER_ID_RE.fullmatch(transfer_id):
-            raise ValueError("transfer_id phải là đúng 32 ký tự hex thường")
+        validate_transfer_id(transfer_id)
         if sys.platform == "win32":
             temp = self._create_temp_windows(transfer_id)
         else:

@@ -9,14 +9,17 @@ lần mở kết nối, kết nối vào, kết nối mất, mạng đổi, hẹ
   rồi báo kết quả qua `connect_finished`;
 - `CancelConnect`: hủy lần mở đang chạy (không báo `connect_finished` cho lần đó);
 - `CloseConnection`: đóng một kết nối;
-- `Notify`: báo người dùng (`LinkUp`, `LinkDown`, `LinkFailed`).
+- `Notify`: báo một sự kiện kết nối (`LinkUp`, `LinkDown`, `LinkFailed` cho người dùng;
+  `LinkSwitched` chỉ cho các phần khác của `app`).
 
 Luật chính:
 
 - Tối đa một kết nối điều khiển cho mỗi thiết bị. Hai kết nối cùng sống: kết nối cũ
   đã mở ≥ `REPLACE_AFTER` giây, hoặc hai kết nối do cùng một bên mở → giữ kết nối mới;
   còn lại (hai bên gọi nhau cùng lúc) giữ kết nối do bên có `device_id` nhỏ hơn mở.
-  Đổi kết nối không báo người dùng.
+  Đổi kết nối không báo người dùng: giữ kết nối mới thì phát `LinkSwitched` (sau
+  `CloseConnection` của kết nối cũ) để `app` chuyển kênh điều khiển sang kết nối mới;
+  giữ kết nối cũ thì chỉ đóng kết nối mới.
 - Nối lại theo lịch 1, 2, 4… ≤ 30 s. Máy kia từ chối, danh tính không khớp hay khác
   phiên bản giao thức thì “chặn”: không thử lại theo lịch, chỉ khi có sự kiện mDNS
   hoặc mạng đổi (vẫn theo lịch tính từ lần thử trước), hoặc người dùng thao tác.
@@ -25,8 +28,25 @@ Luật chính:
   độ có trần. Lịch 1, 2, 4… là lịch theo thời gian, không bị giới hạn này.
 - Mỗi loại lỗi chỉ báo một lần cho tới khi kết nối được hoặc người dùng thao tác;
   “không kết nối được” chỉ báo sau `UNREACHABLE_REPORT_AFTER` lần thất bại liên tiếp.
-- mDNS chỉ là gợi ý địa chỉ: thiết bị biến mất khỏi mDNS thì ngừng thử lại, nhưng
-  kết nối đang sống không bị đóng.
+- mDNS chỉ là gợi ý địa chỉ: thiết bị biến mất khỏi mDNS thì ngừng thử lại (trừ khi
+  đang `hold`, xem dưới), nhưng kết nối đang sống không bị đóng.
+- Lịch §6.2 (hẹn giờ, đếm lần “không kết nối được” → `LinkFailed`) chỉ chạy khi có địa chỉ
+  mDNS còn tươi hoặc thiết bị đang `hold` (protocol §6.1, §6.2). Thiết bị chỉ có `hint` chỉ
+  được thử khi có thao tác người dùng hoặc sự kiện (`hint`, `retry_now`, `network_changed`,
+  `trusted_changed`, `hold(True)`): không hẹn lịch, không báo `LinkFailed(UNREACHABLE)`.
+- `hint` là địa chỉ do người dùng đưa (ví dụ khi mDNS bị chặn): tracker nhớ nó tới khi có
+  `hint` mới hoặc thiết bị thôi tin cậy, kể cả sau khi mDNS báo thiết bị biến mất. Gọi
+  `hint` tính là người dùng thao tác (gỡ chặn, xóa bộ đếm, thử ngay).
+- Địa chỉ đích của một lần thử (`_target`): địa chỉ mDNS nếu còn tươi; không thì `hint`;
+  không thì địa chỉ mDNS cũ (chỉ còn khi đang `hold`). Có cả `hint` và mDNS tươi cùng
+  cổng: địa chỉ `hint` trước rồi địa chỉ mDNS, bỏ trùng, tối đa `_MAX_ADDRESSES`. Khác
+  cổng: lần thử do chính `hint()` gây ra dùng địa chỉ/cổng `hint` (gọi lúc đang thử thì
+  lần thử kế tiếp, sau khi lần đó kết thúc, dùng `hint`), các lần sau dùng mDNS.
+- `hold(device_id, True)` (app gọi khi thiết bị còn lượt truyền dở, protocol §6.1, §6.2):
+  mDNS báo biến mất thì địa chỉ cũ chỉ bị đánh dấu cũ (`stale`), lịch nối lại vẫn chạy;
+  `hold(False)` lúc địa chỉ đã cũ thì quên nó như khi mDNS vừa báo biến mất. `hold` chỉ
+  áp cho thiết bị tin cậy, không sống qua lần thôi tin cậy, và không bao giờ trả
+  `CloseConnection` hay `Notify`.
 """
 
 from __future__ import annotations
@@ -117,12 +137,25 @@ class LinkFailed:
     result: ConnectResult
 
 
-LinkEvent = LinkUp | LinkDown | LinkFailed
+@dataclass(frozen=True, slots=True)
+class LinkSwitched:
+    """Kết nối điều khiển hiện tại đổi từ `old_conn_id` sang `conn_id` (chống trùng, protocol §6.1).
+
+    Không báo người dùng (thiết bị vẫn kết nối); `app` chuyển kênh điều khiển sang kết nối mới.
+    """
+
+    device_id: str
+    old_conn_id: int
+    conn_id: int
+    outgoing: bool  # True: máy này mở kết nối MỚI
+
+
+LinkEvent = LinkUp | LinkDown | LinkFailed | LinkSwitched
 
 
 @dataclass(frozen=True, slots=True)
 class Notify:
-    """Báo người dùng một sự kiện kết nối."""
+    """Báo một sự kiện kết nối (cho người dùng, trừ `LinkSwitched`)."""
 
     event: LinkEvent
 
@@ -137,12 +170,19 @@ class _Conn:
     local: bool  # máy này mở
 
 
+_Target = tuple[tuple[str, ...], int]  # (địa chỉ, cổng)
+
+
 @dataclass(slots=True)
 class _Device:
-    """Trạng thái của một thiết bị (tin cậy, hoặc chưa tin cậy nhưng đang thấy qua mDNS)."""
+    """Trạng thái của một thiết bị (tin cậy, hoặc chưa tin cậy nhưng đang thấy qua mDNS / có `hint`)."""
 
     trusted: bool = False
-    seen: tuple[tuple[str, ...], int] | None = None  # (địa chỉ, cổng) mDNS gần nhất
+    seen: _Target | None = None  # (địa chỉ, cổng) mDNS gần nhất
+    stale: bool = False  # mDNS đã báo biến mất trong lúc `held`: `seen` là địa chỉ cũ
+    hint: _Target | None = None  # (địa chỉ, cổng) người dùng đưa qua `hint`
+    held: bool = False  # còn lượt truyền dở (`hold`): không quên `seen` khi mDNS báo biến mất
+    hint_next: bool = False  # `hint()` vừa gọi: lần `_start` kế tiếp dùng `hint_target()`
     current: _Conn | None = None
     attempt: int | None = None  # attempt_id đang chạy
     dirty: bool = False  # có sự kiện mDNS/mạng trong lúc đang thử
@@ -152,9 +192,43 @@ class _Device:
     last_start: float | None = None  # `now` của lần thử gần nhất
     reported: set[ConnectResult] = field(default_factory=set)  # loại lỗi đã báo
 
+    def fresh(self) -> _Target | None:
+        """Địa chỉ mDNS còn tươi (chưa bị báo biến mất)."""
+        return self.seen if not self.stale else None
+
+    def target(self) -> _Target | None:
+        """Địa chỉ đích của lần thử theo lịch / do sự kiện (luật trong docstring module)."""
+        fresh = self.fresh()
+        if fresh is not None and self.hint is not None and fresh[1] == self.hint[1]:
+            return _merge(self.hint, fresh)
+        if fresh is not None:
+            return fresh
+        if self.hint is not None:
+            return self.hint
+        return self.seen  # địa chỉ cũ, chỉ còn khi đang `held`
+
+    def hint_target(self) -> _Target | None:
+        """Địa chỉ của lần thử do `hint()` gây ra: `hint`, gộp với mDNS tươi nếu cùng cổng."""
+        if self.hint is None:
+            return None
+        fresh = self.fresh()
+        if fresh is not None and fresh[1] == self.hint[1]:
+            return _merge(self.hint, fresh)
+        return self.hint
+
+    def scheduled(self) -> bool:
+        """Lịch §6.2 có chạy không: có địa chỉ mDNS tươi, hoặc đang `held` và có địa chỉ đích."""
+        return self.fresh() is not None or (self.held and self.target() is not None)
+
     def eligible(self) -> bool:
-        """Đủ điều kiện thử: tin cậy, đang thấy, chưa kết nối, không đang thử."""
-        return self.trusted and self.seen is not None and self.current is None and self.attempt is None
+        """Đủ điều kiện thử: tin cậy, có địa chỉ đích, chưa kết nối, không đang thử."""
+        return self.trusted and self.target() is not None and self.current is None and self.attempt is None
+
+
+def _merge(hint: _Target, fresh: _Target) -> _Target:
+    """`hint` và mDNS tươi cùng cổng: địa chỉ `hint` trước, bỏ trùng, tối đa `_MAX_ADDRESSES`."""
+    addresses = tuple(dict.fromkeys(hint[0] + fresh[0]))[:_MAX_ADDRESSES]
+    return addresses, hint[1]
 
 
 def _delay(failures: int) -> float:
@@ -209,8 +283,8 @@ class LinkTracker:
     theo `device_id` tăng dần.
 
     Tracker nhớ địa chỉ mDNS của mọi thiết bị đang thấy (cả chưa tin cậy, để thiết bị
-    vừa ghép đôi mà đang thấy thì nối được ngay); bên gọi bảo đảm số thiết bị đang
-    thấy có giới hạn.
+    vừa ghép đôi mà đang thấy thì nối được ngay), và `hint` của mọi thiết bị được đưa
+    (cả chưa tin cậy); bên gọi bảo đảm số thiết bị đang thấy / có `hint` có giới hạn.
     """
 
     def __init__(self, own_device_id: str) -> None:
@@ -272,20 +346,79 @@ class LinkTracker:
             return []
         dev = self._devices.setdefault(device_id, _Device())
         dev.seen = (addrs, port)
+        dev.stale = False
         if not dev.trusted:
             return []
         return self._event_retry(device_id, dev, now)
 
     def device_gone(self, device_id: str, now: float) -> list[LinkAction]:
-        """mDNS báo thiết bị biến mất: ngừng thử lại; KHÔNG đóng kết nối, KHÔNG hủy lần thử."""
+        """mDNS báo thiết bị biến mất: ngừng thử lại; KHÔNG đóng kết nối, KHÔNG hủy lần thử.
+
+        Đang `hold`: chỉ đánh dấu địa chỉ là cũ, lịch nối lại giữ nguyên. Còn `hint`: vẫn nhớ,
+        nhưng chỉ thử khi có thao tác người dùng hay sự kiện (không theo lịch).
+        """
         dev = self._lookup(device_id, now)
         if dev is None:
             return []
-        dev.seen = None
-        dev.next_at = None
-        dev.dirty = False
+        if dev.held and dev.trusted:
+            if dev.seen is not None:
+                dev.stale = True
+            return []
+        self._forget_seen(device_id, dev)
+        return []
+
+    def hint(self, device_id: str, addresses: Sequence[str], port: int, now: float) -> list[LinkAction]:
+        """Người dùng đưa địa chỉ của thiết bị: nhớ, gỡ chặn, xóa bộ đếm, thử ngay nếu đủ điều kiện.
+
+        Thiết bị chưa tin cậy thì chỉ nhớ (thử khi nó được tin cậy). Kiểm tham số như
+        `device_seen`. Lần thử do lời gọi này dùng địa chỉ/cổng `hint` (gộp với mDNS tươi
+        nếu cùng cổng, xem docstring module).
+        """
+        validate_device_id(device_id)
+        addrs = _check_addresses(addresses)
+        port = _check_port(port)
+        now = self._check_now(now)
+        self._last_now = now
+        if device_id == self._own_id:
+            return []
+        dev = self._devices.setdefault(device_id, _Device())
+        dev.hint = (addrs, port)
         if not dev.trusted:
-            del self._devices[device_id]
+            return []
+        dev.failures = 0
+        dev.blocked = False
+        dev.reported.clear()
+        if dev.eligible():
+            dev.hint_next = True
+            return [self._start(device_id, dev, now)]
+        if dev.attempt is not None:
+            # Lần thử đang chạy có thể nhắm địa chỉ cũ: thất bại thì thử lại sớm, tới địa chỉ `hint`.
+            dev.dirty = True
+            dev.hint_next = True
+        return []
+
+    def hold(self, device_id: str, held: bool, now: float) -> list[LinkAction]:
+        """Giữ (`held=True`) hay thả địa chỉ của thiết bị còn lượt truyền dở (protocol §6.1, §6.2).
+
+        Giữ: mDNS báo biến mất thì không quên địa chỉ, lịch nối lại vẫn chạy. Lúc đổi từ thả sang
+        giữ, thiết bị đủ điều kiện, không bị chặn và chưa có lịch thì thử như một sự kiện
+        (≥ `EVENT_RETRY_GAP`); gọi lặp `hold(True)` không làm gì. Thả: địa chỉ đã cũ thì quên nó
+        như `device_gone`; không còn mDNS tươi thì ngừng lịch. Thiết bị lạ hay không tin cậy →
+        `[]`. Chỉ có thể trả `Connect`, không bao giờ `CloseConnection` hay `Notify`.
+        """
+        if type(held) is not bool:
+            raise TypeError("held phải là bool")
+        dev = self._lookup(device_id, now)
+        if dev is None or not dev.trusted:
+            return []
+        if held:
+            was_held, dev.held = dev.held, True
+            if not was_held and not dev.blocked and dev.eligible() and dev.next_at is None:
+                return self._event_retry(device_id, dev, now)
+            return []
+        if dev.held:
+            dev.held = False
+            self._forget_seen(device_id, dev, stale_only=True)
         return []
 
     def network_changed(self, now: float) -> list[LinkAction]:
@@ -362,7 +495,7 @@ class LinkTracker:
         if dev is None or dev.current is None or dev.current.conn_id != conn_id:
             return []
         dev.current = None
-        if dev.trusted and dev.seen is not None and not dev.blocked:
+        if dev.trusted and dev.scheduled() and not dev.blocked:
             dev.next_at = now + _delay(max(dev.failures, 1))
         return [Notify(LinkDown(device_id, conn_id))]
 
@@ -407,14 +540,19 @@ class LinkTracker:
         return self._devices.get(device_id)
 
     def _start(self, device_id: str, dev: _Device, now: float) -> Connect:
-        assert dev.seen is not None
+        """Bắt đầu một lần thử tới `dev.target()`, hoặc `dev.hint_target()` khi `hint_next`."""
+        target = dev.hint_target() if dev.hint_next else None
+        dev.hint_next = False
+        if target is None:
+            target = dev.target()
+        assert target is not None
         attempt_id = self._next_attempt
         self._next_attempt += 1
         dev.attempt = attempt_id
         dev.last_start = now
         dev.next_at = None
         dev.dirty = False
-        addresses, port = dev.seen
+        addresses, port = target
         return Connect(device_id, attempt_id, addresses, port)
 
     @staticmethod
@@ -437,7 +575,7 @@ class LinkTracker:
             if now >= earliest:
                 return [self._start(device_id, dev, now)]
             dev.next_at = earliest if dev.next_at is None else min(dev.next_at, earliest)
-        elif dev.attempt is not None and dev.seen is not None:
+        elif dev.attempt is not None and dev.target() is not None:
             dev.dirty = True
         return []
 
@@ -455,18 +593,22 @@ class LinkTracker:
         if dev.current is not None:
             # Máy kia đã nối tới trong lúc thử: không tính là thất bại.
             dev.dirty = False
+            dev.hint_next = False
             return []
         dev.failures += 1
         actions: list[LinkAction] = []
         if result is ConnectResult.UNREACHABLE:
             dev.blocked = False
-            if dev.seen is not None:
+            if dev.scheduled():
                 dev.next_at = now + _delay(dev.failures)
                 if dev.dirty and dev.last_start is not None:
                     dev.next_at = min(dev.next_at, max(now, dev.last_start + EVENT_RETRY_GAP))
                 if dev.failures >= UNREACHABLE_REPORT_AFTER and result not in dev.reported:
                     dev.reported.add(result)
                     actions.append(Notify(LinkFailed(device_id, result)))
+            elif dev.dirty and dev.last_start is not None and dev.target() is not None:
+                # Chỉ có `hint`: không theo lịch, nhưng sự kiện tới trong lúc thử vẫn được thử lại.
+                dev.next_at = max(now, dev.last_start + EVENT_RETRY_GAP)
             dev.dirty = False
             return actions
         assert result in _BLOCKING
@@ -485,6 +627,7 @@ class LinkTracker:
     ) -> list[LinkAction]:
         """Một kết nối mới đã sống (ra hoặc vào); áp luật chống trùng nếu đã có kết nối."""
         old = dev.current
+        dev.hint_next = False
         if old is None:
             dev.current = _Conn(conn_id, now, local)
             self._reset_failures(dev)
@@ -497,11 +640,30 @@ class LinkTracker:
             keep_new = local == keep_local
         if keep_new:
             dev.current = _Conn(conn_id, now, local)
-            return [CloseConnection(device_id, old.conn_id)]
+            return [
+                CloseConnection(device_id, old.conn_id),
+                Notify(LinkSwitched(device_id, old.conn_id, conn_id, local)),
+            ]
         return [CloseConnection(device_id, conn_id)]
 
+    def _forget_seen(self, device_id: str, dev: _Device, *, stale_only: bool = False) -> None:
+        """Quên địa chỉ mDNS (`stale_only`: chỉ khi nó đã cũ); lịch §6.2 hết chạy thì dừng nó."""
+        if not stale_only or dev.stale:
+            dev.seen = None
+            dev.stale = False
+        if not dev.scheduled() and not dev.hint_next:
+            # Còn `hint_next`: lần thử tới `hint` (đã hẹn, hoặc sau khi lần đang chạy thất bại)
+            # là do người dùng, không phải lịch §6.2, nên giữ `next_at` và `dirty` cho nó.
+            dev.next_at = None
+            dev.dirty = False
+        if not dev.trusted and dev.hint is None:
+            del self._devices[device_id]
+
     def _untrust(self, device_id: str) -> list[LinkAction]:
-        """Thiết bị thôi tin cậy: đóng kết nối, hủy lần thử, quên mọi thứ trừ địa chỉ mDNS."""
+        """Thiết bị thôi tin cậy: đóng kết nối, hủy lần thử, quên mọi thứ trừ địa chỉ mDNS tươi.
+
+        `hint`, `held` và địa chỉ mDNS cũ (`stale`) cũng bị quên.
+        """
         dev = self._devices[device_id]
         actions: list[LinkAction] = []
         notify: list[LinkAction] = []
@@ -510,8 +672,9 @@ class LinkTracker:
             notify.append(Notify(LinkDown(device_id, dev.current.conn_id)))
         if dev.attempt is not None:
             actions.append(CancelConnect(device_id, dev.attempt))
-        if dev.seen is not None:
-            self._devices[device_id] = _Device(seen=dev.seen)
+        fresh = dev.fresh()
+        if fresh is not None:
+            self._devices[device_id] = _Device(seen=fresh)
         else:
             del self._devices[device_id]
         return actions + notify

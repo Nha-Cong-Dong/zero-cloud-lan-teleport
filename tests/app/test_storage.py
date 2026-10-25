@@ -687,6 +687,36 @@ def test_create_temp_rejects_bad_transfer_id_without_touching_disk(rd, tmp_path,
     assert snapshot(tmp_path) == before
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [ID.upper(), ID[:31], ID.encode(), int(ID, 16), None, "0" * 31 + "\x00", ID + "\n"],
+    ids=["hoa", "31-ky-tu", "bytes", "so", "none", "nul", "xuong-dong"],
+)
+def test_create_temp_bad_transfer_id_uses_message_validator(rd, tmp_path, bad):
+    """P2-6a ST1 (plan-p2-6 mục 2.3): `create_temp` kiểm id bằng `core.messages.validate_transfer_id`.
+
+    Vẫn là `ValueError` như cũ (`MessageError` là lớp con), thông điệp là của `MessageError`, không đụng đĩa.
+    """
+    from teleport.core.messages import MessageError, validate_transfer_id
+
+    with pytest.raises(MessageError) as expected:
+        validate_transfer_id(bad)
+    before = snapshot(tmp_path)
+    with pytest.raises(ValueError) as got:
+        rd.create_temp(bad)
+    assert isinstance(got.value, MessageError)
+    assert str(got.value) == str(expected.value)
+    assert snapshot(tmp_path) == before
+
+
+def test_storage_docstring_no_longer_promises_validator_switch(storage):
+    """Plan-p2-6 mục 2.3: câu “đổi sang … khi P2-4 merge” đã hết hiệu lực, phải được xóa."""
+    import inspect
+
+    text = inspect.getsource(storage)
+    assert "khi P2-4 đã merge" not in text and "khi P2-4 merge" not in text
+
+
 # ---------------------------------------------------------------------------------------------
 # AC-8 `<id>` đã có
 # ---------------------------------------------------------------------------------------------
