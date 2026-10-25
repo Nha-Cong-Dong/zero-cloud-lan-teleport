@@ -259,7 +259,7 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 4. Mọi khối khớp → tính Merkle root từ danh sách hash; khác `merkle_root` của bên gửi (trạng thái nối lại bị hỏng) → xóa toàn bộ bitfield (nối bản ghi xóa mọi đánh dấu vào `.state`) và gửi `resume` với bitfield toàn 0 để nhận lại cả file.
 5. Một file qua bước 3 hoặc 4 mà vẫn sai **quá 3 lần** (ví dụ ổ đĩa hỏng) → `cancel{error}`, báo người dùng.
 6. Khớp → **đổi tên không ghi đè** sang tên thật → ghi “file đã xong” vào trạng thái mức lượt truyền (mục 6.3) → xóa trạng thái của file → gửi `verified`. Thứ tự đầy đủ, kể cả các lần `fsync` file và thư mục: [architecture.md](architecture.md) mục 4.
-   - Đổi tên không ghi đè chạy được trên mọi hệ file, kể cả FAT/exFAT và ổ mạng. Chọn tên đích (đã có thì thử ` (1)`, ` (2)`…), **nối bản ghi ý định mang tên đó vào `.state` và `fsync`** rồi mới tạo file đích rỗng bằng `O_CREAT | O_EXCL` để giữ chỗ; tạo được thì **nối bản ghi đã giữ chỗ cho tên đó và `fsync`**; sau đó `os.replace` file tạm đè lên **chính file giữ chỗ đó**.
+   - Đổi tên không ghi đè ✅ (`teleport.app.storage`; Giai đoạn 2 chưa ghi hai bản ghi vào `.state`; thứ tự đang chạy: [architecture.md](architecture.md) mục 4 “Thư mục nhận”) chạy được trên mọi hệ file, kể cả FAT/exFAT và ổ mạng. Chọn tên đích (đã có thì thử ` (1)`, ` (2)`…), **nối bản ghi ý định mang tên đó vào `.state` và `fsync`** rồi mới tạo file đích rỗng bằng `O_CREAT | O_EXCL` để giữ chỗ; tạo được thì **nối bản ghi đã giữ chỗ cho tên đó và `fsync`**; sau đó `os.replace` file tạm đè lên **chính file giữ chỗ đó**.
    - `os.replace` gặp `PermissionError` (Windows: antivirus hay trình lập chỉ mục đang mở file giữ chỗ) → thử lại tối đa 5 lần, cách nhau 50 ms.
    - Bị ngắt giữa chừng → lần sau, bên nhận chỉ dùng lại một file mang tên đích khi `.state` có bản ghi đã giữ chỗ cho đúng tên đó; file nào `.state` không chứng minh được là của mình thì không bao giờ bị xóa hay ghi đè. Bảng phục hồi: [architecture.md](architecture.md) mục 4.
    - Không dùng `os.rename` trần trên POSIX, vì nó âm thầm ghi đè file đích. Cũng không dùng `os.link`, vì FAT/exFAT không hỗ trợ.
@@ -278,7 +278,7 @@ Test vector Merkle: lá thứ `i` (đếm từ 0) là SHA-256 của khối dài 
 
 Với 5 lá L0 … L4: tầng 1 là SHA-256(L0 ‖ L1), SHA-256(L2 ‖ L3), L4 (đẩy thẳng lên); tầng 2 là SHA-256 của hai nút đầu, rồi L4; root = SHA-256(tầng 2 nút đầu ‖ L4).
 
-**Tên file nhận được** được làm sạch trước khi dùng (chi tiết: [ke_hoach.md](ke_hoach.md) mục 3.3); bộ làm sạch chỉ biến đổi tên, không bao giờ từ chối (mục 3.3). Hai file trùng tên trong cùng `offer`, hoặc trùng với file đã có (không phân biệt hoa thường), đều được đặt tên ` (1)`, ` (2)`…
+**Tên file nhận được** được làm sạch trước khi dùng (chi tiết: [ke_hoach.md](ke_hoach.md) mục 3.3); bộ làm sạch chỉ biến đổi tên, không bao giờ từ chối (mục 3.3). Hai file trùng tên trong cùng `offer`, hoặc trùng với file đã có (không phân biệt hoa thường), đều được đặt tên ` (1)`, ` (2)`… Tên còn được cắt cho vừa giới hạn độ dài đường dẫn của máy nhận, và hệ file từ chối tên thì bên nhận dùng tên dự phòng ([architecture.md](architecture.md) mục 4 “Thư mục nhận”).
 
 ## 5. Ghép đôi
 
