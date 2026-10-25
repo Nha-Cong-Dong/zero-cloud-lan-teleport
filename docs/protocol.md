@@ -12,7 +12,7 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 - **Chữ ký bằng khóa danh tính** (ngoài chữ ký tự ký của chứng chỉ): mọi payload được ký phải bắt đầu bằng một **nhãn riêng** dạng `teleport-…-vN` (ví dụ `teleport-initiator-proof-v1`, mục 5.2), mỗi mục đích một nhãn, để chữ ký làm cho việc này không bao giờ dùng lại được cho việc khác.
 - **Pin ngắn** = 8 byte đầu của fingerprint, dạng `AB:CD:EF:…`. Chỉ để hiển thị (so bằng mắt); máy không bao giờ xác thực bằng pin ngắn.
 - **Danh tính gắn với thư mục cấu hình, không gắn với máy.** Xóa thư mục cấu hình (gỡ cài đặt không giữ cài đặt, hoặc cài lại sạch) sinh `device_id` và fingerprint mới: với các máy khác, đó là một **thiết bị mới**, chưa ghép đôi (mục 7).
-- File danh tính thiếu một nửa, hỏng, khóa không khớp chứng chỉ, hoặc mất danh tính mà vẫn còn `trusted.json` → app báo lỗi và dừng, **không bao giờ** tự tạo danh tính mới (làm vậy sẽ âm thầm làm hỏng mọi ghép đôi). Cách tạo và lưu: [architecture.md](architecture.md) mục 4.
+- File danh tính thiếu một nửa, hỏng, khóa không khớp chứng chỉ, hoặc mất danh tính mà `trusted.json` vẫn còn thiết bị (hoặc không đọc được) → app báo lỗi và dừng, **không bao giờ** tự tạo danh tính mới (làm vậy sẽ âm thầm làm hỏng mọi ghép đôi). Cách tạo và lưu: [architecture.md](architecture.md) mục 4.
 
 ## 2. Tầng vận chuyển
 
@@ -393,6 +393,7 @@ Cài đặt ở `teleport.core.links` (máy trạng thái) và `teleport.app.nod
   - Hai kết nối do hai bên mở cách nhau **dưới 5 s** (hai bên gọi nhau cùng lúc) → giữ kết nối do bên có `device_id` **nhỏ hơn** mở, đóng kết nối kia.
   - Mỗi bên đo theo đồng hồ của mình: phía server lúc nhận `control_open`, phía client lúc gửi xong `control_open`. Hai bên đo lệch nhau một chút, nên ở sát ngưỡng 5 s có thể cả hai kết nối cùng bị đóng; lần nối lại sau sẽ ổn, và việc đồng bộ lại (mục 6.3) bảo đảm không mất gì.
   - Đổi kết nối không báo người dùng.
+- mDNS chỉ là gợi ý địa chỉ (mục 8): mDNS báo một thiết bị đã đi thì node ngừng thử nối lại tới nó khi không còn lượt truyền dở với nó (mục 6.2), nhưng **không** đóng kết nối điều khiển đang sống với thiết bị đó.
 - Message đang gửi dở trên kết nối bị đóng có thể mất. Lượt truyền không bị ảnh hưởng vì hai bên đồng bộ lại trên kết nối mới (mục 6.3); clipboard chỉ gửi theo kiểu cố gắng, không gửi lại.
 
 ### 6.2. Nối lại

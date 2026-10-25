@@ -4,7 +4,7 @@
 > **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
 > **Không chứa:** phạm vi, tính năng, tiêu chí chấp nhận và con số chất lượng → [mvp.md](mvp.md) (tham chiếu theo mã F1–F12, N1–N12). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
 > **Bản chính thức về kỹ thuật:** đặc tả giao thức [protocol.md](protocol.md) và trạng thái từng module [architecture.md](architecture.md); khi lệch nhau thì hai file đó đúng.
-> **Cập nhật:** 2026-10-24
+> **Cập nhật:** 2026-10-25
 
 ---
 
@@ -325,7 +325,7 @@ Bản chính thức: [CONTRIBUTING.md](CONTRIBUTING.md). Tóm tắt:
 - **Nhánh:** `main` luôn chạy được và được bảo vệ (chỉ merge qua Pull Request khi CI xanh). Mỗi việc làm trên nhánh riêng `feat/...`, `fix/...`.
 - **Commit:** theo [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `chore:`), giúp viết `CHANGELOG.md` dễ dàng.
 - **CI** (`.github/workflows/ci.yml`): `ruff check`, `ruff format --check`, `mypy src`, `pytest` trên Windows/macOS/Linux × Python 3.12/3.14 (bản thấp nhất và mới nhất được hỗ trợ). `mypy` có từ đầu Giai đoạn 2 (cấu hình trong `pyproject.toml`).
-- **Đội subagent** trong `.claude/agents/` (vai trò và quy trình: `.claude/CLAUDE.md`): lập kế hoạch → làm rõ → lập trình + viết test song song → soát code ∥ tấn công thử (đo đạc trước và sau khi thay đổi chạm yêu cầu N) → chốt → tóm tắt. Soát tài liệu chạy trước mỗi lần phát hành và sau mỗi đợt sửa nhiều tài liệu; giao diện và đóng gói dùng ở các giai đoạn sau. Chỉ commit và push khi người dùng đồng ý.
+- **Đội subagent** trong `.claude/agents/`: vai trò và quy trình ở `.claude/CLAUDE.md`. Chỉ commit và push khi người dùng đồng ý.
 - **Phát hành:** gắn tag `vX.Y.Z` → GitHub Actions build bộ cài và tạo GitHub Release kèm ghi chú từ `CHANGELOG.md`.
 - **Theo dõi công việc:** GitHub Issues + Milestones tương ứng từng bản phát hành ở mục 5.1.
 
@@ -342,7 +342,7 @@ Bản chính thức: [CONTRIBUTING.md](CONTRIBUTING.md). Tóm tắt:
 | Soak test | 100 lượt truyền liên tiếp, kiểm tra không rò bộ nhớ, không còn file tạm | N7 |
 | Thủ công trước mỗi bản beta/1.0 | 2 máy thật trên Wi-Fi nhà, văn phòng, quán cà phê; ma trận Windows 10/11, macOS, Ubuntu; giao diện, trợ năng | N10, N12, AC giao diện |
 
-Test mở socket thật được đánh dấu `@pytest.mark.integration`.
+Quy ước viết test (marker, fixture, chỗ test thay được): [architecture.md](architecture.md) mục 6.
 
 ---
 

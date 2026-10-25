@@ -2,8 +2,8 @@
 
 Luật ở docs/ke_hoach.md mục 3.3 và docs/protocol.md mục 3.3, 4.4. Tên file do máy kia gửi
 không bao giờ được tin: `sanitize_filename` **biến đổi** mọi chuỗi thành một tên an toàn để
-đặt trong thư mục nhận, không bao giờ từ chối. Từ chối message (tên rỗng, quá 255 byte, có ký
-tự loại Cc) là việc của `teleport.core.messages`.
+đặt trong thư mục nhận, không bao giờ từ chối. Từ chối message (tên quá 255 byte UTF-8, có ký
+tự loại Cc/Cs; tên rỗng vẫn hợp lệ) là việc của `teleport.core.messages`.
 
 Thứ tự làm sạch (mỗi bước giữ được điều các bước trước đã bảo đảm):
 1. Bỏ ký tự loại Cc (điều khiển, kể cả mã 0–31), Cs (surrogate lẻ), ký tự điều khiển hướng chữ
@@ -23,7 +23,7 @@ Tên kiểu `x.mp4.part` hay `x.part.state` được giữ nguyên: file tạm n
 `<thư mục nhận>/.teleport/<transfer_id>/` nên không bao giờ đụng tên file nhận được
 (ke_hoach mục 3.3); chỉ chính tên `.teleport` mới trùng tên nội bộ.
 
-Giới hạn độ dài của cả đường dẫn (Windows `MAX_PATH`) không thuộc module này: `app/storage.py`
+Giới hạn độ dài của cả đường dẫn (Windows `MAX_PATH`) không thuộc module này: tầng `app`
 lo, có thể gọi `numbered(..., max_bytes=...)` với giới hạn nhỏ hơn.
 """
 

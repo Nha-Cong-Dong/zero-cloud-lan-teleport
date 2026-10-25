@@ -34,15 +34,15 @@ Tài liệu này là **nguồn duy nhất** về trạng thái từng module. Tr
 
 **Quy tắc**, được `tests/test_architecture.py` kiểm tra tự động:
 1. Mỗi tầng chỉ import các tầng **bên dưới**. `ui` và `cli` không import lẫn nhau.
-2. `core` là **sans-IO**: không import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `ifaddr`, `PySide6`, `teleport.paths`, `teleport.lock`, hay bất kỳ tầng nào khác.
-3. Mọi module/gói ở cấp `teleport.*` phải thuộc một tầng, hoặc là tiện ích dùng chung (`paths`, `lock`, `atomic`) không import tầng nào. Tạo gói mới thì phải xếp nó vào sơ đồ.
+2. `core` là **sans-IO**: không import `asyncio`, `socket`, `ssl`, `threading`, `zeroconf`, `selectors`, `ifaddr`, `PySide6`, `teleport.paths`, `teleport.lock`, `teleport.atomic`, hay bất kỳ tầng nào khác.
+3. Mọi module/gói ở cấp `teleport.*` phải thuộc một tầng, hoặc là tiện ích dùng chung (`paths`, `lock`, `atomic`) không import tầng nào. Tạo gói mới thì phải xếp nó vào sơ đồ, và vào `LAYERS` (hoặc `SHARED`) trong `tests/test_architecture.py`.
 
 ### Vì sao chia như vậy
 
 - **core sans-IO:** logic khó nhất là chọn khối nào gửi lại, xử lý `resume`, lượt đọc lại cuối, quyết định hủy khi file nguồn đổi. Phần này được viết thành **máy trạng thái thuần**: nhận sự kiện (message tới, khối tới), trả về hành động (gửi message, ghi khối, báo lỗi). Khi đó test ngẫu nhiên hàng nghìn kịch bản ngắt kết nối bằng `hypothesis` chạy trong vài mili giây, không cần socket.
 - **trust tách khỏi net:** danh tính và danh sách thiết bị tin cậy là mật mã cộng lưu trữ, không phải mạng. Tách ra thì giữ chúng nhỏ và dễ kiểm toán.
 - **net chỉ là đường ống:** `net` đọc bytes, đưa cho `core` xử lý, rồi thực hiện hành động `core` trả về. Không có quyết định nghiệp vụ nào trong `net`.
-- **app là nơi điều phối duy nhất:** CLI và giao diện gọi cùng các dịch vụ, nên không viết logic hai lần.
+- **app là nơi điều phối duy nhất:** CLI và giao diện gọi cùng các dịch vụ, nên không viết logic hai lần. `app` chỉ trả mã kết quả (ví dụ `PairingOutcome`); câu chữ cho người dùng nằm ở `cli.py` và sau này ở `ui`.
 - **clipboard là tính năng, không phải tầng:** `ClipboardSync` thuộc `app`. Nó đọc/ghi clipboard qua một interface `ClipboardBackend`; `ui` cung cấp bản dùng Qt, test dùng bản giả. Nhờ vậy CLI không phải kéo theo Qt.
 
 ## 2. Mô hình tiến trình
@@ -70,7 +70,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | — | `lock.py` | Khóa file của hệ điều hành: `node.lock` (một node cho mỗi thư mục cấu hình), `identity.lock` (khi tạo danh tính) | ✅ |
 | — | `atomic.py` | Ghi file nguyên tử (`.tmp` → fsync → `os.replace`, thử lại khi bị khóa); dùng cho `trusted.json`, `settings.json` | ✅ |
 | core | `framing.py` | Mã hóa/giải mã khung `[uint32 độ dài][JSON]`; giới hạn 1 MiB, riêng kết nối ghép đôi 16 KiB | ✅ |
-| core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message (`hello` có `os`, `pair_*` gồm `pair_nonce.signature`, `control_open`, `ping`/`pong`; truyền file: `data_open`, `offer` với `FileEntry`, `accept`, `reject` có trường kèm theo lý do, `resume`, `complete`, `verified`, `cancel`; chỉ những gì kiểm được từ riêng message, phần cần `offer` để máy trạng thái truyền file kiểm); bảng loại kết nối (`ConnectionKind`, `allowed_types`, `opening_kind`: `data_open` có chứng chỉ client → dữ liệu) | ✅ |
+| core | `messages.py` | Kiểu và kiểm tra hợp lệ từng message, nơi duy nhất kiểm từng trường của một message do máy khác gửi (`hello` có `os`, `pair_*` gồm `pair_nonce.signature`, `control_open`, `ping`/`pong`; truyền file: `data_open`, `offer` với `FileEntry`, `accept`, `reject` có trường kèm theo lý do, `resume`, `complete`, `verified`, `cancel`; chỉ những gì kiểm được từ riêng message, phần cần `offer` để máy trạng thái truyền file kiểm); bảng loại kết nối (`ConnectionKind`, `allowed_types`, `opening_kind`: `data_open` có chứng chỉ client → dữ liệu) | ✅ |
 | core | `keepalive.py` | Keepalive sans-IO: khi nào gửi ping, khi nào coi là mất kết nối ([protocol.md](protocol.md) mục 2.3) | ✅ |
 | core | `pairing_code.py` | Cam kết nonce và mã ghép đôi 6 số từ hai fingerprint + hai nonce; payload chứng minh giữ khóa mà bên khởi xướng ký (`proof_payload`) | ✅ |
 | core | `pairing.py` | Máy trạng thái ghép đôi sans-IO: thứ tự `pair_*`, hết giờ, lý do hủy (`InitiatorSession`, `ResponderSession`); bên khởi xướng ký (`ProofSigner`) và bên trả lời kiểm chữ ký trong `pair_nonce` (`ProofVerifier`) trước khi hiện mã, hai hàm do `app` đưa vào từ `trust`; chống làm phiền: một phiên tại một thời điểm, chờ tăng dần theo IP, giới hạn số mã hiện ra, hai bên cùng chủ động (`PairingGate`) | ✅ |
@@ -120,7 +120,7 @@ Module chỉ được tạo khi có code thật, không tạo file rỗng trư�
 
 Do `teleport.trust.identity.load_or_create_identity` tạo và đọc.
 
-- **Tạo** (chưa có cả hai file, và chưa có `trusted.json`), trong khi giữ `identity.lock`: ghi `device.key.tmp` và `device.crt.tmp` (quyền `0o600` ngay lúc tạo, `fsync`), rồi đổi tên khóa trước, chứng chỉ sau. Chứng chỉ có hiệu lực từ 2000-01-01 tới 9999-12-31. Còn `device.crt.tmp` mà chưa có `device.crt` (bị ngắt giữa hai bước đổi tên) thì lần chạy sau làm nốt.
+- **Tạo** (chưa có cả hai file, và `trusted.json` chưa có hoặc có danh sách thiết bị rỗng; `trusted.json` không đọc được hay hỏng thì coi như còn ghép đôi → `IdentityError`), trong khi giữ `identity.lock`: ghi `device.key.tmp` và `device.crt.tmp` (quyền `0o600` ngay lúc tạo, `fsync`), rồi đổi tên khóa trước, chứng chỉ sau. Chứng chỉ có hiệu lực từ 2000-01-01 tới 9999-12-31. Còn `device.crt.tmp` mà chưa có `device.crt` (bị ngắt giữa hai bước đổi tên) thì lần chạy sau làm nốt.
 - **Đọc:** chứng chỉ phải qua đúng bộ kiểm tra dành cho chứng chỉ máy khác ([protocol.md](protocol.md) mục 5); khóa phải là ECDSA P-256 và khớp chứng chỉ.
 - **Lỗi:** chỉ còn một file, file hỏng, khóa không khớp → `IdentityError` kèm hướng dẫn; CLI in thông báo và thoát với mã 1. **Không bao giờ** tự tạo danh tính mới khi đã có một phần, vì làm vậy sẽ âm thầm xóa mọi ghép đôi.
 
@@ -167,8 +167,8 @@ Do `teleport.app.settings.Settings` đọc/ghi.
 
 Do `teleport.lock.NodeLock` giữ (tiện ích dùng chung như `paths.py`, vì `trust` cũng cần khóa này). Khóa là khóa của hệ điều hành trên file (Windows: `msvcrt.locking` byte 0; Linux/macOS: `flock`), không phải sự tồn tại của file:
 
-- Lấy khóa không chờ. Đã có node khác giữ (kể cả trong cùng tiến trình) → `NodeLockedError` (“Teleport đang chạy với thư mục cấu hình này”), lệnh CLI thoát với mã ≠ 0.
-- Tiến trình chết, kể cả bị kill, thì hệ điều hành tự nhả khóa: không có khóa treo phải xóa tay.
+- Mặc định lấy khóa không chờ. Đã có node khác giữ (kể cả trong cùng tiến trình) → `NodeLockedError` (“Teleport đang chạy với thư mục cấu hình này”), lệnh CLI thoát với mã ≠ 0.
+- Tiến trình chết, kể cả bị kill, thì hệ điều hành tự nhả khóa: không có khóa treo phải xóa tay. Nhưng Windows nhả khóa của tiến trình bị kill **không đồng bộ**, nên chỗ nào bên giữ khóa có thể vừa chết (node khởi động lại sau khi sập) phải lấy khóa có chờ: `acquire(timeout=...)`, như `Node.start` với `LOCK_TIMEOUT`.
 - File không chứa gì (không ghi PID) và được giữ lại sau khi nhả khóa.
 
 ### `<file_index>.state` (nhật ký nối lại) ⬜
@@ -262,6 +262,10 @@ Ngoại lệ có chủ đích: ghi `trusted.json` và `settings.json` chạy đ�
 ## 6. Kiểm thử
 
 - `tests/` chia thư mục theo tầng: `core/`, `trust/`, `net/`… Test ở thư mục gốc `tests/` dành cho các tiện ích dùng chung (`paths`, `lock`, `atomic`), `cli` và quy tắc phân tầng.
-- Test cần socket thật được đánh dấu `@pytest.mark.integration`. Chạy nhanh phần còn lại bằng `pytest -m "not integration"`.
+- Test cần socket thật được đánh dấu `@pytest.mark.integration`. Chạy nhanh phần còn lại bằng `pytest -m "not integration"`. Mạng chặn multicast: [CONTRIBUTING.md](CONTRIBUTING.md) (`TELEPORT_SKIP_MDNS`).
+- Mọi test kết nối từ `127.0.0.1`, nên fixture tự động trong `tests/conftest.py` nới **tốc độ và burst** bắt tay của `teleport.core.admission` (không nới giới hạn số kết nối đồng thời). Test cần mặc định thật gắn `@pytest.mark.real_admission_limits`. Node chạy bằng tiến trình con không nhận fixture này, nên luôn chạy với mặc định thật.
+- pytest chạy với `asyncio_mode = "auto"` (test `async def` không cần marker) và `--import-mode=importlib` (hai thư mục tầng có file test trùng tên được), cấu hình ở `pyproject.toml`.
+- Hằng thời gian chờ của `teleport.net.connection` và giới hạn của `teleport.core.admission` là biến cấp module, đọc lúc dùng, nên test chỉnh bằng `monkeypatch.setattr`. Hằng nào là giá trị mặc định của tham số (keepalive: `ping_interval`, `dead_after`; mDNS: `probe_interval`, `max_services`) thì vá không có tác dụng: test truyền tham số tường minh. `teleport.app.node` gọi `MdnsDiscovery`, `open_control`… qua tên toàn cục của module để test thay được.
+- CLI: test chạy lệnh ngay trong tiến trình qua `run_listen`, `run_pair`, `run_list` (`teleport.cli`). Các cờ ẩn `--host`, `--port`, `--mdns-interface` và `--advertise-address` (chỉ `listen`) chỉ dành cho test (nghe `127.0.0.1`, cổng 0).
 
 Giao thức trên dây: xem [protocol.md](protocol.md).
