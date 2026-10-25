@@ -1225,3 +1225,231 @@ async def test_sc5_scan_duration(scan_dir, fake_mdns, monkeypatch):
         assert spy.sleeps == [(timeout, ["start", "set_priority", "start_browsing"])], spy.sleeps
         assert fake_mdns.last.calls[-1] == "close" and fake_mdns.last.closed
         assert took >= 0.8 * timeout, took
+
+
+# =================================================================================================
+# P2-6a L5: đổi kết nối (LinkSwitched), connect_hint, auto_connect_to
+# (specs/plan-p2-6.md mục 2.6 và tiêu chí L5; specs/spec-p2-6.md mục A5)
+# =================================================================================================
+
+
+def _device_events(rec, device_id: str) -> list[str]:
+    return [type(e).__name__ for e in rec.events if e.device.device_id == device_id]
+
+
+@integration
+async def test_l5_same_side_switch_emits_no_device_events_and_no_error(
+    node_factory, trust_each_other, control_client, caplog
+):
+    """Máy kia mở kết nối điều khiển thứ hai → node đổi sang kết nối mới mà người dùng không thấy gì."""
+    caplog.set_level(logging.DEBUG, logger="teleport")
+    trust_each_other("A", "B")
+    A = await node_factory("A")
+    B = await node_factory("B")
+    c1 = await control_client(B, A)
+    await A.rec.wait_event(DeviceConnected, B.id, timeout=2)
+    first = A.control_connection(B.id)
+    c2 = await control_client(B, A)
+    await wait_until(lambda: c1.task.done(), 2, "kết nối cũ chưa bị đóng")
+    await wait_until(lambda: A.control_connection(B.id) is not first, 2, "A chưa đổi sang kết nối mới")
+    await asyncio.sleep(0.3)
+    assert A.connected_devices() == frozenset({B.id})
+    assert _device_events(A.rec, B.id) == ["DeviceConnected"], "đổi kết nối không báo người dùng"
+    n = c2.pongs()
+    await wait_until(lambda: c2.pongs() >= n + 1, 3, "kết nối mới không trao ping/pong")
+    errors = _teleport_records(caplog, min_level=logging.ERROR)
+    assert errors == [], _describe(errors)
+
+
+@integration
+async def test_l5_old_outgoing_replaced_after_replace_after_emits_no_device_events(
+    node_factory, trust_each_other, control_client, fast, caplog
+):
+    """Kết nối ra cũ ≥ REPLACE_AFTER bị kết nối vào mới thay (luật §6.1): không Disconnected/Connected."""
+    caplog.set_level(logging.DEBUG, logger="teleport")
+    trust_each_other("A", "B")
+    A = await node_factory("A")
+    B = await node_factory("B")
+    A.connect_hint(B.id, [LOCAL], B.port)
+    await wait_until(lambda: B.id in A.connected_devices() and A.id in B.connected_devices(), 3)
+    old = A.control_connection(B.id)
+    assert old.is_server is False
+    await asyncio.sleep(fast.REPLACE_AFTER + 0.3)
+    await control_client(B, A)
+    await wait_until(lambda: A.control_connection(B.id) is not old, 2, "A chưa đổi sang kết nối mới")
+    assert A.control_connection(B.id).is_server is True
+    await asyncio.sleep(0.3)
+    assert A.connected_devices() == frozenset({B.id})
+    assert _device_events(A.rec, B.id) == ["DeviceConnected"]
+    errors = _teleport_records(caplog, min_level=logging.ERROR)
+    assert errors == [], _describe(errors)
+
+
+@integration
+@pytest.mark.parametrize("caller", ["A", "B"])
+async def test_l5_connect_hint_connects_without_mdns(
+    node_factory, trust_each_other, count_open_control, caller
+):
+    counter = count_open_control()
+    trust_each_other("A", "B")
+    A = await node_factory("A")  # mdns=None: không có khám phá nào
+    B = await node_factory("B")
+    src, dst = (A, B) if caller == "A" else (B, A)
+    assert src.connect_hint(dst.id, [LOCAL], dst.port) is None
+    await wait_until(
+        lambda: dst.id in src.connected_devices() and src.id in dst.connected_devices(), 3, "chưa nối được"
+    )
+    assert counter.count(caller=src) == 1 and counter.count(caller=dst) == 0
+    call = counter.of(caller=src)[0]
+    assert (call.addresses, call.port, call.fingerprint) == ((LOCAL,), dst.port, dst.identity.fingerprint)
+    up = await src.rec.wait_event(DeviceConnected, dst.id)
+    assert up.outgoing is True
+    assert (await dst.rec.wait_event(DeviceConnected, src.id)).outgoing is False
+    assert src.control_connection(dst.id).is_server is False
+
+
+@integration
+async def test_l5_connect_hint_works_with_auto_connect_false(
+    node_factory, trust_each_other, count_open_control
+):
+    counter = count_open_control()
+    trust_each_other("A", "B")
+    A = await node_factory("A", auto_connect=False)
+    B = await node_factory("B")
+    A.connect_hint(B.id, [LOCAL], B.port)
+    await wait_until(
+        lambda: B.id in A.connected_devices(), 3, "connect_hint phải chạy khi auto_connect=False"
+    )
+    assert counter.count(caller=A) == 1
+
+
+@integration
+async def test_l5_connect_hint_only_peer_drop_waits_for_user_action(
+    node_factory, trust_each_other, count_open_control, fast
+):
+    """Spec C1: thiết bị chỉ có hint (không mDNS, không held) mất kết nối → không tự nối lại theo lịch;
+    hint vẫn được nhớ, `connect_hint` lần nữa (thao tác người dùng) nối lại được."""
+    counter = count_open_control()
+    trust_each_other("A", "B")
+    A = await node_factory("A")
+    B = await node_factory("B")
+    A.connect_hint(B.id, [LOCAL], B.port)
+    await wait_until(lambda: A.id in B.connected_devices(), 3)
+    B.control_connection(A.id).abort()  # B cắt kết nối
+    await A.rec.wait_event(DeviceDisconnected, B.id, timeout=2)
+    await asyncio.sleep(5 * fast.RETRY_BASE + 0.5)
+    assert counter.count(caller=A) == 1, "không held, không mDNS: không được tự nối lại theo lịch"
+    assert B.id not in A.connected_devices()
+    A.connect_hint(B.id, [LOCAL], B.port)
+    await wait_until(lambda: B.id in A.connected_devices(), 3, "connect_hint lần hai chưa nối lại")
+    assert {(c.addresses, c.port) for c in counter.of(caller=A)} == {((LOCAL,), B.port)}
+
+
+@integration
+async def test_l5_connect_hint_to_unknown_device_is_key_error(node_factory, app_helpers, count_open_control):
+    counter = count_open_control()
+    A = await node_factory("A")
+    with pytest.raises(KeyError):
+        A.connect_hint(app_helpers.new_device_id(), [LOCAL], 47474)
+    await asyncio.sleep(0.1)
+    assert counter.count() == 0
+
+
+async def test_l5_connect_hint_before_start_is_runtime_error(node_factory, app_helpers):
+    A = await node_factory("A", start=False)
+    with pytest.raises(RuntimeError):
+        A.connect_hint(app_helpers.new_device_id(), [LOCAL], 47474)
+
+
+@integration
+@pytest.mark.parametrize(
+    ("addresses", "port"),
+    [
+        ([], 47474),
+        (["::1"], 47474),
+        (["localhost"], 47474),
+        (["0.0.0.0"], 47474),
+        (["224.0.0.251"], 47474),
+        ("127.0.0.1", 47474),
+        ([LOCAL], 0),
+        ([LOCAL], 65536),
+        ([LOCAL], True),
+        ([LOCAL], "47474"),
+    ],
+    ids=[
+        "rong",
+        "ipv6",
+        "ten-mien",
+        "0.0.0.0",
+        "multicast",
+        "chuoi-don",
+        "cong-0",
+        "cong-65536",
+        "bool",
+        "chuoi",
+    ],
+)
+async def test_l5_connect_hint_bad_address_or_port_is_value_error(
+    node_factory, trust_each_other, count_open_control, addresses, port
+):
+    counter = count_open_control()
+    trust_each_other("A", "B")
+    A = await node_factory("A")
+    B = await node_factory("B")
+    with pytest.raises(ValueError):
+        A.connect_hint(B.id, addresses, port)
+    await asyncio.sleep(0.1)
+    assert counter.count() == 0
+    assert A.connected_devices() == frozenset()
+
+
+@integration
+async def test_l5_connect_hint_to_own_device_is_value_error(node_factory, count_open_control):
+    counter = count_open_control()
+    A = await node_factory("A")
+    with pytest.raises(ValueError):
+        A.connect_hint(A.id, [LOCAL], A.port)
+    await asyncio.sleep(0.1)
+    assert counter.count() == 0
+
+
+@integration
+async def test_l5_auto_connect_to_only_opens_control_to_that_device(
+    node_factory, trust_each_other, fake_mdns, app_helpers, count_open_control
+):
+    counter = count_open_control()
+    _, id_x = trust_each_other("A", "X", name_b="X")
+    trust_each_other("A", "Y", name_b="Y")
+    X = await node_factory("X")
+    Y = await node_factory("Y")
+    A = await node_factory("A", mdns=MdnsOptions(), auto_connect_to=id_x.device_id)
+    m = fake_mdns.of(A)
+    m.emit(DeviceAdded(app_helpers.dev(Y)))
+    m.emit(DeviceAdded(app_helpers.dev(X)))
+    await wait_until(lambda: X.id in A.connected_devices(), 3, "A chưa nối tới X")
+    await asyncio.sleep(0.5)
+    assert counter.count(caller=A, to=Y) == 0, "auto_connect_to=X: không được mở kết nối tới Y"
+    assert counter.count(caller=A, to=X) == 1
+    assert A.connected_devices() == frozenset({X.id})
+    # Registry vẫn nhận mọi thiết bị: Y vẫn hiện trên giao diện (trực tuyến, đã ghép đôi).
+    views = {v.device_id: v for v in A.devices()}
+    assert views[Y.id].online and views[Y.id].paired and not views[Y.id].connected
+    assert _device_events(A.rec, Y.id) == ["DeviceOnline"]
+    # Y biến mất / quay lại: vẫn không nối, không lỗi.
+    m.emit(DeviceRemoved(app_helpers.dev(Y)))
+    m.emit(DeviceAdded(app_helpers.dev(Y)))
+    await asyncio.sleep(0.5)
+    assert counter.count(caller=A, to=Y) == 0
+    assert _device_events(A.rec, Y.id) == ["DeviceOnline", "DeviceOffline", "DeviceOnline"]
+
+
+def test_l5_auto_connect_to_requires_auto_connect_and_valid_id(tmp_path):
+    good = "0123456789abcdef0123456789abcdef"
+    with pytest.raises(ValueError):
+        Node(tmp_path / "A", name="A", auto_connect=False, auto_connect_to=good)
+    for bad in ("xyz", good.upper(), good[:31], 123):
+        with pytest.raises(ValueError):
+            Node(tmp_path / "A", name="A", auto_connect_to=bad)
+    Node(tmp_path / "A", name="A", auto_connect_to=good)
+    Node(tmp_path / "A", name="A", auto_connect=False, auto_connect_to=None)
+    assert not (tmp_path / "A").exists(), "kiểm tham số không được tạo thư mục cấu hình"

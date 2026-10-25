@@ -28,7 +28,8 @@ Hợp đồng thực thi (bên gọi, kể cả bộ mô phỏng của test, ph�
    `WriteBlock` đúng chỉ số đó; đứt → `data_closed`.
 5. Hành động đĩa của một lượt chạy theo **một hàng FIFO** (`CreateTemp`, `OpenPart`,
    `WriteBlock`, `SyncPart`, `Reread`, `Finalize`, `RemoveTemp`); kết quả báo lại đúng thứ tự
-   (`synced`, `reread_done`, `finalized`). Thao tác lỗi → `storage_failed(op)` rồi bỏ các thao
+   (`synced`, `reread_done`, `finalized`). Thao tác lỗi → `storage_failed(op)` (`CreateTemp` gặp
+   thư mục tạm đã có → `storage_failed(CREATE_TEMP, detail=TEMP_EXISTS)`) rồi bỏ các thao
    tác còn lại của lượt, trừ `RemoveTemp`. Gặp `RemoveTemp`: bỏ mọi thao tác chưa bắt đầu (kể
    cả `CreateTemp`, `Finalize`), đặt `stop` cho `Reread` đang chạy, chờ thao tác đang chạy xong
    rồi mới xóa thư mục tạm mà **chính lượt đó** đã tạo (đối tượng `CreateTemp` trả về, không suy
@@ -160,6 +161,7 @@ class FailureDetail(StrEnum):
     """Nguyên nhân cụ thể của `cancel{error}` do máy này phát hiện."""
 
     DISK = "disk"
+    TEMP_EXISTS = "temp_exists"  # thư mục tạm của lượt đã có sẵn (sót lại từ lần trước)
     CORRUPT_BLOCKS = "corrupt_blocks"
     VERIFY_FAILED = "verify_failed"
     PROTOCOL = "protocol"
@@ -1415,13 +1417,31 @@ class TransferEngine:
         return self._finish()
 
     def storage_failed(
-        self, device_id: str, transfer_id: str, op: DiskOp, now: float
+        self,
+        device_id: str,
+        transfer_id: str,
+        op: DiskOp,
+        now: float,
+        *,
+        detail: FailureDetail | None = None,
     ) -> list[TransferAction]:
-        """Thao tác đĩa `op` của lượt nhận bị lỗi: dừng lượt (`cancel{error}`)."""
+        """Thao tác đĩa `op` của lượt nhận bị lỗi: dừng lượt (`cancel{error}`).
+
+        `detail` là nguyên nhân ghi vào `TransferEnded.detail`: None (= `DISK`), `DISK`, hoặc
+        `TEMP_EXISTS` (chỉ với `op` là `CREATE_TEMP`: thư mục tạm của lượt đã có sẵn). Giá trị
+        khác → ValueError. Trên dây vẫn là `cancel{error}`.
+        """
         validate_device_id(device_id)
         validate_transfer_id(transfer_id)
         if not isinstance(op, DiskOp):
             raise ValueError("op phải là DiskOp")
+        if detail is None:
+            detail = FailureDetail.DISK
+        elif detail is FailureDetail.TEMP_EXISTS:
+            if op is not DiskOp.CREATE_TEMP:
+                raise ValueError("detail TEMP_EXISTS chỉ đi với op CREATE_TEMP")
+        elif detail is not FailureDetail.DISK:
+            raise ValueError("detail phải là None, FailureDetail.DISK hoặc FailureDetail.TEMP_EXISTS")
         now = self._check_now(now)
         self._accept_now(now)
         found = self._running_recv(device_id, transfer_id)
@@ -1430,7 +1450,7 @@ class TransferEngine:
         t = found[1]
         if op is DiskOp.CREATE_TEMP:
             t.owns_temp = False  # không tạo được thì không phải của lượt này: không xóa
-        self._fail(t, CancelReason.ERROR, FailureDetail.DISK, now, file_index=t.file_index)
+        self._fail(t, CancelReason.ERROR, detail, now, file_index=t.file_index)
         return self._finish()
 
     def source_checked(

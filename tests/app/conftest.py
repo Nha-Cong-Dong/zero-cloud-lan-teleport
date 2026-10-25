@@ -933,6 +933,7 @@ async def node_factory(fast, tmp_path):
     `answer=True/False` → trong `on_prompt` gọi `decide`; `answer=callable` → gọi với prompt.
     `hostname=True` → truyền `name=None` cho Node (tên lấy từ hostname).
     `prompt=False` → truyền `on_pairing_prompt=None` (node không ghép đôi được; kế hoạch L1).
+    `auto_connect_to=device_id` → chỉ tự nối tới thiết bị đó (P2-6a; chỉ truyền khi khác None).
     """
     from teleport.app.node import Node
 
@@ -955,6 +956,7 @@ async def node_factory(fast, tmp_path):
         auto_connect: bool = True,
         raise_in_event: bool = False,
         prompt: bool = True,
+        auto_connect_to: str | None = None,
     ) -> AppNode:
         directory = tmp_path / label
         rec = Recorder(
@@ -969,6 +971,8 @@ async def node_factory(fast, tmp_path):
             extra["mdns"] = mdns
         if auto_connect is not True:
             extra["auto_connect"] = auto_connect
+        if auto_connect_to is not None:
+            extra["auto_connect_to"] = auto_connect_to
         node = Node(
             directory,
             name=None if hostname else (name or label),

@@ -236,6 +236,93 @@ def test_storage_failed_for_unknown_transfer_is_ignored(tx):
     assert r.call("storage_failed", tx.PEER, r.T, DiskOp.WRITE) == []
 
 
+# ---- P2-6a T1: `storage_failed(..., detail=)` (spec-p2-6 mục A4, plan-p2-6 mục 2.2) ----------------
+
+
+def _storage_failed(tx, r, op, **kw):
+    """Gọi `storage_failed` với tham số từ khóa `detail` (bộ lái `call` chỉ truyền đối số vị trí)."""
+    r.clock.now += 0.01
+    acts = r.e.storage_failed(r.peer, r.T, op, r.clock.now, **kw)
+    assert isinstance(acts, list)
+    tx.check_order(acts)
+    return acts
+
+
+def test_failure_detail_temp_exists_value():
+    assert FailureDetail.TEMP_EXISTS.value == "temp_exists"
+
+
+def test_temp_exists_failure_cancels_with_error_and_keeps_foreign_temp(tx):
+    r = tx.Recv(tx.entries(2))
+    assert tx.one(r.accept(), CreateTemp).transfer_id == r.T
+    acts = _storage_failed(tx, r, DiskOp.CREATE_TEMP, detail=FailureDetail.TEMP_EXISTS)
+    # Trên dây vẫn là `cancel{error}` (không đổi protocol).
+    assert tx.sent(acts) == [Cancel(transfer_id=r.T, reason="error")]
+    assert tx.one(acts, tx.tr.SendMessage).device_id == tx.PEER
+    end = tx.one(tx.ended(acts), object)
+    assert (end.key, end.outcome, end.reason, end.by_peer, end.detail) == (
+        r.key,
+        Outcome.CANCELLED,
+        "error",
+        False,
+        FailureDetail.TEMP_EXISTS,
+    )
+    # Thư mục tạm có sẵn không phải của lượt này: không bao giờ xóa.
+    assert tx.of(acts, RemoveTemp) == []
+    assert r.e.info(r.key) is None
+    # Bia mộ trả lời `offer` lặp lại bằng cùng lý do.
+    assert tx.sent(r.send_offer()) == [Cancel(transfer_id=r.T, reason="error")]
+
+
+@pytest.mark.parametrize("how", ["omitted", "none", "disk"])
+@pytest.mark.parametrize("op", list(DiskOp))
+def test_storage_failed_detail_defaults_to_disk(tx, op, how):
+    r = tx.Recv(tx.entries(2))
+    r.accept()
+    kw = {"omitted": {}, "none": {"detail": None}, "disk": {"detail": FailureDetail.DISK}}[how]
+    acts = _storage_failed(tx, r, op, **kw)
+    assert tx.sent(acts) == [Cancel(transfer_id=r.T, reason="error")]
+    assert tx.one(tx.ended(acts), object).detail == FailureDetail.DISK
+    assert bool(tx.of(acts, RemoveTemp)) == (op != DiskOp.CREATE_TEMP)
+
+
+_BAD_DETAILS = [
+    pytest.param(FailureDetail.CORRUPT_BLOCKS, DiskOp.WRITE, id="corrupt_blocks"),
+    pytest.param(FailureDetail.VERIFY_FAILED, DiskOp.REREAD, id="verify_failed"),
+    pytest.param(FailureDetail.PROTOCOL, DiskOp.SYNC, id="protocol"),
+    pytest.param(FailureDetail.SOURCE_READ, DiskOp.CREATE_TEMP, id="source_read"),
+    pytest.param("temp_exists", DiskOp.CREATE_TEMP, id="chuoi-temp_exists"),
+    pytest.param("disk", DiskOp.WRITE, id="chuoi-disk"),
+    pytest.param(1, DiskOp.WRITE, id="so"),
+    pytest.param(True, DiskOp.WRITE, id="bool"),
+    pytest.param(DiskOp.CREATE_TEMP, DiskOp.CREATE_TEMP, id="diskop"),
+    *[
+        pytest.param(FailureDetail.TEMP_EXISTS, op, id=f"temp_exists-voi-{op.value}")
+        for op in DiskOp
+        if op is not DiskOp.CREATE_TEMP
+    ],
+]
+
+
+@pytest.mark.parametrize(("detail", "op"), _BAD_DETAILS)
+def test_storage_failed_bad_detail_raises_and_keeps_state(tx, detail, op):
+    """A4: chỉ nhận `None`, `DISK`, `TEMP_EXISTS` (và `TEMP_EXISTS` chỉ đi với `CREATE_TEMP`).
+
+    Mọi tham số khác đều hợp lệ (đúng thiết bị, đúng lượt đang chạy, `op` hợp lệ), nên lỗi chỉ có
+    thể đến từ `detail`; sau đó lượt vẫn sống và lời gọi hợp lệ vẫn kết thúc được nó.
+    """
+    r = tx.Recv(tx.entries(2))
+    r.accept()
+    before = tx.snapshot(r.e)
+    info = r.e.info(r.key)
+    with pytest.raises(ValueError):
+        _storage_failed(tx, r, op, detail=detail)
+    assert tx.snapshot(r.e) == before
+    assert r.e.info(r.key) == info
+    acts = _storage_failed(tx, r, op)
+    assert tx.one(tx.ended(acts), object).detail == FailureDetail.DISK
+
+
 def test_remove_temp_is_last_disk_action_of_transfer(tx):
     r = tx.Recv(tx.entries(3))
     r.accept()
