@@ -56,6 +56,8 @@ CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the a
 - **Windows file locks:** a killed process's lock is released asynchronously, so take a lock with `acquire(timeout=...)` wherever its holder may have just died (`architecture.md` §4, `node.lock`).
 - **`cryptography` exceptions:** some derive straight from `Exception`, so code that parses a peer's cert catches `Exception` and turns it into `InvalidCertificate` (`trust/identity.py`).
 - **CLI stdin:** read only with `os.read` in a daemon thread, never `input()` or `sys.stdin.readline()`, which can cause “Fatal Python error” at shutdown (`cli.py` docstring).
+- **Transfer disk I/O:** every file-system call of a transfer goes through the node's `DiskExecutor` with `submit`, and a timed-out job still runs: wait for `DiskJob.settled()` before closing what it uses (`architecture.md` §5, `app/diskio.py`).
+- **Never call `TransferEngine` re-entrantly:** while an action list is being executed (including from `on_transfer_event`), engine calls go to the `_deferred` queue; read `now` when the call really happens (`core/transfer.py` docstring, `architecture.md` §5).
 - **Tests run from 127.0.0.1:** `tests/conftest.py` relaxes the handshake rate limits for every test, so a test of the real limits needs `@pytest.mark.real_admission_limits` (`architecture.md` §6).
 
 ## Team of subagents

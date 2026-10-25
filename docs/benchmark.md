@@ -3,7 +3,7 @@
 > **Vai trò:** số đo thực tế của các yêu cầu phi chức năng.
 > **Nguồn duy nhất cho:** định nghĩa từng phép đo, môi trường, kết quả từng lần đo và kết luận so với ngưỡng.
 > **Không chứa:** ngưỡng yêu cầu → [mvp.md](mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](ke_hoach.md) mục 5.1.
-> **Cập nhật:** 2026-10-23
+> **Cập nhật:** 2026-10-26
 
 ## 1. Quy ước
 
@@ -20,7 +20,7 @@
 |---|---|---|
 | mvp N1 | 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged trên cùng máy (mục 3.3) | **ĐẠT trên máy ảo bridged**; chưa đo trên hai máy thật (mục 3.4) |
 | mvp N2 | — | chưa đo |
-| mvp N3 | — | chưa đo |
+| mvp N3 | 2026-10-26: đo sơ bộ Giai đoạn 2, hai tiến trình trên một máy Windows 11, loopback, file 64 MiB và 1 GiB (mục 4.3) | **CHƯA ĐỦ DỮ LIỆU**: phần “RSS tăng khi truyền” ĐẠT với 1 GiB và không tăng theo kích thước; 5 GB, 10 GB, lúc rảnh, ổ đích chậm, hai máy thật chưa đo (mục 4.4) |
 | mvp N4 | — | chưa đo |
 | mvp N5 | — | chưa đo |
 | mvp N6 | — | chưa đo |
@@ -166,3 +166,116 @@ python n1_host.py summarize (Get-ChildItem results\run-*\results.jsonl).FullName
 Lệnh trên host viết cho PowerShell (Python trên Windows không tự mở rộng `run-*`).
 
 `vm_subject` gồm `appear_vm` + `exit_vm`, `host_subject` gồm `appear_host` + `exit_host`, `open` là `open_host`, `link_down` và `pause` kèm ca thấy lại tương ứng. Mỗi lượt ghi vào `results/run-<giờ UTC>/` (`results.jsonl`, `summary.md`, `summary.json`); `--repeat` (mặc định 10) và `--seed` chỉnh số lần và hạt giống. Preflight phải báo đạt mới chạy tiếp.
+
+## 4. mvp N3: Bộ nhớ
+
+### 4.1. Định nghĩa phép đo
+
+Đo bộ nhớ của **từng tiến trình node** (gửi, nhận) từ một tiến trình điều phối thứ ba, bằng `GetProcessMemoryInfo` của Windows (đọc qua `ctypes`, không dùng `psutil`). “RSS” ở đây là *working set* (`WorkingSetSize`); ghi kèm *private bytes* (`PrivateUsage`, bộ nhớ riêng đã cam kết), vì working set có cả trang dùng chung (DLL).
+
+| Đại lượng | Cách lấy |
+|---|---|
+| RSS lúc bắt đầu | Working set đọc ngay trước khi điều phối ra lệnh gửi; lúc này hai node đã nối kết nối điều khiển và đã rảnh 3 s |
+| RSS đỉnh | `PeakWorkingSetSize` (đỉnh do nhân ghi, không lỡ mẫu) đọc 0,5 s sau khi cả hai bên báo `TransferFinished`. Đỉnh này tính từ lúc tiến trình khởi động, nên luôn ≥ đỉnh thật trong lúc truyền; ghi kèm đỉnh nhân đọc lúc bắt đầu để biết đỉnh có rơi vào lúc truyền không |
+| RSS tăng (cận trên) | RSS đỉnh − RSS lúc bắt đầu. Dùng giá trị này để kết luận |
+| RSS tăng (lấy mẫu) | Working set lớn nhất trong các mẫu lấy mỗi 10 ms (thực tế khoảng 15 ms, theo nhịp hẹn giờ của Windows) từ lúc ra lệnh gửi tới 0,5 s sau khi xong, trừ RSS lúc bắt đầu; dùng để vẽ đường RSS |
+| Private bytes tăng (cận trên) | `PeakPagefileUsage` sau cùng − private bytes lúc bắt đầu |
+| Thông lượng (chỉ tham khảo, không phải mvp N2) | Kích thước file / (lúc bên gửi nhận `TransferFinished` − lúc bên gửi gọi `transfers.send`), cùng đồng hồ `time.perf_counter()` của tiến trình gửi. Gồm cả `offer`/`accept`, `fsync`, đọc lại và kiểm Merkle ở bên nhận |
+
+Kết luận phần truyền: so RSS tăng (cận trên) với ngưỡng RSS tăng của mvp N3 theo cách hiểu chặt hơn (MB = 10⁶ byte); “không tăng theo kích thước” xét bằng hai cách: RSS tăng của 1 GiB so với 64 MiB, và đỉnh RSS lấy mẫu theo từng phần tư thời gian truyền 1 GiB.
+
+### 4.2. Phương pháp
+
+- Hai node là **hai tiến trình Python riêng**, mỗi bên một thư mục cấu hình riêng (danh tính riêng), đã tin nhau: `trusted.json` dựng sẵn bằng `TrustStore.add` như fixture `trust_each_other` của test, không qua ghép đôi. Nghe `127.0.0.1` cổng ngẫu nhiên, không mDNS. Bên gửi nối kết nối điều khiển tới bên nhận bằng `Node.connect_hint`; kết nối dữ liệu đi cùng chiều.
+- Bên nhận: `Node(receive_dir=…, auto_accept=True)`; bên gửi gọi `node.transfers.send(device_id, [path])`. Cấu hình mặc định của mã, không vá hằng số nào (khác test: không đổi `connection.DRAIN_TIMEOUT`), không giới hạn tốc độ.
+- File nguồn là dữ liệu ngẫu nhiên (`os.urandom`), tạo một lần mỗi lượt, đặt cùng ổ với thư mục nhận. Mỗi lần đo bật hai tiến trình mới, truyền một file, so SHA-256 file nhận với file nguồn, xóa file nhận, tắt hai node (`Node.close()`).
+- Lặp 10 vòng; mỗi vòng đo cả 64 MiB và 1 GiB, đổi thứ tự xen kẽ giữa các vòng. Mọi lần chờ có giới hạn (một lần truyền tối đa 600 s, cả lượt tối đa 3 giờ); kết thúc thì tắt mọi tiến trình và xóa thư mục làm việc (file nguồn, thư mục nhận, thư mục cấu hình).
+
+### 4.3. Lần đo 2026-10-26: đo sơ bộ Giai đoạn 2 (P2-6b), loopback trên một máy
+
+Lượt `run-20261025T182834Z` (giờ UTC). Mã đo: nhánh `feat/transfer-manager`, commit `5c2ed74` cộng thay đổi chưa commit của P2-6b (`src/teleport/app/node.py` sửa, `src/teleport/app/transfers.py` mới); digest mã nguồn `src/teleport` (SHA-256 trên đường dẫn + nội dung mọi file `.py`) `a7143d814e2b7637582f1c7cd61f7ca8f91ae62647e4e9526675694e030624d4`. Script: `n3_bench.py`, `n3_node.py` (mục 4.5).
+
+**Môi trường**
+
+| | |
+|---|---|
+| Hệ điều hành | Windows 11, bản 10.0.26300 |
+| Python | 3.14.5 (64 bit), `.venv` của repo |
+| Teleport | `__version__` 0.0.1 (mã nạp từ `src/` của worktree, đã kiểm trong từng tiến trình) |
+| cryptography / zeroconf / ifaddr | 50.0.2 / 0.151.5 / 0.2.0 (zeroconf không dùng: tắt mDNS) |
+| CPU | Intel Core i7-12800H, 20 luồng |
+| RAM | 15,7 GiB; còn trống lúc bắt đầu lượt 3,4 GiB (máy đang chạy các ứng dụng khác) |
+| Ổ đĩa | NVMe SSD SSSTC CL1-3D512-Q11 512 GB; file nguồn và thư mục nhận cùng ổ |
+| Mạng | Loopback `127.0.0.1` (không qua card mạng) |
+
+**Kết quả** (10 lần hợp lệ mỗi cỡ, 0 lần hỏng; mọi lần đều `done` ở cả hai bên, SHA-256 khớp, không sót file trong thư mục nhận, hai tiến trình thoát mã 0). Đơn vị MiB; mỗi ô là trung vị / p95 / min / max.
+
+| Cỡ file | Tiến trình | RSS lúc bắt đầu | RSS đỉnh (nhân) | RSS tăng, cận trên | RSS tăng, lấy mẫu | Private bytes lúc bắt đầu | Private bytes tăng, cận trên |
+|---|---|---|---|---|---|---|---|
+| 64 MiB | gửi | 49,7 / 50,1 / 49,1 / 50,1 | 53,5 / 54,0 / 53,2 / 54,0 | 3,9 / 4,2 / 3,2 / 4,2 | 3,9 / 4,2 / 3,2 / 4,2 | 31,5 / 32,1 / 30,9 / 32,1 | 3,7 / 4,0 / 2,7 / 4,0 |
+| 64 MiB | nhận | 49,4 / 50,5 / 49,2 / 50,5 | 60,8 / 61,4 / 57,0 / 61,4 | 11,2 / 12,0 / 6,5 / 12,0 | 8,7 / 9,4 / 3,3 / 9,4 | 31,6 / 32,2 / 31,3 / 32,2 | 11,6 / 12,3 / 6,8 / 12,3 |
+| 1 GiB | gửi | 49,8 / 50,3 / 49,3 / 50,3 | 53,6 / 54,0 / 53,0 / 54,0 | 3,8 / 4,2 / 3,5 / 4,2 | 3,8 / 4,2 / 3,5 / 4,2 | 31,6 / 32,6 / 31,2 / 32,6 | 3,6 / 3,9 / 3,0 / 3,9 |
+| 1 GiB | nhận | 49,3 / 49,8 / 49,1 / 49,8 | 61,3 / 61,9 / 60,3 / 61,9 | 11,7 / 12,6 / 10,8 / 12,6 | 10,3 / 11,7 / 8,8 / 11,7 | 31,6 / 32,2 / 31,3 / 32,2 | 12,1 / 13,1 / 10,5 / 13,1 |
+
+Ở cả 40 lần (2 cỡ × 2 tiến trình × 10), đỉnh nhân đọc lúc bắt đầu bằng đúng RSS lúc bắt đầu, nên “RSS đỉnh (nhân)” chính là đỉnh trong lúc truyền, không lẫn đỉnh lúc khởi động.
+
+**Đường RSS khi truyền 1 GiB** (RSS lớn nhất trong từng phần tư thời gian truyền, MiB, theo mẫu)
+
+| Lần | Thời gian (s) | Gửi: Q1 / Q2 / Q3 / Q4 | Nhận: Q1 / Q2 / Q3 / Q4 |
+|---|---|---|---|
+| 2 | 15,6 | 53,2 / 53,2 / 53,2 / 53,2 | 58,3 / 58,6 / 58,5 / 58,5 |
+| 3 | 10,5 | 53,6 / 53,6 / 53,6 / 53,6 | 58,2 / 58,3 / 60,0 / 58,2 |
+| 6 | 8,8 | 53,9 / 53,9 / 53,9 / 53,9 | 57,7 / 59,8 / 58,0 / 57,1 |
+| 7 | 10,3 | 53,7 / 53,7 / 53,7 / 53,7 | 58,7 / 58,6 / 60,6 / 60,5 |
+| 10 | 12,9 | 53,4 / 53,4 / 53,4 / 53,5 | 58,3 / 57,4 / 59,6 / 58,8 |
+| 11 | 8,2 | 54,0 / 54,0 / 54,0 / 54,0 | 59,3 / 58,6 / 59,3 / 58,1 |
+| 14 | 11,7 | 53,7 / 53,7 / 53,7 / 53,7 | 59,1 / 58,4 / 58,5 / 58,4 |
+| 15 | 11,4 | 53,0 / 53,0 / 53,0 / 53,0 | 58,1 / 59,4 / 55,5 / 58,5 |
+| 18 | 7,4 | 54,0 / 54,0 / 54,0 / 54,0 | 60,2 / 59,0 / 58,7 / 58,7 |
+| 19 | 15,0 | 53,2 / 53,2 / 53,2 / 53,2 | 59,7 / 58,7 / 60,9 / 60,5 |
+
+**Thông lượng loopback** (chỉ tham khảo, không phải mvp N2; trung vị / p95 / min / max)
+
+| Cỡ file | MB/s (10⁶ byte/s) | Thời gian (s) |
+|---|---|---|
+| 64 MiB | 133,6 / 162,9 / 18,2 / 162,9 | 0,50 / 3,70 / 0,41 / 3,70 |
+| 1 GiB | 98,1 / 145,8 / 68,7 / 145,8 | 10,97 / 15,63 / 7,37 / 15,63 |
+
+Lần chậm nhất của 64 MiB (18,2 MB/s, 3,70 s) là lần đo đầu tiên của lượt, ngay sau khi tạo file nguồn; lần đo này không tìm hiểu nguyên nhân. Thông lượng dao động mạnh vì hai node, file nguồn và thư mục nhận dùng chung CPU và ổ, và máy đang chạy các ứng dụng khác.
+
+**Kết luận**
+
+- RSS tăng khi truyền 1 GiB: cận trên lớn nhất 12,6 MiB (tiến trình nhận), 4,2 MiB (tiến trình gửi), dưới ngưỡng của mvp N3 ở cả 10 lần, cả hai tiến trình: **ĐẠT** (tiêu chí sơ bộ của P2-6b).
+- Không tăng theo kích thước: RSS tăng của 1 GiB so với 64 MiB khác nhau trong khoảng dao động giữa các lần (gửi: trung vị 3,8 so với 3,9 MiB; nhận: 11,7 so với 11,2 MiB, cỡ 64 MiB tự dao động 6,5–12,0 MiB); trong lúc truyền 1 GiB, đường RSS phẳng (bảng trên, không phần tư nào tăng dần): **ĐẠT** với hai cỡ đã đo.
+- **mvp N3 nói chung: CHƯA ĐỦ DỮ LIỆU**: mvp N3 đòi cả các cỡ lớn hơn và phần lúc rảnh (mục 4.4).
+
+**Ghi nhận** (không phải kết luận)
+
+- Lúc rảnh (đã nối kết nối điều khiển, chưa truyền), working set mỗi tiến trình node khoảng 49–50,5 MiB, private bytes khoảng 31–32,6 MiB. Đây là node không có giao diện và **không bật mDNS**, nên không dùng để kết luận phần lúc rảnh của mvp N3.
+- Tiến trình nhận tăng nhiều hơn tiến trình gửi (khoảng 11–12 MiB so với 4 MiB). Lần đo này không tách xem phần tăng đó thuộc phần nào của mã.
+
+**Giới hạn của lần đo này**
+
+- Hai tiến trình trên cùng một máy, qua loopback: không qua card mạng, không có mất gói hay trễ thật; khi mạng chậm hơn đĩa, hàng chờ ở hai bên có thể đầy theo cách khác.
+- Ổ đích là NVMe SSD nhanh và dùng chung với ổ nguồn; ca “ổ đích chậm” (bên nhận phải chờ đĩa) chưa đo.
+- File nguồn vừa được tạo nên nằm trong bộ đệm file của Windows; bộ đệm file của hệ điều hành không tính vào working set của tiến trình, và phép đo này không đo nó.
+- Chỉ một file mỗi lượt, một lượt mỗi lần; không đo nhiều file hay nhiều lượt cùng lúc. Không giới hạn tốc độ.
+- Chỉ Windows 11 và Python 3.14; chưa đo Linux, macOS, Python 3.12.
+
+### 4.4. Việc còn lại
+
+- File 5 GB và 10 GB theo mvp N3: **chưa đo** (cần khoảng 2 lần dung lượng file trống trên ổ; script có sẵn cỡ `5GiB`, cần thêm cỡ 10 GiB).
+- Phần lúc rảnh của mvp N3 (RAM và CPU của app hoàn chỉnh có mDNS, sau này có giao diện): **chưa đo**. Đo CPU cần tránh bẫy lõi tiết kiệm điện của Windows (EcoQoS).
+- Ổ đích chậm mà RAM không tăng (điều kiện xong Giai đoạn 2, ke_hoach mục 5.2): **chưa đo**; cần ổ chậm thật (USB, thẻ nhớ) hoặc giới hạn tốc độ ghi.
+- Hai máy thật trong mạng LAN, và hệ điều hành khác: **chưa đo**.
+
+### 4.5. Cách đo lại
+
+Script nằm ngoài repo (không commit): `n3_bench.py` (điều phối, đọc bộ nhớ, tóm tắt) và `n3_node.py` (một node trong tiến trình riêng, điều khiển qua stdin/stdout bằng JSON Lines; stdin đọc bằng `os.read` trong thread). Chỉ chạy trên Windows. Trong PowerShell, ở thư mục chứa hai script:
+
+```
+$env:PYTHONPATH = "<thư mục repo hoặc worktree>\src"
+& "<repo>\.venv\Scripts\python.exe" n3_bench.py --repeat 10 --sizes 64MiB,1GiB
+```
+
+`--sizes` nhận `64MiB`, `256MiB`, `1GiB`, `5GiB`; `--settle` (mặc định 3 s) là thời gian rảnh trước khi gửi, `--sample-ms` (mặc định 10) là nhịp lấy mẫu, `--work` là thư mục làm việc (mặc định `work/` cạnh script; bị xóa khi xong, trừ khi có `--keep`). Mỗi lượt ghi vào `results/run-<giờ UTC>/`: `results.jsonl` (môi trường, cấu hình, từng lần đo kèm mọi sự kiện của hai node), `samples-<lần>-<cỡ>.csv` (đường RSS và private bytes theo thời gian), `summary.md`, `summary.json`, và stderr của từng tiến trình node.
