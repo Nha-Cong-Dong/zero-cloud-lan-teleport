@@ -678,6 +678,95 @@ async def test_closing_control_connection_credits_a_strike_after_strike_credit_a
     assert h.listener.is_priority(LOCAL) is True
 
 
+# --- Kết nối dữ liệu (spec P2-3 mục 3.1 bước 2 và 5, AC-4) -----------------------------------------
+# DATA được hoàn token như kết nối điều khiển (protocol §2.3), nhưng không cấp và không giữ ưu tiên
+# (chỉ kết nối điều khiển cấp ưu tiên), và vé đã `trusted()` không tính là một lần lỗi.
+
+DATA_OPEN = {"type": "data_open", "transfer_id": "0123456789abcdef" * 2, "file_index": 0, "resume_seq": 1}
+
+
+async def open_raw_data(h, ctx: ssl.SSLContext, identity, delivered) -> None:
+    """TLS bằng `ctx`, đọc `hello`, gửi `hello` + `data_open`; chờ `delivered()` đúng rồi mới cắt."""
+    from teleport.core.framing import encode_message
+    from teleport.net.stream import read_message
+
+    reader, writer = await asyncio.wait_for(asyncio.open_connection(LOCAL, h.port, ssl=ctx), 3)
+    try:
+        msg = await asyncio.wait_for(read_message(reader, 16 * 1024), 2)
+        assert isinstance(msg, dict) and msg.get("type") == "hello"
+        hello = {"type": "hello", "protocol": PROTOCOL_VERSION, "device_id": identity.device_id, "name": "B"}
+        hello.update(app_version="0.0.0", os="windows")
+        writer.write(encode_message(hello) + encode_message(DATA_OPEN))
+        await writer.drain()
+        await wait_until(delivered, 2.0, "kết nối dữ liệu chưa được giao")
+    finally:
+        writer.transport.abort()
+
+
+@real_limits
+async def test_trusted_data_connections_are_refunded(slow, monkeypatch, listener_factory, ids, cert_client):
+    """AC-4 (a): 8 lần mở DATA liên tiếp bằng chứng chỉ tin cậy, tốc độ nạp gần 0: đều được giao, không
+    lần nào bị từ chối (bắt tay tin cậy được hoàn token, protocol §2.3)."""
+    from teleport.core.messages import ConnectionKind
+
+    monkeypatch.setattr(admission, "HANDSHAKE_RATE_PER_IP", 0.001)
+    delivered: list = []
+
+    async def on_connection(conn):
+        delivered.append(conn.kind)
+
+    h = await listener_factory(ids.server, trusted=[ids.b], on_connection=on_connection)
+    ctx = cert_client(ids.b)
+    for k in range(8):
+        await open_raw_data(h, ctx, ids.b, lambda k=k: len(delivered) == k + 1)
+        await h.wait_idle()
+    assert delivered == [ConnectionKind.DATA] * 8
+    assert refusals(h) == no_refusals()
+
+
+@real_limits
+async def test_data_connection_does_not_grant_priority(slow, listener_factory, ids, cert_client):
+    """AC-4 (b): DATA được giao (còn sống, rồi đóng) mà không có kết nối điều khiển → IP không ưu tiên."""
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    assert h.listener.is_priority(LOCAL) is False
+    await open_raw_data(h, cert_client(ids.b), ids.b, lambda: h.calls == 1)
+    conn = await h.next()
+    assert h.listener.is_priority(LOCAL) is False, "kết nối dữ liệu đang sống không được cấp ưu tiên"
+    conn.abort()
+    h.release.set()
+    await wait_until(lambda: h.listener.connection_count == 0, 2.0, "kết nối dữ liệu chưa kết thúc")
+    await h.wait_idle()
+    assert h.listener.is_priority(LOCAL) is False
+    assert refusals(h) == no_refusals()
+
+
+@real_limits
+async def test_data_connection_from_priority_ip_keeps_priority_and_strikes(
+    slow, listener_factory, ids, cert_client
+):
+    """AC-4 (c): IP đang ưu tiên (có kết nối điều khiển vào) mở rồi đóng DATA tin cậy → vẫn ưu tiên và ngân
+    sách lỗi không giảm."""
+    h = await listener_factory(ids.server, trusted=[ids.b])
+    control = await b_control(h, ids)
+    try:
+        await h.next()
+        assert h.listener.is_priority(LOCAL) is True
+        gate = h.listener._gate  # chẩn đoán: Listener không có API cho ngân sách lỗi
+        loop = asyncio.get_running_loop()
+        before = gate.priority_strikes(LOCAL, loop.time())
+        await open_raw_data(h, cert_client(ids.b), ids.b, lambda: h.calls == 2)
+        data = await h.next()
+        assert data.kind.value == "data"
+        data.abort()
+        await h.wait_idle()
+        after = gate.priority_strikes(LOCAL, loop.time())
+        assert after >= before - 1e-9, f"ngân sách lỗi giảm từ {before} xuống {after}"
+        assert h.listener.is_priority(LOCAL) is True
+        assert refusals(h) == no_refusals()
+    finally:
+        await control.close()
+
+
 # --- Chỗ được trả trên mọi đường ra --------------------------------------------------------------
 
 
