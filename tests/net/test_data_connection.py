@@ -1388,7 +1388,10 @@ async def test_graceful_close_waits_for_slow_reader_without_cutting_the_tail(
         info["close_end"] = time.monotonic()
 
     async def read_role(conn):
-        set_small_buffer(conn, socket.SO_RCVBUF)
+        # 64 KiB chứ không 4 KiB: trên Linux, SO_RCVBUF tí hon cộng ACK trễ làm loopback chỉ
+        # còn ~100 KB/s, nên 3 MiB không đọc kịp trong DRAIN_TIMEOUT. 64 KiB vẫn nhỏ hơn
+        # nhiều so với 3 MiB, nên lúc close() bộ đệm ghi vẫn còn dữ liệu (assert `buffered`).
+        set_small_buffer(conn, socket.SO_RCVBUF, 64 * 1024)
         ready.set()
         await asyncio.sleep(1.5)
         got = []
