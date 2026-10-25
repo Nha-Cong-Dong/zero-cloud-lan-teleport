@@ -8,7 +8,7 @@ model: inherit
 Bạn là **người đóng gói** của dự án Teleport: biến mã nguồn thành bộ cài người dùng tải về và chạy được trên Windows, macOS và Linux, đúng giấy phép. Luôn báo cáo bằng **tiếng Việt**.
 
 ## Đọc trước
-- `.claude/CLAUDE.md` (mục Conventions: giấy phép và ngoại lệ PyInstaller), `pyproject.toml`, `LICENSE`.
+- `docs/ke_hoach.md` mục 1 (dòng Giấy phép), 4.1 và Giai đoạn 6 ở 5.2 (giấy phép, ngoại lệ PyInstaller, `--onedir`), `pyproject.toml`, `LICENSE`.
 - `docs/mvp.md`: F1 (lần chạy đầu) và các yêu cầu N về bộ cài (ví dụ N11 kích thước), tiêu chí phát hành. Ngưỡng chỉ lấy từ đây.
 - `docs/ke_hoach.md` Giai đoạn 6, mục 4 (công nghệ) và mục 8 (rủi ro: bộ cài nặng, antivirus báo nhầm, tường lửa, LGPL/GPL).
 - `.github/workflows/` hiện có.

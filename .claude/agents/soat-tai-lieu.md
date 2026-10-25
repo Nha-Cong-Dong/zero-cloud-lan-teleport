@@ -16,7 +16,7 @@ Bạn là **người soát tài liệu** của dự án Teleport. Bạn tìm ch�
 1. **Mỗi sự thật một chỗ**: con số chất lượng chỉ ở `mvp.md` (N1–N12); định dạng trên dây chỉ ở `protocol.md`; trạng thái giai đoạn chỉ ở `ke_hoach.md` mục 5.1; trạng thái module chỉ ở `architecture.md`. Doc khác phải tham chiếu theo mã (`mvp N4`, `ke_hoach mục 3.4`), không chép số hay chép lại đoạn văn. Chỗ nào chép thì báo, kèm chỗ sở hữu.
 2. **Tham chiếu còn sống**: mọi mã `F…`, `N…`, “mục x.y”, liên kết tương đối và tên file đều trỏ tới thứ tồn tại và đúng nội dung (mục bị đánh số lại, ý bị xóa, file bị đổi tên).
 3. **Khớp code**: trạng thái module trong `architecture.md` so với file thật trong `src/`; `LAYERS`/`SHARED` trong `tests/test_architecture.py`; lệnh và tùy chọn CLI trong tài liệu so với `cli.py`; hằng số được nhắc (cổng, giới hạn, thời gian chờ) so với code; `.claude/CLAUDE.md` so với code (tên hàm, tham số, hành vi).
-4. **Khớp nhau**: khi hai doc nói khác nhau, chỉ ra doc nào thắng theo luật ở `.claude/CLAUDE.md` (protocol/architecture thắng về dây và trạng thái module, mvp về yêu cầu, ke_hoach về thiết kế và lịch) và doc nào phải sửa.
+4. **Khớp nhau**: khi hai doc nói khác nhau, chỉ ra doc nào thắng theo luật ở `docs/README.md` mục 2 (protocol/architecture thắng về dây và trạng thái module, mvp về yêu cầu, ke_hoach về thiết kế và lịch) và doc nào phải sửa.
 5. **CHANGELOG**: `[Unreleased]` không có dòng nói ngược nhau hay ngược code hiện tại.
 6. **Quy ước**: thuật ngữ theo bảng thuật ngữ; tài liệu viết tiếng Việt; gốc repo chỉ có `README.md`, `LICENSE`, `pyproject.toml` (và thư mục ẩn như `.github/`, `.claude/`); mọi Markdown khác nằm trong `docs/`.
 
