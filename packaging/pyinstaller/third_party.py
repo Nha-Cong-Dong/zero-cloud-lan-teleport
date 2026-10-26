@@ -418,6 +418,31 @@ def _python_dirs(base_prefix: str | None = None) -> tuple[str, list[str], list[s
 # ở gốc base_prefix là file lạ. python.exe/pythonw.exe không có ở đây vì bản onedir không đóng chúng.
 PYTHON_ROOT_FILES: tuple[str, ...] = ("python3*.dll", "vcruntime140*.dll")
 
+# Universal CRT (mẫu tên file đích, so chữ thường): thành phần của Windows 10 trở lên nên không đóng vào.
+# PyInstaller cố ý gom các DLL này khi tìm thấy chúng ngoài System32, ví dụ trong thư mục bin của một
+# JDK nằm trên PATH, nên bản sao lấy từ công cụ không liên quan lọt vào bản build. Spec lọc chúng khỏi
+# `Analysis.binaries` bằng `drop_ucrt` TRƯỚC `check`; `check` không nhận chúng là file đã biết, nên bản
+# sao nào lọt qua bộ lọc vẫn làm build dừng như mọi file lạ. Chỉ đúng ba họ này, không mở rộng.
+UCRT_FILES: tuple[str, ...] = ("api-ms-win-core-*.dll", "api-ms-win-crt-*.dll", "ucrtbase.dll")
+
+
+def drop_ucrt(
+    toc: Iterable[tuple[str, str, str]],
+) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Bỏ khỏi TOC các file Universal CRT (`UCRT_FILES`, theo tên file đích, không phân biệt hoa thường).
+
+    Trả (TOC còn lại, giữ nguyên thứ tự; tên đích đã bỏ).
+    """
+    kept: list[tuple[str, str, str]] = []
+    dropped: list[str] = []
+    for entry in toc:
+        name = re.split(r"[\\/]", entry[0])[-1].lower()
+        if any(fnmatch.fnmatchcase(name, pattern) for pattern in UCRT_FILES):
+            dropped.append(entry[0])
+        else:
+            kept.append(entry)
+    return kept, dropped
+
 
 def _is_python_file(path: str, python_dirs: tuple[str, list[str], list[str]]) -> bool:
     """File thuộc chính bản Python (PSF-2.0 và thành phần ở PYTHON_EMBEDDED) hay không.
@@ -756,7 +781,7 @@ def check(
             report.append(f"  {name} ({', '.join(python_files[prefix])}, trong Python): {lic}")
     for key, entries in sorted(sboms.items()):
         report.append(f"  SBOM {components[key].name}: {len(entries)} thành phần, đều tương thích GPLv3")
-    _log("\n".join(report))
+    log("\n".join(report))
     return AuditResult(components, python_files, sboms, notices, source)
 
 
@@ -793,7 +818,7 @@ def remove_stale_dist(distpath: Path, name: str) -> bool:
     return True
 
 
-def _log(text: str) -> None:
+def log(text: str) -> None:
     """In ra log build; console Windows có thể không phải UTF-8 nên thay ký tự không in được."""
     encoding = sys.stdout.encoding or "utf-8"
     print(text.encode(encoding, "backslashreplace").decode(encoding), flush=True)

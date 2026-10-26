@@ -145,6 +145,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport receive` khi dừng bằng Ctrl+C: mỗi lượt chưa hiện lời hỏi (kể cả lượt đang xếp hàng hoặc chưa kịp có lời hỏi) nay có dòng “Đã từ chối N file từ X vì đang dừng nhận.”; lượt đang hỏi không in thêm “Đã từ chối.”. Hai trường hợp trên không đổi `result` và `message` trong `--json`.
 - `teleport receive --dir <file>`: khi đường dẫn là một file (trùng tên thư mục mong muốn), báo “đó không phải là thư mục (có thể là một file trùng tên)…” thay cho câu chung về ổ đĩa; vẫn thoát mã 1. Trên Windows, khi một thư mục cha là file, vẫn hiện câu về ổ đĩa.
 - README: `teleport unpair` nói đúng điều kiện: không chạy được khi `teleport listen`, `receive` hoặc `send` đang chạy với thư mục cấu hình đó.
+- Build bản CLI thử không còn dừng ở bước kiểm giấy phép khi máy build có Universal CRT trên `PATH` (ví dụ JDK). Bản build không mang Universal CRT, vì Windows 10 trở lên đã có sẵn.
 
 ### Removed
 - `teleport.net.tls.verify_pin`, `normalize_pin`, `MIN_PIN_HEX`: không tính năng nào xác thực bằng tiền tố fingerprint; pin ngắn chỉ còn để hiển thị.
