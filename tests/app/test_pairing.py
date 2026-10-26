@@ -2390,6 +2390,117 @@ async def test_l2_cancel_pair_with_while_yielding_cancels_replacement(
     assert hi.store.get(lo.device_id) is None
 
 
+def _hold_after_close(monkeypatch, task_name: str, *, close_branch: bool) -> tuple[asyncio.Event, list]:
+    """Giữ task `task_name` lại (ngủ dài, lệnh hủy cắt ngang) ngay sau lần `_perform` đầu tiên trả `Close`.
+
+    `close_branch=True`: lần gọi ở nhánh Close của vòng `_drive` (có hạn chót): phiên đã DONE, đã
+    gửi `pair_abort` nhưng chưa bắt đầu `conn.close()`. False: lần gọi trong nhánh hủy cứng (không
+    hạn chót), nên ABORT_ON_CANCEL_TIMEOUT hết trước khi `conn.close()` kịp chạy.
+    Trả (`held`: đặt khi bắt đầu giữ, `states`: trạng thái phiên lúc đó).
+    """
+    from teleport.app import pairing as app_pairing
+
+    real = app_pairing.PairingService._perform
+    held = asyncio.Event()
+    states: list = []
+
+    async def perform(self, run, conn, actions, deadline=None):
+        close = await real(self, run, conn, actions, deadline)
+        task = asyncio.current_task()
+        if (
+            close is not None
+            and not held.is_set()
+            and task is not None
+            and task.get_name() == task_name
+            and (deadline is not None) == close_branch
+        ):
+            states.append(run.session.state)
+            held.set()
+            await asyncio.sleep(60)
+        return close
+
+    monkeypatch.setattr(app_pairing.PairingService, "_perform", perform)
+    return held, states
+
+
+@integration
+async def test_l2_cancel_after_yielded_session_closed_is_bounded(
+    node_factory, fake_server, raw_pairing_client, app_helpers, tmp_path, monkeypatch, fast
+):
+    """L2, thứ tự CI macOS gặp: phiên khởi xướng đã nhường (DONE, đã gửi `pair_abort{busy}`) nhưng
+    chưa bắt đầu đóng kết nối thì `pair_with` bị hủy → task kết thúc trong ABORT_ON_CANCEL_TIMEOUT
+    (+ SLACK), không chờ máy đích (không trả close_notify) tới CLOSE_TIMEOUT của net; phiên thay thế
+    vẫn bị hủy (CANCELLED), gate rảnh.
+    """
+    from teleport.app import pairing as app_pairing
+    from teleport.core import pairing as core_pairing
+    from teleport.net import connection
+
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", 5.0)
+    monkeypatch.setattr(app_pairing, "FAILED_CLOSE_TIMEOUT", 3.0)
+    monkeypatch.setattr(core_pairing, "MESSAGE_TIMEOUT", 10.0)
+    monkeypatch.setattr(core_pairing, "NONCE_TIMEOUT", 10.0)
+    held, states = _hold_after_close(monkeypatch, "test.pair-hi", close_branch=True)
+    hi = await node_factory("H", answer=True)
+    lo = app_helpers.identity_below(tmp_path / "lo", hi.id)
+    seen = asyncio.Event()
+    port = await fake_server(lo, _target_script(lo, seen, [], stall=True))
+    task = asyncio.create_task(hi.pairing.pair_with([LOCAL], port), name="test.pair-hi")
+    await asyncio.wait_for(seen.wait(), 5)
+    c = await raw_pairing_client(hi.port)
+    await c.begin(lo, "Lo")
+    await c.read_commit()
+    await asyncio.wait_for(held.wait(), 2)
+    assert states == [core_pairing.State.DONE]
+    assert not task.done()
+
+    t0 = time.monotonic()
+    task.cancel()
+    limit = fast.ABORT_ON_CANCEL_TIMEOUT + fast.SLACK
+    assert limit < connection.CLOSE_TIMEOUT
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, limit)
+    took = time.monotonic() - t0
+    assert took <= limit, f"hủy pair_with mất {took:.2f} s"
+
+    await hi.rec.wait_finished(1, timeout=fast.ABORT_ON_CANCEL_TIMEOUT + 1)
+    assert [(f.role, f.outcome) for f in hi.rec.finished] == [(Role.RESPONDER, PairingOutcome.CANCELLED)]
+    await wait_until(lambda: hi.pairing.gate.active is None and not hi.pairing._runs, 2, "còn phiên chưa dọn")
+
+
+@integration
+async def test_hard_cancel_cleanup_over_budget_still_aborts_connection(
+    node_factory, fake_server, app_helpers, tmp_path, monkeypatch, fast
+):
+    """`pair_with` bị hủy khi đang chờ máy kia, và phần dọn dẹp hủy cứng (gửi `pair_abort{user}`)
+    dùng hết ABORT_ON_CANCEL_TIMEOUT trước khi `conn.close()` kịp chạy → kết nối bị abort, task
+    kết thúc trong ABORT_ON_CANCEL_TIMEOUT (+ SLACK), không đóng gọn tới CLOSE_TIMEOUT của net.
+    """
+    from teleport.net import connection
+
+    monkeypatch.setattr(connection, "CLOSE_TIMEOUT", 5.0)
+    held, _ = _hold_after_close(monkeypatch, "test.pair-hi", close_branch=False)
+    hi = await node_factory("H")
+    lo = app_helpers.identity_below(tmp_path / "lo", hi.id)
+    seen = asyncio.Event()
+    port = await fake_server(lo, _target_script(lo, seen, [], stall=True))
+    task = asyncio.create_task(hi.pairing.pair_with([LOCAL], port), name="test.pair-hi")
+    await asyncio.wait_for(seen.wait(), 5)
+
+    t0 = time.monotonic()
+    task.cancel()
+    limit = fast.ABORT_ON_CANCEL_TIMEOUT + fast.SLACK
+    assert limit < connection.CLOSE_TIMEOUT
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, limit)
+    took = time.monotonic() - t0
+    assert held.is_set(), "phần dọn dẹp hủy cứng chưa chạy"
+    assert took <= limit, f"hủy pair_with mất {took:.2f} s"
+    await hi.rec.wait_finished(1, timeout=1)
+    assert [(f.role, f.outcome) for f in hi.rec.finished] == [(Role.INITIATOR, PairingOutcome.CANCELLED)]
+    assert hi.pairing.gate.active is None and not hi.pairing._runs
+
+
 # --- M5 lật lại (protocol 5.1, 5.5): máy lạ bị chặn trước khi hiện mã; ghép đôi lại thì đổi tên ---
 
 

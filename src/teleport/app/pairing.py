@@ -634,7 +634,9 @@ class PairingService:
 
         Bị hủy cứng khi phiên chưa xong → `Cancel(user)`, thực hiện các hành động trong
         ABORT_ON_CANCEL_TIMEOUT, rồi để CancelledError bay ra; chưa chốt thì hủy luôn phiên
-        thay thế (nếu có) trước. Lệnh hủy qua `_Run.cancel` được xét trước message mạng.
+        thay thế (nếu có) trước. Phiên đã ra `Close` nhưng chưa đóng xong kết nối cũng chỉ
+        được đóng gọn trong ABORT_ON_CANCEL_TIMEOUT; quá hạn thì abort, nên kết nối luôn đã
+        đóng cả khi CancelledError bay ra. Lệnh hủy qua `_Run.cancel` được xét trước message mạng.
         """
         loop = asyncio.get_running_loop()
         run.session = session
@@ -693,16 +695,21 @@ class PairingService:
                 actions = session.handle(event, loop.time())
         except asyncio.CancelledError:
             run.cancel_replacement()  # trước mọi await dọn dẹp bên dưới
-            if session.state is not State.DONE:
-                log.debug("ghép đôi: phiên %d bị hủy cứng", run.slot.id)
-                try:
-                    async with asyncio.timeout(ABORT_ON_CANCEL_TIMEOUT):
+            try:
+                async with asyncio.timeout(ABORT_ON_CANCEL_TIMEOUT):
+                    if session.state is not State.DONE:
+                        log.debug("ghép đôi: phiên %d bị hủy cứng", run.slot.id)
                         await self._perform(run, conn, session.handle(Cancel(), loop.time()))
-                        await _stop(recv)
-                        recv = None
-                        await conn.close()  # bị hủy vì hết giờ thì close() tự abort
-                except TimeoutError:
-                    pass
+                    # Phiên đã DONE (bị hủy giữa lúc gửi pair_abort và lúc bắt đầu close) cũng
+                    # phải đóng ở đây: không thì bên gọi đóng gọn tới CLOSE_TIMEOUT của net.
+                    await _stop(recv)
+                    recv = None
+                    await conn.close()  # bị hủy vì hết giờ thì close() tự abort
+            except TimeoutError:
+                pass
+            finally:
+                if not conn.closed:
+                    conn.abort()  # hết giờ hoặc bị hủy thêm lần nữa trước khi close() kịp chạy
             raise
         finally:
             # Không await gì khác trước khi hủy hai task con; bị hủy thêm lần nữa thì task
