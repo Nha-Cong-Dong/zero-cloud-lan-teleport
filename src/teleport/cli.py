@@ -1401,11 +1401,8 @@ def _send_result(finished: TransferFinished, p: str) -> str:
             f"Không đọc được {file} trên máy này nữa (file có thể đang bị chương trình khác khóa, "
             f"hoặc nằm trên ổ vừa bị rút ra). Đã dừng gửi tới {p}."
         )
-    if result is TransferResult.PEER_ERROR:
-        return (
-            f"{p} không lưu được {file} nên đã dừng nhận. "
-            "Hãy nhờ người dùng máy đó kiểm tra ổ lưu file rồi gửi lại."
-        )
+    if result is TransferResult.PEER_ERROR:  # máy nhận gửi `cancel{error}`: lỗi đĩa, dữ liệu hỏng…
+        return f"{p} gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại."
     if result is TransferResult.PROTOCOL_ERROR:
         return _protocol_error(p)
     return f"{p} đã dừng lượt gửi."  # UNKNOWN_TRANSFER, CANCELLED_OTHER, UNPAIRED, CORRUPT…
@@ -1425,6 +1422,16 @@ _RECEIVE_SILENT = frozenset(
     {TransferResult.REJECTED_BUSY, TransferResult.REJECTED_OTHER, TransferResult.REJECTED_NOT_RECEIVING}
 )
 _KEPT = "Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại."
+
+
+def _rejected_no_answer(n: int, s: str) -> str:
+    """Máy nhận: lượt chưa hiện lời hỏi bị từ chối vì đầu vào đã đóng (mvp mục 8)."""
+    return f"Đã từ chối {n} file từ {s} vì không đọc được câu trả lời (đầu vào đã đóng)."
+
+
+def _rejected_stopping(n: int, s: str) -> str:
+    """Máy nhận: lượt chưa hiện lời hỏi bị từ chối vì Ctrl+C (mvp mục 8)."""
+    return f"Đã từ chối {n} file từ {s} vì đang dừng nhận."
 
 
 def _protocol_error(p: str) -> str:
@@ -1634,7 +1641,11 @@ def source_error_message(error: SourceError) -> tuple[int, str, list[str]]:
 
 
 def receive_dir_error_message(error: ReceiveDirUnavailable) -> list[str]:
-    """Câu báo không dùng được thư mục nhận, theo lỗi gốc (`__cause__`)."""
+    """Câu báo không dùng được thư mục nhận, theo lỗi gốc (`__cause__`).
+
+    `NotADirectoryError` / `FileExistsError`: đường dẫn là file (POSIX: cả khi một thư mục
+    cha là file; Windows báo ca đó bằng `FileNotFoundError` nên ra câu ổ đĩa).
+    """
     head = f"Không dùng được thư mục nhận {_printable(str(error.path))}:"
     cause = error.__cause__
     if isinstance(cause, UnsafeReceiveDirError):
@@ -1644,6 +1655,8 @@ def receive_dir_error_message(error: ReceiveDirUnavailable) -> list[str]:
         )
     elif isinstance(cause, PathTooLongError):
         tail = "đường dẫn quá dài. Hãy chọn thư mục có đường dẫn ngắn hơn bằng `--dir`."
+    elif isinstance(cause, NotADirectoryError | FileExistsError):
+        tail = "đó không phải là thư mục (có thể là một file trùng tên). Hãy chọn thư mục khác bằng `--dir`."
     elif isinstance(cause, PermissionError):
         tail = "máy này không có quyền ghi vào đó. Hãy chọn thư mục khác bằng `--dir`."
     else:
@@ -1898,17 +1911,20 @@ class _TransferPrinter:
         else:
             out.text(f"Đã lưu: {_printable(path if path is not None else update.name)}")
 
-    def finished(self, finished: TransferFinished, *, show_text: bool = True) -> None:
-        """Kết quả của lượt: câu (`show_text`) và sự kiện JSON `result`."""
+    def finished(self, finished: TransferFinished, *, lines: list[str] | None = None) -> None:
+        """Kết quả của lượt: câu và sự kiện JSON `result`.
+
+        `lines`: câu in thay cho câu của `transfer_result_message` (`[]`: không in); `message`
+        trong JSON vẫn là câu của `transfer_result_message`.
+        """
         info = finished.info
         key = info.key
         self._file_counts.pop(key, None)
         self._plain_at.pop(key, None)
         name = self._name_of(key.device_id)
-        lines = transfer_result_message(finished, peer_name=name, receive_dir=self._receive_dir())
+        message = transfer_result_message(finished, peer_name=name, receive_dir=self._receive_dir())
         out = self._output
-        if show_text:
-            out.text(*lines)
+        out.text(*(message if lines is None else lines))
         out.event(
             "result",
             **_transfer_fields(key),
@@ -1921,7 +1937,7 @@ class _TransferPrinter:
             file_count=len(info.files),
             done_bytes=info.done_bytes,
             total_bytes=info.total_bytes,
-            message=" ".join(lines),
+            message=" ".join(message),
         )
 
     def _unreachable(self, device_id: str) -> None:
@@ -2257,6 +2273,14 @@ class _ReceiveSession(_Session):
     Mỗi lần một lời hỏi; `offer` tới sau xếp hàng FIFO. Luật stdin như `_Prompter`: dòng gõ
     trước lúc hiện lời hỏi bị bỏ (`--json`: trước lúc in sự kiện `offer` của nó); EOF → từ chối
     lời hỏi đang mở và mọi lời hỏi sau. Sự kiện tới trước khi in xong phần đầu được giữ lại.
+
+    Câu khi lượt bị từ chối không do người dùng gõ `k` (mvp mục 8; JSON `result` không đổi):
+    - EOF: B13 in một lần, lúc lần đầu có lượt bị từ chối vì EOF; lượt đã hiện lời hỏi thì không
+      in thêm “Đã từ chối.”; lượt chưa từng hiện (đang xếp hàng lúc EOF, hay tới sau EOF) thì in
+      “Đã từ chối N file từ X vì không đọc được câu trả lời …” cho từng lượt.
+    - Ctrl+C (`node.close()` từ chối mọi lượt còn chờ): lượt đang hỏi không in gì (đã có “Đang
+      dừng…”); lượt chưa hiện lời hỏi (đang xếp hàng, hay chưa có `offer` vì `core` còn giữ trong
+      hàng của thiết bị) in “Đã từ chối N file từ X vì đang dừng nhận.”
     """
 
     def __init__(self, output: _Output) -> None:
@@ -2272,7 +2296,8 @@ class _ReceiveSession(_Session):
         self._stdin_closed = False
         self._told_closed = False
         self._offered: set[TransferKey] = set()  # lượt đã phát `offer`
-        self._eof_rejected: set[TransferKey] = set()  # đã từ chối vì đầu vào đóng (B13 thay cho C6)
+        self._shown: set[TransferKey] = set()  # lượt đã hiện lời hỏi (`--json`: đã tới lượt hỏi)
+        self._eof_rejected: set[TransferKey] = set()  # đã từ chối vì đầu vào đóng (B13 / M14 thay C6)
 
     def _name_of(self, device_id: str) -> str | None:
         if self.node is None:
@@ -2359,6 +2384,7 @@ class _ReceiveSession(_Session):
             return
         offer, emitted_at = self._queue.popleft()
         self._current = offer
+        self._shown.add(offer.key)
         if self.output.json:
             self._shown_at = emitted_at
             return
@@ -2415,12 +2441,24 @@ class _ReceiveSession(_Session):
             reopen = True
         elif any(offer.key == key for offer, _ in self._queue):
             self._queue = deque((offer, at) for offer, at in self._queue if offer.key != key)
+        shown = key in self._shown
+        self._shown.discard(key)
         eof = key in self._eof_rejected
         self._eof_rejected.discard(key)
-        # Từ chối vì đầu vào đóng: đã in B13, không in thêm “Đã từ chối.” (JSON vẫn có `result`).
-        self.printer.finished(
-            finished, show_text=not (eof and finished.result is TransferResult.REJECTED_USER)
-        )
+        lines: list[str] | None = None  # None: câu thường (“Đã từ chối.”…)
+        if (
+            finished.result is TransferResult.REJECTED_USER
+            and not finished.by_peer
+            and (eof or self.stopping)
+        ):
+            # Từ chối vì đầu vào đóng hay Ctrl+C (docstring lớp); JSON vẫn có `result` như cũ.
+            if shown:
+                lines = []
+            else:
+                n = len(finished.info.files)
+                s = _peer_label(self._name_of(key.device_id), key.device_id)
+                lines = [_rejected_no_answer(n, s) if eof else _rejected_stopping(n, s)]
+        self.printer.finished(finished, lines=lines)
         if reopen:
             self._next()
 
@@ -2604,9 +2642,7 @@ def cmd_unpair(args: argparse.Namespace) -> int:
         _config_dir_error(output, directory, e)
         return 1
     except NodeLockedError:
-        output.error(
-            "node_locked", "Teleport đang chạy với thư mục cấu hình này; hãy dừng `teleport listen` trước."
-        )
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
         return 1
     except TrustStoreError as e:
         output.error("trust_store_error", str(e))

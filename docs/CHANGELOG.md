@@ -118,6 +118,8 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Mọi lệnh `--json` viết U+2028 và U+2029 dưới dạng thoát `\u2028` / `\u2029`, để JSON Lines không vỡ khi bên đọc tách dòng bằng `str.splitlines`.
 - Tên hiển thị trung hòa ký tự vô hình và ký tự đổi hướng chữ: tên file trên màn hình thay chúng bằng `·`; đường dẫn và tên in ra của CLI thay chúng (và ký tự điều khiển) bằng U+FFFD.
 - Lời hỏi `[c/k]` của `listen`, `pair` và `receive` được in lại khi có dòng khác in chen giữa lúc đang chờ trả lời.
+- `teleport send`: khi máy nhận dừng vì lỗi của chính nó (ghi đĩa, dữ liệu hỏng, thư mục tạm còn sót lại), câu báo nay là “… gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại.”. Trong `--json`, `message` của sự kiện `result` đổi theo; `result` và `by_peer` không đổi.
+- `teleport unpair` khi có node đang chạy cùng thư mục cấu hình: dòng gợi ý nằm riêng và nêu cả `teleport receive` lẫn `teleport listen`, giống `send` và `receive`. Trong `--json`, `message` của lỗi `node_locked` chỉ còn câu “Teleport đang chạy với thư mục cấu hình này.”, không còn gợi ý.
 
 ### Fixed
 - Hai máy gọi nhau cùng lúc mà một lần mở kết nối điều khiển chậm (vài giây) có thể đóng rồi mở lại kết nối mãi. Ngưỡng chống trùng của protocol mục 6.1 nay lớn hơn hạn mở kết nối, nên hai bên luôn giữ cùng một kết nối.
@@ -132,6 +134,10 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport listen` / `teleport pair` không còn in “Nếu mã trên hai máy khác nhau…” cho phiên dừng trước khi hiện mã, mà báo phiên dừng trước khi hiện mã. Một yêu cầu ghép đôi tự xưng là thiết bị đã ghép đôi nhưng dùng danh tính khác làm `teleport listen` báo “một máy chưa xác minh tự xưng là …” và không còn khuyên hủy ghép đôi máy thật (mvp mục 8).
 - README: câu hỏi “tắt máy giữa chừng” nói đúng điều kiện nối lại (máy nhận tắt hoặc khởi động lại thì tiếp tục được khi Teleport trên máy gửi vẫn chạy; máy gửi tắt Teleport thì lượt gửi bị hủy); thống nhất cụm “tắt app nhận” trong README và tài liệu.
 - Trên Windows có WSL/Hyper-V, địa chỉ card vEthernet (ví dụ `172.18.96.1`) không còn bị quảng bá qua mDNS và không còn được `teleport listen` gợi ý cho máy kia; nguyên nhân: địa chỉ ưu tiên trước đây lấy theo tuyến multicast, mà trên Windows tuyến này chỉ phản ánh metric của card.
+- `teleport receive` khi không đọc được câu trả lời `[c/k]` vì đầu vào đã đóng: mỗi lượt bị từ chối mà chưa kịp hiện lời hỏi (đang xếp hàng, hoặc tới sau khi đầu vào đóng) nay có dòng “Đã từ chối N file từ X vì không đọc được câu trả lời (đầu vào đã đóng).”. Lượt đã hiện lời hỏi không in thêm “Đã từ chối.”.
+- `teleport receive` khi dừng bằng Ctrl+C: mỗi lượt chưa hiện lời hỏi (kể cả lượt đang xếp hàng hoặc chưa kịp có lời hỏi) nay có dòng “Đã từ chối N file từ X vì đang dừng nhận.”; lượt đang hỏi không in thêm “Đã từ chối.”. Hai trường hợp trên không đổi `result` và `message` trong `--json`.
+- `teleport receive --dir <file>`: khi đường dẫn là một file (trùng tên thư mục mong muốn), báo “đó không phải là thư mục (có thể là một file trùng tên)…” thay cho câu chung về ổ đĩa; vẫn thoát mã 1. Trên Windows, khi một thư mục cha là file, vẫn hiện câu về ổ đĩa.
+- README: `teleport unpair` nói đúng điều kiện: không chạy được khi `teleport listen`, `receive` hoặc `send` đang chạy với thư mục cấu hình đó.
 
 ### Removed
 - `teleport.net.tls.verify_pin`, `normalize_pin`, `MIN_PIN_HEX`: không tính năng nào xác thực bằng tiền tố fingerprint; pin ngắn chỉ còn để hiển thị.

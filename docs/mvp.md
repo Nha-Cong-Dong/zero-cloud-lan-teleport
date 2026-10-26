@@ -3,7 +3,7 @@
 > **Vai trò:** đặc tả sản phẩm — giải quyết vấn đề gì, cho ai, gồm những gì, trông ra sao, đạt chuẩn nào thì được phát hành.
 > **Nguồn duy nhất cho:** phạm vi MVP, tính năng và tiêu chí chấp nhận (F1–F12), yêu cầu phi chức năng (N1–N12), thông báo lỗi, tiêu chí phát hành.
 > **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
-> **Cập nhật:** 2026-10-23
+> **Cập nhật:** 2026-10-26
 
 ---
 
@@ -347,7 +347,7 @@ Các dòng khác của `teleport receive` / `teleport send` (*nghiêng* là ch�
 | `send` chờ máy nhận xong lượt trước | “Đang chờ *PC-Nha* nhận xong lượt trước…” |
 | Mất kết nối giữa lượt | “Đang nối lại…” |
 | Đang kiểm tra toàn vẹn một file | “Đang kiểm tra *video.mp4*…” |
-| Tiến độ (mỗi giây; không phải terminal thì mỗi 10 giây) | “*42,0*% · *3,4 GB* / *8,4 GB* · *85,2 MB/s* · còn *1 phút 2 giây* · *video.mp4* (*1*/*3*)”; chưa đo được tốc độ thì thay “còn …” bằng “đang tính thời gian còn lại”; `receive` thêm tên máy gửi ở đầu dòng |
+| Tiến độ (mỗi giây; không phải terminal thì mỗi 10 giây) | “  *42,0*% · *3,4 GB* / *8,4 GB* · *85,2 MB/s* · còn *1 phút 2 giây* · *video.mp4* (*1*/*3*)” (thụt hai dấu cách đầu dòng); chưa đo được tốc độ thì thay “còn …” bằng “đang tính thời gian còn lại”; `receive` thêm “*Laptop-Minh*: ” sau hai dấu cách đó |
 | `send`: một file xong | “Đã gửi *video.mp4* (*1*/*3*).” |
 | `send`: cả lượt xong | “Đã gửi xong *3* file (*8,4 GB*) tới *PC-Nha*.” |
 | `receive`: một file xong | “Đã lưu: *D:\…\video (1).mp4*” |
@@ -424,9 +424,9 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Máy nhận đang nhận một lượt khác từ máy này | Trạng thái “Đang chờ *PC-Nha* nhận xong lượt trước…” (không phải lỗi, lượt xếp hàng) | Tự xử lý |
 | Người gửi hủy | Máy nhận: “*Laptop-Minh* đã hủy lượt gửi. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.”; hủy khi máy nhận còn đang hỏi: “*Laptop-Minh* đã hủy lượt gửi.” Máy gửi (tự hủy): “Đã hủy lượt gửi tới *PC-Nha*. Các file đã gửi xong vẫn nằm trên máy đó.” | — |
 | Người nhận hủy giữa chừng | Máy gửi: “*PC-Nha* đã dừng nhận giữa chừng. Các file đã gửi xong vẫn nằm trên máy đó.” Máy nhận (tự hủy): “Đã hủy nhận từ *Laptop-Minh*. File đã nhận xong vẫn giữ nguyên.” | Máy gửi: nút “Gửi lại” |
-| Lỗi ghi đĩa ở máy nhận (ghi, `fsync` hay đổi tên lỗi) | Máy nhận: “Không lưu được *video.mp4* vào *D:\Downloads\Teleport* vì ổ đĩa báo lỗi khi ghi (ổ có thể đã đầy, bị rút ra hoặc bị hỏng). Đã dừng nhận từ *Laptop-Minh*; các file đã nhận xong vẫn giữ nguyên.” Máy gửi: “*PC-Nha* không lưu được *video.mp4* nên đã dừng nhận. Hãy nhờ người dùng máy đó kiểm tra ổ lưu file rồi gửi lại.” | Máy nhận: nút “Đổi thư mục nhận”. Máy gửi: nút “Gửi lại” |
+| Lỗi ghi đĩa ở máy nhận (ghi, `fsync` hay đổi tên lỗi) | Máy nhận: “Không lưu được *video.mp4* vào *D:\Downloads\Teleport* vì ổ đĩa báo lỗi khi ghi (ổ có thể đã đầy, bị rút ra hoặc bị hỏng). Đã dừng nhận từ *Laptop-Minh*; các file đã nhận xong vẫn giữ nguyên.” Máy gửi: “*PC-Nha* gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại.” (máy nhận chỉ gửi `cancel{error}`) | Máy nhận: nút “Đổi thư mục nhận”. Máy gửi: nút “Gửi lại” |
 | Không đọc được file nguồn khi đang gửi | Máy gửi: “Không đọc được *video.mp4* trên máy này nữa (file có thể đang bị chương trình khác khóa, hoặc nằm trên ổ vừa bị rút ra). Đã dừng gửi tới *PC-Nha*.” Máy nhận: “*Laptop-Minh* đã dừng gửi *video.mp4* vì gặp lỗi trên máy đó. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” | Nút “Gửi lại” |
-| Dữ liệu nhận bị hỏng quá số lần gửi lại cho phép | Máy nhận: “Dữ liệu nhận từ *Laptop-Minh* bị hỏng nhiều lần liên tiếp nên đã dừng nhận *video.mp4*. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” Máy gửi: câu máy gửi của dòng “Lỗi ghi đĩa ở máy nhận” (máy nhận chỉ gửi `cancel{error}`) | Nút “Gửi lại” |
+| Dữ liệu nhận bị hỏng quá số lần gửi lại cho phép | Máy nhận: “Dữ liệu nhận từ *Laptop-Minh* bị hỏng nhiều lần liên tiếp nên đã dừng nhận *video.mp4*. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” Máy gửi: câu máy gửi của dòng “Lỗi ghi đĩa ở máy nhận” | Nút “Gửi lại” |
 | Máy kia gửi dữ liệu không đúng giao thức | “Lượt gửi với *PC-Nha* đã dừng vì máy đó gửi dữ liệu không hợp lệ. Hãy cập nhật Teleport trên cả hai máy rồi thử lại.” | — |
 | Thư mục tạm của lượt còn sót lại từ lần trước (máy nhận bị tắt đột ngột rồi máy gửi gửi lại lượt đó) | Máy nhận: “Không nhận được lượt gửi từ *Laptop-Minh* vì thư mục tạm của lượt này còn sót lại từ lần trước (ví dụ Teleport vừa bị tắt đột ngột). Hãy nhờ gửi lại.” Máy gửi: câu máy gửi của dòng “Lỗi ghi đĩa ở máy nhận” | Nút “Gửi lại” |
 | Lượt dừng vì lý do khác (lý do máy này không biết, máy kia không còn biết lượt này…) | Máy gửi: “*PC-Nha* đã dừng lượt gửi.” Máy nhận: “*Laptop-Minh* đã dừng lượt gửi.” | — |
@@ -441,14 +441,15 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Chọn quá số file một lượt | “Mỗi lần gửi được tối đa *1000* file.” | Lượt gửi không bắt đầu |
 | CLI: `--limit-rate` sai | “Tốc độ không hợp lệ: “*x*”. Hãy nhập ví dụ 20M (20 MB/s) hoặc 512K; tối thiểu 64K.” | — |
 | CLI: `--address` của `send` sai | “*x* không phải địa chỉ IPv4 hợp lệ. Hãy nhập ví dụ 192.168.1.5 hoặc 192.168.1.5:47474.” | — |
-| CLI: `send` / `receive` khi một node khác đang chạy cùng thư mục cấu hình | “Teleport đang chạy với thư mục cấu hình này.” kèm dòng “Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại.” | — |
+| CLI: `send` / `receive` / `unpair` khi một node khác đang chạy cùng thư mục cấu hình | “Teleport đang chạy với thư mục cấu hình này.” kèm dòng “Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại.” | — |
 | CLI: `send` không thấy máy nhận trong mạng | “Không thấy *PC-Nha* trong mạng. Hãy kiểm tra máy đó đang chạy `teleport receive` và hai máy dùng chung một mạng; nếu mạng chặn mDNS, hãy thêm `--address <ip[:cổng]>`.” | — |
 | CLI: `send` không bật được khám phá mDNS | “Không tìm được *PC-Nha* vì không bật được khám phá mDNS (*lý do*). Hãy thêm `--address <ip[:cổng]>`.” | — |
-| CLI: không dùng được thư mục nhận | “Không dùng được thư mục nhận *D:\X*:” rồi một trong các đuôi: “thư mục ẩn `.teleport` bên trong là liên kết hoặc thuộc người dùng khác. Hãy xóa nó hoặc chọn thư mục khác bằng `--dir`.” / “đường dẫn quá dài. Hãy chọn thư mục có đường dẫn ngắn hơn bằng `--dir`.” / “máy này không có quyền ghi vào đó. Hãy chọn thư mục khác bằng `--dir`.” / “ổ đĩa báo lỗi hoặc không phản hồi. Hãy chọn thư mục khác bằng `--dir`.” | — |
+| CLI: không dùng được thư mục nhận | “Không dùng được thư mục nhận *D:\X*:” rồi một trong các đuôi: “thư mục ẩn `.teleport` bên trong là liên kết hoặc thuộc người dùng khác. Hãy xóa nó hoặc chọn thư mục khác bằng `--dir`.” / “đường dẫn quá dài. Hãy chọn thư mục có đường dẫn ngắn hơn bằng `--dir`.” / “máy này không có quyền ghi vào đó. Hãy chọn thư mục khác bằng `--dir`.” / “ổ đĩa báo lỗi hoặc không phản hồi. Hãy chọn thư mục khác bằng `--dir`.” / “đó không phải là thư mục (có thể là một file trùng tên). Hãy chọn thư mục khác bằng `--dir`.” | — |
 | CLI: `receive --yes` | “Cảnh báo: đang tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi trước (`--yes`).” | — |
 | CLI: `receive` khi chưa ghép đôi với thiết bị nào | “Máy này chưa ghép đôi với thiết bị nào nên chưa nhận được file. Hãy ghép đôi trước: `teleport listen` trên một máy, `teleport pair` trên máy kia.” | — |
 | CLI: `receive` không quảng bá được qua mDNS | “Cảnh báo: chưa quảng bá được qua mDNS (*lý do*); máy khác vẫn gửi được bằng `teleport send … --address <IP của máy này>`.” | — |
-| CLI: `receive` không đọc được câu trả lời `[c/k]` (đầu vào đã đóng) | “Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận.” | — |
+| CLI: `receive` không đọc được câu trả lời `[c/k]` (đầu vào đã đóng) | “Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận.” (in một lần); mỗi lượt bị từ chối khi chưa hiện lời hỏi (đang xếp hàng, hay tới sau khi đầu vào đóng) thêm: “Đã từ chối *3* file từ *Laptop-Minh* vì không đọc được câu trả lời (đầu vào đã đóng).” | — |
+| CLI: `receive` dừng (Ctrl+C) khi còn lượt chưa hiện lời hỏi | Mỗi lượt đó: “Đã từ chối *3* file từ *Laptop-Minh* vì đang dừng nhận.” (lượt đang hỏi thì không in “Đã từ chối.”) | — |
 
 ---
 

@@ -54,7 +54,7 @@ Mỗi thư mục cấu hình (tức mỗi danh tính) chỉ có **một node** c
 | `v0.1`–`v0.2` (chỉ có CLI) | Mỗi lệnh CLI tự chạy một node. Node giữ **file khóa** `<config_dir>/node.lock`; tiến trình thứ hai cùng thư mục cấu hình sẽ báo “Teleport đang chạy” rồi thoát. |
 | Từ `v0.3` (có giao diện) | Giao diện chạy node nền ở khay hệ thống. CLI phát hiện node đang chạy thì gửi lệnh cho nó qua **IPC cục bộ** (socket trên `127.0.0.1` kèm token trong thư mục cấu hình), không tự chạy node thứ hai. |
 
-`teleport unpair` sửa `trusted.json` khi không có node nào chạy, và giữ `node.lock` trong lúc sửa. Đang có `teleport listen` thì báo phải dừng nó trước (tới v0.3).
+`teleport unpair` sửa `trusted.json` khi không có node nào (`listen`, `receive`, `send`) đang chạy, và giữ `node.lock` trong lúc sửa. Đang có node chạy cùng thư mục cấu hình thì báo phải dừng nó trước (tới v0.3).
 
 `teleport list` chỉ duyệt mDNS trong vài giây: không giữ `node.lock` và không quảng bá máy này. `teleport pair <tên>` chạy một node chỉ duyệt, không quảng bá và không tự giữ kết nối.
 

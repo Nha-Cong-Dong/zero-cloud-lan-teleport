@@ -78,7 +78,21 @@ def test_corrupt_identity_exits_1_with_message_not_traceback(tmp_path, capsys):
 LOCAL = "127.0.0.1"
 TIME_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
 MVP_NOT_DONE = "Ghép đôi với {x} chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo."
-LOCKED_UNPAIR = "Lỗi: Teleport đang chạy với thư mục cấu hình này; hãy dừng `teleport listen` trước."
+# `unpair` khi khóa node bận (spec-p2-8 mục B “8a”): cùng gợi ý như `send`/`receive` (mvp §8, dòng “CLI:
+# `send` / `receive` khi một node khác đang chạy cùng thư mục cấu hình”), nhắc cả `receive` lẫn `listen`.
+LOCKED = "Teleport đang chạy với thư mục cấu hình này"
+LOCKED_HINT = "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại."
+LOCKED_UNPAIR_OLD = "hãy dừng `teleport listen` trước"
+
+
+def assert_unpair_locked_text(err: str) -> None:
+    """Câu báo khóa bận của `unpair` (text, ra stderr): câu chính + đúng gợi ý của mvp §8."""
+    assert err.startswith(f"Lỗi: {LOCKED}"), err
+    assert LOCKED_HINT in err, err
+    assert LOCKED_UNPAIR_OLD not in err, err
+    assert "Traceback" not in err, err
+
+
 BAD_ADDRESS = (  # PR-4 mục 3.10 (đổi theo mục 4.8)
     "“{target}” không phải địa chỉ IPv4 hợp lệ. Hãy nhập địa chỉ IP, ví dụ 192.168.1.5 hoặc "
     "192.168.1.5:47474, hoặc tên / mã thiết bị như `teleport list` hiện."
@@ -232,7 +246,7 @@ def test_cl4_unpair_while_node_lock_held(trusted_cfg, capsys, monkeypatch):
         t0 = time.monotonic()
         assert run_main(["--config-dir", str(d), "unpair", "B"]) == 1
         assert time.monotonic() - t0 < 2.0
-        assert LOCKED_UNPAIR in capsys.readouterr().err
+        assert_unpair_locked_text(capsys.readouterr().err)
         assert run_main(["--config-dir", str(d), "unpair", "B", "--json"]) == 1
         obj = json.loads(capsys.readouterr().out.strip())
         assert obj["error"] == "node_locked"
@@ -834,9 +848,49 @@ def test_cl15_unpair_while_listen_runs(tmp_path, procs, capsys, monkeypatch):
     listen = procs(listen_cmd(d))
     listen.wait_json("listening")
     assert run_main(["--config-dir", str(d), "unpair", "B"]) == 1
-    assert LOCKED_UNPAIR in capsys.readouterr().err
+    assert_unpair_locked_text(capsys.readouterr().err)
     listen.interrupt()
     assert listen.finish(30) == 0
+
+
+@pytest.mark.integration
+def test_unpair_while_receive_runs_names_receive_and_listen(tmp_path, procs, capsys, monkeypatch):
+    """spec-p2-8 mục B “8a”: `teleport receive` đang giữ khóa → `unpair` mã 1, gợi ý nhắc cả
+    `teleport receive` lẫn `teleport listen`; `--json` → `error` `node_locked`; trusted.json không đổi;
+    `receive` chạy tiếp."""
+    from teleport.app import node as node_mod
+
+    monkeypatch.setattr(node_mod, "LOCK_TIMEOUT", 0.2)
+    d = tmp_path / "B"
+    load_or_create_identity(d)
+    peer = load_or_create_identity(tmp_path / "peer-B")
+    TrustStore.load(d).add(peer_cert_from_pem(peer.cert_pem()), "B")
+    before = (d / "trusted.json").read_bytes()
+    recv_dir = tmp_path / "nhan"
+    receive = procs(
+        [
+            "--config-dir",
+            str(d),
+            "receive",
+            "--json",
+            "--yes",
+            "--dir",
+            str(recv_dir),
+            "--name",
+            "R",
+            *NODE_OPTS,
+        ]
+    )
+    receive.wait_json("receiving")
+    assert run_main(["--config-dir", str(d), "unpair", "B"]) == 1
+    assert_unpair_locked_text(capsys.readouterr().err)
+    assert run_main(["--config-dir", str(d), "unpair", "B", "--json"]) == 1
+    obj = json.loads(capsys.readouterr().out.strip())
+    assert obj["error"] == "node_locked"
+    assert (d / "trusted.json").read_bytes() == before
+    assert receive.p.poll() is None, "receive phải chạy tiếp"
+    receive.interrupt()
+    assert receive.finish(30) == 0
 
 
 # --- StdinReader (mục 2.6, 0 điểm 12) -------------------------------------------------------------------
@@ -1711,6 +1765,43 @@ async def test_cl27_listen_text_with_discovery(tmp_path, fast_links, cli_mdns, c
 
 
 @with_marks(socket_test)
+async def test_listen_reprints_pair_question_after_discovery_line_until_answered(
+    tmp_path, fast_cli, cli_mdns, cli_runs
+):
+    """`listen` đang hỏi “Trùng khớp? [c/k]: ” mà mDNS báo thấy một máy (dòng “Thấy …” in chen) → câu
+    hỏi được in lại ngay sau dòng đó; trả lời `k` xong thì dòng “Thấy …” sau không kéo theo câu hỏi."""
+    from teleport.core.discovery import DeviceAdded
+
+    listen = cli_runs("listen", mdns_listen_argv(tmp_path / "B", json_mode=False, name="B"))
+    port = await listen_port_text(listen)
+    pair = cli_runs("pair", pair_argv(tmp_path / "A", port))
+    await listen.wait_text(ASK)
+    await pair.wait_event("pair_prompt")
+    m = cli_mdns.last
+    x = load_or_create_identity(tmp_path / "peer-X")
+    seen_x = f"Thấy “X” ({x.device_id[:8]}, Windows, chưa ghép đôi) tại 192.0.2.30:47474."
+    m.emit(DeviceAdded(discovered(x.device_id, "X", 47474, addresses=("192.0.2.30",))))
+    await listen.wait_text(seen_x)
+    await asyncio.sleep(0.1)
+    out = listen.out.getvalue()
+    assert seen_x + "\n" + ASK in out, out
+    assert out.endswith(ASK), out
+
+    listen.say("k")
+    assert await asyncio.wait_for(pair.task, 10) == 1
+    await listen.wait_text("Tiếp tục chờ ghép đôi…")
+    y = load_or_create_identity(tmp_path / "peer-Y")
+    seen_y = f"Thấy “Y” ({y.device_id[:8]}, Windows, chưa ghép đôi) tại 192.0.2.31:47474."
+    asks = listen.out.getvalue().count(ASK)
+    m.emit(DeviceAdded(discovered(y.device_id, "Y", 47474, addresses=("192.0.2.31",))))
+    await listen.wait_text(seen_y)
+    await asyncio.sleep(0.1)
+    out = listen.out.getvalue()
+    assert out.count(ASK) == asks, out
+    assert out.endswith(seen_y + "\n"), out
+
+
+@with_marks(socket_test)
 async def test_cl27_listen_json_with_discovery(tmp_path, fast_links, cli_mdns, cli_runs):
     from teleport.core.discovery import DeviceAdded, DeviceRemoved
 
@@ -1967,6 +2058,117 @@ async def test_json_pair_prompt_has_recent_codes_and_warning(role, n, warn):
     assert ev["warning"] == (WARN_CODES.format(n=n) if warn else None)
     assert ev["code"] == "123456" and ev["role"] == role
     assert err.getvalue() == ""
+
+
+# --- In lại “Trùng khớp? [c/k]: ” khi có dòng chen vào (spec-p2-7 mục E1 cho listen/pair; plan-p2-8 a2) ---
+
+INTERJECT = "Thấy “X” (abababab, Windows, chưa ghép đôi) tại 192.0.2.30:47474."
+INTERJECT_AFTER = "Thấy “Y” (cdcdcdcd, Linux, chưa ghép đôi) tại 192.0.2.31:47474."
+
+
+class _DecideNode:
+    """Node giả cho `_Prompter`: chỉ ghi lại `pairing.decide`."""
+
+    def __init__(self) -> None:
+        self.decided: list[tuple[int, bool]] = []
+        self.pairing = self
+
+    def decide(self, session_id: int, accepted: bool) -> bool:
+        self.decided.append((session_id, accepted))
+        return True
+
+
+def _text_prompter(*, listening: bool):
+    from teleport.cli import _Output, _Prompter
+
+    out, err = io.StringIO(), io.StringIO()
+    output = _Output(out, err, False)
+    prompter = _Prompter(output, listening=listening)
+    prompter.node = _DecideNode()
+    return prompter, output, out, err
+
+
+def _pair_finished(outcome: str, *, role: str = "responder", session_id: int = 7):
+    from teleport.app.pairing import PairingFinished, PairingOutcome
+    from teleport.core.pairing import Role
+
+    return PairingFinished(
+        session_id=session_id,
+        role=Role(role),
+        outcome=PairingOutcome(outcome),
+        address="192.168.1.5",
+        port=None if role == "responder" else 47474,
+        peer_name="A",
+        peer_device_id="ab" * 16,
+        peer_reason=None,
+        device=None,
+        known_name=None,
+        code_shown=True,
+    )
+
+
+@pytest.mark.parametrize("listening", [True, False], ids=["listen", "pair"])
+async def test_pair_question_is_reprinted_after_interjected_line(listening):
+    """Lời hỏi đang mở mà có dòng khác in chen (ví dụ “Thấy …” của mDNS) → dòng đó in trên dòng riêng
+    rồi “Trùng khớp? [c/k]: ” được in lại ngay sau, con trỏ ở cuối câu hỏi."""
+    p, output, out, err = _text_prompter(listening=listening)
+    role = "responder" if listening else "initiator"
+    p.on_prompt(_prompt(role, 0))
+    assert out.getvalue().endswith("\n" + ASK)
+    output.text(INTERJECT)
+    assert out.getvalue().endswith(ASK + "\n" + INTERJECT + "\n" + ASK), out.getvalue()
+    output.text(INTERJECT_AFTER)
+    assert out.getvalue().endswith(ASK + "\n" + INTERJECT_AFTER + "\n" + ASK), out.getvalue()
+    assert out.getvalue().count(ASK) == 3
+    assert err.getvalue() == ""
+
+
+@pytest.mark.parametrize("listening", [True, False], ids=["listen", "pair"])
+async def test_pair_question_is_reprinted_after_interjected_error_line(listening):
+    """Dòng lỗi (ra stderr) chen vào lúc đang hỏi: câu hỏi vẫn được in lại trên stdout."""
+    p, output, out, err = _text_prompter(listening=listening)
+    p.on_prompt(_prompt("responder" if listening else "initiator", 0))
+    before = out.getvalue().count(ASK)
+    output.error("x", "giả lập lỗi chen vào")
+    assert "Lỗi: giả lập lỗi chen vào" in err.getvalue()
+    assert out.getvalue().endswith("\n" + ASK) and out.getvalue().count(ASK) == before + 1
+
+
+@pytest.mark.parametrize("listening", [True, False], ids=["listen", "pair"])
+async def test_pair_question_is_reprinted_after_wrong_answer_then_interjected_line(listening):
+    """Gõ sai → gợi ý + hỏi lại; câu hỏi mới vẫn mở nên dòng chen sau đó cũng được in lại câu hỏi."""
+    p, output, out, _ = _text_prompter(listening=listening)
+    p.on_prompt(_prompt("responder" if listening else "initiator", 0))
+    p.feed(time.perf_counter(), "có lẽ")
+    assert "Hãy gõ c (trùng) hoặc k (không trùng)." in out.getvalue()
+    assert out.getvalue().endswith(ASK)
+    output.text(INTERJECT)
+    assert out.getvalue().endswith(INTERJECT + "\n" + ASK), out.getvalue()
+    assert p.node.decided == []
+
+
+@pytest.mark.parametrize("listening", [True, False], ids=["listen", "pair"])
+@pytest.mark.parametrize("closing", ["c", "k", "eof", "peer_aborted", "timeout"])
+async def test_pair_question_is_not_reprinted_after_answer_or_cancel(listening, closing):
+    """Sau khi đã trả lời (c/k), đầu vào đóng, hoặc phiên tự kết thúc (máy kia hủy, hết giờ): dòng chen
+    vào sau đó không kéo theo “Trùng khớp? [c/k]: ” nữa."""
+    p, output, out, _ = _text_prompter(listening=listening)
+    role = "responder" if listening else "initiator"
+    p.on_prompt(_prompt(role, 0))
+    if closing in ("c", "k"):
+        p.feed(time.perf_counter(), closing)
+        assert p.node.decided == [(7, closing == "c")]
+    elif closing == "eof":
+        p.feed(time.perf_counter(), None)
+        assert p.node.decided == [(7, False)]
+    else:
+        p.on_finished(_pair_finished(closing, role=role))
+        assert p.node.decided == []
+    asks = out.getvalue().count(ASK)
+    output.text(INTERJECT_AFTER)
+    value = out.getvalue()
+    assert value.count(ASK) == asks, value
+    assert value.endswith(INTERJECT_AFTER + "\n"), value
 
 
 @pytest.mark.parametrize("role", ["responder", "initiator"])
