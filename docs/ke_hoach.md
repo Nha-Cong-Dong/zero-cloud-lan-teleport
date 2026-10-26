@@ -4,7 +4,7 @@
 > **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
 > **Không chứa:** phạm vi, tính năng, tiêu chí chấp nhận và con số chất lượng → [mvp.md](mvp.md) (tham chiếu theo mã F1–F12, N1–N12). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
 > **Bản chính thức về kỹ thuật:** đặc tả giao thức [protocol.md](protocol.md) và trạng thái từng module [architecture.md](architecture.md); khi lệch nhau thì hai file đó đúng.
-> **Cập nhật:** 2026-10-25
+> **Cập nhật:** 2026-10-26
 
 ---
 
@@ -17,7 +17,7 @@
 | Ngôn ngữ chính | **Python 3.12+** cho toàn bộ ứng dụng |
 | Ngôn ngữ bổ trợ | **C/C++** và **Java** cho công cụ phụ trợ (mục 4.2), không nằm trên đường găng của v1.0 |
 | Repo | **Public** trên GitHub `Nha-Cong-Dong/zero-cloud-lan-teleport`: mã nguồn và mọi tài liệu trong `docs/` đều công khai |
-| Giấy phép | **GPL-3.0-or-later** (file `LICENSE`). Mọi bản phân phối đã sửa đổi phải mở mã theo GPL. Thư viện chạy/đóng gói phải tương thích GPLv3: chỉ dùng MIT/BSD/Apache-2.0/LGPL; ngoại lệ là PyInstaller (GPL kèm bootloader exception). Công cụ chỉ dùng khi phát triển được phép khác (ví dụ `hypothesis` MPL-2.0) |
+| Giấy phép | **GPL-3.0-or-later** (file `LICENSE`). Mọi bản phân phối đã sửa đổi phải mở mã theo GPL. Thư viện chạy/đóng gói phải tương thích GPLv3: chỉ dùng MIT/MIT-0/BSD/Apache-2.0/PSF-2.0/LGPL; LGPL chỉ cho gói đóng vào dạng file riêng người dùng thay được, không cho thành phần liên kết tĩnh; thành phần lồng bên trong một gói đã duyệt (liệt kê trong SBOM của gói, hoặc thư viện C đi kèm CPython) được dùng thêm các giấy phép dễ dãi tương thích GPLv3: ISC, Zlib, 0BSD, Unicode-3.0, Unicode-DFS-2016, Apache-2.0 WITH LLVM-exception, bzip2-1.0.6, public domain, giấy phép chỉ đòi giữ thông báo của `dtoa.c` (David M. Gay, trong lõi CPython); ngoại lệ là PyInstaller (GPL kèm bootloader exception). DLL runtime MSVC (`vcruntime140*.dll`) đi kèm runtime Python thuộc ngoại lệ System Library của GPLv3. Công cụ chỉ dùng khi phát triển được phép khác (ví dụ `hypothesis` MPL-2.0) |
 | Ưu tiên | **Hoàn thành MVP v1.0 trước** (desktop ↔ desktop); điện thoại và các việc “Sau v1.0” chưa làm |
 | Nguồn lực | Làm một mình |
 | Thời hạn | Không có hạn cố định → kiểm soát bằng các bản phát hành (mục 5), mốc tham khảo ~15 tuần tới v1.0 |
@@ -209,12 +209,13 @@ teleport/                      # ← gốc repo
   README.md  LICENSE  pyproject.toml   # gốc repo chỉ có 3 file này (ngoài .gitignore)
   .claude/CLAUDE.md            # hướng dẫn cho Claude Code
   .claude/agents/              # đội subagent (danh sách: .claude/CLAUDE.md)
-  .github/workflows/ci.yml
+  .github/workflows/           # ci.yml; build-cli.yml (build thử bản CLI, chạy tay)
   docs/                        # mọi tài liệu .md: README (mục lục, thuật ngữ), y_tuong, mvp, ke_hoach,
                                #   architecture, protocol, CONTRIBUTING, SECURITY, CHANGELOG,
                                #   benchmark, (sau này) hướng dẫn người dùng
   src/teleport/                # core/ trust/ net/ app/ ui/ + tiện ích dùng chung và cli.py
   tests/                       # core/, trust/, net/, app/, … theo tầng
+  packaging/pyinstaller/       # cấu hình build PyInstaller (cách build: docs/CONTRIBUTING.md)
   tools/                       # (tùy chọn) cpp-receiver/, java-client/
 ```
 Danh sách module và trạng thái từng module: [architecture.md](architecture.md) mục 3. Module chỉ được tạo khi có code thật.
@@ -309,6 +310,8 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Tài liệu người dùng: cài đặt, ghép đôi, khắc phục sự cố (tường lửa, cô lập Wi-Fi). `SECURITY.md`, chính sách quyền riêng tư.
 - Thử nghiệm với người dùng thật (mvp mục 9.1), sửa lỗi; test soak (N7).
 - Tuân thủ giấy phép khi đóng gói: dùng PyInstaller `--onedir` (không `--onefile`) để người dùng thay được thư viện LGPL (Qt/PySide6, zeroconf); bộ cài kèm `LICENSE` (GPL-3.0), văn bản giấy phép các thư viện bên thứ ba, và chỉ dẫn lấy mã nguồn đúng phiên bản.
+- Trước bản phát hành thật: thêm dòng bản quyền của các crate chỉ theo MIT liên kết tĩnh vào `_rust.pyd` của `cryptography` (ví dụ `openssl-sys`, `pem`) vào `THIRD-PARTY-NOTICES.txt`.
+- Đáp ứng LGPL-2.1 §6 cho zeroconf: phát hành kèm sdist của zeroconf, hoặc kèm lời đề nghị cung cấp mã nguồn bằng văn bản (hiện `SOURCE.txt` chỉ dẫn link PyPI/GitHub).
 - **Xong khi:** đạt toàn bộ tiêu chí phát hành ở mvp mục 12. → **`v1.0.0`**.
 
 ### 5.3. Sau v1.0

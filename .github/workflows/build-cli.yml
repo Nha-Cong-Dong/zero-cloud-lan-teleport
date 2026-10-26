@@ -1,0 +1,53 @@
+# Build thử bản CLI Teleport cho Windows bằng PyInstaller (--onedir) rồi chạy test khói trên exe.
+# Chỉ chạy tay (workflow_dispatch); không gắn tag, không tạo Release, không dùng secret, không ký mã.
+# Kết quả là artifact tạm (giữ 14 ngày), không phải bản phát hành.
+name: Build CLI (thử)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: windows-latest / Python 3.12.10
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          # Ghim đúng bản vá: THIRD-PARTY-NOTICES.txt kèm văn bản giấy phép của CPython theo đúng
+          # phiên bản (packaging/pyinstaller/licenses/, CPYTHON_LICENSE_TEXTS trong third_party.py).
+          # Nâng bản Python thì thêm văn bản của tag mới, nếu không build sẽ dừng.
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            packaging/pyinstaller/requirements.txt
+      - name: Cài dependency và công cụ build
+        run: python -m pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt
+      - name: Build bằng PyInstaller
+        env:
+          PYTHONUTF8: "1"
+        run: pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/pyinstaller/teleport-cli.spec
+      - name: Lấy phiên bản và commit
+        id: meta
+        shell: bash
+        run: |
+          version="$(python -c 'import teleport; print(teleport.__version__)')"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "sha7=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Test khói trên exe (pytest -m frozen)
+        env:
+          TELEPORT_FROZEN_EXE: ${{ github.workspace }}\dist\teleport\teleport.exe
+        run: pytest -m frozen -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teleport-cli-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.sha7 }}-windows
+          path: dist/teleport/
+          retention-days: 14
+          if-no-files-found: error
