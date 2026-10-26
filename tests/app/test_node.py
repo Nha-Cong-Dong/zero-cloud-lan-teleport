@@ -11,6 +11,7 @@ import logging
 import os
 import platform
 import time
+from pathlib import Path
 
 import pytest
 
@@ -409,45 +410,216 @@ async def test_many_control_connections_keep_at_most_one(node_factory, trust_eac
     assert A.connected_devices() == frozenset({B.id})
 
 
-# --- P2-3 AC-17: node cắt kết nối dữ liệu tới khi có quản lý lượt truyền ----------------------------
+# --- P2-6b AC-20 (viết lại P2-3 AC-17): kết nối dữ liệu vào đi qua TransferManager -----------------
+
+
+async def _expect_data_closed(conn, within: float) -> None:
+    """Bên mở kết nối dữ liệu thấy kết nối bị đóng (None / ConnectionLostError) trong `within` giây."""
+    from teleport.net import connection
+
+    start = time.monotonic()
+    try:
+        got = await asyncio.wait_for(conn.read_raw(1, at_boundary=True, idle_timeout=within + 2), within + 3)
+    except connection.IdleTimeout:
+        pytest.fail("A không đóng kết nối dữ liệu: bên mở chỉ thấy hết hạn chờ")
+    except connection.ConnectionLostError:
+        got = None
+    elapsed = time.monotonic() - start
+    assert got is None, f"A gửi dữ liệu trên kết nối dữ liệu: {got!r}"
+    assert elapsed < within, f"A đóng kết nối dữ liệu sau {elapsed:.2f} s"
 
 
 @integration
-async def test_node_aborts_incoming_data_connection_and_keeps_control(
-    node_factory, trust_each_other, fake_mdns, app_helpers
+@pytest.mark.parametrize("opener", ["B", "A"], ids=["B-mo-control", "A-mo-control"])
+async def test_ac20_data_open_for_unknown_transfer_is_closed_and_control_kept(
+    node_factory, trust_each_other, monkeypatch, opener
 ):
-    """Spec P2-3 mục 3.7: A nhận `data_open` hợp lệ từ B (đã ghép đôi, có kết nối điều khiển) → cắt ngay
-    kết nối dữ liệu (chưa có TransferManager); kết nối điều khiển hai bên không bị ảnh hưởng."""
-    from teleport.app.node import MdnsOptions
-    from teleport.core.discovery import DeviceAdded
-    from teleport.core.messages import DataOpen
+    """P2-6b AC-20 (kế hoạch 2.6: nhánh DATA của `_on_connection` đi qua `transfers.serve_data`, bỏ
+    `conn.abort()` thẳng): B (tin cậy) mở `data_open` cho lượt A không biết.
+
+    - B mở kết nối điều khiển (A là server, đúng chiều dữ liệu): A gửi `cancel{unknown_transfer}` trên
+      kết nối điều khiển rồi đóng kết nối dữ liệu < 1 s (protocol §4.1).
+    - A mở kết nối điều khiển (sai chiều): chỉ đóng, không gửi `cancel`.
+    Kết nối điều khiển hai bên không bị ảnh hưởng.
+    """
+    from teleport.core.messages import Cancel, DataOpen
     from teleport.net import connection
 
+    sent: list = []
+    real_send = connection.Connection.send
+
+    async def spy_send(self, msg):
+        sent.append(msg)
+        return await real_send(self, msg)
+
+    monkeypatch.setattr(connection.Connection, "send", spy_send)
     trust_each_other("A", "B")
-    A = await node_factory("A", mdns=MdnsOptions())
-    B = await node_factory("B", mdns=MdnsOptions())
-    fake_mdns.of(B).emit(DeviceAdded(app_helpers.dev(A)))  # B là client của kết nối điều khiển
+    A = await node_factory("A")
+    B = await node_factory("B")
+    if opener == "B":
+        B.connect_hint(A.id, [LOCAL], A.port)
+    else:
+        A.connect_hint(B.id, [LOCAL], B.port)
     await wait_until(
         lambda: B.id in A.connected_devices() and A.id in B.connected_devices(), 3, "chưa kết nối hai bên"
     )
-    opening = DataOpen(transfer_id="0123456789abcdef" * 2, file_index=0, resume_seq=1)
+    tid = "0123456789abcdef" * 2
+    opening = DataOpen(transfer_id=tid, file_index=0, resume_seq=1)
     conn = await connection.open_data(LOCAL, A.port, B.identity, B.hello, A.identity.cert_pem(), opening)
     try:
-        start = time.monotonic()
-        try:
-            got = await asyncio.wait_for(conn.read_raw(1, at_boundary=True, idle_timeout=3), 5)
-        except connection.IdleTimeout:
-            pytest.fail("A không cắt kết nối dữ liệu: bên mở chỉ thấy hết hạn chờ")
-        except connection.ConnectionLostError:
-            got = None
-        elapsed = time.monotonic() - start
-        assert got is None, f"A gửi dữ liệu trên kết nối dữ liệu: {got!r}"
-        assert elapsed < 1.0, f"A cắt kết nối dữ liệu sau {elapsed:.2f} s"
+        await _expect_data_closed(conn, 1.0)
     finally:
         conn.abort()
+
+    def cancels() -> list:
+        return [m for m in sent if isinstance(m, Cancel) and m.transfer_id == tid]
+
+    if opener == "B":
+        await wait_until(lambda: cancels(), 2, "A không gửi cancel cho data_open của lượt lạ")
+        assert [m.reason for m in cancels()] == ["unknown_transfer"]
+    else:
+        await asyncio.sleep(0.3)
+        assert cancels() == [], "data_open sai chiều chỉ bị đóng, không được trả cancel"
     await asyncio.sleep(0.3)
-    assert B.id in A.connected_devices(), "cắt kết nối dữ liệu làm mất kết nối điều khiển phía A"
-    assert A.id in B.connected_devices(), "cắt kết nối dữ liệu làm mất kết nối điều khiển phía B"
+    assert B.id in A.connected_devices(), "đóng kết nối dữ liệu làm mất kết nối điều khiển phía A"
+    assert A.id in B.connected_devices(), "đóng kết nối dữ liệu làm mất kết nối điều khiển phía B"
+
+
+# --- P2-6b AC-25: tham số mới của Node, ReceiveDirUnavailable; AC-29 --------------------------------
+
+
+def _noop(update) -> None:
+    pass
+
+
+def test_ac25_receive_dir_needs_auto_accept_or_event_callback(tmp_path):
+    """Kế hoạch 2.6: `receive_dir` khác None, `auto_accept=False` và `on_transfer_event=None` → ValueError
+    (không ai trả lời được lời hỏi nhận file)."""
+    rd = tmp_path / "nhan"
+    with pytest.raises(ValueError):
+        Node(tmp_path / "A", name="A", host=LOCAL, port=0, receive_dir=rd)
+    with pytest.raises(ValueError):
+        Node(tmp_path / "A", name="A", host=LOCAL, port=0, receive_dir=rd, auto_accept=False)
+    Node(tmp_path / "A", name="A", host=LOCAL, port=0, receive_dir=rd, auto_accept=True)
+    Node(tmp_path / "A", name="A", host=LOCAL, port=0, receive_dir=rd, on_transfer_event=_noop)
+    Node(tmp_path / "A", name="A", host=LOCAL, port=0, receive_dir=str(rd), auto_accept=True)
+    Node(tmp_path / "A", name="A", host=LOCAL, port=0)  # không nhận file: không cần gì thêm
+    assert not rd.exists(), "hàm tạo không được chạm đĩa"
+
+
+@pytest.mark.parametrize(
+    "rate",
+    [0, -1, "min-1", 1.5, "float-min", True, "65536"],
+    ids=["0", "-1", "min-1", "1.5", "float", "bool", "chuoi"],
+)
+def test_ac25_rate_limit_must_be_none_or_int_at_least_min(tmp_path, rate):
+    from teleport.app.transfers import MIN_RATE_LIMIT
+
+    if rate == "min-1":
+        rate = MIN_RATE_LIMIT - 1
+    elif rate == "float-min":
+        rate = float(MIN_RATE_LIMIT)
+    with pytest.raises(ValueError):
+        Node(tmp_path / "A", name="A", host=LOCAL, port=0, rate_limit=rate)
+
+
+def test_ac25_rate_limit_accepts_none_and_minimum(tmp_path):
+    from teleport.app.transfers import MIN_RATE_LIMIT
+
+    Node(tmp_path / "A", name="A", host=LOCAL, port=0, rate_limit=None)
+    Node(tmp_path / "A", name="A", host=LOCAL, port=0, rate_limit=MIN_RATE_LIMIT)
+    Node(tmp_path / "A", name="A", host=LOCAL, port=0, rate_limit=100 * 1024 * 1024)
+
+
+async def test_ac25_transfers_before_start_is_runtime_error(tmp_path):
+    node = Node(tmp_path / "A", name="A", host=LOCAL, port=0)
+    with pytest.raises(RuntimeError):
+        _ = node.transfers
+    await node.close()
+
+
+@integration
+async def test_ac25_transfers_available_while_running(node_factory):
+    A = await node_factory("A")
+    tm = A.transfers
+    assert tm is A.transfers
+    assert tm.receiving is False and tm.receive_dir is None
+
+
+def _make_receive_dir_a_file(rd):
+    rd.parent.mkdir(parents=True, exist_ok=True)
+    rd.write_bytes(b"khong phai thu muc")
+
+
+def _make_temp_root_a_file(rd):
+    rd.mkdir(parents=True)
+    (rd / ".teleport").write_bytes(b"khong phai thu muc")
+
+
+@integration
+@pytest.mark.parametrize(
+    ("setup", "cause"),
+    [(_make_receive_dir_a_file, OSError), (_make_temp_root_a_file, "UnsafeReceiveDirError")],
+    ids=["thu-muc-nhan-la-file", "teleport-la-file"],
+)
+async def test_ac25_unusable_receive_dir_fails_start_and_releases_lock(tmp_path, fast, setup, cause):
+    """Kế hoạch 2.6: `ReceiveDir.open` lỗi (`UnsafeReceiveDirError`, `PathTooLongError`, `OSError`) →
+    `start()` ném `ReceiveDirUnavailable(path)` (`__cause__` là lỗi gốc) sau khi dọn và nhả khóa."""
+    from teleport.app import storage
+    from teleport.app.node import ReceiveDirUnavailable
+
+    if isinstance(cause, str):
+        cause = getattr(storage, cause)
+    rd = tmp_path / "nhan"
+    setup(rd)
+    before = rd.read_bytes() if rd.is_file() else (rd / ".teleport").read_bytes()
+    node = Node(tmp_path / "A", name="A", host=LOCAL, port=0, receive_dir=rd, auto_accept=True)
+    with pytest.raises(ReceiveDirUnavailable) as e:
+        await node.start()
+    assert Path(e.value.path) == rd
+    assert isinstance(e.value.__cause__, cause), repr(e.value.__cause__)
+    assert lock_is_free(tmp_path / "A")
+    after = rd.read_bytes() if rd.is_file() else (rd / ".teleport").read_bytes()
+    assert after == before, "không được sửa thứ đã có ở thư mục nhận"
+    await node.close()
+    with pytest.raises(RuntimeError):
+        await node.start()
+
+
+@integration
+async def test_ac25_receive_dir_path_too_long_fails_start_and_releases_lock(tmp_path, fast, monkeypatch):
+    """Kế hoạch 2.6: `ReceiveDir.open` ném `PathTooLongError` → `start()` ném `ReceiveDirUnavailable`
+    (`__cause__` là `PathTooLongError`) và nhả `node.lock`: một node khác mở được cùng thư mục cấu hình."""
+    from teleport.app import storage
+    from teleport.app.node import ReceiveDirUnavailable
+
+    calls: list = []
+
+    def too_long(cls, root):
+        calls.append(root)
+        raise storage.PathTooLongError("giả lập đường dẫn quá dài")
+
+    monkeypatch.setattr(storage.ReceiveDir, "open", classmethod(too_long))
+    rd = tmp_path / "nhan"
+    node = Node(tmp_path / "A", name="A", host=LOCAL, port=0, receive_dir=rd, auto_accept=True)
+    with pytest.raises(ReceiveDirUnavailable) as e:
+        await node.start()
+    assert calls, "start() không mở thư mục nhận"
+    assert Path(e.value.path) == rd
+    assert isinstance(e.value.__cause__, storage.PathTooLongError), repr(e.value.__cause__)
+    assert lock_is_free(tmp_path / "A")
+    await node.close()
+    async with Node(tmp_path / "A", name="A2", host=LOCAL, port=0) as other:
+        assert other.port > 0
+    assert lock_is_free(tmp_path / "A")
+
+
+def test_ac29_send_chunk_equals_rate_limit_chunk():
+    """AC-29: đoạn ghi của kết nối dữ liệu bằng đoạn của giới hạn tốc độ (protocol §4.2)."""
+    from teleport.core import ratelimit
+    from teleport.net import connection
+
+    assert connection._SEND_CHUNK == ratelimit.CHUNK_SIZE == 64 * 1024
 
 
 # --- N8–N10: hủy ghép đôi ---------------------------------------------------------------------------

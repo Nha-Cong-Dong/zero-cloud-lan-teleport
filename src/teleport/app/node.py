@@ -5,15 +5,18 @@ từ `start()` tới `close()`, nạp danh tính và kho tin cậy, mở `Listen
 (47474, hoặc cổng dự phòng lưu trong `settings.json`), rồi giao kết nối tới:
 
 - ghép đôi → `PairingService.handle_incoming`;
-- điều khiển → `ControlChannel` (ping/pong).
+- điều khiển → `ControlChannel` (ping/pong); message truyền file → `TransferManager`;
+- dữ liệu → `TransferManager.serve_data` (`app.transfers`).
 
 Kết nối điều khiển (cả vào lẫn ra) do `core.links.LinkTracker` quyết định: tối đa
 **một** kết nối cho mỗi thiết bị (chống trùng protocol §6.1), tự mở tới thiết bị tin
 cậy thấy qua mDNS (hoặc chỉ một thiết bị: `auto_connect_to`), tới địa chỉ người dùng
 đưa (`connect_hint`), và nối lại theo lịch §6.2. Node chỉ thực hiện hành động tracker
-trả về; đổi kết nối (`LinkSwitched`) không báo `NodeEvent`. `DeviceRegistry` gộp mDNS +
-`trusted.json` + trạng thái kết nối thành `DeviceView` cho giao diện, và `on_event` báo
-`NodeEvent` (thiết bị lên/xuống, kết nối được/mất/lỗi).
+trả về; đổi kết nối (`LinkSwitched`) không báo `NodeEvent` mà chuyển kênh điều khiển của
+`TransferManager` sang kết nối mới. Thiết bị còn lượt truyền dở được `hold` (nối lại theo
+lịch kể cả khi mDNS báo máy đi). `DeviceRegistry` gộp mDNS + `trusted.json` + trạng thái
+kết nối thành `DeviceView` cho giao diện, và `on_event` báo `NodeEvent` (thiết bị
+lên/xuống, kết nối được/mất/lỗi).
 
 mDNS là tùy chọn (`mdns=None`: tắt) và chỉ là gợi ý địa chỉ: kết nối luôn kiểm chứng
 chỉ server với chứng chỉ đã lưu ngay trong bắt tay. Kết nối ra mở xong thì node báo
@@ -22,10 +25,14 @@ chỉ server với chứng chỉ đã lưu ngay trong bắt tay. Kết nối ra 
 NETWORK_CHECK_INTERVAL giây đọc địa chỉ và đồng hồ (`core.discovery.NetworkWatch`):
 địa chỉ đổi → khởi động lại mDNS; máy vừa thức dậy → quảng bá lại.
 
+Truyền file (`receive_dir`, `auto_accept`, `rate_limit`, `on_transfer_event`) chạy ở
+`TransferManager` (`node.transfers`); thứ tự đóng ở `close()` và trần thời gian của nó ở
+docs/architecture.md mục 5.
+
 `unpair` chạy đồng bộ từ lúc xóa khỏi kho tới lúc lấy kết nối của máy đó ra khỏi bảng
-(không có `await` xen giữa), rồi đóng kết nối đó. Kết nối (vào hay ra) được đăng ký
-trước mọi `await`. Ghi `trusted.json` / `settings.json` chạy đồng bộ trên event loop:
-file nhỏ, và nhờ vậy trạng thái trong RAM đổi cùng lúc với file.
+và hủy mọi lượt truyền với nó (không có `await` xen giữa), rồi đóng kết nối đó. Kết nối
+(vào hay ra) được đăng ký trước mọi `await`. Ghi `trusted.json` / `settings.json` chạy
+đồng bộ trên event loop: file nhỏ, và nhờ vậy trạng thái trong RAM đổi cùng lúc với file.
 """
 
 from __future__ import annotations
@@ -37,6 +44,7 @@ import functools
 import ipaddress
 import logging
 import math
+import os
 import platform
 import re
 import ssl
@@ -47,9 +55,13 @@ from pathlib import Path
 from typing import Any, Self
 
 import teleport
+from teleport.app import storage
+from teleport.app import transfers as app_transfers
 from teleport.app.devices import DeviceNotFound, DeviceRegistry, DeviceView, resolve_trusted
+from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt, PairingService
 from teleport.app.settings import Settings
+from teleport.app.transfers import TransferManager, TransferUpdate
 from teleport.core.discovery import (
     PROBE_INTERVAL,
     RESOLVE_TIMEOUT,
@@ -78,6 +90,8 @@ from teleport.core.messages import (
     PROTOCOL_VERSION,
     ConnectionKind,
     Hello,
+    Ping,
+    Pong,
     validate_device_id,
     validate_device_name,
     validate_os,
@@ -160,6 +174,18 @@ class ConfigDirError(Exception):
 
 class DiscoveryUnavailable(Exception):
     """Không bật được khám phá mDNS; `__cause__` là lỗi gốc (OSError, DiscoveryError…)."""
+
+
+class ReceiveDirUnavailable(Exception):
+    """Không mở được thư mục nhận (`path`); `__cause__` là lỗi gốc.
+
+    Lỗi gốc: `UnsafeReceiveDirError` (liên kết hay sai chủ trong cây `.teleport`),
+    `PathTooLongError`, OSError (không tạo được, không phải thư mục…), `DiskTimeout`.
+    """
+
+    def __init__(self, path: Path) -> None:
+        super().__init__("không mở được thư mục nhận")
+        self.path = path
 
 
 # ---- Tùy chọn mDNS -------------------------------------------------------------------------
@@ -371,6 +397,10 @@ class Node:
         auto_connect: bool = True,
         auto_connect_to: str | None = None,
         on_event: Callable[[NodeEvent], None] | None = None,
+        receive_dir: str | os.PathLike[str] | None = None,
+        auto_accept: bool = False,
+        rate_limit: int | None = None,
+        on_transfer_event: Callable[[TransferUpdate], None] | None = None,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
 
@@ -384,6 +414,15 @@ class Node:
         ValueError. `on_event` nhận `NodeEvent`, gọi đồng bộ trên loop; raise thì chỉ ghi log.
         `on_pairing_prompt=None`: node không hiện mã được nên không ghép đôi được;
         khi đó `accept_pairing=True` → ValueError.
+
+        Truyền file (`app.transfers`): `receive_dir=None` → không nhận file (`offer` nhận
+        `reject{not_receiving}`); khác None → mở lúc `start()` (tạo nếu chưa có). Có
+        `receive_dir` mà không tự nhận (`auto_accept=False`) và không có `on_transfer_event`
+        để hỏi người dùng → ValueError. `auto_accept` không phải bool → ValueError.
+        `rate_limit`: None hoặc số nguyên ≥ `transfers.MIN_RATE_LIMIT` byte/giây, sai →
+        ValueError. `on_transfer_event` nhận `TransferUpdate`, gọi đồng bộ trên loop; raise
+        thì chỉ ghi log. `receive_dir` không phải đường dẫn dạng chuỗi, `on_transfer_event`
+        không gọi được → TypeError.
         """
         if name is not None:
             validate_device_name(name)
@@ -401,6 +440,21 @@ class Node:
             validate_device_id(auto_connect_to)
             if not auto_connect:
                 raise ValueError("auto_connect_to cần auto_connect=True")
+        receive_path: Path | None = None
+        if receive_dir is not None:
+            raw = os.fspath(receive_dir)  # không phải đường dẫn → TypeError
+            if not isinstance(raw, str):
+                raise TypeError("receive_dir phải là đường dẫn dạng chuỗi")
+            receive_path = Path(raw)
+        if type(auto_accept) is not bool:
+            raise ValueError("auto_accept phải là bool")
+        minimum = app_transfers.MIN_RATE_LIMIT
+        if rate_limit is not None and (type(rate_limit) is not int or rate_limit < minimum):
+            raise ValueError(f"rate_limit phải là None hoặc số nguyên ≥ {minimum} (byte/giây)")
+        if on_transfer_event is not None and not callable(on_transfer_event):
+            raise TypeError("on_transfer_event phải là hàm")
+        if receive_path is not None and not auto_accept and on_transfer_event is None:
+            raise ValueError("receive_dir cần auto_accept=True hoặc on_transfer_event để hỏi người dùng")
         self._config_dir = Path(config_dir)
         self._name_arg = name
         self._port_arg = port
@@ -412,6 +466,10 @@ class Node:
         self._auto_connect = auto_connect
         self._auto_connect_to = auto_connect_to  # None: mọi thiết bị tin cậy
         self._on_event = on_event or _ignore
+        self._receive_path = receive_path
+        self._auto_accept = auto_accept
+        self._rate_limit = rate_limit
+        self._on_transfer_event = on_transfer_event
 
         self._started = False  # start() đã được gọi (thành công hay không)
         self._running = False  # start() thành công, close() chưa xong
@@ -425,6 +483,8 @@ class Node:
         self._listener: Listener | None = None
         self._links: LinkTracker | None = None
         self._registry: DeviceRegistry | None = None
+        self._disk: DiskExecutor | None = None  # I/O đĩa của truyền file; TransferManager đóng nó
+        self._transfers: TransferManager | None = None
         self._conns: dict[int, Connection] = {}  # conn_id → kết nối điều khiển đang chạy (vào lẫn ra)
         self._next_conn_id = 1
         self._attempts: dict[int, asyncio.Task] = {}  # attempt_id → task của lần thử đang chạy
@@ -446,10 +506,14 @@ class Node:
     async def start(self) -> None:
         """Lấy `node.lock`, nạp danh tính và kho tin cậy, mở cổng, bật mDNS (nếu có).
 
+        Có `receive_dir` thì mở thư mục nhận (qua `DiskExecutor`, hạn `DISK_OP_TIMEOUT`) và
+        tạo `TransferManager` trước khi mở cổng.
+
         Lỗi bay ra sau khi đã dọn (đóng cổng, đóng mDNS, nhả khóa): NodeLockedError,
         IdentityError (cả khi `PairingService` không đọc được khóa để ký lúc ghép đôi),
         TrustStoreError, ConfigDirError (OSError khi lấy khóa, nạp danh
-        tính hay kho tin cậy), OSError (không mở được cổng), ValueError (`host` sai). Bị
+        tính hay kho tin cậy), ReceiveDirUnavailable (không mở được thư mục nhận), OSError
+        (không mở được cổng), ValueError (`host` sai). Bị
         hủy lần nữa trong lúc dọn thì cổng vẫn đóng đồng bộ trước khi nhả khóa, còn mDNS
         đóng nền sau khi đã nhả khóa. Lỗi mDNS không làm `start` thất bại (xem
         `discovery_error`). Gọi lần hai, sau khi `start` thất bại hoặc sau `close()` →
@@ -489,6 +553,28 @@ class Node:
             self._links = LinkTracker(identity.device_id)
             self._registry.set_trusted(store.devices())
             self._apply(self._links.trusted_changed(self._trusted_ids(), self._now()))
+            disk = self._disk = DiskExecutor()
+            receive_dir = None
+            if self._receive_path is not None:
+                receive_dir = await self._open_receive_dir(disk, self._receive_path)
+                if self._close_done is not None:
+                    receive_dir.close()
+                    raise RuntimeError("Node đã bị đóng trong lúc khởi động")
+            # TransferManager có trước khi mở cổng: kết nối dữ liệu vào có thể tới ngay.
+            transfers = TransferManager(
+                identity=identity,
+                hello=hello,
+                store=store,
+                executor=disk,
+                receive_dir=receive_dir,
+                auto_accept=self._auto_accept,
+                rate_limit=self._rate_limit,
+                on_event=self._on_transfer_event,
+                new_id=self._new_conn_id,
+                set_hold=self._transfer_hold,
+            )
+            self._transfers = transfers
+            transfers.start()
             await self._listen(listener)
             if self._close_done is not None:
                 raise RuntimeError("Node đã bị đóng trong lúc khởi động")
@@ -507,6 +593,7 @@ class Node:
                 self._identity = self._store = self._hello = None
                 self._pairing = self._listener = None
                 self._links = self._registry = None
+                self._transfers = self._disk = None
                 lock.release()
             raise
         self._lock = lock
@@ -524,6 +611,12 @@ class Node:
         tasks += [*self._attempts.values(), *self._link_tasks]
         for task in tasks:
             task.cancel()
+        # Truyền file: chưa có lượt nào (cổng chưa nhận kết nối) — hủy task, shutdown executor,
+        # đóng thư mục nhận khi không còn thread đĩa nào bận.
+        if self._transfers is not None:
+            self._transfers.abort_now()
+        elif self._disk is not None:
+            self._disk.shutdown()
         listener_closing = False
         try:
             if listener is not None:
@@ -549,6 +642,31 @@ class Node:
             self._mdns_closing.clear()
             self._discovery_active = False
 
+    async def _open_receive_dir(self, disk: DiskExecutor, path: Path) -> storage.ReceiveDir:
+        """`ReceiveDir.open` qua executor, hạn `DISK_OP_TIMEOUT`; lỗi → ReceiveDirUnavailable."""
+        job = disk.submit(storage.ReceiveDir.open, path)
+        try:
+            return await job.result(app_transfers.DISK_OP_TIMEOUT)
+        except (storage.StorageError, OSError, DiskTimeout) as e:
+            if isinstance(e, DiskTimeout):
+                # Mở xong muộn thì đóng ngay (task nền, `_abort_start` chờ có giới hạn).
+                self._spawn(self._close_late_receive_dir(job), f"{_TASK_NAME}.close-receive-dir")
+            log.warning("không mở được thư mục nhận (%s)", type(e).__name__)
+            raise ReceiveDirUnavailable(path) from e
+        except asyncio.CancelledError:
+            if not job.cancel():
+                self._spawn(self._close_late_receive_dir(job), f"{_TASK_NAME}.close-receive-dir")
+            raise
+
+    @staticmethod
+    async def _close_late_receive_dir(job: DiskJob[storage.ReceiveDir]) -> None:
+        await job.settled()
+        try:
+            receive_dir = await job.result(None)
+        except (Exception, asyncio.CancelledError):
+            return
+        receive_dir.close()
+
     async def _listen(self, listener: Listener) -> None:
         """Mở cổng: cổng chỉ định, hoặc cổng ưu tiên rồi dự phòng (protocol §2.1)."""
         if self._port_arg is not None:
@@ -573,11 +691,16 @@ class Node:
             log.warning("không lưu được cổng dự phòng vào settings.json (%s)", type(e).__name__)
 
     async def close(self) -> None:
-        """Hủy các phiên ghép đôi, gửi goodbye mDNS, đóng cổng và mọi kết nối, nhả `node.lock`.
+        """Hủy mọi lượt truyền và phiên ghép đôi, gửi goodbye mDNS, đóng cổng và mọi kết nối,
+        dọn thư mục tạm, nhả `node.lock`.
 
-        Gọi nhiều lần hay đồng thời đều được; trước `start` hay sau khi `start` thất bại
-        thì không làm gì. Bị hủy giữa chừng thì vẫn hủy cứng mọi phiên ghép đôi (không
-        ghi `trusted.json` nữa), ngừng nhận kết nối và hủy mọi kết nối trước khi nhả khóa
+        Thứ tự (docs/architecture.md mục 5): hủy mọi lượt truyền; dừng hẹn giờ; chờ đẩy các
+        `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi cổng cắt kết nối
+        dữ liệu; đóng ghép đôi, mDNS, cổng, kết nối; rồi chờ các hàng đĩa xóa thư mục tạm tối đa
+        `CLOSE_DISK_WAIT` và đóng thư mục nhận (bỏ qua nếu còn thread đĩa bận). Gọi nhiều lần hay
+        đồng thời đều được; trước `start` hay sau khi `start` thất bại thì không làm gì. Bị hủy
+        giữa chừng thì vẫn hủy cứng mọi phiên ghép đôi (không ghi `trusted.json` nữa), mọi task
+        truyền file (không chờ đĩa), ngừng nhận kết nối và hủy mọi kết nối trước khi nhả khóa
         (phần chờ đóng xong, kể cả mDNS, chạy nền, có giới hạn), rồi để CancelledError bay ra.
         """
         if self._close_done is not None:
@@ -590,8 +713,14 @@ class Node:
         self._closing = True
         assert self._pairing is not None and self._listener is not None
         listener_closing = False
+        transfers = self._transfers
         try:
+            if transfers is not None:
+                # Trước `await` đầu tiên: `send()` gọi trong lúc đóng phải bị từ chối ngay.
+                transfers.begin_close()  # đồng bộ: ngừng nhận offer, hủy mọi lượt
             await self._stop_tasks([self._timer_task, self._netwatch_task])
+            if transfers is not None:
+                await transfers.flush_control(app_transfers.CANCEL_FLUSH_TIMEOUT)
             await self._pairing.close()  # phiên đang chạy gửi pair_abort{user}
             for m in self._mdns_instances():
                 await m.close()  # goodbye: máy khác xóa máy này ngay (mvp N1)
@@ -605,8 +734,12 @@ class Node:
             for task in list(self._link_tasks):
                 task.cancel()  # kết nối ra: ControlChannel đóng gọn
             await self._drain_background()
+            if transfers is not None:
+                await transfers.close()  # task dữ liệu, hàng đĩa (≤ CLOSE_DISK_WAIT), thư mục nhận
         except BaseException:
             self._pairing.abort_all()
+            if transfers is not None:
+                transfers.abort_now()
             for task in self._all_node_tasks():
                 task.cancel()  # Connection.close() bị hủy thì abort
             if not listener_closing:
@@ -703,6 +836,14 @@ class Node:
         return self.hello.name
 
     @property
+    def transfers(self) -> TransferManager:
+        """Quản lý lượt truyền file (`app.transfers`). Chưa `start()` → RuntimeError.
+
+        Sau `close()` vẫn trả về đối tượng cũ: mọi lời gọi không làm gì, `send` → RuntimeError.
+        """
+        return self._need(self._transfers)
+
+    @property
     def port(self) -> int | None:
         """Cổng đang lắng nghe; None trước `start()`."""
         return None if self._listener is None else self._listener.port
@@ -760,9 +901,11 @@ class Node:
         """Nối tới thiết bị tin cậy tại `addresses:port` (người dùng đưa, không cần mDNS).
 
         Tracker nhớ địa chỉ này (`LinkTracker.hint`): gỡ chặn, thử ngay nếu chưa có kết nối
-        (đang thử thì thử lại tới địa chỉ này khi lần đó thất bại). Không có mDNS tươi và không
-        còn lượt truyền dở thì không nối lại theo lịch: chỉ thử khi người dùng thao tác hay mạng
-        đổi (`core.links`). Chạy được cả khi
+        (đang thử thì thử lại tới địa chỉ này khi lần đó thất bại). Còn lượt truyền dở với
+        thiết bị thì nối lại theo lịch (`hold`). Không có mDNS tươi và không còn lượt dở thì
+        không nối lại theo lịch: chỉ thử khi người dùng thao tác (`connect_hint` lần nữa), khi
+        có lượt truyền mới, hoặc khi mạng đổi; riêng “mạng đổi” chỉ được theo dõi khi
+        `auto_connect=True` và node quảng bá mDNS (`core.links`). Chạy được cả khi
         `auto_connect=False`. Node chưa chạy hoặc đang đóng → RuntimeError; thiết bị không
         tin cậy → KeyError; máy này, `device_id`, địa chỉ hay cổng sai → ValueError
         (`device_id` sai → MessageError, lớp con của ValueError).
@@ -784,14 +927,17 @@ class Node:
 
         Không có `device_id` → KeyError; không ghi được → TrustStoreError (không đổi gì).
         Khi trả về, máy đó không còn trong `connected_devices()`, lần thử kết nối tới nó
-        đã bị hủy, và kết nối của nó đã bắt đầu đóng (chờ tối đa UNPAIR_CLOSE_TIMEOUT).
-        Node chưa chạy → RuntimeError.
+        đã bị hủy, mọi lượt truyền với nó đã bị hủy (kết quả `UNPAIRED`; máy kia không nhận
+        `cancel` vì kết nối đã mất, nó kết thúc lượt bằng `EXPIRED`), và kết nối của nó đã
+        bắt đầu đóng (chờ tối đa UNPAIR_CLOSE_TIMEOUT). Node chưa chạy → RuntimeError.
         """
         if not self._running:
             raise RuntimeError("node chưa chạy")
-        # Đồng bộ từ đây tới lúc lấy kết nối ra khỏi bảng: không có await xen giữa.
+        # Đồng bộ từ đây tới lúc lấy kết nối ra khỏi bảng và hủy các lượt: không có await xen giữa.
         device = self.store.remove(device_id)
         closes = self._trust_changed()
+        if self._transfers is not None:
+            self._transfers.forget_device(device.device_id)
         if closes:
             await asyncio.wait(closes, timeout=UNPAIR_CLOSE_TIMEOUT)
         log.info("đã hủy ghép đôi với %s", device.device_id[:8])
@@ -857,9 +1003,12 @@ class Node:
         elif conn.kind is ConnectionKind.CONTROL:
             await self._serve_control(conn)
         elif conn.kind is ConnectionKind.DATA:
-            # Chưa có TransferManager (P2-6): cắt ngay mọi kết nối dữ liệu vào, chưa gửi
-            # `cancel{unknown_transfer}`; kết nối điều khiển với thiết bị đó không bị ảnh hưởng.
-            conn.abort()
+            # `serve_data` báo engine trước `await` đầu tiên (cùng khối đồng bộ với lần kiểm
+            # `is_trusted` của Listener), rồi giữ handler tới khi kết nối dữ liệu xong.
+            if self._transfers is None:
+                conn.abort()
+            else:
+                await self._transfers.serve_data(conn)
 
     async def _serve_control(self, conn: Connection) -> None:
         """Kết nối điều khiển vào: đăng ký với tracker (chống trùng), rồi chạy tới khi kết thúc."""
@@ -878,7 +1027,8 @@ class Node:
     async def _run_control(self, device_id: str, conn_id: int, conn: Connection) -> None:
         """Chạy `ControlChannel` tới khi kết nối kết thúc rồi báo tracker."""
         try:
-            reason = await ControlChannel(conn).run(_ignore)
+            on_message = functools.partial(self._on_control_message, device_id, conn_id)
+            reason = await ControlChannel(conn).run(on_message)
             log.debug("kết nối điều khiển %d với %s kết thúc: %s", conn_id, device_id[:8], reason.value)
         finally:
             self._conns.pop(conn_id, None)
@@ -886,6 +1036,22 @@ class Node:
             # `_emit` không phát sự kiện và `_apply` không mở kết nối mới.
             if self._links is not None:
                 self._apply(self._links.connection_lost(device_id, conn_id, self._now()))
+
+    def _on_control_message(self, device_id: str, conn_id: int, msg: object) -> None:
+        """Message trên kết nối điều khiển (đồng bộ): `ping`/`pong` bỏ qua, còn lại → `TransferManager`."""
+        if isinstance(msg, Ping | Pong) or self._transfers is None:
+            return
+        try:
+            self._transfers.on_message(device_id, conn_id, msg)
+        except Exception:
+            log.exception("lỗi khi xử lý message điều khiển từ %s", device_id[:8])
+
+    def _transfer_hold(self, device_id: str, held: bool) -> None:
+        """`TransferManager`: thiết bị có/hết lượt truyền dở → giữ/thả địa chỉ ở tracker."""
+        if self._links is not None:
+            # `hold` chỉ trả `Connect` (không `Notify`), nên không sinh lời gọi lồng vào
+            # TransferManager.
+            self._apply(self._links.hold(device_id, held, self._now()))
 
     async def _link_out(self, action: Connect) -> None:
         """Một lần thử của tracker: mở kết nối điều khiển, báo kết quả, rồi chạy kết nối đó."""
@@ -987,20 +1153,25 @@ class Node:
         assert self._registry is not None
         registry = self._registry
         if isinstance(event, LinkSwitched):
-            # Thiết bị vẫn kết nối: không phát NodeEvent, chỉ ghi DEBUG.
+            # Thiết bị vẫn kết nối: không phát NodeEvent, chỉ ghi DEBUG; kênh điều khiển của
+            # truyền file chuyển sang kết nối mới (engine đồng bộ lại, protocol §6.3).
             log.debug(
                 "đổi kết nối điều khiển với %s: %d → %d",
                 event.device_id[:8],
                 event.old_conn_id,
                 event.conn_id,
             )
+            self._transfer_control_up(event.device_id, event.conn_id, event.outgoing)
         elif isinstance(event, LinkUp):
+            self._transfer_control_up(event.device_id, event.conn_id, event.outgoing)
             registry.set_connected(event.device_id, True)
             log.info("đã kết nối với %s", event.device_id[:8])
             view = registry.get(event.device_id)
             if view is not None:
                 self._emit(DeviceConnected(view, event.outgoing))
         elif isinstance(event, LinkDown):
+            if self._transfers is not None:
+                self._transfers.control_lost(event.device_id, event.conn_id)
             registry.set_connected(event.device_id, False)
             log.info("mất kết nối với %s", event.device_id[:8])
             view = registry.get(event.device_id)
@@ -1012,6 +1183,16 @@ class Node:
             view = registry.get(event.device_id)
             if view is not None:
                 self._emit(ConnectFailed(view, event.result))
+
+    def _transfer_control_up(self, device_id: str, conn_id: int, outgoing: bool) -> None:
+        """Kết nối điều khiển hiện tại của thiết bị vừa có hay vừa đổi → `TransferManager`."""
+        if self._transfers is None:
+            return
+        conn = self._conns.get(conn_id)
+        if conn is None:
+            log.error("kết nối điều khiển %d với %s không có trong bảng", conn_id, device_id[:8])
+            return
+        self._transfers.control_up(device_id, conn_id, conn, client=outgoing)
 
     def _emit(self, event: NodeEvent) -> None:
         if self._closing:

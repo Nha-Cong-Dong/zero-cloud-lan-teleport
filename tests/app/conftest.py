@@ -68,6 +68,15 @@ FAST = SimpleNamespace(
     REPLACE_AFTER=2.0,
     NETWORK_CHECK_INTERVAL=0.2,
     SLACK=2.5,  # biên trên nới cho CI: thời gian chờ + 2,5 s
+    # P2-6b (kế hoạch mục 4, việc 6b-T0): teleport.core.transfer và teleport.net.connection
+    RECONNECT_GRACE=4.0,
+    DATA_OPEN_WAIT=2.0,
+    DATA_RETRY_BASE=0.2,
+    DATA_RETRY_MAX=1.0,
+    IDLE_TIMEOUT=5.0,
+    # `transfer_nodes` đặt lại `connection.DRAIN_TIMEOUT` (spec-p2-6 B12: ≥ 10 s), vì bên nhận có thể
+    # ngừng đọc trong lúc chờ đĩa và một đoạn ghi của bên gửi phải chờ được lâu hơn 1 s.
+    TRANSFER_DRAIN_TIMEOUT=10.0,
 )
 
 
@@ -563,16 +572,92 @@ class Recorder:
         await wait_until(lambda: len(self.finished) >= n, timeout, f"chưa có {n} kết quả")
 
 
-class AppNode:
-    """Bọc một `Node` thật: chuyển mọi thuộc tính tới node, thêm `rec`, `dir`, `label`, `id`."""
+class TransferRecorder:
+    """Ghi lại `TransferUpdate` (P2-6b) của một Node theo thứ tự nhận, kèm `time.monotonic()`.
 
-    _OWN = frozenset({"node", "rec", "dir", "label"})
+    So loại sự kiện theo **tên lớp** (`"TransferFinished"`…), để conftest không phải import
+    `teleport.app.transfers` (module có thể chưa có). `hooks`: hàm gọi đồng bộ với mỗi sự kiện,
+    ngay trong callback của Node (test gọi API của `TransferManager` từ đây được: kế hoạch 2.7,
+    lời gọi trong lúc dispatch được xếp hàng). Sự kiện của một lượt có thể tới **trước** khi
+    `send()` trả `key` (spec-p2-6 B12), nên test lọc theo `transfer_id`, không theo thứ tự.
+    """
+
+    def __init__(self, label: str) -> None:
+        self.label = label
+        self.updates: list = []
+        self.times: list[float] = []
+        self.hooks: list[Callable[[object], None]] = []
+        self.raise_in_event = False
+
+    def on_update(self, update) -> None:
+        self.updates.append(update)
+        self.times.append(time.monotonic())
+        for hook in list(self.hooks):
+            hook(update)
+        if self.raise_in_event:
+            raise RuntimeError("lỗi giả lập trong on_transfer_event")
+
+    @staticmethod
+    def key_of(update):
+        """`TransferKey` của một sự kiện (`key`, hoặc `info.key`); `DataUnreachable` → None."""
+        key = getattr(update, "key", None)
+        if key is None:
+            key = getattr(getattr(update, "info", None), "key", None)
+        return key
+
+    def timed(self, kind: str | type, transfer_id: str | None = None) -> list[tuple[float, object]]:
+        name = kind if isinstance(kind, str) else kind.__name__
+        out: list[tuple[float, object]] = []
+        for t, u in zip(self.times, self.updates, strict=True):
+            if type(u).__name__ != name:
+                continue
+            if transfer_id is not None:
+                key = self.key_of(u)
+                if key is None or key.transfer_id != transfer_id:
+                    continue
+            out.append((t, u))
+        return out
+
+    def of(self, kind: str | type, transfer_id: str | None = None) -> list:
+        return [u for _, u in self.timed(kind, transfer_id)]
+
+    def finished(self, transfer_id: str):
+        """`TransferFinished` của lượt (None nếu chưa có)."""
+        found = self.of("TransferFinished", transfer_id)
+        return found[0] if found else None
+
+    def statuses(self, transfer_id: str) -> list[str]:
+        return [str(u.info.status) for u in self.of("TransferStatusChanged", transfer_id)]
+
+    async def wait_kind(
+        self, kind: str | type, transfer_id: str | None = None, n: int = 1, timeout: float = 10.0
+    ):
+        name = kind if isinstance(kind, str) else kind.__name__
+        await wait_until(
+            lambda: len(self.of(kind, transfer_id)) >= n,
+            timeout,
+            f"{self.label}: chưa có {n} sự kiện {name} (lượt {transfer_id and transfer_id[:8]})",
+        )
+        return self.of(kind, transfer_id)[n - 1]
+
+    async def wait_finished(self, transfer_id: str | None = None, timeout: float = 30.0):
+        return await self.wait_kind("TransferFinished", transfer_id, 1, timeout)
+
+
+class AppNode:
+    """Bọc một `Node` thật: chuyển mọi thuộc tính tới node, thêm `rec`, `dir`, `label`, `id`.
+
+    `trec`: `TransferRecorder` khi node được tạo qua `transfer_nodes` (P2-6b), không thì None.
+    """
+
+    _OWN = frozenset({"node", "rec", "dir", "label", "trec"})
 
     def __init__(self, node, rec: Recorder, directory: Path, label: str) -> None:
         object.__setattr__(self, "node", node)
         object.__setattr__(self, "rec", rec)
         object.__setattr__(self, "dir", directory)
         object.__setattr__(self, "label", label)
+        object.__setattr__(self, "trec", None)
 
     @property
     def id(self) -> str:
@@ -852,8 +937,15 @@ def fast(monkeypatch):
         "BACKOFF_MAX",
     ):
         monkeypatch.setattr(core_pairing, name, getattr(FAST, name))
-    for name in ("OPENING_TIMEOUT", "CLOSE_TIMEOUT", "DRAIN_TIMEOUT"):
+    for name in ("OPENING_TIMEOUT", "CLOSE_TIMEOUT", "DRAIN_TIMEOUT", "IDLE_TIMEOUT"):
         monkeypatch.setattr(connection, name, getattr(FAST, name))
+    try:
+        from teleport.core import transfer as core_transfer
+    except ImportError:
+        core_transfer = None
+    if core_transfer is not None:
+        for name in ("RECONNECT_GRACE", "DATA_OPEN_WAIT", "DATA_RETRY_BASE", "DATA_RETRY_MAX"):
+            monkeypatch.setattr(core_transfer, name, getattr(FAST, name))
     try:
         from teleport.app import pairing as app_pairing
     except ImportError:
@@ -934,6 +1026,8 @@ async def node_factory(fast, tmp_path):
     `hostname=True` → truyền `name=None` cho Node (tên lấy từ hostname).
     `prompt=False` → truyền `on_pairing_prompt=None` (node không ghép đôi được; kế hoạch L1).
     `auto_connect_to=device_id` → chỉ tự nối tới thiết bị đó (P2-6a; chỉ truyền khi khác None).
+    `node_kwargs={...}` → truyền thêm cho `Node` (P2-6b: `receive_dir`, `auto_accept`, `rate_limit`,
+    `on_transfer_event`); ghi đè các đối số trên nếu trùng tên.
     """
     from teleport.app.node import Node
 
@@ -957,6 +1051,7 @@ async def node_factory(fast, tmp_path):
         raise_in_event: bool = False,
         prompt: bool = True,
         auto_connect_to: str | None = None,
+        node_kwargs: dict | None = None,
     ) -> AppNode:
         directory = tmp_path / label
         rec = Recorder(
@@ -973,6 +1068,7 @@ async def node_factory(fast, tmp_path):
             extra["auto_connect"] = auto_connect
         if auto_connect_to is not None:
             extra["auto_connect_to"] = auto_connect_to
+        extra.update(node_kwargs or {})
         node = Node(
             directory,
             name=None if hostname else (name or label),
@@ -1015,6 +1111,83 @@ def trust_each_other(tmp_path):
         return id_a, id_b
 
     return run
+
+
+# Khóa của `transfer_nodes(receiver_opts, sender_opts)` đi vào `node_factory`; còn lại là đối số của `Node`.
+_FACTORY_KEYS = frozenset(
+    {"mdns", "auto_connect", "auto_connect_to", "name", "port", "accept_pairing", "answer", "prompt", "start"}
+)
+
+
+@pytest.fixture
+async def transfer_nodes(node_factory, trust_each_other, tmp_path, monkeypatch, fast):
+    """P2-6b (kế hoạch mục 4, việc 6b-T0): hai node tin nhau, A **nhận**, B **gửi**.
+
+    `net = await transfer_nodes(receiver_opts=None, sender_opts=None, client="sender")`:
+
+    - Node `A` mặc định `receive_dir=tmp_path/"nhan-A"`, `auto_accept=True`; `B` không có thư mục
+      nhận. `receiver_opts` / `sender_opts` ghi đè (vd. `{"receive_dir": None}`, `{"rate_limit": n}`,
+      `{"mdns": MdnsOptions()}`); khóa của `node_factory` (`mdns`, `auto_connect`…) đi vào đó.
+    - Cả hai có `on_transfer_event` ghi vào `node.trec` (`TransferRecorder`), trừ khi opts tự đưa.
+    - `mdns=None` (mặc định của `node_factory`): nối bằng `connect_hint` theo chiều `client`:
+      `"sender"` → B mở kết nối điều khiển tới A; `"receiver"` → A mở tới B. Kết nối dữ liệu đi theo
+      chiều đó (protocol §4.1). `connect=False` → chưa nối; gọi `await net.connect()` sau.
+    - `extra_trusted=("C",)` → A và C tin nhau (ghi trước khi start; test tự tạo C bằng `node_factory`).
+    - `connection.DRAIN_TIMEOUT` = 10 s (spec-p2-6 B12), vá trước khi tạo node.
+
+    `net`: `A`, `B` (`AppNode`), `receive_dir`, `src` (thư mục tạo file nguồn), `client`, `connect`.
+    """
+    from teleport.net import connection
+
+    monkeypatch.setattr(connection, "DRAIN_TIMEOUT", FAST.TRANSFER_DRAIN_TIMEOUT)
+
+    async def start(label: str, opts: dict) -> AppNode:
+        trec = TransferRecorder(label)
+        factory_kw = {k: v for k, v in opts.items() if k in _FACTORY_KEYS}
+        node_kw = {k: v for k, v in opts.items() if k not in _FACTORY_KEYS}
+        node_kw.setdefault("on_transfer_event", trec.on_update)
+        handle = await node_factory(label, node_kwargs=node_kw, **factory_kw)
+        handle.trec = trec
+        return handle
+
+    async def make(
+        receiver_opts: dict | None = None,
+        sender_opts: dict | None = None,
+        client: str = "sender",
+        *,
+        connect: bool = True,
+        extra_trusted: tuple[str, ...] = (),
+    ) -> SimpleNamespace:
+        if client not in ("sender", "receiver"):
+            raise ValueError("client phải là 'sender' hoặc 'receiver'")
+        trust_each_other("A", "B")
+        for label in extra_trusted:
+            trust_each_other("A", label, name_b=label)
+        r_opts: dict = {"receive_dir": tmp_path / "nhan-A", "auto_accept": True}
+        r_opts.update(receiver_opts or {})
+        s_opts: dict = dict(sender_opts or {})
+        A = await start("A", r_opts)
+        B = await start("B", s_opts)
+        src = tmp_path / "nguon"
+        src.mkdir(exist_ok=True)
+
+        async def do_connect() -> None:
+            opener, other = (B, A) if client == "sender" else (A, B)
+            opener.connect_hint(other.id, [LOCAL], other.port)
+            await wait_until(
+                lambda: other.id in opener.connected_devices() and opener.id in other.connected_devices(),
+                5,
+                f"{opener.label} chưa nối được kết nối điều khiển tới {other.label}",
+            )
+
+        net = SimpleNamespace(
+            A=A, B=B, receive_dir=r_opts.get("receive_dir"), src=src, client=client, connect=do_connect
+        )
+        if connect:
+            await do_connect()
+        return net
+
+    return make
 
 
 @pytest.fixture
@@ -1169,6 +1342,7 @@ def app_helpers():
         ref_proof_payload=ref_proof_payload,
         ref_sign=ref_sign,
         ref_verify=ref_verify,
+        TransferRecorder=TransferRecorder,
     )
 
 

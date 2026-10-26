@@ -48,14 +48,14 @@ Trạng thái từng phần: ✅ đã cài đặt · 📝 dự thảo, chưa cà
 
 ### 2.3. Giới hạn và thời gian chờ
 
-Phần ở tầng mạng đã cài ở `teleport.net.connection` ✅, kể cả tầng mạng của kết nối dữ liệu (nhận, mở, thời gian chờ, khung khối), với luật nhận/từ chối kết nối mới ở `teleport.core.admission` ✅ (các giới hạn ở gạch “Nhận kết nối mới” và giới hạn kết nối ẩn danh là biến của module đó); những chỗ đánh 📝 (các luật do node áp: số kết nối dữ liệu, xếp hàng, mất kết nối điều khiển) chưa cài.
+Phần ở tầng mạng đã cài ở `teleport.net.connection` ✅, kể cả tầng mạng của kết nối dữ liệu (nhận, mở, thời gian chờ, khung khối), với luật nhận/từ chối kết nối mới ở `teleport.core.admission` ✅ (các giới hạn ở gạch “Nhận kết nối mới” và giới hạn kết nối ẩn danh là biến của module đó). Các luật do node áp (số kết nối dữ liệu, xếp hàng, mất kết nối điều khiển) ở `teleport.core.transfer`, thực thi ở `teleport.app.transfers` ✅.
 
 | | Kết nối ghép đôi | Kết nối điều khiển | Kết nối dữ liệu |
 |---|---|---|---|
 | Bắt tay TLS + `hello` + message mở đầu | 10 s ✅ | 10 s ✅ | 10 s ✅ |
 | Kích thước message tối đa | **16 KiB** (`MAX_PAIRING_MESSAGE_SIZE`) ✅ | **1 MiB** (`MAX_MESSAGE_SIZE`) ✅; `hello` và `control_open` 16 KiB ✅ | 16 KiB cho `hello`/`data_open` ✅; khung khối: header 41 byte + payload ≤ 1 MiB (mục 4.2) ✅ (`Connection.read_block` kiểm header, kể cả theo `size`, trước khi đọc payload) |
-| Sau khi mở đầu | Bên trả lời chờ `pair_nonce` **5 s** kể từ khi gửi `pair_commit` ✅ (bên dưới); chờ mỗi message khác 10 s; riêng lúc chờ người dùng xác nhận: 60 s, cộng 10 s chờ `pair_confirm` của máy kia (bên dưới) | Keepalive (bên dưới) ✅; một đoạn gửi không xong (`drain()`) trong 30 s → đóng ✅ | Bên nhận file: **đang chờ đọc** mà không nhận được byte nào trong 30 s → đóng ✅. Bên gửi file: một đoạn `drain()` không xong trong 30 s → đóng ✅; mất kết nối điều khiển với máy đó → đóng 📝. Gạch “Kết nối dữ liệu” bên dưới |
-| Số kết nối đồng thời | 1 phiên ghép đôi ✅ (`PairingGate`, nối vào node ở `teleport.app.pairing`); yêu cầu bị từ chối nhận `pair_abort{busy}` rồi bị đóng, tổng cộng tối đa 1 s ✅; phiên kết thúc mà không ghép đôi được cũng gửi `pair_abort` (nếu có) rồi đóng trong tổng cộng tối đa 1 s, nên máy kia không đọc cũng không giữ được phiên lâu hơn ✅; kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng ✅ (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) ✅ (`teleport.core.links`, `teleport.app.node`) | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác **xếp hàng**, tối đa 8 `offer` chưa trả lời mỗi thiết bị mỗi chiều, quá thì `reject{busy}` (mục 4.1); tối đa 2 kết nối dữ liệu đang chờ `resume` cho mỗi thiết bị (mục 4.1) 📝 |
+| Sau khi mở đầu | Bên trả lời chờ `pair_nonce` **5 s** kể từ khi gửi `pair_commit` ✅ (bên dưới); chờ mỗi message khác 10 s; riêng lúc chờ người dùng xác nhận: 60 s, cộng 10 s chờ `pair_confirm` của máy kia (bên dưới) | Keepalive (bên dưới) ✅; một đoạn gửi không xong (`drain()`) trong 30 s → đóng ✅ | Bên nhận file: **đang chờ đọc** mà không nhận được byte nào trong 30 s → đóng ✅. Bên gửi file: một đoạn `drain()` không xong trong 30 s → đóng ✅; mất kết nối điều khiển với máy đó → đóng ✅. Gạch “Kết nối dữ liệu” bên dưới |
+| Số kết nối đồng thời | 1 phiên ghép đôi ✅ (`PairingGate`, nối vào node ở `teleport.app.pairing`); yêu cầu bị từ chối nhận `pair_abort{busy}` rồi bị đóng, tổng cộng tối đa 1 s ✅; phiên kết thúc mà không ghép đôi được cũng gửi `pair_abort` (nếu có) rồi đóng trong tổng cộng tối đa 1 s, nên máy kia không đọc cũng không giữ được phiên lâu hơn ✅; kết nối ẩn danh chưa vào phiên: 1 mỗi IP, 8 tổng cộng ✅ (mục 5.3) | 1 cho mỗi thiết bị tin cậy (mục 6.1) ✅ (`teleport.core.links`, `teleport.app.node`) | 1 cho mỗi lượt truyền (file gửi lần lượt); mỗi chiều giữa hai máy chỉ chạy 1 lượt truyền, lượt khác **xếp hàng**, tối đa 8 `offer` chưa trả lời mỗi thiết bị mỗi chiều, quá thì `reject{busy}` (mục 4.1); tối đa 2 kết nối dữ liệu đang chờ `resume` cho mỗi thiết bị (mục 4.1) ✅ (`teleport.core.transfer`, `teleport.app.transfers`) |
 
 - **Nhận kết nối mới** ✅ (`AdmissionGate`): mỗi kết nối TCP được xét ngay khi nhận, trước mọi bước khác; bị từ chối thì đóng ngay (TCP reset), trước cả bắt tay TLS. Có hai **pool**:
   - **Pool chung** cho IP lạ: kết nối đang mở đầu (từ lúc nhận TCP tới khi xác định loại) tối đa **4 mỗi IP, 64 tổng**; tốc độ bắt tay mới **1/s mỗi IP (burst 2)** và **4/s tổng (burst 4)**.
@@ -122,7 +122,7 @@ Mỗi message:
 
 ### 3.2. Các loại message
 
-Mọi message trong bảng trừ `clipboard` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅, kể cả `data_open` và các message truyền file. `hello`, `control_open`, `ping` và `pong` đã được gửi trên mạng (`teleport.net.connection`) ✅; `pair_*` trên mạng ✅ (`teleport.app.pairing`). `Listener` nhận `data_open` có chứng chỉ client còn tin cậy (kiểm lại như với `control_open`, mục 7) và giao kết nối dữ liệu cho node ✅ (`teleport.net.connection`); node hiện cắt ngay mọi kết nối dữ liệu tới khi có quản lý lượt truyền 📝. Message truyền file chưa được gửi hay xử lý trên mạng 📝. `clipboard` là dự thảo 📝.
+Mọi message trong bảng trừ `clipboard` đã có kiểu và kiểm tra hợp lệ (`teleport.core.messages`) ✅, kể cả `data_open` và các message truyền file. `hello`, `control_open`, `ping` và `pong` đã được gửi trên mạng (`teleport.net.connection`) ✅; `pair_*` trên mạng ✅ (`teleport.app.pairing`). `Listener` nhận `data_open` có chứng chỉ client còn tin cậy (kiểm lại như với `control_open`, mục 7) và giao kết nối dữ liệu cho node ✅ (`teleport.net.connection`); node giao nó cho quản lý lượt truyền ✅ (`teleport.app.transfers`). Message truyền file được gửi và xử lý trên mạng ✅ (`teleport.app.transfers`, theo máy trạng thái `teleport.core.transfer`). `clipboard` là dự thảo 📝.
 
 | `type` | Hướng | Kết nối | Trường |
 |---|---|---|---|
@@ -188,6 +188,8 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 
 ### 4.1. Mở kết nối
 
+Mọi luật của mục này ✅: chính sách ở `teleport.core.transfer`, thực thi trên mạng ở `teleport.app.transfers` (mở, nhận, đóng kết nối dữ liệu; thử lại; báo tường lửa).
+
 - Mỗi lượt truyền có tối đa **một kết nối dữ liệu** tại một thời điểm; các file được gửi lần lượt. Kết nối dữ liệu mới cho cùng lượt truyền thay kết nối cũ (kết nối cũ bị đóng).
 - **Mỗi chiều giữa hai máy chạy 1 lượt truyền.** Lượt khác cùng chiều **xếp hàng**: bên nhận để `offer` thứ hai chưa trả lời (không `accept`, không `reject`) tới khi lượt trước kết thúc, rồi mới xét nó như một `offer` mới. Bên gửi chờ trả lời như thường; trong lúc đó `offer` gửi lại (mục 6.3) vẫn bị bỏ qua.
 - **Trần hàng chờ:** mỗi thiết bị, mỗi chiều, bên nhận giữ tối đa **8 `offer` chưa trả lời** (đang chờ người dùng hoặc đang xếp hàng; `offer` gửi lại của cùng lượt không tính thêm). `offer` mới vượt trần → `reject{busy}` ngay, để máy kia không làm bên nhận phình bộ nhớ bằng lũ `offer`.
@@ -201,7 +203,7 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
   - Bên gửi gửi xong các khối được yêu cầu thì đóng gọn kết nối dữ liệu (hạn: mục 2.3, gạch “Kết nối dữ liệu”); bên nhận bỏ dở thì cắt ngay.
 - **Phạm vi của `seq` là một kết nối điều khiển:** bên nhận đánh `seq` lại từ 1 trên mỗi kết nối điều khiển mới, và bên gửi quên mọi `seq` cũ khi kết nối điều khiển đổi. Vì vậy `seq` không phải lưu xuống đĩa, và bên nhận vừa khởi động lại không bao giờ bị coi là đang gửi `seq` cũ.
 - Hai kết nối không có thứ tự với nhau, nên `data_open` có thể tới trước `resume` tương ứng. Bên gửi chỉ gửi khối sau khi đã có, trên kết nối điều khiển hiện tại, `resume` với đúng `seq` đó và đúng `transfer_id`/`file_index` (chờ tối đa 10 s, quá thì đóng kết nối dữ liệu). `resume_seq` nhỏ hơn `seq` **lớn nhất** mà bên gửi đã nhận trên kết nối điều khiển hiện tại → kết nối cũ, đóng. Không nhét bitfield vào `data_open`, vì file 100 GiB có bitfield 12,5 KiB, mã hóa base64 thành khoảng 16,7 KiB, vượt giới hạn 16 KiB.
-- **Server của kết nối dữ liệu kiểm `data_open`** trước khi dùng kết nối, sai thì đóng ngay (như mọi lần từ chối khi mở đầu, mục 2.3). Tầng mạng kiểm trước ✅ (`teleport.net.connection.Listener`): chứng chỉ client còn tin cậy lúc nhận `data_open` (mục 7), `CN` khớp `hello.device_id` (mục 2.2), `data_open` đúng luật ở mục 3.3. Ba điều dưới đây do node kiểm 📝:
+- **Server của kết nối dữ liệu kiểm `data_open`** trước khi dùng kết nối, sai thì đóng ngay (như mọi lần từ chối khi mở đầu, mục 2.3). Tầng mạng kiểm trước ✅ (`teleport.net.connection.Listener`): chứng chỉ client còn tin cậy lúc nhận `data_open` (mục 7), `CN` khớp `hello.device_id` (mục 2.2), `data_open` đúng luật ở mục 3.3. Ba điều dưới đây do node kiểm ✅ (`teleport.core.transfer`):
   - thiết bị của kết nối (fingerprint chứng chỉ client) phải là thiết bị của lượt truyền `transfer_id`, và lượt đó chưa kết thúc (với bên gửi file: đã gửi `offer`, kể cả khi chưa nhận `accept`, mục 6.3); lượt có bia mộ hay không biết thì xử lý theo mục 6.3;
   - kết nối phải đi **đúng chiều**: máy này là server của kết nối điều khiển hiện tại với thiết bị đó (gạch thứ hai của mục này);
   - server là bên nhận file: `transfer_id`, `file_index`, `resume_seq` phải khớp đúng `resume` **gần nhất** mà nó đã gửi trên kết nối điều khiển hiện tại; server là bên gửi file: luật chờ `resume` ở gạch trên.
@@ -211,7 +213,7 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
   - Client là bên nhận: gửi `resume` mới.
   - Server là bên nhận: không nhận được `data_open` khớp `resume` (thiếu khối) vừa gửi trong thời hạn đó → gửi `resume` mới theo lịch ở mục 6.2. Nhờ vậy lượt không treo khi bên gửi đã ghi xong mọi khung vào một kết nối bị cắt trước khi tới bên nhận. Lần quá hạn này không tính vào số lần mở thất bại để báo lỗi tường lửa: chỉ client mở kết nối dữ liệu, nên chỉ client báo lỗi đó.
   - Bên nhận gặp kết nối dữ liệu đóng mà không mang được khối mới nào: chờ theo lịch ở mục 6.2 rồi mới gửi `resume` kế tiếp.
-  - Trong lúc lỗi mở liên tiếp, lượt ở trạng thái “Đang nối lại…” (`teleport.core.transfer` ✅; nối vào mạng 📝).
+  - Trong lúc lỗi mở liên tiếp, lượt ở trạng thái “Đang nối lại…” ✅ (`teleport.core.transfer`, `teleport.app.transfers`).
 - Một `resume` mới của lượt T thay `resume` cũ: bên gửi đóng kết nối dữ liệu đang phục vụ `resume` cũ của T; bên nhận đóng kết nối dữ liệu hiện tại của T mỗi khi xin `resume` mới, và từ lúc xin (kể cả trong lúc chờ `fsync` trước khi gửi, mục 4.3) không nhận kết nối dữ liệu nào cho `resume` cũ nữa.
 
 ### 4.2. Khung khối
@@ -242,7 +244,8 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
 
 ### 4.3. Ghi đĩa và trạng thái nối lại
 
-- Luồng ghi đĩa nhận khối qua hàng đợi có giới hạn **8 khối**. Hàng đợi đầy → bên nhận ngừng đọc socket → TCP làm bên gửi chậm lại (backpressure).
+- Luồng ghi đĩa nhận khối qua hàng đợi có giới hạn **8 khối**. Hàng đợi đầy → bên nhận ngừng đọc socket → TCP làm bên gửi chậm lại (backpressure) ✅ (`teleport.app.transfers`).
+- Giai đoạn 2 ✅ (`teleport.core.transfer`, `teleport.app.transfers`): `fsync` `.part` mỗi 16 khối và khi đủ khối, bit chỉ bật sau `fsync` thành công; chưa có `.state`, nên các gạch về `.state` dưới đây là 📝 (Giai đoạn 3).
 - **Trạng thái nối lại** của mỗi file là một **nhật ký chỉ ghi thêm** (`.state`): không bao giờ ghi lại toàn bộ trạng thái, chỉ nối thêm bản ghi vào cuối. Bitfield và hash các khối được dựng lại bằng cách đọc nhật ký từ đầu. Manifest chỉ nằm ở `transfer.json`; header của nhật ký chỉ để đối chiếu. Định dạng byte, cách đọc lại và gộp nhật ký: [architecture.md](architecture.md) mục 4.
 - **Mỗi 16 khối** (và khi đã nhận đủ khối của file): `fsync` file `.part` → nối một bản ghi đánh dấu các khối đó, kèm hash của từng khối (từ header khung), vào `.state` → `fsync` `.state`. Một khối chỉ được tính là đã có (bit bật) khi đã khớp hash, đã nằm bền trong `.part`, **và** bản ghi đánh dấu nó đã nằm bền trong `.state`. Mất điện ở bước nào thì trạng thái cũng không đánh dấu khối chưa có trên đĩa: bản ghi ghi dở bị bỏ khi đọc lại, nên mất tối đa một lần đánh dấu (≤ 16 khối), và các khối đó đã nằm trong giới hạn gửi lại bên dưới.
 - Trước khi gửi `resume`, bên nhận `fsync` các khối đã ghi mà chưa đánh dấu rồi mới gửi, để `resume` không xin lại chúng (✅ `teleport.core.transfer`).
@@ -415,18 +418,18 @@ Cài đặt ở `teleport.core.links` (máy trạng thái) và `teleport.app.nod
 
 ### 6.2. Nối lại
 
-- 📝 Mất kết nối điều khiển (lỗi socket hoặc keepalive hết 30 s) → mọi lượt truyền với máy đó chuyển sang “Đang nối lại…”. Bên nào còn lượt truyền dở dang thì thử kết nối lại theo lịch 1 s, 2 s, 4 s… tối đa 30 s một lần, trong tối đa 24 giờ; địa chỉ lấy lại từ mDNS vì IP có thể đã đổi.
+- ✅ Mất kết nối điều khiển (lỗi socket hoặc keepalive hết 30 s) → mọi lượt truyền với máy đó chuyển sang “Đang nối lại…”. Bên nào còn lượt truyền dở dang thì thử kết nối lại theo lịch 1 s, 2 s, 4 s… tối đa 30 s một lần, trong tối đa 24 giờ; địa chỉ lấy lại từ mDNS vì IP có thể đã đổi (`teleport.core.links`: `hold` giữ địa chỉ cuối kể cả khi mDNS báo máy đi; `teleport.app.transfers`). Giai đoạn 2 dừng sớm hơn 24 giờ (gạch dưới).
 - Giai đoạn 2: thời hạn chờ nối lại ngắn hơn ([ke_hoach.md](ke_hoach.md) Giai đoạn 2); quá hạn thì lượt thất bại với lý do `expired` (mục 6.3).
 - ✅ **Không có lượt truyền nào** (chỉ giữ kết nối điều khiển, như ở Giai đoạn 1): mất kết nối mà mDNS vẫn thấy máy kia → thử lại theo cùng lịch, cho tới khi mDNS báo máy đó đã đi. mDNS báo máy xuất hiện lại hoặc đổi địa chỉ → thử ngay.
 - ✅ **Bị từ chối** (EOF hoặc lỗi SSL trước `hello`, sau khi bắt tay TLS xong, mục 2.2) → không tự thử lại theo lịch; chỉ thử lại khi mDNS báo sự kiện mới về máy đó hoặc khi người dùng thao tác. Nhờ vậy máy đã hủy ghép đôi không bị gọi liên tục. Cũng áp cho danh tính không khớp (`IdentityMismatch`) và khác phiên bản giao thức.
 - ✅ **Giới hạn tốc độ:** sự kiện mDNS hay mạng đổi được thử ngay nhưng cách lần thử trước ≥ 2 s; máy đang bị chặn (gạch trên) thì lần thử do sự kiện cách lần thử trước ≥ max(2 s, lịch 1, 2, 4… ≤ 30 s), và bộ đếm không bị xóa khi mDNS báo máy đi rồi đến lại. Giới hạn 2 s chỉ áp cho lần thử do sự kiện; lịch 1, 2, 4… (gạch “Không có lượt truyền nào”) là lịch theo thời gian, nên lần thử theo lịch đầu tiên vẫn là 1 s sau lần thất bại. Mỗi loại lỗi chỉ báo người dùng một lần cho tới khi kết nối được, hoặc người dùng ghép đôi lại; “không kết nối được” chỉ báo sau 3 lần thất bại liên tiếp.
-- 📝 Kết nối điều khiển có lại → hai bên đồng bộ lại (mục 6.3); bên gửi chỉ gửi các khối có bit = 0, trên kết nối dữ liệu mới (mục 4.1).
-- 📝 Bên gửi kiểm `size` và `mtime` của file nguồn trước khi gửi tiếp; khác manifest → `cancel{source_changed}`.
+- ✅ Kết nối điều khiển có lại → hai bên đồng bộ lại (mục 6.3); bên gửi chỉ gửi các khối có bit = 0, trên kết nối dữ liệu mới (mục 4.1).
+- ✅ Bên gửi kiểm `size` và `mtime` của file nguồn trước khi gửi tiếp; khác manifest → `cancel{source_changed}` (`teleport.app.sources`, mỗi lần mở file nguồn cho một kết nối dữ liệu).
 - 📝 **Tắt app nhận** (hoặc khởi động lại máy): trạng thái nối lại nằm trên đĩa, nên bên nhận gửi `resume` khi mở lại app. Lượng gửi lại vẫn theo mục 4.3.
-- 📝 **Tắt app gửi:** v1.0 không lưu lượt truyền của bên gửi xuống đĩa. Bên gửi nhận `resume` cho `transfer_id` không biết → trả `cancel{unknown_transfer}`; bên nhận xóa file tạm và báo người dùng gửi lại.
+- ✅ **Tắt app gửi:** v1.0 không lưu lượt truyền của bên gửi xuống đĩa. Bên gửi nhận `resume` cho `transfer_id` không biết → trả `cancel{unknown_transfer}`; bên nhận xóa file tạm và báo người dùng gửi lại.
 - 📝 File dở dang không còn được nối lại sau 7 ngày thì bị dọn (chỉnh được trong cài đặt, mvp F6).
 
-### 6.3. Đồng bộ lại sau mỗi kết nối điều khiển mới ✅ máy trạng thái (`teleport.core.transfer`); nối vào mạng 📝
+### 6.3. Đồng bộ lại sau mỗi kết nối điều khiển mới ✅ (`teleport.core.transfer`, nối vào mạng ở `teleport.app.transfers`)
 
 Message điều khiển có thể mất khi kết nối đứt hoặc bị thay (mục 6.1). Vì vậy mọi message của lượt truyền đều **gửi lại được, và nhận trùng không gây hại** (nhận diện bằng lượt truyền, gạch “Khóa của lượt truyền” bên dưới, và `file_index`). Ngay khi có kết nối điều khiển mới với một máy, cho mọi lượt truyền chưa kết thúc giữa hai máy:
 
