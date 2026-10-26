@@ -45,39 +45,8 @@ LOCAL = "127.0.0.1"
 # Các cách một kết nối bị đóng mà phía đọc có thể thấy (Windows hay báo reset thay cho EOF).
 CLOSED_ERRORS: tuple[type[BaseException], ...] = (ConnectionError, ssl.SSLError)
 
-# Hằng thời gian sau khi patch (mục 4.1); test đọc từ đây để tính biên.
-FAST = SimpleNamespace(
-    MESSAGE_TIMEOUT=1.0,
-    NONCE_TIMEOUT=0.5,  # bên trả lời chờ pair_nonce; nhỏ hơn MESSAGE_TIMEOUT để phân biệt hai hạn
-    CONFIRM_TIMEOUT=2.0,
-    CONFIRM_GRACE=0.5,
-    BACKOFF_BASE=0.5,
-    BACKOFF_MAX=2.0,
-    OPENING_TIMEOUT=2.0,
-    CLOSE_TIMEOUT=0.5,
-    DRAIN_TIMEOUT=1.0,
-    SEND_TIMEOUT=1.0,
-    BUSY_REPLY_TIMEOUT=0.5,
-    ABORT_ON_CANCEL_TIMEOUT=0.5,
-    CLOSE_SESSIONS_TIMEOUT=1.0,
-    LOCK_TIMEOUT=0.5,
-    # PR-4 (đặc tả PR-4 mục 4.1): teleport.core.links và teleport.app.node
-    RETRY_BASE=0.2,
-    RETRY_MAX=1.0,
-    EVENT_RETRY_GAP=0.2,
-    REPLACE_AFTER=2.0,
-    NETWORK_CHECK_INTERVAL=0.2,
-    SLACK=2.5,  # biên trên nới cho CI: thời gian chờ + 2,5 s
-    # P2-6b (kế hoạch mục 4, việc 6b-T0): teleport.core.transfer và teleport.net.connection
-    RECONNECT_GRACE=4.0,
-    DATA_OPEN_WAIT=2.0,
-    DATA_RETRY_BASE=0.2,
-    DATA_RETRY_MAX=1.0,
-    IDLE_TIMEOUT=5.0,
-    # `transfer_nodes` đặt lại `connection.DRAIN_TIMEOUT` (spec-p2-6 B12: ≥ 10 s), vì bên nhận có thể
-    # ngừng đọc trong lúc chờ đĩa và một đoạn ghi của bên gửi phải chờ được lâu hơn 1 s.
-    TRANSFER_DRAIN_TIMEOUT=10.0,
-)
+# `FAST` và fixture `fast` nằm ở tests/conftest.py (P2-7, spec-p2-7 mục A5); test đọc giá trị qua
+# fixture `fast` (vá rồi trả `FAST`) hoặc `fast_values` (chỉ trả `FAST`).
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------
@@ -923,59 +892,6 @@ async def find_leaks(before: set[asyncio.Task]) -> list[str]:
 
 
 @pytest.fixture
-def fast(monkeypatch):
-    """Rút ngắn hằng thời gian (mục 4.1). Patch qua module, trước khi tạo Node."""
-    from teleport.core import pairing as core_pairing
-    from teleport.net import connection
-
-    for name in (
-        "MESSAGE_TIMEOUT",
-        "NONCE_TIMEOUT",
-        "CONFIRM_TIMEOUT",
-        "CONFIRM_GRACE",
-        "BACKOFF_BASE",
-        "BACKOFF_MAX",
-    ):
-        monkeypatch.setattr(core_pairing, name, getattr(FAST, name))
-    for name in ("OPENING_TIMEOUT", "CLOSE_TIMEOUT", "DRAIN_TIMEOUT", "IDLE_TIMEOUT"):
-        monkeypatch.setattr(connection, name, getattr(FAST, name))
-    try:
-        from teleport.core import transfer as core_transfer
-    except ImportError:
-        core_transfer = None
-    if core_transfer is not None:
-        for name in ("RECONNECT_GRACE", "DATA_OPEN_WAIT", "DATA_RETRY_BASE", "DATA_RETRY_MAX"):
-            monkeypatch.setattr(core_transfer, name, getattr(FAST, name))
-    try:
-        from teleport.app import pairing as app_pairing
-    except ImportError:
-        app_pairing = None
-    if app_pairing is not None:
-        for name in (
-            "SEND_TIMEOUT",
-            "BUSY_REPLY_TIMEOUT",
-            "ABORT_ON_CANCEL_TIMEOUT",
-            "CLOSE_SESSIONS_TIMEOUT",
-        ):
-            monkeypatch.setattr(app_pairing, name, getattr(FAST, name))
-    try:
-        from teleport.app import node as app_node
-    except ImportError:
-        app_node = None
-    if app_node is not None:
-        monkeypatch.setattr(app_node, "LOCK_TIMEOUT", FAST.LOCK_TIMEOUT)
-        monkeypatch.setattr(app_node, "NETWORK_CHECK_INTERVAL", FAST.NETWORK_CHECK_INTERVAL, raising=False)
-    try:
-        from teleport.core import links
-    except ImportError:
-        links = None
-    if links is not None:
-        for name in ("RETRY_BASE", "RETRY_MAX", "EVENT_RETRY_GAP", "REPLACE_AFTER"):
-            monkeypatch.setattr(links, name, getattr(FAST, name))
-    return FAST
-
-
-@pytest.fixture
 def fake_mdns(monkeypatch):
     """Thay `teleport.app.node.MdnsDiscovery` bằng `FakeMdns`; trả `FakeMdnsControl`.
 
@@ -1139,7 +1055,7 @@ async def transfer_nodes(node_factory, trust_each_other, tmp_path, monkeypatch, 
     """
     from teleport.net import connection
 
-    monkeypatch.setattr(connection, "DRAIN_TIMEOUT", FAST.TRANSFER_DRAIN_TIMEOUT)
+    monkeypatch.setattr(connection, "DRAIN_TIMEOUT", fast.TRANSFER_DRAIN_TIMEOUT)
 
     async def start(label: str, opts: dict) -> AppNode:
         trec = TransferRecorder(label)
@@ -1310,10 +1226,10 @@ async def fake_server():
 
 
 @pytest.fixture
-def app_helpers():
+def app_helpers(fast_values):
     """Hàm và lớp phụ trợ (test không import được conftest)."""
     return SimpleNamespace(
-        FAST=FAST,
+        FAST=fast_values,
         LOCAL=LOCAL,
         CLOSED_ERRORS=CLOSED_ERRORS,
         wait_until=wait_until,

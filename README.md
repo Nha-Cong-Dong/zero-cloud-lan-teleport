@@ -188,6 +188,8 @@ Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope Curre
 | `teleport listen` | Chờ ghép đôi: hiện mã 6 số, hỏi xác nhận |
 | `teleport pair <tên \| tiền tố mã \| ip[:cổng]>` | Ghép đôi với một máy |
 | `teleport unpair <thiết bị>` | Hủy ghép đôi (khi không có `teleport listen` nào đang chạy) |
+| `teleport receive [--dir <thư mục>] [--yes]` | Chờ nhận file từ các máy đã ghép đôi, hỏi `[c/k]` mỗi lượt (`--yes`: tự nhận); mặc định lưu vào `Teleport` trong thư mục Tải về |
+| `teleport send <file...> --to <thiết bị> [--address ip[:cổng]] [--limit-rate 20M]` | Gửi file tới một máy đã ghép đôi (máy đó chạy `teleport receive`); Ctrl+C để hủy |
 | `teleport --version` | Xem phiên bản |
 
 ### Chạy nhiều node trên một máy

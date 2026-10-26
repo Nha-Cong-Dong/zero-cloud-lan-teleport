@@ -1090,3 +1090,137 @@ async def test_n3_any_oserror_on_preferred_port_falls_back(node_factory, tmp_pat
     A = await node_factory("A", port=None)
     assert A.port != preferred and A.port > 0
     assert Settings.load(tmp_path / "A").port == A.port
+
+
+# =====================================================================================================
+# P2-7 (plan-p2-7 mục 3; spec-p2-7 A2, A6): `find_trusted`, `close_time_limit`, `MDNS_CLOSE_ALLOWANCE`
+# =====================================================================================================
+
+
+def _listing(directory: Path) -> dict[str, bytes]:
+    return {
+        str(p.relative_to(directory)): p.read_bytes() for p in sorted(directory.rglob("*")) if p.is_file()
+    }
+
+
+def test_p27_find_trusted_by_name_and_prefix_without_touching_disk(offline_dir):
+    d, ids = offline_dir
+    before = _listing(d)
+    found = node_mod.find_trusted(d, "b")
+    assert found.device_id == ids["B"] and found.name == "B"
+    assert node_mod.find_trusted(d, ids["C"][:6].upper()).device_id == ids["C"]
+    assert _listing(d) == before, "find_trusted không được tạo hay sửa file nào"
+    assert not (d / "node.lock").exists() or lock_is_free(d)
+
+
+def test_p27_find_trusted_does_not_take_node_lock(offline_dir):
+    d, ids = offline_dir
+    lock = NodeLock(d)
+    lock.acquire()
+    try:
+        t0 = time.monotonic()
+        assert node_mod.find_trusted(d, "B").device_id == ids["B"]
+        assert time.monotonic() - t0 < 1.0, "find_trusted không được chờ node.lock"
+    finally:
+        lock.release()
+
+
+def test_p27_find_trusted_not_found_lists_known_and_ambiguous_lists_candidates(offline_dir):
+    d, ids = offline_dir
+    with pytest.raises(DeviceNotFound) as nf:
+        node_mod.find_trusted(d, "khong-co")
+    assert {x.device_id for x in nf.value.known} == set(ids.values())
+    with pytest.raises(AmbiguousDevice) as amb:
+        node_mod.find_trusted(d, "pc")
+    assert {x.device_id for x in amb.value.candidates} == {ids["C"], ids["D"]}
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_p27_find_trusted_missing_config_dir_creates_nothing(tmp_path, nested):
+    d = tmp_path / "x" / "y" if nested else tmp_path / "x"
+    with pytest.raises(DeviceNotFound) as nf:
+        node_mod.find_trusted(d, "PC-Nha")
+    assert nf.value.known == ()
+    assert not (tmp_path / "x").exists()
+
+
+def test_p27_find_trusted_config_dir_that_is_a_file_is_config_dir_error(tmp_path):
+    """spec-p2-7 A6: thư mục cấu hình là một file → ConfigDirError tường minh, cả Windows lẫn POSIX."""
+    f = tmp_path / "cfg"
+    f.write_text("không phải thư mục", encoding="utf-8")
+    with pytest.raises(node_mod.ConfigDirError):
+        node_mod.find_trusted(f, "PC-Nha")
+    assert f.read_text(encoding="utf-8") == "không phải thư mục"
+
+
+def test_p27_find_trusted_corrupt_store_is_trust_store_error(tmp_path):
+    d = tmp_path / "A"
+    load_or_create_identity(d)
+    (d / "trusted.json").write_text("{không phải json", encoding="utf-8")
+    with pytest.raises(TrustStoreError):
+        node_mod.find_trusted(d, "PC-Nha")
+
+
+def _close_terms():
+    from teleport.app import pairing as app_pairing
+    from teleport.app import transfers as app_transfers
+    from teleport.net import connection
+
+    return app_pairing, app_transfers, connection
+
+
+def test_p27_close_time_limit_covers_every_close_step(monkeypatch):
+    """spec-p2-7 A2: trần ≥ ghép đôi (CLOSE_SESSIONS + ABORT_ON_CANCEL + 1) + Listener.close
+    (2×CLOSE_TIMEOUT + 1) + task nền (CLOSE_TIMEOUT + 1) + CANCEL_FLUSH + CLOSE_DISK_WAIT + mDNS
+    (ít nhất một instance × MDNS_CLOSE_ALLOWANCE)."""
+    app_pairing, app_transfers, connection = _close_terms()
+    assert node_mod.MDNS_CLOSE_ALLOWANCE > 0
+    limit = node_mod.close_time_limit()
+    floor = (
+        app_pairing.CLOSE_SESSIONS_TIMEOUT
+        + app_pairing.ABORT_ON_CANCEL_TIMEOUT
+        + 1
+        + 2 * connection.CLOSE_TIMEOUT
+        + 1
+        + connection.CLOSE_TIMEOUT
+        + 1
+        + app_transfers.CANCEL_FLUSH_TIMEOUT
+        + app_transfers.CLOSE_DISK_WAIT
+        + node_mod.MDNS_CLOSE_ALLOWANCE
+    )
+    assert isinstance(limit, float | int) and limit >= floor - 1e-9, (limit, floor)
+
+
+@pytest.mark.parametrize(
+    ("owner", "name", "weight"),
+    [
+        ("pairing", "CLOSE_SESSIONS_TIMEOUT", 1),
+        ("pairing", "ABORT_ON_CANCEL_TIMEOUT", 1),
+        ("connection", "CLOSE_TIMEOUT", 3),
+        ("transfers", "CANCEL_FLUSH_TIMEOUT", 1),
+        ("transfers", "CLOSE_DISK_WAIT", 1),
+        ("node", "MDNS_CLOSE_ALLOWANCE", 1),
+    ],
+)
+def test_p27_close_time_limit_reads_constants_at_call_time(monkeypatch, owner, name, weight):
+    app_pairing, app_transfers, connection = _close_terms()
+    module = {"pairing": app_pairing, "connection": connection, "transfers": app_transfers, "node": node_mod}[
+        owner
+    ]
+    before = node_mod.close_time_limit()
+    monkeypatch.setattr(module, name, getattr(module, name) + 10.0)
+    after = node_mod.close_time_limit()
+    assert after - before >= 10.0 * weight - 1e-9, f"{name}: {before} → {after}"
+
+
+@integration
+async def test_p27_node_close_bounds_mdns_close_by_allowance(node_factory, fake_mdns, monkeypatch):
+    """spec-p2-7 A2: `Node.close` bọc việc đóng mDNS bằng `MDNS_CLOSE_ALLOWANCE` (mDNS treo không giữ
+    `close()` quá hạn)."""
+    monkeypatch.setattr(node_mod, "MDNS_CLOSE_ALLOWANCE", 0.3)
+    A = await node_factory("A", mdns=node_mod.MdnsOptions(advertise=True))
+    fake_mdns.close_delay = 60.0
+    t0 = time.monotonic()
+    await asyncio.wait_for(A.node.close(), 10)
+    assert time.monotonic() - t0 < 0.3 + 2.5
+    assert lock_is_free(A.dir)

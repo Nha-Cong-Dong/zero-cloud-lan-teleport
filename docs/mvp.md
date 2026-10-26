@@ -202,7 +202,9 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **AC:**
   - Các lệnh: `teleport list`, `teleport listen` (chờ máy khác ghép đôi), `teleport pair <thiết bị>`, `teleport unpair <thiết bị>`, `teleport send <file...> --to <thiết bị>`, `teleport receive`.
   - `<thiết bị>` là tên hoặc tiền tố `device_id` (ít nhất 4 ký tự, như `teleport list` hiện). Khớp nhiều thiết bị → báo lỗi kèm danh sách để chọn, không tự đoán. Riêng `teleport pair` còn nhận `ip` hoặc `ip:cổng`, để ghép đôi được khi mạng chặn mDNS.
-  - Mã thoát khác 0 khi lỗi; có `--json` cho đầu ra máy đọc được.
+  - `teleport send` chỉ gửi tới thiết bị đã ghép đôi (`--to` tìm trong thiết bị tin cậy). Khi mạng chặn mDNS: thêm `--address ip[:cổng]` (vẫn cần `--to`, để kiểm đúng danh tính máy đó). `--limit-rate R` giới hạn tốc độ gửi, tính theo byte/giây hệ nhị phân (`20M` = 20 MB/s, `512K`), tối thiểu `64K`. Một lần chạy gửi một lượt (1–1000 file, không gửi thư mục); Ctrl+C hủy lượt và máy nhận được báo ngay.
+  - `teleport receive` nhận file từ mọi thiết bị đã ghép đôi tới khi Ctrl+C, hỏi `[c/k]` cho từng lượt (mục 7.3); `--yes` tự nhận mọi lượt, không hỏi (cảnh báo lúc khởi động); `--dir D` đổi thư mục nhận, mặc định là `Teleport` trong thư mục Tải về của hệ điều hành. Không nhận yêu cầu ghép đôi (dùng `teleport listen`).
+  - Mã thoát khác 0 khi lỗi (0 thành công, 1 lỗi lúc chạy, 2 cú pháp lệnh sai); `send` trả 0 chỉ khi lượt gửi xong, `receive` trả 0 khi dừng bằng Ctrl+C. Có `--json` cho đầu ra máy đọc được.
 
 ---
 
@@ -319,6 +321,41 @@ Trùng khớp? [c/k]:
 └───────────────────────────────────────────┘
 ```
 
+Tên file do máy gửi đặt (đã làm sạch, [ke_hoach.md](ke_hoach.md) mục 3.3) hiện như tên máy ở mục 7.2 (ký tự trông như khoảng trắng, ký tự vô hình và ký tự đổi hướng chữ thành `·`, chữ rộng 2 cột, dấu kết hợp và ZWJ 0 cột) nhưng tối đa **48 cột**, và dài hơn thì **cắt ở giữa, giữ đuôi** (`ten-rat-dai…cuoi.mp4`), để phần mở rộng vẫn còn thấy. Tên máy gửi theo mục 7.2. Máy gửi không có tên (không còn trong thiết bị tin cậy) thì hiện 8 ký tự đầu của mã máy.
+
+Bản CLI (`teleport receive`), mỗi lần một lời hỏi; lượt tới sau xếp hàng tới khi lời hỏi trước được trả lời. Tối đa 10 dòng file, còn lại gộp thành một dòng; cột dung lượng thẳng hàng:
+```
+“Laptop-Minh” muốn gửi 3 file (8,4 GB):
+  video.mp4        8,0 GB
+  thumbnail.png    2,1 MB
+  script.docx      380 KB
+Lưu vào: D:\Downloads\Teleport
+Nhận? [c/k]:
+```
+- Hơn 10 file: dòng thứ 11 là `  … và 990 file khác`.
+- Trả lời: `c` (nhận), `k` (từ chối, in “Đã từ chối.”); gõ khác thì “Hãy gõ c (nhận) hoặc k (từ chối).” rồi hỏi lại. Dòng gõ trước lúc hiện lời hỏi bị bỏ. Đầu vào đóng (không đọc được câu trả lời) thì từ chối lượt đang hỏi và mọi lượt sau (mục 8). Không có hạn chờ trả lời.
+- `--yes`: không hỏi; vẫn in các dòng trên, trừ dòng `Nhận? [c/k]:`.
+
+Các dòng khác của `teleport receive` / `teleport send` (*nghiêng* là chỗ điền):
+
+| Khi nào | Dòng |
+|---|---|
+| `receive` khởi động | “Teleport đang chờ nhận file.” / “  Tên:      *X*” / “  Mã máy:   *a71c04d2*” / “  Lưu vào:  *D:\Downloads\Teleport*”, các cảnh báo (mục 8), rồi “Nhấn Ctrl+C để dừng.” |
+| `send` khởi động | “Đang tìm “*PC-Nha*” trong mạng…” hoặc “Đang kết nối tới “*PC-Nha*” tại *192.168.1.5:47474*…”; có `--limit-rate`: “Giới hạn tốc độ gửi: *20 MB/s*.” |
+| `send` đã kết nối | “Đã kết nối với “*PC-Nha*”. Gửi *3* file (*8,4 GB*).” |
+| `send` chờ máy nhận trả lời | “Đang chờ *PC-Nha* trả lời…” |
+| `send` chờ máy nhận xong lượt trước | “Đang chờ *PC-Nha* nhận xong lượt trước…” |
+| Mất kết nối giữa lượt | “Đang nối lại…” |
+| Đang kiểm tra toàn vẹn một file | “Đang kiểm tra *video.mp4*…” |
+| Tiến độ (mỗi giây; không phải terminal thì mỗi 10 giây) | “*42,0*% · *3,4 GB* / *8,4 GB* · *85,2 MB/s* · còn *1 phút 2 giây* · *video.mp4* (*1*/*3*)”; chưa đo được tốc độ thì thay “còn …” bằng “đang tính thời gian còn lại”; `receive` thêm tên máy gửi ở đầu dòng |
+| `send`: một file xong | “Đã gửi *video.mp4* (*1*/*3*).” |
+| `send`: cả lượt xong | “Đã gửi xong *3* file (*8,4 GB*) tới *PC-Nha*.” |
+| `receive`: một file xong | “Đã lưu: *D:\…\video (1).mp4*” |
+| `receive`: cả lượt xong | “Đã nhận xong *3* file (*8,4 GB*) từ *Laptop-Minh*.” |
+| Ctrl+C lần đầu | “Đang dừng… (nhấn Ctrl+C lần nữa để thoát ngay)”; `receive` dừng xong in “Đã dừng.”, `send` dừng trước khi có lượt in “Đã hủy.” |
+
+Trên terminal, dòng tiến độ được vẽ lại tại chỗ, cắt vừa bề ngang và không vẽ khi đang có lời hỏi.
+
 ### 7.4. Cài đặt ▸ Thiết bị tin cậy
 ```
 ┌─ Thiết bị tin cậy ──────────────────────────────────────────────────┐
@@ -360,9 +397,11 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Không thấy thiết bị nào | “Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia và kiểm tra hai máy dùng chung một mạng Wi-Fi.” | Nút “Nhập IP thủ công” |
 | Thấy nhưng không kết nối được (cô lập thiết bị) | “Thấy *PC-Nha* nhưng không kết nối được. Mạng Wi-Fi này có thể đang chặn các thiết bị nói chuyện với nhau (hay gặp ở quán cà phê, khách sạn).” | Gợi ý dùng hotspot điện thoại |
 | Tường lửa chặn | “Tường lửa của Windows đang chặn Teleport nhận kết nối.” (máy bị chặn tự phát hiện và hiện; nếu chiều ngược lại vẫn kết nối được thì Teleport vẫn chạy, chỉ hiện gợi ý) | Nút “Mở hướng dẫn” |
+| Không mở được kết nối truyền dữ liệu tới máy kia nhiều lần liên tiếp (máy mở kết nối báo) | “Không mở được kết nối truyền dữ liệu tới *PC-Nha*; tường lửa trên máy đó có thể đang chặn Teleport. Teleport vẫn đang thử lại.” | Tự thử lại |
 | macOS chưa cho quyền mạng cục bộ | “Teleport chưa được phép dùng mạng cục bộ nên không thấy máy khác.” | Nút “Mở Cài đặt hệ thống” |
-| Không đủ dung lượng | “Không đủ chỗ trống: cần 12,4 GB, ổ D: còn 8,1 GB.” | Nút “Đổi thư mục nhận” |
+| Không đủ dung lượng | Máy nhận: “Đã từ chối *3* file từ *Laptop-Minh*: không đủ chỗ trống, cần *12,4 GB*, *ổ D:* còn *8,1 GB*.” Máy gửi: “*PC-Nha* không đủ chỗ trống để nhận: cần *12,4 GB*, ổ lưu file trên máy đó còn *8,1 GB*.” | Máy nhận: nút “Đổi thư mục nhận” |
 | Thư mục nhận nằm trên ổ không chứa được file lớn như vậy (FAT32: mỗi file phải nhỏ hơn 4 GB) | Máy nhận: “Đã từ chối 3 file từ *Laptop-Minh*: ổ *E:* chỉ chứa được file nhỏ hơn 4 GB, mà *video.mp4* nặng 8,0 GB.” Máy gửi: “*PC-Nha* không nhận được *video.mp4* (8,0 GB): ổ lưu file trên máy đó chỉ chứa được file nhỏ hơn 4 GB.” | Máy nhận: nút “Đổi thư mục nhận” (chọn ổ khác). Máy gửi: nút “Gửi lại” sau khi máy kia đổi thư mục nhận |
+| Cách gọi ổ của thư mục nhận trong hai câu trên | Windows: “ổ *D:*”; ổ mạng Windows: “ổ mạng *\\máy\chia-sẻ*”; macOS, Linux: “ổ chứa */home/minh/Downloads/Teleport*” | — |
 | Danh tính thiết bị thay đổi (cùng mã thiết bị, khác chứng chỉ), khi máy này kết nối hoặc gửi yêu cầu ghép đôi tới máy đó | “*PC-Nha* đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. Kết nối đã bị chặn.” | Không cho ghép đôi đè; nút “Hủy ghép đôi *PC-Nha*” (kèm cảnh báo), sau đó mới ghép đôi lại được |
 | Một máy gửi yêu cầu ghép đôi tới máy này, tự xưng là một thiết bị đã ghép đôi (cùng mã thiết bị) nhưng dùng danh tính khác | “Một máy chưa xác minh tự xưng là *PC-Nha* nhưng dùng danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy đó. Yêu cầu ghép đôi đã bị chặn.” | Không gợi ý hủy ghép đôi: máy thật có thể không liên quan |
 | Máy đã ghép đôi cài lại Teleport | “Có một *PC-Nha* mới chưa ghép đôi. Nếu máy đó vừa cài lại Teleport, hãy ghép đôi lại.” | Nút “Ghép đôi”; ghép xong thì hỏi xóa mục *PC-Nha* cũ |
@@ -379,10 +418,37 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |
 | Chọn gửi file lớn hơn 4 TB | “Không gửi được *backup.img* (5,2 TB): Teleport chỉ gửi được file tối đa 4 TB. Hãy chia file thành nhiều phần nhỏ hơn rồi gửi.” | Lượt gửi không bắt đầu; bỏ file đó ra rồi gửi lại các file còn lại |
 | Chọn gửi file có tên chứa ký tự điều khiển (ví dụ dấu xuống dòng; [protocol.md](protocol.md) mục 3.3) | “Không gửi được *bao�cao.txt*: tên file có ký tự không hiển thị được. Hãy đổi tên file rồi gửi lại.” | Lượt gửi không bắt đầu. Trong thông báo, mỗi ký tự điều khiển hiện thành `�` (U+FFFD), không in thẳng ra màn hình |
-| File nguồn bị sửa khi đang gián đoạn | “*video.mp4* đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại.” | Nút “Gửi lại” |
-| Người nhận từ chối | “*PC-Nha* đã từ chối nhận file.” | — |
+| File nguồn bị sửa khi đang gián đoạn hoặc khi đang gửi | Máy gửi: “*video.mp4* đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại.” Máy nhận: “*video.mp4* đã bị thay đổi trên *Laptop-Minh* nên không nhận tiếp được. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” | Nút “Gửi lại” |
+| Người nhận từ chối, hoặc máy nhận từ chối với lý do máy này không biết | “*PC-Nha* đã từ chối nhận file.” (máy nhận tự từ chối thì chỉ in “Đã từ chối.”) | — |
+| Máy nhận chưa bật nhận file (đang chạy `teleport listen`, hay chỉ đang gửi) | “*PC-Nha* chưa bật nhận file. Trên máy đó hãy chạy `teleport receive` rồi gửi lại.” | — |
+| Máy nhận đang nhận một lượt khác từ máy này | Trạng thái “Đang chờ *PC-Nha* nhận xong lượt trước…” (không phải lỗi, lượt xếp hàng) | Tự xử lý |
+| Người gửi hủy | Máy nhận: “*Laptop-Minh* đã hủy lượt gửi. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.”; hủy khi máy nhận còn đang hỏi: “*Laptop-Minh* đã hủy lượt gửi.” Máy gửi (tự hủy): “Đã hủy lượt gửi tới *PC-Nha*. Các file đã gửi xong vẫn nằm trên máy đó.” | — |
+| Người nhận hủy giữa chừng | Máy gửi: “*PC-Nha* đã dừng nhận giữa chừng. Các file đã gửi xong vẫn nằm trên máy đó.” Máy nhận (tự hủy): “Đã hủy nhận từ *Laptop-Minh*. File đã nhận xong vẫn giữ nguyên.” | Máy gửi: nút “Gửi lại” |
+| Lỗi ghi đĩa ở máy nhận (ghi, `fsync` hay đổi tên lỗi) | Máy nhận: “Không lưu được *video.mp4* vào *D:\Downloads\Teleport* vì ổ đĩa báo lỗi khi ghi (ổ có thể đã đầy, bị rút ra hoặc bị hỏng). Đã dừng nhận từ *Laptop-Minh*; các file đã nhận xong vẫn giữ nguyên.” Máy gửi: “*PC-Nha* không lưu được *video.mp4* nên đã dừng nhận. Hãy nhờ người dùng máy đó kiểm tra ổ lưu file rồi gửi lại.” | Máy nhận: nút “Đổi thư mục nhận”. Máy gửi: nút “Gửi lại” |
+| Không đọc được file nguồn khi đang gửi | Máy gửi: “Không đọc được *video.mp4* trên máy này nữa (file có thể đang bị chương trình khác khóa, hoặc nằm trên ổ vừa bị rút ra). Đã dừng gửi tới *PC-Nha*.” Máy nhận: “*Laptop-Minh* đã dừng gửi *video.mp4* vì gặp lỗi trên máy đó. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” | Nút “Gửi lại” |
+| Dữ liệu nhận bị hỏng quá số lần gửi lại cho phép | Máy nhận: “Dữ liệu nhận từ *Laptop-Minh* bị hỏng nhiều lần liên tiếp nên đã dừng nhận *video.mp4*. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” Máy gửi: câu máy gửi của dòng “Lỗi ghi đĩa ở máy nhận” (máy nhận chỉ gửi `cancel{error}`) | Nút “Gửi lại” |
+| Máy kia gửi dữ liệu không đúng giao thức | “Lượt gửi với *PC-Nha* đã dừng vì máy đó gửi dữ liệu không hợp lệ. Hãy cập nhật Teleport trên cả hai máy rồi thử lại.” | — |
+| Thư mục tạm của lượt còn sót lại từ lần trước (máy nhận bị tắt đột ngột rồi máy gửi gửi lại lượt đó) | Máy nhận: “Không nhận được lượt gửi từ *Laptop-Minh* vì thư mục tạm của lượt này còn sót lại từ lần trước (ví dụ Teleport vừa bị tắt đột ngột). Hãy nhờ gửi lại.” Máy gửi: câu máy gửi của dòng “Lỗi ghi đĩa ở máy nhận” | Nút “Gửi lại” |
+| Lượt dừng vì lý do khác (lý do máy này không biết, máy kia không còn biết lượt này…) | Máy gửi: “*PC-Nha* đã dừng lượt gửi.” Máy nhận: “*Laptop-Minh* đã dừng lượt gửi.” | — |
 | Đã tắt app gửi khi lượt truyền đang gián đoạn | “*Laptop-Minh* đã hủy lượt gửi *video.mp4*. Hãy nhờ gửi lại.” | — |
 | Mất mạng | “Đang nối lại…” (không phải lỗi) | Tự xử lý |
+| Mất kết nối quá lâu (quá hạn nối lại) | Máy gửi: “Mất kết nối với *PC-Nha* quá lâu nên lượt gửi đã dừng. Hãy gửi lại.” Máy nhận: “Mất kết nối với *Laptop-Minh* quá lâu nên đã dừng nhận. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.” | Nút “Gửi lại” |
+| Chọn gửi file không có quyền đọc | “Không mở được *video.mp4*: máy này không có quyền đọc file đó.” | Lượt gửi không bắt đầu |
+| Chọn gửi một thư mục | “*ảnh* không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file.” | Lượt gửi không bắt đầu |
+| Chọn một file hai lần | “Có file được chọn hai lần. Hãy chọn mỗi file một lần.” | Lượt gửi không bắt đầu |
+| Chọn gửi file không tồn tại | “Không tìm thấy file *D:\x\video.mp4*.” | Lượt gửi không bắt đầu |
+| Ổ đĩa báo lỗi khi kiểm file chọn gửi | “Không đọc được *video.mp4*: ổ đĩa báo lỗi.” | Lượt gửi không bắt đầu |
+| Chọn quá số file một lượt | “Mỗi lần gửi được tối đa *1000* file.” | Lượt gửi không bắt đầu |
+| CLI: `--limit-rate` sai | “Tốc độ không hợp lệ: “*x*”. Hãy nhập ví dụ 20M (20 MB/s) hoặc 512K; tối thiểu 64K.” | — |
+| CLI: `--address` của `send` sai | “*x* không phải địa chỉ IPv4 hợp lệ. Hãy nhập ví dụ 192.168.1.5 hoặc 192.168.1.5:47474.” | — |
+| CLI: `send` / `receive` khi một node khác đang chạy cùng thư mục cấu hình | “Teleport đang chạy với thư mục cấu hình này.” kèm dòng “Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại.” | — |
+| CLI: `send` không thấy máy nhận trong mạng | “Không thấy *PC-Nha* trong mạng. Hãy kiểm tra máy đó đang chạy `teleport receive` và hai máy dùng chung một mạng; nếu mạng chặn mDNS, hãy thêm `--address <ip[:cổng]>`.” | — |
+| CLI: `send` không bật được khám phá mDNS | “Không tìm được *PC-Nha* vì không bật được khám phá mDNS (*lý do*). Hãy thêm `--address <ip[:cổng]>`.” | — |
+| CLI: không dùng được thư mục nhận | “Không dùng được thư mục nhận *D:\X*:” rồi một trong các đuôi: “thư mục ẩn `.teleport` bên trong là liên kết hoặc thuộc người dùng khác. Hãy xóa nó hoặc chọn thư mục khác bằng `--dir`.” / “đường dẫn quá dài. Hãy chọn thư mục có đường dẫn ngắn hơn bằng `--dir`.” / “máy này không có quyền ghi vào đó. Hãy chọn thư mục khác bằng `--dir`.” / “ổ đĩa báo lỗi hoặc không phản hồi. Hãy chọn thư mục khác bằng `--dir`.” | — |
+| CLI: `receive --yes` | “Cảnh báo: đang tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi trước (`--yes`).” | — |
+| CLI: `receive` khi chưa ghép đôi với thiết bị nào | “Máy này chưa ghép đôi với thiết bị nào nên chưa nhận được file. Hãy ghép đôi trước: `teleport listen` trên một máy, `teleport pair` trên máy kia.” | — |
+| CLI: `receive` không quảng bá được qua mDNS | “Cảnh báo: chưa quảng bá được qua mDNS (*lý do*); máy khác vẫn gửi được bằng `teleport send … --address <IP của máy này>`.” | — |
+| CLI: `receive` không đọc được câu trả lời `[c/k]` (đầu vào đã đóng) | “Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận.” | — |
 
 ---
 

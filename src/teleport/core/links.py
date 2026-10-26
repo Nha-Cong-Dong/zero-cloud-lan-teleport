@@ -33,7 +33,13 @@ Luật chính:
 - Lịch §6.2 (hẹn giờ, đếm lần “không kết nối được” → `LinkFailed`) chỉ chạy khi có địa chỉ
   mDNS còn tươi hoặc thiết bị đang `hold` (protocol §6.1, §6.2). Thiết bị chỉ có `hint` chỉ
   được thử khi có thao tác người dùng hoặc sự kiện (`hint`, `retry_now`, `network_changed`,
-  `trusted_changed`, `hold(True)`): không hẹn lịch, không báo `LinkFailed(UNREACHABLE)`.
+  `trusted_changed`, `hold(True)`): không hẹn lịch, không đếm tới `UNREACHABLE_REPORT_AFTER`.
+  Riêng lần thử do chính `hint()` gây ra (ngay lúc gọi, hoặc lần kế tiếp khi gọi lúc đang thử)
+  mà “không kết nối được” thì luôn báo `LinkFailed(UNREACHABLE)` ngay, có lịch hay không, tối
+  đa một lần cho mỗi lần gọi `hint` (người dùng đưa địa chỉ và đang chờ kết quả, ví dụ
+  `teleport send --address`; mDNS có thể báo máy đi trước khi đếm đủ). Khi có lịch, lịch và bộ
+  đếm vẫn chạy như thường (đã báo thì không báo lại tới khi kết nối được hay người dùng thao
+  tác); các lần thử khác tới địa chỉ `hint` không báo.
 - `hint` là địa chỉ do người dùng đưa (ví dụ khi mDNS bị chặn): tracker nhớ nó tới khi có
   `hint` mới hoặc thiết bị thôi tin cậy, kể cả sau khi mDNS báo thiết bị biến mất. Gọi
   `hint` tính là người dùng thao tác (gỡ chặn, xóa bộ đếm, thử ngay).
@@ -187,6 +193,7 @@ class _Device:
     hint: _Target | None = None  # (địa chỉ, cổng) người dùng đưa qua `hint`
     held: bool = False  # còn lượt truyền dở (`hold`): không quên `seen` khi mDNS báo biến mất
     hint_next: bool = False  # `hint()` vừa gọi: lần `_start` kế tiếp dùng `hint_target()`
+    hint_attempt: int | None = None  # attempt_id của lần thử do `hint()` gây ra (đang chạy)
     current: _Conn | None = None
     attempt: int | None = None  # attempt_id đang chạy
     dirty: bool = False  # có sự kiện mDNS/mạng trong lúc đang thử
@@ -376,7 +383,8 @@ class LinkTracker:
 
         Thiết bị chưa tin cậy thì chỉ nhớ (thử khi nó được tin cậy). Kiểm tham số như
         `device_seen`. Lần thử do lời gọi này dùng địa chỉ/cổng `hint` (gộp với mDNS tươi
-        nếu cùng cổng, xem docstring module).
+        nếu cùng cổng, xem docstring module); nó “không kết nối được” thì báo
+        `LinkFailed(UNREACHABLE)` ngay, một lần, kể cả khi lịch §6.2 đang chạy.
         """
         validate_device_id(device_id)
         addrs = _check_addresses(addresses)
@@ -465,6 +473,8 @@ class LinkTracker:
             # Lần thử cũ, đã hủy, hoặc thiết bị đã thôi tin cậy: kết nối hoàn tất muộn bị đóng.
             return [CloseConnection(device_id, conn_id)] if conn_id is not None else []
         dev.attempt = None
+        from_hint = dev.hint_attempt == attempt_id
+        dev.hint_attempt = None
         if result is ConnectResult.OK:
             assert conn_id is not None
             self._reset_failures(dev)
@@ -472,7 +482,7 @@ class LinkTracker:
             if not dev.trusted:
                 return [CloseConnection(device_id, conn_id)]
             return self._add_connection(device_id, dev, conn_id, True, now)
-        return self._failed(device_id, dev, result, now)
+        return self._failed(device_id, dev, result, now, from_hint=from_hint)
 
     def incoming_control(self, device_id: str, conn_id: int, now: float) -> list[LinkAction]:
         """Máy kia vừa mở kết nối điều khiển tới máy này (đã qua `control_open`)."""
@@ -545,7 +555,8 @@ class LinkTracker:
 
     def _start(self, device_id: str, dev: _Device, now: float) -> Connect:
         """Bắt đầu một lần thử tới `dev.target()`, hoặc `dev.hint_target()` khi `hint_next`."""
-        target = dev.hint_target() if dev.hint_next else None
+        from_hint = dev.hint_next
+        target = dev.hint_target() if from_hint else None
         dev.hint_next = False
         if target is None:
             target = dev.target()
@@ -553,6 +564,7 @@ class LinkTracker:
         attempt_id = self._next_attempt
         self._next_attempt += 1
         dev.attempt = attempt_id
+        dev.hint_attempt = attempt_id if from_hint else None
         dev.last_start = now
         dev.next_at = None
         dev.dirty = False
@@ -592,8 +604,10 @@ class LinkTracker:
             return [self._start(device_id, dev, now)]
         return []
 
-    def _failed(self, device_id: str, dev: _Device, result: ConnectResult, now: float) -> list[LinkAction]:
-        """Lần thử hiện tại thất bại (`dev.attempt` đã được xóa)."""
+    def _failed(
+        self, device_id: str, dev: _Device, result: ConnectResult, now: float, *, from_hint: bool
+    ) -> list[LinkAction]:
+        """Lần thử hiện tại thất bại (`dev.attempt` đã được xóa); `from_hint`: lần thử do `hint()` gây ra."""
         if dev.current is not None:
             # Máy kia đã nối tới trong lúc thử: không tính là thất bại.
             dev.dirty = False
@@ -603,16 +617,22 @@ class LinkTracker:
         actions: list[LinkAction] = []
         if result is ConnectResult.UNREACHABLE:
             dev.blocked = False
-            if dev.scheduled():
+            scheduled = dev.scheduled()
+            if scheduled:
                 dev.next_at = now + _delay(dev.failures)
                 if dev.dirty and dev.last_start is not None:
                     dev.next_at = min(dev.next_at, max(now, dev.last_start + EVENT_RETRY_GAP))
-                if dev.failures >= UNREACHABLE_REPORT_AFTER and result not in dev.reported:
-                    dev.reported.add(result)
-                    actions.append(Notify(LinkFailed(device_id, result)))
             elif dev.dirty and dev.last_start is not None and dev.target() is not None:
                 # Chỉ có `hint`: không theo lịch, nhưng sự kiện tới trong lúc thử vẫn được thử lại.
                 dev.next_at = max(now, dev.last_start + EVENT_RETRY_GAP)
+            # Lần thử do `hint()` gây ra (mỗi lần gọi `hint` gây ra tối đa một lần thử): luôn báo
+            # ngay cho người dùng vừa đưa địa chỉ, có lịch hay không, kể cả khi đã báo cho lần
+            # `hint` trước. Còn lại: chỉ báo sau UNREACHABLE_REPORT_AFTER lần thất bại liên tiếp
+            # khi lịch chạy, và chỉ một lần.
+            due = scheduled and dev.failures >= UNREACHABLE_REPORT_AFTER and result not in dev.reported
+            if from_hint or due:
+                dev.reported.add(result)
+                actions.append(Notify(LinkFailed(device_id, result)))
             dev.dirty = False
             return actions
         assert result in _BLOCKING

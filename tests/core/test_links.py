@@ -1734,10 +1734,14 @@ def test_l2_hint_unblocks_and_counts_as_user_action(result):
 
 
 def test_l2_hint_clears_unreachable_counter():
+    """Hint là thao tác người dùng: xóa bộ đếm (lịch tính lại từ delay(1)). spec-p2-7 E2: lần thử do hint
+    gây ra mà UNREACHABLE thì báo ngay, kể cả khi mDNS tươi (trước E2: không báo)."""
     t = tracker(PEER)
     fail_n_unreachable(t, PEER, 2)
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 1.5))
-    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.6)) == []
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.6)) == [
+        LinkFailed(PEER, UNREACHABLE)
+    ]
     assert t.next_wakeup() == pytest.approx(1.6 + delay(1))
 
 
@@ -1775,7 +1779,9 @@ def test_l2_hint_survives_device_gone_for_network_event_after_failure():
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.2))
     t.device_gone(PEER, 0.3)
     acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.4)
-    assert notifies(acts) == [] and only(acts, Connect) == []
+    # spec-p2-7 A1: lần thử do `hint()` gây ra thất bại lúc không có lịch (mDNS đã báo biến mất,
+    # không held) → báo `LinkFailed(UNREACHABLE)` một lần (trước P2-7: không báo).
+    assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)] and only(acts, Connect) == []
     assert t.next_wakeup() is None
     c = the_connect(t.network_changed(0.2 + links.EVENT_RETRY_GAP))
     assert (c.addresses, c.port) == (ADDR2, PORT2)
@@ -1808,10 +1814,13 @@ def test_l2_new_hint_replaces_old_one():
 # --- C1: lịch §6.2 chỉ chạy khi mDNS tươi hoặc đang held --------------------------------------------------
 
 
-def test_c1_hint_only_failure_has_no_schedule_and_no_report():
+def test_c1_hint_only_failure_has_no_schedule_and_reports_unreachable_once():
+    """C1 + spec-p2-7 A1: chỉ có hint → không lịch; nhưng lần thử do `hint()` gây ra thất bại thì báo
+    `LinkFailed(UNREACHABLE)` ngay (để `teleport send --address` tới cổng đóng dừng được), đúng một lần."""
     t = tracker(PEER)
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
-    assert t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1) == []
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    assert acts == [Notify(LinkFailed(PEER, UNREACHABLE))]
     assert t.next_wakeup() is None
     assert t.tick(3600.0) == []
 
@@ -1847,13 +1856,18 @@ def test_c1_hint_only_failures_while_held_follow_schedule_and_report_once():
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
     now = 0.0
     reports = []
-    for _ in range(5):
+    for i in range(5):
         now += 0.1
-        reports += notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now))
+        acts = notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now))
+        if i == 0:
+            # spec-p2-7 E2: lần thử đầu do hint gây ra → báo ngay, dù đang held (có lịch).
+            assert acts == [LinkFailed(PEER, UNREACHABLE)]
+        reports += acts
         nw = t.next_wakeup()
         assert nw is not None, "đang held: phải có lịch"
         c = the_connect(t.tick(nw))
         now = nw
+    # Đã báo rồi thì các lần thất bại theo lịch không báo lại (mỗi loại lỗi một lần).
     assert reports == [LinkFailed(PEER, UNREACHABLE)]
 
 
@@ -1951,7 +1965,9 @@ def test_c2_pending_hint_runs_once_after_release_then_no_schedule():
     assert nw is not None, "lần thử hint đã hẹn vẫn phải chạy sau hold(False)"
     c = the_connect(t.tick(nw))
     assert (c.addresses, c.port) == (ADDR3, PORT2)
-    assert t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, nw + 0.1) == []
+    # Lần thử này do `hint()` thứ hai gây ra, thất bại lúc không còn lịch → spec-p2-7 A1: báo một lần.
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, nw + 0.1)
+    assert acts == [Notify(LinkFailed(PEER, UNREACHABLE))]
     assert t.next_wakeup() is None
     assert t.tick(nw + 3600.0) == []
 
@@ -2597,3 +2613,166 @@ def test_l4_tracker_with_hint_and_hold_keeps_invariants(ops):
                 f"thiết bị {d[:4]}: kết nối còn mở {sorted(live)}, kết nối hiện tại {cur}"
             )
         assert t.attempting() == {d: a for a, d in outstanding.items()}
+
+
+# =========================================================================================================
+# P2-7 (spec-p2-7.md mục E2, thay A1): lần thử do `hint()` gây ra mà UNREACHABLE → **luôn**
+# `LinkFailed(UNREACHABLE)` một lần cho mỗi lần gọi `hint`, có lịch §6.2 (mDNS tươi, held) hay không.
+# REJECTED / IDENTITY / VERSION giữ như cũ. Lịch §6.2 và bộ đếm `UNREACHABLE_REPORT_AFTER` vẫn chạy như
+# cũ khi có lịch (xem thêm `test_l2_hint_clears_unreachable_counter`,
+# `test_c1_hint_only_failures_while_held_follow_schedule_and_report_once`).
+# =========================================================================================================
+
+
+def test_a1_each_hint_call_reports_unreachable_again():
+    t = tracker(PEER)
+    for k in range(3):
+        start = 10.0 * k
+        c = the_connect(t.hint(PEER, ADDR2, PORT2, start))
+        acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, start + 0.1)
+        assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)], f"lần gọi hint thứ {k + 1}"
+        assert only(acts, Connect) == [] and t.next_wakeup() is None
+
+
+def test_a1_event_attempt_after_hint_failure_is_not_reported_again():
+    """Chỉ lần thử do chính `hint()` gây ra được báo; lần thử do sự kiện mạng sau đó (vẫn tới địa chỉ
+    hint, vẫn không lịch) thất bại thì không báo thêm."""
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)) == [
+        LinkFailed(PEER, UNREACHABLE)
+    ]
+    now = 0.0
+    for _ in range(3):
+        now += links.EVENT_RETRY_GAP + 1.0
+        c = the_connect(t.network_changed(now))
+        assert (c.addresses, c.port) == (ADDR2, PORT2)
+        assert t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1) == []
+        assert t.next_wakeup() is None
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_a1_blocking_result_of_hint_attempt_is_reported_as_itself_only(result):
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    acts = t.connect_finished(PEER, c.attempt_id, result, None, 0.1)
+    assert notifies(acts) == [LinkFailed(PEER, result)], "không kèm thêm LinkFailed(UNREACHABLE)"
+    assert t.next_wakeup() is None
+
+
+def test_a1_hint_attempt_that_connects_reports_nothing():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    assert notifies(t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)) == [LinkUp(PEER, 1, True)]
+    # Mất kết nối, không held, chỉ có hint: không lịch, không báo (C1); hint lần nữa mà thất bại → báo.
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 2.0))
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 2.1)) == [
+        LinkFailed(PEER, UNREACHABLE)
+    ]
+
+
+def test_a1_hint_attempt_fails_after_device_gone_is_reported():
+    """mDNS tươi lúc gọi hint (cùng cổng: gộp địa chỉ), rồi mDNS báo biến mất trước khi lần thử xong:
+    lúc thất bại thiết bị không còn lịch → báo một lần."""
+    t = tracker(PEER)
+    assert only(t.device_seen(PEER, ADDR, PORT, 0.0), Connect) != []
+    t.connect_finished(PEER, 1, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, ADDR2, PORT, 0.2))
+    assert t.device_gone(PEER, 0.3) == []
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.4)
+    assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)]
+    assert t.next_wakeup() is None
+
+
+def test_a1_two_hint_calls_during_one_attempt_report_for_each_attempt_they_caused():
+    """Hint thứ hai gọi lúc lần thử của hint thứ nhất đang chạy → lần thử kế tiếp dùng hint mới (C2).
+    Mỗi lần thử do một lần gọi hint gây ra mà thất bại không lịch → mỗi lần một báo."""
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+    assert only(t.hint(PEER, ADDR3, PORT2, 0.05), Connect) == []
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    reports = notifies(acts)
+    found = only(acts, Connect)
+    if not found:
+        nw = t.next_wakeup()
+        assert nw is not None, "lần thử do hint thứ hai gây ra phải còn được hẹn"
+        found = only(t.tick(nw), Connect)
+    [c2] = found
+    assert (c2.addresses, c2.port) == (ADDR3, PORT2)
+    reports += notifies(t.connect_finished(PEER, c2.attempt_id, UNREACHABLE, None, 5.0))
+    assert reports == [LinkFailed(PEER, UNREACHABLE)] * 2
+    assert t.next_wakeup() is None
+
+
+@HYPO
+@given(ops=st.lists(st.sampled_from(["hint", "event"]), min_size=1, max_size=12))
+def test_a1_unreachable_reports_equal_failed_hint_calls_without_schedule(ops):
+    """Thiết bị chỉ có hint (không mDNS, không held): số `LinkFailed(UNREACHABLE)` đúng bằng số lần gọi
+    `hint` có lần thử thất bại; lần thử do sự kiện mạng thất bại không bao giờ được báo."""
+    t = tracker(PEER)
+    now = 0.0
+    hint_failures = 0
+    reports: list = []
+    for op in ops:
+        now += links.EVENT_RETRY_GAP + 1.0
+        acts = t.hint(PEER, ADDR2, PORT2, now) if op == "hint" else t.network_changed(now)
+        found = only(acts, Connect)
+        if op == "hint":
+            assert len(found) == 1, "hint là thao tác người dùng: thử ngay"
+        if not found:
+            continue
+        if op == "hint":
+            hint_failures += 1
+        after = t.connect_finished(PEER, found[0].attempt_id, UNREACHABLE, None, now + 0.1)
+        reports += notifies(after)
+        assert only(after, Connect) == [] and t.next_wakeup() is None
+    assert reports == [LinkFailed(PEER, UNREACHABLE)] * hint_failures
+
+
+def test_e2_seen_then_failed_then_hint_failed_reports_now_and_device_gone_does_not_hang():
+    """Ca soat-code: `device_seen` → thất bại → `hint` → thất bại → phải có `LinkFailed(UNREACHABLE)` ngay
+    (không chờ đủ 3 lần theo lịch); sau đó `device_gone` (không held) thì không còn lần thử treo/hẹn."""
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)) == []
+    c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.2))
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.3)
+    assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)]
+    assert t.next_wakeup() is not None, "mDNS tươi: lịch §6.2 vẫn chạy"
+    assert t.device_gone(PEER, 0.4) == []
+    assert t.attempting() == {} and t.connected() == {}
+    assert t.next_wakeup() is None
+    assert t.tick(3600.0) == []
+
+
+def test_e2_each_hint_reports_once_even_with_fresh_mdns_and_schedule_does_not_repeat_it():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    now = 0.1
+    for k in range(3):
+        now += 10.0
+        c = the_connect(t.hint(PEER, ADDR2, PORT2, now))
+        acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1)
+        assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)], f"hint thứ {k + 1}"
+    # Lịch §6.2 chạy tiếp; UNREACHABLE đã báo nên ≥ 3 lần thất bại theo lịch không báo lại.
+    reports = []
+    for _ in range(4):
+        acts, at = tick_to_wakeup(t)
+        c = the_connect(acts)
+        reports += notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, at + 0.1))
+    assert reports == []
+
+
+def test_e2_hint_merged_with_fresh_mdns_same_port_reports_once():
+    """Cùng cổng: lần thử do hint gộp địa chỉ hint + mDNS; thất bại vẫn tính là do hint → báo một lần."""
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    t.connection_lost(PEER, 1, 1.0)
+    c = the_connect(t.hint(PEER, ADDR2, PORT, 1.2))
+    assert c.addresses[: len(ADDR2)] == ADDR2
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.3)) == [
+        LinkFailed(PEER, UNREACHABLE)
+    ]

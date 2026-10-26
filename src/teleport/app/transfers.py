@@ -31,6 +31,9 @@
   (`core.ratelimit`); khi có giới hạn, tối đa `MAX_LIMITED_SENDS` lượt gửi chạy cùng lúc để mỗi
   lần chờ một đoạn ngắn hơn hạn chờ đọc của bên nhận.
 
+`preview_sources(paths)` kiểm trước các file sẽ gửi mà không cần node (cùng lỗi như `send`), để
+CLI báo lỗi file trước khi lấy `node.lock` hay đụng mạng.
+
 Sự kiện cho giao diện / CLI: một callback `on_transfer_event` (`TransferUpdate`), gọi đồng bộ trên
 loop theo thứ tự engine báo; vẫn phát trong lúc `close()`, hết phát khi `close()` trả về. Kết quả
 cuối của mỗi lượt là `TransferResult` (mã, không có câu chữ: câu chữ ở `cli.py` / `ui`).
@@ -137,6 +140,7 @@ __all__ = [
     "OfferReceived",
     "SourceError",
     "SourceErrorKind",
+    "SourceFile",
     "TransferFinished",
     "TransferInfo",
     "TransferKey",
@@ -146,6 +150,7 @@ __all__ = [
     "TransferStatus",
     "TransferStatusChanged",
     "TransferUpdate",
+    "preview_sources",
 ]
 
 # architecture §5 (bảng số của truyền file). Đọc lúc dùng: test vá bằng monkeypatch.
@@ -290,6 +295,26 @@ def _result_of(ended: TransferEnded, unpaired: bool) -> TransferResult:
     if reason == CancelReason.UNKNOWN_TRANSFER and ended.by_peer:
         return TransferResult.UNKNOWN_TRANSFER
     return TransferResult.CANCELLED_OTHER
+
+
+async def preview_sources(paths: Sequence[str | os.PathLike[str]]) -> list[SourceFile]:
+    """Kiểm các file sẽ gửi như `TransferManager.send` (`sources.prepare_sources`), không cần node.
+
+    Chạy trên một `DiskExecutor` một thread dùng một lần (thread daemon), không hạn (ổ mạng có
+    thể treo: bên gọi hủy được). Lỗi như `send`: `SourceError`, ValueError (0 hoặc quá
+    `MAX_OFFER_FILES` file, một file chọn hai lần), TypeError. Bị hủy → bỏ việc nếu chưa chạy;
+    thread đang chạy thì chạy nốt rồi tự thoát. Không giữ handle nào sau khi trả về.
+    """
+    executor = DiskExecutor(1, name="teleport.preview")
+    try:
+        job = executor.submit(sources.prepare_sources, paths)
+        try:
+            return await job.result(None)
+        except asyncio.CancelledError:
+            job.cancel()
+            raise
+    finally:
+        executor.shutdown()
 
 
 # ---- Việc đĩa --------------------------------------------------------------------------------

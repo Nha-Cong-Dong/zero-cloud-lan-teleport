@@ -1,9 +1,19 @@
-"""Hiện tên thiết bị do máy kia tự đặt: thay ký tự trống, đo độ rộng theo cột, rút gọn.
+"""Hiện chữ cho người dùng: tên do máy kia tự đặt, tên file, dung lượng, thời gian.
 
-Luật ở docs/mvp.md mục 7.2. Tên trong `hello` chưa được xác thực (docs/protocol.md mục 3.3):
-kẻ đứng giữa có thể đặt tên trông như một mã ghép đôi, hoặc chèn ký tự trông như khoảng trắng
-để đẩy chữ ra xa. `display_name` làm những ký tự đó lộ ra (thành `·`) và giữ tên trong
-`DISPLAY_NAME_WIDTH` cột. Ngoặc “…” và vị trí của tên (luôn sau mã) do người gọi lo.
+Tên thiết bị: luật ở docs/mvp.md mục 7.2. Tên trong `hello` chưa được xác thực
+(docs/protocol.md mục 3.3): kẻ đứng giữa có thể đặt tên trông như một mã ghép đôi, hoặc chèn
+ký tự trông như khoảng trắng để đẩy chữ ra xa. `display_name` làm những ký tự đó lộ ra (thành
+`·`) và giữ tên trong `DISPLAY_NAME_WIDTH` cột. Ngoặc “…” và vị trí của tên (luôn sau mã) do
+người gọi lo.
+
+Tên file (`display_filename`, docs/mvp.md mục 7.3): cùng luật ký tự trống, nhưng cắt ở giữa
+và giữ đuôi (phần mở rộng), tối đa `FILE_NAME_WIDTH` cột. Ký tự vô hình và điều khiển hướng chữ
+mà `core.filenames` bỏ khi làm sạch (`INVISIBLE_CHARS`) cũng thành `·`, để không phụ thuộc
+một tầng làm sạch duy nhất. Không thay ký tự điều khiển (Cc): tên file nhận đã được làm sạch,
+tên file cục bộ do bên gọi thay trước khi in.
+
+Dung lượng (`format_size`) theo hệ nhị phân của docs/mvp.md mục 8; thời gian (`format_duration`)
+cho “còn … ” của dòng tiến độ.
 
 Độ rộng chỉ là ước lượng cho terminal và giao diện: `east_asian_width` W/F = 2 cột; dấu kết
 hợp (Mn, Me) và ZWJ (U+200D) = 0 cột, kể cả khi dấu đó cũng thuộc loại rộng; còn lại 1 cột.
@@ -11,15 +21,20 @@ hợp (Mn, Me) và ZWJ (U+200D) = 0 cột, kể cả khi dấu đó cũng thuộ
 
 from __future__ import annotations
 
+import math
 import unicodedata
 
+from teleport.core.filenames import INVISIBLE_CHARS
+
 DISPLAY_NAME_WIDTH = 32  # mvp mục 7.2: tên dài hơn bị cắt, tổng cả `…` vẫn ≤ 32 cột
+FILE_NAME_WIDTH = 48  # mvp mục 7.3: tên file dài hơn bị cắt ở giữa, tổng cả `…` vẫn ≤ 48 cột
 BLANK_MARK = "·"  # ·
 
 _ELLIPSIS = "…"  # … (1 cột)
 _ZWJ = "\u200d"  # ZWJ, viết bằng escape để mã nguồn không chứa ký tự ẩn
 # Ngoài khoảng trắng Unicode (loại Zs): các ký tự hiện ra trống trơn dù không phải khoảng trắng.
 _EXTRA_BLANKS = frozenset("\u2800\u3164\u115f\u1160\uffa0")  # chữ nổi trống, các ký tự lấp chỗ Hangul
+_SIZE_UNITS = ("KB", "MB", "GB", "TB")  # mvp mục 8: 1 KB = 1024 byte, 1 MB = 1024 KB…
 
 
 def _is_blank(ch: str) -> bool:
@@ -59,3 +74,112 @@ def display_name(name: str, *, max_width: int = DISPLAY_NAME_WIDTH) -> str:
         used += width
         end += 1
     return shown[:end].rstrip(_ZWJ) + _ELLIPSIS
+
+
+def text_width(text: str) -> int:
+    """Số cột của cả chuỗi (cộng `_width` từng ký tự)."""
+    return sum(_width(ch) for ch in text)
+
+
+def _shown_filename(text: str) -> str:
+    return "".join(BLANK_MARK if ch in INVISIBLE_CHARS or _is_blank(ch) else ch for ch in text)
+
+
+def display_filename(name: str, *, max_width: int = FILE_NAME_WIDTH) -> str:
+    """Tên file để hiện: ký tự trống thành `·` như `display_name`, dài quá `max_width` cột thì cắt ở giữa.
+
+    Ký tự trong `core.filenames.INVISIBLE_CHARS` (điều khiển hướng chữ, U+2028/U+2029, U+200B,
+    U+FEFF, U+2060…) cũng thành `·`.
+
+    Cắt: giữ phần cuối dài nhất ≤ nửa ngân sách (làm tròn lên) và phần đầu dài nhất trong phần
+    ngân sách còn lại, nối bằng `…` (1 cột), nên đuôi file (phần mở rộng) vẫn còn và tổng ≤
+    `max_width` cột. Bỏ ZWJ thừa ở cuối phần đầu, và ký tự 0 cột ở đầu phần cuối (dấu kết hợp
+    không dính vào `…`). `name` không phải chuỗi → TypeError; `max_width < 2` → ValueError.
+    """
+    if not isinstance(name, str):
+        raise TypeError("name phải là chuỗi")
+    if max_width < 2:
+        raise ValueError("max_width phải ≥ 2")
+    shown = _shown_filename(name)
+    widths = [_width(ch) for ch in shown]
+    if sum(widths) <= max_width:
+        return shown
+    budget = max_width - 1  # chừa 1 cột cho `…`
+    tail_used = 0
+    start = len(shown)
+    for width in reversed(widths):
+        if tail_used + width > (budget + 1) // 2:
+            break
+        tail_used += width
+        start -= 1
+    head_used = 0
+    end = 0
+    for width in widths[:start]:
+        if head_used + width > budget - tail_used:
+            break
+        head_used += width
+        end += 1
+    tail = shown[start:]
+    while tail and _width(tail[0]) == 0:
+        tail = tail[1:]
+    return shown[:end].rstrip(_ZWJ) + _ELLIPSIS + tail
+
+
+def _round_half_up(numerator: int, denominator: int) -> int:
+    return (2 * numerator + denominator) // (2 * denominator)
+
+
+def format_size(size: int, *, trim: bool = False) -> str:
+    """Dung lượng theo hệ nhị phân (mvp mục 8): “512 byte”, “2,1 MB”, “380 KB”, “8,0 GB”.
+
+    Dưới 1024 byte: “N byte”. Còn lại: đơn vị lớn nhất (tới TB) mà giá trị ≥ 1; giá trị < 100
+    có một chữ số thập phân (dấu phẩy), ≥ 100 là số nguyên; làm tròn nửa lên, chạm 1024 thì lên
+    đơn vị kế. `trim`: bỏ “,0” (“4 GB”, dùng cho giới hạn). Không phải số nguyên → TypeError;
+    âm → ValueError.
+    """
+    if isinstance(size, bool) or not isinstance(size, int):
+        raise TypeError("size phải là số nguyên")
+    if size < 0:
+        raise ValueError("size phải ≥ 0")
+    if size < 1024:
+        return f"{size} byte"
+    unit = 0
+    while unit < len(_SIZE_UNITS) - 1 and size >= 1024 ** (unit + 2):
+        unit += 1
+    while True:
+        base = 1024 ** (unit + 1)
+        tenths = _round_half_up(size * 10, base)
+        if tenths < 1000:
+            whole, frac = divmod(tenths, 10)
+            text = str(whole) if trim and frac == 0 else f"{whole},{frac}"
+            return f"{text} {_SIZE_UNITS[unit]}"
+        whole = _round_half_up(size, base)
+        if whole >= 1024 and unit < len(_SIZE_UNITS) - 1:
+            unit += 1  # làm tròn chạm 1024: lên đơn vị kế (“1,0 MB”)
+            continue
+        return f"{whole} {_SIZE_UNITS[unit]}"
+
+
+def format_duration(seconds: float) -> str:
+    """Khoảng thời gian: “45 giây”, “2 phút 10 giây”, “1 giờ 5 phút”, “2 ngày 3 giờ”.
+
+    Làm tròn tới giây (nửa lên); chỉ hai đơn vị lớn nhất, bỏ đơn vị sau khi nó bằng 0
+    (“2 phút”). Âm tính là 0. Không phải số → TypeError; NaN hay vô hạn → ValueError.
+    """
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+        raise TypeError("seconds phải là số")
+    if not math.isfinite(seconds):
+        raise ValueError("seconds phải là số hữu hạn")
+    total = max(0, math.floor(seconds + 0.5))
+    if total < 60:
+        return f"{total} giây"
+    for size, big, small_size, small in (
+        (86400, "ngày", 3600, "giờ"),
+        (3600, "giờ", 60, "phút"),
+        (60, "phút", 1, "giây"),
+    ):
+        if total >= size:
+            major, rest = divmod(total, size)
+            minor = rest // small_size
+            return f"{major} {big}" if minor == 0 else f"{major} {big} {minor} {small}"
+    raise AssertionError("không tới đây")

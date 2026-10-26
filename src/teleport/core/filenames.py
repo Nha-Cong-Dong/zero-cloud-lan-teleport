@@ -62,6 +62,8 @@ _DROPPED_CHARS = frozenset(
     "\u202a\u202b\u202c\u202d\u202e"  # LRE, RLE, PDF, LRO, RLO
     "\u2066\u2067\u2068\u2069"  # LRI, RLI, FSI, PDI
 )
+# Tên công khai của cùng tập ký tự: `core.display` và `cli` trung hòa chúng khi in (phòng thủ chiều sâu).
+INVISIBLE_CHARS = _DROPPED_CHARS
 _DROPPED_CATEGORIES = frozenset({"Cc", "Cs"})
 _OUTGOING_FORBIDDEN_CATEGORIES = _DROPPED_CATEGORIES  # bên gửi: protocol mục 3.3
 

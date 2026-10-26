@@ -26,8 +26,13 @@ NETWORK_CHECK_INTERVAL giây đọc địa chỉ và đồng hồ (`core.discove
 địa chỉ đổi → khởi động lại mDNS; máy vừa thức dậy → quảng bá lại.
 
 Truyền file (`receive_dir`, `auto_accept`, `rate_limit`, `on_transfer_event`) chạy ở
-`TransferManager` (`node.transfers`); thứ tự đóng ở `close()` và trần thời gian của nó ở
-docs/architecture.md mục 5.
+`TransferManager` (`node.transfers`); thứ tự đóng ở `close()` ở docs/architecture.md mục 5,
+trần thời gian của nó là `close_time_limit()` (tính từ các hằng lúc gọi; CLI đặt hạn thoát cứng
+theo hàm này). Mỗi instance mDNS chỉ được chờ đóng tối đa `MDNS_CLOSE_ALLOWANCE` giây trong
+`close()`; phần còn lại chạy nền và được chờ cùng các task nền.
+
+`find_trusted` tìm thiết bị tin cậy mà không lấy khóa, không tạo gì (`teleport send` kiểm
+`--to` trước khi chạy node).
 
 `unpair` chạy đồng bộ từ lúc xóa khỏi kho tới lúc lấy kết nối của máy đó ra khỏi bảng
 và hủy mọi lượt truyền với nó (không có `await` xen giữa), rồi đóng kết nối đó. Kết nối
@@ -40,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import errno
 import functools
 import ipaddress
 import logging
@@ -55,6 +61,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import teleport
+from teleport.app import pairing as app_pairing
 from teleport.app import storage
 from teleport.app import transfers as app_transfers
 from teleport.app.devices import DeviceNotFound, DeviceRegistry, DeviceView, resolve_trusted
@@ -120,6 +127,7 @@ UNPAIR_CLOSE_TIMEOUT = 1.0  # unpair chờ đóng kết nối của máy bị h�
 NETWORK_CHECK_INTERVAL = 5.0  # giây giữa hai lần đọc địa chỉ + đồng hồ
 SCAN_TIMEOUT = 3.0  # mặc định của scan_devices / teleport list
 MAX_SCAN_TIMEOUT = 60.0
+MDNS_CLOSE_ALLOWANCE = 2.0  # close(): chờ đóng mỗi instance mDNS (goodbye, socket) tối đa; còn lại chạy nền
 _wall_clock = time.time  # test patch để giả máy thức dậy
 _mono_clock = time.monotonic
 # DEFAULT_PORT import từ teleport.net.connection; Node đọc qua biến toàn cục của module này
@@ -132,6 +140,9 @@ _OS_NAMES = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}
 _OS_STRIP_RE = re.compile(r"[^a-z0-9_]")
 _LOCAL_SUFFIX = ".local"
 _MAX_INTERFACES = 16
+# Số instance mDNS tối đa lúc `close()`: instance đang dùng + một instance cũ đang đóng dở
+# (`_restart_mdns` bị hủy giữa chừng; lỗi khi đóng làm task theo dõi mạng dừng, nên không có thêm).
+_MAX_MDNS_INSTANCES = 2
 
 _CONNECT_RESULTS: tuple[tuple[type[ConnectError], ConnectResult], ...] = (
     (Unreachable, ConnectResult.UNREACHABLE),
@@ -293,6 +304,49 @@ class ScanResult:
     name: str  # default_device_name(identity)
     port: int  # Settings.load().port or DEFAULT_PORT
     devices: tuple[DeviceView, ...]  # thấy qua mDNS + thiết bị tin cậy không thấy; connected luôn False
+
+
+def close_time_limit() -> float:
+    """Trần thời gian (giây) của `Node.close()`, tính từ các hằng đọc lúc gọi (docs/architecture.md mục 5).
+
+    Cộng các bước có hạn của `close()`: chờ đẩy `cancel` (`CANCEL_FLUSH_TIMEOUT`); đóng ghép đôi
+    (`CLOSE_SESSIONS_TIMEOUT` + `ABORT_ON_CANCEL_TIMEOUT` + 1); đóng mDNS (`MDNS_CLOSE_ALLOWANCE`
+    mỗi instance, tối đa hai instance); `Listener.close` (2 × `CLOSE_TIMEOUT` + 1); chờ task nền
+    (`CLOSE_TIMEOUT` + 1); chờ đĩa (`CLOSE_DISK_WAIT`). Thread đĩa treo không kéo dài thêm (daemon).
+    """
+    return (
+        app_transfers.CANCEL_FLUSH_TIMEOUT
+        + app_pairing.CLOSE_SESSIONS_TIMEOUT
+        + app_pairing.ABORT_ON_CANCEL_TIMEOUT
+        + 1
+        + _MAX_MDNS_INSTANCES * MDNS_CLOSE_ALLOWANCE
+        + 2 * net_connection.CLOSE_TIMEOUT
+        + 1
+        + net_connection.CLOSE_TIMEOUT
+        + 1
+        + app_transfers.CLOSE_DISK_WAIT
+    )
+
+
+def find_trusted(config_dir: Path, query: str) -> TrustedDevice:
+    """Tìm đúng một thiết bị tin cậy theo tên hoặc tiền tố mã (`resolve_trusted`), chỉ đọc `trusted.json`.
+
+    Không lấy `node.lock`, không tạo file hay thư mục nào. Thư mục cấu hình chưa có →
+    DeviceNotFound (`known` rỗng); có mà không phải thư mục → ConfigDirError (kiểm trước khi
+    đọc, để mọi hệ điều hành cùng kết quả). Lỗi khác bay ra nguyên trạng: TrustStoreError,
+    DeviceNotFound (`known`: mọi thiết bị tin cậy), AmbiguousDevice.
+    """
+    config_dir = Path(config_dir)
+    try:
+        if not config_dir.exists():
+            raise DeviceNotFound(query, ())
+        if not config_dir.is_dir():
+            code = errno.ENOTDIR
+            raise ConfigDirError(config_dir, NotADirectoryError(code, os.strerror(code), str(config_dir)))
+    except OSError as e:
+        raise ConfigDirError(config_dir, e) from e
+    store = TrustStore.load(config_dir)
+    return resolve_trusted(query, store.devices())
 
 
 def unpair_offline(config_dir: Path, query: str, *, lock_timeout: float | None = None) -> TrustedDevice:
@@ -694,9 +748,10 @@ class Node:
         """Hủy mọi lượt truyền và phiên ghép đôi, gửi goodbye mDNS, đóng cổng và mọi kết nối,
         dọn thư mục tạm, nhả `node.lock`.
 
-        Thứ tự (docs/architecture.md mục 5): hủy mọi lượt truyền; dừng hẹn giờ; chờ đẩy các
-        `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi cổng cắt kết nối
-        dữ liệu; đóng ghép đôi, mDNS, cổng, kết nối; rồi chờ các hàng đĩa xóa thư mục tạm tối đa
+        Thứ tự (docs/architecture.md mục 5): hủy mọi lượt truyền (trước `await` đầu tiên); dừng hẹn
+        giờ; chờ đẩy các `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi
+        cổng cắt kết nối dữ liệu; đóng ghép đôi, mDNS (mỗi instance chờ tối đa
+        `MDNS_CLOSE_ALLOWANCE`), cổng, kết nối; rồi chờ các hàng đĩa xóa thư mục tạm tối đa
         `CLOSE_DISK_WAIT` và đóng thư mục nhận (bỏ qua nếu còn thread đĩa bận). Gọi nhiều lần hay
         đồng thời đều được; trước `start` hay sau khi `start` thất bại thì không làm gì. Bị hủy
         giữa chừng thì vẫn hủy cứng mọi phiên ghép đôi (không ghi `trusted.json` nữa), mọi task
@@ -716,14 +771,13 @@ class Node:
         transfers = self._transfers
         try:
             if transfers is not None:
-                # Trước `await` đầu tiên: `send()` gọi trong lúc đóng phải bị từ chối ngay.
-                transfers.begin_close()  # đồng bộ: ngừng nhận offer, hủy mọi lượt
+                transfers.begin_close()  # đồng bộ, trước await đầu tiên: ngừng nhận offer, hủy mọi lượt
             await self._stop_tasks([self._timer_task, self._netwatch_task])
             if transfers is not None:
                 await transfers.flush_control(app_transfers.CANCEL_FLUSH_TIMEOUT)
             await self._pairing.close()  # phiên đang chạy gửi pair_abort{user}
             for m in self._mdns_instances():
-                await m.close()  # goodbye: máy khác xóa máy này ngay (mvp N1)
+                await self._close_mdns(m)  # goodbye: máy khác xóa máy này ngay (mvp N1)
                 self._mdns_closing.discard(m)
             self._mdns = None
             self._discovery_active = False
@@ -756,6 +810,17 @@ class Node:
             if self._lock is not None:
                 self._lock.release()
             self._close_done.set()
+
+    async def _close_mdns(self, m: MdnsDiscovery) -> None:
+        """`m.close()` chạy như task nền, chờ tối đa `MDNS_CLOSE_ALLOWANCE`; quá hạn thì để nó chạy tiếp.
+
+        Không hủy: zeroconf thấy task bị hủy thì dừng giữa chừng và có thể để lại socket. Phần
+        còn lại được `_drain_background` chờ (có giới hạn) như mọi task nền.
+        """
+        task = self._spawn(m.close(), f"{_TASK_NAME}.close-mdns")
+        _, pending = await asyncio.wait({task}, timeout=MDNS_CLOSE_ALLOWANCE)
+        if pending:
+            log.warning("đóng mDNS quá %.1f s, để chạy nền", MDNS_CLOSE_ALLOWANCE)
 
     def _mdns_instances(self) -> list[MdnsDiscovery]:
         """Mọi instance mDNS chưa đóng xong (đang dùng và đang đóng dở)."""
@@ -901,7 +966,9 @@ class Node:
         """Nối tới thiết bị tin cậy tại `addresses:port` (người dùng đưa, không cần mDNS).
 
         Tracker nhớ địa chỉ này (`LinkTracker.hint`): gỡ chặn, thử ngay nếu chưa có kết nối
-        (đang thử thì thử lại tới địa chỉ này khi lần đó thất bại). Còn lượt truyền dở với
+        (đang thử thì thử lại tới địa chỉ này khi lần đó thất bại). Lần thử đó không kết nối
+        được thì phát `ConnectFailed(UNREACHABLE)` ngay, một lần cho mỗi lần gọi, kể cả khi
+        đang có lịch nối lại (không chờ đủ số lần thất bại). Còn lượt truyền dở với
         thiết bị thì nối lại theo lịch (`hold`). Không có mDNS tươi và không còn lượt dở thì
         không nối lại theo lịch: chỉ thử khi người dùng thao tác (`connect_hint` lần nữa), khi
         có lượt truyền mới, hoặc khi mạng đổi; riêng “mạng đổi” chỉ được theo dõi khi
