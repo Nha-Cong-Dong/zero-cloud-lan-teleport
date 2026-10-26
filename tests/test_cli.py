@@ -6,14 +6,12 @@ import io
 import json
 import logging
 import os
-import queue
 import re
 import secrets
 import signal
 import socket
 import ssl
 import struct
-import subprocess
 import sys
 import threading
 import time
@@ -418,113 +416,7 @@ def test_hidden_options_are_not_in_help(capsys):
 # --- Trong tiến trình, có socket (CL7–CL12) --------------------------------------------------------
 
 
-@pytest.fixture
-def fast_cli(monkeypatch):
-    """Như `fast` của tests/app (mục 4.1): rút ngắn hằng thời gian trước khi tạo Node."""
-    from teleport.app import node as app_node
-    from teleport.app import pairing as app_pairing
-    from teleport.core import pairing as core_pairing
-    from teleport.net import connection
-
-    values = {
-        core_pairing: {
-            "MESSAGE_TIMEOUT": 1.0,
-            "NONCE_TIMEOUT": 0.5,
-            "CONFIRM_TIMEOUT": 2.0,
-            "CONFIRM_GRACE": 0.5,
-            "BACKOFF_BASE": 0.5,
-            "BACKOFF_MAX": 2.0,
-        },
-        connection: {"OPENING_TIMEOUT": 2.0, "CLOSE_TIMEOUT": 0.5, "DRAIN_TIMEOUT": 1.0},
-        app_pairing: {
-            "SEND_TIMEOUT": 1.0,
-            "BUSY_REPLY_TIMEOUT": 0.5,
-            "ABORT_ON_CANCEL_TIMEOUT": 0.5,
-            "CLOSE_SESSIONS_TIMEOUT": 1.0,
-        },
-        app_node: {"LOCK_TIMEOUT": 0.5},
-    }
-    for module, names in values.items():
-        for name, value in names.items():
-            monkeypatch.setattr(module, name, value)
-
-
-@pytest.fixture
-async def cli_no_leaks():
-    """Không còn task nào của test hay của Teleport sau khi test xong."""
-    before = asyncio.all_tasks()
-    yield
-    await asyncio.sleep(0.05)
-    me = asyncio.current_task()
-    left = [t for t in asyncio.all_tasks() if t is not me and t not in before and not t.done()]
-    assert not left, [t.get_name() for t in left]
-
-
-class CliRun:
-    """Một lần chạy `run_listen` / `run_pair` trong tiến trình, với `Lines` và đầu ra riêng."""
-
-    def __init__(self, coro_fn, argv: list[str]) -> None:
-        self.args = build_parser().parse_args(argv)
-        self.lines: asyncio.Queue = asyncio.Queue()
-        self.out = io.StringIO()
-        self.err = io.StringIO()
-        self.task = asyncio.create_task(coro_fn(self.args, self.lines, self.out, self.err), name="test.cli")
-
-    def say(self, text: str | None, ts: float | None = None) -> None:
-        # Hợp đồng `Lines` (sửa F2): mốc đọc là `time.perf_counter()`.
-        self.lines.put_nowait((time.perf_counter() if ts is None else ts, text))
-
-    def text(self) -> str:
-        return self.out.getvalue() + self.err.getvalue()
-
-    def events(self) -> list[dict]:
-        return [json.loads(line) for line in self.out.getvalue().splitlines() if line.strip()]
-
-    def events_of(self, name: str) -> list[dict]:
-        return [e for e in self.events() if e.get("event") == name]
-
-    async def wait_event(self, name: str, n: int = 1, timeout: float = 8.0) -> dict:
-        deadline = time.monotonic() + timeout
-        while len(self.events_of(name)) < n:
-            if self.task.done():
-                raise AssertionError(f"lệnh đã dừng trước khi có {name}: {self.text()!r}")
-            if time.monotonic() > deadline:
-                raise AssertionError(f"hết {timeout} s chưa có {name}: {self.text()!r}")
-            await asyncio.sleep(0.01)
-        return self.events_of(name)[n - 1]
-
-    async def wait_text(self, needle: str, n: int = 1, timeout: float = 8.0) -> None:
-        deadline = time.monotonic() + timeout
-        while self.text().count(needle) < n:
-            if self.task.done():
-                raise AssertionError(f"lệnh đã dừng mà chưa in {needle!r}: {self.text()!r}")
-            if time.monotonic() > deadline:
-                raise AssertionError(f"hết {timeout} s chưa in {needle!r}: {self.text()!r}")
-            await asyncio.sleep(0.01)
-
-    async def stop(self) -> None:
-        if not self.task.done():
-            self.task.cancel()
-        with contextlib.suppress(BaseException):
-            await asyncio.wait_for(self.task, 15)
-
-
-@pytest.fixture
-async def cli_runs():
-    """`start("listen"|"pair", argv)` → `CliRun`; mọi lần chạy được dừng khi test xong."""
-    from teleport.cli import run_listen, run_pair
-
-    runs: list[CliRun] = []
-
-    def start(kind: str, argv: list[str]) -> CliRun:
-        run = CliRun(run_listen if kind == "listen" else run_pair, argv)
-        runs.append(run)
-        return run
-
-    yield start
-
-    for run in runs:
-        await run.stop()
+# `fast_cli`, `cli_no_leaks`, `cli_runs` (`CliRun`) nằm ở tests/conftest.py (P2-7, spec-p2-7 mục A5).
 
 
 def listen_argv(d, *, json_mode: bool = True, name: str = "B") -> list[str]:
@@ -536,7 +428,7 @@ def pair_argv(d, port: int, *, json_mode: bool = True, name: str = "A") -> list[
     return ["--config-dir", str(d), "pair", f"{LOCAL}:{port}", *mode, "--name", name, *NODE_OPTS]
 
 
-async def listen_port_text(run: CliRun) -> int:
+async def listen_port_text(run) -> int:
     await run.wait_text("Nhấn Ctrl+C để dừng.")
     m = re.search(r"Cổng:\s+(\d+)", run.text())
     assert m, run.text()
@@ -849,106 +741,7 @@ async def test_pair_with_self_message(tmp_path, fast_cli, cli_runs):
 # --- Subprocess (CL13–CL15) ----------------------------------------------------------------------------
 
 
-class Proc:
-    """`python -m teleport …` thật; stdout đọc theo dòng trong thread; luôn bị dừng khi xong."""
-
-    def __init__(self, argv: list[str]) -> None:
-        env = dict(os.environ)
-        env.pop(ENV_HOME, None)
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-        self.p = subprocess.Popen(
-            [sys.executable, "-m", "teleport", *argv],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=flags,
-            env=env,
-        )
-        self.lines: queue.Queue = queue.Queue()
-        self.out: list[str] = []
-        self.err = bytearray()
-        self._t_out = threading.Thread(target=self._read_out, daemon=True)
-        self._t_err = threading.Thread(target=self._read_err, daemon=True)
-        self._t_out.start()
-        self._t_err.start()
-
-    def _read_out(self) -> None:
-        with contextlib.suppress(Exception):
-            for raw in self.p.stdout:
-                self.lines.put(raw.decode("utf-8", "replace").rstrip("\r\n"))
-
-    def _read_err(self) -> None:
-        with contextlib.suppress(Exception):
-            for raw in self.p.stderr:
-                self.err += raw
-
-    def err_text(self) -> str:
-        return self.err.decode("utf-8", "replace")
-
-    def wait_json(self, event: str, timeout: float = 30.0) -> dict:
-        deadline = time.monotonic() + timeout
-        while True:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise AssertionError(f"hết {timeout} s chưa có {event}: {self.out!r} {self.err_text()}")
-            try:
-                line = self.lines.get(timeout=min(left, 0.5))
-            except queue.Empty:
-                if self.p.poll() is not None and self.lines.empty():
-                    detail = f"{self.out!r} {self.err_text()}"
-                    raise AssertionError(
-                        f"tiến trình đã thoát ({self.p.returncode}) trước {event}: {detail}"
-                    ) from None
-                continue
-            self.out.append(line)
-            with contextlib.suppress(ValueError):
-                obj = json.loads(line)
-                if isinstance(obj, dict) and obj.get("event") == event:
-                    return obj
-
-    def write(self, text: str) -> None:
-        self.p.stdin.write(text.encode("utf-8"))
-        self.p.stdin.flush()
-
-    def interrupt(self) -> None:
-        if sys.platform == "win32":
-            os.kill(self.p.pid, signal.CTRL_BREAK_EVENT)
-        else:
-            self.p.send_signal(signal.SIGINT)
-
-    def finish(self, timeout: float = 30.0) -> int:
-        code = self.p.wait(timeout)
-        self._t_out.join(5)
-        self._t_err.join(5)
-        while not self.lines.empty():
-            self.out.append(self.lines.get())
-        return code
-
-    def kill(self) -> None:
-        if self.p.poll() is None:
-            self.p.kill()
-            with contextlib.suppress(Exception):
-                self.p.wait(10)
-        for stream in (self.p.stdin, self.p.stdout, self.p.stderr):
-            with contextlib.suppress(Exception):
-                stream.close()
-        self._t_out.join(5)
-        self._t_err.join(5)
-
-
-@pytest.fixture
-def procs():
-    started: list[Proc] = []
-
-    def start(argv: list[str]) -> Proc:
-        proc = Proc(argv)
-        started.append(proc)
-        return proc
-
-    yield start
-
-    for proc in started:
-        proc.kill()
+# `procs` (`Proc`) nằm ở tests/conftest.py (P2-7, spec-p2-7 mục A5).
 
 
 def listen_cmd(d) -> list[str]:
@@ -1168,92 +961,7 @@ def discovered(device_id: str, name: str, port: int, *, addresses=(LOCAL,), os: 
     )
 
 
-class CliFakeMdnsControl:
-    def __init__(self) -> None:
-        self.instances: list = []
-        self.fail_start: BaseException | None = None
-        self.fail_advertise: BaseException | None = None
-        self.seed: dict = {}
-
-    @property
-    def last(self):
-        assert self.instances, "chưa có MdnsDiscovery nào được tạo"
-        return self.instances[-1]
-
-
-class CliFakeMdns:
-    """Bản giả `MdnsDiscovery` (như `FakeMdns` của tests/app): không socket; thiết bị trong `seed`
-    được báo `DeviceAdded` ngay sau `start_browsing`."""
-
-    def __init__(self, ctl: CliFakeMdnsControl, **kwargs) -> None:
-        self.ctl = ctl
-        self.kwargs = kwargs
-        self.calls: list[str] = []
-        self.advertised: list[dict] = []
-        self.closing = False
-        self.on_event = None
-        self._devices: dict = {}
-        ctl.instances.append(self)
-
-    async def start(self) -> None:
-        self.calls.append("start")
-        if self.ctl.fail_start is not None:
-            raise self.ctl.fail_start
-
-    async def close(self) -> None:
-        self.calls.append("close")
-        self.closing = True
-
-    async def advertise(self, **kw) -> None:
-        self.calls.append("advertise")
-        if self.ctl.fail_advertise is not None:
-            raise self.ctl.fail_advertise
-        self.advertised.append(kw)
-
-    async def stop_advertising(self) -> None:
-        self.calls.append("stop_advertising")
-
-    async def start_browsing(self, *, self_device_id: str, on_event, max_services: int = 256) -> None:
-        from teleport.core.discovery import DeviceAdded
-
-        self.calls.append("start_browsing")
-        self.on_event = on_event
-        loop = asyncio.get_running_loop()
-        for d in self.ctl.seed.values():
-            if d.device_id != self_device_id:
-                loop.call_soon(self.emit, DeviceAdded(d))
-
-    def set_priority(self, device_ids) -> None:
-        self.calls.append("set_priority")
-        list(device_ids)
-
-    @property
-    def devices(self):
-        return dict(self._devices)
-
-    def emit(self, event) -> None:
-        from teleport.core.discovery import DeviceRemoved
-
-        if self.closing:
-            return
-        if isinstance(event, DeviceRemoved):
-            self._devices.pop(event.device.device_id, None)
-        else:
-            self._devices[event.device.device_id] = event.device
-        if self.on_event is not None:
-            self.on_event(event)
-
-
-@pytest.fixture
-def cli_mdns(monkeypatch):
-    """Thay `teleport.app.node.MdnsDiscovery`; địa chỉ card mạng cố định (không khởi động lại mDNS)."""
-    from teleport.app import node as node_mod
-    from teleport.net import discovery as net_discovery
-
-    ctl = CliFakeMdnsControl()
-    monkeypatch.setattr(node_mod, "MdnsDiscovery", lambda **kw: CliFakeMdns(ctl, **kw))
-    monkeypatch.setattr(net_discovery, "local_ipv4_addresses", lambda: ("192.0.2.5",))
-    return ctl
+# `cli_mdns` (mDNS giả) nằm ở tests/conftest.py (P2-7, spec-p2-7 mục A5).
 
 
 @pytest.fixture
@@ -1930,9 +1638,10 @@ def test_g3_ctrl_c_during_pair_by_name_reports_stripped_name(
     from teleport.app import node as node_mod
 
     monkeypatch.setattr(cli, "_PAIR_BROWSE_TIMEOUT", 10.0)
+    fake_factory = node_mod.MdnsDiscovery  # `cli_mdns` đã cài: tạo `CliFakeMdns`
 
     def factory(**kwargs):
-        m = CliFakeMdns(cli_mdns, **kwargs)
+        m = fake_factory(**kwargs)
         real = m.start_browsing
 
         async def start_browsing(**kw):
@@ -2282,7 +1991,7 @@ def test_outcome_message_prompt_failed(role):
     assert outcome_message(result) == [MVP_PROMPT_FAILED]
 
 
-async def _pair_once(cli_runs, a_dir, port: int, *, json_mode: bool = True) -> CliRun:
+async def _pair_once(cli_runs, a_dir, port: int, *, json_mode: bool = True):
     """Một lần `pair` tới `listen` ở `port`, hai bên trả lời “c”; trả lần chạy `pair` (đã xong)."""
     pair = cli_runs("pair", pair_argv(a_dir, port, json_mode=json_mode))
     if json_mode:

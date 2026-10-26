@@ -1816,3 +1816,70 @@ async def test_logs_never_contain_file_names_or_paths(T, transfer_nodes, monkeyp
         if secret in text or str(net.src) in text:
             leaks.append(f"{r.name} {r.levelname}: {text[:200]}")
     assert leaks == [], "log chứa tên/đường dẫn file:\n" + "\n".join(leaks)
+
+
+# =================================================================================================
+# P2-7 (plan-p2-7 mục 2.2 bước 3, mục 3): `preview_sources(paths)` — kiểm file nguồn trước khi lấy
+# khóa/đụng mạng; chạy `sources.prepare_sources` trên một `DiskExecutor` dùng một lần (thread daemon),
+# cùng lỗi như `send()`; bị hủy → bỏ việc và đóng executor.
+# =================================================================================================
+
+
+async def test_p27_preview_sources_returns_entries_in_order(T, tmp_path):
+    a = make_file(tmp_path, "a.bin", 1000)
+    empty = make_file(tmp_path, "rong.txt", 0)
+    found = await T.preview_sources([a, empty])
+    assert [f.entry.name for f in found] == ["a.bin", "rong.txt"]
+    assert [f.entry.size for f in found] == [1000, 0]
+    assert [f.path for f in found] == [Path(os.path.abspath(a)), Path(os.path.abspath(empty))]
+
+
+async def test_p27_preview_sources_raises_same_errors_as_send(T, tmp_path):
+    a = make_file(tmp_path, "a.bin", 10)
+    with pytest.raises(T.SourceError) as e:
+        await T.preview_sources([tmp_path / "khong-co.bin"])
+    assert e.value.kind is T.SourceErrorKind.NOT_FOUND
+    folder = tmp_path / "anh"
+    folder.mkdir()
+    with pytest.raises(T.SourceError) as e:
+        await T.preview_sources([a, folder])
+    assert e.value.kind is T.SourceErrorKind.NOT_A_FILE
+    with pytest.raises(ValueError):
+        await T.preview_sources([a, a])
+
+
+async def test_p27_preview_sources_runs_off_the_loop_in_daemon_thread(T, tmp_path, monkeypatch):
+    seen: list[threading.Thread] = []
+    real = sources.prepare_sources
+
+    def spy(paths):
+        seen.append(threading.current_thread())
+        return real(paths)
+
+    monkeypatch.setattr(sources, "prepare_sources", spy)
+    await T.preview_sources([make_file(tmp_path, "a.bin", 10)])
+    [thread] = seen
+    assert thread is not threading.main_thread() and thread.daemon
+
+
+async def test_p27_preview_sources_cancel_returns_promptly(T, tmp_path, monkeypatch):
+    """Ổ mạng treo: `preview_sources` không có hạn, nhưng hủy (Ctrl+C) phải trả về ngay."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def stuck(paths):
+        entered.set()
+        release.wait(30)
+        raise OSError("đã thả")
+
+    monkeypatch.setattr(sources, "prepare_sources", stuck)
+    task = asyncio.create_task(T.preview_sources([tmp_path / "a.bin"]))
+    try:
+        await wait_until(entered.is_set, 5, "prepare_sources chưa được gọi")
+        t0 = time.monotonic()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+        assert time.monotonic() - t0 < 1.0
+    finally:
+        release.set()

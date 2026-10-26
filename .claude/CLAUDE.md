@@ -37,6 +37,9 @@ teleport listen                                  # wait for pairing (shows the 6
 teleport pair 192.168.1.5                        # pair with a machine by IP (ip or ip:port)
 teleport list                                    # devices seen via mDNS for a few seconds (no node.lock, no advertising)
 teleport pair PC-Nha                             # pair by name or device_id prefix as `teleport list` shows it
+teleport receive                                 # receive files from paired machines, asks [c/k] per offer (--yes, --dir D)
+teleport send video.mp4 --to PC-Nha              # send to a paired machine running `teleport receive`
+teleport send a.zip --to PC-Nha --address 192.168.1.5:47474 --limit-rate 20M   # when mDNS is blocked; --to still required
 ```
 
 CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the admission fixture, monkeypatch seams, CLI test seams): `architecture.md` §6. The distribution name is `zero-cloud-lan-teleport` and the import name is `teleport`. Set `TELEPORT_HOME` (or pass `--config-dir`) to give each node its own identity when running several nodes on one machine.

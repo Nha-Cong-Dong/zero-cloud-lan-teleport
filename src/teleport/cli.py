@@ -1,11 +1,38 @@
 """Giao diện dòng lệnh: `teleport <lệnh>`.
 
-Mỗi lệnh là một hàm `cmd_<tên>(args) -> int` (mã thoát). Lệnh mới được thêm
-theo từng giai đoạn: `send`, `receive`.
+Mỗi lệnh là một hàm `cmd_<tên>(args) -> int` (mã thoát).
 
 Mã thoát: 0 thành công; 1 lỗi lúc chạy (khóa bận, danh tính/kho hỏng, không mở được
 cổng, không bật được mDNS, ghép đôi không thành, không tìm thấy thiết bị); 2 cú pháp
 lệnh sai (argparse, đích trông như địa chỉ mà sai dạng, `--name` không hợp lệ).
+
+Mã thoát của truyền file:
+
+- `send`: 0 khi lượt gửi xong (`DONE`), kể cả khi Ctrl+C tới sau đó; 1 khi lượt kết thúc khác
+  `DONE`, file không gửi được (trừ thư mục), `--to` không khớp đúng một thiết bị tin cậy, khóa
+  bận, không kết nối được, hay Ctrl+C trước khi xong; 2 khi `--limit-rate` / `--address` sai,
+  quá `MAX_OFFER_FILES` file, chọn thư mục, hay chọn một file hai lần.
+- `receive`: 0 khi dừng bằng Ctrl+C (kể cả lần hai, kể cả khi có lượt lỗi); 1 khi lỗi khởi động
+  (khóa bận, thư mục nhận không dùng được…); 2 khi tham số sai.
+
+`send` kiểm `--to` (`find_trusted`) và các file (`preview_sources`) trước khi lấy `node.lock`
+hay đụng mạng; node của nó nghe cổng 0 (không lưu), chỉ duyệt mDNS và chỉ tự nối tới đích
+(`--address`: `connect_hint`, lần thử thất bại được báo ngay). Một tiến trình gửi đúng một
+lượt. `receive` quảng bá mDNS, giữ kết nối với mọi thiết bị tin cậy, hỏi `[c/k]` từng `offer`
+theo docs/mvp.md mục 7.3 (`--yes`: tự nhận, không đọc stdin).
+
+Bẫy tín hiệu của `send` / `receive`: `cancel{user}` chỉ ra dây trong `Node.close()` có trật tự
+(`begin_close` rồi `flush_control`). Không dùng `task.cancel()` cho Ctrl+C như các lệnh khác: sau
+một lần hủy, `Task.cancelling()` ≥ 1 suốt lúc `close()` chạy trong task đó, zeroconf thấy vậy thì
+dừng giữa chừng; còn Ctrl+C lần hai qua handler mặc định của `asyncio.Runner` ném
+KeyboardInterrupt. Vì vậy `cmd_send` / `cmd_receive` gắn handler trước `runner.run` (Runner thấy
+SIGINT đã có handler thì không gắn handler riêng) và khôi phục sau khi đóng Runner: POSIX dùng
+`loop.add_signal_handler` cho SIGINT, SIGTERM; Windows dùng `signal.signal` cho SIGINT, SIGBREAK
+kèm `call_soon_threadsafe` (Proactor đã có wakeup fd). Handler chỉ gọi `Interrupts.press()`. Lần
+đầu: in “Đang dừng…”, hủy task làm việc (task đó không sở hữu node), rồi `node.close()` chạy
+trong task riêng, không bị hủy, tối đa `app.node.close_time_limit()` giây; lần hai hay hết hạn:
+hủy `close()` (thoát cứng, không chờ đĩa). Ctrl+C lúc đang chờ `node.lock` có thể trễ tới
+`LOCK_TIMEOUT` (khóa chờ bằng `time.sleep`).
 
 `list` chỉ duyệt mDNS vài giây: không giữ `node.lock`, không quảng bá máy này.
 `listen` quảng bá và duyệt mDNS, tự giữ kết nối với các máy đã ghép đôi và in sự kiện
@@ -35,25 +62,34 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import datetime
 import functools
+import glob
 import ipaddress
 import json
 import logging
 import math
+import ntpath
 import os
 import re
+import shutil
 import signal
 import sys
 import threading
 import time
 import unicodedata
-from collections.abc import Awaitable, Callable, Sequence
+from collections import deque
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any, TextIO
 
 from teleport import __version__
+from teleport.app import node as app_node  # close_time_limit đọc lúc dùng (test vá)
+from teleport.app import sources as app_sources  # MAX_FILE_SIZE đọc lúc dùng
+from teleport.app import transfers as app_transfers  # preview_sources, MIN_RATE_LIMIT đọc lúc dùng
 from teleport.app.devices import (
     AmbiguousDevice,
     DeviceNotFound,
@@ -74,20 +110,40 @@ from teleport.app.node import (
     MdnsOptions,
     Node,
     NodeEvent,
+    ReceiveDirUnavailable,
+    find_trusted,
     scan_devices,
     unpair_offline,
 )
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt
 from teleport.app.settings import Settings
+from teleport.app.storage import PathTooLongError, UnsafeReceiveDirError
+from teleport.app.transfers import (
+    DataUnreachable,
+    Direction,
+    FileDone,
+    OfferReceived,
+    SourceError,
+    SourceErrorKind,
+    TransferFinished,
+    TransferInfo,
+    TransferKey,
+    TransferProgress,
+    TransferResult,
+    TransferStatus,
+    TransferStatusChanged,
+    TransferUpdate,
+)
 from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc lúc dùng
-from teleport.core.display import display_name
+from teleport.core.display import display_filename, display_name, format_duration, format_size, text_width
+from teleport.core.filenames import INVISIBLE_CHARS
 from teleport.core.links import ConnectResult
-from teleport.core.messages import MessageError
+from teleport.core.messages import MAX_OFFER_FILES, MessageError, validate_device_name
 from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
 from teleport.lock import NodeLockedError
 from teleport.net.connection import DEFAULT_PORT
-from teleport.paths import ENV_HOME, config_dir
+from teleport.paths import ENV_HOME, config_dir, default_receive_dir
 from teleport.trust.identity import IdentityError, format_fingerprint, load_or_create_identity
 from teleport.trust.store import TrustedDevice, TrustStoreError
 
@@ -102,6 +158,8 @@ _MAX_LINE_BYTES = 4096  # dòng dài hơn bị bỏ (không giữ trong RAM)
 _TTY_EOF_DELAY = 0.3
 _YES = frozenset({"c", "co", "y", "yes"})
 _NO = frozenset({"k", "khong", "n", "no"})
+
+log = logging.getLogger(__name__)
 
 _PAIRED = PairingOutcome.PAIRED
 _UNFINISHED = frozenset(
@@ -143,14 +201,37 @@ def _utc_now() -> str:
     return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
 
 
-class _Output:
-    """In ra `out` / `err` theo chế độ text hoặc JSON; mọi dòng đều flush ngay."""
+def _json_line(obj: object) -> str:
+    """Một dòng JSON (UTF-8, không thoát chữ thường); riêng U+2028 và U+2029 được viết thoát,
+    vì nhiều bên đọc (ví dụ `str.splitlines`) coi chúng là xuống dòng và làm vỡ JSON Lines."""
+    return json.dumps(obj, ensure_ascii=False).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
 
-    def __init__(self, out: TextIO, err: TextIO, json_mode: bool) -> None:
+
+def _stream_isatty(stream: object) -> bool:
+    try:
+        return bool(stream.isatty())  # type: ignore[attr-defined]
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+class _Output:
+    """In ra `out` / `err` theo chế độ text hoặc JSON; mọi dòng đều flush ngay.
+
+    `tty` (mặc định `out.isatty()`): dòng tiến độ được vẽ lại tại chỗ bằng CR, không dùng mã
+    ANSI; in dòng text khác thì xuống dòng trước.
+
+    Câu hỏi đang mở (`ask`, tới khi `answered` / `close_question`): dòng khác in chen vào thì câu
+    hỏi được in lại ngay sau, để người dùng luôn thấy mình đang được hỏi; dòng tiến độ không vẽ.
+    """
+
+    def __init__(self, out: TextIO, err: TextIO, json_mode: bool, *, tty: bool | None = None) -> None:
         self.out = out
         self.err = err
         self.json = json_mode
+        self.tty = _stream_isatty(out) if tty is None else tty
         self._line_open = False  # vừa in “[c/k]: ” và chưa xuống dòng
+        self._question: str | None = None  # câu hỏi đang mở (chưa trả lời, chưa đóng)
+        self._progress_width = 0  # TTY: số cột của dòng tiến độ đang vẽ (chưa xuống dòng); 0 = không có
 
     def text(self, *lines: str) -> None:
         """Dòng cho người đọc (chỉ ở chế độ text)."""
@@ -159,25 +240,54 @@ class _Output:
         self._close_line()
         for line in lines:
             print(line, file=self.out, flush=True)
+        self._reask()
 
     def ask(self, question: str) -> None:
-        """In câu hỏi, để con trỏ ở cuối dòng."""
+        """In câu hỏi, để con trỏ ở cuối dòng; câu hỏi mở tới khi `answered` / `close_question`."""
         if self.json:
             return
         self._close_line()
-        print(question, end="", file=self.out, flush=True)
-        self._line_open = True
+        self._question = question
+        self._reask()
 
     def answered(self) -> None:
-        """Người dùng đã gõ Enter: terminal đã xuống dòng."""
+        """Người dùng đã gõ Enter: terminal đã xuống dòng, câu hỏi đóng (hỏi lại thì `ask` lần nữa)."""
         self._line_open = False
+        self._question = None
+
+    def close_question(self) -> None:
+        """Câu hỏi đóng mà không có câu trả lời (máy kia hủy, đầu vào đóng, đang dừng…)."""
+        self._question = None
+
+    def _reask(self) -> None:
+        if self._question is not None:
+            print(self._question, end="", file=self.out, flush=True)
+            self._line_open = True
+
+    def progress(self, line: str) -> None:
+        """Dòng tiến độ (chỉ ở chế độ text).
+
+        TTY: vẽ lại dòng hiện tại bằng CR, đệm khoảng trắng tới độ dài dòng trước; không vẽ khi
+        đang có lời hỏi mở. Không TTY: in như một dòng thường.
+        """
+        if self.json:
+            return
+        if not self.tty:
+            self.text(line)
+            return
+        if self._question is not None or self._line_open:
+            return  # đang hỏi: không vẽ đè lên lời hỏi
+        width = text_width(line)
+        pad = " " * max(0, self._progress_width - width)
+        print("\r" + line + pad, end="", file=self.out, flush=True)
+        self._progress_width = max(width, 1)
 
     def event(self, kind: str, /, **fields: Any) -> None:
         """Một dòng JSON (chỉ ở chế độ `--json`)."""
         if not self.json:
             return
         obj = {"event": kind, "time": _utc_now(), **fields}
-        print(json.dumps(obj, ensure_ascii=False), file=self.out, flush=True)
+        print(_json_line(obj), file=self.out, flush=True)
 
     def error(self, code: str, message: str, *, extra: Sequence[str] = (), **fields: Any) -> None:
         """Lỗi: text → “Lỗi: …” ra `err`; JSON → object `error` ra `out`."""
@@ -188,11 +298,13 @@ class _Output:
         print(f"Lỗi: {message}", file=self.err, flush=True)
         for line in extra:
             print(line, file=self.err, flush=True)
+        self._reask()
 
     def _close_line(self) -> None:
-        if self._line_open:
+        if self._line_open or self._progress_width:
             print(file=self.out, flush=True)
             self._line_open = False
+            self._progress_width = 0
 
 
 def _target(result: PairingFinished) -> str:
@@ -475,6 +587,7 @@ class _Prompter:
     def on_finished(self, result: PairingFinished) -> None:
         if self._prompt is not None and self._prompt.session_id == result.session_id:
             self._prompt = None  # lời hỏi tự hủy (hết giờ, máy kia hủy…)
+            self._output.close_question()
         if self._state is not None and not self._state.emitted:
             self._state.result = result
         if not self._listening:
@@ -505,6 +618,7 @@ class _Prompter:
 
     def _decide(self, accepted: bool) -> bool:
         prompt, self._prompt = self._prompt, None
+        self._output.close_question()
         if prompt is None or self.node is None:
             return False
         return self.node.pairing.decide(prompt.session_id, accepted)
@@ -1151,6 +1265,1328 @@ def cmd_pair(args: argparse.Namespace) -> int:
     return 1
 
 
+# ---- Truyền file: câu chữ --------------------------------------------------------------------
+
+# Seam cấp module, đọc lúc dùng (test vá bằng monkeypatch).
+_SEND_CONNECT_TIMEOUT = 20.0  # send qua mDNS: chờ kết nối tới máy nhận tối đa (giây)
+_PLAIN_PROGRESS_INTERVAL = 10.0  # không TTY: in dòng tiến độ tối đa một lần mỗi 10 s mỗi lượt
+_OFFER_LIST_MAX = 10  # lời hỏi nhận file: số file liệt kê tối đa, còn lại gộp một dòng
+
+_MAX_RATE = 1 << 40  # --limit-rate tối đa (byte/giây)
+_MAX_RATE_TEXT = 64  # chuỗi --limit-rate dài hơn thì sai luôn (không đổi số khổng lồ)
+_RATE_RE = re.compile(r"\s*(\d+(?:[.,]\d+)?)\s*([kKmMgG])?[bB]?(?:/s)?\s*", re.ASCII)
+_RATE_UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
+_GLOB_CHARS = frozenset("*?[")
+_REPLACEMENT = "�"  # U+FFFD: ký tự điều khiển trong tên file cục bộ (mvp mục 8)
+
+_STOPPING = "Đang dừng… (nhấn Ctrl+C lần nữa để thoát ngay)"
+_CANCELLED = "Đã hủy."
+_RECONNECTING = "Đang nối lại…"
+_NODE_LOCKED_HINT = "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại."
+_ASK_RECEIVE = "Nhận? [c/k]: "
+_STDIN_CLOSED = "Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận."
+_RECEIVE_REJECTED = "Đã từ chối."
+
+
+def _terminal_width() -> int:
+    """Số cột của terminal (seam cho test)."""
+    return shutil.get_terminal_size().columns
+
+
+def _printable(text: str) -> str:
+    """Ký tự điều khiển (Cc), surrogate lẻ (Cs) và ký tự vô hình / điều khiển hướng chữ
+    (`core.filenames.INVISIBLE_CHARS`) → U+FFFD, trước khi in tên hay đường dẫn.
+
+    Tên file nhận đã được làm sạch ở `core.filenames`, tên file và đường dẫn trên máy này thì
+    chưa (mvp mục 8: ký tự điều khiển không in thẳng ra màn hình); thay cả ở đây để không phụ
+    thuộc một tầng làm sạch duy nhất.
+    """
+    return "".join(
+        _REPLACEMENT if ch in INVISIBLE_CHARS or unicodedata.category(ch) in ("Cc", "Cs") else ch
+        for ch in text
+    )
+
+
+def _file_label(name: str) -> str:
+    return display_filename(_printable(name))
+
+
+def _peer_label(name: str | None, device_id: str) -> str:
+    """Tên máy kia trong câu (không ngoặc): `display_name`, không có tên thì 8 ký tự đầu của mã."""
+    return display_name(name) if name else device_id[:8]
+
+
+def _file_at(info: TransferInfo, index: int | None) -> str:
+    """Tên file thứ `index` (None: `info.file_index`) của lượt, kẹp trong khoảng hợp lệ."""
+    if not info.names:
+        return "?"
+    i = info.file_index if index is None else index
+    return _file_label(info.names[min(max(i, 0), len(info.names) - 1)])
+
+
+def _drive_label(receive_dir: Path | None) -> str:
+    """Cách gọi ổ chứa thư mục nhận (mvp mục 8): “ổ D:”, “ổ mạng \\\\máy\\chia-sẻ”, “ổ chứa /home/…”."""
+    if receive_dir is None:
+        return "ổ lưu file"
+    text = str(receive_dir)
+    if sys.platform == "win32":
+        if text.startswith("\\\\?\\UNC\\"):
+            text = "\\\\" + text[len("\\\\?\\UNC\\") :]
+        elif text.startswith("\\\\?\\"):
+            text = text[len("\\\\?\\") :]
+        drive = ntpath.splitdrive(text)[0]
+        if drive.startswith(("\\\\", "//")):
+            return f"ổ mạng {_printable(drive)}"
+        if drive:
+            return f"ổ {_printable(drive.upper())}"
+    return f"ổ chứa {_printable(text)}"
+
+
+def _dir_label(receive_dir: Path | None) -> str:
+    return "thư mục nhận" if receive_dir is None else _printable(str(receive_dir))
+
+
+def transfer_result_message(
+    finished: TransferFinished, *, peer_name: str | None, receive_dir: Path | None
+) -> list[str]:
+    """Câu báo kết quả một lượt truyền (docs/mvp.md mục 8); `[]` khi chỉ báo qua JSON.
+
+    `peer_name`: tên máy kia (chưa qua `display_name`; None → 8 ký tự đầu của mã). `receive_dir`:
+    thư mục nhận (bên nhận: câu lỗi ghi đĩa, câu từ chối vì ổ). Tên file theo
+    `finished.file_index` (không có thì `info.file_index`), kẹp trong khoảng hợp lệ.
+    """
+    info = finished.info
+    p = _peer_label(peer_name, info.key.device_id)
+    if info.key.direction is Direction.SEND:
+        return [_send_result(finished, p)]
+    return _receive_result(finished, p, receive_dir)
+
+
+def _send_result(finished: TransferFinished, p: str) -> str:
+    info, result, reject = finished.info, finished.result, finished.reject
+    file = _file_at(info, finished.file_index)
+    if result is TransferResult.DONE:
+        return f"Đã gửi xong {len(info.files)} file ({format_size(info.total_bytes)}) tới {p}."
+    if (
+        result is TransferResult.REJECTED_NO_SPACE
+        and reject is not None
+        and reject.needed is not None
+        and reject.available is not None
+    ):
+        return (
+            f"{p} không đủ chỗ trống để nhận: cần {format_size(reject.needed)}, "
+            f"ổ lưu file trên máy đó còn {format_size(reject.available)}."
+        )
+    if result is TransferResult.REJECTED_FILE_TOO_LARGE and reject is not None:
+        index, max_size = reject.file_index, reject.max_size
+        if index is not None and max_size is not None and 0 <= index < len(info.files):
+            return (
+                f"{p} không nhận được {_file_at(info, index)} ({format_size(info.files[index].size)}): "
+                f"ổ lưu file trên máy đó chỉ chứa được file nhỏ hơn {format_size(max_size + 1, trim=True)}."
+            )
+    if result is TransferResult.REJECTED_NOT_RECEIVING:
+        return f"{p} chưa bật nhận file. Trên máy đó hãy chạy `teleport receive` rồi gửi lại."
+    if result in _REJECTED:
+        return f"{p} đã từ chối nhận file."
+    if result is TransferResult.CANCELLED_USER:
+        if finished.by_peer:
+            return f"{p} đã dừng nhận giữa chừng. Các file đã gửi xong vẫn nằm trên máy đó."
+        return f"Đã hủy lượt gửi tới {p}. Các file đã gửi xong vẫn nằm trên máy đó."
+    if result is TransferResult.SOURCE_CHANGED:
+        return f"{file} đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại."
+    if result is TransferResult.EXPIRED:
+        return f"Mất kết nối với {p} quá lâu nên lượt gửi đã dừng. Hãy gửi lại."
+    if result is TransferResult.SOURCE_READ_FAILED:
+        return (
+            f"Không đọc được {file} trên máy này nữa (file có thể đang bị chương trình khác khóa, "
+            f"hoặc nằm trên ổ vừa bị rút ra). Đã dừng gửi tới {p}."
+        )
+    if result is TransferResult.PEER_ERROR:
+        return (
+            f"{p} không lưu được {file} nên đã dừng nhận. "
+            "Hãy nhờ người dùng máy đó kiểm tra ổ lưu file rồi gửi lại."
+        )
+    if result is TransferResult.PROTOCOL_ERROR:
+        return _protocol_error(p)
+    return f"{p} đã dừng lượt gửi."  # UNKNOWN_TRANSFER, CANCELLED_OTHER, UNPAIRED, CORRUPT…
+
+
+_REJECTED = frozenset(
+    {
+        TransferResult.REJECTED_USER,
+        TransferResult.REJECTED_NO_SPACE,
+        TransferResult.REJECTED_FILE_TOO_LARGE,
+        TransferResult.REJECTED_BUSY,
+        TransferResult.REJECTED_OTHER,
+    }
+)
+# Bên nhận: kết quả chỉ báo qua JSON (máy này tự trả lời, không phải lỗi người dùng cần biết).
+_RECEIVE_SILENT = frozenset(
+    {TransferResult.REJECTED_BUSY, TransferResult.REJECTED_OTHER, TransferResult.REJECTED_NOT_RECEIVING}
+)
+_KEPT = "Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại."
+
+
+def _protocol_error(p: str) -> str:
+    return (
+        f"Lượt gửi với {p} đã dừng vì máy đó gửi dữ liệu không hợp lệ. "
+        "Hãy cập nhật Teleport trên cả hai máy rồi thử lại."
+    )
+
+
+def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None) -> list[str]:
+    info, result, reject = finished.info, finished.result, finished.reject
+    file = _file_at(info, finished.file_index)
+    n = len(info.files)
+    if result is TransferResult.DONE:
+        return [f"Đã nhận xong {n} file ({format_size(info.total_bytes)}) từ {s}."]
+    if result is TransferResult.REJECTED_USER and not finished.by_peer:
+        return [_RECEIVE_REJECTED]
+    if result in _RECEIVE_SILENT:
+        return []
+    if (
+        result is TransferResult.REJECTED_NO_SPACE
+        and reject is not None
+        and reject.needed is not None
+        and reject.available is not None
+    ):
+        return [
+            f"Đã từ chối {n} file từ {s}: không đủ chỗ trống, cần {format_size(reject.needed)}, "
+            f"{_drive_label(receive_dir)} còn {format_size(reject.available)}."
+        ]
+    if result is TransferResult.REJECTED_FILE_TOO_LARGE and reject is not None:
+        index, max_size = reject.file_index, reject.max_size
+        if index is not None and max_size is not None and 0 <= index < n:
+            return [
+                f"Đã từ chối {n} file từ {s}: {_drive_label(receive_dir)} chỉ chứa được file nhỏ hơn "
+                f"{format_size(max_size + 1, trim=True)}, mà {_file_at(info, index)} nặng "
+                f"{format_size(info.files[index].size)}."
+            ]
+    if result is TransferResult.CANCELLED_USER:
+        if not finished.by_peer:
+            return [f"Đã hủy nhận từ {s}. File đã nhận xong vẫn giữ nguyên."]
+        if info.status in (TransferStatus.WAITING, TransferStatus.QUEUED):
+            return [f"{s} đã hủy lượt gửi."]  # hủy khi máy này còn đang hỏi / xếp hàng
+        return [
+            f"{s} đã hủy lượt gửi. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên."
+        ]
+    if result is TransferResult.SOURCE_CHANGED:
+        return [f"{file} đã bị thay đổi trên {s} nên không nhận tiếp được. {_KEPT}"]
+    if result is TransferResult.EXPIRED:
+        return [
+            f"Mất kết nối với {s} quá lâu nên đã dừng nhận. "
+            "Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên."
+        ]
+    if result is TransferResult.DISK_FAILED:
+        return [
+            f"Không lưu được {file} vào {_dir_label(receive_dir)} vì ổ đĩa báo lỗi khi ghi "
+            f"(ổ có thể đã đầy, bị rút ra hoặc bị hỏng). Đã dừng nhận từ {s}; "
+            "các file đã nhận xong vẫn giữ nguyên."
+        ]
+    if result is TransferResult.TEMP_EXISTS:
+        return [
+            f"Không nhận được lượt gửi từ {s} vì thư mục tạm của lượt này còn sót lại từ lần trước "
+            "(ví dụ Teleport vừa bị tắt đột ngột). Hãy nhờ gửi lại."
+        ]
+    if result is TransferResult.CORRUPT:
+        return [f"Dữ liệu nhận từ {s} bị hỏng nhiều lần liên tiếp nên đã dừng nhận {file}. {_KEPT}"]
+    if result is TransferResult.PEER_ERROR:
+        return [f"{s} đã dừng gửi {file} vì gặp lỗi trên máy đó. {_KEPT}"]
+    if result is TransferResult.UNKNOWN_TRANSFER:
+        return [f"{s} đã hủy lượt gửi {file}. Hãy nhờ gửi lại."]
+    if result is TransferResult.PROTOCOL_ERROR:
+        return [_protocol_error(s)]
+    return [f"{s} đã dừng lượt gửi."]  # CANCELLED_OTHER, UNPAIRED…
+
+
+def offer_prompt_lines(offer: OfferReceived, *, peer_name: str | None, receive_dir: Path | None) -> list[str]:
+    """Các dòng của lời hỏi nhận file trước câu “Nhận? [c/k]: ” (docs/mvp.md mục 7.3, bản CLI).
+
+    Tiêu đề có tên máy gửi trong “…” (`display_name`), rồi tối đa `_OFFER_LIST_MAX` dòng
+    “tên file  dung lượng” (tên qua `display_filename`, cột dung lượng thẳng hàng), dòng
+    “… và N file khác” nếu còn, rồi “Lưu vào: …”.
+    """
+    p = _peer_label(peer_name, offer.key.device_id)
+    n = len(offer.files)
+    lines = [f"“{p}” muốn gửi {n} file ({format_size(offer.total_bytes)}):"]
+    limit = _OFFER_LIST_MAX
+    shown = [
+        (_file_label(name), format_size(entry.size))
+        for name, entry in zip(offer.names[:limit], offer.files[:limit], strict=False)
+    ]
+    column = max((text_width(name) for name, _ in shown), default=0) + 4
+    for name, size in shown:
+        lines.append(f"  {name}{' ' * (column - text_width(name))}{size}")
+    if n > len(shown):
+        lines.append(f"  … và {n - len(shown)} file khác")
+    lines.append(f"Lưu vào: {_dir_label(receive_dir)}")
+    return lines
+
+
+def _percent_tenths(done: int, total: int) -> int:
+    """Phần nghìn đã xong, làm tròn xuống (không hiện 100,0% trước khi xong); total 0 → 1000."""
+    if total <= 0:
+        return 1000
+    return min(1000, max(0, done) * 1000 // total)
+
+
+def _cut(text: str, limit: int) -> str:
+    """Cắt `text` ở cuối cho vừa `limit` cột (kèm `…`)."""
+    if text_width(text) <= limit:
+        return text
+    if limit <= 0:
+        return ""
+    used = 0
+    end = 0
+    for ch in text:
+        width = text_width(ch)
+        if used + width > limit - 1:
+            break
+        used += width
+        end += 1
+    return text[:end] + "…"
+
+
+def progress_line(update: TransferProgress, *, peer_name: str | None, width: int | None) -> str:
+    """Dòng tiến độ: `  42,0% · 3,4 GB / 8,4 GB · 85,2 MB/s · còn 1 phút 2 giây · video.mp4 (1/3)`.
+
+    `peer_name` khác None (lệnh `receive`): thêm tiền tố tên máy gửi. Chưa đo được tốc độ (`eta`
+    None): “đang tính thời gian còn lại”. `width`: số cột của terminal; dòng trả về ≤ `width` − 1
+    cột (cột cuối để trống, terminal không tự xuống dòng), cắt ở cuối kèm `…`; None: không cắt.
+    """
+    info = update.info
+    tenths = _percent_tenths(info.done_bytes, info.total_bytes)
+    speed = update.bytes_per_second
+    speed_bytes = int(speed) if math.isfinite(speed) and speed > 0 else 0
+    eta = update.eta
+    remaining = (
+        "đang tính thời gian còn lại"
+        if eta is None or not math.isfinite(eta)
+        else f"còn {format_duration(eta)}"
+    )
+    parts = [
+        f"{tenths // 10},{tenths % 10}%",
+        f"{format_size(max(0, info.done_bytes))} / {format_size(max(0, info.total_bytes))}",
+        f"{format_size(speed_bytes)}/s",
+        remaining,
+    ]
+    n = len(info.names)
+    if n:
+        i = min(max(info.file_index, 0), n - 1)
+        parts.append(f"{_file_label(info.names[i])} ({i + 1}/{n})")
+    prefix = "" if peer_name is None else f"{_peer_label(peer_name, info.key.device_id)}: "
+    line = "  " + prefix + " · ".join(parts)
+    return line if width is None else _cut(line, width - 1)
+
+
+def parse_rate(text: str) -> int:
+    """`--limit-rate` → byte/giây: “20M”, “512K”, “1,5M”, “64KB/s”, “65536” (hệ nhị phân, làm tròn xuống).
+
+    Chỉ chữ số ASCII; hậu tố K/M/G không phân biệt hoa thường, sau đó tùy chọn “B” và “/s”;
+    không hậu tố là byte/giây. Sai dạng, hoặc ngoài `transfers.MIN_RATE_LIMIT` … 2⁴⁰ → ValueError.
+    """
+    if not isinstance(text, str) or len(text) > _MAX_RATE_TEXT:
+        raise ValueError("tốc độ không hợp lệ")
+    match = _RATE_RE.fullmatch(text)
+    if match is None:
+        raise ValueError("tốc độ không hợp lệ")
+    number = Decimal(match.group(1).replace(",", "."))
+    unit = _RATE_UNITS[(match.group(2) or "").lower()]
+    value = int((number * unit).to_integral_value(rounding=ROUND_FLOOR))
+    if not app_transfers.MIN_RATE_LIMIT <= value <= _MAX_RATE:
+        raise ValueError("tốc độ ngoài khoảng cho phép")
+    return value
+
+
+def source_error_message(error: SourceError) -> tuple[int, str, list[str]]:
+    """File không gửi được → `(mã thoát, mã lỗi JSON, các dòng)`; thư mục là lỗi cách dùng (mã 2)."""
+    path = error.path
+    name = _file_label(path.name or str(path))
+    kind = error.kind
+    if kind is SourceErrorKind.NOT_A_FILE:
+        return (
+            2,
+            "not_a_file",
+            [f"{name} không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file."],
+        )
+    if kind is SourceErrorKind.NOT_FOUND:
+        return 1, "source_not_found", [f"Không tìm thấy file {_printable(str(path))}."]
+    if kind is SourceErrorKind.PERMISSION:
+        return 1, "source_permission", [f"Không mở được {name}: máy này không có quyền đọc file đó."]
+    if kind is SourceErrorKind.TOO_LARGE:
+        size = "?" if error.size is None else format_size(error.size)
+        limit = format_size(app_sources.MAX_FILE_SIZE, trim=True)
+        return (
+            1,
+            "source_too_large",
+            [
+                f"Không gửi được {name} ({size}): Teleport chỉ gửi được file tối đa {limit}. "
+                "Hãy chia file thành nhiều phần nhỏ hơn rồi gửi."
+            ],
+        )
+    if kind is SourceErrorKind.BAD_NAME:
+        return (
+            1,
+            "source_bad_name",
+            [f"Không gửi được {name}: tên file có ký tự không hiển thị được. Hãy đổi tên file rồi gửi lại."],
+        )
+    return 1, "source_os_error", [f"Không đọc được {name}: ổ đĩa báo lỗi."]
+
+
+def receive_dir_error_message(error: ReceiveDirUnavailable) -> list[str]:
+    """Câu báo không dùng được thư mục nhận, theo lỗi gốc (`__cause__`)."""
+    head = f"Không dùng được thư mục nhận {_printable(str(error.path))}:"
+    cause = error.__cause__
+    if isinstance(cause, UnsafeReceiveDirError):
+        tail = (
+            "thư mục ẩn `.teleport` bên trong là liên kết hoặc thuộc người dùng khác. "
+            "Hãy xóa nó hoặc chọn thư mục khác bằng `--dir`."
+        )
+    elif isinstance(cause, PathTooLongError):
+        tail = "đường dẫn quá dài. Hãy chọn thư mục có đường dẫn ngắn hơn bằng `--dir`."
+    elif isinstance(cause, PermissionError):
+        tail = "máy này không có quyền ghi vào đó. Hãy chọn thư mục khác bằng `--dir`."
+    else:
+        tail = "ổ đĩa báo lỗi hoặc không phản hồi. Hãy chọn thư mục khác bằng `--dir`."
+    return [f"{head} {tail}"]
+
+
+def _unreachable_data_message(p: str) -> str:
+    return (
+        f"Không mở được kết nối truyền dữ liệu tới {p}; tường lửa trên máy đó có thể đang chặn Teleport. "
+        "Teleport vẫn đang thử lại."
+    )
+
+
+# ---- Truyền file: Ctrl+C và đóng node --------------------------------------------------------
+
+
+class Interrupts:
+    """Ctrl+C của `send` / `receive`: lần đầu đặt `stop` (dừng có trật tự), lần hai đặt `hard`.
+
+    Handler tín hiệu chỉ gọi `press()` trên event loop (bẫy tín hiệu ở docstring module); test
+    gọi `press()` trực tiếp.
+    """
+
+    def __init__(self) -> None:
+        self.stop = asyncio.Event()
+        self.hard = asyncio.Event()
+
+    def press(self) -> None:
+        if self.stop.is_set():
+            self.hard.set()
+        else:
+            self.stop.set()
+
+
+class _Session:
+    """Trạng thái chung của một lần chạy `send` / `receive`: node (task làm việc không sở hữu nó)."""
+
+    def __init__(self) -> None:
+        self.node: Node | None = None
+        self.stopping = False  # đã có Ctrl+C lần đầu: không mở lời hỏi mới
+
+    def on_stop(self) -> None:
+        """Ctrl+C lần đầu (trước khi in “Đang dừng…”)."""
+        self.stopping = True
+
+
+async def _close_node(node: Node, interrupts: Interrupts) -> None:
+    """`node.close()` có trật tự trong task riêng (không bị hủy), tối đa `close_time_limit()` giây.
+
+    Ctrl+C lần hai hay hết hạn → hủy `close()`: nó tự hủy cứng mọi thứ còn lại rồi nhả khóa.
+    """
+    closing = asyncio.create_task(node.close(), name="teleport.cli.close")
+    hard = asyncio.create_task(interrupts.hard.wait(), name="teleport.cli.hard")
+    try:
+        await asyncio.wait(
+            {closing, hard}, timeout=app_node.close_time_limit(), return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        hard.cancel()
+        if not closing.done():
+            closing.cancel()
+        await asyncio.wait({closing, hard})
+    if not closing.cancelled() and (error := closing.exception()) is not None:
+        log.error("đóng node lỗi: %s", type(error).__name__)
+
+
+async def _supervise(
+    work: Coroutine[Any, Any, int], session: _Session, output: _Output, interrupts: Interrupts
+) -> int | None:
+    """Chạy `work` tới khi xong hoặc tới lần Ctrl+C đầu (in “Đang dừng…”, hủy `work`), rồi đóng node.
+
+    Trả mã thoát của `work`; None nếu bị dừng trước khi `work` xong. Lệnh bị hủy từ ngoài
+    (test) vẫn đóng node trước khi CancelledError bay ra.
+    """
+    task = asyncio.create_task(work, name="teleport.cli.work")
+    stop = asyncio.create_task(interrupts.stop.wait(), name="teleport.cli.stop")
+    try:
+        await asyncio.wait({task, stop}, return_when=asyncio.FIRST_COMPLETED)
+        if not task.done():
+            session.on_stop()
+            output.text(_STOPPING)
+            task.cancel()
+            await asyncio.wait({task})
+    finally:
+        stop.cancel()
+        if not task.done():
+            task.cancel()
+            await asyncio.wait({task})
+        await asyncio.wait({stop})
+        if session.node is not None:
+            await _close_node(session.node, interrupts)
+    if task.cancelled():
+        return None
+    return task.result()
+
+
+def _check_node_args(args: argparse.Namespace, output: _Output) -> bool:
+    """`--host`, `--name` của `send` / `receive`; sai → in lỗi, False (mã thoát 2)."""
+    host = getattr(args, "host", _ANY_HOST)
+    if not _valid_host(host):
+        output.error("invalid_address", f"Địa chỉ lắng nghe không hợp lệ: {host!r}")
+        return False
+    name = getattr(args, "name", None)
+    if name is not None:
+        try:
+            validate_device_name(name)
+        except MessageError as e:
+            output.error("invalid_name", f"Tên thiết bị không hợp lệ: {e}")
+            return False
+    return True
+
+
+async def _start_transfer_node(node: Node, output: _Output) -> int | None:
+    """`node.start()` của `send` / `receive`; lỗi → in lỗi, trả mã thoát. Thành công → None."""
+    try:
+        await node.start()
+    except NodeLockedError:
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
+        return 1
+    except IdentityError as e:
+        output.error("identity_error", str(e))
+        return 1
+    except TrustStoreError as e:
+        output.error("trust_store_error", str(e))
+        return 1
+    except ConfigDirError as e:
+        _config_dir_error(output, e.path, e.error)
+        return 1
+    except ReceiveDirUnavailable as e:
+        lines = receive_dir_error_message(e)
+        output.error("receive_dir_error", lines[0], extra=lines[1:], path=str(e.path))
+        return 1
+    except OSError as e:  # Node.start: OSError còn lại chỉ đến từ cổng lắng nghe
+        output.error("port_unavailable", f"Không mở được cổng để lắng nghe: {e}")
+        return 1
+    return None
+
+
+# ---- Truyền file: sự kiện --------------------------------------------------------------------
+
+
+def _key_of(update: TransferUpdate) -> TransferKey | None:
+    if isinstance(update, OfferReceived | FileDone):
+        return update.key
+    if isinstance(update, TransferStatusChanged | TransferProgress | TransferFinished):
+        return update.info.key
+    return None  # DataUnreachable: chỉ có device_id
+
+
+def _transfer_fields(key: TransferKey) -> dict[str, Any]:
+    return {"transfer_id": key.transfer_id, "direction": key.direction.value, "device_id": key.device_id}
+
+
+class _TransferPrinter:
+    """In sự kiện của lượt truyền (trạng thái, tiến độ, file xong, kết quả) ở chế độ text và JSON.
+
+    `name_of(device_id)`: tên máy kia (chưa qua `display_name`); `receive_dir()`: thư mục nhận.
+    `prefix`: dòng tiến độ có tiền tố tên máy kia (`receive`, nhiều lượt cùng lúc).
+    """
+
+    def __init__(
+        self,
+        output: _Output,
+        *,
+        name_of: Callable[[str], str | None],
+        receive_dir: Callable[[], Path | None],
+        prefix: bool,
+    ) -> None:
+        self._output = output
+        self._name_of = name_of
+        self._receive_dir = receive_dir
+        self._prefix = prefix
+        self._file_counts: dict[TransferKey, int] = {}
+        self._plain_at: dict[TransferKey, float] = {}  # không TTY: lúc in dòng tiến độ gần nhất
+
+    def _peer(self, device_id: str) -> str:
+        return _peer_label(self._name_of(device_id), device_id)
+
+    def note_files(self, key: TransferKey, count: int) -> None:
+        self._file_counts[key] = count
+
+    def handle(self, update: TransferUpdate) -> None:
+        if isinstance(update, TransferStatusChanged):
+            self._status(update.info)
+        elif isinstance(update, TransferProgress):
+            self._progress(update)
+        elif isinstance(update, FileDone):
+            self._file_done(update)
+        elif isinstance(update, TransferFinished):
+            self.finished(update)
+        elif isinstance(update, DataUnreachable):
+            self._unreachable(update.device_id)
+
+    def _status(self, info: TransferInfo) -> None:
+        key = info.key
+        self.note_files(key, len(info.files))
+        out = self._output
+        out.event("status", **_transfer_fields(key), status=info.status.value)
+        sending = key.direction is Direction.SEND
+        status = info.status
+        if status is TransferStatus.QUEUED and sending:
+            out.text(f"Đang chờ {self._peer(key.device_id)} nhận xong lượt trước…")
+        elif status is TransferStatus.WAITING and sending:
+            out.text(f"Đang chờ {self._peer(key.device_id)} trả lời…")
+        elif status is TransferStatus.RECONNECTING:
+            out.text(_RECONNECTING)
+        elif status is TransferStatus.VERIFYING:
+            out.text(f"Đang kiểm tra {_file_at(info, None)}…")
+
+    def _progress(self, update: TransferProgress) -> None:
+        info = update.info
+        key = info.key
+        self.note_files(key, len(info.files))
+        out = self._output
+        speed = update.bytes_per_second
+        eta = update.eta
+        out.event(
+            "progress",
+            **_transfer_fields(key),
+            done_bytes=info.done_bytes,
+            total_bytes=info.total_bytes,
+            percent=_percent_tenths(info.done_bytes, info.total_bytes) / 10,
+            bytes_per_second=int(speed) if math.isfinite(speed) and speed > 0 else 0,
+            eta_seconds=eta if eta is not None and math.isfinite(eta) else None,
+            file_index=info.file_index,
+            file_count=len(info.files),
+        )
+        if out.json:
+            return
+        peer = (self._name_of(key.device_id) or key.device_id[:8]) if self._prefix else None
+        if out.tty:
+            out.progress(progress_line(update, peer_name=peer, width=_terminal_width()))
+            return
+        now = time.monotonic()
+        last = self._plain_at.get(key)
+        if last is None or now - last >= _PLAIN_PROGRESS_INTERVAL:
+            self._plain_at[key] = now
+            out.text(progress_line(update, peer_name=peer, width=None))
+
+    def _file_done(self, update: FileDone) -> None:
+        key = update.key
+        out = self._output
+        path = None if update.path is None else str(update.path)
+        out.event(
+            "file_done", **_transfer_fields(key), file_index=update.file_index, name=update.name, path=path
+        )
+        if key.direction is Direction.SEND:
+            count = self._file_counts.get(key)
+            total = "?" if count is None else str(count)
+            out.text(f"Đã gửi {_file_label(update.name)} ({update.file_index + 1}/{total}).")
+        else:
+            out.text(f"Đã lưu: {_printable(path if path is not None else update.name)}")
+
+    def finished(self, finished: TransferFinished, *, show_text: bool = True) -> None:
+        """Kết quả của lượt: câu (`show_text`) và sự kiện JSON `result`."""
+        info = finished.info
+        key = info.key
+        self._file_counts.pop(key, None)
+        self._plain_at.pop(key, None)
+        name = self._name_of(key.device_id)
+        lines = transfer_result_message(finished, peer_name=name, receive_dir=self._receive_dir())
+        out = self._output
+        if show_text:
+            out.text(*lines)
+        out.event(
+            "result",
+            **_transfer_fields(key),
+            device_name=name,
+            result=finished.result.value,
+            by_peer=finished.by_peer,
+            reason=finished.reason,
+            file_index=finished.file_index,
+            files_done=info.file_index,
+            file_count=len(info.files),
+            done_bytes=info.done_bytes,
+            total_bytes=info.total_bytes,
+            message=" ".join(lines),
+        )
+
+    def _unreachable(self, device_id: str) -> None:
+        message = _unreachable_data_message(self._peer(device_id))
+        self._output.text(message)
+        self._output.event("data_unreachable", device_id=device_id, message=message)
+
+
+# ---- send ------------------------------------------------------------------------------------
+
+
+class _SendSession(_Session):
+    """Trạng thái của `send`: ghi kết quả ngay trong callback, để Ctrl+C tới sau vẫn trả đúng mã."""
+
+    def __init__(self, output: _Output) -> None:
+        super().__init__()
+        self.output = output
+        self.device_id = ""
+        self.peer_name: str | None = None  # tên trong trusted.json, chưa qua display_name
+        self.connected = False  # đã có DeviceConnected của máy nhận (có thể tới trước khi chờ)
+        self.failure: ConnectFailed | None = None  # ConnectFailed đầu tiên trước khi gửi
+        self.sending = False  # đã gọi transfers.send: ConnectFailed sau đó chỉ in (nối lại 30 s)
+        self.offered = False  # đã phát `offer` (JSON) cho lượt gửi
+        self.result: TransferFinished | None = None
+        self.wake = asyncio.Event()  # có sự kiện kết nối mới
+        self.done = asyncio.Event()  # có `result`
+        self.printer = _TransferPrinter(
+            output, name_of=lambda _: self.peer_name, receive_dir=lambda: None, prefix=False
+        )
+
+    def on_event(self, event: NodeEvent) -> None:
+        view = event.device
+        if view.device_id != self.device_id:
+            return
+        if isinstance(event, DeviceConnected):
+            self.connected = True
+            self.wake.set()
+        elif isinstance(event, ConnectFailed):
+            if self.sending:
+                self.output.text(*connect_failed_message(view, event.result))
+            elif self.failure is None:
+                self.failure = event
+                self.wake.set()
+
+    def on_transfer_event(self, update: TransferUpdate) -> None:
+        if isinstance(update, DataUnreachable):
+            if update.device_id == self.device_id:
+                self.printer.handle(update)
+            return
+        key = _key_of(update)
+        if key is None or key.direction is not Direction.SEND or key.device_id != self.device_id:
+            return
+        if not self.offered and isinstance(
+            update, TransferStatusChanged | TransferProgress | TransferFinished
+        ):
+            self.offered = True
+            info = update.info
+            self.output.event(
+                "offer",
+                **_transfer_fields(key),
+                device_name=self.peer_name,
+                files=[{"name": n, "size": e.size} for n, e in zip(info.names, info.files, strict=False)],
+                total_bytes=info.total_bytes,
+            )
+        self.printer.handle(update)
+        if isinstance(update, TransferFinished) and self.result is None:
+            self.result = update
+            self.done.set()
+
+
+def _expand_sources(paths: Sequence[str]) -> tuple[list[str], str | None]:
+    """Windows: đường dẫn không tồn tại mà có `*?[` thì mở rộng bằng `glob` (sắp xếp), vì cmd.exe và
+    PowerShell không tự mở rộng. Trả `(đường dẫn, mẫu không khớp file nào hoặc None)`."""
+    if sys.platform != "win32":
+        return list(paths), None
+    result: list[str] = []
+    for path in paths:
+        if _GLOB_CHARS.isdisjoint(path) or os.path.lexists(path):
+            result.append(path)
+            continue
+        matches = sorted(glob.glob(path))
+        if not matches:
+            return result, path
+        result.extend(matches)
+    return result, None
+
+
+def _trusted_lookup_error(output: _Output, query: str, error: DeviceNotFound | AmbiguousDevice) -> None:
+    """`--to` / `unpair`: không có, hoặc khớp nhiều thiết bị tin cậy."""
+    if isinstance(error, AmbiguousDevice):
+        output.error(
+            "ambiguous",
+            f"“{query}” khớp nhiều thiết bị; hãy nhập mã thiết bị dài hơn:",
+            extra=[f"  {d.device_id}  {d.name}" for d in error.candidates],
+            candidates=_candidates(error.candidates),
+        )
+        return
+    if error.known:
+        extra = ["Các thiết bị tin cậy:", *(f"  {d.device_id[:8]}  {d.name}" for d in error.known)]
+    else:
+        extra = ["(chưa ghép đôi với thiết bị nào)"]
+    output.error(
+        "not_found",
+        f"Không có thiết bị tin cậy nào khớp “{query}”.",
+        extra=extra,
+        candidates=_candidates(error.known),
+    )
+
+
+def _source_error(output: _Output, error: SourceError) -> int:
+    code, kind, lines = source_error_message(error)
+    output.error(kind, lines[0], extra=lines[1:])
+    return code
+
+
+def _duplicate_error(output: _Output) -> int:
+    output.error("duplicate_file", "Có file được chọn hai lần. Hãy chọn mỗi file một lần.")
+    return 2
+
+
+async def run_send(
+    args: argparse.Namespace, lines: Lines, out: TextIO, err: TextIO, *, interrupts: Interrupts | None = None
+) -> int:
+    """`teleport send <file...> --to <thiết bị>`: 0 khi gửi xong, 1 lỗi lúc chạy hay bị hủy, 2 cú pháp sai.
+
+    `lines` không dùng (lệnh này không đọc stdin). `interrupts`: Ctrl+C (test gọi `press()`).
+    Kết quả của lượt được ghi ngay trong callback, nên Ctrl+C tới sau khi xong vẫn trả 0.
+    """
+    interrupts = interrupts if interrupts is not None else Interrupts()
+    output = _Output(out, err, bool(getattr(args, "json", False)))
+    session = _SendSession(output)
+    code = await _supervise(_send_main(args, output, session), session, output, interrupts)
+    if session.result is not None:
+        return 0 if session.result.result is TransferResult.DONE else 1
+    if code is None:  # dừng trước khi có kết quả (kể cả thoát cứng trước khi kịp hủy lượt)
+        output.text(_CANCELLED)
+        output.event("error", error="cancelled", message=_CANCELLED)
+        return 1
+    return code
+
+
+async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSession) -> int:
+    """Phần việc của `send` (task con, bị hủy khi Ctrl+C); node được `_supervise` đóng."""
+    rate: int | None = None
+    if args.limit_rate is not None:
+        try:
+            rate = parse_rate(args.limit_rate)
+        except ValueError:
+            output.error(
+                "invalid_rate",
+                f"Tốc độ không hợp lệ: “{_printable(args.limit_rate)}”. "
+                "Hãy nhập ví dụ 20M (20 MB/s) hoặc 512K; tối thiểu 64K.",
+            )
+            return 2
+    endpoint: tuple[str, int] | None = None
+    if args.address is not None:
+        try:
+            endpoint = parse_manual_address(args.address)
+        except ValueError:
+            output.error(
+                "invalid_address",
+                f"{_printable(args.address.strip())} không phải địa chỉ IPv4 hợp lệ. "
+                "Hãy nhập ví dụ 192.168.1.5 hoặc 192.168.1.5:47474.",
+            )
+            return 2
+    if not _check_node_args(args, output):
+        return 2
+    paths, unmatched = _expand_sources(args.files)
+    if unmatched is not None:
+        output.error("source_not_found", f"Không tìm thấy file {_printable(os.path.abspath(unmatched))}.")
+        return 1
+    if len(paths) > MAX_OFFER_FILES:
+        output.error("too_many_files", f"Mỗi lần gửi được tối đa {MAX_OFFER_FILES} file.")
+        return 2
+    # Kiểm thiết bị và file trước khi lấy node.lock hay đụng mạng.
+    query = args.to
+    try:
+        device = find_trusted(_config(args), query)
+    except ConfigDirError as e:
+        _config_dir_error(output, e.path, e.error)
+        return 1
+    except TrustStoreError as e:
+        output.error("trust_store_error", str(e))
+        return 1
+    except (DeviceNotFound, AmbiguousDevice) as e:
+        _trusted_lookup_error(output, query, e)
+        return 1
+    try:
+        files = await app_transfers.preview_sources(paths)
+    except SourceError as e:
+        return _source_error(output, e)
+    except ValueError:
+        return _duplicate_error(output)
+    total = sum(f.entry.size for f in files)
+    name = display_name(device.name)
+    mdns = _mdns_options(args, advertise=False)
+    if mdns is None and endpoint is None:
+        output.error("discovery_error", _no_discovery_message(name, "đang tắt"))
+        return 1
+    session.device_id = device.device_id
+    session.peer_name = device.name
+    port = getattr(args, "port", None)
+    node = Node(
+        _config(args),
+        name=getattr(args, "name", None),
+        port=0 if port is None else port,  # cổng tạm, không lưu settings.json
+        host=getattr(args, "host", _ANY_HOST),
+        accept_pairing=False,
+        mdns=mdns,
+        auto_connect=True,
+        auto_connect_to=device.device_id,
+        on_event=session.on_event,
+        rate_limit=rate,
+        on_transfer_event=session.on_transfer_event,
+    )
+    session.node = node
+    code = await _start_transfer_node(node, output)
+    if code is not None:
+        return code
+    # trusted.json có thể đã đổi giữa lúc tìm và lúc lấy khóa.
+    current = node.store.get(device.device_id)
+    if current is None:
+        _trusted_lookup_error(output, query, DeviceNotFound(query, node.store.devices()))
+        return 1
+    session.peer_name = current.name
+    name = display_name(current.name)
+    if endpoint is not None:
+        node.connect_hint(current.device_id, [endpoint[0]], endpoint[1])
+        output.text(f"Đang kết nối tới “{name}” tại {endpoint[0]}:{endpoint[1]}…")
+    elif not node.discovery_active:
+        reason = node.discovery_error
+        output.error(
+            "discovery_error", _no_discovery_message(name, "?" if reason is None else _error_text(reason))
+        )
+        return 1
+    else:
+        output.text(f"Đang tìm “{name}” trong mạng…")
+    if rate is not None:
+        output.text(f"Giới hạn tốc độ gửi: {format_size(rate, trim=True)}/s.")
+    output.event(
+        "connecting",
+        device_id=current.device_id,
+        name=current.name,
+        address=None if endpoint is None else f"{endpoint[0]}:{endpoint[1]}",
+        file_count=len(files),
+        total_bytes=total,
+        rate_limit=rate,
+    )
+    code = await _wait_connected(node, output, session, name, endpoint)
+    if code is not None:
+        return code
+    output.text(f"Đã kết nối với “{name}”. Gửi {len(files)} file ({format_size(total)}).")
+    session.sending = True
+    try:
+        await node.transfers.send(current.device_id, [f.path for f in files])
+    except SourceError as e:
+        return _source_error(output, e)
+    except ValueError:
+        return _duplicate_error(output)
+    except (RuntimeError, KeyError):  # node đang đóng, hoặc máy nhận vừa thôi tin cậy
+        if session.result is None:
+            output.text(_CANCELLED)
+            output.event("error", error="cancelled", message=_CANCELLED)
+        return 1
+    await session.done.wait()
+    assert session.result is not None
+    return 0 if session.result.result is TransferResult.DONE else 1
+
+
+def _no_discovery_message(name: str, reason: str) -> str:
+    return (
+        f"Không tìm được {name} vì không bật được khám phá mDNS ({reason}). Hãy thêm `--address <ip[:cổng]>`."
+    )
+
+
+async def _wait_connected(
+    node: Node, output: _Output, session: _SendSession, name: str, endpoint: tuple[str, int] | None
+) -> int | None:
+    """Chờ kết nối điều khiển tới máy nhận. `ConnectFailed` đầu tiên → mã 1; qua mDNS: quá
+    `_SEND_CONNECT_TIMEOUT` → mã 1. `--address` không có hạn: lần thử do `connect_hint` thất bại
+    được `core.links` báo ngay. Kết nối được → None."""
+    loop = asyncio.get_running_loop()
+    deadline = None if endpoint is not None else loop.time() + _SEND_CONNECT_TIMEOUT
+    device_id = session.device_id
+    while True:
+        if session.connected or device_id in node.connected_devices():
+            return None
+        failure = session.failure
+        if failure is not None:
+            if failure.result is ConnectResult.UNREACHABLE and endpoint is not None:
+                lines = [
+                    f"Không kết nối được tới {endpoint[0]}:{endpoint[1]}. Hãy kiểm tra Teleport đang chạy "
+                    "trên máy đó, hai máy dùng chung một mạng, và tường lửa cho phép Teleport."
+                ]
+            else:
+                lines = connect_failed_message(failure.device, failure.result)
+            output.error(
+                "connect_failed", lines[0], extra=lines[1:], result=failure.result.value, device_id=device_id
+            )
+            return 1
+        timeout = None if deadline is None else deadline - loop.time()
+        if timeout is not None and timeout <= 0:
+            view = next((v for v in node.devices() if v.device_id == device_id), None)
+            if view is not None and view.online:
+                lines = connect_failed_message(view, ConnectResult.UNREACHABLE)
+                output.error(
+                    "connect_failed",
+                    lines[0],
+                    extra=lines[1:],
+                    result=ConnectResult.UNREACHABLE.value,
+                    device_id=device_id,
+                )
+            else:
+                output.error(
+                    "not_seen",
+                    f"Không thấy {name} trong mạng. Hãy kiểm tra máy đó đang chạy `teleport receive` và hai "
+                    "máy dùng chung một mạng; nếu mạng chặn mDNS, hãy thêm `--address <ip[:cổng]>`.",
+                    device_id=device_id,
+                )
+            return 1
+        session.wake.clear()
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(timeout):
+                await session.wake.wait()
+
+
+# ---- receive ---------------------------------------------------------------------------------
+
+
+class _ReceiveSession(_Session):
+    """Lời hỏi nhận file và in sự kiện của `receive`.
+
+    Mỗi lần một lời hỏi; `offer` tới sau xếp hàng FIFO. Luật stdin như `_Prompter`: dòng gõ
+    trước lúc hiện lời hỏi bị bỏ (`--json`: trước lúc in sự kiện `offer` của nó); EOF → từ chối
+    lời hỏi đang mở và mọi lời hỏi sau. Sự kiện tới trước khi in xong phần đầu được giữ lại.
+    """
+
+    def __init__(self, output: _Output) -> None:
+        super().__init__()
+        self.output = output
+        self.printer = _TransferPrinter(
+            output, name_of=self._name_of, receive_dir=self._receive_dir, prefix=True
+        )
+        self._pending: list[Callable[[], None]] | None = []
+        self._queue: deque[tuple[OfferReceived, float]] = deque()  # (offer, lúc in sự kiện offer)
+        self._current: OfferReceived | None = None
+        self._shown_at = 0.0
+        self._stdin_closed = False
+        self._told_closed = False
+        self._offered: set[TransferKey] = set()  # lượt đã phát `offer`
+        self._eof_rejected: set[TransferKey] = set()  # đã từ chối vì đầu vào đóng (B13 thay cho C6)
+
+    def _name_of(self, device_id: str) -> str | None:
+        if self.node is None:
+            return None
+        try:
+            device = self.node.store.get(device_id)
+        except RuntimeError:
+            return None
+        return None if device is None else device.name
+
+    def _receive_dir(self) -> Path | None:
+        if self.node is None:
+            return None
+        try:
+            return self.node.transfers.receive_dir
+        except RuntimeError:
+            return None
+
+    def _later(self, fn: Callable[[], None]) -> None:
+        if self._pending is not None:
+            self._pending.append(fn)
+        else:
+            fn()
+
+    def ready(self) -> None:
+        """Đã in phần đầu: in các sự kiện đã giữ lại."""
+        pending, self._pending = self._pending, None
+        for fn in pending or ():
+            fn()
+
+    def on_event(self, event: NodeEvent) -> None:
+        if isinstance(event, DeviceConnected | DeviceDisconnected | ConnectFailed):
+            self._later(functools.partial(_print_event, self.output, event))
+
+    def on_transfer_event(self, update: TransferUpdate) -> None:
+        self._later(functools.partial(self._handle, update))
+
+    def _handle(self, update: TransferUpdate) -> None:
+        if isinstance(update, DataUnreachable):
+            self.printer.handle(update)
+            return
+        key = _key_of(update)
+        if key is None or key.direction is not Direction.RECEIVE:
+            return
+        if isinstance(update, OfferReceived):
+            self._offered.add(key)
+            self._offer(update)
+        elif isinstance(update, TransferFinished):
+            self._offered.discard(key)
+            self._finished(update)
+        elif isinstance(update, TransferStatusChanged) and key not in self._offered:
+            return  # kiểm chỗ trống / xếp hàng trước khi hỏi: `offer` là sự kiện đầu của lượt
+        else:
+            self.printer.handle(update)
+
+    def _offer(self, offer: OfferReceived) -> None:
+        self.printer.note_files(offer.key, len(offer.files))
+        receive_dir = self._receive_dir()
+        self.output.event(
+            "offer",
+            **_transfer_fields(offer.key),
+            device_name=offer.device_name,
+            files=[{"name": n, "size": e.size} for n, e in zip(offer.names, offer.files, strict=False)],
+            total_bytes=offer.total_bytes,
+            auto_accepted=offer.auto_accepted,
+            receive_dir=None if receive_dir is None else str(receive_dir),
+        )
+        if offer.auto_accepted:
+            self.output.text(*offer_prompt_lines(offer, peer_name=offer.device_name, receive_dir=receive_dir))
+            return
+        self._queue.append((offer, time.perf_counter()))  # cùng đồng hồ với mốc của StdinReader
+        if self._stdin_closed:
+            self._reject_all()
+        else:
+            self._next()
+
+    def on_stop(self) -> None:
+        super().on_stop()
+        self.output.close_question()  # lời hỏi đang mở sẽ được `close()` từ chối
+
+    def _next(self) -> None:
+        """Mở lời hỏi kế tiếp nếu đang không hỏi gì và chưa dừng."""
+        if self.stopping or self._current is not None or not self._queue:
+            return
+        offer, emitted_at = self._queue.popleft()
+        self._current = offer
+        if self.output.json:
+            self._shown_at = emitted_at
+            return
+        self._shown_at = time.perf_counter()
+        lines = offer_prompt_lines(offer, peer_name=offer.device_name, receive_dir=self._receive_dir())
+        self.output.text(*lines)
+        self.output.ask(_ASK_RECEIVE)
+
+    def _decide(self, offer: OfferReceived, accept: bool) -> None:
+        if self.node is not None:
+            self.node.transfers.decide(offer.key, accept)
+
+    def feed(self, read_at: float, line: str | None) -> None:
+        """Một dòng từ stdin (`None` = EOF)."""
+        if line is None:
+            self._stdin_closed = True
+            self._reject_all()
+            return
+        offer = self._current
+        if offer is None or read_at < self._shown_at:
+            return  # không có lời hỏi, hoặc dòng gõ trước lúc hiện lời hỏi
+        self.output.answered()
+        answer = line.strip().casefold()
+        if answer.isascii() and (answer in _YES or answer in _NO):
+            self._current = None
+            self._decide(offer, answer in _YES)
+            self._next()
+        elif not self.output.json:
+            self.output.text("Hãy gõ c (nhận) hoặc k (từ chối).")
+            self.output.ask(_ASK_RECEIVE)
+
+    def _reject_all(self) -> None:
+        """stdin đã đóng: từ chối lời hỏi đang mở và mọi lời hỏi đang chờ."""
+        offers = [] if self._current is None else [self._current]
+        offers += [offer for offer, _ in self._queue]
+        self._current = None
+        self._queue.clear()
+        self.output.close_question()
+        if not offers:
+            return
+        if not self._told_closed:
+            self._told_closed = True
+            self.output.text(_STDIN_CLOSED)
+        for offer in offers:
+            self._eof_rejected.add(offer.key)
+            self._decide(offer, False)
+
+    def _finished(self, finished: TransferFinished) -> None:
+        key = finished.info.key
+        reopen = False
+        if self._current is not None and self._current.key == key:
+            self._current = None  # lời hỏi tự đóng (máy gửi hủy…)
+            self.output.close_question()
+            reopen = True
+        elif any(offer.key == key for offer, _ in self._queue):
+            self._queue = deque((offer, at) for offer, at in self._queue if offer.key != key)
+        eof = key in self._eof_rejected
+        self._eof_rejected.discard(key)
+        # Từ chối vì đầu vào đóng: đã in B13, không in thêm “Đã từ chối.” (JSON vẫn có `result`).
+        self.printer.finished(
+            finished, show_text=not (eof and finished.result is TransferResult.REJECTED_USER)
+        )
+        if reopen:
+            self._next()
+
+
+async def run_receive(
+    args: argparse.Namespace, lines: Lines, out: TextIO, err: TextIO, *, interrupts: Interrupts | None = None
+) -> int:
+    """`teleport receive`: nhận file tới khi Ctrl+C (mã 0); lỗi khởi động → 1, tham số sai → 2.
+
+    Câu trả lời `[c/k]` đọc từ `lines` (không dùng khi `--yes`). `interrupts`: Ctrl+C (test gọi
+    `press()`). Kết quả các lượt kết thúc trong lúc đóng node vẫn được in.
+    """
+    interrupts = interrupts if interrupts is not None else Interrupts()
+    output = _Output(out, err, bool(getattr(args, "json", False)))
+    session = _ReceiveSession(output)
+    code = await _supervise(_receive_main(args, lines, output, session), session, output, interrupts)
+    if code is not None:
+        return code
+    output.text("Đã dừng.")
+    output.event("stopped")
+    return 0
+
+
+async def _receive_main(
+    args: argparse.Namespace, lines: Lines, output: _Output, session: _ReceiveSession
+) -> int:
+    """Phần việc của `receive` (task con, bị hủy khi Ctrl+C); chỉ trả về khi lỗi khởi động."""
+    if not _check_node_args(args, output):
+        return 2
+    auto_accept = bool(getattr(args, "yes", False))
+    raw_dir = getattr(args, "dir", None)
+    receive_dir = Path(os.path.abspath(os.path.expanduser(raw_dir))) if raw_dir else default_receive_dir()
+    mdns = _mdns_options(args, advertise=True)
+    node = Node(
+        _config(args),
+        name=getattr(args, "name", None),
+        port=getattr(args, "port", None),
+        host=getattr(args, "host", _ANY_HOST),
+        accept_pairing=False,
+        mdns=mdns,
+        auto_connect=True,
+        on_event=session.on_event,
+        receive_dir=receive_dir,
+        auto_accept=auto_accept,
+        on_transfer_event=session.on_transfer_event,
+    )
+    session.node = node
+    code = await _start_transfer_node(node, output)
+    if code is not None:
+        return code
+    addresses = await node.local_addresses()
+    port = node.port
+    root = node.transfers.receive_dir or receive_dir
+    discovery_error = node.discovery_error
+    output.event(
+        "receiving",
+        name=node.name,
+        device_id=node.identity.device_id,
+        port=port,
+        addresses=list(addresses),
+        receive_dir=str(root),
+        auto_accept=auto_accept,
+        discovery=node.discovery_active,
+        discovery_error=None if discovery_error is None else _error_text(discovery_error),
+    )
+    text = [
+        "Teleport đang chờ nhận file.",
+        f"  Tên:      {node.name}",
+        f"  Mã máy:   {node.identity.device_id[:8]}",
+        f"  Lưu vào:  {_printable(str(root))}",
+    ]
+    if auto_accept:
+        text.append("Cảnh báo: đang tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi trước (`--yes`).")
+    if mdns is not None and discovery_error is not None:
+        text.append(
+            f"Cảnh báo: chưa quảng bá được qua mDNS ({_error_text(discovery_error)}); máy khác vẫn gửi được "
+            "bằng `teleport send … --address <IP của máy này>`."
+        )
+    if not node.store.devices():
+        text.append(
+            "Máy này chưa ghép đôi với thiết bị nào nên chưa nhận được file. Hãy ghép đôi trước: "
+            "`teleport listen` trên một máy, `teleport pair` trên máy kia."
+        )
+    text.append("Nhấn Ctrl+C để dừng.")
+    output.text(*text)
+    session.ready()
+    if auto_accept:
+        await asyncio.Event().wait()  # chạy tới khi bị dừng; không đọc stdin
+    while True:
+        read_at, line = await lines.get()
+        session.feed(read_at, line)
+
+
+def _install_interrupts(loop: asyncio.AbstractEventLoop, interrupts: Interrupts) -> Callable[[], None]:
+    """Gắn Ctrl+C (POSIX: SIGINT, SIGTERM; Windows: SIGINT, SIGBREAK) vào `interrupts.press` trên loop.
+
+    Gọi trước `runner.run`; trả hàm khôi phục handler cũ, gọi sau khi đóng Runner. Không ở thread
+    chính thì không gắn gì.
+    """
+    previous: list[tuple[int, Any]] = []
+    if sys.platform == "win32":
+
+        def handler(signum: int, frame: object) -> None:
+            with contextlib.suppress(RuntimeError):  # loop đã đóng
+                loop.call_soon_threadsafe(interrupts.press)
+
+        for name in ("SIGINT", "SIGBREAK"):
+            sig = getattr(signal, name, None)
+            if sig is None:
+                continue
+            with contextlib.suppress(ValueError, OSError):  # không ở thread chính
+                previous.append((sig, signal.signal(sig, handler)))
+    else:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                old = signal.getsignal(sig)
+                loop.add_signal_handler(sig, interrupts.press)
+            except (ValueError, RuntimeError, OSError):
+                continue
+            previous.append((sig, old))
+
+    def restore() -> None:
+        for sig, old in previous:
+            with contextlib.suppress(ValueError, OSError, TypeError):
+                signal.signal(sig, old)
+
+    return restore
+
+
+TransferRunFn = Callable[..., Awaitable[int]]
+
+
+async def _transfer_main(
+    args: argparse.Namespace, run: TransferRunFn, interrupts: Interrupts, *, stdin: bool
+) -> int:
+    lines: Lines = asyncio.Queue()
+    if stdin:
+        StdinReader(asyncio.get_running_loop(), lines).start()
+    return await run(args, lines, sys.stdout, sys.stderr, interrupts=interrupts)
+
+
+def _run_transfer_command(args: argparse.Namespace, run: TransferRunFn, *, stdin: bool) -> int:
+    """Chạy `send` / `receive` trong event loop riêng, Ctrl+C qua `Interrupts` (docstring module)."""
+    interrupts = Interrupts()
+    restore: Callable[[], None] = _no_restore
+    try:
+        with asyncio.Runner() as runner:
+            restore = _install_interrupts(runner.get_loop(), interrupts)
+            return runner.run(_transfer_main(args, run, interrupts, stdin=stdin))
+    finally:
+        restore()
+
+
+def _no_restore() -> None:
+    return None
+
+
+def cmd_send(args: argparse.Namespace) -> int:
+    return _run_transfer_command(args, run_send, stdin=False)
+
+
+def cmd_receive(args: argparse.Namespace) -> int:
+    # --yes không đọc stdin: chạy nền trên POSIX mà đọc stdin thì bị SIGTTIN dừng tiến trình.
+    return _run_transfer_command(args, run_receive, stdin=not args.yes)
+
+
 # ---- unpair --------------------------------------------------------------------------------
 
 
@@ -1175,25 +2611,8 @@ def cmd_unpair(args: argparse.Namespace) -> int:
     except TrustStoreError as e:
         output.error("trust_store_error", str(e))
         return 1
-    except DeviceNotFound as e:
-        if e.known:
-            extra = ["Các thiết bị tin cậy:", *(f"  {d.device_id[:8]}  {d.name}" for d in e.known)]
-        else:
-            extra = ["(chưa ghép đôi với thiết bị nào)"]
-        output.error(
-            "not_found",
-            f"Không có thiết bị tin cậy nào khớp “{query}”.",
-            extra=extra,
-            candidates=_candidates(e.known),
-        )
-        return 1
-    except AmbiguousDevice as e:
-        output.error(
-            "ambiguous",
-            f"“{query}” khớp nhiều thiết bị; hãy nhập mã thiết bị dài hơn:",
-            extra=[f"  {d.device_id}  {d.name}" for d in e.candidates],
-            candidates=_candidates(e.candidates),
-        )
+    except (DeviceNotFound, AmbiguousDevice) as e:
+        _trusted_lookup_error(output, query, e)
         return 1
     if output.json:
         obj = {"time": _utc_now(), "removed": True, "device_id": device.device_id, "name": device.name}
@@ -1286,6 +2705,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_node_options(pair)
     pair.set_defaults(handler=cmd_pair)
+
+    send = sub.add_parser("send", help="gửi file tới một thiết bị đã ghép đôi")
+    send.add_argument(
+        "files", nargs="+", metavar="<file>", help=f"các file cần gửi (tối đa {MAX_OFFER_FILES})"
+    )
+    send.add_argument(
+        "--to", required=True, metavar="<thiết bị>", help="tên hoặc tiền tố mã thiết bị đã ghép đôi"
+    )
+    send.add_argument(
+        "--address", metavar="<ip[:cổng]>", help="địa chỉ của máy nhận, khi mạng chặn mDNS (vẫn cần --to)"
+    )
+    send.add_argument(
+        "--limit-rate",
+        metavar="<tốc độ>",
+        help="giới hạn tốc độ gửi (byte/giây, hệ nhị phân), ví dụ 20M hoặc 512K; tối thiểu 64K",
+    )
+    _add_node_options(send)
+    send.set_defaults(handler=cmd_send)
+
+    receive = sub.add_parser("receive", help="nhận file từ các thiết bị đã ghép đôi")
+    receive.add_argument(
+        "--dir", metavar="<thư mục>", help="thư mục lưu file nhận (mặc định: Teleport trong thư mục Tải về)"
+    )
+    receive.add_argument(
+        "--yes", action="store_true", help="tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi"
+    )
+    _add_node_options(receive)
+    receive.add_argument("--advertise-address", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
+    receive.set_defaults(handler=cmd_receive)
 
     unpair = sub.add_parser("unpair", help="hủy ghép đôi với một thiết bị (khi Teleport không chạy)")
     unpair.add_argument("device", metavar="<thiết bị>", help="tên hoặc tiền tố mã thiết bị (≥ 4 ký tự)")
