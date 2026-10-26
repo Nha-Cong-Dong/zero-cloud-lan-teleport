@@ -69,8 +69,8 @@ S_SOURCE_READ = (  # 6b
     "Không đọc được {file} trên máy này nữa (file có thể đang bị chương trình khác khóa, hoặc nằm trên "
     "ổ vừa bị rút ra). Đã dừng gửi tới {p}."
 )
-S_PEER_ERROR = (  # 6b
-    "{p} không lưu được {file} nên đã dừng nhận. Hãy nhờ người dùng máy đó kiểm tra ổ lưu file rồi gửi lại."
+S_PEER_ERROR = (  # M16 (spec-p2-8 mục A; thay câu 6b “… không lưu được {file} …” ở ba dòng mvp §8)
+    "{p} gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại."
 )
 S_STOPPED = "{p} đã dừng lượt gửi."  # A4
 PROTOCOL = (  # M4 (hai bên)
@@ -156,6 +156,9 @@ B9A = (
 B9B = "đường dẫn quá dài. Hãy chọn thư mục có đường dẫn ngắn hơn bằng `--dir`."
 B9C = "máy này không có quyền ghi vào đó. Hãy chọn thư mục khác bằng `--dir`."
 B9D = "ổ đĩa báo lỗi hoặc không phản hồi. Hãy chọn thư mục khác bằng `--dir`."
+B9E = (  # spec-p2-8 A
+    "đó không phải là thư mục (có thể là một file trùng tên). Hãy chọn thư mục khác bằng `--dir`."
+)
 B10 = "Cảnh báo: đang tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi trước (`--yes`)."
 B11 = (
     "Máy này chưa ghép đôi với thiết bị nào nên chưa nhận được file. Hãy ghép đôi trước: `teleport listen` "
@@ -164,6 +167,8 @@ B11 = (
 B12_PREFIX = "Cảnh báo: chưa quảng bá được qua mDNS ("
 B12_SUFFIX = "); máy khác vẫn gửi được bằng `teleport send … --address <IP của máy này>`."
 B13 = "Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận."
+M14 = "Đã từ chối {n} file từ {s} vì không đọc được câu trả lời (đầu vào đã đóng)."  # spec-p2-8 A
+M15 = "Đã từ chối {n} file từ {s} vì đang dừng nhận."  # spec-p2-8 A
 C1_HEAD = "Teleport đang chờ nhận file."
 C1_TAIL = "Nhấn Ctrl+C để dừng."
 C2_SEARCH = "Đang tìm “{x}” trong mạng…"
@@ -525,7 +530,7 @@ SEND_CASES = [
     ("source_changed", False, 1, None, S_SOURCE_CHANGED.format(file="thumbnail.png")),
     ("expired", False, None, None, S_EXPIRED.format(p=RECEIVER)),
     ("source_read_failed", False, 2, None, S_SOURCE_READ.format(file="script.docx", p=RECEIVER)),
-    ("peer_error", True, 1, None, S_PEER_ERROR.format(p=RECEIVER, file="thumbnail.png")),
+    ("peer_error", True, 1, None, S_PEER_ERROR.format(p=RECEIVER)),  # M16
     ("protocol_error", False, None, None, PROTOCOL.format(x=RECEIVER)),
     ("protocol_error", True, None, None, PROTOCOL.format(x=RECEIVER)),
     ("unknown_transfer", True, None, None, S_STOPPED.format(p=RECEIVER)),
@@ -616,6 +621,25 @@ def test_transfer_result_message_receiver_silent_rejections(cli, result, rej):
     """Bên nhận không in gì cho busy/lý do lạ/not_receiving (chỉ JSON, `message` rỗng; spec A20)."""
     fin = finished("receive", result, by_peer=False, reject=reject(rej), status="waiting")
     assert message(cli, fin, peer=SENDER) == []
+
+
+@pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
+@pytest.mark.parametrize(("file_index", "info_index"), [(None, 0), (0, 0), (2, 1), (None, 3)])
+def test_m16_sender_sentence_for_receiver_error_names_no_file(cli, status, file_index, info_index):
+    """M16 (spec-p2-8 A): bên nhận gửi `cancel{error}` (lỗi ghi đĩa, dữ liệu hỏng, thư mục tạm còn sót —
+    máy gửi không phân biệt được) → máy gửi in đúng một câu M16, không nêu tên file, không còn câu 6b cũ."""
+    fin = finished(
+        "send",
+        "peer_error",
+        by_peer=True,
+        file_index=file_index,
+        file_index_info=info_index,
+        status=status,
+    )
+    lines = message(cli, fin, peer=RECEIVER)
+    assert lines == [S_PEER_ERROR.format(p=RECEIVER)]
+    assert "không lưu được" not in lines[0]
+    assert not any(name in lines[0] for name in NAMES)
 
 
 @pytest.mark.parametrize(
@@ -950,12 +974,24 @@ def _cause(kind: str) -> BaseException:
         "permission": PermissionError(errno.EACCES, "từ chối"),
         "eio": OSError(errno.EIO, "lỗi I/O"),
         "timeout": DiskTimeout(),
+        # B9e (spec-p2-8 A): `--dir` không phải thư mục — `NotADirectoryError`, hoặc `mkdir` gặp file
+        # trùng tên (`FileExistsError`).
+        "not_a_dir": NotADirectoryError(errno.ENOTDIR, "không phải thư mục"),
+        "file_exists": FileExistsError(errno.EEXIST, "đã có file"),
     }[kind]
 
 
 @pytest.mark.parametrize(
     ("kind", "why"),
-    [("unsafe", B9A), ("too_long", B9B), ("permission", B9C), ("eio", B9D), ("timeout", B9D)],
+    [
+        ("unsafe", B9A),
+        ("too_long", B9B),
+        ("permission", B9C),
+        ("eio", B9D),
+        ("timeout", B9D),
+        ("not_a_dir", B9E),
+        ("file_exists", B9E),
+    ],
 )
 def test_receive_dir_error_message_by_cause(cli, tmp_path, kind, why):
     path = tmp_path / "Nhận"
@@ -1875,14 +1911,22 @@ async def test_receive_dir_with_foreign_temp_root_exits_1(pair_dirs, transfer_en
 
 
 @with_marks(socket_test)
-async def test_receive_dir_that_is_a_file_exits_1(pair_dirs, transfer_env, cli_runs):
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_receive_dir_that_is_a_file_exits_1_with_b9e(pair_dirs, transfer_env, cli_runs, json_mode):
+    """B9e (spec-p2-8 A): `--dir` trỏ vào một file → mã 1, đúng câu B9e (mọi OS); file không bị đụng."""
     net = pair_dirs
     target = net.tmp / "la-file"
     target.write_text("x", encoding="utf-8")
-    recv = cli_runs("receive", receive_argv(net, recv=target, json_mode=False))
+    recv = cli_runs("receive", receive_argv(net, recv=target, json_mode=json_mode))
     assert await recv.code(15) == 1
-    assert f"Không dùng được thư mục nhận {target}:" in recv.text()
+    expected = B9.format(dir=target, why=B9E)
+    if json_mode:
+        [ev] = recv.events_of("error")
+        assert (ev["error"], ev["message"]) == ("receive_dir_error", expected)
+    else:
+        assert expected in recv.text(), recv.text()
     assert target.read_text(encoding="utf-8") == "x"
+    assert lock_is_free(net.R)
 
 
 # --- Kết quả lỗi đúng câu ở cả hai phía ---------------------------------------------------------------------
@@ -1951,7 +1995,7 @@ FAILURES = {
     ),
     "write_error": (
         _write_error,
-        lambda net: S_PEER_ERROR.format(p=RECEIVER, file="f.bin"),
+        lambda net: S_PEER_ERROR.format(p=RECEIVER),  # M16
         lambda net: R_DISK_FAILED.format(file="f.bin", dir=net.recv, s=SENDER),
     ),
     "source_changed": (
@@ -1982,6 +2026,27 @@ async def test_failure_sentences_on_both_sides(
     for rec in caplog.records:
         for name, _ in specs:
             assert name not in rec.getMessage(), (rec.name, rec.getMessage())
+
+
+@with_marks(socket_test)
+async def test_m16_sender_json_result_for_receiver_write_error(
+    pair_dirs, transfer_env, cli_runs, monkeypatch
+):
+    """M16 (spec-p2-8 A) ở `--json`: bên nhận lỗi ghi đĩa → gửi `cancel{error}`; bên gửi có `result`
+    `peer_error`, `by_peer: true`, `message` = M16; mã 1. Bên nhận vẫn báo câu của chính nó (6b)."""
+    net = pair_dirs
+    specs = _write_error(monkeypatch)
+    files = [make_file(net.src, name, size) for name, size in specs]
+    recv = cli_runs("receive", receive_argv(net))
+    port = (await recv.wait_event("receiving"))["port"]
+    send = cli_runs("send", send_argv(net, files, port))
+    assert await send.code(30) == 1, send.text()
+    [res] = send.events_of("result")
+    assert (res["result"], res["by_peer"]) == ("peer_error", True), res
+    assert res["message"] == S_PEER_ERROR.format(p=RECEIVER)
+    got = await recv.wait_event("result", timeout=10)
+    assert got["result"] == "disk_failed"
+    assert got["message"] == R_DISK_FAILED.format(file="f.bin", dir=net.recv, s=SENDER)
 
 
 # --- Giới hạn tốc độ, tiến độ JSON / TTY / không TTY --------------------------------------------------------
@@ -2420,3 +2485,228 @@ async def test_e4_stdin_eof_with_pending_offers_prints_b13_once_and_no_c6(
     text = recv.text()
     assert text.count(B13) == 1, text
     assert R_REJECTED_SELF not in text, text
+
+
+# =================================================================================================
+# spec-p2-8 mục A (P2-8a): M14 (offer chưa hiện bị từ chối vì đầu vào đóng), M15 (Ctrl+C khi còn offer
+# chưa hiện). Câu so nguyên văn với câu đã duyệt.
+# =================================================================================================
+
+
+def text_lines(run) -> list[str]:
+    """Các dòng chữ của một lần chạy (out + err), bỏ phần “[c/k]: ” dính đầu dòng nếu có."""
+    found = []
+    for raw in run.text().splitlines():
+        line = raw
+        while line.startswith(C4_ASK):
+            line = line[len(C4_ASK) :]
+        found.append(line)
+    return found
+
+
+@with_marks(socket_test)
+async def test_m14_offers_arriving_after_stdin_eof_print_m14_each_and_b13_once(
+    pair_dirs, transfer_env, cli_runs, node_spy
+):
+    """M14: stdin đóng trước khi có offer; hai offer tới sau (2 file từ Laptop-Minh, rồi 1 file từ May-C)
+    → cả hai bị từ chối, không hiện lời hỏi; B13 đúng một lần; M14 đúng một lần cho mỗi offer, đúng số
+    file và tên thiết bị; không có dòng C6 “Đã từ chối.”."""
+    net = pair_dirs
+    c_dir = add_sender(net, "C", "May-C")
+    recv, port = await start_receiver(cli_runs, net, node_spy, json_mode=False, yes=False)
+    recv.say(None)  # EOF
+    await asyncio.sleep(0.2)
+    two = [make_file(net.src, "a.bin", 1000), make_file(net.src, "b.bin", 10)]
+    send_s = cli_runs("send", send_argv(net, two, port))
+    assert await send_s.code(15) == 1
+    assert send_s.events_of("result")[0]["result"] == "rejected_user"
+    one = [make_file(net.tmp / "nguon-c", "c.bin", 1000)]
+    send_c = cli_runs("send", send_argv(net, one, port, config=c_dir))
+    assert await send_c.code(15) == 1
+    assert send_c.events_of("result")[0]["result"] == "rejected_user"
+    m14_s, m14_c = M14.format(n=2, s=SENDER), M14.format(n=1, s="May-C")
+    await recv.wait_text(m14_c)
+    await asyncio.sleep(0.3)
+    text = recv.text()
+    assert text.count(B13) == 1, text
+    assert text.count(m14_s) == 1, text
+    assert text.count(m14_c) == 1, text
+    assert "muốn gửi" not in text, "offer tới sau EOF không được hiện lời hỏi"
+    assert R_REJECTED_SELF not in text_lines(recv), text
+    assert not recv.task.done(), "receive phải chạy tiếp sau EOF"
+
+
+@with_marks(socket_test)
+async def test_m14_offer_queued_at_eof_gets_m14_and_open_prompt_gets_b13(
+    pair_dirs, transfer_env, cli_runs, node_spy
+):
+    """M14: lúc stdin đóng có một offer đang hỏi (Laptop-Minh) và một offer xếp hàng (May-C, 1 file) →
+    offer đang hỏi: B13, không M14; offer xếp hàng: M14 đúng một lần; B13 đúng một lần; không C6."""
+    net = pair_dirs
+    c_dir = add_sender(net, "C", "May-C")
+    recv, port = await start_receiver(cli_runs, net, node_spy, json_mode=False, yes=False)
+    send_s = cli_runs("send", send_argv(net, [make_file(net.src, "s.bin", 1000)], port))
+    await recv.wait_text(C4_ASK)
+    send_c = cli_runs(
+        "send", send_argv(net, [make_file(net.tmp / "nguon-c", "c.bin", 1000)], port, config=c_dir)
+    )
+    await send_c.wait_event("status")
+    await asyncio.sleep(0.3)
+    assert recv.text().count("muốn gửi") == 1, "chỉ một lời hỏi mở, offer kia còn xếp hàng"
+    recv.say(None)
+    for run in (send_s, send_c):
+        assert await run.code(15) == 1
+        assert run.events_of("result")[0]["result"] == "rejected_user"
+    m14_c = M14.format(n=1, s="May-C")
+    await recv.wait_text(m14_c)
+    await asyncio.sleep(0.3)
+    text = recv.text()
+    assert text.count(B13) == 1, text
+    assert text.count(m14_c) == 1, text
+    assert M14.format(n=1, s=SENDER) not in text, "offer đang hỏi lúc EOF chỉ có B13"
+    assert R_REJECTED_SELF not in text_lines(recv), text
+    assert text.count("muốn gửi") == 1, "offer xếp hàng không được hiện lời hỏi sau EOF"
+
+
+@with_marks(socket_test)
+async def test_m15_ctrl_c_with_open_and_queued_offer(pair_dirs, transfer_env, cli_runs, node_spy):
+    """M15: Ctrl+C khi một offer đang hỏi (Laptop-Minh) và một offer xếp hàng (May-C, 2 file) → offer
+    đang hỏi không in C6; offer xếp hàng in M15 đúng một lần; không B13, không M14; `receive` mã 0."""
+    net = pair_dirs
+    c_dir = add_sender(net, "C", "May-C")
+    recv, port = await start_receiver(cli_runs, net, node_spy, json_mode=False, yes=False)
+    send_s = cli_runs("send", send_argv(net, [make_file(net.src, "s.bin", 1000)], port))
+    await recv.wait_text(C4_ASK)
+    src_c = net.tmp / "nguon-c"
+    files_c = [make_file(src_c, "c1.bin", 1000), make_file(src_c, "c2.bin", 1000)]
+    send_c = cli_runs("send", send_argv(net, files_c, port, config=c_dir))
+    await send_c.wait_event("status")
+    await asyncio.sleep(0.3)
+    assert recv.text().count("muốn gửi") == 1, "chỉ một lời hỏi mở, offer kia còn xếp hàng"
+    recv.press()
+    assert await recv.code(15) == 0
+    for run in (send_s, send_c):
+        assert await run.code(15) == 1
+    text = recv.text()
+    m15_c = M15.format(n=2, s="May-C")
+    assert text.count(m15_c) == 1, text
+    assert M15.format(n=1, s=SENDER) not in text, "offer đang hỏi không in M15"
+    assert R_REJECTED_SELF not in text_lines(recv), "offer đang hỏi không in C6"
+    assert B13 not in text, text
+    assert "vì không đọc được câu trả lời" not in text, text
+    assert STOPPED in text, text
+    assert text.count("muốn gửi") == 1, text
+
+
+# --- Bổ sung sau soat-code 8a: JSON giữ `message` “Đã từ chối.”; M15 cho lượt chưa từng có `offer` --------
+
+
+class _FakeReceiveNode:
+    """Node giả cho `_ReceiveSession`: tên máy gửi trong `store`, thư mục nhận, ghi lại `decide`."""
+
+    def __init__(self, name: str = SENDER) -> None:
+        self.decided: list[tuple[object, bool]] = []
+        self.store = SimpleNamespace(get=lambda device_id: SimpleNamespace(name=name))
+        self.transfers = SimpleNamespace(
+            receive_dir=RECV_DIR, decide=lambda key, accept: self.decided.append((key, accept))
+        )
+
+
+def _receive_session(cli, *, json_mode: bool):
+    out, err = io.StringIO(), io.StringIO()
+    session = cli._ReceiveSession(cli._Output(out, err, json_mode))
+    session.node = _FakeReceiveNode()
+    session.ready()
+    return session, out, err
+
+
+def _rejected_by_me():
+    """`TransferFinished(rejected_user)` của bên nhận, do chính máy này từ chối (`by_peer` False)."""
+    return finished("receive", "rejected_user", by_peer=False, reject=reject("user"), status="waiting")
+
+
+def _mark(session, fin, why: str) -> None:
+    if why == "stop":
+        session.on_stop()
+    else:
+        session._eof_rejected.add(fin.info.key)
+
+
+@pytest.mark.parametrize("why", ["eof", "stop"])
+def test_json_result_message_stays_c6_when_rejected_by_eof_or_stop(cli, why):
+    """`--json` (spec-p2-8 A: JSON không đổi): lượt bị từ chối vì EOF hay vì đang dừng vẫn có `result`
+    `rejected_user` với `message` “Đã từ chối.”; không dòng JSON nào chứa câu M14/M15."""
+    session, out, err = _receive_session(cli, json_mode=True)
+    fin = _rejected_by_me()
+    _mark(session, fin, why)
+    session.on_transfer_event(fin)
+    events = json_lines(out.getvalue())
+    [res] = [e for e in events if e["event"] == "result"]
+    assert (res["result"], res["by_peer"]) == ("rejected_user", False)
+    assert res["message"] == R_REJECTED_SELF
+    raw = out.getvalue() + err.getvalue()
+    for sentence in (M14.format(n=3, s=SENDER), M15.format(n=3, s=SENDER)):
+        assert sentence not in raw, raw
+    assert "vì không đọc được câu trả lời" not in raw and "vì đang dừng nhận" not in raw, raw
+
+
+@pytest.mark.parametrize(("why", "sentence"), [("eof", M14), ("stop", M15)], ids=["eof", "stop"])
+def test_text_rejection_by_eof_or_stop_without_prompt_prints_m14_or_m15(cli, why, sentence):
+    """Đối chứng cho test JSON ở trên (cùng đầu vào, chế độ text): lượt chưa hiện lời hỏi in đúng một câu
+    M14 (EOF) / M15 (dừng), không C6 — để biết nhánh EOF/dừng thật sự được đi qua."""
+    session, out, _ = _receive_session(cli, json_mode=False)
+    fin = _rejected_by_me()
+    _mark(session, fin, why)
+    session.on_transfer_event(fin)
+    lines = out.getvalue().splitlines()
+    assert lines.count(sentence.format(n=3, s=SENDER)) == 1, lines
+    assert R_REJECTED_SELF not in lines, lines
+
+
+def test_m15_for_transfer_that_never_emitted_offer(cli):
+    """M15: lượt chưa từng phát `offer` (`core` còn giữ trong hàng của thiết bị) bị từ chối lúc dừng →
+    đúng một câu M15 với đúng số file (3) và tên máy gửi; không C6; không có sự kiện `offer` nào."""
+    session, out, err = _receive_session(cli, json_mode=False)
+    fin = _rejected_by_me()
+    assert fin.info.key not in session._offered
+    session.on_stop()
+    session.on_transfer_event(fin)
+    lines = out.getvalue().splitlines()
+    assert lines == [M15.format(n=3, s=SENDER)], lines
+    assert err.getvalue() == ""
+
+
+@with_marks(socket_test)
+async def test_m15_ctrl_c_with_second_transfer_from_same_sender_still_queued_in_core(
+    pair_dirs, transfer_env, cli_runs, node_spy
+):
+    """M15, tích hợp: Laptop-Minh (một `Node` trong tiến trình — hai `teleport send` cùng thư mục cấu
+    hình không chạy song song được vì `node.lock`) gửi lượt 1 (lời hỏi đang mở) rồi lượt 2 (2 file; xếp
+    hàng sau lượt 1 trong `core` nên `receive` chưa có `offer`) → Ctrl+C: lượt 2 in đúng một M15 (2 file,
+    Laptop-Minh), lượt 1 không in C6; mã 0."""
+    from teleport.app.node import Node
+
+    net = pair_dirs
+    recv, port = await start_receiver(cli_runs, net, node_spy, json_mode=False, yes=False)
+    sender = Node(net.S, name=SENDER, host=LOCAL, port=0)
+    await sender.start()
+    try:
+        sender.connect_hint(net.rid, [LOCAL], port)
+        await wait_until(lambda: net.rid in sender.connected_devices(), 8, "máy gửi chưa kết nối")
+        await sender.transfers.send(net.rid, [make_file(net.src, "mot.bin", 1000)])
+        await recv.wait_text(C4_ASK)
+        src2 = net.tmp / "nguon-2"
+        await sender.transfers.send(
+            net.rid, [make_file(src2, "hai.bin", 1000), make_file(src2, "ba.bin", 10)]
+        )
+        await asyncio.sleep(0.5)
+        assert recv.text().count("muốn gửi") == 1, "lượt 2 phải còn chờ, chưa hiện lời hỏi"
+        recv.press()
+        assert await recv.code(15) == 0
+    finally:
+        await sender.close()
+    text = recv.text()
+    assert text.count(M15.format(n=2, s=SENDER)) == 1, text
+    assert M15.format(n=1, s=SENDER) not in text, "lượt đang hỏi không in M15"
+    assert R_REJECTED_SELF not in text_lines(recv), text
+    assert B13 not in text, text
