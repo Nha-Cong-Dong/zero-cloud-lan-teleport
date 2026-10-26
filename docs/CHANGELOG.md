@@ -109,6 +109,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport.app.storage` kiểm mã lượt truyền bằng `teleport.core.messages.validate_transfer_id`, dùng chung với các message. Luật không đổi (32 ký tự hex thường); lỗi là `MessageError`, lớp con của `ValueError` nên code bắt `ValueError` vẫn chạy. Không đổi hành vi người dùng thấy.
 
 ### Fixed
+- Hai máy gọi nhau cùng lúc mà một lần mở kết nối điều khiển chậm (vài giây) có thể đóng rồi mở lại kết nối mãi. Ngưỡng chống trùng của protocol mục 6.1 nay lớn hơn hạn mở kết nối, nên hai bên luôn giữ cùng một kết nối.
 - Thân message điều khiển phải là UTF-8 không BOM (protocol mục 3.1). Trước đây UTF-16, UTF-32 và BOM UTF-8 vẫn được nhận. Bản cũ chỉ gửi UTF-8 không BOM nên hai bản vẫn làm việc cùng nhau.
 - `teleport --config-dir <file> identity` in traceback; nay báo “Không dùng được thư mục cấu hình” và thoát mã 1.
 - Dừng node đúng lúc đang ghép đôi có thể để phiên ghép đôi chạy tiếp sau khi đã nhả `node.lock`.

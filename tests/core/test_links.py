@@ -18,7 +18,7 @@ import math
 from collections.abc import Callable
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 import teleport.core.links as links
@@ -118,8 +118,11 @@ def test_constants_match_spec():
 
 
 def test_replace_after_exceeds_opening_timeout():
-    """Lần mở chậm nhất (net) của hai bên gọi nhau cùng lúc không được bị coi là “nối lại” (§6.1)."""
-    assert links.REPLACE_AFTER > OPENING_TIMEOUT
+    """Lần mở chậm nhất (net) của hai bên gọi nhau cùng lúc không được bị coi là “nối lại” (§6.1).
+
+    Có phần dư cho độ lệch đo giữa hai bên: biên thật là hạn mở cộng hai lần độ trễ giao, nên
+    ngưỡng chỉ nhỉnh hơn hạn mở (ví dụ 10,01 s) vẫn lặp lại được vòng đóng/mở của LK22."""
+    assert links.REPLACE_AFTER >= OPENING_TIMEOUT + 2.0
 
 
 def test_connect_result_values():
@@ -1480,6 +1483,17 @@ LK22_PARAMS = st.fixed_dictionaries(
 @pytest.mark.parametrize("first_is_lower", [True, False], ids=["X<Y", "X>Y"])
 @settings(max_examples=1000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(p=LK22_PARAMS)
+# Ca cố định đỏ chắc chắn với ngưỡng cũ 5 s (lần mở 9,2 s): hypothesis hiếm khi tự tìm lại nó.
+@example(
+    p={
+        "seen": (0.392, 0.321),
+        "lats": [4.07, 9.20],
+        "skews": [0.239],
+        "deltas": [0.0005],
+        "partitions": [],
+        "extra_seen": [],
+    }
+)
 def test_lk22_two_trackers_converge_to_one_connection(first_is_lower, p):
     ids = (LO, HI) if first_is_lower else (HI, LO)
     sim = TwoSim(ids, p)
