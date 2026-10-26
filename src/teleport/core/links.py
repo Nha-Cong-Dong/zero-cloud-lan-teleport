@@ -60,7 +60,11 @@ from enum import StrEnum
 from teleport.core.messages import MessageError, validate_device_id
 
 # Thời gian tính bằng giây; đọc lúc dùng để test rút ngắn được bằng monkeypatch.
-REPLACE_AFTER = 5.0  # protocol §6.1: kết nối cũ đã mở ≥ 5 s thì kết nối mới thay
+# protocol §6.1: kết nối cũ đã mở ≥ 15 s thì kết nối mới thay. Phải lớn hơn hạn mở kết nối
+# (net OPENING_TIMEOUT, protocol §2.3) cộng độ lệch đo giữa hai bên: một lần mở chậm của hai
+# bên gọi nhau cùng lúc nếu bị coi là “nối lại” ở một bên thì hai bên đóng hai kết nối khác
+# nhau, mất cả hai, và lặp lại mãi nếu lần mở chậm lặp lại.
+REPLACE_AFTER = 15.0
 RETRY_BASE = 1.0  # protocol §6.2: lịch 1, 2, 4… giây
 RETRY_MAX = 30.0  # … tối đa 30 s
 EVENT_RETRY_GAP = 2.0  # sự kiện mDNS/mạng: hai lần thử tới cùng máy cách nhau ≥ 2 s

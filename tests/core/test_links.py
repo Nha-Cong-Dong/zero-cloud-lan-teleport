@@ -18,7 +18,7 @@ import math
 from collections.abc import Callable
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 import teleport.core.links as links
@@ -35,6 +35,7 @@ from teleport.core.links import (
     Notify,
 )
 from teleport.core.messages import MessageError
+from teleport.net.connection import OPENING_TIMEOUT
 
 OWN = "8" * 32
 LO = "1" * 32  # nhỏ hơn OWN
@@ -109,11 +110,19 @@ def fail_n_unreachable(t: LinkTracker, dev: str, n: int, start: float = 0.0, too
 
 
 def test_constants_match_spec():
-    assert links.REPLACE_AFTER == 5.0
+    assert links.REPLACE_AFTER == 15.0
     assert links.RETRY_BASE == 1.0
     assert links.RETRY_MAX == 30.0
     assert links.EVENT_RETRY_GAP == 2.0
     assert links.UNREACHABLE_REPORT_AFTER == 3
+
+
+def test_replace_after_exceeds_opening_timeout():
+    """Lần mở chậm nhất (net) của hai bên gọi nhau cùng lúc không được bị coi là “nối lại” (§6.1).
+
+    Có phần dư cho độ lệch đo giữa hai bên: biên thật là hạn mở cộng hai lần độ trễ giao, nên
+    ngưỡng chỉ nhỉnh hơn hạn mở (ví dụ 10,01 s) vẫn lặp lại được vòng đóng/mở của LK22."""
+    assert links.REPLACE_AFTER >= OPENING_TIMEOUT + 2.0
 
 
 def test_connect_result_values():
@@ -729,16 +738,17 @@ def test_lk13_replacement_measures_age_from_the_new_connection():
     """Sau khi thay, mốc “lúc mở” là của kết nối mới (R7 so `now - old.since` với kết nối hiện tại)."""
     t = LinkTracker(HI)  # own > peer: khi hòa thì giữ kết nối do máy kia mở
     t.trusted_changed([PEER], 0.0)
+    gap = links.REPLACE_AFTER
     c = start_attempt(t, PEER, 0.0)
     t.incoming_control(PEER, 1, 0.1)
-    # Cùng bên: thay (kèm LinkSwitched, spec P2-6 A3); mốc 4.0.
-    assert t.incoming_control(PEER, 2, 4.0) == [
+    # Cùng bên: thay (kèm LinkSwitched, spec P2-6 A3); mốc gap - 1.
+    assert t.incoming_control(PEER, 2, gap - 1) == [
         CloseConnection(PEER, 1),
         Notify(LinkSwitched(PEER, 1, 2, False)),
     ]
-    # Lần thử ra xong ở 6.0: kết nối hiện tại (2) mới 2 s tuổi → hòa → giữ kết nối do máy kia mở.
-    # Nếu mốc vẫn là 0.1 (của kết nối 1) thì 5.9 s ≥ REPLACE_AFTER và kết nối mới (3) bị giữ nhầm.
-    assert t.connect_finished(PEER, c.attempt_id, OK, 3, 6.0) == [CloseConnection(PEER, 3)]
+    # Lần thử ra xong ở gap + 1: kết nối hiện tại (2) mới 2 s tuổi → hòa → giữ kết nối do máy kia mở.
+    # Nếu mốc vẫn là 0.1 (của kết nối 1) thì gap + 0,9 s ≥ REPLACE_AFTER và kết nối mới (3) bị giữ nhầm.
+    assert t.connect_finished(PEER, c.attempt_id, OK, 3, gap + 1) == [CloseConnection(PEER, 3)]
     assert t.connected() == {PEER: 2}
 
 
@@ -1456,8 +1466,9 @@ _floats = st.floats
 LK22_PARAMS = st.fixed_dictionaries(
     {
         "seen": st.tuples(_floats(0, 1), _floats(0, 1)),
-        # Thời gian mở kết nối tới 8 s: vượt REPLACE_AFTER (5 s) để chạm biên luật chống trùng (T4).
-        "lats": st.lists(_floats(0, 8), min_size=1, max_size=8),
+        # Thời gian mở kết nối tới hạn mở kết nối của net (OPENING_TIMEOUT, protocol §2.3): lần mở
+        # chậm nhất có thể của hai bên gọi nhau cùng lúc vẫn phải hội tụ (T4, protocol §6.1).
+        "lats": st.lists(_floats(0, OPENING_TIMEOUT), min_size=1, max_size=8),
         "skews": st.lists(_floats(-0.3, 0.3), min_size=1, max_size=8),
         "deltas": st.lists(_floats(0, 0.5), min_size=1, max_size=8),
         "partitions": st.lists(
@@ -1472,6 +1483,17 @@ LK22_PARAMS = st.fixed_dictionaries(
 @pytest.mark.parametrize("first_is_lower", [True, False], ids=["X<Y", "X>Y"])
 @settings(max_examples=1000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(p=LK22_PARAMS)
+# Ca cố định đỏ chắc chắn với ngưỡng cũ 5 s (lần mở 9,2 s): hypothesis hiếm khi tự tìm lại nó.
+@example(
+    p={
+        "seen": (0.392, 0.321),
+        "lats": [4.07, 9.20],
+        "skews": [0.239],
+        "deltas": [0.0005],
+        "partitions": [],
+        "extra_seen": [],
+    }
+)
 def test_lk22_two_trackers_converge_to_one_connection(first_is_lower, p):
     ids = (LO, HI) if first_is_lower else (HI, LO)
     sim = TwoSim(ids, p)
