@@ -71,4 +71,5 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "integration: cần socket thật trên 127.0.0.1 (bỏ qua bằng -m 'not integration')",
+    "frozen: chạy bản build PyInstaller trỏ bởi biến môi trường TELEPORT_FROZEN_EXE (không có thì bỏ qua)",
 ]

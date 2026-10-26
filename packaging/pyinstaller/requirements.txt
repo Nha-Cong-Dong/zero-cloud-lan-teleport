@@ -1,0 +1,8 @@
+# Công cụ build bản CLI bằng PyInstaller (chỉ dùng lúc build, không đóng vào bản phân phối,
+# trừ bootloader và runtime hook của PyInstaller — xem THIRD-PARTY-NOTICES.txt sinh ra khi build).
+# Ghim đúng bản để build lặp lại được; nâng bản thì build lại và chạy `pytest -m frozen`.
+# Nguồn: PyPI (https://pypi.org/project/pyinstaller/, https://pypi.org/project/pyinstaller-hooks-contrib/).
+#   PyInstaller: GPL-2.0-or-later kèm bootloader exception (ngoại lệ ở ke_hoach mục 1).
+#   pyinstaller-hooks-contrib: GPL-2.0-or-later hoặc Apache-2.0 (runtime hook: Apache-2.0).
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9

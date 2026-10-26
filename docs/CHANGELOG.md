@@ -67,6 +67,11 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport receive [--dir <thư mục>] [--yes] [--json]`: nhận file từ các máy đã ghép đôi; mỗi lượt hỏi `[c/k]`, hoặc tự nhận với `--yes` (có cảnh báo). Thư mục mặc định là `Teleport` trong thư mục Tải về: Known Folder trên Windows, XDG trên Linux, `~/Downloads` trên các hệ khác hoặc khi không dò được.
 - `send` và `receive` chung: `--json` in JSON Lines, mỗi dòng một sự kiện: `receiving`, `connecting`, `offer`, `status`, `progress`, `file_done`, `data_unreachable`, `result`, `error`, `stopped`. Mã thoát 0 (xong, hoặc `receive` dừng bằng Ctrl+C), 1 (lượt không thành công, không kết nối được, hoặc `send` bị Ctrl+C), 2 (lệnh sai). Ctrl+C lần đầu dừng có trật tự: gửi lệnh hủy tới máy kia để máy đó báo ngay; Ctrl+C lần hai thoát ngay.
 - Nội bộ, API cho lớp CLI: `core.display` (`format_size`, `format_duration`, `display_filename`, `FILE_NAME_WIDTH`); `paths.default_receive_dir()`; `app.node` (`find_trusted`, `close_time_limit()`, `MDNS_CLOSE_ALLOWANCE`); `app.transfers.preview_sources`; `core.filenames.INVISIBLE_CHARS`.
+- Bản CLI thử cho Windows, đóng gói bằng PyInstaller theo dạng thư mục (`teleport.exe` cùng thư mục `_internal\`). Bản này chỉ build tay qua GitHub Actions (workflow “Build CLI (thử)”), là artifact tạm tự xóa sau 14 ngày, không phải bản phát hành. `teleport.exe` chưa có chữ ký số, nên Windows có thể cảnh báo khi chạy.
+- Bản build kèm `LICENSE`, `THIRD-PARTY-NOTICES.txt` (giấy phép của mọi thành phần đóng vào, kể cả Python) và `SOURCE.txt` (commit dùng để build và cách lấy mã nguồn đúng phiên bản).
+- zeroconf (LGPL) được đóng thành các file riêng trong `_internal\zeroconf\`, người dùng có thể thay bằng bản khác.
+- Kiểm giấy phép tự động khi build: gặp gói, file hoặc giấy phép chưa được duyệt thì build dừng và không tạo `teleport.exe`.
+- Test khói chạy trên chính exe vừa build (`pytest -m frozen`), và hướng dẫn build thử trong `docs/CONTRIBUTING.md`.
 
 ### Changed
 - Kiểm chứng chỉ TLS (cả hai chiều) không còn kiểm ngày hiệu lực (`NO_CHECK_TIME`): chứng chỉ được ghim đúng từng cái, nên đồng hồ sai ở một máy không làm hỏng kết nối giữa các thiết bị đã ghép đôi.
@@ -120,6 +125,8 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lời hỏi `[c/k]` của `listen`, `pair` và `receive` được in lại khi có dòng khác in chen giữa lúc đang chờ trả lời.
 - `teleport send`: khi máy nhận dừng vì lỗi của chính nó (ghi đĩa, dữ liệu hỏng, thư mục tạm còn sót lại), câu báo nay là “… gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại.”. Trong `--json`, `message` của sự kiện `result` đổi theo; `result` và `by_peer` không đổi.
 - `teleport unpair` khi có node đang chạy cùng thư mục cấu hình: dòng gợi ý nằm riêng và nêu cả `teleport receive` lẫn `teleport listen`, giống `send` và `receive`. Trong `--json`, `message` của lỗi `node_locked` chỉ còn câu “Teleport đang chạy với thư mục cấu hình này.”, không còn gợi ý.
+- `docs/ke_hoach.md` mục 1 (Giấy phép) và mục 4.1: làm rõ luật giấy phép khi đóng gói. Chấp nhận thêm MIT-0 và PSF-2.0. Thành phần lồng trong một gói đã duyệt (liệt kê trong SBOM của gói, hoặc thư viện C đi kèm CPython) được dùng thêm các giấy phép dễ dãi tương thích GPLv3 (ISC, Zlib, 0BSD, Unicode-3.0 và vài giấy phép tương tự). LGPL chỉ được đóng thành file người dùng thay được, không liên kết tĩnh. Ngoại lệ System Library của GPLv3 bao gồm DLL runtime MSVC đi kèm Python.
+- `docs/CONTRIBUTING.md` mục Giấy phép: không liệt kê cứng các giấy phép được phép nữa, mà trỏ về `docs/ke_hoach.md` (mục 1 và 4.1).
 
 ### Fixed
 - Hai máy gọi nhau cùng lúc mà một lần mở kết nối điều khiển chậm (vài giây) có thể đóng rồi mở lại kết nối mãi. Ngưỡng chống trùng của protocol mục 6.1 nay lớn hơn hạn mở kết nối, nên hai bên luôn giữ cùng một kết nối.
