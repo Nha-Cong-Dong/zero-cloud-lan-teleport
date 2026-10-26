@@ -71,6 +71,13 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# Không đóng Universal CRT (ucrtbase.dll, api-ms-win-*.dll): đó là thành phần của Windows 10 trở lên,
+# còn bản PyInstaller tìm thấy trên PATH là của công cụ khác (UCRT_FILES trong third_party.py). Lọc
+# trước khi kiểm giấy phép; COLLECT dùng đúng danh sách đã lọc này.
+a.binaries, _ucrt_dropped = third_party.drop_ucrt(a.binaries)
+if _ucrt_dropped:
+    third_party.log(f"Bỏ {len(_ucrt_dropped)} file Universal CRT khỏi bản build: {', '.join(_ucrt_dropped)}")
+
 # Kiểm giấy phép trước khi tạo teleport.exe: mọi file sẽ vào bản build, kể cả module khởi động mà PYZ
 # đưa thêm (pyz.dependencies). Lỗi thì build dừng ở đây với LicenseAuditError.
 try:

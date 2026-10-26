@@ -371,6 +371,16 @@ def test_frozen_version_prints_program_name_and_version(exe):
     assert out.strip() == f"teleport {__version__}", out + err
 
 
+UCRT_NAME_RE = re.compile(r"^(?:ucrtbase\.dll|api-ms-win-(?:core|crt)-.*\.dll)$", re.IGNORECASE)
+
+
+def test_frozen_bundle_has_no_universal_crt(exe):
+    """Universal CRT là thành phần của Windows 10+, bản build không được mang bản sao nào."""
+    root = Path(exe).parent
+    found = sorted(str(p.relative_to(root)) for p in root.rglob("*") if UCRT_NAME_RE.match(p.name))
+    assert not found, found
+
+
 def test_frozen_identity_creates_stable_identity_in_teleport_home(exe, tmp_path):
     home = tmp_path / "home"
     code, out, err = run_once(["identity"], env=base_env(home))

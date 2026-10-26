@@ -261,6 +261,88 @@ def test_check_rejects_unmappable_localpyc(
     _expect_unknown(repo, base, [("khong_ton_tai_xyz", str(pyc), "PYMODULE")], "khong_ton_tai_xyz")
 
 
+# ------------------------------- 2b. drop_ucrt: Universal CRT là của Windows, không đóng vào
+
+
+_UCRT_SRC = r"C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk\17.0.20-101\x64\bin"
+
+
+@pytest.mark.parametrize(
+    "dest",
+    [
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "API-MS-WIN-core-file-l1-1-0.dll",
+        "api-ms-win-core-kernel32-legacy-l1-1-1.dll",
+        "ucrtbase.dll",
+        "UCRTBASE.DLL",
+        "sub/dir/api-ms-win-crt-stdio-l1-1-0.dll",
+        "sub\\ucrtbase.dll",
+    ],
+)
+def test_drop_ucrt_removes_universal_crt(dest: str) -> None:
+    entry = (dest, f"{_UCRT_SRC}\\{dest}", "BINARY")
+    kept, dropped = tp.drop_ucrt([entry])
+    assert kept == []
+    assert dropped == [dest]
+
+
+@pytest.mark.parametrize(
+    "dest",
+    [
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "python312.dll",
+        "python3.dll",
+        "_ssl.pyd",
+        "libcrypto-3.dll",
+        "libssl-3.dll",
+        "ucrtbase.dll.txt",
+        "ucrtbase.pyd",
+        "xucrtbase.dll",
+        "ucrtbased.dll",
+        "api-ms-win-crt-runtime-l1-1-0.pyd",
+        "api-ms-win-security-base-l1-1-0.dll",
+        "api-ms-win-eventing-provider-l1-1-0.dll",
+        "my-api-ms-win-crt-runtime-l1-1-0.dll",
+        "ucrtbase.dll/evil.dll",
+    ],
+)
+def test_drop_ucrt_keeps_other_files(dest: str) -> None:
+    entry = (dest, f"C:\\Python312\\{dest}", "BINARY")
+    kept, dropped = tp.drop_ucrt([entry])
+    assert kept == [entry]
+    assert dropped == []
+
+
+def test_drop_ucrt_keeps_order_of_remaining_entries() -> None:
+    toc = [
+        ("python312.dll", r"C:\Python312\python312.dll", "BINARY"),
+        ("ucrtbase.dll", rf"{_UCRT_SRC}\ucrtbase.dll", "BINARY"),
+        ("_ssl.pyd", r"C:\Python312\DLLs\_ssl.pyd", "EXTENSION"),
+        ("api-ms-win-crt-heap-l1-1-0.dll", rf"{_UCRT_SRC}\api-ms-win-crt-heap-l1-1-0.dll", "BINARY"),
+        ("vcruntime140.dll", r"C:\Python312\vcruntime140.dll", "BINARY"),
+    ]
+    kept, dropped = tp.drop_ucrt(toc)
+    assert kept == [toc[0], toc[2], toc[4]]
+    assert dropped == ["ucrtbase.dll", "api-ms-win-crt-heap-l1-1-0.dll"]
+
+
+@pytest.mark.parametrize("name", ["ucrtbase.dll", "api-ms-win-crt-runtime-l1-1-0.dll"])
+def test_check_still_rejects_ucrt_that_was_not_dropped(
+    base: Path, repo: Path, tmp_path: Path, name: str
+) -> None:
+    """Bộ lọc nằm ở spec, không ở cổng kiểm: UCRT lọt vào `check` vẫn là file lạ, build dừng."""
+    good = _touch(base / "DLLs" / "_socket.pyd")
+    ucrt = _touch(tmp_path / "jdk" / "bin" / name)
+    toc = [("_socket.pyd", str(good), "EXTENSION"), (name, str(ucrt), "BINARY")]
+    _expect_unknown(repo, base, toc, name, (str(good),))
+
+
+@pytest.mark.parametrize("name", ["ucrtbase.dll", "api-ms-win-crt-runtime-l1-1-0.dll"])
+def test_ucrt_at_base_prefix_root_is_not_python(base: Path, name: str) -> None:
+    assert _classify(_touch(base / name), base) is False
+
+
 # ------------------------------------------ 2. audit() dừng khi giấy phép chưa duyệt
 
 
