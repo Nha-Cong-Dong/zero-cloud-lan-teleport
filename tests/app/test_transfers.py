@@ -259,6 +259,24 @@ def send_spy(monkeypatch):
 
 
 @pytest.fixture
+def read_spy(monkeypatch):
+    """Spy trên `connection.Connection.read_block` (bên nhận đọc khung): `reads` = (conn, chỉ số khối)
+    của mọi khung đọc được, theo thứ tự. Chỉ có khung trên kết nối bên nhận đã chấp nhận (kết nối bị từ
+    chối sau `data_open` không bao giờ được đọc)."""
+    spy = SimpleNamespace(reads=[])
+    real = connection.Connection.read_block
+
+    async def read_block(self, *args, **kwargs):
+        result = await real(self, *args, **kwargs)
+        if result is not None:
+            spy.reads.append((self, result[0].index))
+        return result
+
+    monkeypatch.setattr(connection.Connection, "read_block", read_block)
+    return spy
+
+
+@pytest.fixture
 def engine_spy(monkeypatch):
     """Đếm lời gọi `TransferEngine.block_bad` (bên nhận gặp khối sai)."""
     spy = SimpleNamespace(block_bad=0)
@@ -910,11 +928,21 @@ async def test_ac13_cancel_matrix(T, transfer_nodes, write_spy, monkeypatch, pha
 
 
 @integration
-async def test_ac14_corrupted_block_is_resent_alone(T, transfer_nodes, frame_spy, write_spy, engine_spy):
+async def test_ac14_corrupted_block_is_resent_alone(
+    T, transfer_nodes, frame_spy, write_spy, engine_spy, read_spy
+):
     """AC-14 (spec B12): lật một byte payload khối 5 lần đầu (seam `Connection.write_block`) → khối sai
-    bị phát hiện đúng một lần; khung đầu trên kết nối dữ liệu mới là khối 5; mỗi chỉ số được ghi
-    xuống đĩa đúng một lần; lượt vẫn DONE, SHA khớp."""
+    bị phát hiện đúng một lần; mỗi chỉ số được ghi xuống đĩa đúng một lần; lượt vẫn DONE, SHA khớp.
+
+    “Chỉ khối sai được gửi lại” kiểm ở **bên nhận** (khung mà A thật sự đọc, spy `Connection.read_block`):
+    sau khối sai, khung đầu A đọc trên kết nối mới là khối 5 và không khối nào < 5 được đọc lại. Không
+    kiểm theo khung bên gửi ghi: B là client, kết nối dữ liệu đứt thì B thử mở lại cho `resume` cũ
+    (lịch protocol §4.1); A từ chối `data_open` của `resume` cũ (đang chờ `fsync` trước `resume` mới,
+    docstring `core/transfer.py`), nhưng server không xác nhận `data_open` (protocol §4.1) nên B có thể
+    đã ghi một khung (khối 0) trước khi thấy kết nối bị đóng. Khung đó bị bỏ, không phải gửi lại.
+    """
     R = T.TransferResult
+    reads = read_spy.reads
     net = await transfer_nodes()
     flipped: list[object] = []
 
@@ -937,22 +965,26 @@ async def test_ac14_corrupted_block_is_resent_alone(T, transfer_nodes, frame_spy
     written = collections.Counter(i for tid, f, i in write_spy.done if tid == key.transfer_id and f == 0)
     assert written == collections.Counter(range(10)), f"số lần ghi mỗi khối: {dict(written)}"
 
-    conns: list[object] = []
-    for fr in frame_spy.frames:
-        if fr.conn not in conns:
-            conns.append(fr.conn)
-    bad_conn = next(fr.conn for fr in frame_spy.frames if fr.index == 5)
-    after = conns[conns.index(bad_conn) + 1 :]
-    assert after, "không có kết nối dữ liệu mới sau khối sai"
-    first_on_new = next(fr.index for fr in frame_spy.frames if fr.conn is after[0])
-    assert first_on_new == 5, f"khung đầu trên kết nối mới là khối {first_on_new}"
+    order = [i for _, i in reads]
+    bad_pos = order.index(5)  # khung khối 5 đầu tiên A đọc là khung bị lật
+    bad_conn = reads[bad_pos][0]
+    assert order[:bad_pos] == [0, 1, 2, 3, 4], f"khung A đọc: {order}"
+    after = reads[bad_pos + 1 :]
+    assert after, "A không đọc khung nào sau khối sai"
+    assert all(c is not bad_conn for c, _ in after), "A còn đọc tiếp trên kết nối có khối sai"
+    assert [i for _, i in after] == [5, 6, 7, 8, 9], f"khung A đọc sau khối sai: {[i for _, i in after]}"
+    assert len(flipped) == 1 and sum(1 for fr in frame_spy.frames if fr.index == 5) >= 2
 
 
 @integration
 async def test_ac15_block_always_corrupt_cancels_with_corrupt_at_fourth(
-    T, transfer_nodes, frame_spy, engine_spy
+    T, transfer_nodes, frame_spy, engine_spy, read_spy
 ):
-    """AC-15: khối 5 luôn sai → lần thứ 4 (`MAX_BAD_BLOCKS` + 1) hủy: A `CORRUPT` (file 0), B `PEER_ERROR`."""
+    """AC-15: khối 5 luôn sai → lần thứ 4 (`MAX_BAD_BLOCKS` + 1) hủy: A `CORRUPT` (file 0), B `PEER_ERROR`.
+
+    Số lần khối 5 tới đếm ở bên nhận (`read_spy`): B có thể ghi thêm khung lên kết nối mở lại cho
+    `resume` cũ mà A đã từ chối (xem AC-14), khung đó không được đọc.
+    """
     R = T.TransferResult
     net = await transfer_nodes()
 
@@ -969,7 +1001,9 @@ async def test_ac15_block_always_corrupt_cancels_with_corrupt_at_fourth(
     assert fin_a.file_index == 0
     assert_finished(fin_b, R.PEER_ERROR, by_peer=True)
     assert engine_spy.block_bad == core_transfer.MAX_BAD_BLOCKS + 1 == 4
-    assert sum(1 for fr in frame_spy.frames if fr.index == 5) == 4
+    assert [i for _, i in read_spy.reads if i == 5] == [5] * 4
+    assert [i for _, i in read_spy.reads if i != 5] == [0, 1, 2, 3, 4], "khối đã có bit bị gửi lại"
+    assert sum(1 for fr in frame_spy.frames if fr.index == 5) >= 4
     await wait_until(lambda: not temp_dir(net, key.transfer_id).exists(), 10, "thư mục tạm chưa được xóa")
     assert received_names(net) == set()
 
