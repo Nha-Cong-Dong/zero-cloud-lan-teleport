@@ -694,7 +694,7 @@ class Node:
         """Hủy mọi lượt truyền và phiên ghép đôi, gửi goodbye mDNS, đóng cổng và mọi kết nối,
         dọn thư mục tạm, nhả `node.lock`.
 
-        Thứ tự (docs/architecture.md mục 5): dừng hẹn giờ; hủy mọi lượt truyền và chờ đẩy các
+        Thứ tự (docs/architecture.md mục 5): hủy mọi lượt truyền; dừng hẹn giờ; chờ đẩy các
         `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi cổng cắt kết nối
         dữ liệu; đóng ghép đôi, mDNS, cổng, kết nối; rồi chờ các hàng đĩa xóa thư mục tạm tối đa
         `CLOSE_DISK_WAIT` và đóng thư mục nhận (bỏ qua nếu còn thread đĩa bận). Gọi nhiều lần hay
@@ -715,9 +715,11 @@ class Node:
         listener_closing = False
         transfers = self._transfers
         try:
+            if transfers is not None:
+                # Trước `await` đầu tiên: `send()` gọi trong lúc đóng phải bị từ chối ngay.
+                transfers.begin_close()  # đồng bộ: ngừng nhận offer, hủy mọi lượt
             await self._stop_tasks([self._timer_task, self._netwatch_task])
             if transfers is not None:
-                transfers.begin_close()  # đồng bộ: ngừng nhận offer, hủy mọi lượt
                 await transfers.flush_control(app_transfers.CANCEL_FLUSH_TIMEOUT)
             await self._pairing.close()  # phiên đang chạy gửi pair_abort{user}
             for m in self._mdns_instances():
