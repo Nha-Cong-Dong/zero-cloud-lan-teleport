@@ -3,7 +3,7 @@
 > **Vai trò:** số đo thực tế của các yêu cầu phi chức năng.
 > **Nguồn duy nhất cho:** định nghĩa từng phép đo, môi trường, kết quả từng lần đo và kết luận so với ngưỡng.
 > **Không chứa:** ngưỡng yêu cầu → [mvp.md](mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](ke_hoach.md) mục 5.1.
-> **Cập nhật:** 2026-10-27
+> **Cập nhật:** 2026-10-28
 
 ## 1. Quy ước
 
@@ -20,7 +20,7 @@
 |---|---|---|
 | mvp N1 | 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged trên cùng máy (mục 3.3) | **ĐẠT trên máy ảo bridged**; chưa đo trên hai máy thật (mục 3.4) |
 | mvp N2 | — | chưa đo; định nghĩa và tiêu chí đã viết trước khi đo (mục 5.1) |
-| mvp N3 | 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), 10 GiB qua card mạng giữa hai máy, lúc rảnh của app có giao diện chưa đo (mục 4.4) |
+| mvp N3 | 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8). 2026-10-28: trước/sau thay đổi ghi trạng thái nối lại bền, 1 GiB và 1000 file nhỏ (mục 4.9) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), 10 GiB qua card mạng giữa hai máy, lúc rảnh của app có giao diện chưa đo (mục 4.4). Sau thay đổi ghi trạng thái nối lại bền (mục 4.9), tiêu chí 1 và 2a vẫn ĐẠT với 1 GiB và 1000 file nhỏ |
 | mvp N4 | — | chưa đo |
 | mvp N5 | — | chưa đo |
 | mvp N6 | — | chưa đo |
@@ -468,6 +468,97 @@ Vì hệ file là FAT32, lượt đo **không chạy**; không có file nào đ�
 **Kết luận phần ổ đích chậm: CHƯA ĐỦ DỮ LIỆU** (chưa đo). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D4).
 
 **Việc cần để đo:** một USB NTFS hoặc exFAT còn ≥ 8 GB trống. Định dạng lại ổ hiện có thành exFAT/NTFS sẽ xóa khoảng 26 GB dữ liệu đang có trên đó: người dùng quyết, người đo không làm. Ổ đang báo cần sửa lỗi, nên sửa lỗi (hoặc định dạng lại) trước. VID/PID `048D:1234` là mã chung, hay gặp ở USB không rõ hãng; nếu dùng lại ổ này, kiểm dung lượng thật trước, vì USB khai khống dung lượng làm hỏng dữ liệu ghi và khiến SHA-256 không khớp mà không do Teleport.
+
+### 4.9. Lần đo 2026-10-28: trước/sau P3-3a (ghi trạng thái nối lại bền), loopback trên một máy
+
+Mục đích: xem việc ghi `transfer.json` và `.state` bền khi nhận (P3-3a, [architecture.md](architecture.md) mục 4) có làm xấu mvp N3 hay thông lượng không. Ba lượt, giờ UTC 2026-10-27 17:01–17:56 (giờ máy 2026-10-28 00:01–00:56).
+
+**Mã đo** (cùng commit gốc `e1d9a58`)
+
+| Bên | Worktree, nhánh | `src` | Digest `src/teleport` (cách tính ở mục 4.3) |
+|---|---|---|---|
+| trước | `p3-2`, `feat/transfer-restore` | sạch | `62f1be94f026f815076dd36905b028250fc989aabf8022848c3aff46ebaed4c3` |
+| sau | `p3-3a`, `feat/resume-storage` | thay đổi chưa commit ở `app/storage.py`, `app/transfers.py`, `core/resume_state.py` | `06295d338ea57a920e4c1e594406819537d0db89748da20a8395ffc246c5d272` |
+
+Cùng `python.exe` của `.venv` ở checkout chính; mã nạp từ `src/` của đúng worktree qua `PYTHONPATH`. Trước **mỗi** lần đo, script chạy `python -c` với đúng môi trường của hai tiến trình đo và kiểm `teleport.__file__` nằm trong worktree của bên đó (72/72 lần đúng).
+
+**Cách đo.** Như phép đo qua CLI thật ở mục 4.1: `teleport receive --yes --json --dir <D> --port <p>` và `teleport send <nguồn> --to <mã> --address 127.0.0.1:<p> --json`, mỗi bên `TELEPORT_HOME` riêng (danh tính và `trusted.json` riêng cho bên trước và bên sau), mDNS bật như mặc định. Khác mục 4.6: chờ 2 s sau dòng `receiving` rồi mới bật `send`. RSS lúc bắt đầu, RSS đỉnh, RSS tăng (cận trên), max Q4 − max Q1, CPU, thông lượng: định nghĩa ở mục 4.1 (chế độ CLI); “thời gian gửi” là từ dòng `offer` tới dòng `result` của `send`.
+
+- **Ca 1 GiB:** một file ngẫu nhiên 1 GiB.
+- **Ca 1000 file nhỏ:** 1000 file, cỡ ngẫu nhiên đều trong 4–64 KiB, nội dung ngẫu nhiên, seed 20261027 (tổng 35 174 623 byte, cùng bộ file cho mọi lần); gửi một lượt bằng mẫu `<thư mục>\f*.bin`.
+- **Thứ tự xen kẽ:** vòng r chạy một cặp 1 GiB (trước/sau, đảo thứ tự theo r) rồi một cặp 1000 file (thứ tự ngược cặp 1 GiB). Mỗi lần bật hai tiến trình mới; sau mỗi lần so SHA-256 từng file nhận với nguồn, kiểm `.teleport` không còn file, xóa file nhận.
+- **Lượt chính** `d1-20261027T171134Z`: 10 cặp mỗi ca, thêm một cặp khởi động mỗi ca ở đầu lượt, **không tính** (lý do ở lượt 1 dưới đây). **Lượt 1** `d1-20261027T170113Z`: đúng số lần của kế hoạch (1 GiB × 5, 1000 file × 3 mỗi bên), không có cặp khởi động. **Lượt chẩn đoán** `d1-20261027T174055Z`: đếm `os.fsync`, không dùng cho số đo chính (mục cuối).
+
+**Môi trường.** Như mục 4.6 (Windows 11 Pro 10.0.26300, Python 3.14.5, i7-12800H 20 luồng, RAM 15,7 GiB, NVMe SSSTC CL1-3D512-Q11 NTFS, cryptography 50.0.2, zeroconf 0.151.5, `__version__` 0.1.0a0), khác: RAM trống lúc bắt đầu lượt chính 5,1 GiB; ổ C trống 40,3 GiB; file nguồn và thư mục nhận cùng ổ, thư mục làm việc `%TEMP%\tpd1`. Cắm sạc, power plan Balanced với chế độ nguồn **Best power efficiency** (overlay `961cc777-…`); Defender thời gian thực bật. Mọi tiến trình đo: không Efficiency mode (ControlMask = StateMask = 0), ưu tiên Normal. Lúc bắt đầu không có tiến trình python nào khác; CPU cả máy bận trong từng lần đo: 7,1–28,3 %.
+
+**Kết quả lượt chính** (10 lần hợp lệ mỗi bên mỗi ca, 0 lần hỏng; mọi lần hai bên `result: done`, SHA-256 khớp mọi file, `.teleport` không còn file, mã thoát 0 / 0). Trung vị / p95 / min / max; RSS tính bằng MiB.
+
+| Đại lượng | 1 GiB, trước | 1 GiB, sau | 1000 file, trước | 1000 file, sau |
+|---|---|---|---|---|
+| Thời gian gửi (s) | 11,08 / 17,38 / 5,74 / 17,38 | 10,40 / 14,04 / 6,22 / 14,04 | 26,41 / 32,63 / 11,25 / 32,63 | 38,85 / 62,11 / 19,89 / 62,11 |
+| Thông lượng (MB/s, 10⁶ byte/s) | 97,4 / 187,0 / 61,8 / 187,0 | 103,2 / 172,5 / 76,5 / 172,5 | 1,33 / 3,13 / 1,08 / 3,13 | 0,91 / 1,77 / 0,57 / 1,77 |
+| Nhận: RSS đỉnh | 65,63 / 66,19 / 63,45 / 66,19 | 65,83 / 66,59 / 64,69 / 66,59 | 58,63 / 58,88 / 58,45 / 58,88 | 60,28 / 60,49 / 60,04 / 60,49 |
+| Nhận: RSS tăng, cận trên | 11,15 / 11,93 / 9,57 / 11,93 | 11,20 / 11,90 / 9,59 / 11,90 | 3,58 / 4,09 / 3,02 / 4,09 | 4,58 / 6,05 / 3,96 / 6,05 |
+| Nhận: private bytes tăng, cận trên | 12,39 / 13,17 / 11,41 / 13,17 | 11,89 / 12,40 / 10,24 / 12,40 | 3,41 / 4,18 / 2,92 / 4,18 | 4,47 / 6,35 / 4,14 / 6,35 |
+| Nhận: max Q4 − max Q1 | 0,04 / 2,74 / −2,20 / 2,74 | 0,01 / 1,21 / −8,56 / 1,21 | 1,97 / 2,67 / 1,03 / 2,67 | 2,88 / 3,53 / 2,41 / 3,53 |
+| Gửi: RSS tăng, cận trên | 4,39 / 4,86 / 4,17 / 4,86 | 4,33 / 4,55 / 4,08 / 4,55 | 1,29 / 1,57 / 0,72 / 1,57 | 1,40 / 1,52 / 0,97 / 1,52 |
+| Nhận: CPU trong lúc truyền (s) | 5,40 / 7,20 / 4,59 / 7,20 | 5,66 / 9,05 / 4,88 / 9,05 | 12,14 / 16,34 / 6,59 / 16,34 | 24,69 / 30,14 / 11,09 / 30,14 |
+
+Số thô, thời gian gửi (s), theo thứ tự chạy:
+
+| Ca, bên | Các lần |
+|---|---|
+| 1 GiB, trước | 11,87; 6,80; 12,60; 12,89; 5,74; 17,39; 12,03; 10,29; 8,03; 7,42 |
+| 1 GiB, sau | 11,53; 6,22; 10,52; 7,53; 11,87; 14,04; 10,28; 6,51; 11,91; 6,29 |
+| 1000 file, trước | 11,25; 14,20; 31,32; 32,63; 26,46; 31,29; 26,35; 12,33; 12,00; 28,76 |
+| 1000 file, sau | 19,89; 61,16; 35,74; 40,72; 58,73; 62,11; 36,99; 20,58; 23,64; 42,04 |
+
+**So từng cặp liền kề** (thời gian sau / thời gian trước, 10 cặp mỗi ca): 1 GiB trung vị 0,85, nhỏ nhất 0,58, lớn nhất 2,07 (8 cặp sau nhanh hơn, 2 cặp chậm hơn); 1000 file trung vị 1,72, nhỏ nhất 1,14, lớn nhất 4,31 (**10/10 cặp sau chậm hơn**). CPU tiến trình nhận sau / trước: 1 GiB trung vị 1,02 (0,94–1,36); 1000 file trung vị 1,82 (1,46–2,92).
+
+**Lượt 1** (5 + 3 lần mỗi bên, không cặp khởi động; 16/16 lần hợp lệ, cùng các kiểm như trên). Thời gian gửi (s): 1 GiB trước 21,23; 10,06; 8,48; 10,79; 8,34 (trung vị 10,06), sau 19,88; 8,43; 11,65; 4,00; 10,11 (trung vị 10,11); 1000 file trước 16,58; 24,58; 12,83 (trung vị 16,58), sau 63,98; 24,25; 19,93 (trung vị 24,25). RSS tăng (cận trên) của tiến trình nhận: 1 GiB trung vị 11,14 (trước) và 11,39 MiB (sau), lớn nhất 11,57 và 12,39 MiB; 1000 file trung vị 3,51 và 4,29 MiB, lớn nhất 3,96 và 5,65 MiB. Lần 1000 file đầu tiên (bên sau, ngay sau khi tạo bộ file) chậm bất thường: `send` mất 19,3 s từ lúc bật tới dòng `offer` (các lần khác dưới 1 s), nghi do file nguồn vừa tạo (bộ đệm, quét của Defender; không kiểm). Vì vậy lượt chính thêm một cặp khởi động không tính.
+
+**Lượt chẩn đoán: số `fsync` và thời gian trong `fsync` của tiến trình nhận.** Một `sitecustomize.py` (đặt sau `src` trong `PYTHONPATH` của tiến trình đo, chỉ ở lượt này) bọc `os.fsync`: đếm theo loại file và bấm giờ từng lần gọi. Trên Windows mọi `fsync` của `storage` đi qua `os.fsync` (`_fsync_dir` không làm gì). Lượt này còn chạy một luồng lấy mẫu ngăn xếp mỗi 2 ms nên chậm hơn lượt chính; chỉ dùng số đếm và tỉ lệ. 1 cặp 1 GiB và 3 cặp 1000 file, sau một cặp khởi động.
+
+| Ca | `fsync` mỗi lượt, trước | `fsync` mỗi lượt, sau | Thời gian trong `fsync` (s), trước | Thời gian trong `fsync` (s), sau | Thời gian gửi (s), trước | Thời gian gửi (s), sau |
+|---|---|---|---|---|---|---|
+| 1000 file | 3000: `.part` 2000, file đích giữ chỗ 1000 | 8001: `.state` 3000, `.state.<hex>.tmp` 1000, `transfer.json.<hex>.tmp` 1001, `.part` 2000, file đích giữ chỗ 1000 | 1,62; 1,90; 1,63 | 9,87; 7,93; 9,31 | 14,96; 16,27; 14,80 | 23,79; 21,71; 27,49 |
+| 1 GiB | 66 (`.part` 65) | 135 (`.part` 65, `.state` 66, tạm 3) | 1,21 | 6,72, trong đó `.state` 0,24 | 3,99 | 9,54 |
+
+Với file nhỏ, mỗi file cần 3 `fsync` trước và 8 sau (cộng 1 lần `transfer.json` lúc tạo thư mục tạm). Thời gian trong `fsync` tăng thêm 6,0–8,3 s mỗi lượt 1000 file (từng cặp), cùng cỡ với phần thời gian gửi tăng thêm ở cùng lượt (5,4–12,7 s): `fsync` của `.state` (3 lần mỗi file, trung bình 1,3–1,5 ms mỗi lần) là phần tốn nhất, rồi đến `.state.<hex>.tmp` và `transfer.json.<hex>.tmp` (trung bình 0,9–1,8 ms mỗi lần). Phần CPU tăng thêm của tiến trình nhận (lượt chính: trung vị 12,1 → 24,7 s) chưa tách được giữa thời gian nhân của `FlushFileBuffers` và mã Python (mã hóa, ghi `transfer.json`, `.state`). Với 1 GiB, `fsync` của `.state` chỉ thêm 0,24 s; thời gian `fsync` của `.part` dao động mạnh giữa các lần (1,2–12,3 s cho cùng 65 lần), nên cặp 1 GiB của lượt này không dùng để so.
+
+**Đánh giá**
+
+| Câu hỏi | Số đo | Kết quả |
+|---|---|---|
+| mvp N3, tiêu chí 1 (mục 4.1): RSS tăng (cận trên) dưới ngưỡng mvp N3, mọi lần, cả hai tiến trình | lớn nhất ở bên sau: nhận 12,39 MiB (lượt 1, 1 GiB), gửi 4,60 MiB; 1000 file: nhận 6,05 MiB | **ĐẠT**, cả trước và sau (28/28 lần mỗi bên: lượt 1 và lượt chính, không kể cặp khởi động) |
+| mvp N3, tiêu chí 2a: max Q4 − max Q1 ≤ 4 MiB | lớn nhất ở bên sau: 1 GiB 1,21 MiB; 1000 file 3,82 MiB (lượt 1) | **ĐẠT** mọi lần |
+| P3-3a có làm RSS khi nhận 1 GiB tăng không | trung vị RSS tăng nhận 11,15 → 11,20 MiB (+0,05), RSS đỉnh 65,63 → 65,83 MiB | không thấy khác biệt vượt dao động giữa các lần (9,6–11,9 MiB) |
+| P3-3a có làm RSS khi nhận 1000 file tăng không | trung vị RSS tăng nhận 3,58 → 4,58 MiB (+1,00), RSS đỉnh 58,63 → 60,28 MiB (+1,65); max Q4 − max Q1 1,97 → 2,88 MiB | có, khoảng 1 MiB; vẫn xa ngưỡng |
+| Thông lượng 1 GiB | trung vị thời gian 11,08 → 10,40 s (−6 %); tỉ số từng cặp trung vị 0,85 (0,58–2,07) | không thấy chậm đi; độ nhiễu giữa các lần (5,7–17,4 s) lớn hơn mọi chênh lệch có thể có |
+| Thời gian 1000 file nhỏ | trung vị 26,41 → 38,85 s (+47 %); tỉ số từng cặp trung vị 1,72 (1,14–4,31), 10/10 cặp chậm hơn | **chậm hơn rõ**; phần lớn do `fsync` thêm (lượt chẩn đoán) |
+
+**Kết luận:** P3-3a **không làm xấu mvp N3** ở hai ca đã đo (1 GiB, 1000 file nhỏ, loopback): hai tiêu chí đo được đều ĐẠT ở cả trước và sau; RSS tăng thêm khoảng 1 MiB khi nhận 1000 file, không đổi khi nhận 1 GiB. Thông lượng 1 GiB không thấy chậm đi. Gửi 1000 file nhỏ chậm hơn khoảng 1,5–1,7 lần (trung vị +47 %, tỉ số cặp 1,72) vì số `fsync` mỗi file tăng từ 3 lên 8. mvp N3 nói chung vẫn **CHƯA ĐỦ DỮ LIỆU** như mục 4.4; lần đo này không đo 5 / 10 GiB nên không xét tiêu chí 2b, và không thay kết quả mục 4.6 cho mã sau P3-3a.
+
+**Ghi nhận** (không phải kết luận)
+
+- Ca 1000 file có hai nhóm thời gian rõ ở cả hai bên (trước: 11–14 s và 26–33 s; sau: 20–24 s và 36–62 s), và CPU của tiến trình nhận tăng theo cùng nhóm (trước 6,6–8,6 s so với 12–16 s). Lần đo này không tìm nguyên nhân; có thể do lõi hiệu năng và lõi tiết kiệm điện của CPU, hoặc chế độ nguồn Best power efficiency. Vì nhóm chậm có ở cả hai bên và các cặp chạy liền nhau, so từng cặp đáng tin hơn so trung vị.
+- Mã sau P3-3a đòi thư mục nhận chừa nhiều chỗ hơn (`TEMP_PATH_RESERVE`, [architecture.md](architecture.md) mục 4 “Thư mục nhận”): thư mục nhận dài 187 ký tự trong scratchpad bị `receive` của bên sau từ chối (`PathTooLongError`), bên trước nhận được. Vì vậy thư mục làm việc đặt ở `%TEMP%\tpd1`.
+- Max Q4 − max Q1 của tiến trình nhận ở ca 1000 file (bên sau tới 3,82 MiB) gần mức 4 MiB của tiêu chí 2a; bên trước cũng tăng dần trong lượt (tới 2,67 MiB). Lần đo này không tách phần tăng đó thuộc phần nào của mã. Một lượt có tối đa 1000 file ([protocol.md](protocol.md) mục 3.3), nên 1000 file là ca nhiều file nhất của một lượt; nhiều lượt 1000 file liên tiếp trong một tiến trình chưa đo.
+
+**Giới hạn của lần đo này**
+
+- Hai tiến trình trên một máy qua loopback, ổ NVMe nhanh dùng chung cho nguồn và đích. Trên ổ chậm (USB, HDD) mỗi `fsync` đắt hơn nhiều, nên phần chậm thêm của ca nhiều file nhỏ có thể lớn hơn ở đây: **chưa đo**.
+- Chế độ nguồn Best power efficiency và Defender bật; thông lượng dao động mạnh giữa các lần (1 GiB: 62–187 MB/s), nên 10 cặp chỉ cho thấy không có chậm đi lớn ở ca 1 GiB, không loại được chênh lệch nhỏ.
+- Chỉ 1 GiB và 1000 file 4–64 KiB; không đo 5 / 10 GiB, file vừa (vài MiB), hay nhiều lượt cùng lúc. Chỉ Windows 11 và Python 3.14.
+
+**Cách đo lại.** Script nằm ngoài repo, trong scratchpad của phiên đo (thư mục `d1-p3-3a`, không bền): `d1_ab.py` (điều phối A/B, dùng lại `n3_bench.py` và `n3_cli.py` của mục 4.5, chép cùng thư mục), `d1_report.py` (bảng trung vị, số thô), `d1_pairs.py` (tỉ số từng cặp), `d1_diag.py` và `diag/sitecustomize.py` (lượt chẩn đoán). Trong PowerShell, ở thư mục chứa script (thư mục làm việc phải ngắn, xem ghi nhận ở trên):
+
+```
+$env:PYTHONPATH = "<worktree trước>\src"   # chỉ để điều phối tạo danh tính; tiến trình đo có PYTHONPATH riêng
+& $PY d1_ab.py --before <worktree trước> --after <worktree sau> --big-runs 10 --small-runs 10 --warmup --work $env:TEMP\tpd1
+& $PY d1_report.py results\d1-<giờ UTC>\results.jsonl ; & $PY d1_pairs.py results\d1-<giờ UTC>\results.jsonl
+$env:D1_PROFILE = "1"; & $PY d1_ab.py ... --big-runs 1 --small-runs 3 --warmup --diag ; & $PY d1_diag.py results\d1-<giờ UTC>
+```
 
 ## 5. mvp N2: Hiệu năng so với SMB
 

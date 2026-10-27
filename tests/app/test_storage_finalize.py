@@ -17,6 +17,11 @@ Luật kiểm ở đây:
   `NameUnavailableError`.
 - Đường dẫn cuối vừa `PathLimits` (đơn vị: UTF-16 trên Windows, byte trên POSIX).
 
+P3-3a (spec-p3-3a mục 4 V1, 8.1): `create_temp` bắt buộc `record` khớp `size` từng part (fixture
+`new_temp`), `finalize` chỉ nhận file kế tiếp; `_write_atomic_in` (`.state`, `transfer.json`) cũng đổi
+tên qua cùng seam, nên các test đếm đổi tên lọc theo tên (`.part` → tên thật). Bước 1, 4, 7, 8 và hủy
+giữ chỗ bằng `TARGET`: `test_storage_resume.py`; sập ở từng bước: `test_storage_recovery.py`.
+
 Không test nào mở socket (spec mục 5). Mọi `ReceiveDir` được đóng để Windows dọn được `tmp_path`.
 """
 
@@ -73,8 +78,14 @@ def rd(storage, root):
 
 
 @pytest.fixture
-def temp(rd):
-    return rd.create_temp(ID)
+def new_temp(rd, record_for):
+    """`new_temp(sizes, tid=ID)`: thư mục tạm của lượt có `record` khớp `size` từng part (P3-3a:
+    `create_temp` bắt buộc `record`, `create_part` kiểm `size` theo nó; spec-p3-3a mục 8.1 (c))."""
+
+    def make(sizes, tid: str = ID):
+        return rd.create_temp(tid, record_for(tid, sizes))
+
+    return make
 
 
 @pytest.fixture
@@ -138,6 +149,10 @@ def install_rename(storage, monkeypatch, behavior) -> None:
     real = getattr(owner, attr)
 
     def wrapper(*args, **kwargs):
+        # P3-3a: `_write_atomic_in` (`.state`, `transfer.json`) cũng đổi tên qua seam này; chỉ lần
+        # đổi tên `.part` → tên thật đi qua `behavior` (lọc theo tên, spec-p3-3a mục 8.1 (b)).
+        if not os.fsdecode(args[0]).endswith(".part"):
+            return real(*args, **kwargs)
         return behavior(real, args, kwargs)
 
     monkeypatch.setattr(owner, attr, wrapper)
@@ -233,7 +248,8 @@ NAME_IDS = [f"{i}-{ascii(n)[:24]}" for i, n in enumerate(NAMES_ON_DISK)]
 
 
 @pytest.mark.parametrize("name", NAMES_ON_DISK, ids=NAME_IDS)
-def test_finalize_moves_part_to_sanitized_name(fn, rd, temp, tmp_path, name):
+def test_finalize_moves_part_to_sanitized_name(fn, rd, new_temp, tmp_path, name):
+    temp = new_temp([1000])
     data = payload(1000)
     part = make_part(temp, 0, data)
     part_path = part.path
@@ -250,19 +266,22 @@ def test_finalize_moves_part_to_sanitized_name(fn, rd, temp, tmp_path, name):
 
 
 @pytest.mark.parametrize("size", [0, 1, BS, BS + 1])
-def test_finalize_boundary_sizes(rd, temp, size):
+def test_finalize_boundary_sizes(rd, new_temp, size):
+    temp = new_temp([size])
     data = payload(size, seed=size)
     final = rd.finalize(make_part(temp, 0, data), "f.bin")
     assert final.read_bytes() == data
 
 
 @pytest.mark.parametrize("mtime_ms", [1_700_000_000_123, 0])
-def test_finalize_sets_mtime(rd, temp, mtime_ms):
+def test_finalize_sets_mtime(rd, new_temp, mtime_ms):
+    temp = new_temp([BS + 5])
     final = rd.finalize(make_part(temp, 0, payload(BS + 5)), "a.txt", mtime_ms=mtime_ms)
     assert os.stat(final).st_mtime_ns // 1_000_000 == mtime_ms
 
 
-def test_finalize_huge_mtime_still_succeeds(rd, temp):
+def test_finalize_huge_mtime_still_succeeds(rd, new_temp):
+    temp = new_temp([100])
     data = payload(100)
     final = rd.finalize(make_part(temp, 0, data), "a.txt", mtime_ms=2**53 - 1)
     assert final.read_bytes() == data
@@ -271,7 +290,8 @@ def test_finalize_huge_mtime_still_succeeds(rd, temp):
 @pytest.mark.parametrize(
     "error", [OSError(errno.EPERM, "khong cho"), OverflowError("tran"), ValueError("sai")]
 )
-def test_finalize_ignores_utime_errors(rd, temp, monkeypatch, error):
+def test_finalize_ignores_utime_errors(rd, new_temp, monkeypatch, error):
+    temp = new_temp([100])
     data = payload(100)
     part = make_part(temp, 0, data)
 
@@ -283,7 +303,8 @@ def test_finalize_ignores_utime_errors(rd, temp, monkeypatch, error):
     assert final.read_bytes() == data
 
 
-def test_finalize_without_mtime_keeps_content(rd, temp):
+def test_finalize_without_mtime_keeps_content(rd, new_temp):
+    temp = new_temp([10])
     data = payload(10)
     final = rd.finalize(make_part(temp, 0, data), "a.txt", mtime_ms=None)
     assert final.read_bytes() == data
@@ -294,7 +315,8 @@ def test_finalize_without_mtime_keeps_content(rd, temp):
 # ---------------------------------------------------------------------------------------------
 
 
-def test_existing_file_is_never_overwritten(rd, temp):
+def test_existing_file_is_never_overwritten(rd, new_temp):
+    temp = new_temp([5000])
     sentinel = rd.root / "a.txt"
     content = os.urandom(64 * 1024)
     sentinel.write_bytes(content)
@@ -308,7 +330,8 @@ def test_existing_file_is_never_overwritten(rd, temp):
     assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
 
 
-def test_second_number_when_first_taken(rd, temp):
+def test_second_number_when_first_taken(rd, new_temp):
+    temp = new_temp([3])
     (rd.root / "a.txt").write_bytes(b"0")
     (rd.root / "a (1).txt").write_bytes(b"1")
     final = rd.finalize(make_part(temp, 0, b"moi"), "a.txt")
@@ -317,7 +340,8 @@ def test_second_number_when_first_taken(rd, temp):
     assert (rd.root / "a (1).txt").read_bytes() == b"1"
 
 
-def test_case_insensitive_match_on_every_os(rd, temp):
+def test_case_insensitive_match_on_every_os(rd, new_temp):
+    temp = new_temp([3])
     (rd.root / "A.TXT").write_bytes(b"hoa")
     final = rd.finalize(make_part(temp, 0, b"moi"), "a.txt")
     assert final == rd.root / "a (1).txt"
@@ -325,7 +349,8 @@ def test_case_insensitive_match_on_every_os(rd, temp):
     assert (rd.root / "A.TXT").read_bytes() == b"hoa"
 
 
-def test_nfc_existing_matches_nfd_incoming(rd, temp):
+def test_nfc_existing_matches_nfd_incoming(rd, new_temp):
+    temp = new_temp([3])
     nfc = "\u00c9.txt"
     (rd.root / nfc).write_bytes(b"cu")
     final = rd.finalize(make_part(temp, 0, b"moi"), "E\u0301.txt")
@@ -334,7 +359,8 @@ def test_nfc_existing_matches_nfd_incoming(rd, temp):
     assert (rd.root / nfc).read_bytes() == b"cu"
 
 
-def test_existing_directory_with_same_name(rd, temp):
+def test_existing_directory_with_same_name(rd, new_temp):
+    temp = new_temp([3])
     (rd.root / "a.txt").mkdir()
     final = rd.finalize(make_part(temp, 0, b"moi"), "a.txt")
     assert final == rd.root / "a (1).txt"
@@ -342,7 +368,8 @@ def test_existing_directory_with_same_name(rd, temp):
     assert os.listdir(rd.root / "a.txt") == []
 
 
-def test_existing_dangling_symlink_with_same_name(rd, temp, tmp_path):
+def test_existing_dangling_symlink_with_same_name(rd, new_temp, tmp_path):
+    temp = new_temp([3])
     target = tmp_path / "khong-ton-tai.txt"
     link = rd.root / "a.txt"
     make_symlink(target, link, is_dir=False)
@@ -356,7 +383,8 @@ def test_existing_dangling_symlink_with_same_name(rd, temp, tmp_path):
     assert not os.path.lexists(target)
 
 
-def test_thousand_case_variants_of_same_name(storage, rd, temp, monkeypatch):
+def test_thousand_case_variants_of_same_name(storage, rd, new_temp, monkeypatch):
+    temp = new_temp([2] * 1000)
     # Ca biên spec mục 5: 1000 tên trùng nhau, khác hoa thường. Test chỉ xét chọn tên, nên bỏ
     # fsync (qua seam `_full_fsync` và `os.fsync`): 3000 lần fsync, nhất là F_FULLFSYNC trên macOS,
     # làm test chậm mà không kiểm thêm gì.
@@ -379,7 +407,8 @@ def test_thousand_case_variants_of_same_name(storage, rd, temp, monkeypatch):
 # ---------------------------------------------------------------------------------------------
 
 
-def test_racer_creating_target_before_reservation_is_not_overwritten(rd, temp, monkeypatch):
+def test_racer_creating_target_before_reservation_is_not_overwritten(rd, new_temp, monkeypatch):
+    temp = new_temp([3000])
     data = payload(3000)
     part = make_part(temp, 0, data)
     real_open = os.open
@@ -401,7 +430,8 @@ def test_racer_creating_target_before_reservation_is_not_overwritten(rd, temp, m
     assert final.read_bytes() == data
 
 
-def test_racer_writing_into_reservation_gets_next_name(storage, rd, temp, monkeypatch):
+def test_racer_writing_into_reservation_gets_next_name(storage, rd, new_temp, monkeypatch):
+    temp = new_temp([3000])
     data = payload(3000)
     part = make_part(temp, 0, data)
     calls: list[Path] = []
@@ -421,7 +451,8 @@ def test_racer_writing_into_reservation_gets_next_name(storage, rd, temp, monkey
     assert final.read_bytes() == data
 
 
-def test_part_swapped_before_rename_is_not_published(storage, rd, temp, monkeypatch):
+def test_part_swapped_before_rename_is_not_published(storage, rd, new_temp, monkeypatch):
+    temp = new_temp([3000])
     data = payload(3000)
     impostor = payload(3000, seed=99)
     part = make_part(temp, 0, data)
@@ -445,7 +476,10 @@ def test_part_swapped_before_rename_is_not_published(storage, rd, temp, monkeypa
 
 
 @posix_only
-def test_part_swapped_for_symlink_before_rename_is_not_published(storage, rd, temp, monkeypatch, tmp_path):
+def test_part_swapped_for_symlink_before_rename_is_not_published(
+    storage, rd, new_temp, monkeypatch, tmp_path
+):
+    temp = new_temp([3000])
     data = payload(3000)
     victim = tmp_path / "victim.bin"
     victim.write_bytes(payload(3000, seed=42))
@@ -470,7 +504,8 @@ def test_part_swapped_for_symlink_before_rename_is_not_published(storage, rd, te
 # ---------------------------------------------------------------------------------------------
 
 
-def test_rename_permission_error_twice_then_succeeds(storage, rd, temp, monkeypatch):
+def test_rename_permission_error_twice_then_succeeds(storage, rd, new_temp, monkeypatch):
+    temp = new_temp([2000])
     monkeypatch.setattr(storage, "REPLACE_DELAY", 0.02)
     data = payload(2000)
     part = make_part(temp, 0, data)
@@ -493,8 +528,9 @@ def test_rename_permission_error_twice_then_succeeds(storage, rd, temp, monkeypa
 
 @pytest.mark.parametrize("attempts", [None, 3])
 def test_rename_permission_error_forever_cleans_reservation(
-    storage, rd, temp, monkeypatch, quick_retry, attempts
+    storage, rd, new_temp, monkeypatch, quick_retry, attempts
 ):
+    temp = new_temp([2000])
     if attempts is not None:
         monkeypatch.setattr(storage, "REPLACE_ATTEMPTS", attempts)  # đọc lúc dùng
     sentinel = rd.root / "a.txt"
@@ -522,7 +558,8 @@ def test_rename_permission_error_forever_cleans_reservation(
         rd.finalize(part, "a.txt")  # đã đóng, không finalize lại được
 
 
-def test_rename_other_error_is_not_retried(storage, rd, temp, monkeypatch, quick_retry):
+def test_rename_other_error_is_not_retried(storage, rd, new_temp, monkeypatch, quick_retry):
+    temp = new_temp([2000])
     data = payload(2000)
     part = make_part(temp, 0, data)
     part_path = part.path
@@ -541,7 +578,8 @@ def test_rename_other_error_is_not_retried(storage, rd, temp, monkeypatch, quick
     assert part_path.read_bytes() == data
 
 
-def test_reservation_changed_by_someone_else_is_kept(storage, rd, temp, monkeypatch, quick_retry):
+def test_reservation_changed_by_someone_else_is_kept(storage, rd, new_temp, monkeypatch, quick_retry):
+    temp = new_temp([2000])
     data = payload(2000)
     part = make_part(temp, 0, data)
     part_path = part.path
@@ -562,7 +600,8 @@ def test_reservation_changed_by_someone_else_is_kept(storage, rd, temp, monkeypa
 
 
 @pytest.mark.parametrize("size", [0, 2000])
-def test_interrupt_after_real_rename_keeps_final_file(storage, rd, temp, monkeypatch, size):
+def test_interrupt_after_real_rename_keeps_final_file(storage, rd, new_temp, monkeypatch, size):
+    temp = new_temp([size])
     data = payload(size)
     part = make_part(temp, 0, data)
 
@@ -579,7 +618,8 @@ def test_interrupt_after_real_rename_keeps_final_file(storage, rd, temp, monkeyp
 
 
 @pytest.mark.parametrize("size", [0, 2000])
-def test_interrupt_after_real_rename_keeps_final_file_without_inode(storage, rd, temp, monkeypatch, size):
+def test_interrupt_after_real_rename_keeps_final_file_without_inode(storage, rd, new_temp, monkeypatch, size):
+    temp = new_temp([size])
     # AC-19 trên hệ file không có `st_ino` (spec mục 3.3, 3.6 “Dọn khi lỗi”, D27, mục 7): khi đó file
     # giữ chỗ và file 0 byte vừa nhận trông y như nhau (file thường, 0 byte). Đổi tên thật đã xong thì
     # file cuối không bao giờ bị xóa, dù lỗi bay ra trước khi kịp ghi nhận việc đổi tên.
@@ -605,8 +645,9 @@ def test_interrupt_after_real_rename_keeps_final_file_without_inode(storage, rd,
 
 @pytest.mark.parametrize("size", [0, 2000])
 def test_rename_failure_without_inode_still_cleans_reservation(
-    storage, rd, temp, monkeypatch, quick_retry, size
+    storage, rd, new_temp, monkeypatch, quick_retry, size
 ):
+    temp = new_temp([size])
     # Mặt kia của ca trên: đổi tên chưa xảy ra (`.part` còn trong thư mục tạm) thì file giữ chỗ vẫn
     # bị dọn khi không có `st_ino` (spec mục 3.6 “Dọn khi lỗi”: chỉ so loại file và kích thước).
     filesystem_without_inodes(monkeypatch)
@@ -625,7 +666,8 @@ def test_rename_failure_without_inode_still_cleans_reservation(
     assert part_path.read_bytes() == data
 
 
-def test_cleanup_retries_unlink_of_reservation(storage, rd, temp, monkeypatch, quick_retry):
+def test_cleanup_retries_unlink_of_reservation(storage, rd, new_temp, monkeypatch, quick_retry):
+    temp = new_temp([100])
     part = make_part(temp, 0, payload(100))
 
     def broken(real, args, kwargs):
@@ -657,7 +699,8 @@ def test_cleanup_retries_unlink_of_reservation(storage, rd, temp, monkeypatch, q
 
 
 @windows_only
-def test_windows_uses_move_file_ex_with_write_through(storage, rd, temp, monkeypatch):
+def test_windows_uses_move_file_ex_with_write_through(storage, rd, new_temp, monkeypatch):
+    temp = new_temp([2000])
     data = payload(2000)
     part = make_part(temp, 0, data)
     events: list[tuple] = []
@@ -667,7 +710,8 @@ def test_windows_uses_move_file_ex_with_write_through(storage, rd, temp, monkeyp
     real_fsync = os.fsync
 
     def spy_move(src, dst, flags):
-        events.append(("move", flags))
+        if basename_of(dst) == "a.txt":  # bỏ các lần thay `.state`/`transfer.json` (spec-p3-3a 8.1 (b))
+            events.append(("move", flags))
         return real_move(src, dst, flags)
 
     def spy_replace(*args, **kwargs):
@@ -702,7 +746,8 @@ def test_windows_uses_move_file_ex_with_write_through(storage, rd, temp, monkeyp
 
 
 @macos_only
-def test_macos_finalize_uses_full_fsync(rd, temp, monkeypatch):
+def test_macos_finalize_uses_full_fsync(rd, new_temp, monkeypatch):
+    temp = new_temp([100])
     import fcntl
 
     part = make_part(temp, 0, payload(100))
@@ -719,7 +764,8 @@ def test_macos_finalize_uses_full_fsync(rd, temp, monkeypatch):
 
 
 @linux_only
-def test_linux_fsyncs_after_replace(rd, temp, monkeypatch):
+def test_linux_fsyncs_after_replace(rd, new_temp, monkeypatch):
+    temp = new_temp([100])
     part = make_part(temp, 0, payload(100))
     events: list[str] = []
     real_replace = os.replace
@@ -748,7 +794,8 @@ ODD_NAME = "Ảnh \U00018df3.jpg"
 
 
 @pytest.mark.parametrize("err", [errno.EILSEQ, errno.EINVAL, errno.ENAMETOOLONG])
-def test_rejected_name_falls_back_to_ascii(fn, rd, temp, monkeypatch, err):
+def test_rejected_name_falls_back_to_ascii(fn, rd, new_temp, monkeypatch, err):
+    temp = new_temp([3000])
     data = payload(3000)
     part = make_part(temp, 0, data)
     rejected = reject_names(monkeypatch, err)
@@ -760,7 +807,8 @@ def test_rejected_name_falls_back_to_ascii(fn, rd, temp, monkeypatch, err):
     assert final.read_bytes() == data
 
 
-def test_fallback_name_is_numbered_when_taken(fn, rd, temp, monkeypatch):
+def test_fallback_name_is_numbered_when_taken(fn, rd, new_temp, monkeypatch):
+    temp = new_temp([300])
     fallback = fn.fallback_filename(ODD_NAME)
     (rd.root / fallback).write_bytes(b"cu")
     data = payload(300)
@@ -773,7 +821,8 @@ def test_fallback_name_is_numbered_when_taken(fn, rd, temp, monkeypatch):
     assert (rd.root / fallback).read_bytes() == b"cu"
 
 
-def test_every_name_rejected_raises_name_unavailable(storage, rd, temp, monkeypatch):
+def test_every_name_rejected_raises_name_unavailable(storage, rd, new_temp, monkeypatch):
+    temp = new_temp([300])
     data = payload(300)
     part = make_part(temp, 0, data)
     part_path = part.path
@@ -786,7 +835,8 @@ def test_every_name_rejected_raises_name_unavailable(storage, rd, temp, monkeypa
     assert part_path.read_bytes() == data
 
 
-def test_candidate_cap_stops_endless_interloper(storage, rd, temp, monkeypatch):
+def test_candidate_cap_stops_endless_interloper(storage, rd, new_temp, monkeypatch):
+    temp = new_temp([300])
     # D19: kẻ chen làm hỏng mọi file giữ chỗ → dừng bằng NameUnavailableError sau trần ứng viên
     # (F3: tính cả các lần quay lại từ F7). Trần là biến cấp module, vá nhỏ lại để test nhanh.
     monkeypatch.setattr(storage, "MAX_NAME_CANDIDATES", 5)
@@ -810,7 +860,8 @@ def test_candidate_cap_stops_endless_interloper(storage, rd, temp, monkeypatch):
 
 
 @macos_only
-def test_apfs_unassigned_code_point_still_finalizes(fn, rd, temp):
+def test_apfs_unassigned_code_point_still_finalizes(fn, rd, new_temp):
+    temp = new_temp([300])
     data = payload(300)
     final = rd.finalize(make_part(temp, 0, data), ODD_NAME)
     name = unicodedata.normalize("NFC", final.name)
@@ -827,10 +878,10 @@ LONG_UNICODE = "ệ" * 100 + ".mp4"
 
 
 @pytest.mark.parametrize("name", [LONG_ASCII, LONG_UNICODE])
-def test_long_name_is_cut_to_fit_path_limit(storage, fn, root, monkeypatch, name):
+def test_long_name_is_cut_to_fit_path_limit(storage, fn, root, monkeypatch, name, record_for):
     max_path = limit_root(storage, monkeypatch, root, extra=storage.TEMP_PATH_RESERVE)
     with storage.ReceiveDir.open(root) as rd:
-        temp = rd.create_temp(ID)
+        temp = rd.create_temp(ID, record_for(ID, [1, 1]))
         first = rd.finalize(make_part(temp, 0, b"1"), name)
         second = rd.finalize(make_part(temp, 1, b"2"), name)
         for final in (first, second):
@@ -844,10 +895,10 @@ def test_long_name_is_cut_to_fit_path_limit(storage, fn, root, monkeypatch, name
         assert second.read_bytes() == b"2"
 
 
-def test_long_name_fits_path_limit_in_fallback_mode(storage, fn, root, monkeypatch):
+def test_long_name_fits_path_limit_in_fallback_mode(storage, fn, root, monkeypatch, record_for):
     max_path = limit_root(storage, monkeypatch, root, extra=storage.TEMP_PATH_RESERVE)
     with storage.ReceiveDir.open(root) as rd:
-        temp = rd.create_temp(ID)
+        temp = rd.create_temp(ID, record_for(ID, [1, 1]))
         parts = [make_part(temp, i, bytes([i])) for i in range(2)]
         reject_names(monkeypatch, errno.EILSEQ)
         finals = [rd.finalize(p, LONG_UNICODE) for p in parts]
@@ -860,10 +911,10 @@ def test_long_name_fits_path_limit_in_fallback_mode(storage, fn, root, monkeypat
         assert key(finals[0].name) != key(finals[1].name)
 
 
-def test_name_respects_max_name_bytes(storage, fn, root, monkeypatch):
+def test_name_respects_max_name_bytes(storage, fn, root, monkeypatch, record_for):
     limit_root(storage, monkeypatch, root, extra=10_000, max_name_bytes=100)
     with storage.ReceiveDir.open(root) as rd:
-        temp = rd.create_temp(ID)
+        temp = rd.create_temp(ID, record_for(ID, [1]))
         final = rd.finalize(make_part(temp, 0, b"x"), LONG_UNICODE)
         assert len(final.name.encode("utf-8")) <= 100
         assert final.name.endswith(".mp4")
@@ -874,9 +925,9 @@ def test_name_respects_max_name_bytes(storage, fn, root, monkeypatch):
 # ---------------------------------------------------------------------------------------------
 
 
-def test_finalize_part_of_other_receive_dir_raises(storage, tmp_path):
+def test_finalize_part_of_other_receive_dir_raises(storage, tmp_path, record_for):
     with storage.ReceiveDir.open(tmp_path / "a") as rd1, storage.ReceiveDir.open(tmp_path / "b") as rd2:
-        part = make_part(rd2.create_temp(ID), 0, b"abc")
+        part = make_part(rd2.create_temp(ID, record_for(ID, [3])), 0, b"abc")
         with pytest.raises(ValueError):
             rd1.finalize(part, "a.txt")
         assert not part.closed
@@ -886,7 +937,8 @@ def test_finalize_part_of_other_receive_dir_raises(storage, tmp_path):
         assert final.read_bytes() == b"abc"
 
 
-def test_finalize_closed_part_raises(rd, temp):
+def test_finalize_closed_part_raises(rd, new_temp):
+    temp = new_temp([3])
     part = make_part(temp, 0, b"abc")
     part.close()
     with pytest.raises(ValueError):
@@ -895,7 +947,8 @@ def test_finalize_closed_part_raises(rd, temp):
     assert part.path.read_bytes() == b"abc"
 
 
-def test_finalize_twice_raises_and_index_stays_used(rd, temp):
+def test_finalize_twice_raises_and_index_stays_used(rd, new_temp):
+    temp = new_temp([3])
     part = make_part(temp, 0, b"abc")
     final = rd.finalize(part, "a.txt")
     with pytest.raises(ValueError):
@@ -907,7 +960,8 @@ def test_finalize_twice_raises_and_index_stays_used(rd, temp):
 
 
 @pytest.mark.parametrize("mtime_ms", [-1, True, False, 1.5, "1", 1e12])
-def test_finalize_rejects_bad_mtime_before_touching_part(rd, temp, mtime_ms):
+def test_finalize_rejects_bad_mtime_before_touching_part(rd, new_temp, mtime_ms):
+    temp = new_temp([3])
     part = make_part(temp, 0, b"abc")
     with pytest.raises(ValueError):
         rd.finalize(part, "a.txt", mtime_ms=mtime_ms)
@@ -917,7 +971,8 @@ def test_finalize_rejects_bad_mtime_before_touching_part(rd, temp, mtime_ms):
 
 
 @pytest.mark.parametrize("name", [None, b"a.txt", 1, Path("a.txt")])
-def test_finalize_rejects_non_str_name(rd, temp, name):
+def test_finalize_rejects_non_str_name(rd, new_temp, name):
+    temp = new_temp([3])
     part = make_part(temp, 0, b"abc")
     with pytest.raises(TypeError):
         rd.finalize(part, name)
@@ -925,7 +980,8 @@ def test_finalize_rejects_non_str_name(rd, temp, name):
     assert entries(rd.root) == []
 
 
-def test_finalize_incomplete_part_raises_storage_error(storage, rd, temp):
+def test_finalize_incomplete_part_raises_storage_error(storage, rd, new_temp):
+    temp = new_temp([2 * BS + 5])
     size = 2 * BS + 5
     data = payload(size)
     part = temp.create_part(0, size)
@@ -936,13 +992,13 @@ def test_finalize_incomplete_part_raises_storage_error(storage, rd, temp):
     assert os.path.getsize(part.path) == BS
 
 
-def test_closed_receive_dir_rejects_every_call(storage, root):
+def test_closed_receive_dir_rejects_every_call(storage, root, record_for):
     rd = storage.ReceiveDir.open(root)
-    temp = rd.create_temp(ID)
+    temp = rd.create_temp(ID, record_for(ID, [3, 1]))
     part = make_part(temp, 0, b"abc")
     rd.close()
     with pytest.raises(ValueError):
-        rd.create_temp(ID2)
+        rd.create_temp(ID2, record_for(ID2, [1]))
     with pytest.raises(ValueError):
         rd.finalize(part, "a.txt")
     with pytest.raises(ValueError):
@@ -954,7 +1010,8 @@ def test_closed_receive_dir_rejects_every_call(storage, root):
     assert entries(root) == []
 
 
-def test_removed_temp_rejects_create_part(rd, temp):
+def test_removed_temp_rejects_create_part(rd, new_temp):
+    temp = new_temp([1])
     assert rd.remove_temp(temp) is True
     assert temp.closed
     with pytest.raises(ValueError):
@@ -966,7 +1023,8 @@ def test_removed_temp_rejects_create_part(rd, temp):
 # ---------------------------------------------------------------------------------------------
 
 
-def test_logs_never_contain_received_names(storage, fn, rd, temp, monkeypatch, caplog, quick_retry):
+def test_logs_never_contain_received_names(storage, fn, rd, new_temp, monkeypatch, caplog, quick_retry):
+    temp = new_temp([1, 1])
     caplog.set_level(logging.DEBUG)
     secret = "BiMatTuyetDoi-Ảnh riêng.txt"
     forms = {secret, fn.sanitize_filename(secret), fn.fallback_filename(secret), "BiMatTuyetDoi"}
@@ -998,8 +1056,11 @@ def test_logs_never_contain_received_names(storage, fn, rd, temp, monkeypatch, c
 # ---------------------------------------------------------------------------------------------
 
 
-def test_two_threads_finalizing_same_name(rd):
-    temps = [rd.create_temp(ID), rd.create_temp(ID2)]
+def test_two_threads_finalizing_same_name(rd, record_for):
+    def sizes(k: int) -> list[int]:
+        return [len(f"luot {k} file {i}\n".encode()) * (i + 1) for i in range(20)]
+
+    temps = [rd.create_temp(ID, record_for(ID, sizes(0))), rd.create_temp(ID2, record_for(ID2, sizes(1)))]
     results: list[list[tuple[Path, bytes]]] = [[], []]
     errors: list[BaseException] = []
     barrier = threading.Barrier(2)
@@ -1078,7 +1139,7 @@ NAMES = st.one_of(
 
 @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(data=st.data())
-def test_property_finalize_never_overwrites_and_names_are_distinct(storage, fn, data):
+def test_property_finalize_never_overwrites_and_names_are_distinct(storage, fn, data, record_for):
     names = data.draw(st.lists(NAMES, min_size=1, max_size=8), label="names")
     preexisting = data.draw(st.sets(st.integers(min_value=0, max_value=len(names) - 1)), label="pre")
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
@@ -1104,7 +1165,8 @@ def test_property_finalize_never_overwrites_and_names_are_distinct(storage, fn, 
         finals: list[tuple[Path, bytes]] = []
         with storage.ReceiveDir.open(root) as rd:
             root_abs = rd.root
-            temp = rd.create_temp(ID)
+            sizes = [len(f"file {i} ".encode()) + 8 for i in range(len(names))]
+            temp = rd.create_temp(ID, record_for(ID, sizes))
             for i, name in enumerate(names):
                 content = f"file {i} ".encode() + os.urandom(8)
                 finals.append((rd.finalize(make_part(temp, i, content), name), content))
@@ -1124,7 +1186,8 @@ def test_property_finalize_never_overwrites_and_names_are_distinct(storage, fn, 
         assert len(after) == count_before + len(names)
 
 
-def test_finalized_content_hash_matches_reread(rd, temp):
+def test_finalized_content_hash_matches_reread(rd, new_temp):
+    temp = new_temp([2 * BS + 17])
     # Đọc lại rồi finalize: nội dung cuối đúng với hash đã đọc lại (chuỗi P2-6 sẽ dùng).
     data = payload(2 * BS + 17)
     part = make_part(temp, 0, data)

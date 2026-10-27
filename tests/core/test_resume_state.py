@@ -32,6 +32,7 @@ from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from teleport.core import resume_state as rs
+from teleport.core.bitfield import Bitfield
 from teleport.core.blocks import BLOCK_SIZE, MAX_BLOCKS, MAX_FILE_SIZE
 from teleport.core.filenames import sanitize_filename
 from teleport.core.messages import FileEntry, Offer
@@ -904,6 +905,58 @@ def test_compact_writes_target_before_reserved():
         "x.bin",
         True,
     )
+
+
+# --- `compact_length_for` (spec-p3-3a mục 8.1, B5) ------------------------------------------------
+# Hàm công khai, thuần: độ dài bản gọn (kể cả header) khi có `marked` khối bật, `TARGET` cuối `target`
+# và `RESERVED` khớp tên `reserved` (None = không có). Phải bằng độ dài thật mà `compact_records` sinh ra.
+
+
+@SETTINGS
+@given(logs(), st.lists(st.integers(1, 97), min_size=1, max_size=3))
+def test_compact_length_for_equals_real_compact_of_replayed_log(
+    log: tuple[int, list[bytes]], chunks: list[int]
+):
+    n, records = log
+    header = rs.encode_header(TID, 0, n * BLOCK_SIZE)
+    result = _replay(n, header + b"".join(records), chunks=chunks)
+    compact_file = header + b"".join(_compact_bytes(result))
+    marked = len(_bit_set(result.bits, n))
+    reserved = result.target if result.reserved else None
+    assert rs.compact_length_for(marked, result.target, reserved) == len(compact_file)
+
+
+@SETTINGS
+@given(
+    st.integers(0, 3 * 4096 + 7),
+    st.one_of(st.none(), names, st.just("ệ" * 85)),
+    st.booleans(),
+)
+def test_compact_length_for_matches_compact_records_across_mark_split(
+    marked: int, target: str | None, reserved: bool
+):
+    # Số khối vượt qua ranh giới 4096 khối mỗi `MARK` của bản gọn; tên dài tới 255 byte.
+    reserved = reserved and target is not None
+    n = max(marked, 1)
+    bits = Bitfield(n)
+    for i in range(marked):
+        bits.set(i)
+    leaves = bytes(32 * n)
+    compact = b"".join(rs.compact_records(bits, leaves, target, reserved))
+    expected = len(rs.encode_header(TID, 0, n * BLOCK_SIZE)) + len(compact)
+    assert rs.compact_length_for(marked, target, target if reserved else None) == expected
+
+
+def test_compact_length_for_of_empty_state_is_header_only():
+    assert rs.compact_length_for(0, None, None) == HEADER_LEN
+
+
+def test_compact_length_for_is_public_and_pure():
+    assert not rs.compact_length_for.__name__.startswith("_")
+    assert rs.compact_length_for(16, "a.txt", "a.txt") == rs.compact_length_for(16, "a.txt", "a.txt")
+    # 16 khối, `TARGET` + `RESERVED` tên 5 byte: 41 + 2 × (7 + 5) + 583.
+    assert rs.compact_length_for(16, "a.txt", "a.txt") == HEADER_LEN + 2 * 12 + 583
+    assert rs.compact_length_for(16, "a.txt", None) == HEADER_LEN + 12 + 583
 
 
 # =================================================================================================

@@ -38,6 +38,7 @@ from teleport.app import sources, storage
 from teleport.app.node import DeviceConnected, DeviceDisconnected, MdnsOptions
 from teleport.core import links as core_links
 from teleport.core import ratelimit
+from teleport.core import resume_state as rs
 from teleport.core import transfer as core_transfer
 from teleport.core.discovery import DeviceAdded, DeviceRemoved
 from teleport.core.messages import Cancel, DataOpen, FileEntry
@@ -1883,3 +1884,120 @@ async def test_p27_preview_sources_cancel_returns_promptly(T, tmp_path, monkeypa
         assert time.monotonic() - t0 < 1.0
     finally:
         release.set()
+
+
+# =================================================================================================
+# P3-3a (specs/spec-p3-3a.md mục 2.4, việc V6): bên nhận ghi `transfer.json` và `.state` khi nhận
+# =================================================================================================
+
+
+def _state_of(part) -> Path:
+    return part.path.with_name(f"{part.file_index}.state")
+
+
+@integration
+async def test_p33a_transfer_json_durable_before_sender_sees_transferring_and_marks_grow(
+    T, transfer_nodes, monkeypatch, resume_helpers
+):
+    """V6: khi B thấy TRANSFERRING (A đã `accept`), `transfer.json` của A đã có và giải mã được, đúng
+    máy nhận / máy gửi / manifest; mỗi lô `SyncPart` (`PartFile.commit`) để lại `0.state` có header hợp
+    lệ và số `MARK` tăng dần; xong thì `.teleport/<tid>` không còn."""
+    R = T.TransferResult
+    net = await transfer_nodes()
+    A, B = net.A, net.B
+    seen: list[object] = []
+
+    def on_transferring(u):
+        if (
+            not seen
+            and type(u).__name__ == "TransferStatusChanged"
+            and u.info.key.direction == T.Direction.SEND
+            and u.info.status == T.TransferStatus.TRANSFERRING
+        ):
+            t = u.info.key.transfer_id
+            try:
+                seen.append(
+                    rs.decode_transfer_record((temp_dir(net, t) / "transfer.json").read_bytes(), dir_name=t)
+                )
+            except Exception as e:  # ghi lại để khẳng định bên dưới
+                seen.append(e)
+
+    B.trec.hooks.append(on_transferring)
+    commits: list[tuple[int, bytes, int, int]] = []
+    real_commit = storage.PartFile.commit
+
+    def commit(self, blocks):
+        real_commit(self, blocks)
+        header, records = resume_helpers.parse_state(_state_of(self).read_bytes())
+        commits.append((self.file_index, header, sum(1 for r in records if r[0] == "mark"), len(blocks)))
+
+    monkeypatch.setattr(storage.PartFile, "commit", commit)
+    size = 40 * MiB + 5
+    src = make_file(net.src, "lon.bin", size, mtime_ns=1_600_000_000_123_456_789)
+    key, fin_a, fin_b = await run_transfer(net, [src])
+    tid = key.transfer_id
+    assert_finished(fin_b, R.DONE)
+    assert_finished(fin_a, R.DONE)
+    assert sha256_of(net.receive_dir / "lon.bin") == sha256_of(src)
+
+    assert len(seen) == 1, "B không thấy TRANSFERRING"
+    rec = seen[0]
+    assert isinstance(rec, rs.TransferRecord), (
+        f"transfer.json chưa có hay hỏng lúc B thấy TRANSFERRING: {rec!r}"
+    )
+    assert (rec.receiver, rec.sender) == (A.id, B.id)
+    assert rec.offer.transfer_id == tid
+    assert rec.offer.files == (FileEntry("lon.bin", size, 1_600_000_000_123),)
+    assert (rec.verified, rec.done_at) == (0, None)
+
+    batches = [c for c in commits if c[3] > 0]
+    assert len(batches) >= 3, commits  # 41 khối, lô 16 khối
+    assert all(c[0] == 0 and c[1] == rs.encode_header(tid, 0, size) for c in batches)
+    counts = [c[2] for c in batches]
+    assert all(b > a for a, b in itertools.pairwise(counts)), f"số MARK không tăng: {counts}"
+    await wait_until(lambda: not temp_dir(net, tid).exists(), 10, "thư mục tạm chưa được xóa")
+
+
+@integration
+async def test_p33a_part_byte_flipped_before_reread_appends_clear(
+    T, transfer_nodes, monkeypatch, resume_helpers
+):
+    """V6: lật 1 byte khối 2 của `.part` ngay trước lượt đọc lại → A thấy khối sai, nối `CLEAR` khối đó
+    vào `0.state` (`ClearBlocks`), nhận lại khối 2 rồi xong; nội dung đúng nguồn."""
+    R = T.TransferResult
+    net = await transfer_nodes()
+    real_reread = storage.PartFile.reread
+    flipped: list[bool] = []
+
+    def reread(self, *, stop=None):
+        if not flipped and self.file_index == 0:
+            flipped.append(True)
+            with open(self.path, "r+b") as f:
+                f.seek(2 * MiB + 3)
+                b = f.read(1)
+                f.seek(2 * MiB + 3)
+                f.write(bytes([b[0] ^ 0xFF]))
+        return real_reread(self, stop=stop)
+
+    states: list[bytes] = []
+    real_finalize = storage.ReceiveDir.finalize
+
+    def finalize(self, part, name, **kwargs):
+        states.append(_state_of(part).read_bytes())
+        return real_finalize(self, part, name, **kwargs)
+
+    monkeypatch.setattr(storage.PartFile, "reread", reread)
+    monkeypatch.setattr(storage.ReceiveDir, "finalize", finalize)
+    src = make_file(net.src, "f.bin", 6 * MiB)
+    key, fin_a, fin_b = await run_transfer(net, [src])
+    assert_finished(fin_b, R.DONE)
+    assert_finished(fin_a, R.DONE)
+    assert flipped
+    assert sha256_of(net.receive_dir / "f.bin") == sha256_of(src)
+    assert len(states) == 1
+    _, records = resume_helpers.parse_state(states[0])
+    clears = [i for i, r in enumerate(records) if r[0] == "clear"]
+    assert clears and records[clears[0]] == ("clear", [2]), records
+    remarked = [r for r in records[clears[0] + 1 :] if r[0] == "mark" and any(i == 2 for i, _ in r[1])]
+    assert remarked, "khối 2 phải được đánh dấu lại sau CLEAR"
+    await wait_until(lambda: not temp_dir(net, key.transfer_id).exists(), 10, "thư mục tạm chưa được xóa")
