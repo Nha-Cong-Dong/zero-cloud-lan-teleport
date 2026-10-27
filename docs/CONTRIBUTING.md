@@ -14,7 +14,7 @@ docs: cập nhật hướng dẫn tường lửa
 test: thêm test nối lại khi rớt mạng
 ```
 
-Thay đổi nào người dùng nhận thấy được thì ghi thêm vào mục `[Unreleased]` của [CHANGELOG.md](CHANGELOG.md).
+Thay đổi nào người dùng nhận thấy được thì ghi thêm vào mục `[Unreleased]` của [CHANGELOG.md](CHANGELOG.md), chia `### Added` / `### Changed` / `### Fixed` / `### Security`, mỗi dòng viết cho người dùng hiểu. Mục `[Unreleased]` chưa phát hành, nên dòng cũ nói ngược hành vi mới thì sửa dòng cũ, không thêm dòng mâu thuẫn. Đổi định dạng trên dây mà không tăng phiên bản giao thức ([protocol.md](protocol.md) mục 9) thì ghi rõ bản cũ và bản mới không làm việc được với nhau.
 
 ## Trước khi mở Pull Request
 

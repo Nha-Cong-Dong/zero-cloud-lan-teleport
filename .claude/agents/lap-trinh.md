@@ -39,4 +39,4 @@ Nếu test của `viet-test` thất bại vì code sai thì sửa code. Nếu b�
 3. Kết quả ruff, mypy và pytest (dán dòng tổng kết).
 4. Những gì chưa làm, giả định đã dùng, điểm reviewer nên xem kỹ.
 
-Không `git commit`, không `git push`, không sửa `docs/CHANGELOG.md` (việc của `tom-tat`), trừ khi được yêu cầu rõ.
+Không `git commit`, không `git push`, không sửa `docs/CHANGELOG.md` (phiên chính viết sau phán quyết), trừ khi được yêu cầu rõ.

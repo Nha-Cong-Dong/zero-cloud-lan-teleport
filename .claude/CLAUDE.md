@@ -65,7 +65,7 @@ CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the a
 
 ## Team of subagents
 
-This file is the single source for the subagent team and its pipeline (`ke_hoach.md` §6 points here). `.claude/agents/` defines eleven project subagents. Their names and prompts are in Vietnamese. The frontmatter is YAML, so a `description` that contains `": "` must be in double quotes; otherwise the agent silently never loads (this is why the old `review` agent, now `soat-code`, never loaded). They load only when Claude Code is started in this folder (the repo root), not in a parent folder, and only at session start, so a new or renamed agent needs a new session.
+This file is the single source for the subagent team and its pipeline (`ke_hoach.md` §6 points here). `.claude/agents/` defines ten project subagents. Their names and prompts are in Vietnamese. The frontmatter is YAML, so a `description` that contains `": "` must be in double quotes; otherwise the agent silently never loads (this is why the old `review` agent, now `soat-code`, never loaded). They load only when Claude Code is started in this folder (the repo root), not in a parent folder, and only at session start, so a new or renamed agent needs a new session.
 
 | Agent | Role | Edits files? |
 |---|---|---|
@@ -79,7 +79,6 @@ This file is the single source for the subagent team and its pipeline (`ke_hoach
 | `soat-tai-lieu` | Docs auditor. Audits all docs, `README.md`, this file and `.claude/agents/` for the one-fact-one-place rule, dead references, copied numbers and drift from the code | No |
 | `giao-dien` | UI coder (phase 4+). Writes the PySide6 `ui` layer through `app`, with i18n (F11) and accessibility (N12); uses the user-level `design-taste-frontend` skill only as reference for app screens, never its web scripts or network assets | Yes, `src/teleport/ui/`, `tests/ui/` and the `ui` rows of `docs/architecture.md` |
 | `dong-goi` | Packager (trial builds from phase 2, mainly phase 6). Installers, release workflow, dependency licence audit; never tags, releases or pushes | Packaging files, `.github/workflows/`, and `pyproject.toml` when assigned |
-| `tom-tat` | Summarizer. After the verdict, summarizes verified changes, writes the CHANGELOG entry (fixing contradicting `[Unreleased]` lines) and drafts the commit message | `docs/CHANGELOG.md` only |
 
 Subagents cannot call each other, so **the main session orchestrates**. For any non-trivial feature, run this pipeline:
 1. `truong-nhom` makes the plan.
@@ -87,7 +86,7 @@ Subagents cannot call each other, so **the main session orchestrates**. For any 
 3. Run `lap-trinh` and `viet-test` in parallel, from the spec's API and done criteria (`giao-dien` instead of `lap-trinh` for `ui`).
 4. Loop `soat-code` and fixes until no **nghiêm trọng** or **cao** issues remain. When the change takes input from other machines (`net`, pairing, discovery, receiving files), run `tan-cong` in parallel with `soat-code`; its reproduced findings count the same as review findings. When it may affect an N requirement, run `do-dac` before and after.
 5. Re-run ruff and the full pytest after the last fix, then `truong-nhom` gives the verdict, fed with those results and the reports.
-6. `tom-tat` writes the CHANGELOG entry, the summary and the commit message.
+6. The main session writes the CHANGELOG entry (rules: `CONTRIBUTING.md`) from the verified diff and the points the verdict lists, drafts the commit message, and shows both to the user before committing.
 
 Run `soat-tai-lieu` before each release and after large doc changes. Small fixes of a few lines can skip the pipeline.
 
