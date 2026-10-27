@@ -84,7 +84,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | core | `blocks.py` | Khung khối nhị phân 41 byte kèm SHA-256 (`BLOCK_HEADER`, `pack_header`, `parse_header` → `BlockHeader`, `check_block` theo kích thước file; sai → `BlockError`); chia khối (`block_count`, `block_length`); trần kích thước file ([protocol.md](protocol.md) mục 4.2) | ✅ |
 | core | `merkle.py` | Merkle root từ hash các khối nối liền trong một `bytearray` ([protocol.md](protocol.md) mục 4.4, có test vector) | ✅ |
 | core | `bitfield.py` | `Bitfield`: bảng khối bên nhận đã có, bit cao nhất trước, base64 chuẩn chặt trên dây; sai độ dài hay bit thừa ≠ 0 → `ValueError` ([protocol.md](protocol.md) mục 3.3) | ✅ |
-| core | `resume_state.py` | Nhật ký nối lại `.state` (sans-IO): mã hóa header và các bản ghi `MARK`/`CLEAR`/`CLEAR_ALL`/`TARGET`/`RESERVED`, đọc lại nhật ký theo từng đoạn bytes (dừng ở bản ghi hỏng đầu tiên, báo vị trí cần cắt), dựng bitfield + hash, quyết định khi nào gộp và cách phục hồi tên đích (mục 4); đọc/ghi file ở `app` | ⬜ |
+| core | `resume_state.py` | Trạng thái bền của bên nhận (sans-IO, mục 4): nhật ký `.state` (mã hóa và đối chiếu header, các bản ghi `MARK`/`CLEAR`/`CLEAR_ALL`/`TARGET`/`RESERVED`; `StateReplay` đọc lại cả file theo từng đoạn bytes trong trần `max_state_length`, dừng sạch ở bản ghi hỏng đầu tiên và báo vị trí cần cắt, dựng bitfield + hash; khi nào gộp và các bản ghi của bản gọn; bảng phục hồi tên đích `recover_target`); mã hóa và kiểm `transfer.json` (`TransferRecord`) và `tombstones.json` (`TombstoneRecord`); mọi lỗi → `StateError`. Đọc/ghi file ở `app` | ✅ |
 | core | `transfer.py` | Máy trạng thái gửi/nhận sans-IO (`TransferEngine`): hàng `offer` có trần; đồng bộ lại ([protocol.md](protocol.md) mục 6.3); `seq` và kết nối dữ liệu (mục 4.1); `fsync` theo lô trước khi bật bit; khối trùng và thứ tự khối; đọc lại và Merkle; bia mộ / `reject` / lượt đã xong có trần mỗi thiết bị ([protocol.md](protocol.md) mục 6.3); chờ nối lại tới 24 giờ (`RECONNECT_GRACE`, mục 6.2); `check_offer`, `mtime_ms`; lỗi đĩa kèm nguyên nhân (`storage_failed(detail=)`: `DISK`, `TEMP_EXISTS`). Giai đoạn 2: trạng thái chỉ trong RAM | ✅ |
 | core | `ratelimit.py` | TokenBucket giới hạn tốc độ gửi theo đoạn payload, burst một đoạn ([protocol.md](protocol.md) mục 4.2) | ✅ |
 | trust | `identity.py` | Khóa ECDSA P-256, chứng chỉ tự ký, fingerprint; kiểm tra chứng chỉ của máy khác (`PeerCert`; mọi lỗi phân tích → `InvalidCertificate`); danh tính hỏng → `IdentityError`, không tự tạo lại; ký chứng minh giữ khóa khi ghép đôi (`load_pairing_signer` → `PairingSigner`) và kiểm chữ ký của máy kia (`verify_pairing_proof`, không bao giờ ném) | ✅ |
@@ -117,7 +117,8 @@ Module chỉ được tạo khi có code thật, không tạo file rỗng trư�
 | `<config_dir>/identity.lock` | Khóa trong lúc tạo danh tính, để nhiều tiến trình chạy lần đầu cùng lúc nhận cùng một danh tính ✅ |
 | `<config_dir>/settings.json` | Cài đặt người dùng: cổng dự phòng khi 47474 bận ([protocol.md](protocol.md) mục 2.1) ✅; sau này cả cài đặt theo từng thiết bị tin cậy (“Hỏi trước khi nhận”, “Đồng bộ clipboard”), theo `device_id` ⬜. Không đưa vào `trusted.json`: file đó bỏ trường lạ khi ghi và bị bản cũ từ chối nếu tăng `version`. Chi tiết bên dưới |
 | `<config_dir>/history.json` | 100 lượt truyền gần nhất (mvp F5), ghi nguyên tử ⬜ |
-| `<thư mục nhận>/.teleport/<transfer_id>/transfer.json` | Trạng thái mức lượt truyền, còn sau khi khởi động lại: manifest của `offer` (chỉ nằm ở đây; `.state` chỉ đối chiếu), thiết bị gửi (`device_id`), đã chấp nhận, file hiện tại, các file đã `verified`; ghi nguyên tử; xóa khi hết thời hạn nhớ lượt đã kết thúc, tính từ lúc file cuối xong ([protocol.md](protocol.md) mục 6.3, gạch “Bia mộ”) ⬜ |
+| `<config_dir>/tombstones.json` | Bia mộ của lượt đã hủy hay thất bại, cả hai chiều, còn sau khi khởi động lại ([protocol.md](protocol.md) mục 6.3). Định dạng bên dưới (mã hóa ✅ `teleport.core.resume_state`; đọc/ghi ở `app` ⬜) |
+| `<thư mục nhận>/.teleport/<transfer_id>/transfer.json` | Trạng thái mức lượt truyền, còn sau khi khởi động lại: manifest của `offer` (chỉ nằm ở đây; `.state` chỉ đối chiếu), máy nhận và máy gửi (`device_id`), số file đầu đã `verified` (file đang nhận là file kế tiếp); có file nghĩa là đã chấp nhận; ghi nguyên tử; xóa khi hết thời hạn nhớ lượt đã kết thúc, tính từ lúc file cuối xong ([protocol.md](protocol.md) mục 6.3, gạch “Bia mộ”). Định dạng bên dưới (mã hóa ✅ `teleport.core.resume_state`; đọc/ghi ở `app` ⬜) |
 | `<thư mục nhận>/.teleport/<transfer_id>/<file_index>.part` | Dữ liệu đang nhận, ghi đúng vị trí từng khối ✅ (Giai đoạn 2, `teleport.app.storage`; chi tiết bên dưới) |
 | `<thư mục nhận>/.teleport/<transfer_id>/<file_index>.state` | Trạng thái nối lại của file đó, dạng nhật ký chỉ ghi thêm. Quy tắc bền vững: [protocol.md](protocol.md) mục 4.3; định dạng: bên dưới ⬜ |
 
@@ -178,6 +179,23 @@ Do `teleport.lock.NodeLock` giữ (tiện ích dùng chung như `paths.py`, vì 
 - Tiến trình chết, kể cả bị kill, thì hệ điều hành tự nhả khóa: không có khóa treo phải xóa tay. Nhưng Windows nhả khóa của tiến trình bị kill **không đồng bộ**, nên chỗ nào bên giữ khóa có thể vừa chết (node khởi động lại sau khi sập) phải lấy khóa có chờ: `acquire(timeout=...)`, như `Node.start` với `LOCK_TIMEOUT`.
 - File không chứa gì (không ghi PID) và được giữ lại sau khi nhả khóa.
 
+### `tombstones.json`
+
+Do `teleport.core.resume_state` mã hóa và đọc (`TombstoneRecord`, `encode_tombstones`, `decode_tombstones`) ✅; `app` đọc/ghi file bằng `teleport.atomic.write_atomic` ⬜ (Giai đoạn 3).
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {"device_id": "3f2a…", "direction": "send", "transfer_id": "9c41…", "reason": "user", "unsent": false, "at": "2026-10-27T10:00:00Z"}
+  ]
+}
+```
+
+- `direction`: `send` hoặc `receive`, nhìn từ máy này; `reason`: như `cancel.reason` ([protocol.md](protocol.md) mục 3.3); `unsent`: chưa gửi được `cancel` cho máy kia; `at`: lúc lập bia mộ, UTC, dạng `YYYY-MM-DDTHH:MM:SSZ`. `app` đổi `at` ra tuổi: giờ tường hiện tại − `at`, kẹp ≥ 0 (đồng hồ lùi thì tuổi là 0).
+- **Ghi:** UTF-8, mỗi mục một dòng, giữ thứ tự bên gọi đưa vào. Tối đa `MAX_TOMBSTONE_FILE` = 8 MiB: vượt thì bỏ mục cũ nhất (`at` nhỏ nhất) tới khi vừa.
+- **Đọc:** không bao giờ chặn app. File > 8 MiB (kiểm trước khi giải mã), không phải JSON UTF-8 (chấp nhận BOM), không phải object, `version` khác số nguyên 1 hay `entries` không phải mảng → cảnh báo (chỉ loại lỗi, không ghi nội dung), coi như rỗng. Mục thiếu hay sai trường → bỏ riêng mục đó. Chỉ nạp mục của thiết bị còn tin cậy, trong thời hạn và số mục tối đa mỗi thiết bị của [protocol.md](protocol.md) mục 6.3. Trường lạ bị bỏ qua.
+
 ### Thư mục nhận (`teleport.app.storage`)
 
 Do `teleport.app.storage` quản lý (API đồng bộ, mục 5). Giai đoạn 2 chưa có `.state` và `transfer.json` (bên dưới).
@@ -207,9 +225,30 @@ Do `teleport.app.storage` quản lý (API đồng bộ, mục 5). Giai đoạn 2
 - **Dọn một lượt:** chỉ xóa các `.part` do chính lượt đó tạo mà còn là file thường cùng danh tính lúc tạo (gặp `PermissionError` thì thử lại), rồi `<transfer_id>` khi đã rỗng. Không xóa theo mẫu tên, không đệ quy, không xóa `.teleport`; file lạ trong thư mục tạm được để nguyên.
 - **`fsync`:** lỗi `fsync` thư mục bỏ qua (một số hệ file như SMB không hỗ trợ), như `teleport.atomic`; lỗi `fsync` file luôn được báo lên (xử lý: “Lỗi khi đang nhận” ở mục `.state` bên dưới).
 
+### `transfer.json`
+
+Một file cho mỗi lượt nhận, trong thư mục tạm của lượt đó. Do `teleport.core.resume_state` mã hóa và kiểm (`TransferRecord`, `encode_transfer_record`, `decode_transfer_record`) ✅; `teleport.app.storage` đọc/ghi file ⬜ (Giai đoạn 3).
+
+```json
+{
+  "version": 1,
+  "receiver": "<device_id máy này>",
+  "sender": "<device_id máy gửi>",
+  "transfer_id": "<32 hex, trùng tên thư mục tạm>",
+  "block_size": 1048576,
+  "files": [{"name": "video.mp4", "size": 0, "mtime": 0}],
+  "verified": 0,
+  "done_at": null
+}
+```
+
+- `files`: đúng manifest của `offer` (`name` như máy gửi gửi, chưa làm sạch; `mtime` mili giây). `verified`: số file đầu đã đổi sang tên thật. Đủ mọi file thì có `done_at`, lúc file cuối xong (UTC, `YYYY-MM-DDTHH:MM:SSZ`); bản ghi lượt đã xong được giữ theo thời hạn ở [protocol.md](protocol.md) mục 6.3.
+- **Ghi:** UTF-8, `indent=2`, giữ nguyên ký tự Unicode.
+- **Đọc:** tối đa `MAX_TRANSFER_RECORD` = 2 MiB (kiểm trước khi giải mã); JSON UTF-8, chấp nhận BOM, từ chối `NaN`/`Infinity`; phải đủ mọi trường; `version` = số nguyên 1; `transfer_id` = tên thư mục tạm; `block_size` = `BLOCK_SIZE`; `files` qua đúng bộ kiểm `offer` của `teleport.core.messages`; 0 ≤ `verified` ≤ số file; `done_at` có khi và chỉ khi `verified` = số file. Trường lạ bị bỏ qua. `app` kiểm thêm `receiver` là máy này và `sender` còn tin cậy. Sai bất kỳ điều gì → không phải lượt của máy này: không khôi phục, chỉ dọn theo luật thư mục mồ côi.
+
 ### `<file_index>.state` (nhật ký nối lại) ⬜
 
-Sẽ do `teleport.core.resume_state` (sans-IO) mã hóa và đọc lại; `app` đọc/ghi file. Quy tắc bền vững (thứ tự `fsync`, khi nào một khối được tính là đã có): [protocol.md](protocol.md) mục 4.3, 4.4. Nhật ký **chỉ ghi thêm**: không bao giờ ghi lại toàn bộ trạng thái ở mỗi lần đánh dấu (lý do: [ke_hoach.md](ke_hoach.md) mục 3.4).
+Do `teleport.core.resume_state` (sans-IO) mã hóa và đọc lại ✅; `app` đọc/ghi file ⬜ (Giai đoạn 3). Quy tắc bền vững (thứ tự `fsync`, khi nào một khối được tính là đã có): [protocol.md](protocol.md) mục 4.3, 4.4. Nhật ký **chỉ ghi thêm**: không bao giờ ghi lại toàn bộ trạng thái ở mỗi lần đánh dấu (lý do: [ke_hoach.md](ke_hoach.md) mục 3.4).
 
 Mọi số nguyên là số không dấu, big-endian (như khung khối, [protocol.md](protocol.md) mục 4.2). `crc32` là CRC-32 IEEE (`zlib.crc32`) của mọi byte đứng trước nó trong cùng header hay cùng bản ghi.
 
@@ -253,7 +292,11 @@ Một `MARK` 16 khối dài 583 byte, tức khoảng 36,4 byte mỗi khối: nh�
 - `MARK`: bật bit và lưu hash của từng index. Index đã có thì bản ghi sau thắng.
 - `CLEAR`: tắt bit các index đó. `CLEAR_ALL`: tắt mọi bit.
 - `TARGET`: nhớ tên đích và quên mọi `RESERVED` trước đó. `RESERVED`: ghi nhận đã giữ chỗ, chỉ khi tên trùng `TARGET` cuối cùng; khác tên thì bỏ qua.
-- Gặp bản ghi đầu tiên bị cụt, sai `crc32`, có loại lạ, `n` = 0, index ≥ số khối của file, `len` ngoài khoảng ở trên, hoặc tên không phải UTF-8 hợp lệ hay đổi đi khi qua bộ làm sạch tên file ([ke_hoach.md](ke_hoach.md) mục 3.3) → dừng ở đó, bỏ phần còn lại: cắt file về cuối bản ghi tốt cuối cùng rồi `fsync`, để bản ghi nối sau không nằm sau rác. Mất điện chỉ làm cụt bản ghi đang ghi dở, nên mất tối đa một `MARK` (≤ 16 khối), vẫn trong giới hạn gửi lại ở [protocol.md](protocol.md) mục 4.3.
+- Gặp bản ghi đầu tiên bị cụt, sai `crc32`, có loại lạ, `n` = 0, index ≥ số khối của file, `len` ngoài khoảng ở trên, tên không phải UTF-8 hợp lệ hay đổi đi khi qua bộ làm sạch tên file ([ke_hoach.md](ke_hoach.md) mục 3.3), hoặc là bản ghi `TARGET`/`RESERVED` thứ `MAX_NAME_RECORDS` + 1 (`MAX_NAME_RECORDS` = 1024, đếm chung cả hai loại) → dừng ở đó, bỏ phần còn lại: cắt file về cuối bản ghi tốt cuối cùng rồi `fsync`, để bản ghi nối sau không nằm sau rác. Mất điện chỉ làm cụt bản ghi đang ghi dở, nên mất tối đa một `MARK` (≤ 16 khối), vẫn trong giới hạn gửi lại ở [protocol.md](protocol.md) mục 4.3.
+- **Trần đọc:** chỉ đọc tối đa `max_state_length(n)` byte của file `n` khối = 2 × kích thước gọn lớn nhất của file đó (header, `TARGET` và `RESERVED` với tên dài nhất, các `MARK` gọn của mọi khối; “Gộp” bên dưới) + 64 KiB + một bản ghi lớn nhất (`MARK` 65 535 khối). Từ byte đó trở đi là rác: dừng đọc và cắt như gặp bản ghi hỏng. Nhờ luật gộp, `.state` do Teleport ghi không bao giờ chạm trần.
+- **Trần bản ghi tên:** nhật ký hợp lệ chỉ có vài `TARGET`/`RESERVED` (mỗi lần tới bước đổi tên thêm 2, bản gọn có tối đa 2); trần 1024 chặn việc dựng `.state` toàn bản ghi tên để bắt bộ đọc chạy bộ làm sạch tên hàng triệu lần. Bên ghi phải gộp (bản gọn có tối đa 2 bản ghi tên) trước khi nối `TARGET`/`RESERVED` khi số bản ghi tên đã có (`ReplayResult.name_records` cộng các bản ghi tên đã nối từ lần đọc lại) ≥ `MAX_NAME_RECORDS` − 2. Lý do: vượt trần thì bộ đọc dừng ở bản thứ 1025, nên cặp `TARGET X` + `RESERVED X` cũ đứng trước có thể được coi là của mình và dòng “0 byte” của bảng phục hồi bên dưới ghi đè file 0 byte của người khác mang tên `X`.
+- **Chi phí đọc lại** tuyến tính theo độ dài đã đọc, nên bị chặn bởi trần đọc, kể cả với `.state` do chương trình khác dựng: `CLEAR_ALL` chỉ tắt các khối đã bật từ lần `CLEAR_ALL` trước, không xóa cả bảng mỗi lần. Bản ghi tí hon (`CLEAR_ALL`, `CLEAR` 1 khối, `MARK` 1 khối) vẫn đắt nhất mỗi byte; số đo và hệ quả cho hạn của mỗi lượt khôi phục: docstring `teleport.core.resume_state.StateReplay`.
+- Header hỏng (cấu trúc, hay số khối theo `size` và `block_size` khác số khối của file) → `StateError`, xử lý như header không khớp ở trên; bản ghi hỏng thì không báo lỗi, chỉ dừng.
 - `.state` nằm trên đĩa của chính máy nhận nhưng vẫn được kiểm như dữ liệu không tin cậy, vì chương trình khác cũng ghi được vào thư mục nhận.
 
 **Kết thúc một file**, sau khi lượt đọc lại và Merkle root đều khớp ([protocol.md](protocol.md) mục 4.4, bước 6), theo đúng thứ tự:
@@ -272,20 +315,20 @@ Một `MARK` 16 khối dài 583 byte, tức khoảng 36,4 byte mỗi khối: nh�
 
 Ghi chú nền tảng: trên macOS `os.fsync` không xả cache của ổ đĩa, nên các `fsync` ở trên dùng `fcntl.F_FULLFSYNC`, lùi về `os.fsync` khi hệ file không hỗ trợ (ví dụ SMB); Windows không `fsync` được thư mục từ Python, nên bước 3 thay bằng `os.fsync` (FlushFileBuffers) trên handle của chính file giữ chỗ vừa tạo rồi mới đóng handle, còn bước 5 và 6 gộp thành một lần `MoveFileExW(.part, đích, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`, vẫn thử lại khi `PermissionError` như `os.replace`; mọi handle tới file giữ chỗ phải đóng trước khi đổi tên. Cả ba đã cài ✅ (`teleport.app.storage`, Giai đoạn 2). Vẫn chưa chắc FlushFileBuffers trên file làm bền được mục thư mục trên NTFS và FAT/exFAT.
 
-**Phục hồi tên đích** sau khi đọc lại (khi `transfer.json` chưa ghi file là `verified`). Không bao giờ xóa hay ghi đè một file mà `.state` không chứng minh được là của mình. Xét bảng từ trên xuống và dùng dòng đầu tiên khớp; dòng “đúng `size` byte, không còn `.part`” đứng trước dòng “0 byte” vì thiếu `.part` thì phải xét nó trước (file rỗng có `size` = 0):
+**Phục hồi tên đích** sau khi đọc lại (khi `transfer.json` chưa ghi file là `verified`). Không bao giờ xóa hay ghi đè một file mà `.state` không chứng minh được là của mình. Xét bảng từ trên xuống và dùng dòng đầu tiên khớp; dòng “đúng `size` byte, không còn `.part`” đứng trước dòng “0 byte” vì thiếu `.part` thì phải xét nó trước (file rỗng có `size` = 0). Cột cuối là giá trị `teleport.core.resume_state.recover_target` trả về:
 
-| `.state` cho biết | File mang tên đích trên đĩa | Làm gì |
-|---|---|---|
-| Không có `TARGET` | — | Chọn tên khi tới bước đổi tên, như bình thường |
-| `TARGET` không có `RESERVED` khớp | Bất kỳ | Không đụng file mang tên đó; tới bước đổi tên thì chọn tên mới |
-| `TARGET` + `RESERVED` | Đúng `size` byte, và không còn `.part` | Đã sập sau `os.replace`: đọc lại file đó, kiểm từng khối theo hash đã lưu; khớp hết thì coi như file đã `verified` và làm tiếp từ bước 6 ở trên |
-| `TARGET` + `RESERVED` | 0 byte, và còn `.part` | Dùng lại làm file giữ chỗ; làm lại lượt đọc lại ([protocol.md](protocol.md) mục 4.4, bước 3) rồi mới làm tiếp từ bước 5 (`.part` có thể đã bị sửa trong lúc app tắt) |
-| `TARGET` + `RESERVED` | 0 byte, và không còn `.part` | File đó là của máy này: coi như chưa có khối nào (ghi lại header mới, gửi `resume` với bitfield toàn 0) và nhận xong thì dùng lại nó làm file giữ chỗ, không chọn tên mới |
-| Mọi trường hợp còn lại (kể cả kiểm ở dòng “đúng `size`” có khối sai) | Bất kỳ | Không đụng file đó, chọn tên mới; còn thiếu `.part` thì coi như chưa có khối nào: ghi lại header mới (để `.state` khớp trạng thái trong RAM) và gửi `resume` với bitfield toàn 0 |
+| `.state` cho biết | File mang tên đích trên đĩa | Làm gì | `TargetRecovery` |
+|---|---|---|---|
+| Không có `TARGET` | — | Chọn tên khi tới bước đổi tên, như bình thường | `NEW_NAME` |
+| `TARGET` không có `RESERVED` khớp | Bất kỳ | Không đụng file mang tên đó; tới bước đổi tên thì chọn tên mới | `NEW_NAME` |
+| `TARGET` + `RESERVED` | Đúng `size` byte, và không còn `.part` | Đã sập sau `os.replace`: đọc lại file đó, kiểm từng khối theo hash đã lưu; khớp hết thì coi như file đã `verified` và làm tiếp từ bước 6 ở trên | `VERIFY_TARGET` |
+| `TARGET` + `RESERVED` | 0 byte, và còn `.part` | Dùng lại làm file giữ chỗ; làm lại lượt đọc lại ([protocol.md](protocol.md) mục 4.4, bước 3) rồi mới làm tiếp từ bước 5 (`.part` có thể đã bị sửa trong lúc app tắt) | `REUSE_PLACEHOLDER` |
+| `TARGET` + `RESERVED` | 0 byte, và không còn `.part` | File đó là của máy này: coi như chưa có khối nào (ghi lại header mới, gửi `resume` với bitfield toàn 0) và nhận xong thì dùng lại nó làm file giữ chỗ, không chọn tên mới | `RESTART_REUSE` |
+| Mọi trường hợp còn lại (kể cả kiểm ở dòng “đúng `size`” có khối sai) | Bất kỳ | Không đụng file đó, chọn tên mới; còn thiếu `.part` thì coi như chưa có khối nào: ghi lại header mới (để `.state` khớp trạng thái trong RAM) và gửi `resume` với bitfield toàn 0 | `NEW_NAME`; thiếu `.part`: `RESTART` |
 
 Còn một khe được chấp nhận: sập sau khi `O_CREAT | O_EXCL` tạo file giữ chỗ nhưng trước khi `RESERVED` bền trên đĩa thì file 0 byte mang tên thật bị bỏ lại. Việc dọn file tạm cũ chỉ dọn trong `.teleport/`, nên không đụng file này; nó được để lại cho người dùng.
 
-**Gộp:** kích thước gọn là độ dài của header, cộng `TARGET` cuối cùng (nếu có) rồi `RESERVED` (chỉ khi trùng tên với `TARGET` đó), cộng các `MARK` chứa đúng các khối đang có bit bật (mỗi `MARK` tối đa 65 535 khối). Sau mỗi lần nối và khi đọc lại, nếu `.state` dài hơn 2 × kích thước gọn + 64 KiB thì ghi lại bản gọn bằng `write_atomic`. Nhật ký chỉ dài hơn bản gọn khi có `CLEAR`, `CLEAR_ALL`, khối được đánh dấu lại, hay nhiều `TARGET`/`RESERVED`, nên hiếm khi phải gộp.
+**Gộp:** kích thước gọn là độ dài của header, cộng `TARGET` cuối cùng (nếu có) rồi `RESERVED` (chỉ khi trùng tên với `TARGET` đó), cộng các `MARK` chứa đúng các khối đang có bit bật, theo thứ tự tăng dần, mỗi `MARK` tối đa `COMPACT_MARK_BLOCKS` = 4096 khối (định dạng cho phép tới 65 535; `MARK` nhỏ hơn giữ mỗi bản ghi của bản gọn ở khoảng 144 KiB khi ghi theo đoạn). `ReplayResult.compact_length` tính đúng độ dài đó, kể cả header. Sau mỗi lần nối và khi đọc lại, nếu `.state` dài hơn 2 × kích thước gọn + 64 KiB thì ghi lại bản gọn bằng `write_atomic`. Nhật ký chỉ dài hơn bản gọn khi có `CLEAR`, `CLEAR_ALL`, khối được đánh dấu lại, hay nhiều `TARGET`/`RESERVED`, nên hiếm khi phải gộp.
 
 - Đóng handle đang nối thêm vào `.state` trước khi gọi `write_atomic` (khi gộp hay khi ghi lại header), vì Windows không `os.replace` được lên file đang mở; xong thì mở lại để nối tiếp.
 - Bản gọn ghi `TARGET` trước, rồi mới tới `RESERVED` khớp tên, để đọc lại bản gọn cho đúng kết quả như nhật ký cũ. Bản gọn được sinh từ bitfield và hash đang giữ trong RAM rồi ghi ra theo từng đoạn, không dựng cả bản gọn thành một khối bytes (RAM: [ke_hoach.md](ke_hoach.md) mục 8). `write_atomic` hiện nhận cả nội dung một lần, nên sẽ cần thêm cách ghi theo đoạn.
