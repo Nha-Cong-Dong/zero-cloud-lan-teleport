@@ -104,6 +104,29 @@ def temp_dir(net, tid: str) -> Path:
     return net.receive_dir / ".teleport" / tid
 
 
+def only_done_record(net, tid: str) -> bool:
+    """P3-3b (spec-p3-3b mục 5.2, `RemoveTemp.keep_record`): sau DONE thư mục tạm chỉ còn `transfer.json`,
+    đọc lại được, đủ `verified` và có `done_at` (protocol §6.3, “Nhớ lượt đã kết thúc”)."""
+    d = temp_dir(net, tid)
+    try:
+        names = os.listdir(d)
+    except FileNotFoundError:
+        return False
+    if names != ["transfer.json"]:
+        return False
+    rec = rs.decode_transfer_record((d / "transfer.json").read_bytes(), dir_name=tid)
+    return rec.done_at is not None and rec.verified == len(rec.offer.files)
+
+
+async def wait_done_record(net, tid: str, timeout: float = 10.0) -> None:
+    """Dọn thư mục tạm là việc nền: dò có hạn tới khi chỉ còn `transfer.json` của lượt đã xong."""
+    await wait_until(
+        lambda: only_done_record(net, tid),
+        timeout,
+        f"thư mục tạm {tid[:8]} chưa chỉ còn transfer.json có done_at",
+    )
+
+
 def describe(fin) -> str:
     if fin is None:
         return "chưa có TransferFinished"
@@ -381,7 +404,8 @@ async def relay_factory(transfer_nodes):
 
 
 def test_constants_match_plan(T):
-    """Kế hoạch mục 2.10: các con số mới, là biến cấp module (đọc lúc dùng)."""
+    """Kế hoạch mục 2.10: các con số mới, là biến cấp module (đọc lúc dùng); P3-3b (spec-p3-3b mục 2.1):
+    `TOMBSTONE_FLUSH_TIMEOUT`, `TOMBSTONE_MIN_INTERVAL`, `CLEANUP_INTERVAL`."""
     from teleport.app import diskio
 
     assert T.DISK_OP_TIMEOUT == 60
@@ -395,13 +419,17 @@ def test_constants_match_plan(T):
     assert T.PROGRESS_INTERVAL == 1
     assert T.SPEED_WINDOW == 5
     assert T.WRITE_QUEUE_BLOCKS == 8
+    assert T.TOMBSTONE_FLUSH_TIMEOUT == 2
+    assert T.TOMBSTONE_MIN_INTERVAL == 1
+    assert T.CLEANUP_INTERVAL == 24 * 3600
     assert diskio.DISK_THREADS == 4
 
 
 def test_public_api_is_exported(T):
-    """Kế hoạch mục 3: `__all__` và các lớp re-export từ `core`/`sources`."""
+    """Kế hoạch mục 3: `__all__` và các lớp re-export từ `core`/`sources`; P3-3b: `TransferResumed`."""
     expected = {
         "TransferManager",
+        "TransferResumed",
         "TransferResult",
         "TransferUpdate",
         "OfferReceived",
@@ -439,7 +467,7 @@ def test_data_unreachable_is_reexport_of_core_class(T):
 
 
 def test_transfer_result_has_exactly_planned_members(T):
-    """Kế hoạch mục 3, bảng `TransferResult`."""
+    """Kế hoạch mục 3, bảng `TransferResult`; P3-3b (spec-p3-3b mục 2.1): thêm `SUSPENDED = "suspended"`."""
     assert issubclass(T.TransferResult, StrEnum)
     assert {m.name for m in T.TransferResult} == {
         "DONE",
@@ -461,7 +489,9 @@ def test_transfer_result_has_exactly_planned_members(T):
         "PEER_ERROR",
         "UNKNOWN_TRANSFER",
         "CANCELLED_OTHER",
+        "SUSPENDED",
     }
+    assert T.TransferResult.SUSPENDED == "suspended"
 
 
 @pytest.mark.parametrize(
@@ -471,7 +501,11 @@ def test_transfer_result_has_exactly_planned_members(T):
         ("TransferStatusChanged", ["info"]),
         ("TransferProgress", ["info", "bytes_per_second", "eta"]),
         ("FileDone", ["key", "file_index", "name", "path"]),
-        ("TransferFinished", ["info", "result", "by_peer", "reason", "file_index", "reject"]),
+        (
+            "TransferFinished",
+            ["info", "result", "by_peer", "reason", "file_index", "reject", "payload_sent"],
+        ),
+        ("TransferResumed", ["info"]),
     ],
 )
 def test_event_classes_are_frozen_dataclasses_with_planned_fields(T, cls, fields):
@@ -489,8 +523,9 @@ def test_event_classes_are_frozen_dataclasses_with_planned_fields(T, cls, fields
 @integration
 @pytest.mark.parametrize("client", ["sender", "receiver"])
 async def test_ac1_single_file_arrives_intact_with_name_and_mtime(T, transfer_nodes, client):
-    """AC-1: một file 5 MiB + 1, hai chiều: SHA khớp, tên giữ, mtime = offer (ms), không còn thư mục
-    tạm, hai phía DONE, `FileDone.path` của A đúng; `OfferReceived` mang đủ thông tin."""
+    """AC-1: một file 5 MiB + 1, hai chiều: SHA khớp, tên giữ, mtime = offer (ms), thư mục tạm chỉ còn
+    `transfer.json` có `done_at` (P3-3b), hai phía DONE, `FileDone.path` của A đúng; `OfferReceived` mang
+    đủ thông tin."""
     R = T.TransferResult
     net = await transfer_nodes(client=client)
     A, B = net.A, net.B
@@ -512,7 +547,7 @@ async def test_ac1_single_file_arrives_intact_with_name_and_mtime(T, transfer_no
     assert sha256_of(dst) == sha256_of(src)
     assert mtime_ms_of(dst) == 1_600_000_000_123
     assert received_names(net) == {name}
-    assert not temp_dir(net, tid).exists()
+    await wait_done_record(net, tid)
 
     offers = A.trec.of("OfferReceived", tid)
     assert len(offers) == 1
@@ -560,7 +595,7 @@ async def test_ac2_three_files_with_empty_one_open_data_only_for_non_empty(
     assert [d.file_index for d in net.A.trec.of("FileDone", tid)] == [0, 1, 2]
     opened = collections.Counter(c.opening.file_index for c in open_data_spy.of(tid))
     assert set(opened) == {1, 2}, f"data_open theo file: {dict(opened)} (file rỗng không được mở)"
-    assert not temp_dir(net, tid).exists()
+    await wait_done_record(net, tid)
 
 
 @integration
@@ -574,7 +609,7 @@ async def test_ac3_64_mib_random_file_two_directions(T, transfer_nodes, client):
     assert_finished(fin_b, R.DONE)
     assert_finished(fin_a, R.DONE)
     assert sha256_of(net.receive_dir / "lon.bin") == sha256_of(src)
-    assert not temp_dir(net, key.transfer_id).exists()
+    await wait_done_record(net, key.transfer_id)
 
 
 @integration
@@ -1259,39 +1294,75 @@ async def test_ac19_foreign_data_open_is_closed_and_transfer_unaffected(
 
 
 @integration
-@pytest.mark.parametrize("closer", ["A", "B"])
-async def test_ac21_22_close_mid_transfer_cancels_other_side_quickly(
-    T, transfer_nodes, write_spy, app_helpers, closer
+async def test_ac22_sender_close_mid_transfer_cancels_receiver_quickly(
+    T, transfer_nodes, write_spy, app_helpers
 ):
-    """AC-21 (A nhận đóng) / AC-22 (B gửi đóng): `close()` giữa lượt → bên kia `CANCELLED_USER`
-    (by_peer True) ≤ 1 s; bên đóng nhận `TransferFinished(CANCELLED_USER)` trước khi `close()` trả về
-    và không còn sự kiện nào sau đó; A không giữ `.part` hay thư mục tạm; `node.lock` nhả."""
+    """AC-22 (B gửi đóng): `close()` giữa lượt → A `CANCELLED_USER` (by_peer True) ≤ 1 s; B nhận
+    `TransferFinished(CANCELLED_USER)` trước khi `close()` trả về và không còn sự kiện nào sau đó; A không
+    giữ `.part` hay thư mục tạm; `node.lock` nhả. (P3-3b: phía gửi không đổi; phía nhận đóng thì tạm dừng,
+    `test_ac21_receiver_close_mid_transfer_suspends`.)"""
     R = T.TransferResult
     net = await transfer_nodes(sender_opts={"rate_limit": SLOW_RATE})
     A, B = net.A, net.B
     key = await B.transfers.send(A.id, [make_file(net.src, "f.bin", 16 * MiB)])
     tid = key.transfer_id
     await wait_until(lambda: write_spy.count(tid) >= 2, 20, "A chưa nhận khối nào")
-    X, Y = (A, B) if closer == "A" else (B, A)
 
     t0 = time.monotonic()
-    await asyncio.wait_for(X.close(), 15)
+    await asyncio.wait_for(B.close(), 15)
     t_ret = time.monotonic()
-    timed = X.trec.timed("TransferFinished", tid)
+    timed = B.trec.timed("TransferFinished", tid)
     assert timed, "bên đóng không nhận TransferFinished trong close()"
     assert timed[0][0] <= t_ret
     assert_finished(timed[0][1], R.CANCELLED_USER, by_peer=False)
-    n = len(X.trec.updates)
+    n = len(B.trec.updates)
 
-    fin_y = await Y.trec.wait_finished(tid, 5)
-    assert_finished(fin_y, R.CANCELLED_USER, by_peer=True)
-    t_other = Y.trec.timed("TransferFinished", tid)[0][0]
+    fin_a = await A.trec.wait_finished(tid, 5)
+    assert_finished(fin_a, R.CANCELLED_USER, by_peer=True)
+    t_other = A.trec.timed("TransferFinished", tid)[0][0]
     assert t_other - t0 <= 1.0, f"bên kia biết lượt bị hủy sau {t_other - t0:.2f} s"
 
     await asyncio.sleep(0.3)
-    assert len(X.trec.updates) == n, "còn sự kiện sau khi close() trả về"
-    assert app_helpers.lock_is_free(X.dir)
+    assert len(B.trec.updates) == n, "còn sự kiện sau khi close() trả về"
+    assert app_helpers.lock_is_free(B.dir)
     await wait_until(lambda: not temp_dir(net, tid).exists(), 10, "thư mục tạm chưa được xóa")
+    assert received_names(net) == set()
+
+
+@integration
+async def test_ac21_receiver_close_mid_transfer_suspends(T, transfer_nodes, write_spy, send_spy, app_helpers):
+    """AC-21 sửa ở P3-3b (spec-p3-3b mục 2.4, 5.2; protocol §6.2 “Tắt app nhận”): A nhận `close()` giữa
+    lượt → A nhận đúng một `TransferFinished(SUSPENDED)` (by_peer False) trước khi `close()` trả về, không
+    còn sự kiện nào sau đó; A không gửi `cancel`/`reject` nào của lượt; B thấy mất kết nối và chuyển sang
+    “Đang nối lại…” (không kết thúc); thư mục tạm của A còn `transfer.json`, `0.part`, `0.state`; `node.lock`
+    nhả."""
+    R = T.TransferResult
+    net = await transfer_nodes(sender_opts={"rate_limit": SLOW_RATE})
+    A, B = net.A, net.B
+    key = await B.transfers.send(A.id, [make_file(net.src, "f.bin", 16 * MiB)])
+    tid = key.transfer_id
+    await wait_until(lambda: write_spy.count(tid) >= 2, 20, "A chưa nhận khối nào")
+
+    await asyncio.wait_for(A.close(), 15)
+    t_ret = time.monotonic()
+    timed = A.trec.timed("TransferFinished", tid)
+    assert len(timed) == 1, [describe(u) for _, u in timed]
+    assert timed[0][0] <= t_ret
+    assert_finished(timed[0][1], R.SUSPENDED, by_peer=False)
+    n = len(A.trec.updates)
+
+    await wait_until(lambda: "reconnecting" in B.trec.statuses(tid), 5, "B chưa chuyển sang “Đang nối lại…”")
+    assert B.trec.finished(tid) is None, describe(B.trec.finished(tid))
+    on_wire = [
+        m for _, m in send_spy.sent if type(m).__name__ in ("Cancel", "Reject") and m.transfer_id == tid
+    ]
+    assert on_wire == [], f"A gửi {on_wire!r} cho lượt đang tạm dừng"
+
+    await asyncio.sleep(0.3)
+    assert len(A.trec.updates) == n, "còn sự kiện sau khi close() trả về"
+    assert app_helpers.lock_is_free(A.dir)
+    left = set(os.listdir(temp_dir(net, tid)))
+    assert {"transfer.json", "0.part", "0.state"} <= left, left
     assert received_names(net) == set()
 
 
@@ -1901,7 +1972,7 @@ async def test_p33a_transfer_json_durable_before_sender_sees_transferring_and_ma
 ):
     """V6: khi B thấy TRANSFERRING (A đã `accept`), `transfer.json` của A đã có và giải mã được, đúng
     máy nhận / máy gửi / manifest; mỗi lô `SyncPart` (`PartFile.commit`) để lại `0.state` có header hợp
-    lệ và số `MARK` tăng dần; xong thì `.teleport/<tid>` không còn."""
+    lệ và số `MARK` tăng dần; xong thì `.teleport/<tid>` chỉ còn `transfer.json` có `done_at` (P3-3b)."""
     R = T.TransferResult
     net = await transfer_nodes()
     A, B = net.A, net.B
@@ -1955,7 +2026,7 @@ async def test_p33a_transfer_json_durable_before_sender_sees_transferring_and_ma
     assert all(c[0] == 0 and c[1] == rs.encode_header(tid, 0, size) for c in batches)
     counts = [c[2] for c in batches]
     assert all(b > a for a, b in itertools.pairwise(counts)), f"số MARK không tăng: {counts}"
-    await wait_until(lambda: not temp_dir(net, tid).exists(), 10, "thư mục tạm chưa được xóa")
+    await wait_done_record(net, tid)
 
 
 @integration
@@ -2000,4 +2071,4 @@ async def test_p33a_part_byte_flipped_before_reread_appends_clear(
     assert clears and records[clears[0]] == ("clear", [2]), records
     remarked = [r for r in records[clears[0] + 1 :] if r[0] == "mark" and any(i == 2 for i, _ in r[1])]
     assert remarked, "khối 2 phải được đánh dấu lại sau CLEAR"
-    await wait_until(lambda: not temp_dir(net, key.transfer_id).exists(), 10, "thư mục tạm chưa được xóa")
+    await wait_done_record(net, key.transfer_id)

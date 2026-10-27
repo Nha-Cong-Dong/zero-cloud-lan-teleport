@@ -35,16 +35,17 @@ liên kết.
   đọc, pha 2 sửa đĩa theo bảng “Phục hồi tên đích”, không băm file lúc khởi động).
 - `remove_temp` xóa các `.part` do lượt tạo (cùng danh tính), các file khác của bố cục, rồi
   `<transfer_id>` khi đã rỗng; không bao giờ ném `OSError`. `close_temp` chỉ đóng handle.
-  `cleanup` dọn thư mục lượt cũ theo ba ngưỡng.
+  `cleanup` dọn thư mục lượt cũ theo ba ngưỡng; `discard_temp` xóa ngay một lượt nhận dở của
+  máy này (không xét ngưỡng).
 - `volume_info` nhận ra hệ file FAT (trần kích thước file ở protocol mục 3.3) và dung lượng trống.
 
 Toàn bộ API là đồng bộ (chặn), gọi từ thread; executor và hạn cho mỗi lần ghi hay `fsync` do
 `app/transfers.py` quyết. `ReceiveDir` an toàn khi nhiều thread gọi song song cho các lượt khác
-nhau (một `transfer_id` chỉ được một lời gọi `create_temp`, `open_for_resume` hay `cleanup` giữ tại
-một thời điểm: tập `_busy`); một `TransferTemp` và các `PartFile` của nó chỉ được một thread dùng
-tại một thời điểm. `remove_temp`, `close_temp` và `close` đòi không thread nào đang dùng các
-`PartFile` mà chúng đóng (đóng fd giữa lúc thread khác ghi có thể làm thread đó ghi vào một fd
-khác vừa được cấp lại cùng số).
+nhau (một `transfer_id` chỉ được một lời gọi `create_temp`, `open_for_resume`, `cleanup` hay
+`discard_temp` giữ tại một thời điểm: tập `_busy`); một `TransferTemp` và các `PartFile` của nó chỉ
+được một thread dùng tại một thời điểm. `remove_temp`, `close_temp` và `close` đòi không thread
+nào đang dùng các `PartFile` mà chúng đóng (đóng fd giữa lúc thread khác ghi có thể làm thread đó
+ghi vào một fd khác vừa được cấp lại cùng số).
 
 Lỗi: dùng sai API → `ValueError` (riêng `name` không phải chuỗi → `TypeError`); lỗi I/O thật
 → `OSError` nguyên trạng; các tình huống riêng → lớp con của `StorageError` (không lớp nào là
@@ -1278,6 +1279,39 @@ class ReceiveDir:
             root.close()
         return removed
 
+    def discard_temp(self, transfer_id: str, *, own_device_id: str) -> bool:
+        """Xóa ngay thư mục lượt nhận dở `transfer_id` của máy này (architecture mục 4 “Khôi phục”).
+
+        Như `cleanup` cho đúng một thư mục nhưng không xét ngưỡng thời gian: chỉ xóa khi đọc lại
+        `transfer.json` thấy hợp lệ, `receiver` = `own_device_id` và chưa xong (`done_at` None).
+        Lượt đang mở trong `ReceiveDir` này, đang được tạo, mở lại hay dọn → không làm gì. Chỉ xóa
+        file thường khớp bố cục, không theo liên kết, không đệ quy, rồi `rmdir` khi rỗng; không
+        bao giờ xóa `.teleport`. Trả True khi chính lần này xóa được `<transfer_id>`.
+
+        Tham số sai → ValueError; `.teleport` không an toàn → `UnsafeReceiveDirError`; lỗi trong
+        thư mục lượt chỉ log DEBUG (trả False).
+        """
+        self._ensure_open()
+        validate_transfer_id(transfer_id)
+        validate_device_id(own_device_id)
+        root = self._open_temp_root_ref()
+        if root is None:
+            return False
+        try:
+            with self._lock:
+                if self._in_use(transfer_id):
+                    return False
+                self._busy.add(transfer_id)
+            try:
+                return self._discard_one(root, transfer_id, own_device_id)
+            except (OSError, StorageError, ValueError) as e:
+                log.debug("lượt %s: không xóa được thư mục tạm (%s)", transfer_id, type(e).__name__)
+                return False
+            finally:
+                self._release(transfer_id)
+        finally:
+            root.close()
+
     def close(self) -> None:
         """Đóng mọi fd (thư mục nhận, `TransferTemp`, `PartFile` còn mở); không xóa gì. Gọi lại được.
 
@@ -2053,6 +2087,20 @@ class ReceiveDir:
                 threshold = retention
             last = scan.last_activity
             if last is None or last > wall_now or wall_now - last < threshold:
+                return False
+            self._remove_layout(sub.ref, keep_record=False, include_part=True)
+        finally:
+            sub.close()  # Windows: đóng handle canh của `<transfer_id>` trước `rmdir`
+        return root.rmdir(transfer_id)
+
+    def _discard_one(self, root: _TempRoot, transfer_id: str, own: str) -> bool:
+        """`discard_temp` cho một thư mục đã giữ trong `_busy`; True khi đã xóa hết nó."""
+        sub = root.open_dir(transfer_id)
+        if sub is None:
+            return False
+        try:
+            record, broken = self._read_record(sub.ref, transfer_id)
+            if broken or record is None or record.receiver != own or record.done_at is not None:
                 return False
             self._remove_layout(sub.ref, keep_record=False, include_part=True)
         finally:

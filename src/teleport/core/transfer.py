@@ -37,10 +37,12 @@ Hợp đồng thực thi (bên gọi, kể cả bộ mô phỏng của test, ph�
    cho `Reread` đang chạy, chờ thao tác đang chạy xong rồi mới xóa thư mục tạm mà **chính lượt
    đó** đã tạo (đối tượng `CreateTemp` trả về, không suy lại đường dẫn từ `transfer_id`: thiết bị
    khác có thể dùng cùng `transfer_id`); chưa có thư mục tạm (`CreateTemp` lỗi hay chưa chạy) thì
-   không làm gì; `keep_record` thì giữ lại `transfer.json`. Gặp `SuspendTemp`: các thao tác đứng
-   trước nó chạy xong (`Reread` đang chạy được dừng như với `RemoveTemp`: đọc lại không đổi gì
-   trên đĩa), rồi chỉ đóng handle, không xóa gì. Thao tác bị bỏ hay bị dừng không báo gì.
-   `Finalize` đang chạy thì chạy tới cùng.
+   không làm gì; `keep_record` thì giữ lại `transfer.json`. Gặp `SuspendTemp`: `Finalize` và
+   `Reread` chưa bắt đầu bị bỏ (lượt báo tạm dừng không được xong ngầm trên đĩa); các thao tác
+   khác đứng trước (`CreateTemp`, `OpenPart`, `WriteBlock`, `SyncPart`, `ClearBlocks`) chạy xong;
+   `Reread` đang chạy được dừng như với `RemoveTemp` (đọc lại không đổi gì trên đĩa); rồi chỉ
+   đóng handle, không xóa gì. Thao tác bị bỏ hay bị dừng không báo gì. `Finalize` đang chạy thì
+   chạy tới cùng.
 6. `Reread`: app đọc lại `.part` trong luồng riêng, so hash từng khối với `leaves` để ra `bad`
    (các chỉ số khác nhau, tăng dần); `bad` rỗng thì `root = merkle_root(leaves)`, không thì
    `root = None`; báo `reread_done(bad, root)`. `CheckSource`: `stat` file nguồn (file thường)
@@ -453,7 +455,8 @@ class RemoveTemp:
 
 @dataclass(frozen=True, slots=True)
 class SuspendTemp:
-    """Tạm dừng lượt nhận (`suspend_receiving`): chạy hết thao tác đứng trước, rồi chỉ đóng handle.
+    """Tạm dừng lượt nhận (`suspend_receiving`): chạy nốt thao tác ghi đứng trước (bỏ `Finalize` /
+    `Reread` chưa bắt đầu), rồi chỉ đóng handle.
 
     Không xóa gì: `.part`, `.state`, `transfer.json` giữ nguyên cho lần `restore` sau.
     """

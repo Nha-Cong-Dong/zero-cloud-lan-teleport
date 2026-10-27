@@ -453,3 +453,73 @@ def test_cleanup_ignores_entries_with_invalid_names(storage, root, h, now):
 
 def test_temp_retention_constant_is_seven_days(storage):
     assert storage.TEMP_RETENTION == 7 * 24 * 3600.0
+
+
+# ---------------------------------------------------------------------------------------------
+# `discard_temp` (P3-3b, spec-p3-3b mục 2.1, Q6): dọn một lượt RUNNING thừa, bỏ ngưỡng thời gian
+# ---------------------------------------------------------------------------------------------
+
+
+def do_discard(storage, root, transfer_id, h, *, own=None):
+    with storage.ReceiveDir.open(root) as rd:
+        return rd.discard_temp(transfer_id, own_device_id=h.RECEIVER if own is None else own)
+
+
+def test_discard_temp_removes_fresh_running_dir_of_this_node(storage, root, record_for, h, now):
+    """Lượt RUNNING của máy này vừa hoạt động (còn xa ngưỡng nối lại) vẫn bị xóa: bỏ ngưỡng thời gian."""
+    d = build(
+        root, tid(1), now, age=0, record=running(record_for, h, tid(1)), files=("0.part", "0.state", "1.part")
+    )
+    assert do_discard(storage, root, tid(1), h) is True
+    assert not d.exists()
+    assert (root / ".teleport").is_dir()
+
+
+@pytest.mark.parametrize("kind", ["other_node", "done", "broken", "orphan"])
+def test_discard_temp_refuses_anything_but_running_of_this_node(storage, root, record_for, h, now, kind):
+    record = {
+        "other_node": running(record_for, h, tid(1), receiver=OTHER),
+        "done": done(record_for, h, tid(1)),
+        "broken": None,
+        "orphan": None,
+    }[kind]
+    raw = b"{hong" if kind == "broken" else None
+    d = build(root, tid(1), now, age=10 * RETENTION, record=record, raw=raw, files=("0.part", "0.state"))
+    before = h.snapshot(d)
+    assert do_discard(storage, root, tid(1), h) is False
+    assert h.snapshot(d) == before
+
+
+def test_discard_temp_of_missing_dir_is_false(storage, root, h):
+    (root / ".teleport").mkdir()
+    assert do_discard(storage, root, tid(9), h) is False
+
+
+def test_discard_temp_refuses_temp_open_in_same_receive_dir(storage, root, record_for, h):
+    with storage.ReceiveDir.open(root) as rd:
+        temp = rd.create_temp(tid(1), record_for(tid(1), [5], receiver=h.RECEIVER))
+        part = temp.create_part(0, 5)
+        part.write_at(0, b"12345")
+        before = h.snapshot(temp.path)
+        assert rd.discard_temp(tid(1), own_device_id=h.RECEIVER) is False
+        assert h.snapshot(temp.path) == before
+        rd.close_temp(temp)
+
+
+def test_discard_temp_deletes_only_layout_names_and_keeps_foreign(storage, root, record_for, h, now):
+    names = ["0.part", "0.state", "transfer.json.0123456789abcdef.tmp"]
+    foreign = ["ghi-chu.txt", "1000.part"]
+    d = build(root, tid(1), now, age=0, record=running(record_for, h, tid(1)), files=names + foreign)
+    do_discard(storage, root, tid(1), h)
+    assert sorted(os.listdir(d)) == sorted(foreign)
+    for name in foreign:
+        assert (d / name).read_bytes() == b"du lieu"
+
+
+def test_discard_temp_does_not_follow_part_symlink(storage, root, record_for, h, now, tmp_path):
+    victim = tmp_path / "nan-nhan.bin"
+    victim.write_bytes(b"cua nan nhan")
+    d = build(root, tid(1), now, age=0, record=running(record_for, h, tid(1)), files=("0.state",))
+    make_symlink(victim, d / "0.part")
+    do_discard(storage, root, tid(1), h)
+    assert victim.read_bytes() == b"cua nan nhan"

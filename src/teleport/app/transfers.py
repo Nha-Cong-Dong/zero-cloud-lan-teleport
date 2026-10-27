@@ -29,7 +29,30 @@
   kể cả khi mDNS báo máy đi, protocol §6.1, §6.2).
 - **Giới hạn tốc độ:** một `TokenBucket` chung cho mọi lượt gửi, áp theo từng đoạn 64 KiB
   (`core.ratelimit`); khi có giới hạn, tối đa `MAX_LIMITED_SENDS` lượt gửi chạy cùng lúc để mỗi
-  lần chờ một đoạn ngắn hơn hạn chờ đọc của bên nhận.
+  lần chờ một đoạn ngắn hơn hạn chờ đọc của bên nhận. Cùng móc đó đếm `payload_sent` của từng
+  lượt gửi (`TransferFinished`).
+- **Khôi phục** (`restore`, `Node.start` gọi đúng một lần trước khi mở cổng): đọc
+  `tombstones.json` (`app.tombstones`, hạn `DISK_OP_TIMEOUT`) và quét thư mục nhận
+  (`scan_temps`, hạn `DISK_SYNC_TIMEOUT`); mỗi máy gửi chỉ giữ lượt RUNNING có hoạt động cuối
+  gần nhất (bằng nhau: `transfer_id` lớn hơn), lượt RUNNING còn lại bị xóa (`discard_temp`,
+  chạy nền sau các lần mở lại, chỉ khi `engine.restore` đã nạp bia mộ `expired` của chúng) kèm
+  bia mộ `expired` chưa gửi; lượt DONE thành `RestoredDone`.
+  Mở lại song song (`open_for_resume`), mỗi lượt có `stop` và hạn riêng, cả bước có hạn tổng;
+  lượt quá hạn hay lỗi bị bỏ, để nguyên trên đĩa. Rồi trong **một khối đồng bộ**: dựng hàng đĩa
+  cho lượt mở được (trước khi thực thi hành động), `engine.restore` (lời gọi engine đầu tiên, kể
+  cả khi không có thư mục nhận), `TransferResumed` cho lượt còn trong hạn nối lại, thực thi hành
+  động.
+- **Tạm dừng** (`begin_close`): `engine.suspend_receiving` → `SuspendTemp`: hàng đĩa bỏ
+  `Finalize` / `Reread` chưa bắt đầu, chạy nốt các thao tác đứng trước khác (để `MARK` bền), rồi
+  chỉ đóng handle (`close_temp`); không `cancel` trên dây. `Finalize` đang chạy thì chạy tới cùng
+  (giới hạn đã biết, `_close_lane`). `RemoveTemp(keep_record=True)` của lượt DONE giữ `transfer.json`.
+- **Bia mộ:** `TombstonesChanged` chỉ đánh dấu và hẹn (`call_soon`, hay `call_later` cho đủ
+  `TOMBSTONE_MIN_INTERVAL` từ lần ghi trước); lúc chạy mới chụp `export_tombstones` rồi ghi
+  `tombstones.json` qua executor (mã hóa trong thread). Tối đa một lần ghi tại một thời điểm, và
+  lần sau chỉ bắt đầu khi việc trước đã `settled` (tên `.tmp` cố định), kể cả khi quá hạn.
+  `close()` xả ảnh chụp cuối tối đa `TOMBSTONE_FLUSH_TIMEOUT`; `abort_now()` không xả.
+- **Dọn tạm** (`cleanup_temps`, `Node` hẹn giờ mỗi `CLEANUP_INTERVAL`): `skip` là lượt nhận engine
+  còn giữ và hàng đĩa còn sống, chụp đồng bộ ngay trước khi giao việc.
 
 `preview_sources(paths)` kiểm trước các file sẽ gửi mà không cần node (cùng lỗi như `send`), để
 CLI báo lỗi file trước khi lấy `node.lock` hay đụng mạng.
@@ -42,9 +65,11 @@ Log (mvp N9): không bao giờ ghi tên hay đường dẫn file; chỉ `transfe
 `device_id[:8]`, loại lỗi và `errno` (`OSError` có thể mang đường dẫn trong `str(e)`, nên không
 ghi `str(e)` hay traceback của nó).
 
-Seam cho test (biến cấp module, đọc lúc dùng): các hằng dưới đây, `open_data`, `uuid4`; module
-`sources` được gọi qua thuộc tính (`sources.prepare_sources`, `sources.SourceReader`,
-`sources.check_source`).
+Seam cho test (biến cấp module, đọc lúc dùng): các hằng dưới đây, `open_data`, `uuid4`,
+`_wall_time` (giờ tường: tuổi khi khôi phục, mốc `at` của bia mộ, `cleanup`); module `sources`
+được gọi qua thuộc tính (`sources.prepare_sources`, `sources.SourceReader`,
+`sources.check_source`), `tombstones.load` / `tombstones.save` cũng vậy; `storage.TEMP_RETENTION`,
+`diskio.DISK_THREADS`, `core.transfer.RECONNECT_GRACE` đọc lúc dùng.
 """
 
 from __future__ import annotations
@@ -54,8 +79,10 @@ import contextlib
 import functools
 import hashlib
 import logging
+import math
 import os
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -64,11 +91,24 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from teleport.app import sources
+from teleport.app import diskio, sources, storage, tombstones
 from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.sources import SourceChanged, SourceError, SourceErrorKind, SourceFile, SourceReader
-from teleport.app.storage import PartFile, ReceiveDir, RereadStopped, TempExistsError, TransferTemp
+from teleport.app.storage import (
+    NotResumableError,
+    PartFile,
+    ReceiveDir,
+    RereadStopped,
+    ResumeHandle,
+    ResumeMode,
+    StorageError,
+    TempExistsError,
+    TempKind,
+    TempScan,
+    TransferTemp,
+)
 from teleport.core import ratelimit
+from teleport.core import transfer as core_transfer
 from teleport.core.blocks import DIGEST_SIZE, BlockError
 from teleport.core.merkle import merkle_root
 from teleport.core.messages import (
@@ -87,7 +127,7 @@ from teleport.core.messages import (
     validate_device_id,
 )
 from teleport.core.ratelimit import TokenBucket
-from teleport.core.resume_state import TransferRecord
+from teleport.core.resume_state import TombstoneRecord, TransferRecord
 from teleport.core.transfer import (
     AskUser,
     CheckSource,
@@ -108,6 +148,9 @@ from teleport.core.transfer import (
     RemoveTemp,
     Report,
     Reread,
+    RestoredDone,
+    RestoredReceive,
+    RestoredTombstone,
     SendBlocks,
     SendMessage,
     StatusChanged,
@@ -151,6 +194,7 @@ __all__ = [
     "TransferManager",
     "TransferProgress",
     "TransferResult",
+    "TransferResumed",
     "TransferStatus",
     "TransferStatusChanged",
     "TransferUpdate",
@@ -158,12 +202,16 @@ __all__ = [
 ]
 
 # architecture §5 (bảng số của truyền file). Đọc lúc dùng: test vá bằng monkeypatch.
-DISK_OP_TIMEOUT = 60.0  # một thao tác đĩa (tạo thư mục tạm, tạo `.part`, ghi khối, đọc khối, finalize phụ)
-DISK_SYNC_TIMEOUT = 120.0  # `fsync` `.part`, `finalize`, phần cố định của lượt đọc lại
+# Hạn đĩa: danh sách đủ các thao tác ở bảng architecture §5.
+DISK_OP_TIMEOUT = 60.0  # một thao tác đĩa (tạo thư mục tạm, ghi/đọc khối, đọc/ghi `tombstones.json`…)
+DISK_SYNC_TIMEOUT = 120.0  # `fsync`, `finalize`, đọc lại; quét, mở lại mỗi lượt khi khôi phục; dọn tạm
 REREAD_BLOCK_TIMEOUT = 1.0  # đọc lại: cộng thêm mỗi khối
 CONTROL_SEND_QUEUE_MAX = 4096  # message chờ gửi trên một kết nối điều khiển; tràn → cắt kết nối đó
 CANCEL_FLUSH_TIMEOUT = 0.5  # `Node.close`: chờ đẩy hết `cancel` ra kết nối điều khiển
-CLOSE_DISK_WAIT = 2.0  # `Node.close`: chờ các hàng đĩa xong `RemoveTemp`
+CLOSE_DISK_WAIT = 2.0  # `Node.close`: chờ các hàng đĩa xong `RemoveTemp` / `SuspendTemp`
+TOMBSTONE_FLUSH_TIMEOUT = 2.0  # `Node.close`: chờ ghi nốt `tombstones.json`
+TOMBSTONE_MIN_INTERVAL = 1.0  # giây tối thiểu giữa hai lần ghi `tombstones.json`
+CLEANUP_INTERVAL = 24 * 3600.0  # `Node`: nhịp hẹn giờ dọn tạm (`cleanup_temps`)
 MAX_LIMITED_SENDS = 8  # có giới hạn tốc độ: số `SendBlocks` chạy cùng lúc
 MIN_RATE_LIMIT = ratelimit.CHUNK_SIZE  # byte/giây: mỗi lần chờ một đoạn ≤ 1 s
 PROGRESS_INTERVAL = 1.0  # giây giữa hai lần báo tiến độ
@@ -171,6 +219,9 @@ SPEED_WINDOW = 5.0  # tốc độ tính trên các mẫu trong 5 s gần nhất
 WRITE_QUEUE_BLOCKS = 8  # protocol §4.3: khối đã nhận chờ ghi đĩa tối đa
 
 _TASK_NAME = "teleport.node"
+
+# Giờ tường (seam cho test, đọc lúc dùng): tuổi khi khôi phục, mốc `at` của bia mộ, `cleanup`.
+_wall_time = time.time
 
 _TRANSFER_MESSAGE_TYPES = (Offer, Accept, Reject, Resume, Complete, Verified, Cancel)
 
@@ -194,6 +245,7 @@ class TransferResult(StrEnum):
     REJECTED_NOT_RECEIVING = "rejected_not_receiving"
     REJECTED_OTHER = "rejected_other"
     UNPAIRED = "unpaired"  # máy này hủy ghép đôi khi lượt chưa kết thúc
+    SUSPENDED = "suspended"  # lượt nhận tạm dừng khi node đóng có trật tự; khôi phục ở lần chạy sau
     CANCELLED_USER = "cancelled_user"
     SOURCE_CHANGED = "source_changed"
     EXPIRED = "expired"  # mất kết nối điều khiển quá `RECONNECT_GRACE` (24 h, protocol §6.2)
@@ -245,7 +297,13 @@ class FileDone:
 
 @dataclass(frozen=True, slots=True)
 class TransferFinished:
-    """Lượt kết thúc (đúng một lần mỗi lượt); `info` là bản chụp cuối."""
+    """Lượt kết thúc (đúng một lần mỗi lượt); `info` là bản chụp cuối.
+
+    `payload_sent` (bên gửi): tổng byte payload đã giao cho kết nối dữ liệu qua `write_block`,
+    mọi file, mọi kết nối, kể cả khung ghi dở, không tính header. Là cận trên: mỗi lần đứt có thể
+    tính thừa tối đa một đoạn `_SEND_CHUNK` của `teleport.net.connection` (đếm trước khi ghi đoạn
+    đó). Bên nhận: 0.
+    """
 
     info: TransferInfo
     result: TransferResult
@@ -253,10 +311,24 @@ class TransferFinished:
     reason: str | None
     file_index: int | None
     reject: Reject | None
+    payload_sent: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class TransferResumed:
+    """Lượt nhận dở được khôi phục khi khởi động; đang chờ máy gửi nối lại."""
+
+    info: TransferInfo
 
 
 TransferUpdate = (
-    OfferReceived | TransferStatusChanged | TransferProgress | FileDone | TransferFinished | DataUnreachable
+    OfferReceived
+    | TransferStatusChanged
+    | TransferProgress
+    | FileDone
+    | TransferFinished
+    | TransferResumed
+    | DataUnreachable
 )
 
 _REJECT_RESULTS: dict[str, TransferResult] = {
@@ -281,6 +353,8 @@ def _result_of(ended: TransferEnded, unpaired: bool) -> TransferResult:
     """`TransferEnded` → `TransferResult`. Lượt bị hủy vì hủy ghép đôi xét trước mọi thứ khác."""
     if unpaired:
         return TransferResult.UNPAIRED
+    if ended.outcome is Outcome.SUSPENDED:
+        return TransferResult.SUSPENDED
     if ended.outcome is Outcome.DONE:
         return TransferResult.DONE
     reason = ended.reason or ""
@@ -364,12 +438,18 @@ def _reread_compare(
 ) -> tuple[list[int], bytes | None]:
     """(thread) Đọc lại `.part`, so hash từng khối với `leaves` → `(bad, root)` cho `reread_done`.
 
-    `leaves` là bytearray của engine: chỉ đọc (engine không sửa nó lúc VERIFYING).
+    `leaves` là bytearray của engine: chỉ đọc (engine không sửa nó lúc VERIFYING). Lượt khôi phục
+    ở `VERIFY_TARGET` (đọc file đích thay `.part`) mà file đích không khớp: bỏ file đích (để
+    nguyên trên đĩa, `PartFile.drop_target`), mọi khối là sai, nhận lại vào `.part` mới và tên mới.
+    Lỗi (kể cả của `drop_target`) bay ra: bên gọi báo `storage_failed(REREAD)`.
     """
     digests = part.reread(stop=stop)
     if digests == leaves:
         return [], merkle_root(leaves)
     n = len(leaves) // DIGEST_SIZE
+    if part.mode is ResumeMode.VERIFY_TARGET:
+        part.drop_target()
+        return list(range(n)), None
     have, want = memoryview(digests), memoryview(leaves)
     bad = [
         i
@@ -379,6 +459,20 @@ def _reread_compare(
     if not bad:  # phòng thủ: độ dài khác nhau mà mọi khối so được đều khớp
         bad = list(range(n))
     return bad, None
+
+
+def _encode_and_save(config_dir: Path, items: tuple[RestoredTombstone, ...], wall_now: float) -> None:
+    """(thread) Đổi tuổi ra mốc giờ tường, mã hóa và ghi `tombstones.json` (qua thuộc tính module)."""
+    tombstones.save(config_dir, tombstones.to_records(items, wall_now))
+
+
+def _recency(scan: TempScan) -> tuple[bool, float, str]:
+    """Khóa so “gần nhất” giữa các lượt RUNNING cùng máy gửi.
+
+    Hoạt động cuối lớn hơn là gần hơn (None là cũ nhất); bằng nhau thì `transfer_id` lớn hơn.
+    """
+    last = scan.last_activity
+    return (last is not None, 0.0 if last is None else last, scan.transfer_id)
 
 
 def _error_label(e: BaseException) -> str:
@@ -413,9 +507,14 @@ class _DiskLane:
     parts: dict[int, PartFile] = field(default_factory=dict)
     pending_writes: int = 0  # `WriteBlock` đang giữ payload, chưa ghi xong (kể cả đang chạy)
     failed: bool = False
-    closing: bool = False  # `RemoveTemp` hay lượt đã kết thúc: chỉ còn dọn
+    closing: bool = False  # `RemoveTemp`, `SuspendTemp` hay lượt đã kết thúc: không báo engine nữa
+    # `SuspendTemp`: thao tác đứng trước (trừ `Finalize` / `Reread` chưa chạy) vẫn chạy để `MARK`
+    # bền, rồi chỉ đóng handle, không xóa.
+    suspended: bool = False
+    keep_record: bool = False  # `RemoveTemp(keep_record=True)` (lượt DONE): giữ `transfer.json`
     jobs: set[DiskJob[Any]] = field(default_factory=set)  # việc đã giao mà chưa `done`
     create_job: DiskJob[TransferTemp] | None = None
+    finalize_job: DiskJob[Path] | None = None  # `Finalize` đã giao cho executor, chưa xong
     waiters: set[asyncio.Event] = field(default_factory=set)  # bên đọc khung chờ chỗ trong hàng ghi
 
 
@@ -537,18 +636,23 @@ class TransferManager:
         store: TrustStore,
         executor: DiskExecutor,
         receive_dir: ReceiveDir | None,
+        config_dir: Path,
         auto_accept: bool,
         rate_limit: int | None,
         on_event: Callable[[TransferUpdate], None] | None,
         new_id: Callable[[], int],
         set_hold: Callable[[str, bool], None],
     ) -> None:
-        """Gọi trong event loop. `new_id` cấp `data_id`; `set_hold(device_id, held)` → `LinkTracker.hold`."""
+        """Gọi trong event loop. `new_id` cấp `data_id`; `set_hold(device_id, held)` → `LinkTracker.hold`.
+
+        `config_dir`: thư mục cấu hình của node, nơi đọc/ghi `tombstones.json`.
+        """
         self._identity = identity
         self._hello = hello
         self._store = store
         self._executor = executor
         self._receive_dir = receive_dir
+        self._config_dir = Path(config_dir)
         self._on_event = on_event
         self._new_id = new_id
         self._set_hold = set_hold
@@ -566,7 +670,9 @@ class TransferManager:
         self._controls: dict[str, _Control] = {}
         self._data: dict[int, _DataSlot] = {}
         self._lanes: dict[tuple[str, str], _DiskLane] = {}
+        self._live_lanes: set[_DiskLane] = set()  # hàng đĩa có task chưa xong (kể cả đang dọn)
         self._sources: dict[tuple[str, str], list[SourceFile]] = {}
+        self._payload_sent: dict[tuple[str, str], int] = {}  # lượt gửi → byte payload đã giao
         self._final_paths: dict[tuple[str, str, int], Path] = {}
         self._payloads: dict[tuple[str, str, int, int], bytearray] = {}
         self._unpaired: set[TransferKey] = set()
@@ -583,6 +689,18 @@ class TransferManager:
         self._reported_done: dict[TransferKey, int] = {}
         self._closing = False  # begin_close() đã chạy: lời gọi công khai không làm gì
         self._closed = False  # close() xong: không phát sự kiện nữa
+        # Khôi phục (`restore`): đã gọi chưa; `stop` của các lần mở lại (abort_now đặt).
+        self._restore_called = False
+        self._restore_stops: set[threading.Event] = set()
+        # Ghi `tombstones.json` (mục “Bia mộ” ở docstring module).
+        self._tomb_dirty = False  # bảng bia mộ đổi từ ảnh chụp cuối
+        self._tomb_scheduled = False  # đã hẹn `_snapshot_tombstones`
+        self._tomb_handle: asyncio.Handle | None = None  # `call_soon` / `call_later` đang hẹn
+        self._tomb_task: asyncio.Task[None] | None = None  # lần ghi đang chạy (tới khi việc `settled`)
+        self._tomb_job: DiskJob[None] | None = None  # việc đĩa của lần ghi gần nhất
+        self._tomb_last_write: float | None = None  # `loop.time()` lúc lần ghi trước xong
+        self._tomb_stopped = False  # đang xả lúc đóng hay đã hủy: không hẹn ghi nữa
+        self._cleanup_job: DiskJob[int] | None = None  # lần dọn tạm gần nhất
 
     def start(self) -> None:
         """Bật bộ hẹn giờ của engine và task tiến độ."""
@@ -696,6 +814,106 @@ class TransferManager:
 
     # ---- Cho Node ---------------------------------------------------------------------------
 
+    async def restore(self) -> None:
+        """Khôi phục lúc khởi động (mục “Khôi phục” ở docstring module); gọi đúng một lần, sau
+        `start()`, trước khi mở cổng. Gọi lần hai → RuntimeError; ngoài ra chỉ ném CancelledError.
+
+        Đọc `tombstones.json` và quét thư mục nhận (nếu có) qua `DiskExecutor`, mở lại song song
+        lượt nhận dở gần nhất của mỗi máy gửi (hạn riêng mỗi lượt và hạn tổng; quá hạn hay lỗi
+        thì bỏ lượt đó, để nguyên trên đĩa), rồi trong một khối đồng bộ: dựng hàng đĩa cho lượt
+        mở được, gọi `engine.restore` (lời gọi engine đầu tiên, kể cả khi không có gì), phát
+        `TransferResumed`, thực thi hành động. Lượt dở thừa của cùng máy gửi bị xóa
+        (`discard_temp`) kèm bia mộ `expired` chưa gửi.
+        """
+        if self._restore_called:
+            raise RuntimeError("restore() chỉ gọi được một lần")
+        self._restore_called = True
+        own = self._identity.device_id
+        records = await self._restore_load_tombstones()
+        rd = self._receive_dir
+        scans: list[TempScan] = []
+        if rd is not None and not self._closing:
+            scans = await self._restore_scan(rd)
+        # Xếp loại: mỗi máy gửi giữ lượt RUNNING gần nhất; lượt thừa thành bia mộ `expired`.
+        # OTHER_NODE / ORPHAN / BROKEN không đụng (để “Dọn tạm”).
+        wall = _wall_time()
+        trusted = self._trusted_ids()
+        running: dict[str, TempScan] = {}
+        extra: list[TempScan] = []
+        done: list[RestoredDone] = []
+        for scan in scans:
+            record = scan.record
+            if record is None or record.sender == own or record.sender not in trusted:
+                continue
+            if scan.kind is TempKind.RUNNING:
+                best = running.get(record.sender)
+                if best is None or _recency(scan) > _recency(best):
+                    if best is not None:
+                        extra.append(best)
+                    running[record.sender] = scan
+                else:
+                    extra.append(scan)
+            elif scan.kind is TempKind.DONE and record.done_at is not None:
+                age = max(0.0, wall - record.done_at.timestamp())
+                done.append(RestoredDone(record.sender, record.offer, age))
+        expired = str(CancelReason.EXPIRED)
+        stones = [
+            RestoredTombstone(s.record.sender, Direction.RECEIVE, s.transfer_id, expired, True, 0.0)
+            for s in extra
+            if s.record is not None
+        ]
+        handles: list[ResumeHandle] = []
+        if rd is not None and running and not self._closing:
+            handles = await self._restore_open(rd, list(running.values()))
+        restored = self._restore_apply(own, records, handles, stones, done)
+        # Sau các lần mở lại (không làm chậm khởi động): xóa lượt thừa, chạy nền; chỉ khi engine đã
+        # nhớ bia mộ `expired` của chúng (không thì máy gửi không bao giờ biết lý do).
+        if rd is not None and restored and not self._closing:
+            for scan in extra:
+                self._spawn(self._discard_temp(rd, scan.transfer_id), "transfer-discard", disk=True)
+
+    async def cleanup_temps(self) -> int | None:
+        """Dọn tạm một lần (`ReceiveDir.cleanup`, `Node` hẹn giờ); trả số thư mục lượt đã xóa.
+
+        Bỏ qua (chụp đồng bộ ngay trước khi giao việc) `transfer_id` của mọi lượt nhận engine còn
+        giữ và mọi hàng đĩa còn sống. None khi: không có thư mục nhận, node đang đóng, lần dọn
+        trước chưa xong, hay lần này lỗi / quá hạn `DISK_SYNC_TIMEOUT` (log, không ném).
+        """
+        rd = self._receive_dir
+        if rd is None or self._closing:
+            return None
+        previous = self._cleanup_job
+        if previous is not None and not previous.done:
+            return None
+        skip = {
+            info.key.transfer_id
+            for info in self._engine.transfers()
+            if info.key.direction is Direction.RECEIVE
+        }
+        skip.update(lane.transfer_id for lane in self._live_lanes)
+        cleanup = functools.partial(
+            rd.cleanup,
+            _wall_time(),
+            own_device_id=self._identity.device_id,
+            skip=frozenset(skip),
+            retention=storage.TEMP_RETENTION,
+        )
+        try:
+            job = self._executor.submit(cleanup)
+        except RuntimeError:  # executor đã shutdown
+            return None
+        self._cleanup_job = job
+        try:
+            return await _job_result(job, DISK_SYNC_TIMEOUT)
+        except asyncio.CancelledError:
+            if not job.cancel():
+                # Đang chạy: để `close()` chờ nó (có hạn) trước khi đóng thư mục nhận.
+                self._spawn(job.settled(), "transfer-cleanup-wait", disk=True)
+            raise
+        except Exception as e:  # DiskTimeout, `_JobDropped`, UnsafeReceiveDirError, OSError…
+            log.warning("dọn tạm lỗi: %s", _error_label(e))
+            return None
+
     def control_up(self, device_id: str, control_id: int, conn: Connection, *, client: bool) -> None:
         """Kết nối điều khiển hiện tại của thiết bị là `conn` (`LinkUp` hoặc `LinkSwitched`)."""
         old = self._controls.pop(device_id, None)
@@ -751,10 +969,18 @@ class TransferManager:
                     self._call(self._engine.data_closed, device_id, slot.data_id, False)
 
     def begin_close(self) -> None:
-        """Bước đầu của `Node.close` (đồng bộ): ngừng nhận `offer`, từ chối `send` mới, hủy mọi lượt."""
+        """Bước đầu của `Node.close` (đồng bộ): tạm dừng lượt đang nhận, hủy các lượt còn lại.
+
+        `engine.suspend_receiving` trước: mỗi lượt nhận đang chạy cắt kết nối dữ liệu, đẩy lô khối
+        đã ghi (`SyncPart`) rồi `SuspendTemp` (thư mục tạm giữ nguyên cho lần `restore` sau, không
+        gửi `cancel`), và kết thúc với `TransferFinished(SUSPENDED)` ngay trong lời gọi này. Sau đó
+        ngừng nhận `offer`, từ chối `send` mới, hủy lượt gửi (`cancel{user}`) và `offer` đang chờ
+        hỏi hay xếp hàng (`reject{user}`).
+        """
         if self._closing:
             return
         self._closing = True
+        self._call(self._engine.suspend_receiving)
         self._engine.receiving = False
         self._cancel_every()
 
@@ -769,10 +995,13 @@ class TransferManager:
                     await outbox.idle.wait()
 
     async def close(self) -> None:
-        """Hủy task mạng, chờ các hàng đĩa dọn xong tối đa `CLOSE_DISK_WAIT`, đóng thư mục nhận.
+        """Hủy task mạng, chờ các hàng đĩa xong tối đa `CLOSE_DISK_WAIT`, xả bia mộ, đóng thư mục nhận.
 
-        `ReceiveDir.close()` chỉ chạy khi không còn thread đĩa nào bận; không thì bỏ qua (WARNING).
-        Gọi lại được. Bị hủy giữa chừng → bên gọi dùng `abort_now()`.
+        Thứ tự: `begin_close()` (nếu chưa); hủy task mạng; chờ các hàng đĩa dọn xong (`RemoveTemp`)
+        hay chạy nốt thao tác của lượt tạm dừng (`SuspendTemp`) tối đa `CLOSE_DISK_WAIT`; xả
+        `tombstones.json` tối đa `TOMBSTONE_FLUSH_TIMEOUT` (`_flush_tombstones`);
+        `DiskExecutor.shutdown()`; `ReceiveDir.close()` chỉ khi không còn thread đĩa nào bận (không
+        thì bỏ qua, WARNING). Gọi lại được. Bị hủy giữa chừng → bên gọi dùng `abort_now()`.
         """
         if self._closed:
             return
@@ -796,16 +1025,22 @@ class TransferManager:
             if pending:
                 log.warning("còn %d việc dọn đĩa chưa xong khi đóng", len(pending))
                 await asyncio.wait(pending)
+        await self._flush_tombstones()
         self._shutdown_disk()
         self._closed = True
 
     def abort_now(self) -> None:
-        """`Node.close` bị hủy: hủy mọi task, không chờ đĩa; không đóng thư mục nhận khi còn thread."""
+        """`Node.close` bị hủy: hủy mọi task, không chờ đĩa, không xả bia mộ; dừng mọi lần mở lại
+        của `restore`; không đóng thư mục nhận khi còn thread."""
         self._closing = True
         self._closed = True
+        self._stop_tombstones()
+        for stop in self._restore_stops:
+            stop.set()
         for ctl in self._controls.values():
             ctl.outbox.close()
-        for task in (self._timer_task, self._progress_task, *self._tasks, *self._disk_tasks):
+        tasks = (self._timer_task, self._progress_task, self._tomb_task, *self._tasks, *self._disk_tasks)
+        for task in tasks:
             if task is not None:
                 task.cancel()
         for slot in list(self._data.values()):
@@ -891,21 +1126,25 @@ class TransferManager:
         elif isinstance(action, CreateTemp):
             self._create_lane(action)  # `transfer.json` ghi từ `action.offer` trong `_lane_op`
         elif isinstance(action, RemoveTemp):
-            # `keep_record` chưa dùng: thư mục tạm luôn bị xóa cả `transfer.json` (P3-3b giữ nó cho
-            # lượt DONE).
             lane = self._lanes.get((action.device_id, action.transfer_id))
             if lane is not None:
+                lane.keep_record = action.keep_record  # đặt trước `_close_lane` (lượt DONE giữ bản ghi)
                 self._close_lane(lane)
+        elif isinstance(action, SuspendTemp):
+            lane = self._lanes.get((action.device_id, action.transfer_id))
+            if lane is not None:
+                lane.suspended = True  # đặt trước `_close_lane`: thao tác ghi đứng trước vẫn chạy
+                self._close_lane(lane)
+        elif isinstance(action, TombstonesChanged):
+            # Không chụp ở đây (đang thực hiện danh sách hành động): hẹn `_snapshot_tombstones`.
+            self._tomb_dirty = True
+            self._schedule_tombstone_snapshot()
         elif isinstance(action, CheckSpace):
             self._spawn(self._check_space(action), f"transfer-check {action.transfer_id[:8]}")
         elif isinstance(action, CheckSource):
             self._spawn(self._check_source(action), f"transfer-check {action.transfer_id[:8]}")
         elif isinstance(action, AskUser):
             self._ask_user(action)
-        elif isinstance(action, TombstonesChanged | SuspendTemp):
-            # Tạm thời không làm gì: chưa lưu `tombstones.json` (P3-3b); `SuspendTemp` chưa được
-            # phát vì chưa gọi `suspend_receiving` (P3-3b).
-            pass
 
     def _cancel_every(self) -> None:
         for info in self._engine.transfers():
@@ -994,9 +1233,12 @@ class TransferManager:
         elif isinstance(event, TransferEnded):
             self._hold_dirty = True
             result = _result_of(event, event.key in self._unpaired)
+            sent = 0
+            if event.key.direction is Direction.SEND:
+                sent = self._payload_sent.pop((event.key.device_id, event.key.transfer_id), 0)
             self._forget_transfer(event.key)
             ended = TransferFinished(
-                event.info, result, event.by_peer, event.reason, event.file_index, event.reject
+                event.info, result, event.by_peer, event.reason, event.file_index, event.reject, sent
             )
             self._emit(ended)
         elif isinstance(event, DataUnreachable):
@@ -1143,6 +1385,15 @@ class TransferManager:
             await asyncio.sleep(delay)
         bucket.take(n, self._loop.time())
 
+    async def _count_chunk(self, pair: tuple[str, str], n: int) -> None:
+        """Móc `before_chunk` của một lượt gửi: giới hạn tốc độ, rồi cộng `n` vào `payload_sent`.
+
+        Đếm trước khi đoạn được ghi (cận trên, `TransferFinished`); lượt đã kết thúc thì không đếm.
+        """
+        await self._before_chunk(n)
+        if pair in self._sources:
+            self._payload_sent[pair] = self._payload_sent.get(pair, 0) + n
+
     async def _acquire_send_slot(self, slot: _DataSlot) -> bool:
         """Có giới hạn tốc độ: chờ một chỗ trong `MAX_LIMITED_SENDS` (dừng chờ khi kết nối bị đóng)."""
         if self._bucket is None:
@@ -1205,6 +1456,7 @@ class TransferManager:
         if files is None or not 0 <= a.file_index < len(files):
             raise RuntimeError("không có file nguồn của lượt")
         source = files[a.file_index]
+        before_chunk = functools.partial(self._count_chunk, (device_id, a.transfer_id))
         jobs.open = self._executor.submit(sources.SourceReader.open, source.path, source.entry)
         reader = await _job_result(jobs.open, DISK_OP_TIMEOUT)
         missing = a.have.missing()
@@ -1223,7 +1475,7 @@ class TransferManager:
                 raise RuntimeError("engine từ chối block_read")
             if slot.closed:  # kết quả có `CloseData` của kết nối này: không ghi khung
                 return False
-            await slot.conn.write_block(index, digest, payload, before_chunk=self._before_chunk)
+            await slot.conn.write_block(index, digest, payload, before_chunk=before_chunk)
             del payload
             index = following
         await slot.conn.close()  # hết khối: đóng gọn, bên nhận đọc hết phần đuôi
@@ -1361,6 +1613,7 @@ class TransferManager:
             return
         lane = _DiskLane(a.device_id, a.transfer_id)
         self._lanes[pair] = lane
+        self._live_lanes.add(lane)
         if self._receive_dir is None or self._closing:
             # Không tạo được: hàng đĩa ở trạng thái lỗi, các thao tác sau của lượt bị bỏ im lặng
             # tới khi lượt kết thúc (engine nhận `storage_failed` đúng một lần).
@@ -1409,10 +1662,30 @@ class TransferManager:
         lane.ops.clear()
         lane.pending_writes -= dropped
 
-    def _close_lane(self, lane: _DiskLane) -> None:
-        """`RemoveTemp` hay lượt đã kết thúc: bỏ thao tác chưa chạy, dừng `Reread`, gỡ hàng.
+    @staticmethod
+    def _drop_suspended_ops(lane: _DiskLane) -> None:
+        """Lane tạm dừng: bỏ `Finalize` và `Reread` chưa bắt đầu, giữ các thao tác làm `MARK` bền.
 
-        Task của hàng chờ thao tác đang chạy xong rồi mới xóa thư mục tạm (`_cleanup_lane`).
+        Phòng thủ: `Finalize` thường đã được `submit` ngay khi tới lượt trong hàng, nên đường thực
+        tế là `finalize_job.cancel()` ở `_close_lane`; lọc `lane.ops` chỉ bắt ca còn nằm trong hàng.
+        """
+        lane.ops = deque(item for item in lane.ops if not isinstance(item[0], Finalize | Reread))
+
+    def _close_lane(self, lane: _DiskLane) -> None:
+        """`RemoveTemp`, `SuspendTemp` hay lượt đã kết thúc: dừng `Reread`, gỡ hàng, thôi báo engine.
+
+        Thường thì bỏ mọi thao tác chưa chạy. Lane `suspended` thì chỉ bỏ `Finalize` và `Reread`
+        chưa bắt đầu (`Finalize` đã giao executor mà thread chưa nhận bị hủy bằng
+        `finalize_job.cancel()`, đường thường gặp vì `Finalize` được `submit` ngay khi tới lượt;
+        lọc `lane.ops` chỉ là phòng thủ; `Reread` đã giao
+        thì dừng trước khối đầu vì `stop` đã đặt); các thao tác khác đứng trước `SuspendTemp`
+        (`WriteBlock`, `SyncPart`, `ClearBlocks`, cả `CreateTemp` / `OpenPart` chưa chạy) vẫn chạy
+        để `MARK` của lô cuối bền. Bỏ `Finalize` để lượt báo `SUSPENDED` không xong ngầm trên đĩa:
+        lần chạy sau khôi phục `.part` đủ bit, máy gửi nối lại và gửi lại `complete`, rồi mới
+        `Reread` → `Finalize`. `Reread` đang chạy dừng ngay (đọc lại không đổi gì trên đĩa). Giới
+        hạn đã biết: `Finalize` **đang chạy** (thread đã nhận việc) lúc tạm dừng thì chạy tới cùng
+        (hợp đồng mục 5), nên trong cửa sổ đó (vài ms) lượt có thể đã xong trên đĩa dù báo
+        `SUSPENDED`. Task của hàng chờ thao tác đang chạy xong rồi mới dọn (`_cleanup_lane`).
         """
         if self._lanes.get((lane.device_id, lane.transfer_id)) is lane:
             del self._lanes[(lane.device_id, lane.transfer_id)]
@@ -1420,7 +1693,12 @@ class TransferManager:
             return
         lane.closing = True
         lane.stop.set()
-        self._drop_ops(lane)
+        if lane.suspended:
+            self._drop_suspended_ops(lane)
+            if lane.finalize_job is not None:
+                lane.finalize_job.cancel()  # chỉ bỏ được khi thread chưa nhận việc
+        else:
+            self._drop_ops(lane)
         self._notify_lane(lane)
         lane.wake.set()
 
@@ -1433,21 +1711,25 @@ class TransferManager:
             self._call(self._engine.storage_failed, lane.device_id, lane.transfer_id, op, detail=detail)
 
     async def _run_lane(self, lane: _DiskLane) -> None:
-        while not lane.closing:
-            if not lane.ops:
-                lane.wake.clear()
-                await lane.wake.wait()
-                continue
-            action, payload = lane.ops.popleft()
-            try:
-                if not lane.failed:
-                    await self._lane_op(lane, action, payload)
-            finally:
-                del payload
-                if isinstance(action, WriteBlock):
-                    lane.pending_writes -= 1
-                    self._notify_lane(lane)
-        await self._cleanup_lane(lane)
+        try:
+            # Lane tạm dừng chạy nốt các thao tác đã xếp hàng rồi mới dọn (`_close_lane`).
+            while not (lane.closing and (not lane.suspended or not lane.ops)):
+                if not lane.ops:
+                    lane.wake.clear()
+                    await lane.wake.wait()
+                    continue
+                action, payload = lane.ops.popleft()
+                try:
+                    if not lane.failed:
+                        await self._lane_op(lane, action, payload)
+                finally:
+                    del payload
+                    if isinstance(action, WriteBlock):
+                        lane.pending_writes -= 1
+                        self._notify_lane(lane)
+            await self._cleanup_lane(lane)
+        finally:
+            self._live_lanes.discard(lane)
 
     async def _lane_job[R](self, lane: _DiskLane, job: DiskJob[R], timeout: float) -> R:
         """Chờ một việc của hàng; việc chưa xong (quá hạn) ở lại `lane.jobs` để dọn chờ nó."""
@@ -1507,7 +1789,12 @@ class TransferManager:
             else:
                 part = self._part(lane, action.file_index)
                 finalize = functools.partial(rd.finalize, part, action.name, mtime_ms=action.mtime)
-                path = await self._lane_job(lane, submit(finalize), DISK_SYNC_TIMEOUT)
+                # Còn xếp hàng ở executor (thread chưa nhận) thì `SuspendTemp` còn bỏ được (`_close_lane`).
+                lane.finalize_job = submit(finalize)
+                try:
+                    path = await self._lane_job(lane, lane.finalize_job, DISK_SYNC_TIMEOUT)
+                finally:
+                    lane.finalize_job = None
                 # `Finalize` đã bắt đầu thì chạy tới cùng (hợp đồng mục 5); lượt đã kết thúc giữa
                 # chừng thì file vẫn mang tên thật, chỉ không báo nữa.
                 if not lane.closing:
@@ -1515,6 +1802,11 @@ class TransferManager:
                     self._call(self._engine.finalized, device_id, transfer_id, action.file_index, path.name)
         except RereadStopped:
             return
+        except _JobDropped:
+            if lane.closing:
+                return  # bị bỏ trước khi chạy (tạm dừng, hay node đóng): không phải lỗi của lượt
+            log.warning("%s của lượt %s bị bỏ khi đóng", _DISK_OPS[type(action)].value, transfer_id[:8])
+            self._fail_lane(lane, _DISK_OPS[type(action)])
         except TempExistsError:
             log.info("thư mục tạm của lượt %s đã có sẵn (sót lại từ lần trước)", transfer_id[:8])
             self._fail_lane(lane, DiskOp.CREATE_TEMP, FailureDetail.TEMP_EXISTS)
@@ -1536,7 +1828,11 @@ class TransferManager:
         return part
 
     async def _cleanup_lane(self, lane: _DiskLane) -> None:
-        """Chờ mọi việc của hàng thật sự xong, rồi xóa thư mục tạm của chính lượt này (nếu có)."""
+        """Chờ mọi việc của hàng thật sự xong, rồi dọn thư mục tạm của chính lượt này (nếu có).
+
+        Lane `suspended` (kể cả khi một thao tác đã lỗi): chỉ đóng handle (`close_temp`), không xóa
+        gì. Còn lại: `remove_temp` (giữ `transfer.json` khi `keep_record`).
+        """
         lane.stop.set()
         self._drop_ops(lane)
         self._notify_lane(lane)
@@ -1545,16 +1841,20 @@ class TransferManager:
         lane.jobs.clear()
         temp = lane.temp
         if temp is None and lane.create_job is not None:
-            # `create_temp` quá hạn rồi xong muộn: thư mục đó là của lượt này, xóa nó.
+            # `create_temp` quá hạn rồi xong muộn: thư mục đó là của lượt này, xóa (hay đóng) nó.
             temp = await _late_result(lane.create_job)
         lane.temp = None
         lane.parts.clear()
         rd = self._receive_dir
         if temp is None or rd is None:
             return
+        if lane.suspended:
+            await self._close_temp(temp)
+            return
         # `remove_temp` đóng mọi `.part` của lượt (kể cả `.part` tạo muộn) rồi mới xóa.
+        remove = functools.partial(rd.remove_temp, temp, keep_record=lane.keep_record)
         try:
-            job = self._executor.submit(rd.remove_temp, temp)
+            job = self._executor.submit(remove)
         except RuntimeError:
             return  # executor đã shutdown (node đóng quá hạn): để lại thư mục tạm
         await job.settled()
@@ -1564,3 +1864,352 @@ class TransferManager:
             await job.result(None)
         except Exception as e:
             log.debug("xóa thư mục tạm của lượt %s lỗi: %s", lane.transfer_id[:8], _error_label(e))
+
+    async def _close_temp(self, temp: TransferTemp) -> None:
+        """Chỉ đóng handle của `temp` (`close_temp`, không xóa gì) qua executor.
+
+        Điều kiện trước: mọi việc đĩa dùng `temp` đã `settled`. Executor đã shutdown (hay bỏ việc
+        trước khi chạy) thì đóng ngay trên loop: chỉ là đóng fd, không thread nào còn dùng chúng.
+        """
+        rd = self._receive_dir
+        if rd is None:
+            return
+        job: DiskJob[None] | None = None
+        with contextlib.suppress(RuntimeError):  # executor đã shutdown
+            job = self._executor.submit(rd.close_temp, temp)
+        if job is not None:
+            await job.settled()
+            if job.started:
+                await _late_result(job)
+                return
+        try:
+            rd.close_temp(temp)
+        except ValueError as e:
+            log.debug("đóng thư mục tạm của lượt %s lỗi: %s", temp.transfer_id[:8], _error_label(e))
+
+    # ---- Khôi phục ---------------------------------------------------------------------------
+
+    def _trusted_ids(self) -> set[str]:
+        return {device.device_id for device in self._store.devices()}
+
+    async def _restore_load_tombstones(self) -> list[TombstoneRecord]:
+        """Bước 1 của `restore`: `tombstones.load` qua executor; hạn `DISK_OP_TIMEOUT` bao cả lúc
+        chờ bắt đầu. Quá hạn hay lỗi → rỗng, WARNING."""
+        try:
+            job = self._executor.submit(tombstones.load, self._config_dir)
+        except RuntimeError:  # executor đã shutdown
+            return []
+        try:
+            async with asyncio.timeout(DISK_OP_TIMEOUT):
+                return await _job_result(job, None)
+        except asyncio.CancelledError:
+            job.cancel()
+            raise
+        except Exception as e:  # gồm TimeoutError của `asyncio.timeout`, `_JobDropped`
+            job.cancel()
+            log.warning(
+                "không đọc được %s (%s), coi như không có bia mộ", tombstones.TOMBSTONES_NAME, _error_label(e)
+            )
+            return []
+
+    async def _restore_scan(self, rd: ReceiveDir) -> list[TempScan]:
+        """Bước 2 của `restore`: `scan_temps` qua executor (`trusted_ids` chụp ngay trước khi giao
+        việc); hạn `DISK_SYNC_TIMEOUT` bao cả lúc chờ bắt đầu. Quá hạn hay lỗi → rỗng, WARNING."""
+        trusted = sorted(self._trusted_ids())
+        try:
+            job = self._executor.submit(rd.scan_temps, self._identity.device_id, trusted)
+        except RuntimeError:  # executor đã shutdown
+            return []
+        try:
+            async with asyncio.timeout(DISK_SYNC_TIMEOUT):
+                return await _job_result(job, None)
+        except asyncio.CancelledError:
+            job.cancel()
+            raise
+        except Exception as e:  # gồm TimeoutError của `asyncio.timeout`, UnsafeReceiveDirError, OSError
+            job.cancel()
+            log.warning("không quét được thư mục nhận (%s): không khôi phục lượt nhận nào", _error_label(e))
+            return []
+
+    async def _restore_open(self, rd: ReceiveDir, scans: list[TempScan]) -> list[ResumeHandle]:
+        """Bước 4 của `restore`: `open_for_resume` song song cho mỗi lượt trong `scans`.
+
+        Mỗi lượt có `threading.Event` `stop` riêng (`abort_now` đặt) và hạn `DISK_SYNC_TIMEOUT`
+        tính từ lúc thread bắt đầu; cả bước có hạn tổng `DISK_SYNC_TIMEOUT × ⌈k / DISK_THREADS⌉`
+        bao cả lúc chờ bắt đầu. Lượt quá hạn hay lỗi bị bỏ, để nguyên trên đĩa: việc chưa bắt đầu
+        bị hủy; việc đang chạy được `stop`, kết quả tới muộn bị đóng (`close_temp`) sau `settled()`.
+        Lỗi chỉ log INFO (`transfer_id[:8]` + loại lỗi).
+        """
+        jobs: list[tuple[TempScan, DiskJob[ResumeHandle], threading.Event]] = []
+        for scan in scans:
+            stop = threading.Event()
+            try:
+                job = self._executor.submit(functools.partial(rd.open_for_resume, scan, stop=stop))
+            except RuntimeError:  # executor đã shutdown
+                break
+            self._restore_stops.add(stop)
+            jobs.append((scan, job, stop))
+        handles: dict[str, ResumeHandle] = {}
+
+        async def open_one(scan: TempScan, job: DiskJob[ResumeHandle], stop: threading.Event) -> None:
+            label = scan.transfer_id[:8]
+            try:
+                handles[scan.transfer_id] = await _job_result(job, DISK_SYNC_TIMEOUT)
+            except DiskTimeout:
+                stop.set()
+                log.info("mở lại lượt %s quá %g s: bỏ qua, để nguyên trên đĩa", label, DISK_SYNC_TIMEOUT)
+            except (NotResumableError, StorageError, ValueError, OSError, _JobDropped) as e:
+                log.info("không mở lại được lượt %s: %s", label, _error_label(e))
+            except Exception:
+                log.exception("lỗi khi mở lại lượt %s", label)
+
+        completed = False
+        try:
+            rounds = math.ceil(len(jobs) / max(1, diskio.DISK_THREADS))
+            try:
+                async with asyncio.timeout(DISK_SYNC_TIMEOUT * rounds):
+                    await asyncio.gather(*(open_one(*item) for item in jobs))
+            except TimeoutError:
+                log.info("mở lại lượt nhận dở quá hạn tổng: bỏ qua các lượt chưa xong")
+            completed = True
+        finally:
+            for scan, job, stop in jobs:
+                self._restore_stops.discard(stop)
+                handle = handles.get(scan.transfer_id)
+                if handle is not None:
+                    if not completed:  # bị hủy trước khi trao cho engine: chỉ đóng handle
+                        self._spawn(self._close_temp(handle.temp), "transfer-restore-close", disk=True)
+                    continue
+                if job.cancel():  # chưa bắt đầu: bỏ
+                    continue
+                stop.set()
+                self._spawn(self._close_late_handle(job), "transfer-restore-late", disk=True)
+        return [handles[scan.transfer_id] for scan, _, _ in jobs if scan.transfer_id in handles]
+
+    async def _close_late_handle(self, job: DiskJob[ResumeHandle]) -> None:
+        """`open_for_resume` đã bị bỏ (quá hạn): chờ việc thật sự xong, đóng handle nếu nó mở được."""
+        await job.settled()
+        handle = await _late_result(job)
+        if handle is not None:
+            await self._close_temp(handle.temp)
+
+    def _restore_apply(
+        self,
+        own: str,
+        records: list[TombstoneRecord],
+        handles: list[ResumeHandle],
+        extra: list[RestoredTombstone],
+        done: list[RestoredDone],
+    ) -> bool:
+        """Bước 5 của `restore`: một khối đồng bộ, không `await` (mục “Khôi phục” ở docstring module).
+
+        Trả True khi engine đã nạp bia mộ (kể cả bia mộ `expired` của lượt thừa); False khi node
+        đang đóng hay cả hai lần `engine.restore` đều lỗi: khi đó không được xóa lượt thừa.
+        """
+        if self._closing:
+            for handle in handles:
+                self._spawn(self._close_temp(handle.temp), "transfer-restore-close", disk=True)
+            return False
+        wall = _wall_time()
+        trusted = self._trusted_ids()
+        receives: list[RestoredReceive] = []
+        lanes: list[_DiskLane] = []
+        senders: set[str] = set()
+        for handle in handles:
+            record = handle.record
+            sender, transfer_id = record.sender, handle.temp.transfer_id
+            pair = (sender, transfer_id)
+            if sender == own or sender not in trusted or sender in senders or pair in self._lanes:
+                self._spawn(self._close_temp(handle.temp), "transfer-restore-close", disk=True)
+                continue
+            senders.add(sender)
+            receives.append(
+                RestoredReceive(
+                    device_id=sender,
+                    offer=record.offer,
+                    file_index=handle.file_index,
+                    bits=handle.bits,
+                    leaves=handle.leaves,  # trao quyền sở hữu cho engine
+                    part_blocks=handle.part_blocks,
+                    age=max(0.0, wall - handle.last_activity),
+                )
+            )
+            # Hàng đĩa có trước khi thực thi hành động: `RemoveTemp` / `SuspendTemp` của lượt áp
+            # vào đúng thư mục đã mở.
+            lane = _DiskLane(sender, transfer_id, temp=handle.temp, parts={handle.file_index: handle.part})
+            self._lanes[pair] = lane
+            self._live_lanes.add(lane)
+            lanes.append(lane)
+            self._spawn(self._run_lane(lane), f"transfer-disk {transfer_id[:8]}", disk=True)
+        try:
+            stones = tombstones.to_restored(records, trusted, wall)
+        except Exception:  # phòng thủ: mục đã qua `TombstoneRecord`, không được lỗi
+            log.exception("không đổi được bia mộ đã đọc")
+            stones = []
+        kept_extra = [s for s in extra if s.device_id != own and s.device_id in trusted]
+        stones.extend(kept_extra)
+        dones = [d for d in done if d.device_id != own and d.device_id in trusted]
+        actions, restored = self._restore_engine(receives, stones, dones, lanes)
+        grace = core_transfer.RECONNECT_GRACE
+        self._dispatching = True  # callback gọi engine lúc này → hoãn
+        try:
+            for r in receives:
+                key = TransferKey(r.device_id, Direction.RECEIVE, r.offer.transfer_id)
+                info = self._engine.info(key)
+                if info is not None and r.age < grace:
+                    self._emit(TransferResumed(info))
+        finally:
+            self._dispatching = False
+        self._dispatch_now(actions)
+        self._drain_deferred()
+        if restored and kept_extra:
+            self._tomb_dirty = True
+            self._schedule_tombstone_snapshot()
+        return restored
+
+    def _restore_engine(
+        self,
+        receives: list[RestoredReceive],
+        stones: list[RestoredTombstone],
+        dones: list[RestoredDone],
+        lanes: list[_DiskLane],
+    ) -> tuple[list[TransferAction], bool]:
+        """`engine.restore` trực tiếp (không qua `_run`) → (hành động, engine đã nạp bia mộ chưa).
+
+        Ném lỗi → gọi lại đúng một lần không kèm lượt nhận dở, rồi đóng các hàng vừa dựng kiểu tạm
+        dừng (`close_temp`, không xóa gì). Cả hai lần đều lỗi → `([], False)`: bên gọi không xóa
+        lượt thừa và không ghi `tombstones.json` (không đè file bằng bảng rỗng).
+        """
+        try:
+            actions = self._engine.restore(
+                receives=receives, tombstones=stones, done=dones, now=self._loop.time()
+            )
+            return actions, True
+        except RuntimeError:
+            # Engine đã có lời gọi khác trước `restore` (không được xảy ra: `restore` chạy trước khi mở cổng).
+            log.error("TransferEngine đã chạy trước restore(): không khôi phục được gì")
+            actions, ok = [], False
+        except Exception:
+            log.exception("TransferEngine.restore ném lỗi; khôi phục lại không kèm lượt nhận dở")
+            try:
+                actions = self._engine.restore(
+                    receives=(), tombstones=stones, done=dones, now=self._loop.time()
+                )
+                ok = True
+            except Exception:
+                log.exception("TransferEngine.restore ném lỗi lần hai")
+                actions, ok = [], False
+        for lane in lanes:
+            lane.suspended = True
+            self._close_lane(lane)
+        return actions, ok
+
+    async def _discard_temp(self, rd: ReceiveDir, transfer_id: str) -> None:
+        """Lượt nhận dở thừa của một máy gửi (`restore`): `discard_temp`, chờ `settled()`; lỗi → INFO."""
+        discard = functools.partial(rd.discard_temp, transfer_id, own_device_id=self._identity.device_id)
+        try:
+            job = self._executor.submit(discard)
+        except RuntimeError:  # executor đã shutdown
+            return
+        await job.settled()
+        if not job.started:
+            return
+        try:
+            await job.result(None)
+        except Exception as e:
+            log.info("không xóa được lượt nhận dở thừa %s: %s", transfer_id[:8], _error_label(e))
+
+    # ---- Bia mộ (`tombstones.json`) ------------------------------------------------------------
+
+    def _schedule_tombstone_snapshot(self) -> None:
+        """Hẹn chụp bảng bia mộ, nếu chưa hẹn và không có lần ghi đang chạy: ngay (`call_soon`), hay
+        lúc đủ `TOMBSTONE_MIN_INTERVAL` từ lần ghi trước (`call_later`)."""
+        if self._tomb_scheduled or self._tomb_task is not None or self._tomb_stopped:
+            return
+        self._tomb_scheduled = True
+        last = self._tomb_last_write
+        delay = 0.0 if last is None else last + TOMBSTONE_MIN_INTERVAL - self._loop.time()
+        if delay > 0:
+            self._tomb_handle = self._loop.call_later(delay, self._snapshot_tombstones)
+        else:
+            self._tomb_handle = self._loop.call_soon(self._snapshot_tombstones)
+
+    def _snapshot_tombstones(self, *, flush: bool = False) -> None:
+        """Chụp `export_tombstones` (đồng bộ, ngoài lúc thực hiện danh sách hành động) rồi tạo task ghi."""
+        self._tomb_scheduled = False
+        self._tomb_handle = None
+        if self._tomb_task is not None or self._closed or (self._tomb_stopped and not flush):
+            return
+        self._tomb_dirty = False
+        try:
+            items = self._engine.export_tombstones(self._loop.time())
+        except Exception:
+            log.exception("TransferEngine.export_tombstones ném lỗi")
+            return
+        wall = _wall_time()
+        self._tomb_task = asyncio.create_task(
+            self._write_tombstones(items, wall), name=f"{_TASK_NAME}.transfer-tombstones"
+        )
+
+    async def _write_tombstones(self, items: tuple[RestoredTombstone, ...], wall: float) -> None:
+        """Một lần ghi `tombstones.json` (mã hóa trong thread). Luôn chờ việc `settled` trước khi cho
+        lần ghi sau (`atomic.write_atomic` dùng tên `.tmp` cố định); còn thay đổi thì hẹn lần sau."""
+        try:
+            try:
+                job = self._executor.submit(_encode_and_save, self._config_dir, items, wall)
+            except RuntimeError:  # executor đã shutdown
+                log.warning("không ghi được %s: node đã đóng", tombstones.TOMBSTONES_NAME)
+                return
+            self._tomb_job = job
+            try:
+                await _job_result(job, DISK_OP_TIMEOUT)
+            except DiskTimeout:
+                log.warning("ghi %s quá %g s", tombstones.TOMBSTONES_NAME, DISK_OP_TIMEOUT)
+            except _JobDropped:
+                return
+            except Exception as e:
+                log.warning("không ghi được %s: %s", tombstones.TOMBSTONES_NAME, _error_label(e))
+            await job.settled()
+            self._tomb_last_write = self._loop.time()
+        finally:
+            if self._tomb_task is asyncio.current_task():
+                self._tomb_task = None
+        if self._tomb_dirty:
+            self._schedule_tombstone_snapshot()
+
+    def _stop_tombstones(self) -> None:
+        """Không hẹn ghi bia mộ nữa (xả lúc đóng, hay `abort_now`); hủy lần hẹn đang chờ."""
+        self._tomb_stopped = True
+        self._tomb_scheduled = False
+        handle, self._tomb_handle = self._tomb_handle, None
+        if handle is not None:
+            handle.cancel()
+
+    async def _flush_tombstones(self) -> None:
+        """`close()`: ghi ảnh chụp cuối của bảng bia mộ, toàn bộ trong `TOMBSTONE_FLUSH_TIMEOUT`.
+
+        Chờ lần ghi đang chạy `settled`; còn thay đổi chưa ghi thì chụp và ghi ngay (bỏ khoảng cách
+        `TOMBSTONE_MIN_INTERVAL`). Quá hạn: việc chưa chạy bị bỏ, việc đang chạy để nguyên trong
+        thread, **không** ghi lần hai (hai lần ghi chồng lên cùng `tombstones.json.tmp`), WARNING.
+        """
+        self._stop_tombstones()
+        try:
+            async with asyncio.timeout(TOMBSTONE_FLUSH_TIMEOUT):
+                task = self._tomb_task
+                if task is not None:
+                    await asyncio.wait({task})  # không hủy task khi hết hạn
+                if self._tomb_task is None and self._tomb_dirty:
+                    self._snapshot_tombstones(flush=True)
+                    task = self._tomb_task
+                    if task is not None:
+                        await asyncio.wait({task})
+        except TimeoutError:
+            job = self._tomb_job
+            if job is not None:
+                job.cancel()  # chỉ có tác dụng khi việc chưa bắt đầu
+            task = self._tomb_task
+            if task is not None:
+                task.cancel()  # chỉ thôi chờ: không có lần ghi nào sau đó
+            log.warning(
+                "ghi %s chưa xong sau %g s khi đóng", tombstones.TOMBSTONES_NAME, TOMBSTONE_FLUSH_TIMEOUT
+            )
