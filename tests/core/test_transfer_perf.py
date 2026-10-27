@@ -38,6 +38,7 @@ def receiver_chain_seconds(nblocks: int, digests: list[bytes]) -> float:
     e.message(PEER, 1, Offer(transfer_id=T, block_size=BLOCK_SIZE, files=files), 1.0)
     e.space_checked(PEER, T, None, None, 1.0)
     acts = e.decide(PEER, T, True, 1.0)
+    acts += e.temp_created(PEER, T, 1.0)  # P3-2: `resume` đầu tiên chỉ sau `temp_created`
     seq = next(a.message.seq for a in acts if isinstance(a, SendMessage) and isinstance(a.message, Resume))
     e.incoming_data(PEER, 100, DataOpen(transfer_id=T, file_index=0, resume_seq=seq), 1.0)
     now = 2.0

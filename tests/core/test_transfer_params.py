@@ -99,6 +99,7 @@ def rich_engine():
     e.message(PEER, 1, Offer(transfer_id=T1, block_size=BLOCK_SIZE, files=tuple(_files(3))), now())
     e.space_checked(PEER, T1, 10**15, None, now())
     acts = e.decide(PEER, T1, True, now())
+    acts += e.temp_created(PEER, T1, now())  # P3-2: `accept`/`resume` chỉ sau `temp_created`
     res = next(a.message for a in acts if isinstance(a, SendMessage) and isinstance(a.message, Resume))
     did = 100
     acts = e.incoming_data(PEER, did, DataOpen(transfer_id=T1, file_index=0, resume_seq=res.seq), now())

@@ -91,6 +91,7 @@ from teleport.core.transfer import (
     AskUser,
     CheckSource,
     CheckSpace,
+    ClearBlocks,
     CloseData,
     CreateTemp,
     DataUnreachable,
@@ -109,7 +110,9 @@ from teleport.core.transfer import (
     SendBlocks,
     SendMessage,
     StatusChanged,
+    SuspendTemp,
     SyncPart,
+    TombstonesChanged,
     TransferAction,
     TransferEnded,
     TransferEngine,
@@ -884,8 +887,9 @@ class TransferManager:
         elif isinstance(action, OpenData):
             self._open_data(action)
         elif isinstance(action, CreateTemp):
-            self._create_lane(action)
+            self._create_lane(action)  # `action.offer` (ghi `transfer.json`): P3-3a
         elif isinstance(action, RemoveTemp):
+            # `keep_record` chưa dùng: chưa có `transfer.json` để giữ (P3-3a).
             lane = self._lanes.get((action.device_id, action.transfer_id))
             if lane is not None:
                 self._close_lane(lane)
@@ -895,6 +899,11 @@ class TransferManager:
             self._spawn(self._check_source(action), f"transfer-check {action.transfer_id[:8]}")
         elif isinstance(action, AskUser):
             self._ask_user(action)
+        elif isinstance(action, ClearBlocks | TombstonesChanged | SuspendTemp):
+            # Tạm thời không làm gì: chưa có `.state` để nối `CLEAR` (P3-3a), chưa lưu
+            # `tombstones.json` (P3-3b); `SuspendTemp` chưa được phát vì chưa gọi
+            # `suspend_receiving` (P3-3b).
+            pass
 
     def _cancel_every(self) -> None:
         for info in self._engine.transfers():
@@ -1456,6 +1465,10 @@ class TransferManager:
             if isinstance(action, CreateTemp):
                 lane.create_job = submit(rd.create_temp, transfer_id)
                 lane.temp = await self._lane_job(lane, lane.create_job, DISK_OP_TIMEOUT)
+                # Báo trước kết quả của mọi thao tác sau nó (hợp đồng mục 5): engine mới gửi `accept`.
+                # Quá hạn thì `DiskTimeout` đã bay ra ở trên: xong muộn cũng không báo.
+                if not lane.closing:
+                    self._call(self._engine.temp_created, device_id, transfer_id)
             elif isinstance(action, OpenPart):
                 if lane.temp is None:
                     raise ValueError("chưa có thư mục tạm")

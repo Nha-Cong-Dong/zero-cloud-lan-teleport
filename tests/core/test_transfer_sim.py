@@ -52,6 +52,7 @@ from teleport.core.transfer import (
     AskUser,
     CheckSource,
     CheckSpace,
+    ClearBlocks,
     CloseData,
     CreateTemp,
     Direction,
@@ -66,13 +67,18 @@ from teleport.core.transfer import (
     RemoveTemp,
     Report,
     Reread,
+    RestoredDone,
+    RestoredReceive,
     SendBlocks,
     SendMessage,
     StatusChanged,
+    SuspendTemp,
     SyncPart,
+    TombstonesChanged,
     TransferEnded,
     TransferEngine,
     TransferKey,
+    TransferStatus,
     WriteBlock,
 )
 
@@ -92,9 +98,10 @@ SIM = settings(
 
 
 def check_order(acts) -> None:
-    """G5: Report đứng cuối; trong nhóm Report, StatusChanged đứng sau."""
+    """G5: Report đứng cuối; trong nhóm Report, StatusChanged đứng sau. P3-2: ≤ 1 TombstonesChanged."""
     rank = [(2 if isinstance(a.event, StatusChanged) else 1) if isinstance(a, Report) else 0 for a in acts]
     assert rank == sorted(rank), f"vi phạm G5: {acts}"
+    assert sum(isinstance(a, TombstonesChanged) for a in acts) <= 1, f"hơn một TombstonesChanged: {acts}"
 
 
 class Link:
@@ -158,6 +165,9 @@ class Node:
         self.send_log: list[tuple[int, int, list[int]]] = []  # (bước, file, khối thiếu)
         self.resumes: list[Resume] = []
         self.known: set[TransferKey] = set()
+        self.kept: set[str] = set()  # thư mục tạm chỉ còn `transfer.json` của lượt đã xong (keep_record)
+        self.tomb_changes = 0
+        self.temp_ok: set[str] = set()  # lượt đã được báo `temp_created` (hay khôi phục từ đĩa)
 
 
 class Sim:
@@ -380,6 +390,8 @@ class Sim:
         check_order(acts)
         if call == "control_up":
             self.check_resync_order(n, acts)
+        if call == "temp_created":
+            n.temp_ok.add(args[1])
         if n is self.B and call == "reread_done":
             # Khối đọc lại sai (hay root sai: mọi khối) bị tắt bit và phải được xin lại (spec 3.8):
             # bỏ chúng khỏi tập “đã ghi” mà mọi `resume` sau phải chứa (xem `do`, SendMessage).
@@ -388,6 +400,27 @@ class Sim:
                 n.written[(T, f)] -= set(bad)
             elif not any(isinstance(a, Finalize) for a in acts):
                 n.written[(T, f)].clear()
+        if n is self.B and call == "reread_done":
+            # QĐ2: khối đọc lại sai (hay root sai) → `ClearBlocks` cùng danh sách, trước mọi `SyncPart`
+            # sau đó (FIFO đĩa của lượt), trừ khi lượt kết thúc ngay (quá số lần đọc lại sai).
+            _, T, f, bad, _root = args
+            ends = [a for a in acts if isinstance(a, Report) and isinstance(a.event, TransferEnded)]
+            if not any(isinstance(a, Finalize) for a in acts) and not ends:
+                clears = [a for a in acts if isinstance(a, ClearBlocks)]
+                want = tuple(bad) if bad else None
+                assert clears == [ClearBlocks(n.peer.device_id, T, f, want)], acts
+        for a in acts:
+            if isinstance(a, RemoveTemp):
+                # `keep_record` True đúng khi lượt kết thúc DONE trong cùng danh sách (spec-p3 P3-2).
+                key = TransferKey(n.peer.device_id, Direction.RECEIVE, a.transfer_id)
+                done = any(
+                    isinstance(b, Report)
+                    and isinstance(b.event, TransferEnded)
+                    and b.event.key == key
+                    and b.event.outcome == Outcome.DONE
+                    for b in acts
+                )
+                assert a.keep_record is done, (a, acts)
         if n is self.B:
             for i, a in enumerate(acts):
                 if isinstance(a, OpenData):
@@ -424,6 +457,10 @@ class Sim:
                 n.cancels_sent[m.transfer_id].append(m.reason)
             if isinstance(m, Complete):
                 n.completes.append(m)
+            if n is self.B and isinstance(m, Accept | Resume):
+                # spec-p3 “`temp_created`”: bên nhận chỉ gửi `accept`/`resume` sau khi thư mục tạm và
+                # `transfer.json` đã bền, nên máy gửi không bao giờ có `complete` mà B có thể quên.
+                assert m.transfer_id in n.temp_ok, f"{type(m).__name__} trước temp_created: {m}"
             if isinstance(m, Resume):
                 n.resumes.append(m)
                 if n is self.B:
@@ -454,11 +491,13 @@ class Sim:
                     n.send_jobs[a.data_id] = [a.transfer_id, a.file_index, list(a.have.missing())]
             elif conn is not None:
                 n.recv_jobs[a.data_id] = (a.transfer_id, a.file_index)
-        elif isinstance(a, CreateTemp | OpenPart | WriteBlock | SyncPart | Reread | Finalize):
+        elif isinstance(a, CreateTemp | OpenPart | WriteBlock | SyncPart | Reread | Finalize | ClearBlocks):
             T = a.transfer_id
             assert T not in n.removed, f"G2: hành động đĩa sau RemoveTemp: {a}"
             extra = None
             if isinstance(a, CreateTemp):
+                # `CreateTemp.offer`: app ghi `transfer.json` từ nó (spec-p3 mục 2.2).
+                assert a.offer == Offer(transfer_id=T, block_size=BLOCK_SIZE, files=self.files), a
                 n.created.add(T)
             elif isinstance(a, OpenPart):
                 assert T in n.created, "G2: OpenPart trước CreateTemp"
@@ -485,6 +524,8 @@ class Sim:
                 n.disk_q.setdefault(T, deque()).append((a, extra))
         elif isinstance(a, RemoveTemp):
             T = a.transfer_id
+            if a.keep_record:
+                n.kept.add(T)
             n.removed.add(T)
             n.disk_dead.add(T)
             n.disk_q.pop(T, None)
@@ -509,6 +550,12 @@ class Sim:
                 n.ended_at[ev.key] = self.now
             elif isinstance(ev, FileVerified):
                 n.file_verified.append(ev)
+        elif isinstance(a, TombstonesChanged):
+            n.tomb_changes += 1
+        elif isinstance(a, SuspendTemp):
+            raise AssertionError(f"SuspendTemp khi không ai gọi suspend_receiving: {a}")
+        else:
+            raise AssertionError(f"hành động lạ: {a!r}")
 
     # ---- kết nối dữ liệu ----
 
@@ -604,6 +651,8 @@ class Sim:
     def disk_step(self, n: Node, T: str) -> None:
         a, extra = n.disk_q[T].popleft()
         peer = n.peer.device_id
+        if isinstance(a, ClearBlocks):
+            return  # đĩa giả của mô phỏng thường không có `.state`; xem `CrashSim`
         if isinstance(a, CreateTemp):
             if T in n.temps:
                 n.disk_q.pop(T, None)
@@ -611,6 +660,9 @@ class Sim:
                 n.inbox.append(("storage_failed", (peer, T, DiskOp.CREATE_TEMP)))
                 return
             n.temps.add(T)
+            # Hợp đồng 5 (P3-2): `CreateTemp` thành công → `temp_created`, báo trước kết quả của mọi thao
+            # tác đứng sau nó trong hàng (cùng hàng sự kiện FIFO của máy).
+            n.inbox.append(("temp_created", (peer, T)))
         elif isinstance(a, OpenPart):
             assert T in n.temps
             n.parts[(T, a.file_index)] = {}
@@ -751,6 +803,7 @@ class Sim:
         for f in range(len(self.files)):
             assert self.B.finalize_count[(TID, f)] == 1, f
         assert self.B.temps == set()
+        assert TID in self.B.kept, "lượt xong phải giữ `transfer.json` (RemoveTemp.keep_record)"
         assert sorted(e.file_index for e in self.A.file_verified) == list(range(len(self.files)))
         assert sorted(e.file_index for e in self.B.file_verified) == list(range(len(self.files)))
         assert self.A.engine.transfers() == () and self.B.engine.transfers() == ()
@@ -860,6 +913,7 @@ def test_resume_scheduled_before_file_verified_does_not_cause_error():
     assert any(isinstance(a, CheckSpace) for a in r_acts)
     R.space_checked(SA, TID, FREE, None, t)
     r_acts = R.decide(SA, TID, True, t)
+    r_acts += R.temp_created(SA, TID, t)  # P3-2: `accept`/`resume` chỉ sau khi thư mục tạm đã bền
     s_acts = to_s(msgs(r_acts), t)
     od = next(a for a in s_acts if isinstance(a, OpenData))
     msg = od.message
@@ -1164,7 +1218,7 @@ def _sender_finishes_connection_receiver_never_sees():
             R.message(SA, 2, a.message, t)
     R.space_checked(SA, TID, FREE, None, t)
     s_acts = []
-    for a in R.decide(SA, TID, True, t):
+    for a in R.decide(SA, TID, True, t) + R.temp_created(SA, TID, t):
         if isinstance(a, SendMessage):
             s_acts += S.message(RB, 1, a.message, t)
     msg = next(a for a in s_acts if isinstance(a, OpenData)).message
@@ -1298,7 +1352,7 @@ def test_sender_cancel_lost_while_receiver_file_awaits_fsync_still_reaches_recei
             R.message(SA, 2, a.message, t)
     R.space_checked(SA, TID, FREE, None, t)
     s_acts = []
-    for a in R.decide(SA, TID, True, t):
+    for a in R.decide(SA, TID, True, t) + R.temp_created(SA, TID, t):
         if isinstance(a, SendMessage):
             s_acts += S.message(RB, 1, a.message, t)
     msg = next(a for a in s_acts if isinstance(a, OpenData)).message
@@ -1573,3 +1627,591 @@ def test_remember_ttl_outlives_peer_reconnect_window_with_keepalive_skew():
     """Bảng nhớ phải sống lâu hơn thời gian bên kia còn có thể nối lại: hạn chờ nối lại tính từ lúc
     bên kia thấy mất kết nối, muộn tới `DEAD_AFTER` (keepalive) so với bên này."""
     assert transfer.REMEMBER_TTL > transfer.RECONNECT_GRACE + DEAD_AFTER
+
+
+# ---- P3-2: mô hình sập của bên nhận (spec-p3 mục 2.3 P3-2, “Xong khi”) -------------------------------
+
+WRITE_QUEUE = 8  # protocol §4.3: hàng ghi đĩa có giới hạn 8 khối → backpressure
+MAX_RESENT_PER_CRASH = 25  # protocol §4.3: khối đã nhận mà chưa đánh dấu ≤ 16 + 8 + 1
+
+
+class CrashSim(Sim):
+    """`Sim` có thêm lỗi “tiến trình nhận bị giết” (B sập) và đĩa giả có `fsync`.
+
+    Đĩa giả của B (sống qua lần sập, giữ ở `Sim`):
+    - `records[T]`: thư mục tạm + `transfer.json` (offer lấy từ `CreateTemp.offer`, `verified`, đã xong
+      chưa, lúc hoạt động cuối); bền từ lúc `CreateTemp` chạy xong, cũng là lúc `temp_created` được báo
+      (trước đó B chưa gửi `accept`/`resume` nào, spec-p3 “`temp_created`”); mất khi `RemoveTemp` không
+      `keep_record`.
+    - `.part`: phần bền (`durable`) và phần chưa `fsync` (`volatile`). `SyncPart` chạy xong mới làm bền
+      mọi khối đã ghi trước nó và nối `MARK` vào `.state` (`marks`), rồi mới báo `synced` (bất biến bên
+      gọi: `synced` chỉ sau MARK bền). `ClearBlocks` nối `CLEAR` theo FIFO đĩa, không `fsync` riêng.
+      `disk_corrupt` làm hỏng khối trên cả phần bền (còn sau khi sập).
+    - Sập: hàng đĩa mất; mỗi khối chưa `fsync` còn hay mất ngẫu nhiên (trang bộ nhớ đệm có thể đã được
+      ghi); `SyncPart` đang chạy dở thì `MARK` của nó còn trọn hay mất (bản ghi cụt bị bỏ khi đọc lại);
+      các `CLEAR` sau `MARK` bền cuối có thể mất (một đoạn đuôi); `cut_durable` > 0 cắt thêm tới chừng
+      ấy bản ghi cuối đã bền (`.state` hỏng đuôi, mvp N5).
+    - Mở lại: dựng `RestoredReceive` / `RestoredDone` từ đĩa như app (P3-3a): `bits`, `leaves` từ việc
+      đọc lại `.state`, `part_blocks` = số khối nằm trọn trong `.part` bền, tuổi = lúc này − hoạt động cuối.
+
+    Backpressure: B chỉ đọc khung tiếp khi hàng đĩa của lượt còn < `WRITE_QUEUE` `WriteBlock`.
+
+    Mô hình này giữ `.state` ở mức bản ghi; mã hóa byte và cắt cụt ở byte ngẫu nhiên được kiểm riêng ở
+    `tests/core/test_resume_state.py` (`StateReplay`).
+    """
+
+    def __init__(
+        self,
+        rng: random.Random,
+        nblocks: list[int],
+        *,
+        crashes: int = 1,
+        crash_rate: float = 0.01,
+        cut_durable: int = 0,
+        crash_when=None,
+        **kw,
+    ) -> None:
+        kw.setdefault("slow_sync", 0.3)
+        kw.setdefault("sync_delay", (0.2, 1.5))
+        super().__init__(rng, nblocks, **kw)
+        self.crash_budget = crashes
+        self.crash_rate = crash_rate
+        self.cut_durable = cut_durable
+        self.crash_when = crash_when  # điều kiện sập cố định (thay cho sập ngẫu nhiên)
+        self.b_down = False
+        self.records: dict[str, dict] = {}
+        self.durable: dict[tuple[str, int], dict[int, bytes]] = {}
+        self.volatile: dict[tuple[str, int], dict[int, bytes]] = {}
+        self.marks: dict[tuple[str, int], list[tuple[str, object]]] = {}
+        self.inflight: dict[str, SyncPart] = {}
+        self.crash_steps: list[int] = []
+        self.lost_per_crash: list[int] = []
+        self.restored: list[tuple[int, set[int]]] = []  # (file, bit đã khôi phục) mỗi lần mở lại
+        self.restore_steps: list[int] = []
+        self.b_resumes: list[tuple[int, Resume]] = []  # (bước, resume) B đã gửi, qua mọi lần sập
+        self.offer_replies: list[list[str]] = []  # B trả lời `offer` gửi lại sau khi mở lại
+        self.clears_done = 0  # số `ClearBlocks` hàng đĩa đã chạy
+        self.cleared_lost = 0  # số bản ghi `CLEAR` mất vì sập
+        self.asks = 0  # số lần B hỏi người dùng (hỏi lại sau sập trước `temp_created`)
+
+    # ---- đĩa có fsync ----
+
+    def touch(self, T: str) -> None:
+        rec = self.records.get(T)
+        if rec is not None:
+            rec["last"] = self.now
+
+    def disk_step(self, n: Node, T: str) -> None:
+        if n is not self.B:
+            super().disk_step(n, T)
+            return
+        a, _ = n.disk_q[T][0]
+        if isinstance(a, SyncPart):
+            n.disk_q[T].popleft()
+            self.inflight[T] = a
+            if self.rng.random() < self.slow_sync:
+                done = self.now + self.rng.uniform(*self.sync_delay)
+                n.disk_busy[T] = done
+                self.at(done, partial(self.sync_done, n, T, a))
+            else:
+                self.sync_done(n, T, a)
+            return
+        if isinstance(a, ClearBlocks):
+            n.disk_q[T].popleft()
+            self.marks.setdefault((T, a.file_index), []).append(("clear", a.indices))
+            self.clears_done += 1
+            self.touch(T)
+            return
+        existed = T in n.temps
+        corrupted = self.corrupted_step
+        super().disk_step(n, T)
+        if isinstance(a, CreateTemp) and not existed and T in n.temps:
+            # P3-3a: `create_temp` ghi `transfer.json` và fsync thư mục trước khi trả về; `temp_created`
+            # được báo ngay sau (xem `Sim.disk_step`). Sập trước bước này: không có gì trên đĩa.
+            self.records[T] = {"offer": a.offer, "verified": 0, "done": False, "last": self.now}
+        elif isinstance(a, Reread) and corrupted is None and self.corrupted_step is not None:
+            # Hỏng khối nằm trên đĩa thật (phần bền), không chỉ trong bản nhìn thấy: còn sau khi sập.
+            f, k = self.disk_corrupt  # type: ignore[misc]
+            if k in self.durable.get((T, f), {}):
+                self.durable[(T, f)][k] = GARBAGE
+        elif isinstance(a, OpenPart):
+            key = (T, a.file_index)
+            self.durable[key] = {}
+            self.volatile[key] = {}
+            self.marks[key] = []  # header `.state` (bất biến bên gọi: `OpenPart` tạo `.part` + header)
+        elif isinstance(a, WriteBlock):
+            self.volatile[(T, a.file_index)][a.index] = n.parts[(T, a.file_index)][a.index]
+        elif isinstance(a, Finalize):
+            rec = self.records[T]
+            rec["verified"] += 1
+            rec["done"] = rec["verified"] == len(self.files)
+            for d in (self.durable, self.volatile, self.marks):
+                d.pop((T, a.file_index), None)
+        self.touch(T)
+
+    def sync_done(self, n: Node, T: str, a: SyncPart) -> None:
+        if n is not self.B or self.inflight.get(T) is not a:
+            return  # tiến trình đã sập: không báo gì
+        del self.inflight[T]
+        key = (T, a.file_index)
+        self.durable[key].update(self.volatile[key])
+        self.volatile[key].clear()
+        self.marks[key].append(("mark", dict(a.blocks)))
+        self.touch(T)
+        n.inbox.append(("synced", (n.peer.device_id, T, a.file_index, a.token)))
+
+    def do(self, n: Node, a, call: str, args: tuple, payload) -> None:
+        if n is self.B and isinstance(a, SendMessage) and isinstance(a.message, Resume):
+            self.b_resumes.append((self.steps, a.message))
+        if n is self.B and isinstance(a, AskUser):
+            self.asks += 1
+        if n is self.B and isinstance(a, RemoveTemp):
+            T = a.transfer_id
+            if a.keep_record and T in self.records:
+                self.records[T]["done"] = True
+                self.touch(T)
+            else:
+                self.records.pop(T, None)
+            for d in (self.durable, self.volatile, self.marks):
+                for key in [k for k in d if k[0] == T]:
+                    del d[key]
+            self.inflight.pop(T, None)
+        super().do(n, a, call, args, payload)
+
+    # ---- backpressure, kết nối tới tiến trình đã chết ----
+
+    def tasks(self) -> list:
+        return [t for t in super().tasks() if not self.blocked(t)]
+
+    def blocked(self, task) -> bool:
+        if getattr(task.func, "__name__", "") != "recv_step" or task.args[0] is not self.B:
+            return False
+        job = self.B.recv_jobs.get(task.args[1])
+        if job is None:
+            return False
+        q = self.B.disk_q.get(job[0], ())
+        return sum(isinstance(a, WriteBlock) for a, _ in q) >= WRITE_QUEUE
+
+    def open_attempt(self, n: Node, link: Link, msg: DataOpen) -> None:
+        if n not in self.nodes:
+            return  # tiến trình đã chết
+        if self.b_down or not link.alive:
+            n.inbox.append(("outgoing_data_failed", (n.peer.device_id, link.ids[n.name], msg)))
+            return
+        super().open_attempt(n, link, msg)
+
+    def arrive(self, conn: Conn) -> None:
+        if conn.client not in self.nodes or conn.server not in self.nodes:
+            conn.arrived = True
+            self.abort(conn, by=None)
+            return
+        super().arrive(conn)
+
+    def execute(self, n: Node, acts: list, call: str, args: tuple = (), payload: tuple | None = None) -> None:
+        if n is self.B and call == "message" and isinstance(args[0], Offer) and self.restore_steps:
+            self.offer_replies.append([type(a.message).__name__ for a in acts if isinstance(a, SendMessage)])
+        super().execute(n, acts, call, args, payload)
+
+    # ---- sập và mở lại ----
+
+    def maybe_fault(self) -> None:
+        if self.can_crash():
+            due = (
+                self.crash_when(self) if self.crash_when is not None else self.rng.random() < self.crash_rate
+            )
+            if due:
+                self.crash()
+                return
+        super().maybe_fault()
+
+    def can_crash(self) -> bool:
+        return (
+            self.crash_budget > 0
+            and not self.b_down
+            and not self.net_down
+            and self.current_link is not None
+            and self.B.ended.get(self.key_b) is None  # sau khi B xong: xem test riêng của `RestoredDone`
+        )
+
+    def crash(self) -> None:
+        self.crash_budget -= 1
+        self.crash_steps.append(self.steps)
+        old = self.B
+        self.b_down = True
+        link = self.current_link
+        assert link is not None
+        link.alive = False
+        for q in link.q.values():
+            q.clear()
+        self.current_link = None
+        self.nodes = [self.A]
+        for c in list(self.conns):
+            if not c.closed:
+                self.abort(c, by=None)
+        self.at(self.now + self.rng.uniform(0, 3.0), partial(self.A.link_events.append, ("lost", link)))
+        # `fsync` `.part` + MARK đang chạy dở: còn trọn hay mất.
+        for T, sp in list(self.inflight.items()):
+            key = (T, sp.file_index)
+            if key in self.marks and self.rng.random() < 0.5:
+                self.durable[key].update(self.volatile[key])
+                self.volatile[key].clear()
+                self.marks[key].append(("mark", dict(sp.blocks)))
+        self.inflight.clear()
+        # Khối chưa `fsync`: mỗi khối còn hay mất.
+        for key, vol in self.volatile.items():
+            for i, dg in vol.items():
+                if self.rng.random() < 0.5:
+                    self.durable[key][i] = dg
+            vol.clear()
+        # `CLEAR` không có `fsync` riêng: chỉ bền khi `MARK` sau nó đã `fsync` `.state`. `CLEAR` đứng sau
+        # `MARK` bền cuối cùng có thể mất (một đoạn đuôi ngẫu nhiên); khối của nó “sống lại” và lượt đọc
+        # lại cuối bắt lại (QĐ2).
+        for log in self.marks.values():
+            tail = 0
+            while tail < len(log) and log[len(log) - 1 - tail][0] == "clear":
+                tail += 1
+            drop = self.rng.randint(0, tail)
+            if drop:
+                self.cleared_lost += drop
+                del log[len(log) - drop :]
+        if self.cut_durable:
+            for log in self.marks.values():
+                del log[max(0, len(log) - self.rng.randint(0, self.cut_durable)) :]
+        written = {k: set(v) for k, v in old.written.items() if k[0] == TID}
+        downtime = self.rng.uniform(0.5, min(5.0, transfer.RECONNECT_GRACE / 6))
+        self.at(self.now + downtime, partial(self.restart, old, written))
+
+    def replay(self, key: tuple[str, int], n: int) -> tuple[set[int], bytearray]:
+        """Đọc lại `.state` giả: bit và `leaves` sau mọi `MARK` / `CLEAR`."""
+        on: set[int] = set()
+        leaves = bytearray(32 * n)
+        for kind, data in self.marks.get(key, []):
+            if kind == "mark":
+                assert isinstance(data, dict)
+                for i, dg in data.items():
+                    on.add(i)
+                    leaves[32 * i : 32 * i + 32] = dg
+            elif data is None:
+                on.clear()
+            else:
+                assert isinstance(data, tuple)
+                on -= set(data)
+        return on, leaves
+
+    def restart(self, old: Node, written: dict[tuple[str, int], set[int]]) -> None:
+        new = Node(self, "B", RB, receiving=True)
+        for attr in ("finals", "finalize_count", "ended", "cancels_sent", "completes", "resumes", "known"):
+            setattr(new, attr, getattr(old, attr))
+        new.file_verified = list(old.file_verified)
+        new.removed = set(old.removed)
+        new.kept = set(old.kept)
+        # Có `transfer.json` bền ⇔ `CreateTemp` đã chạy xong: lượt khôi phục coi như đã `temp_created`.
+        new.temp_ok = set(self.records)
+        receives, done = [], []
+        lost = 0
+        for T, rec in self.records.items():
+            age = self.now - rec["last"]
+            if rec["done"]:
+                done.append(RestoredDone(device_id=SA, offer=rec["offer"], age=age))
+                continue
+            f = rec["verified"]
+            key = (T, f)
+            n = self.n[f]
+            # App tạo `.part` + header khi file hiện tại chưa có (sập ngay sau `CreateTemp` hay `Finalize`).
+            self.durable.setdefault(key, {})
+            self.volatile.setdefault(key, {})
+            self.marks.setdefault(key, [])
+            on, leaves = self.replay(key, n)
+            part = self.durable[key]
+            part_blocks = max(part) + 1 if part else 0
+            assert all(i < part_blocks for i in on), "mô hình đĩa sai: MARK cho khối chưa bền"
+            bits = Bitfield(n)
+            for i in on:
+                bits.set(i)
+            receives.append(
+                RestoredReceive(
+                    device_id=SA,
+                    offer=rec["offer"],
+                    file_index=f,
+                    bits=bits,
+                    leaves=leaves,
+                    part_blocks=part_blocks,
+                    age=age,
+                )
+            )
+            new.temps.add(T)
+            new.created.add(T)
+            new.parts[key] = dict(part)
+            new.hw[key] = part_blocks - 1
+            new.written[key] = set(on)
+            self.restored.append((f, set(on)))
+            if T == TID:
+                lost += len(written.get(key, set()) - on)
+                lost += sum(len(v) for (_, g), v in written.items() if g > f)
+        if TID not in self.records:
+            lost += sum(len(v) for v in written.values())  # chưa có thư mục tạm: mất mọi khối đã nhận
+        self.lost_per_crash.append(lost)
+        self.B = new
+        self.A.peer, new.peer = new, self.A
+        self.nodes = [self.A, new]
+        acts = new.engine.restore(receives=tuple(receives), tombstones=(), done=tuple(done), now=self.now)
+        if receives:
+            assert acts == [Report(StatusChanged(self.key_b, TransferStatus.RECONNECTING))], acts
+        else:
+            assert acts == [], acts
+        self.execute(new, acts, "restore")
+        self.restore_steps.append(self.steps)
+        self.b_down = False
+        self.new_link(spread=0.5)
+
+    # ---- kết luận ----
+
+    def assert_finished(self) -> None:
+        ea, eb = self.A.ended.get(self.key_a), self.B.ended.get(self.key_b)
+        assert ea is not None and ea.outcome == Outcome.DONE, ea
+        if eb is None:
+            # B sập sau khi mọi `Finalize` đã bền mà trước `finalized`: mở lại bằng `RestoredDone`, nên
+            # không engine nào của B phát `TransferEnded`; `transfer.json` ghi lượt đã xong.
+            assert self.records[TID]["done"], self.records
+        else:
+            assert eb.outcome == Outcome.DONE, eb
+            assert TID in self.B.kept
+        assert self.receiver_content_ok(), "file cuối khác nguồn"
+        for f in range(len(self.files)):
+            assert self.B.finalize_count[(TID, f)] == 1, f
+        assert self.B.temps == set()
+        assert self.A.engine.transfers() == () and self.B.engine.transfers() == ()
+        for node in (self.A, self.B):
+            bad = [r for reasons in node.cancels_sent.values() for r in reasons if r != "unknown_transfer"]
+            assert bad == [], (node.name, bad)
+
+
+def long_grace():
+    """Giữ `RECONNECT_GRACE` ≥ 1 giờ trong mô hình sập (hằng của sản phẩm là 24 giờ, nên thường không
+    đổi gì), để “mất mạng rồi sập” không vượt hạn nối lại kể cả khi hằng bị vá nhỏ. Hết hạn của lượt
+    khôi phục có test riêng (`test_transfer_restore.py`).
+    """
+    from teleport.core import transfer
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(transfer, "RECONNECT_GRACE", max(transfer.RECONNECT_GRACE, 3600.0))
+    return mp
+
+
+CRASH = settings(
+    max_examples=60,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
+)
+
+
+@CRASH
+@given(
+    rng=st.randoms(use_true_random=False),
+    nblocks=st.lists(st.integers(0, 60), min_size=1, max_size=3),
+    crashes=st.integers(1, 3),
+    net_faults=st.booleans(),
+)
+def test_receiver_crash_model_ends_with_source_content_and_bounded_resend(rng, nblocks, crashes, net_faults):
+    """Mô hình sập (spec-p3 P3-2 “Xong khi”; ke_hoach GĐ3 (c), (d)): B bị giết ở bước ngẫu nhiên, kể cả
+    giữa `decide` và `temp_created`; đĩa mất phần chưa `fsync`, MARK đang ghi bị cụt, CLEAR cuối có thể
+    mất; mở lại → `restore` → nối lại. Không lần sập nào sinh `cancel` (B sập trước khi bền thì được hỏi
+    lại, mô phỏng tự nhận); hai bên DONE, file khớp nguồn; mỗi lần sập phải gửi lại ≤ 25 khối đã nhận
+    (protocol §4.3, mvp N4)."""
+    sim = CrashSim(
+        rng,
+        nblocks,
+        crashes=crashes,
+        crash_rate=0.02,
+        faults=frozenset({"outage", "switch", "data_break"}) if net_faults else frozenset(),
+    )
+    mp = long_grace()
+    try:
+        sim.start()
+        sim.run(max_steps=60_000)
+    finally:
+        mp.undo()
+    sim.assert_finished()
+    assert all(lost <= MAX_RESENT_PER_CRASH for lost in sim.lost_per_crash), sim.lost_per_crash
+
+
+@settings(
+    max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large]
+)
+@given(
+    rng=st.randoms(use_true_random=False),
+    nblocks=st.lists(st.integers(1, 50), min_size=1, max_size=2),
+    cut=st.integers(1, 4),
+    data=st.data(),
+)
+def test_receiver_crash_with_damaged_state_tail_still_ends_with_source_content(rng, nblocks, cut, data):
+    """Như trên, cộng `.state` hỏng đuôi: mất tới `cut` bản ghi cuối đã bền, và có khi một khối bị hỏng
+    trên đĩa (nên có `CLEAR` trong nhật ký). Bỏ `MARK` làm thiếu bit (gửi lại nhiều hơn); bỏ `CLEAR` làm
+    bit của khối hỏng sống lại, và lượt đọc lại cuối bắt lại nó (QĐ2). Vì vậy file cuối vẫn đúng; biến thể
+    này không kiểm trần 25 khối."""
+    sim = CrashSim(rng, nblocks, crashes=2, crash_rate=0.02, cut_durable=cut)
+    if data.draw(st.booleans()):
+        f = data.draw(st.integers(0, len(nblocks) - 1))
+        sim.disk_corrupt = (f, data.draw(st.integers(0, sim.n[f] - 1)))
+    sim.start()
+    sim.run(max_steps=60_000)
+    sim.assert_finished()
+
+
+@settings(
+    max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large]
+)
+@given(
+    rng=st.randoms(use_true_random=False),
+    nblocks=st.lists(st.integers(1, 50), min_size=1, max_size=2),
+    data=st.data(),
+)
+def test_receiver_crash_with_corrupt_block_ends_with_source_content_and_bounded_resend(rng, nblocks, data):
+    """Mô hình sập có một khối hỏng trên đĩa sau khi đã đánh dấu (mvp F7): lượt đọc lại phát `ClearBlocks`,
+    `CLEAR` có thể mất khi sập ngay sau đó. File cuối vẫn khớp nguồn, mỗi lần sập ≤ 25 khối đã nhận."""
+    sim = CrashSim(rng, nblocks, crashes=2, crash_rate=0.03)
+    f = data.draw(st.integers(0, len(nblocks) - 1))
+    sim.disk_corrupt = (f, data.draw(st.integers(0, sim.n[f] - 1)))
+    sim.start()
+    sim.run(max_steps=60_000)
+    sim.assert_finished()
+    assert all(lost <= MAX_RESENT_PER_CRASH for lost in sim.lost_per_crash), sim.lost_per_crash
+
+
+def test_receiver_crash_right_after_clear_blocks_loses_clear_and_still_finishes():
+    """Ca cố định: B sập ngay khi hàng đĩa vừa nối `CLEAR` của khối hỏng (chưa có `MARK` nào sau nó), nên
+    `CLEAR` có thể mất; khối hỏng “sống lại” trong bitfield khôi phục rồi bị lượt đọc lại cuối bắt lại.
+    Qua 12 seed, phải có seed thật sự mất `CLEAR` (không thì test không thử gì)."""
+    lost_clear = 0
+    for seed in range(12):
+        sim = CrashSim(random.Random(seed), [20], crashes=1, crash_when=lambda s: s.clears_done > 0)
+        sim.disk_corrupt = (0, 7)
+        sim.start()
+        sim.run(max_steps=60_000)
+        sim.assert_finished()
+        assert sim.clears_done >= 1 and sim.crash_steps, (seed, "không có ClearBlocks hay không sập")
+        lost_clear += sim.cleared_lost
+    assert lost_clear > 0
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_receiver_crash_with_fixed_seeds_really_crashes_and_finishes(seed):
+    """Đối chứng cho test hypothesis: với seed cố định, B thật sự sập giữa lượt (không chỉ chạy suôn)."""
+    sim = CrashSim(random.Random(seed), [45, 3, 30], crashes=2, crash_rate=0.03)
+    sim.start()
+    sim.run(max_steps=60_000)
+    sim.assert_finished()
+    assert sim.crash_steps, "seed này không sập: tăng crash_rate"
+    assert all(lost <= MAX_RESENT_PER_CRASH for lost in sim.lost_per_crash), sim.lost_per_crash
+
+
+def _marked_at_least(k: int, f: int = 0):
+    def when(sim: CrashSim) -> bool:
+        on, _ = sim.replay((TID, f), sim.n[f])
+        return len(on) >= k
+
+    return when
+
+
+@pytest.mark.parametrize("first_client", ["A", "B"])
+@pytest.mark.parametrize("seed", range(4))
+def test_restored_receive_resumes_with_restored_bitfield_and_sender_sends_only_missing(seed, first_client):
+    """spec-p3 P3-2 “Xong khi”: khôi phục + `offer` gửi lại → `accept` + `resume` mang bitfield khôi phục;
+    bên gửi chỉ gửi khối thiếu. B sập khi `.state` đã đánh dấu ≥ 20 khối của file 0 (64 khối)."""
+    sim = CrashSim(
+        random.Random(seed), [64, 2], crashes=1, crash_when=_marked_at_least(20), first_client=first_client
+    )
+    sim.start()
+    sim.run(max_steps=60_000)
+    sim.assert_finished()
+    assert len(sim.restore_steps) == 1
+    f, on = sim.restored[0]
+    assert f == 0 and len(on) >= 20
+    after = sim.restore_steps[0]
+    first = next(m for step, m in sim.b_resumes if step >= after)
+    assert first.file_index == 0 and _bits(first.bitfield, 64) == on
+    sends = [miss for step, ff, miss in sim.A.send_log if step >= after and ff == 0]
+    assert sends, "bên gửi không gửi gì cho file 0 sau khi B mở lại"
+    assert set(sends[0]) == set(range(64)) - on
+    assert sim.offer_replies, "bên gửi phải gửi lại offer trên kết nối mới"
+    assert all(reply == ["Accept"] for reply in sim.offer_replies), sim.offer_replies
+
+
+def _done_before_sender_knows(sim: CrashSim) -> bool:
+    """B đã `RemoveTemp(keep_record=True)` (lượt xong) mà A chưa nhận `verified` của file cuối."""
+    return sim.records.get(TID, {}).get("done", False) and sim.A.ended.get(sim.key_a) is None
+
+
+class DoneCrashSim(CrashSim):
+    """B sập ngay sau khi xong mà `verified` của file cuối chưa tới A (message trên đường bị mất)."""
+
+    def can_crash(self) -> bool:
+        return self.crash_budget > 0 and not self.b_down and self.current_link is not None
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_resent_complete_after_restoring_finished_transfer_gets_verified(seed):
+    """spec-p3 P3-2 “Xong khi”: `complete` gửi lại sau khôi phục lượt xong (`RestoredDone`) → `verified`."""
+    sim = DoneCrashSim(random.Random(seed), [3, 2], crashes=1, crash_when=_done_before_sender_knows)
+    sim.start()
+    sim.run(max_steps=60_000)
+    assert sim.crash_steps, "B không sập sau khi xong"
+    ea = sim.A.ended.get(sim.key_a)
+    assert ea is not None and ea.outcome == Outcome.DONE, ea
+    assert sim.receiver_content_ok()
+    assert all(sim.B.finalize_count[(TID, f)] == 1 for f in range(2))
+    assert sim.restored == []  # chỉ có `RestoredDone`, không lượt nhận nào
+
+
+def test_crash_before_record_durable_asks_again():
+    """spec-p3 “`temp_created`” (thay hàng “Thấp” của mục 2.1): bên nhận chỉ gửi `accept`/`resume` đầu
+    tiên sau `temp_created`. B `decide(True)` (file 0 rỗng), chưa có `temp_created` → không gửi `accept`
+    hay `resume`, nên A không có `complete` nào. B sập trước khi thư mục tạm bền; mở lại với `restore()`
+    rỗng. A `control_up` chỉ gửi lại `offer` (không `complete`); B xét như `offer` mới và hỏi lại người
+    dùng (`AskUser`); không bên nào gửi `cancel`.
+    """
+    files = [FileEntry(name="rong.bin", size=0, mtime=1), FileEntry(name="b.bin", size=5, mtime=2)]
+    A = TransferEngine(SA, receiving=False)
+    B1 = TransferEngine(RB, receiving=True)
+    t = 1.0
+    A.control_up(RB, 1, True, t)
+    B1.control_up(SA, 2, False, t)
+    for m in [a.message for a in A.send(RB, TID, files, t) if isinstance(a, SendMessage)]:
+        B1.message(SA, 2, m, t)
+    B1.space_checked(SA, TID, FREE, None, t)
+    b_acts = B1.decide(SA, TID, True, t)
+    assert any(isinstance(a, CreateTemp) for a in b_acts)
+    assert [a for a in b_acts if isinstance(a, SendMessage)] == [], "accept/resume trước temp_created"
+    # B sập: `CreateTemp` chưa chạy xong, không `temp_created`. Mở lại, không có gì để khôi phục.
+    t = 5.0
+    A.control_lost(RB, 1, t)
+    B2 = TransferEngine(RB, receiving=True)
+    assert B2.restore(receives=(), tombstones=(), done=(), now=t) == []
+    up_a = A.control_up(RB, 3, True, t)
+    resent = [a.message for a in up_a if isinstance(a, SendMessage)]
+    assert [type(m) for m in resent] == [Offer], resent
+    B2.control_up(SA, 4, False, t)
+    replies: list = []
+    for m in resent:
+        replies += B2.message(SA, 4, m, t)
+    replies += B2.space_checked(SA, TID, FREE, None, t)
+    cancels = [a.message for a in replies if isinstance(a, SendMessage) and isinstance(a.message, Cancel)]
+    assert cancels == [], f"B hủy lượt thay vì hỏi lại: {cancels}"
+    assert any(isinstance(a, AskUser) and a.transfer_id == TID for a in replies), replies
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_crash_between_decide_and_temp_created_asks_again_and_finishes(seed):
+    """Như trên trong mô phỏng: B sập ngay sau `decide`, trước khi `CreateTemp` chạy xong. Lượt được hỏi
+    lại (mô phỏng tự nhận), không `cancel`, hai bên DONE, file khớp nguồn."""
+
+    def when(sim: CrashSim) -> bool:
+        return TID in sim.B.created and TID not in sim.records
+
+    sim = CrashSim(random.Random(seed), [0, 3, 17], crashes=1, crash_when=when)
+    sim.start()
+    sim.run(max_steps=60_000)
+    assert sim.crash_steps, "B không sập trong cửa sổ decide → temp_created"
+    sim.assert_finished()
+    assert sim.asks >= 2, "B phải hỏi lại sau khi sập"
+    assert sim.lost_per_crash == [0], "trước temp_created không có khối nào được nhận"
