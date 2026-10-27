@@ -130,6 +130,9 @@ def _make(tr: ModuleType) -> SimpleNamespace:
             for a in actions
         ]
         assert rank == sorted(rank), f"vi phạm G5: {actions}"
+        # P3-2: `TombstonesChanged` chỉ báo “bảng bia mộ đã đổi”, nên mỗi lời gọi phát tối đa một lần.
+        changes = [a for a in actions if isinstance(a, tr.TombstonesChanged)]
+        assert len(changes) <= 1, f"hơn một TombstonesChanged trong một lời gọi: {actions}"
 
     def snapshot(engine: Any) -> tuple[Any, Any, Any]:
         """Trạng thái quan sát được qua API công khai (dùng để so trước/sau một lời gọi lỗi)."""
@@ -256,10 +259,22 @@ def _make(tr: ModuleType) -> SimpleNamespace:
             acts += self.call("space_checked", self.peer, self.T, free, max_size)
             return acts
 
-        def accept(self, *, up: bool = True) -> list[Any]:
-            """`offer` → `space_checked` → `decide(True)`. Trả hành động của `decide`."""
+        def accept(self, *, up: bool = True, created: bool = True) -> list[Any]:
+            """`offer` → `space_checked` → `decide(True)` → (mặc định) `temp_created`.
+
+            Trả hành động của `decide` nối với của `temp_created` (P3-2: bên nhận chỉ gửi `accept` và
+            `resume` đầu tiên sau `temp_created`), nên test cũ vẫn thấy `CreateTemp`, `accept`, `resume`
+            trong cùng danh sách. `created=False`: dừng ngay sau `decide`.
+            """
             self.to_asking(up=up)
-            return self.call("decide", self.peer, self.T, True)
+            acts = self.call("decide", self.peer, self.T, True)
+            if created:
+                acts = acts + self.created()  # không `+=`: danh sách của `decide` đã nằm trong `log`
+            return acts
+
+        def created(self) -> list[Any]:
+            """Hàng đĩa báo `CreateTemp` đã xong (thư mục tạm và `transfer.json` đã bền)."""
+            return self.call("temp_created", self.peer, self.T)
 
         def resumes(self) -> list[Resume]:
             return [m for m in sent(self.all_actions(), Resume) if m.transfer_id == self.T]

@@ -349,11 +349,13 @@ def test_cancel_of_same_transfer_id_from_other_device_touches_only_its_own_trans
     assert o.T == p.T
     o.to_asking()
     acts = o.call("decide", tx.OTHER, o.T, True)
-    assert tx.one(acts, CreateTemp) == CreateTemp(device_id=tx.OTHER, transfer_id=o.T)
+    assert tx.one(acts, CreateTemp) == CreateTemp(device_id=tx.OTHER, transfer_id=o.T, offer=o.offer)
     before = p.e.info(p.key)
     acts = o.call("cancel", o.key)  # chưa có kết quả `CreateTemp`
-    assert tx.one(acts, RemoveTemp) == RemoveTemp(device_id=tx.OTHER, transfer_id=o.T)
-    assert {a.device_id for a in acts if not isinstance(a, tx.tr.Report)} == {tx.OTHER}
+    assert tx.one(acts, RemoveTemp) == RemoveTemp(device_id=tx.OTHER, transfer_id=o.T, keep_record=False)
+    # `TombstonesChanged` (P3-2) không mang `device_id`: không nhắm lượt nào.
+    targeted = [a for a in acts if not isinstance(a, tx.tr.Report | tx.tr.TombstonesChanged)]
+    assert {a.device_id for a in targeted} == {tx.OTHER}
     assert [e for e in tx.events(acts) if getattr(e, "key", None) == p.key] == []
     assert p.e.info(p.key) == before
     assert [a.index for a in tx.of(p.feed(d1, 0, [1]), tx.tr.WriteBlock)] == [1]
@@ -423,6 +425,7 @@ def test_accept_while_offline_sends_accept_and_resume_on_connect(tx):
     acts = r.call("decide", tx.PEER, r.T, True)
     assert tx.sent(acts) == []
     assert tx.one(acts, CreateTemp)
+    assert tx.sent(r.created()) == []  # P3-2: thư mục tạm đã bền lúc offline → chờ `control_up`
     acts = r.up(cid=2)
     assert tx.sent(acts)[0] == Accept(transfer_id=r.T)
     assert tx.one(tx.sent(acts, Resume), object).seq == 1
@@ -578,6 +581,7 @@ def test_receiver_status_sequence(tx):
     assert tx.statuses(r2.send_offer(), r2.key) == [TransferStatus.QUEUED]
     assert tx.statuses(r1.call("space_checked", tx.PEER, r1.T, tx.FREE, None), r1.key) == []  # vẫn WAITING
     assert tx.statuses(r1.call("decide", tx.PEER, r1.T, True), r1.key) == [TransferStatus.TRANSFERRING]
+    assert tx.statuses(r1.created(), r1.key) == []  # P3-2: `temp_created` không đổi trạng thái
     did, _ = r1.open()
     r1.sync_all(r1.feed(did, 0, range(2)))
     assert tx.statuses(r1.complete(0), r1.key) == [TransferStatus.VERIFYING]

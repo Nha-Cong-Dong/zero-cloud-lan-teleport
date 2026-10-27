@@ -386,6 +386,8 @@ def test_promised_bytes_tracks_running_transfer_with_short_last_block(tx):
     assert r.e.promised_bytes() == total
     r.call("decide", tx.PEER, r.T, True)
     assert r.e.promised_bytes() == total
+    r.created()  # P3-2: `resume` đầu tiên chỉ sau `temp_created`
+    assert r.e.promised_bytes() == total
     did, _ = r.open()
     acts = r.feed(did, 0, [0, 1])
     assert r.e.promised_bytes() == total - 2 * BLOCK_SIZE  # đã ghi, chưa fsync: vẫn tính là đã ghi

@@ -27,15 +27,20 @@ Hợp đồng thực thi (bên gọi, kể cả bộ mô phỏng của test, ph�
    `block_bad`, đóng, dừng; khớp → `block_received`, và chỉ ghi payload khi kết quả có
    `WriteBlock` đúng chỉ số đó; đứt → `data_closed`.
 5. Hành động đĩa của một lượt chạy theo **một hàng FIFO** (`CreateTemp`, `OpenPart`,
-   `WriteBlock`, `SyncPart`, `Reread`, `Finalize`, `RemoveTemp`); kết quả báo lại đúng thứ tự
-   (`synced`, `reread_done`, `finalized`). Thao tác lỗi → `storage_failed(op)` (`CreateTemp` gặp
-   thư mục tạm đã có → `storage_failed(CREATE_TEMP, detail=TEMP_EXISTS)`) rồi bỏ các thao
-   tác còn lại của lượt, trừ `RemoveTemp`. Gặp `RemoveTemp`: bỏ mọi thao tác chưa bắt đầu (kể
-   cả `CreateTemp`, `Finalize`), đặt `stop` cho `Reread` đang chạy, chờ thao tác đang chạy xong
-   rồi mới xóa thư mục tạm mà **chính lượt đó** đã tạo (đối tượng `CreateTemp` trả về, không suy
-   lại đường dẫn từ `transfer_id`: thiết bị khác có thể dùng cùng `transfer_id`); chưa có thư
-   mục tạm (`CreateTemp` lỗi hay chưa chạy) thì không làm gì. Thao tác bị bỏ hay bị dừng không
-   báo gì. `Finalize` đang chạy thì chạy tới cùng.
+   `WriteBlock`, `SyncPart`, `ClearBlocks`, `Reread`, `Finalize`, `SuspendTemp`, `RemoveTemp`);
+   kết quả báo lại đúng thứ tự (`temp_created`, `synced`, `reread_done`, `finalized`):
+   `CreateTemp` thành công → `temp_created`, báo trước kết quả của mọi thao tác đứng sau nó trong
+   hàng; `CreateTemp` quá hạn rồi xong muộn thì không báo. Thao tác lỗi →
+   `storage_failed(op)` (`CreateTemp` gặp thư mục tạm đã có → `storage_failed(CREATE_TEMP,
+   detail=TEMP_EXISTS)`) rồi bỏ các thao tác còn lại của lượt, trừ `SuspendTemp` và `RemoveTemp`.
+   Gặp `RemoveTemp`: bỏ mọi thao tác chưa bắt đầu (kể cả `CreateTemp`, `Finalize`), đặt `stop`
+   cho `Reread` đang chạy, chờ thao tác đang chạy xong rồi mới xóa thư mục tạm mà **chính lượt
+   đó** đã tạo (đối tượng `CreateTemp` trả về, không suy lại đường dẫn từ `transfer_id`: thiết bị
+   khác có thể dùng cùng `transfer_id`); chưa có thư mục tạm (`CreateTemp` lỗi hay chưa chạy) thì
+   không làm gì; `keep_record` thì giữ lại `transfer.json`. Gặp `SuspendTemp`: các thao tác đứng
+   trước nó chạy xong (`Reread` đang chạy được dừng như với `RemoveTemp`: đọc lại không đổi gì
+   trên đĩa), rồi chỉ đóng handle, không xóa gì. Thao tác bị bỏ hay bị dừng không báo gì.
+   `Finalize` đang chạy thì chạy tới cùng.
 6. `Reread`: app đọc lại `.part` trong luồng riêng, so hash từng khối với `leaves` để ra `bad`
    (các chỉ số khác nhau, tăng dần); `bad` rỗng thì `root = merkle_root(leaves)`, không thì
    `root = None`; báo `reread_done(bad, root)`. `CheckSource`: `stat` file nguồn (file thường)
@@ -45,12 +50,34 @@ Hợp đồng thực thi (bên gọi, kể cả bộ mô phỏng của test, ph�
 7. Gọi `tick(now)` lúc `next_wakeup()`; gọi sớm hay thừa đều vô hại.
 8. Message của một kết nối điều khiển chỉ được giao sau `control_up` của kết nối đó.
 
+Bất biến bên gọi cho phần bền vững (engine không ghi đĩa: `app` lưu trạng thái và đưa lại khi
+khởi động bằng `restore`; định dạng ở docs/architecture.md mục 4):
+
+9. `OpenPart` tạo `.part` rỗng **và** header `.state` của file đó. `CreateTemp` ghi `transfer.json`
+   từ `CreateTemp.offer` cùng thư mục tạm. `RemoveTemp(keep_record=True)` (lượt DONE) giữ lại
+   `transfer.json` của lượt (protocol §6.3), xóa phần còn lại.
+10. `synced` chỉ được báo sau khi bản ghi `MARK` của lô đã bền: `fsync` `.part` → nối `MARK`
+    (từ `SyncPart.blocks`) → `fsync` `.state` → `synced`. `ClearBlocks` nối `CLEAR` (hay
+    `CLEAR_ALL` khi `indices` là None), không cần `fsync` riêng; nó đứng trong hàng FIFO trước
+    `SyncPart` kế tiếp nên `fsync` của `MARK` sau làm nó bền theo.
+11. `restore` là lời gọi **đầu tiên** của engine (trước mọi `control_up`), đúng một lần, kể cả khi
+    không có gì để khôi phục; gọi sau lời gọi khác → RuntimeError. Lượt khôi phục sở hữu thư mục
+    tạm mà app đã mở lúc khôi phục (không có `CreateTemp`): `RemoveTemp`/`SuspendTemp` của nó áp
+    vào thư mục đó, kể cả `RemoveTemp` mà `restore` phát cho lượt nhận trùng một bia mộ còn hạn
+    (lượt đó không có trong engine). `RestoredReceive.leaves` là `bytearray` thì engine giữ chính
+    nó: app trao quyền sở hữu và không dùng lại sau `restore`.
+12. `TombstonesChanged`: chụp `export_tombstones(now)` **ngoài** lúc đang thực hiện danh sách
+    hành động (hẹn bằng `loop.call_soon` hay hàng `_deferred`), rồi mới ghi; gộp nhiều lần báo
+    thành một lần ghi được.
+
 Thứ tự hành động được bảo đảm (chỉ những thứ tự này):
 
 - G1: `SendMessage` theo đúng thứ tự gửi. Trong `control_up`: `cancel` của bia mộ chưa gửi →
-  `offer` của mọi lượt → `complete`; `accept` trước `resume` của cùng lượt; `cancel` trước
+  `offer` của mọi lượt → `complete`; `accept` trước `resume` của cùng lượt (kể cả trong
+  `temp_created`); `cancel` trước
   `CloseData` khi từ chối `data_open` của lượt có bia mộ hay lượt không biết.
-- G2: `CreateTemp` trước `OpenPart`; `WriteBlock` trước `SyncPart` chứa nó; `RemoveTemp` sau mọi
+- G2: `CreateTemp` trước `OpenPart`; `WriteBlock` trước `SyncPart` chứa nó; `ClearBlocks` (phát
+  trong `reread_done`) trước `SyncPart` kế tiếp của file đó; `SuspendTemp` và `RemoveTemp` sau mọi
   hành động đĩa khác của lượt.
 - G3: `OpenData` của một `resume` đứng sau `SendMessage(resume)` đó.
 - G4: `CloseData` của kết nối dữ liệu cũ đứng trước `SendBlocks`/`ReceiveBlocks` trên kết nối
@@ -77,8 +104,15 @@ Bẫy:
   nối dữ liệu nên chỉ client báo `DataUnreachable` và sang RECONNECTING, protocol §4.1).
 - `RemoveTemp` chỉ khi lượt sở hữu thư mục tạm: `CreateTemp` lỗi thì không bao giờ xóa thư mục
   (có thể là của lượt khác mang cùng `transfer_id`).
+- Bên nhận chỉ gửi `accept` và `resume` đầu tiên của một lượt sau `temp_created` (thư mục tạm và
+  `transfer.json` đã bền). Trước đó `offer` gửi lại → im lặng, `complete` → `cancel{error}` + bia
+  mộ (như `complete` của lượt chưa chấp nhận), `data_open` → `CloseData`; `resume` đã xin được giữ
+  tới `temp_created` (hay `control_up` sau đó). Nhờ vậy sập trước lúc đó thì máy gửi chưa có gì
+  của lượt, và `offer` gửi lại sau khi khởi động lại được xét như `offer` mới.
 - Hạn chót chỉ được xử lý trong `tick` (hạn ≤ `now`); lời gọi khác không tự xử lý, kể cả khi
-  đã quá hạn. TTL của bảng nhớ được kiểm lười lúc tra.
+  đã quá hạn. Ngoại lệ duy nhất: `control_up` cho hết hạn trước (như `tick`) các lượt khôi phục
+  có tuổi ≥ `RECONNECT_GRACE` của thiết bị đó, để Q3 không phụ thuộc thứ tự gọi. TTL của bảng nhớ
+  được kiểm lười lúc tra.
 - Chờ nối lại (protocol §6.2): còn lượt với một máy mà không có kết nối điều khiển (mất kết nối,
   hoặc `send` khi chưa có) thì ghi mốc `offline_since`; `tick` lúc `now ≥ offline_since +
   RECONNECT_GRACE` (24 h) kết thúc mọi lượt với máy đó bằng `expired`, không sớm hơn. `control_up`
@@ -87,8 +121,20 @@ Bẫy:
   tính theo giờ thật lượt có thể chờ lâu hơn 24 h. `REMEMBER_TTL` dài hơn hạn này (comment ở hằng).
 - Trên đường đi của từng khối (`block_received`, `synced`, `block_read`) và khi tính trạng thái
   không gọi `Bitfield.count()`/`all_set()`/`missing()`: dùng bộ đếm O(1). O(n) chỉ một lần mỗi
-  `resume` (file 4 TiB có 4 194 304 khối).
-- Giai đoạn 2: mọi trạng thái (lượt, bia mộ, `reject` đã nhớ, lượt đã xong) chỉ nằm trong RAM.
+  `resume` (file 4 TiB có 4 194 304 khối) và một lần mỗi lượt nhận được `restore`.
+- Engine chỉ biết thời gian monotonic; `app` đổi mốc giờ tường trên đĩa ra **tuổi** (giây, ≥ 0)
+  trước khi `restore`, và `export_tombstones` trả tuổi. Mục nhớ khôi phục được xếp theo tuổi giảm
+  dần với `written_at = now − tuổi`, vì bảng nhớ coi thứ tự chèn là thứ tự `written_at`.
+- Lượt nhận khôi phục có `offline_since = now − tuổi`: tuổi ≥ `RECONNECT_GRACE` thì hết hạn ở
+  `tick` đầu tiên hay `control_up` đầu tiên của thiết bị đó, cái nào tới trước (`RemoveTemp` +
+  bia mộ `expired` chưa gửi; trong `control_up` thì `cancel{expired}` được gửi ngay sau đó).
+- Tạm dừng (`suspend_receiving`, lúc đóng node có trật tự) không phải hủy: không `cancel`, không
+  bia mộ, thư mục tạm còn nguyên cho lần chạy sau; engine thôi nhận `offer` mới (`receiving` =
+  False). Engine nhớ khóa của lượt tạm dừng tới hết đời
+  của nó để im lặng với `offer`, `complete`, `cancel` và `data_open` của lượt đó (máy gửi phải
+  thấy mất kết nối rồi nối lại, không phải `reject{not_receiving}` hay `cancel{unknown_transfer}`).
+- Bia mộ và lượt đã xong được lưu xuống đĩa (`tombstones.json`, `transfer.json`); `reject` đã nhớ
+  chỉ nằm trong RAM (protocol §6.3).
 """
 
 from __future__ import annotations
@@ -166,6 +212,7 @@ class Outcome(StrEnum):
     DONE = "done"
     REJECTED = "rejected"
     CANCELLED = "cancelled"
+    SUSPENDED = "suspended"  # `suspend_receiving`: lượt nhận dừng, thư mục tạm giữ cho lần chạy sau
 
 
 class FailureDetail(StrEnum):
@@ -316,15 +363,16 @@ class ReceiveBlocks:
 
 @dataclass(frozen=True, slots=True)
 class CreateTemp:
-    """Tạo `.teleport/<transfer_id>/`; thư mục đã có thì lỗi."""
+    """Tạo `.teleport/<transfer_id>/` và ghi `transfer.json` từ `offer`; thư mục đã có thì lỗi."""
 
     device_id: str
     transfer_id: str
+    offer: Offer
 
 
 @dataclass(frozen=True, slots=True)
 class OpenPart:
-    """Tạo `<file_index>.part` rỗng cho file `size` byte."""
+    """Tạo `<file_index>.part` rỗng cho file `size` byte và header `<file_index>.state`."""
 
     device_id: str
     transfer_id: str
@@ -344,13 +392,29 @@ class WriteBlock:
 
 @dataclass(frozen=True, slots=True)
 class SyncPart:
-    """`fsync` `.part`, gồm mọi `WriteBlock` trước nó; `blocks` là `(index, sha256)` của lô."""
+    """`fsync` `.part` (gồm mọi `WriteBlock` trước nó), nối `MARK` của lô vào `.state`, `fsync` nó.
+
+    `blocks` là `(index, sha256)` của lô; `synced` chỉ sau khi `MARK` đã bền.
+    """
 
     device_id: str
     transfer_id: str
     file_index: int
     token: int
     blocks: tuple[tuple[int, bytes], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ClearBlocks:
+    """Nối `CLEAR` các khối `indices` (tăng dần) vào `.state`; `indices` None → `CLEAR_ALL`.
+
+    Không báo kết quả; lỗi ghi → `storage_failed(op=SYNC)` như lỗi ghi `.state` khác.
+    """
+
+    device_id: str
+    transfer_id: str
+    file_index: int
+    indices: tuple[int, ...] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,7 +440,23 @@ class Finalize:
 
 @dataclass(frozen=True, slots=True)
 class RemoveTemp:
-    """Xóa thư mục tạm `.teleport/<transfer_id>/` mà chính lượt này đã tạo (không có thì bỏ qua)."""
+    """Xóa thư mục tạm `.teleport/<transfer_id>/` mà chính lượt này đã tạo (không có thì bỏ qua).
+
+    `keep_record` (lượt DONE): giữ `transfer.json` để trả lời `offer`/`complete` gửi lại sau khi
+    khởi động lại (protocol §6.3); bản ghi đó được dọn sau `REMEMBER_TTL`.
+    """
+
+    device_id: str
+    transfer_id: str
+    keep_record: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SuspendTemp:
+    """Tạm dừng lượt nhận (`suspend_receiving`): chạy hết thao tác đứng trước, rồi chỉ đóng handle.
+
+    Không xóa gì: `.part`, `.state`, `transfer.json` giữ nguyên cho lần `restore` sau.
+    """
 
     device_id: str
     transfer_id: str
@@ -412,6 +492,15 @@ class CheckSource:
 
 
 @dataclass(frozen=True, slots=True)
+class TombstonesChanged:
+    """Bảng bia mộ đã đổi (thêm, ghi đè, bị đẩy ra, hay cờ `unsent` đổi): lưu lại `tombstones.json`.
+
+    Tối đa một lần mỗi lời gọi. Chụp `export_tombstones` ngoài lúc thực hiện danh sách hành động
+    (hợp đồng mục 12). Bia mộ hết TTL không sinh hành động này: bộ đọc bỏ mục quá `REMEMBER_TTL`.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class Report:
     """Báo giao diện / CLI."""
 
@@ -428,14 +517,60 @@ TransferAction = (
     | OpenPart
     | WriteBlock
     | SyncPart
+    | ClearBlocks
     | Reread
     | Finalize
+    | SuspendTemp
     | RemoveTemp
     | CheckSpace
     | AskUser
     | CheckSource
+    | TombstonesChanged
     | Report
 )
+
+
+# ---- Dữ liệu khôi phục (`restore`, `export_tombstones`) -----------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RestoredReceive:
+    """Lượt nhận dở đọc lại từ đĩa (`transfer.json` + `.state` của file hiện tại).
+
+    `file_index` < số file (các file trước đã `verified`). `bits` (đúng `block_count(size)` bit) và
+    `leaves` (32 byte mỗi khối, hash của khối có bit bật) là trạng thái file hiện tại sau khi
+    đọc lại `.state`. `part_blocks`: số khối đầu nằm trọn trong `.part`; mọi bit từ đó trở đi
+    phải tắt (app đã xóa bit khối không nằm trọn trong `.part`). `age`: giây từ hoạt động cuối.
+    """
+
+    device_id: str
+    offer: Offer
+    file_index: int
+    bits: Bitfield
+    leaves: bytes | bytearray
+    part_blocks: int
+    age: float
+
+
+@dataclass(frozen=True, slots=True)
+class RestoredTombstone:
+    """Một bia mộ (protocol §6.3): `age` là giây từ lúc lập hay ghi đè."""
+
+    device_id: str
+    direction: Direction
+    transfer_id: str
+    reason: str
+    unsent: bool
+    age: float
+
+
+@dataclass(frozen=True, slots=True)
+class RestoredDone:
+    """Lượt nhận đã `verified` mọi file (`transfer.json` có `done_at`); `age` là giây từ `done_at`."""
+
+    device_id: str
+    offer: Offer
+    age: float
 
 
 # ---- Hàm thuần -------------------------------------------------------------------------------
@@ -545,6 +680,26 @@ def _check_optional_size(name: str, value: object) -> int | None:
     return value
 
 
+def _check_age(name: str, value: object) -> float:
+    """Tuổi của dữ liệu khôi phục: số giây hữu hạn ≥ 0 (bool bị từ chối)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{name} phải là số giây")
+    result = _finite_float(value)
+    if result is None or result < 0:
+        raise ValueError(f"{name} phải là số hữu hạn ≥ 0")
+    return result
+
+
+def _check_items[T](name: str, items: object, cls: type[T]) -> tuple[T, ...]:
+    """Dãy (list/tuple) các `cls` của `restore`; kiểu khác → TypeError."""
+    if not isinstance(items, list | tuple):
+        raise TypeError(f"{name} phải là list hoặc tuple")
+    for item in items:
+        if not isinstance(item, cls):
+            raise TypeError(f"{name} chỉ chứa {cls.__name__}")
+    return tuple(items)
+
+
 def _check_bad(bad: object) -> tuple[int, ...]:
     """Chỉ số khối sai của `reread_done`: list/tuple các `int` ≥ 0 tăng ngặt."""
     if not isinstance(bad, list | tuple):
@@ -622,7 +777,8 @@ class _Memory:
     lượt đã xong (protocol §6.3). Tối đa `MAX_REMEMBERED` mục; thêm hay ghi đè thì mục thành mới
     nhất; mục có `now − written_at ≥ REMEMBER_TTL` coi như không có và bị xóa lúc tra.
 
-    `now` không giảm nên thứ tự trong `OrderedDict` cũng là thứ tự `written_at`.
+    `now` không giảm, và `restore` chèn mục khôi phục theo tuổi giảm dần với `written_at = now − tuổi`
+    ≤ `now`, nên thứ tự trong `OrderedDict` cũng là thứ tự `written_at`.
     """
 
     __slots__ = ("_entries",)
@@ -641,12 +797,16 @@ class _Memory:
             return None
         return memo
 
-    def put(self, direction: Direction, transfer_id: str, memo: _Memo) -> None:
+    def put(self, direction: Direction, transfer_id: str, memo: _Memo) -> bool:
+        """Thêm hay ghi đè; True nếu tập bia mộ đổi (bia mộ thêm, bị thay hay bị đẩy ra)."""
         key = (direction, transfer_id)
-        self._entries.pop(key, None)
+        old = self._entries.pop(key, None)
+        changed = isinstance(memo, _Tombstone) or isinstance(old, _Tombstone)
         self._entries[key] = memo
         while len(self._entries) > max(MAX_REMEMBERED, 0):
-            self._entries.popitem(last=False)
+            _, evicted = self._entries.popitem(last=False)
+            changed = changed or isinstance(evicted, _Tombstone)
+        return changed
 
     def tombstone(self, transfer_id: str, now: float) -> _Tombstone | None:
         """Bia mộ mới nhất của `transfer_id`, xét cả hai chiều."""
@@ -677,6 +837,14 @@ class _Memory:
             if now - memo.written_at < REMEMBER_TTL:
                 return
             del self._entries[key]
+
+    def tombstones(self, now: float) -> list[tuple[Direction, str, _Tombstone]]:
+        """Bia mộ còn hạn theo thứ tự ghi, không sửa bảng (truy vấn thuần)."""
+        return [
+            (direction, transfer_id, memo)
+            for (direction, transfer_id), memo in self._entries.items()
+            if isinstance(memo, _Tombstone) and now - memo.written_at < REMEMBER_TTL
+        ]
 
 
 @dataclass(slots=True, eq=False)
@@ -737,6 +905,8 @@ class _Recv:
     total_size: int
     phase: _Phase = _Phase.QUEUED
     owns_temp: bool = False
+    created: bool = False  # đã `temp_created` (hay từ `restore`): được gửi `accept`/`resume`
+    expire_restored: bool = False  # từ `restore` với tuổi ≥ `RECONNECT_GRACE`: hết hạn ở `control_up`
     file_index: int = 0
     verified_bytes: int = 0
     # File hiện tại (mục 3.6–3.8 của spec).
@@ -795,7 +965,7 @@ class TransferEngine:
     Mọi phương thức sự kiện trả `list[TransferAction]`. `now` là thời gian monotonic (giây),
     không được nhỏ hơn mốc của lời gọi thành công trước đó. Sự kiện nhắc tới thứ engine không
     biết hay đã kết thúc (lượt, token, kết nối điều khiển cũ, `device_id` của chính máy này)
-    trả `[]`: đó là chuyện đua bình thường.
+    trả `[]`: đó là chuyện đua bình thường. `restore` phải là lời gọi đầu tiên (hợp đồng mục 11).
     """
 
     def __init__(self, own_device_id: str, *, receiving: bool) -> None:
@@ -804,11 +974,13 @@ class TransferEngine:
         self._peers: dict[str, _Peer] = {}
         self._transfers: dict[TransferKey, _Transfer] = {}  # lượt chưa kết thúc, thứ tự tạo
         self._conns: dict[int, _DataConn] = {}  # mọi kết nối dữ liệu đang theo dõi
-        self._last_now: float | None = None
+        self._suspended: set[TransferKey] = set()  # lượt nhận đã `suspend_receiving`: im lặng với chúng
+        self._last_now: float | None = None  # None: chưa có lời gọi thành công nào (`restore` còn gọi được)
         self._next_token = 1
         self._next_order = 1
         self._actions: list[TransferAction] = []
         self._reports: list[TransferAction] = []
+        self._tombstones_changed = False  # lời gọi này đã đổi tập bia mộ → `TombstonesChanged`
 
     # ---- Truy vấn ------------------------------------------------------------------------
 
@@ -871,12 +1043,159 @@ class TransferEngine:
                 times.append(peer.offline_since + RECONNECT_GRACE)
         return min(times) if times else None
 
+    def export_tombstones(self, now: float) -> tuple[RestoredTombstone, ...]:
+        """Mọi bia mộ còn hạn, cả hai chiều, theo thứ tự ghi (cũ trước), kèm tuổi tính theo `now`.
+
+        Truy vấn thuần: không ghi mốc `now`, không sửa bảng (mục hết TTL bị bỏ qua, không bị xóa).
+        `now` sai kiểu hay nhỏ hơn mốc của lời gọi trước → như mọi lời gọi khác.
+        """
+        now = self._check_now(now)
+        found: list[tuple[int, RestoredTombstone]] = []
+        for device_id, peer in self._peers.items():
+            for direction, transfer_id, memo in peer.memory.tombstones(now):
+                age = max(0.0, now - memo.written_at)
+                item = RestoredTombstone(device_id, direction, transfer_id, memo.reason, memo.unsent, age)
+                found.append((memo.order, item))
+        found.sort(key=lambda pair: pair[0])
+        return tuple(item for _, item in found)
+
+    # ---- Khôi phục, tạm dừng -------------------------------------------------------------
+
+    def restore(
+        self,
+        *,
+        receives: Sequence[RestoredReceive],
+        tombstones: Sequence[RestoredTombstone],
+        done: Sequence[RestoredDone],
+        now: float,
+    ) -> list[TransferAction]:
+        """Nạp trạng thái đọc lại từ đĩa; phải là lời gọi đầu tiên (sau lời gọi khác → RuntimeError).
+
+        - Bia mộ và lượt đã xong có tuổi ≥ `REMEMBER_TTL` bị bỏ; phần còn lại vào bảng nhớ theo
+          tuổi giảm dần (cùng tuổi: lượt đã xong trước bia mộ, rồi theo thứ tự đưa vào), mỗi mục
+          `written_at = now − tuổi`. Bảng mỗi thiết bị vẫn có trần `MAX_REMEMBERED` (bỏ mục cũ).
+        - Mỗi lượt nhận thành lượt đang chạy (RUNNING), sở hữu thư mục tạm, chưa có kết nối điều
+          khiển: `offline_since = now − tuổi`, khối cao nhất đã ghi = `part_blocks − 1`, không phát
+          `OpenPart` (`.part` và `.state` đã có). Kết quả có `Report(StatusChanged(RECONNECTING))`
+          của nó; lượt đã `temp_created`, nên `control_up` sau đó gửi `accept` rồi `resume` với
+          bitfield khôi phục. Tuổi ≥ `RECONNECT_GRACE` → hết hạn ở `tick` đầu tiên hay ở
+          `control_up` đầu tiên của thiết bị đó, cái nào tới trước (Q3). `leaves` là `bytearray`
+          thì engine giữ chính nó (app không được dùng lại); kiểu khác thì chép.
+        - Lượt nhận trùng khóa một bia mộ được khôi phục (đã hủy mà chưa kịp dọn) không được khôi
+          phục: chỉ phát `RemoveTemp` cho thư mục tạm app đã mở cho nó (hợp đồng mục 11).
+
+        Sai kiểu dãy hay phần tử → TypeError. ValueError khi: `device_id`/`transfer_id` sai hay là
+        máy này; một thiết bị có hơn một lượt nhận; `file_index` ≥ số file; `bits` không phải
+        `Bitfield` đúng số khối; `leaves` sai độ dài; `part_blocks` ngoài 0…số khối hay có bit
+        bật từ `part_blocks` trở đi; tuổi không phải số hữu hạn ≥ 0; `direction`, `reason`,
+        `unsent` của bia mộ sai; lượt nhận trùng khóa một lượt đã xong còn hạn. Không có
+        `TombstonesChanged`: bảng vừa nạp đúng bằng thứ đã lưu (trừ mục hết hạn).
+        """
+        if self._last_now is not None:
+            raise RuntimeError("restore phải là lời gọi đầu tiên của TransferEngine")
+        recvs = _check_items("receives", receives, RestoredReceive)
+        stones = _check_items("tombstones", tombstones, RestoredTombstone)
+        dones = _check_items("done", done, RestoredDone)
+        now = self._check_now(now)
+        plans = [self._check_restored_receive(r) for r in recvs]
+        if len({r.device_id for r in recvs}) != len(recvs):
+            raise ValueError("mỗi thiết bị có tối đa một lượt nhận khôi phục")
+        memos: list[tuple[float, str, Direction, str, RestoredTombstone | RestoredDone]] = []
+        for d in dones:
+            self._check_peer_id(d.device_id)
+            if not isinstance(d.offer, Offer):
+                raise ValueError("offer phải là Offer")
+            age = _check_age("age", d.age)
+            if age < REMEMBER_TTL:
+                memos.append((age, d.device_id, Direction.RECEIVE, d.offer.transfer_id, d))
+        for s in stones:
+            self._check_peer_id(s.device_id)
+            if not isinstance(s.direction, Direction):
+                raise ValueError("direction phải là Direction")
+            try:
+                validate_transfer_id(s.transfer_id)
+                Cancel(s.transfer_id, s.reason)  # cùng luật `reason` như trên dây
+            except MessageError as e:
+                raise ValueError(f"bia mộ sai: {e}") from None
+            if type(s.unsent) is not bool:
+                raise ValueError("unsent phải là bool")
+            age = _check_age("age", s.age)
+            if age < REMEMBER_TTL:
+                memos.append((age, s.device_id, s.direction, s.transfer_id, s))
+        done_keys = {(m[1], m[3]) for m in memos if isinstance(m[4], RestoredDone)}
+        for r in recvs:
+            if (r.device_id, r.offer.transfer_id) in done_keys:
+                raise ValueError("lượt nhận khôi phục trùng khóa một lượt đã xong")
+        self._accept_now(now)
+        memos.sort(key=lambda m: -m[0])  # ổn định: cùng tuổi giữ thứ tự đưa vào
+        for age, device_id, direction, transfer_id, item in memos:
+            memo: _Memo
+            if isinstance(item, RestoredDone):
+                digest = _manifest_digest(item.offer)
+                memo = _DoneMemo(len(item.offer.files), digest, now - age, self._order())
+            else:
+                memo = _Tombstone(item.reason, item.unsent, now - age, self._order())
+            self._peer(device_id).memory.put(direction, transfer_id, memo)
+        for r, (n, have_count, have_bytes, age) in zip(recvs, plans, strict=True):
+            peer = self._peer(r.device_id)
+            transfer_id = r.offer.transfer_id
+            if isinstance(peer.memory.get(Direction.RECEIVE, transfer_id, now), _Tombstone):
+                self._emit(RemoveTemp(r.device_id, transfer_id))
+                continue
+            offer = r.offer
+            t = _Recv(
+                key=TransferKey(r.device_id, Direction.RECEIVE, transfer_id),
+                offer=offer,
+                names=tuple(dedupe_offer_names([entry.name for entry in offer.files])),
+                total_size=sum(entry.size for entry in offer.files),
+                phase=_Phase.RUNNING,
+                owns_temp=True,
+                created=True,
+                expire_restored=age >= RECONNECT_GRACE,
+                file_index=r.file_index,
+                verified_bytes=sum(entry.size for entry in offer.files[: r.file_index]),
+                n_f=n,
+                size_f=offer.files[r.file_index].size,
+                bits=_copy_bitfield(r.bits),
+                # `bytearray` thì giữ chính nó (app trao quyền sở hữu, không chép file 4 TiB = 128 MiB).
+                leaves=r.leaves if isinstance(r.leaves, bytearray) else bytearray(r.leaves),
+                have_count=have_count,
+                have_bytes=have_bytes,
+                hw=r.part_blocks - 1,
+            )
+            self._add_transfer(peer, t)
+            peer.running = t
+            peer.offline_since = self._offline_since(now, age)
+        return self._finish()
+
+    def suspend_receiving(self, now: float) -> list[TransferAction]:
+        """Tạm dừng mọi lượt nhận đang chạy (đóng node có trật tự), không hủy.
+
+        Mỗi lượt: `CloseData` các kết nối dữ liệu của nó, `SyncPart` các khối đã ghi mà chưa vào
+        lô (để `MARK` của chúng bền), `SuspendTemp`, rồi `TransferEnded(outcome=SUSPENDED)`.
+        Không `cancel`, không `RemoveTemp`, không bia mộ, không xét `offer` đang xếp hàng (bên gọi
+        hủy chúng sau đó). Từ đó `offer`, `complete`, `cancel` của lượt đó → `[]`, `data_open`
+        của nó → chỉ `CloseData`, và `send` không dùng lại được `transfer_id` của nó với thiết bị đó.
+        Engine thôi nhận file (`receiving` = False): `offer` mới tới sau đó → `reject{not_receiving}`.
+        """
+        now = self._check_now(now)
+        self._accept_now(now)
+        self._receiving = False
+        for t in list(self._transfers.values()):
+            if isinstance(t, _Recv) and t.phase is _Phase.RUNNING:
+                self._suspended.add(t.key)
+                self._end(t, Outcome.SUSPENDED, advance=False)
+        return self._finish()
+
     # ---- Kết nối điều khiển --------------------------------------------------------------
 
     def control_up(self, device_id: str, control_id: int, client: bool, now: float) -> list[TransferAction]:
         """Có kết nối điều khiển `control_id` (đầu tiên hay thay thế): đồng bộ lại (protocol §6.3).
 
         `client`: máy này đã mở kết nối đó (kết nối dữ liệu đi theo chiều này, protocol §4.1).
+        Trước khi đồng bộ lại, lượt khôi phục có tuổi ≥ `RECONNECT_GRACE` của thiết bị này hết hạn
+        như ở `tick` (Q3 không phụ thuộc thứ tự gọi), nên `cancel{expired}` của nó đi ngay sau đó.
+        Lượt nhận chưa `temp_created` không được gửi `accept`/`resume`.
         """
         validate_device_id(device_id)
         _check_id("control_id", control_id)
@@ -890,6 +1209,9 @@ class TransferEngine:
             return []
         if peer is None:
             peer = self._peers[device_id] = _Peer(device_id)
+        for t in list(peer.transfers.values()):
+            if isinstance(t, _Recv) and t.expire_restored:
+                self._expire(t, now)
         self._drop_data(peer)
         peer.control = (control_id, client)
         peer.max_seq = 0
@@ -905,6 +1227,7 @@ class TransferEngine:
         peer.unreachable_reported = False
         for transfer_id, reason in peer.memory.take_unsent(now):
             self._send(peer, Cancel(transfer_id, reason))
+            self._tombstones_changed = True  # cờ `unsent` đã đổi
         sends = [t for t in peer.transfers.values() if isinstance(t, _Send)]
         for s in sends:
             self._send(peer, s.offer)
@@ -914,7 +1237,7 @@ class TransferEngine:
                 if state.root is not None and not s.verified[index]:
                     self._send(peer, Complete(s.key.transfer_id, index, state.root.hex()))
         running = peer.running
-        if running is not None:
+        if running is not None and running.created:
             self._send(peer, Accept(running.key.transfer_id))
             self._request_resume(peer, running, now)
         return self._finish()
@@ -950,6 +1273,11 @@ class TransferEngine:
         peer = self._current_peer(device_id, control_id)
         if peer is None:
             return []
+        if (
+            isinstance(msg, Offer | Complete | Cancel)
+            and TransferKey(device_id, Direction.RECEIVE, msg.transfer_id) in self._suspended
+        ):
+            return []  # S1: lượt nhận đã tạm dừng, máy gửi phải thấy mất kết nối rồi nối lại
         if isinstance(msg, Offer):
             self._on_offer(peer, msg, now)
         elif isinstance(msg, Complete):
@@ -989,6 +1317,7 @@ class TransferEngine:
             (Direction.SEND, transfer_id) in peer.transfers
             or (Direction.RECEIVE, transfer_id) in peer.transfers
             or peer.memory.knows(transfer_id, now)
+            or TransferKey(device_id, Direction.RECEIVE, transfer_id) in self._suspended
         ):
             raise TransferIdInUse(f"transfer_id {transfer_id} đã được dùng với thiết bị này")
         self._accept_now(now)
@@ -1058,10 +1387,28 @@ class TransferEngine:
         t.phase = _Phase.RUNNING
         peer.running = t
         t.owns_temp = True
-        self._emit(CreateTemp(device_id, transfer_id))
+        self._emit(CreateTemp(device_id, transfer_id, t.offer))
+        self._start_file(peer, t, 0, now)  # `accept` và `resume` chờ `temp_created`
+        return self._finish()
+
+    def temp_created(self, device_id: str, transfer_id: str, now: float) -> list[TransferAction]:
+        """`CreateTemp` của lượt nhận đã xong: thư mục tạm và `transfer.json` đã bền.
+
+        Có kết nối điều khiển → gửi `accept` rồi `resume` đang giữ; không có → chờ `control_up`.
+        Lượt lạ, đã kết thúc hay đã `temp_created` → `[]`.
+        """
+        validate_device_id(device_id)
+        validate_transfer_id(transfer_id)
+        now = self._check_now(now)
+        self._accept_now(now)
+        found = self._running_recv(device_id, transfer_id)
+        if found is None or found[1].created:
+            return []
+        peer, t = found
+        t.created = True
         if peer.control is not None:
             self._send(peer, Accept(transfer_id))
-        self._start_file(peer, t, 0, now)
+            self._request_resume(peer, t, now)
         return self._finish()
 
     def cancel(self, key: TransferKey, now: float) -> list[TransferAction]:
@@ -1104,7 +1451,9 @@ class TransferEngine:
             return self._finish()
         transfer_id = msg.transfer_id
         t = self._find_any(peer, transfer_id)
-        if t is None:
+        if t is None and TransferKey(device_id, Direction.RECEIVE, transfer_id) in self._suspended:
+            self._emit(CloseData(device_id, data_id))  # S1: lượt đã tạm dừng, không `cancel`
+        elif t is None:
             tombstone = peer.memory.tombstone(transfer_id, now)
             reason = tombstone.reason if tombstone is not None else CancelReason.UNKNOWN_TRANSFER
             self._send(peer, Cancel(transfer_id, reason))
@@ -1329,7 +1678,7 @@ class TransferEngine:
             t.have_bytes += length
             t.pending.discard(index)
             t.pending_bytes -= length
-        if t.want_resume and not t.batches and peer.control is not None:
+        if t.want_resume and not t.batches and peer.control is not None and t.created:
             # `resume` đã được xin (đồng bộ lại, khối sai…) nhưng phải chờ `fsync`: gửi ở `synced`
             # cuối cùng, kể cả khi đủ bit (protocol §6.3: bên nhận gửi `resume` trên kết nối mới, để
             # `cancel` của bên gửi bị mất được trả lại). Đủ bit thì không mở kết nối dữ liệu.
@@ -1370,15 +1719,20 @@ class TransferEngine:
         self._accept_now(now)
         t.rereading = False
         if bad_blocks:
+            cleared: list[int] = []
             for index in bad_blocks:
                 if index in t.bits:
                     t.bits.clear(index)
                     t.have_count -= 1
                     t.have_bytes -= _block_len(t.size_f, index)
+                    cleared.append(index)
+            if cleared:
+                self._emit(ClearBlocks(device_id, transfer_id, file_index, tuple(cleared)))
         elif root != t.root:
             t.bits = Bitfield(t.n_f)
             t.have_count = 0
             t.have_bytes = 0
+            self._emit(ClearBlocks(device_id, transfer_id, file_index, None))
         else:
             t.finalizing = True
             entry = t.offer.files[file_index]
@@ -1420,7 +1774,8 @@ class TransferEngine:
         t.file_index = n
         t.have_count = t.have_bytes = 0
         self._end(t, Outcome.DONE)
-        peer.memory.put(
+        self._remember(
+            peer,
             Direction.RECEIVE,
             transfer_id,
             _DoneMemo(n, _manifest_digest(t.offer), now, self._order()),
@@ -1584,11 +1939,57 @@ class TransferEngine:
         if data_id in self._conns:
             raise ValueError(f"data_id {data_id} đang được theo dõi")
 
+    def _check_peer_id(self, device_id: object) -> str:
+        """`device_id` của dữ liệu khôi phục: hợp lệ và không phải máy này (sai → ValueError)."""
+        device_id = validate_device_id(device_id)
+        if device_id == self._own_id:
+            raise ValueError("dữ liệu khôi phục không được nhắc tới chính máy này")
+        return device_id
+
+    def _check_restored_receive(self, r: RestoredReceive) -> tuple[int, int, int, float]:
+        """Kiểm một `RestoredReceive`; trả `(số khối, số bit bật, số byte các khối đó, tuổi)`."""
+        self._check_peer_id(r.device_id)
+        if not isinstance(r.offer, Offer):
+            raise ValueError("offer phải là Offer")
+        files = r.offer.files
+        file_index = r.file_index
+        if type(file_index) is not int or not 0 <= file_index < len(files):
+            raise ValueError(f"file_index phải là số nguyên 0…{len(files) - 1}")
+        size = files[file_index].size
+        n = block_count(size)
+        if not isinstance(r.bits, Bitfield) or len(r.bits) != n:
+            raise ValueError(f"bits phải là Bitfield đúng {n} khối")
+        if not isinstance(r.leaves, bytes | bytearray) or len(r.leaves) != DIGEST_SIZE * n:
+            raise ValueError(f"leaves phải dài đúng {DIGEST_SIZE * n} byte")
+        part_blocks = _check_range("part_blocks", r.part_blocks, n)
+        raw = r.bits.to_bytes()
+        value = int.from_bytes(raw, "big")
+        if value & ((1 << (8 * len(raw) - part_blocks)) - 1):  # bit MSB trước: khối ≥ part_blocks ở đuôi
+            raise ValueError("bit của khối từ part_blocks trở đi phải tắt")
+        have_count = value.bit_count()
+        have_bytes = have_count * BLOCK_SIZE
+        if n and n - 1 in r.bits:
+            have_bytes -= BLOCK_SIZE - _block_len(size, n - 1)
+        return n, have_count, have_bytes, _check_age("age", r.age)
+
+    @staticmethod
+    def _offline_since(now: float, age: float) -> float:
+        """Mốc mất kết nối của lượt khôi phục: `now − age`; tuổi ≥ `RECONNECT_GRACE` thì chắc chắn
+        `mốc + RECONNECT_GRACE ≤ now` (làm tròn số thực không được đẩy hạn sang sau `tick` đầu)."""
+        grace = RECONNECT_GRACE
+        since = now - age
+        if age >= grace:
+            since = min(since, now - grace)
+            while since + grace > now:
+                since = math.nextafter(since, -math.inf)
+        return since
+
     def _accept_now(self, now: float) -> None:
         """Mọi kiểm tra đã qua: ghi mốc `now`, bắt đầu gom hành động của lời gọi này."""
         self._last_now = now
         self._actions = []
         self._reports = []
+        self._tombstones_changed = False
 
     def _emit(self, action: TransferAction) -> None:
         self._actions.append(action)
@@ -1605,6 +2006,11 @@ class TransferEngine:
         self._next_order += 1
         return order
 
+    def _remember(self, peer: _Peer, direction: Direction, transfer_id: str, memo: _Memo) -> None:
+        """Ghi vào bảng nhớ; tập bia mộ đổi thì lời gọi này kết thúc bằng `TombstonesChanged`."""
+        if peer.memory.put(direction, transfer_id, memo):
+            self._tombstones_changed = True
+
     def _finish(self) -> list[TransferAction]:
         """Kết thúc lời gọi: hành động, rồi `Report`, rồi `StatusChanged` (G5)."""
         statuses: list[TransferAction] = []
@@ -1618,12 +2024,22 @@ class TransferEngine:
             if status is not t.reported:
                 t.reported = status
                 statuses.append(Report(StatusChanged(t.key, status)))
+        if self._tombstones_changed:
+            self._tombstones_changed = False
+            self._actions.append(TombstonesChanged())
         result = [*self._actions, *self._reports, *statuses]
         self._actions = []
         self._reports = []
         return result
 
     # ---- Nội bộ: tra cứu -----------------------------------------------------------------
+
+    def _peer(self, device_id: str) -> _Peer:
+        """Trạng thái của thiết bị `device_id`, tạo mới nếu chưa có."""
+        peer = self._peers.get(device_id)
+        if peer is None:
+            peer = self._peers[device_id] = _Peer(device_id)
+        return peer
 
     def _current_peer(self, device_id: str, control_id: int) -> _Peer | None:
         """Thiết bị nếu `control_id` là kết nối điều khiển hiện tại của nó; không thì None."""
@@ -1676,6 +2092,7 @@ class TransferEngine:
         """`data_open` khớp `resume` gần nhất (không đủ bit) mà máy này đã gửi trên kết nối hiện tại."""
         return (
             t.phase is _Phase.RUNNING
+            and t.created  # chưa `temp_created` thì chưa có `resume` nào: `data_open` → `CloseData`
             and msg.file_index == t.file_index
             and t.last_resume == (msg.file_index, msg.resume_seq, False)
         )
@@ -1763,7 +2180,10 @@ class TransferEngine:
         reject: Reject | None = None,
         advance: bool = True,
     ) -> None:
-        """Gỡ lượt: đóng kết nối dữ liệu, bỏ lịch, `RemoveTemp` nếu sở hữu, `TransferEnded`."""
+        """Gỡ lượt: đóng kết nối dữ liệu, bỏ lịch, `RemoveTemp` nếu sở hữu, `TransferEnded`.
+
+        `SUSPENDED` thay `RemoveTemp` bằng `SyncPart` (khối chưa vào lô) rồi `SuspendTemp`.
+        """
         peer = self._peers[t.key.device_id]
         index: int | None
         if isinstance(file_index, _Default):
@@ -1786,7 +2206,13 @@ class TransferEngine:
             t.open_wait_at = None
             if t.owns_temp:
                 t.owns_temp = False
-                self._emit(RemoveTemp(peer.device_id, t.key.transfer_id))
+                if outcome is Outcome.SUSPENDED:
+                    if t.unbatched:
+                        self._push_batch(peer, t)  # `MARK` của các khối đã ghi bền trước khi dừng
+                    self._emit(SuspendTemp(peer.device_id, t.key.transfer_id))
+                else:
+                    keep = outcome is Outcome.DONE
+                    self._emit(RemoveTemp(peer.device_id, t.key.transfer_id, keep_record=keep))
             if t in peer.offers:
                 peer.offers.remove(t)
             if peer.running is t:
@@ -1801,7 +2227,7 @@ class TransferEngine:
 
     def _tombstone(self, peer: _Peer, t: _Transfer, reason: str, unsent: bool, now: float) -> None:
         memo = _Tombstone(reason, unsent, now, self._order())
-        peer.memory.put(t.key.direction, t.key.transfer_id, memo)
+        self._remember(peer, t.key.direction, t.key.transfer_id, memo)
 
     def _fail(
         self,
@@ -1834,7 +2260,7 @@ class TransferEngine:
         """Máy này từ chối `offer` đang chờ: gửi (nếu có kết nối), nhớ, kết thúc REJECTED."""
         if peer.control is not None:
             self._send(peer, rej)
-        peer.memory.put(Direction.RECEIVE, t.key.transfer_id, _RejectMemo(rej, now, self._order()))
+        self._remember(peer, Direction.RECEIVE, t.key.transfer_id, _RejectMemo(rej, now, self._order()))
         self._end(t, Outcome.REJECTED, reason=rej.reason, file_index=rej.file_index, reject=rej)
 
     # ---- Nội bộ: kết nối dữ liệu ---------------------------------------------------------
@@ -2085,19 +2511,18 @@ class TransferEngine:
         if isinstance(memo, _DoneMemo) and _manifest_digest(msg) != memo.manifest_digest:
             # Lượt đã xong: không còn gì để hủy, chỉ trả `cancel{error}` và nhớ bia mộ đè lên.
             self._send(peer, Cancel(transfer_id, CancelReason.ERROR))
-            peer.memory.put(
-                Direction.RECEIVE, transfer_id, _Tombstone(CancelReason.ERROR, False, now, self._order())
-            )
+            stone = _Tombstone(CancelReason.ERROR, False, now, self._order())
+            self._remember(peer, Direction.RECEIVE, transfer_id, stone)
             return
         if isinstance(memo, _RejectMemo):
             self._send(peer, memo.reject)
             return
         if isinstance(t, _Recv):
-            if t.phase is _Phase.RUNNING:
+            if t.phase is _Phase.RUNNING and t.created:
                 self._send(peer, Accept(transfer_id))
                 if not t.sent_resume and not t.want_resume and t.resume_at is None:
                     self._request_resume(peer, t, now)
-            return  # đang chờ người dùng hay đang xếp hàng: im lặng
+            return  # đang chờ người dùng, đang xếp hàng hay chưa `temp_created`: im lặng
         if isinstance(memo, _DoneMemo):
             self._send(peer, Accept(transfer_id))
             return
@@ -2106,9 +2531,8 @@ class TransferEngine:
         ):
             # `transfer_id` trùng lượt chiều ngược lại với cùng thiết bị.
             self._send(peer, Cancel(transfer_id, CancelReason.ERROR))
-            peer.memory.put(
-                Direction.RECEIVE, transfer_id, _Tombstone(CancelReason.ERROR, False, now, self._order())
-            )
+            stone = _Tombstone(CancelReason.ERROR, False, now, self._order())
+            self._remember(peer, Direction.RECEIVE, transfer_id, stone)
             return
         if not self._receiving:
             self._send(peer, Reject(transfer_id, RejectReason.NOT_RECEIVING))
@@ -2145,7 +2569,8 @@ class TransferEngine:
             self._send(peer, Cancel(transfer_id, memo.reason))
             return
         t = peer.transfers.get((Direction.RECEIVE, transfer_id))
-        if isinstance(t, _Recv) and t.phase is not _Phase.RUNNING:
+        if isinstance(t, _Recv) and (t.phase is not _Phase.RUNNING or not t.created):
+            # Luật 5; chưa `temp_created` thì máy gửi chưa thể có `accept`/`resume` nào của lượt.
             self._fail(t, CancelReason.ERROR, FailureDetail.PROTOCOL, now)
             return
         if isinstance(memo, _DoneMemo):
@@ -2209,8 +2634,8 @@ class TransferEngine:
         if t.unbatched:
             self._push_batch(peer, t)
         t.want_resume = True
-        if peer.control is not None and not t.batches:
-            self._send_resume(peer, t, now)
+        if peer.control is not None and not t.batches and t.created:
+            self._send_resume(peer, t, now)  # chưa `temp_created`: giữ tới `temp_created`
 
     def _send_resume(self, peer: _Peer, t: _Recv, now: float) -> None:
         """Gửi `resume` cho file hiện tại. Thiếu khối: là client thì mở kết nối dữ liệu; là server
