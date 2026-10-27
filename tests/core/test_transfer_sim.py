@@ -26,12 +26,14 @@ from collections import Counter, defaultdict, deque
 from functools import partial
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
+import teleport.core.transfer as transfer
 from teleport.core.bitfield import Bitfield
 from teleport.core.blocks import BLOCK_SIZE, block_count
 from teleport.core.filenames import dedupe_offer_names
+from teleport.core.keepalive import DEAD_AFTER
 from teleport.core.merkle import merkle_root
 from teleport.core.messages import (
     Accept,
@@ -40,12 +42,13 @@ from teleport.core.messages import (
     DataOpen,
     FileEntry,
     Offer,
+    Reject,
     Resume,
+    Verified,
 )
 from teleport.core.transfer import (
     DATA_OPEN_WAIT,
     DATA_RETRY_MAX,
-    RECONNECT_GRACE,
     AskUser,
     CheckSource,
     CheckSpace,
@@ -141,6 +144,7 @@ class Node:
         self.disk_busy: dict[str, float] = {}  # hàng FIFO đĩa của lượt bận tới lúc này (fsync chậm)
         # Quan sát.
         self.ended: dict[TransferKey, TransferEnded] = {}
+        self.ended_at: dict[TransferKey, float] = {}  # thời gian ảo lúc có TransferEnded
         self.file_verified: list[FileVerified] = []
         self.cancels_sent: dict[str, list[str]] = defaultdict(list)
         self.completes: list[Complete] = []
@@ -502,6 +506,7 @@ class Sim:
             if isinstance(ev, TransferEnded):
                 assert ev.key not in n.ended, "TransferEnded hai lần"
                 n.ended[ev.key] = ev
+                n.ended_at[ev.key] = self.now
             elif isinstance(ev, FileVerified):
                 n.file_verified.append(ev)
 
@@ -686,11 +691,14 @@ class Sim:
         for c in list(self.conns):
             if not c.closed:
                 self.abort(c, by=None)
+        grace = transfer.RECONNECT_GRACE  # đọc lúc dùng: test vá được
         if kind == "long_outage":
-            d = self.rng.uniform(RECONNECT_GRACE + 1, RECONNECT_GRACE + 30)
+            d = self.rng.uniform(grace + 1, grace + 30)
             p_lost = 1.0
         else:
-            d = self.rng.uniform(0.1, RECONNECT_GRACE - 5)
+            # Mất mạng ngắn: 0,1–25 s như trước (hạn 24 giờ không được biến mọi lần mất mạng ngắn
+            # thành hàng giờ), và luôn ngắn hơn hạn kể cả khi hạn bị vá nhỏ.
+            d = self.rng.uniform(0.1, min(25.0, grace - 5) if grace > 10 else grace / 2)
             p_lost = 0.7
         for node in self.nodes:
             if self.rng.random() < p_lost:
@@ -1322,3 +1330,246 @@ def test_sender_cancel_lost_while_receiver_file_awaits_fsync_still_reaches_recei
         r_end += R.message(SA, 4, m, t)
     ends = [a.event for a in r_end if isinstance(a, Report) and isinstance(a.event, TransferEnded)]
     assert [(e.outcome, e.reason, e.by_peer) for e in ends] == [(Outcome.CANCELLED, how, True)]
+
+
+# ---- P3-0 (spec-p3 mục 2.3): chờ nối lại tới `RECONNECT_GRACE` (24 giờ), hết hạn đúng lúc đó ---------
+
+# Giá trị thật, đọc lúc import (trước mọi monkeypatch): protocol §6.2, 24 giờ.
+REAL_GRACE = transfer.RECONNECT_GRACE
+GRACES = pytest.mark.parametrize("grace", [REAL_GRACE, 2.0], ids=["grace-that", "grace-va-nho"])
+
+
+class OutageSim(Sim):
+    """Sim không chèn lỗi ngẫu nhiên; chỉ mất mạng có chủ đích theo `outages`: danh sách
+    `(số khối bên nhận đã ghi, thời lượng)`. Mỗi lần: kết nối điều khiển và mọi kết nối dữ liệu chết,
+    message đang trên đường mất, **cả hai máy** thấy mất kết nối ngay lúc đó (`t_lost`); mạng có lại
+    sau đúng `thời lượng` giây ảo, kết nối mới báo lên hai bên cùng lúc.
+
+    `skew={"A": d}`: máy A thấy mất kết nối muộn `d` giây (keepalive phát hiện lệch nhau, tới
+    `DEAD_AFTER`); trong lúc đó nó vẫn coi kết nối là sống, nhưng mọi thứ nó gửi đều mất. Lớp con đổi
+    điều kiện chèn bằng `ready(after)` và làm gì đó ngay trước lúc mất mạng bằng `before_outage()`."""
+
+    def __init__(
+        self, *args, outages: list[tuple[int, float]], skew: dict[str, float] | None = None, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.outages = list(outages)
+        self.skew = dict(skew or {})
+        self.t_lost: list[float] = []
+
+    def written_blocks(self) -> int:
+        return sum(len(v) for (T, _f), v in self.B.written.items() if T == TID)
+
+    def ready(self, after: int) -> bool:
+        return self.written_blocks() >= after
+
+    def before_outage(self) -> None:
+        pass
+
+    def maybe_fault(self) -> None:
+        if not self.outages or self.net_down:
+            return
+        after, duration = self.outages[0]
+        link = self.current_link
+        if not self.ready(after) or link is None or not link.alive:
+            return
+        if self.A.current is not link or self.B.current is not link:
+            return  # kết nối mới chưa báo lên đủ hai bên
+        self.outages.pop(0)
+        self.before_outage()
+        link.alive = False
+        for q in link.q.values():
+            q.clear()
+        self.net_down = True
+        for c in list(self.conns):
+            if not c.closed:
+                self.abort(c, by=None)
+        self.t_lost.append(self.now)
+        for node in self.nodes:
+            self.at(
+                self.now + self.skew.get(node.name, 0.0), partial(node.link_events.append, ("lost", link))
+            )
+        self.at(self.now + duration, self.back)
+
+    def back(self) -> None:
+        self.net_down = False
+        self.new_link(spread=0.0)
+
+
+def _assert_expired_exactly_at(sim: OutageSim, deadline: float) -> None:
+    """Hai bên `expired` (không do máy kia) đúng lúc `deadline`; bên nhận không còn thư mục tạm.
+    Bên nhận chưa từng biết lượt (offer mất cùng lần mất mạng) thì chỉ xét bên gửi."""
+    sides = [(sim.A, sim.key_a)]
+    if sim.key_b in sim.B.known:
+        sides.append((sim.B, sim.key_b))
+    for node, key in sides:
+        end = node.ended.get(key)
+        assert end is not None, f"{node.name}: lượt chưa kết thúc"
+        assert (end.outcome, end.reason, end.by_peer) == (Outcome.CANCELLED, "expired", False), end
+        assert node.ended_at[key] == pytest.approx(deadline, abs=1e-6), (
+            f"{node.name}: hết hạn lúc {node.ended_at[key]!r}, phải đúng {deadline!r}"
+        )
+    assert sim.B.temps == set(), "bên nhận hết hạn phải xóa thư mục tạm"
+    if TID in sim.B.created:
+        assert TID in sim.B.removed
+
+
+@GRACES
+@pytest.mark.parametrize("first_client", ["A", "B"])
+@pytest.mark.parametrize("seed", range(3))
+def test_outage_just_shorter_than_grace_resumes_and_finishes(monkeypatch, grace, first_client, seed):
+    """Mất mạng ở 85 % và có lại ngay trước hạn (`RECONNECT_GRACE` − 1 ms): không bên nào hết hạn
+    sớm; hai bên đồng bộ lại và DONE, nội dung khớp, không có `cancel` nào ngoài `unknown_transfer`."""
+    monkeypatch.setattr(transfer, "RECONNECT_GRACE", grace)
+    sim = OutageSim(random.Random(seed), [40], first_client=first_client, outages=[(34, grace - 0.001)])
+    sim.start()
+    sim.run()
+    assert len(sim.t_lost) == 1, "chưa chèn được lần mất mạng (lượt xong trước 85 %?)"
+    sim.assert_done()
+    back_at = sim.t_lost[0] + grace - 0.001
+    assert sim.A.ended_at[sim.key_a] >= back_at and sim.B.ended_at[sim.key_b] >= back_at
+    for node in sim.nodes:
+        assert [r for r in node.cancels_sent[TID] if r != "unknown_transfer"] == [], node.name
+
+
+@GRACES
+@pytest.mark.parametrize("first_client", ["A", "B"])
+@pytest.mark.parametrize("seed", range(3))
+def test_outage_longer_than_grace_expires_both_sides_exactly_at_grace(monkeypatch, grace, first_client, seed):
+    """Mất mạng ở 85 % và lâu hơn hạn: cả hai bên kết thúc `expired` (không do máy kia) **đúng** lúc
+    `t_lost + RECONNECT_GRACE`, không sớm hơn và không đợi tới lúc có mạng lại; bên nhận xóa thư mục tạm."""
+    monkeypatch.setattr(transfer, "RECONNECT_GRACE", grace)
+    sim = OutageSim(random.Random(seed), [40], first_client=first_client, outages=[(34, grace + 60.0)])
+    sim.start()
+    sim.run()
+    assert len(sim.t_lost) == 1
+    _assert_expired_exactly_at(sim, sim.t_lost[0] + grace)
+
+
+@GRACES
+def test_each_outage_gets_a_full_grace_from_its_own_start(monkeypatch, grace):
+    """Hai lần mất mạng, mỗi lần 90 % hạn (tổng thời gian mất mạng > hạn): hạn tính lại từ đầu ở mỗi
+    lần mất kết nối (protocol §6.2: “kể từ lúc mất kết nối”), nên lượt vẫn DONE."""
+    monkeypatch.setattr(transfer, "RECONNECT_GRACE", grace)
+    sim = OutageSim(random.Random(11), [40], first_client="A", outages=[(10, grace * 0.9), (30, grace * 0.9)])
+    sim.start()
+    sim.run()
+    assert len(sim.t_lost) == 2
+    sim.assert_done()
+
+
+@GRACES
+@settings(SIM, max_examples=60)
+@given(
+    rng=st.randoms(use_true_random=False),
+    frac=st.floats(min_value=0.0, max_value=2.0, allow_nan=False),
+    after=st.integers(0, 39),
+)
+def test_outage_outcome_depends_only_on_grace(grace, rng, frac, after):
+    """Mất mạng ở vị trí bất kỳ, thời lượng `frac × RECONNECT_GRACE`: ngắn hơn hạn (cách hạn > 1 ms)
+    → DONE, nội dung khớp; dài hơn hạn → `expired` đúng lúc `t_lost + RECONNECT_GRACE`."""
+    duration = frac * grace
+    assume(abs(duration - grace) > 0.001)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(transfer, "RECONNECT_GRACE", grace)
+        sim = OutageSim(rng, [40], outages=[(after, duration)])
+        sim.start()
+        sim.run()
+    if not sim.t_lost or duration < grace:
+        sim.assert_done()
+    else:
+        _assert_expired_exactly_at(sim, sim.t_lost[0] + grace)
+
+
+# ---- P3-0 (soat-code): lời cuối bị mất, hai bên thấy mất kết nối lệch nhau, nối lại sát hạn ----------
+#
+# Bên đã kết thúc lượt (hủy, từ chối, hay đã `verified` file cuối) nhớ lượt đó trong bảng nhớ
+# (`REMEMBER_TTL`); bên kia còn chờ nối lại tới `RECONNECT_GRACE` **tính từ lúc nó thấy mất kết nối**,
+# mà lúc đó có thể muộn tới `DEAD_AFTER` (keepalive). Nối lại ngay trước hạn của bên chờ thì bên đã kết
+# thúc phải còn nhớ, để trả đúng `cancel{user}` / `reject` / `verified` (protocol §6.3), chứ không coi
+# là lượt lạ (hỏi lại người dùng, hay `cancel{unknown_transfer}`).
+
+SKEW = DEAD_AFTER  # bên chờ thấy mất kết nối muộn nhất có thể
+REJOIN_AFTER = REAL_GRACE + DEAD_AFTER / 2  # tính từ lúc lời cuối bị mất; trước hạn của bên chờ
+
+
+class LostLastWordSim(OutageSim):
+    """`case`: `"cancel-receiver"` / `"cancel-sender"` (hủy ở 85 %), `"reject"` (bên nhận từ chối lúc
+    hỏi), `"verified"` (`verified` của file cuối). Message đó bị mất cùng lần mất mạng ngay sau khi gửi;
+    bên kia (bên chờ) thấy mất kết nối muộn `SKEW` giây; mạng có lại sau `REJOIN_AFTER` giây."""
+
+    def __init__(self, rng: random.Random, nblocks: list[int], case: str, **kwargs) -> None:
+        self.case = case
+        self.sent_log: list[tuple[str, object]] = []
+        self.asks: list[float] = []  # thời điểm mỗi AskUser (bên nhận)
+        waiting = "B" if case == "cancel-sender" else "A"
+        super().__init__(rng, nblocks, outages=[(34, REJOIN_AFTER)], skew={waiting: SKEW}, **kwargs)
+
+    def do(self, n: Node, a, call: str, args: tuple, payload) -> None:
+        if isinstance(a, SendMessage):
+            self.sent_log.append((n.name, a.message))
+        if isinstance(a, AskUser):
+            self.asks.append(self.now)
+            if self.case == "reject":
+                n.inbox.append(("decide", (n.peer.device_id, a.transfer_id, False)))
+                return
+        super().do(n, a, call, args, payload)
+
+    def ready(self, after: int) -> bool:
+        if self.case == "reject":
+            return any(name == "B" and isinstance(m, Reject) for name, m in self.sent_log)
+        if self.case == "verified":
+            last = len(self.files) - 1
+            return any(
+                name == "B" and isinstance(m, Verified) and m.file_index == last for name, m in self.sent_log
+            )
+        return super().ready(after)
+
+    def before_outage(self) -> None:
+        if self.case == "cancel-receiver":
+            self.cancel_by_user(self.B)
+        elif self.case == "cancel-sender":
+            self.cancel_by_user(self.A)
+
+
+@pytest.mark.parametrize("first_client", ["A", "B"])
+@pytest.mark.parametrize("seed", range(2))
+@pytest.mark.parametrize("case", ["cancel-receiver", "cancel-sender", "reject", "verified"])
+def test_last_word_lost_before_skewed_outage_is_repeated_when_peer_rejoins_near_grace(
+    case, seed, first_client
+):
+    sim = LostLastWordSim(random.Random(seed), [40], case, first_client=first_client)
+    sim.start()
+    sim.run()
+    assert len(sim.t_lost) == 1, "chưa chèn được lần mất mạng"
+    t_lost = sim.t_lost[0]
+    rejoin = t_lost + REJOIN_AFTER
+    asks_after = [t for t in sim.asks if t > t_lost]
+    assert asks_after == [], f"bên nhận hỏi lại người dùng sau khi nối lại (lượt bị coi là mới): {asks_after}"
+    ea, eb = sim.A.ended.get(sim.key_a), sim.B.ended.get(sim.key_b)
+    assert ea is not None and eb is not None, (ea, eb)
+    if case == "cancel-receiver":
+        assert (eb.outcome, eb.reason, eb.by_peer) == (Outcome.CANCELLED, "user", False), eb
+        assert (ea.outcome, ea.reason, ea.by_peer) == (Outcome.CANCELLED, "user", True), ea
+        waiting, wkey = sim.A, sim.key_a
+    elif case == "cancel-sender":
+        assert (ea.outcome, ea.reason, ea.by_peer) == (Outcome.CANCELLED, "user", False), ea
+        assert (eb.outcome, eb.reason, eb.by_peer) == (Outcome.CANCELLED, "user", True), eb
+        waiting, wkey = sim.B, sim.key_b
+    elif case == "reject":
+        assert (ea.outcome, ea.by_peer) == (Outcome.REJECTED, True), ea
+        waiting, wkey = sim.A, sim.key_a
+    else:
+        sim.assert_done()  # gồm: mỗi file chỉ được hoàn tất một lần, không có lượt nhận mới
+        waiting, wkey = sim.A, sim.key_a
+    # Bên chờ chỉ kết thúc khi đã nối lại (nhận lời cuối được nhắc lại), không hết hạn trước đó.
+    assert waiting.ended_at[wkey] >= rejoin, (waiting.name, waiting.ended_at[wkey], rejoin)
+    assert sim.B.temps == set()
+    unknown = [r for node in sim.nodes for r in node.cancels_sent[TID] if r == "unknown_transfer"]
+    assert unknown == [], "bên đã kết thúc quên lượt trước khi bên kia thôi nối lại"
+
+
+def test_remember_ttl_outlives_peer_reconnect_window_with_keepalive_skew():
+    """Bảng nhớ phải sống lâu hơn thời gian bên kia còn có thể nối lại: hạn chờ nối lại tính từ lúc
+    bên kia thấy mất kết nối, muộn tới `DEAD_AFTER` (keepalive) so với bên này."""
+    assert transfer.REMEMBER_TTL > transfer.RECONNECT_GRACE + DEAD_AFTER

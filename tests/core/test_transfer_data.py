@@ -11,6 +11,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+import teleport.core.keepalive as keepalive
 import teleport.core.transfer as transfer
 from teleport.core.bitfield import Bitfield
 from teleport.core.messages import (
@@ -56,8 +57,10 @@ def test_constants_have_spec_values():
     assert DATA_OPEN_WAIT == 10.0
     assert (transfer.DATA_RETRY_BASE, DATA_RETRY_MAX) == (1.0, 30.0)
     assert DATA_FAIL_REPORT_AFTER == 3
-    assert transfer.RECONNECT_GRACE == 30.0
-    assert transfer.REMEMBER_TTL == 86400.0
+    assert transfer.RECONNECT_GRACE == 86400.0  # spec-p3 P3-0: nối lại tới 24 giờ (protocol §6.2)
+    # soat-code P3-0: bảng nhớ sống lâu hơn hạn nối lại của máy kia cộng độ lệch phát hiện mất kết
+    # nối (keepalive); giá trị cụ thể kiểm theo protocol §6.3 ở test_transfer_params.
+    assert transfer.REMEMBER_TTL > transfer.RECONNECT_GRACE + keepalive.DEAD_AFTER
     assert transfer.MAX_REMEMBERED == 1024
 
 
