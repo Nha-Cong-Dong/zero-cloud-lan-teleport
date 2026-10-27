@@ -1,10 +1,10 @@
 # Kế hoạch dự án — Zero-Cloud LAN Teleport v1.0
 
 > **Vai trò:** kế hoạch kỹ thuật — làm thế nào, bằng công nghệ gì, theo thứ tự nào, đang tới đâu.
-> **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
+> **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, danh sách phép đo của đợt đo trên thiết bị thật (mục 5.4), quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
 > **Không chứa:** phạm vi, tính năng, tiêu chí chấp nhận và con số chất lượng → [mvp.md](mvp.md) (tham chiếu theo mã F1–F12, N1–N12). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
 > **Bản chính thức về kỹ thuật:** đặc tả giao thức [protocol.md](protocol.md) và trạng thái từng module [architecture.md](architecture.md); khi lệch nhau thì hai file đó đúng.
-> **Cập nhật:** 2026-10-26
+> **Cập nhật:** 2026-10-27
 
 ---
 
@@ -70,7 +70,7 @@
 - **Danh tính:** mỗi máy có khóa ECDSA P-256 và chứng chỉ X.509 tự ký; fingerprint = SHA-256 của chứng chỉ (DER). Tên thiết bị chỉ để hiển thị. Danh tính gắn với thư mục cấu hình: xóa thư mục cấu hình (cài lại sạch) là một thiết bị mới (`protocol.md` mục 1, 7).
 - **Ghép đôi lần đầu** (kiểu *numeric comparison* của Bluetooth): bên khởi xướng gửi chứng chỉ, bên trả lời gửi **cam kết** cho nonce của mình, bên khởi xướng gửi nonce kèm **chữ ký** bằng khóa danh tính (chứng minh nó giữ khóa riêng của chứng chỉ vừa gửi, vì chứng chỉ thì ai cũng lấy được), bên trả lời kiểm chữ ký, hiện mã rồi mới lộ nonce. Bên trả lời không cần ký: bắt tay TLS đã chứng minh nó giữ khóa riêng. Bên trả lời là bên cam kết vì nó là máy đang chờ ghép đôi: kẻ đứng giữa gọi tới nó không biết trước được mã, nên mỗi lần thử đều làm nó hiện mã. Mã 6 số tính từ hai fingerprint **và hai nonce**. Nếu mã chỉ tính từ hai fingerprint, kẻ đứng giữa có thể sinh khóa offline tới khi ra mã trùng; có nonce cam kết thì mỗi lần thử chỉ trúng với xác suất 10⁻⁶. Công thức, luồng message `pair_*`, chống làm phiền và test vector: `protocol.md` mục 5.
 - Luồng ghép đôi là **máy trạng thái sans-IO** ở `core/pairing.py` (sự kiện vào: message tới, người dùng xác nhận/từ chối, hết giờ; hành động ra: gửi message, hiện mã, lưu thiết bị, đóng). `app/pairing.py` chỉ sinh nonce, đưa vào hàm ký/kiểm chữ ký của `trust`, và nối máy trạng thái với kết nối thật. Nhờ vậy test được bằng `hypothesis` mọi thứ tự message, message trùng, message sai lúc.
-- Người dùng thấy mã trùng thì bấm “Xác nhận” **ở cả hai máy** (hết giờ 60 giây) → mỗi máy lưu chứng chỉ và fingerprint của máy kia vào `trusted.json`. Những lần sau, TLS chỉ chấp nhận chứng chỉ đã lưu. Có thể **hủy ghép đôi** bất cứ lúc nào, có hiệu lực ngay (`protocol.md` mục 7).
+- Người dùng thấy mã trùng thì bấm “Xác nhận” **ở cả hai máy** (hết giờ: mvp F3) → mỗi máy lưu chứng chỉ và fingerprint của máy kia vào `trusted.json`. Những lần sau, TLS chỉ chấp nhận chứng chỉ đã lưu. Có thể **hủy ghép đôi** bất cứ lúc nào, có hiệu lực ngay (`protocol.md` mục 7).
 - **Xác thực hai chiều:** module `ssl` của Python không cho tự viết hàm kiểm tra chứng chỉ phía server. Phương án: nạp chứng chỉ của các thiết bị tin cậy làm trust anchor cho `SSLContext` của server, chế độ `CERT_OPTIONAL`; vì vậy chứng chỉ có dấu hiệu CA bị từ chối. Client gửi chứng chỉ lạ bị từ chối ngay khi bắt tay; client không gửi chứng chỉ chỉ được ghép đôi, xác thực ở tầng ứng dụng bằng mã 6 số. Đã kiểm chứng bằng test (`tests/net/test_tls.py`).
 - `SSLContext` không gỡ được trust anchor đã nạp, nên mỗi lần danh sách tin cậy đổi (ghép đôi, hủy ghép đôi) node tạo context mới. Listener nhận **TCP trần** và mỗi kết nối gọi `start_tls` với context **hiện tại**, nên đổi danh sách tin cậy chỉ là thay context, không mở lại listener; kết nối đã bắt tay bằng context cũ được kiểm lại fingerprint lúc nhận `control_open`. Node đóng kết nối đang mở với máy vừa bị hủy. Không đổi context giữa chừng bằng `sni_callback`. Server tắt session ticket (`num_tickets = 0`, đã có test): nếu không, máy đã bị hủy ghép đôi dùng lại session cũ thì bỏ qua được bước kiểm chứng chỉ (đã kiểm chứng bằng test trong `tests/net/test_tls.py`).
 - **Kết nối điều khiển:** mỗi cặp thiết bị tin cậy đang trực tuyến giữ đúng một kết nối, mở sẵn; cả hai bên đều có thể chủ động kết nối. Kết nối mới thay kết nối cũ, trừ khi hai bên gọi nhau cùng lúc (cách nhau dưới ngưỡng ở `protocol.md` mục 6.1) thì giữ kết nối do bên có `device_id` nhỏ hơn mở; hai kết nối do cùng một bên mở thì kết nối mới thay. Kết nối dữ liệu đi **cùng chiều** với kết nối điều khiển, nên tường lửa chặn một chiều vẫn truyền được file. Có keepalive `ping`/`pong` để phát hiện mất kết nối (`protocol.md` mục 2.3, 4.1, 6.1).
@@ -86,11 +86,11 @@
       writer.write(BLOCK_HEADER.pack(0x02, idx, len(block), digest) + block)
       await writer.drain()  # ← backpressure: chờ khi bộ đệm đầy
   ```
-- **Bên nhận:** đọc từng khung → băm lại và so với hash trong header → đẩy vào `asyncio.Queue(maxsize=8)` → luồng ghi đĩa (`asyncio.to_thread`) ghi vào `.part` đúng vị trí `idx × BLOCK_SIZE`, cứ 16 khối thì `fsync` và cập nhật trạng thái nối lại (mục 3.4). Ổ đĩa chậm → hàng đợi đầy → ngừng đọc socket → TCP báo bên gửi chậm lại. Kết quả: RAM tối đa khoảng 8–10 khối, bất kể file lớn cỡ nào.
+- **Bên nhận:** đọc từng khung → băm lại và so với hash trong header → đẩy vào `asyncio.Queue(maxsize=8)` → luồng ghi đĩa (`DiskExecutor` của node, [architecture.md](architecture.md) mục 5) ghi vào `.part` đúng vị trí `idx × BLOCK_SIZE`, cứ 16 khối thì `fsync` và cập nhật trạng thái nối lại (mục 3.4). Ổ đĩa chậm → hàng đợi đầy → ngừng đọc socket → TCP báo bên gửi chậm lại. Kết quả: RAM tối đa khoảng 8–10 khối, bất kể file lớn cỡ nào.
 - **Giới hạn tốc độ gửi** (tùy chọn trong cài đặt): token bucket áp theo từng đoạn 64 KiB, để dòng byte không ngưng lâu tới mức bên nhận tưởng mất kết nối.
 - Mỗi lượt truyền chỉ có một kết nối dữ liệu, các file được gửi lần lượt, và mỗi chiều giữa hai máy chỉ chạy một lượt truyền (lượt khác xếp hàng), nên RAM không tăng theo số file hay số lượt truyền.
 - **Hoàn tất:** đọc lại `.part` từ đĩa và so từng khối → so Merkle root → `fsync` → đổi tên không ghi đè (mục 3.4).
-- Mô hình tiến trình tới `v0.2`: mỗi lệnh CLI là một node giữ `node.lock`, nên trên cùng một thư mục cấu hình không chạy được `teleport receive` và `teleport send` cùng lúc, và `teleport send` phải chạy tiếp (tối đa 24 giờ) để tự nối lại. Giới hạn này hết ở `v0.3` khi giao diện giữ node (`architecture.md` mục 2).
+- Mô hình tiến trình tới `v0.2`: mỗi lệnh CLI là một node giữ `node.lock`, nên trên cùng một thư mục cấu hình không chạy được `teleport receive` và `teleport send` cùng lúc, và `teleport send` phải chạy tới khi lượt xong; mất kết nối thì nó chờ nối lại (thời hạn: Giai đoạn 2 ở mục 5.2, từ Giai đoạn 3 theo `protocol.md` mục 6.2). Giới hạn này hết ở `v0.3` khi giao diện giữ node (`architecture.md` mục 2).
 
 ### 3.3. An toàn khi nhận
 *(mvp F4, N8 — bắt buộc, không cắt khi trễ tiến độ)*
@@ -118,14 +118,14 @@
 - **Kiểm tra cuối:** khi có `complete` và đủ mọi bit, bên nhận **đọc lại toàn bộ `.part` từ đĩa** và so từng khối với hash đã lưu, rồi mới so Merkle root. Không có bước này thì byte bị sửa trong `.part` lúc tạm dừng (mvp F7) sẽ lọt qua, vì bitfield và hash đã lưu vẫn nói khối đó đúng. Khối sai → xóa bit, gửi `resume` → bên gửi gửi lại đúng khối đó. Quá 3 lần vẫn sai (ví dụ ổ hỏng) → `cancel{error}`. Bước này là trạng thái “đang kiểm tra” ở mvp F5; tốn một lần đọc file ở tốc độ đĩa.
 - **Một cơ chế gửi lại duy nhất:** `resume{bitfield}` (các khối bên nhận đã có) gửi được lúc nào cũng được: khi nối lại, khi kết nối dữ liệu đóng mà còn thiếu khối, khi lượt đọc lại thấy khối sai, và với bitfield toàn 0 khi Merkle root không khớp. Không cần message `corrupt` riêng. Mỗi `resume` có `seq`, và mỗi kết nối dữ liệu mang `resume_seq` của đúng `resume` nó phục vụ, nên `data_open` tới trước `resume` cũng không làm gửi sai khối.
 - **Message điều khiển bị mất** (kết nối đứt hoặc bị thay đúng lúc `offer`, `complete`, `verified`, `cancel` đang trên đường) không làm treo lượt truyền: mọi message gửi lại được và nhận trùng không gây hại, và mỗi kết nối điều khiển mới mở đầu bằng một lượt đồng bộ lại (`protocol.md` mục 6.3).
-- **Nối lại:** mất kết nối → tự thử lại (1s, 2s, 4s… tối đa 30s một lần, trong tối đa 24 giờ) → bên nhận gửi `resume{bitfield}` → bên gửi chỉ gửi những khối có bit = 0 (`protocol.md` mục 6).
+- **Nối lại:** mất kết nối → tự thử lại (lịch và thời hạn: `protocol.md` mục 6.2) → bên nhận gửi `resume{bitfield}` → bên gửi chỉ gửi những khối có bit = 0 (`protocol.md` mục 6).
 - File nguồn thay đổi (kích thước/mtime khác manifest), kiểm khi nối lại **và** trước khi gửi `complete` → bên gửi gửi `cancel{source_changed}`, báo người dùng.
 - Tắt app gửi: v1.0 không lưu lượt truyền của bên gửi; khi nối lại, bên gửi trả `cancel{unknown_transfer}` và bên nhận dọn file tạm.
-- File tạm bị bỏ dở quá 7 ngày thì tự dọn (chỉnh được trong cài đặt).
+- File tạm bị bỏ dở quá hạn thì tự dọn (hạn: mvp F6).
 - **Merkle root:** tính từ danh sách hash các khối (lá) theo cây nhị phân; lẻ nút thì nút cuối được đẩy thẳng lên tầng trên (`protocol.md` mục 4.4).
 
 ### 3.5. Giao thức (tóm tắt)
-Đặc tả chính thức: [protocol.md](protocol.md), có **số phiên bản** riêng, độc lập với phiên bản app (hiện là phiên bản 1, dự thảo; từ `v0.1.0-alpha` mọi thay đổi không tương thích đều tăng số). Bảng dưới chỉ là tóm tắt; khi lệch nhau thì `protocol.md` đúng. Mọi thay đổi định dạng trên dây phải sửa `protocol.md` trong cùng PR.
+Đặc tả chính thức: [protocol.md](protocol.md), có **số phiên bản** riêng, độc lập với phiên bản app (hiện là phiên bản 1; quy tắc tăng số: `protocol.md` mục 9). Bảng dưới chỉ là tóm tắt; khi lệch nhau thì `protocol.md` đúng. Mọi thay đổi định dạng trên dây phải sửa `protocol.md` trong cùng PR.
 
 Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên gửi `hello`; khác phiên bản giao thức thì đóng kết nối kèm thông báo “hãy cập nhật app”. Có 3 loại kết nối:
 - **Ghép đôi:** client không gửi chứng chỉ; chỉ có `pair_*`; message ≤ 16 KiB.
@@ -233,12 +233,14 @@ Nguyên tắc: **làm bằng dòng lệnh (CLI) trước, giao diện sau.** Ph�
 | # | Giai đoạn | Thời lượng | Hết tuần | Bản phát hành | Tính năng (mvp) | Người dùng làm được gì | Trạng thái |
 |---|---|---|---|---|---|---|---|
 | 0 | Nền tảng, repo, CI | 1 tuần | 1 | — | — | — | ✅ Đã xong |
-| 1 | Khám phá & ghép đôi | 2 tuần | 3 | — | F2, F3 (lõi + CLI), F12 một phần | Thấy máy khác và ghép đôi qua CLI | ✅ Đã xong (N1 đạt khi đo trên máy ảo bridged, [benchmark.md](benchmark.md) mục 3.3; đo lại trên 2 máy thật ở Giai đoạn 4) |
-| 2 | Truyền file, backpressure, an toàn khi nhận | 3 tuần | 6 | `v0.1.0-alpha` | F4, F5 (CLI), F12 | Gửi file lớn qua CLI giữa 2 máy đã ghép đôi | ⬜ Chưa làm |
+| 1 | Khám phá & ghép đôi | 2 tuần | 3 | — | F2, F3 (lõi + CLI), F12 một phần | Thấy máy khác và ghép đôi qua CLI | ✅ Đã xong (N1 đạt khi đo trên máy ảo bridged, [benchmark.md](benchmark.md) mục 3.3; đo lại trên hai máy thật trong đợt đo, mục 5.4) |
+| 2 | Truyền file, backpressure, an toàn khi nhận | 3 tuần | 6 | `v0.1.0-alpha` | F4, F5 (CLI), F12 | Gửi file lớn qua CLI giữa 2 máy đã ghép đôi | ⏸ Code xong, chờ đợt đo (mục 5.4) |
 | 3 | Merkle & tự nối lại | 3 tuần | 9 | `v0.2.0-alpha` | F6, F7 | Rớt mạng vẫn tự nối lại, chỉ gửi phần còn thiếu. **Bản CLI đầu tiên đáng cho người dùng kỹ thuật dùng thử** | ⬜ Chưa làm |
 | 4 | Giao diện, khay hệ thống, đa ngôn ngữ | 2 tuần | 11 | `v0.3.0-beta` | F2–F5 (giao diện), F9, F10, F11 | Dùng hoàn toàn bằng giao diện: radar, kéo thả, ghép đôi | ⬜ Chưa làm |
 | 5 | Đồng bộ clipboard | 1 tuần | 12 | `v0.4.0-beta` | F8 | Đồng bộ clipboard | ⬜ Chưa làm |
 | 6 | Hoàn thiện, bộ cài, phát hành | 3 tuần | 15 | `v1.0.0` | F1, toàn bộ N1–N12 | Bộ cài 3 hệ điều hành, tài liệu người dùng, đã thử với người dùng thật | ⬜ Chưa làm |
+
+Ký hiệu trạng thái: [README.md](README.md) mục 4. Giai đoạn ⏸ còn chờ gì: dòng “Xong khi” của nó ở mục 5.2.
 
 Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên bản giao thức đánh số riêng (mục 3.5). Tiến độ được ghi lại qua commit, GitHub Issues/Milestones và mục `[Unreleased]` của `CHANGELOG.md`.
 
@@ -263,27 +265,29 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - ✅ CLI: `teleport listen`, `teleport pair <ip[:cổng]>`, `teleport unpair <thiết bị>`; `--json`; mã thoát 0/1/2.
 - ✅ CLI còn lại: `teleport list`, `teleport pair <thiết bị>`; `<thiết bị>` là tên hoặc tiền tố `device_id` (mvp F12).
 - ✅ Đo N1 giữa host và máy ảo bridged: đạt ([benchmark.md](benchmark.md) mục 3.3). Tiêu chí tự nhận ra nhau sau khi khởi động lại và từ chối máy chưa ghép đôi có test integration (`tests/app/test_pairing.py`, `tests/app/test_node.py`, `tests/net/test_tls.py`).
-- **Xong khi:** đạt N1 (đo trên máy ảo bridged được chấp nhận ở giai đoạn này; đo lại trên 2 máy thật ở Giai đoạn 4); ghép đôi xong thì tự nhận ra nhau sau khi khởi động lại; máy chưa ghép đôi không mở được kết nối điều khiển hay dữ liệu theo cả hai chiều (chỉ mở được kết nối ghép đôi).
+- **Xong khi:** đạt N1 (đo trên máy ảo bridged được chấp nhận ở giai đoạn này; đo lại trên hai máy thật: mục 5.4, D1); ghép đôi xong thì tự nhận ra nhau sau khi khởi động lại; máy chưa ghép đôi không mở được kết nối điều khiển hay dữ liệu theo cả hai chiều (chỉ mở được kết nối ghép đôi).
 
 #### Giai đoạn 2 — Truyền file, backpressure, an toàn khi nhận
 - Làm trước khi bắt đầu giai đoạn này (không đổi trạng thái ✅ của Giai đoạn 1), đã xong ✅: giới hạn tốc độ bắt tay mới, theo IP và ngân sách chung, cùng pool ưu tiên cho IP đã xác thực mTLS (`teleport.core.admission`, `protocol.md` mục 2.3); client kết nối ra dùng `CERT_REQUIRED` với đúng chứng chỉ đã lưu của máy kia (`protocol.md` mục 2.1, 2.2, 8; mục 8 bên dưới).
-- `core/blocks.py`: khung khối nhị phân kèm hash; `core/merkle.py`, `core/bitfield.py` (dời lên từ Giai đoạn 3, vì định dạng trên dây của protocol 1 được chốt đủ ở `v0.1.0-alpha`); `core/messages.py`: thêm `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
+- ✅ `core/blocks.py`: khung khối nhị phân kèm hash; `core/merkle.py`, `core/bitfield.py` (dời lên từ Giai đoạn 3, vì định dạng trên dây của protocol 1 được chốt đủ ở `v0.1.0-alpha`); `core/messages.py`: thêm `data_open` và các message truyền file, kiểm tra hợp lệ mọi trường.
 - ✅ `core/transfer.py` (nối vào mạng ở `app/transfers.py`): máy trạng thái gửi/nhận, không I/O: `offer`/`accept`/`reject`, nhiều file, hủy; `resume`/`complete`/`verified`; toàn vẹn trong một phiên (kiểm hash từng khối, `resume` xin lại khối sai hay thiếu khi kết nối dữ liệu đứt, lượt đọc lại `.part` cuối, so Merkle root, giới hạn số lần gửi lại → `cancel{error}`); kiểm file nguồn đổi trước `complete` (`cancel{source_changed}`); `cancel{unknown_transfer}` và bia mộ trong bộ nhớ (`protocol.md` mục 6.3).
 - ✅ Đồng bộ lại trong bộ nhớ khi kết nối điều khiển bị thay hoặc có lại (`protocol.md` mục 6.3): mất kết nối điều khiển thì chờ nối lại tối đa 30 s, quá hạn thì lượt truyền thất bại, xóa file tạm, giữ các file đã `verified`.
 - Giới hạn của Giai đoạn 2: chưa có nhật ký `.state`: bit bật khi khối đã khớp hash và `.part` đã `fsync`; lỗi ghi hay `fsync` `.part` dừng lượt ([architecture.md](architecture.md) mục 4). Trạng thái lượt truyền và bia mộ chỉ nằm trong bộ nhớ, nên bên nhận khởi động lại thì mất hết. Bên nhận bị tắt đột ngột giữa lượt thì thư mục tạm `.teleport/<transfer_id>/` của lượt đó còn lại (node không xóa thư mục không chứng minh được là của mình), nên `offer` gửi lại của chính lượt đó sau khi bên nhận chạy lại thất bại (`cancel{error}`; bên nhận báo nguyên nhân riêng, `TransferResult.TEMP_EXISTS`); người gửi gửi lại thành lượt mới. Giai đoạn 3 sửa bằng `transfer.json` và bia mộ trên đĩa.
 - ✅ `app/transfers.py`: chạy máy trạng thái trên kết nối thật, đọc/ghi `.part` theo khối ([architecture.md](architecture.md) mục 5 “Truyền file ở tầng app”).
-- An toàn khi nhận (mục 3.3): làm sạch tên, file tạm trong `.teleport/`, đổi tên không ghi đè; hủy ở cả hai bên (máy nhận xóa file tạm); giới hạn tốc độ gửi.
-- Kiểm hệ file của thư mục nhận trước `accept` (FAT32, mục 8): có file không chứa được thì tự `reject` cả lượt với lý do `file_too_large` (`protocol.md` mục 3.3).
-- Thêm thông báo lỗi ghi đĩa (ghi hay `fsync` `.state`/`.part` lỗi, [architecture.md](architecture.md) mục 4) vào mvp mục 8: trưởng nhóm soạn nguyên văn, người dùng duyệt.
+- ✅ An toàn khi nhận (mục 3.3): làm sạch tên, file tạm trong `.teleport/`, đổi tên không ghi đè; hủy ở cả hai bên (máy nhận xóa file tạm); giới hạn tốc độ gửi.
+- ✅ Kiểm hệ file của thư mục nhận trước `accept` (FAT32, mục 8): có file không chứa được thì tự `reject` cả lượt với lý do `file_too_large` (`protocol.md` mục 3.3).
+- ✅ Thêm thông báo lỗi ghi đĩa (ghi hay `fsync` `.state`/`.part` lỗi, [architecture.md](architecture.md) mục 4) vào mvp mục 8: trưởng nhóm soạn nguyên văn, người dùng duyệt.
 - ✅ CLI: `teleport send <file...> --to <tên>` kèm tiến độ và tốc độ, `teleport receive`; mã thoát khác 0 khi lỗi; `--json`.
-- Build thử CLI bằng PyInstaller để sớm phát hiện vấn đề đóng gói / antivirus.
-- **Xong khi:** truyền file 10 GiB thành công; đạt N3 (biểu đồ RSS phẳng, ổ đích chậm mà RAM không tăng); test path traversal và tên đặc biệt (`../../x`, `C:\Windows\x`, `CON`, `NUL.txt`, `a.txt:ads`, `x.`, `x.part.state`) đều bị chặn hoặc đổi tên; không có trường hợp nào ghi đè file sẵn có. → **`v0.1.0-alpha`**.
+- ✅ Build thử CLI bằng PyInstaller để sớm phát hiện vấn đề đóng gói / antivirus (chạy tay, cách build: [CONTRIBUTING.md](CONTRIBUTING.md)).
+- **Xong khi** (kiểm được ngay, đã đạt): truyền file cỡ lớn nhất mvp N3 nêu thành công qua `teleport send` / `receive` thật và đạt phần truyền của N3 trên loopback ([benchmark.md](benchmark.md) mục 4.6); test path traversal và tên đặc biệt (`../../x`, `C:\Windows\x`, `CON`, `NUL.txt`, `a.txt:ads`, `x.`, `x.part.state`) đều bị chặn hoặc đổi tên; không có trường hợp nào ghi đè file sẵn có.
+- **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D3, D4. → **`v0.1.0-alpha`** (thời điểm gắn tag: mục 5.4).
 
 #### Giai đoạn 3 — Merkle & tự nối lại
 - Trạng thái bền trên đĩa: `core/resume_state.py` (nhật ký `.state`, [architecture.md](architecture.md) mục 4) và `transfer.json`, đọc/ghi ở `app/transfers.py`; bia mộ của lượt truyền đã hủy lưu trên đĩa (`protocol.md` mục 6.3).
 - Nối lại tới 24 giờ sau khi mất kết nối điều khiển (lịch thử lại `protocol.md` mục 6.2, trạng thái “Đang nối lại…”); tắt app nhận rồi mở lại vẫn nối tiếp; phát hiện file nguồn thay đổi khi nối lại; dọn file tạm cũ.
-- Đo phần gửi thừa do bộ đệm socket trên 3 hệ điều hành và chốt `SO_RCVBUF`/`SO_SNDBUF` (`protocol.md` mục 4.3).
-- **Xong khi:** đạt mọi AC của F6, F7 và N4, N5, cụ thể: (a) tắt Wi-Fi ở 85% → bật lại → hoàn tất, lượng gửi lại trong ngưỡng mvp N4; (b) sửa 1 byte trong `.part` → phát hiện và gửi lại đúng 1 khối; (c) tắt hẳn app nhận rồi mở lại → vẫn nối lại được; (d) test `hypothesis` ngắt kết nối ngẫu nhiên → file cuối luôn đúng. → **`v0.2.0-alpha`**.
+- Đo phần gửi thừa do bộ đệm socket trên Windows và Linux và chốt `SO_RCVBUF`/`SO_SNDBUF` (`protocol.md` mục 4.3; phần còn lại: dòng “Xong khi” bên dưới).
+- **Xong khi** (kiểm được ngay: test tự động, loopback, máy ảo): đạt mọi AC của F6 (trừ việc chỉnh số ngày dọn file tạm trong cài đặt, Giai đoạn 4), F7 và N5, và N4 trong test tự động, cụ thể: (a) mất đường truyền ở mốc mvp N4 nêu (proxy trên loopback cắt hay chặn kết nối; cắt liên kết card mạng của máy ảo) → có lại → hoàn tất, lượng gửi lại trong ngưỡng mvp N4; (b) sửa 1 byte trong `.part` → phát hiện và gửi lại đúng 1 khối; (c) tắt hẳn app nhận (đóng có trật tự, và giết tiến trình) rồi mở lại → vẫn nối lại được, lượng gửi lại trong ngưỡng mvp N4; (d) test `hypothesis` ngắt kết nối ngẫu nhiên → file cuối luôn đúng; đã chốt `SO_RCVBUF`/`SO_SNDBUF` theo số đo trên Windows và Linux (`protocol.md` mục 4.3; card mạng thật và macOS: D5).
+- **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D5. → **`v0.2.0-alpha`** (thời điểm gắn tag: mục 5.4).
 
 #### Giai đoạn 4 — Giao diện, khay hệ thống, đa ngôn ngữ
 - Cửa sổ chính theo wireframe mvp mục 7: radar có vòng quét động, mỗi thiết bị là một chấm có tên, biểu tượng hệ điều hành và trạng thái; nút “Nhập IP thủ công”.
@@ -296,12 +300,14 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
   - Lưu ý khi làm IPC: tới `v0.2`, CLI in ra stdout đồng bộ ngay trên event loop của node, nên terminal ngừng đọc (ví dụ đang tạm dừng cuộn) có thể làm cả node đứng chờ. Máy khác trong LAN không gây ra được việc này. Khi node chạy trong tiến trình giao diện, việc in hay gửi sự kiện cho CLI qua IPC không được chặn event loop của node.
 - Tiếng Việt và English bằng Qt Linguist (F11); dùng được bằng bàn phím, theo chế độ sáng/tối (N12).
 - Đo RAM khi rảnh (N3) ngay ở bản này.
-- Đo lại N1 trên 2 máy thật (Wi-Fi qua điểm phát thật và mạng dây), kèm kịch bản mất gói ở hai lần resolve đầu (`protocol.md` mục 8); ghi vào [benchmark.md](benchmark.md).
-- **Xong khi:** dùng trọn vẹn không cần dòng lệnh; đạt AC giao diện của F2–F5, F9–F11. → **`v0.3.0-beta`**.
+- Đo lại N1 trên hai máy thật: chuyển vào đợt đo (mục 5.4).
+- **Xong khi** (kiểm được ngay): dùng trọn vẹn không cần dòng lệnh; đạt AC giao diện của F2–F5, F9–F11.
+- **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D8, phần giao diện. → **`v0.3.0-beta`** (thời điểm gắn tag: mục 5.4).
 
 #### Giai đoạn 5 — Đồng bộ clipboard
 - Văn bản và ảnh chụp màn hình; chống vòng lặp; công tắc theo thiết bị; bỏ qua nội dung nhạy cảm; biểu tượng khay báo vừa nhận (mục 3.6).
-- **Xong khi:** đạt mọi AC của F8 và N6. → **`v0.4.0-beta`**.
+- **Xong khi** (kiểm được ngay, trên loopback): đạt mọi AC của F8.
+- **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D6. → **`v0.4.0-beta`** (thời điểm gắn tag: mục 5.4).
 
 #### Giai đoạn 6 — Hoàn thiện & phát hành v1.0
 - Bộ cài: Inno Setup (Windows, tự tạo rule tường lửa cho mạng Private), `.dmg` (macOS), AppImage (Linux), build tự động bằng GitHub Actions khi gắn tag; lần chạy đầu theo F1; đạt N11.
@@ -312,7 +318,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Tuân thủ giấy phép khi đóng gói: dùng PyInstaller `--onedir` (không `--onefile`) để người dùng thay được thư viện LGPL (Qt/PySide6, zeroconf); bộ cài kèm `LICENSE` (GPL-3.0), văn bản giấy phép các thư viện bên thứ ba, và chỉ dẫn lấy mã nguồn đúng phiên bản.
 - Trước bản phát hành thật: thêm dòng bản quyền của các crate chỉ theo MIT liên kết tĩnh vào `_rust.pyd` của `cryptography` (ví dụ `openssl-sys`, `pem`) vào `THIRD-PARTY-NOTICES.txt`.
 - Đáp ứng LGPL-2.1 §6 cho zeroconf: phát hành kèm sdist của zeroconf, hoặc kèm lời đề nghị cung cấp mã nguồn bằng văn bản (hiện `SOURCE.txt` chỉ dẫn link PyPI/GitHub).
-- **Xong khi:** đạt toàn bộ tiêu chí phát hành ở mvp mục 12. → **`v1.0.0`**.
+- **Xong khi:** đạt toàn bộ tiêu chí phát hành ở mvp mục 12, gồm D1–D8 của đợt đo (mục 5.4). → **`v1.0.0`**.
 
 ### 5.3. Sau v1.0
 1. App Android (Java/Kotlin, dùng cùng giao thức): mDNS cần `MulticastLock`, clipboard qua share-sheet.
@@ -323,15 +329,36 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 
 Ý tưởng mới trong lúc làm v1.0 ghi vào GitHub Issues với nhãn `after-1.0`.
 
+### 5.4. Đợt đo trên thiết bị thật
+
+Hiện chỉ có một máy, cộng một máy ảo Ubuntu bridged ([benchmark.md](benchmark.md) mục 3.3), nên mọi phép đo cần máy thật thứ hai hay thiết bị khác được **dồn vào một đợt**, làm một lượt khi có thiết bị. Việc code các giai đoạn không chờ đợt này: dòng “Xong khi” của mỗi giai đoạn ở mục 5.2 tách phần kiểm được ngay (test tự động, loopback, máy ảo) khỏi phần thuộc đợt đo, và chính các dòng đó ghi giai đoạn nào chờ mã D nào. Mục này là nơi duy nhất liệt kê các phép đo của đợt; định nghĩa phép đo, script và kết quả ở [benchmark.md](benchmark.md), ngưỡng và điều kiện đo ở [mvp.md](mvp.md) mục 9.
+
+| Mã | Phép đo | Thiết bị cần | Định nghĩa, cách đo |
+|---|---|---|---|
+| D1 | mvp N1 giữa hai máy thật, qua Wi-Fi có điểm phát thật và qua mạng dây; kịch bản mất gói ở hai lần resolve đầu ([protocol.md](protocol.md) mục 8) | Máy thật thứ hai | [benchmark.md](benchmark.md) mục 3 |
+| D2 | mvp N2: Teleport so với SMB, qua Wi-Fi và qua mạng dây | Máy thật thứ hai chạy Windows | [benchmark.md](benchmark.md) mục 5 |
+| D3 | mvp N3 khi truyền qua card mạng giữa hai máy, với cỡ file lớn nhất mvp N3 nêu, RAM hai phía; đo cùng lượt D2 | Máy thật thứ hai | [benchmark.md](benchmark.md) mục 4.1 (“Qua card mạng giữa hai máy”), 4.4 |
+| D4 | mvp N3 khi ổ đích chậm | USB định dạng NTFS hoặc exFAT, hoặc ổ ảo giới hạn tốc độ | [benchmark.md](benchmark.md) mục 4.4, 4.8 |
+| D5 | mvp N4 trên mạng thật: tắt Wi-Fi giữa lượt truyền rồi bật lại; phần gửi thừa do bộ đệm socket qua card mạng thật và trên macOS ([protocol.md](protocol.md) mục 4.3) | Máy thật thứ hai; một máy macOS | [benchmark.md](benchmark.md), mục mvp N4 (viết ở Giai đoạn 3) |
+| D6 | mvp N6 trên loại mạng Wi-Fi mà mvp N6 nêu | Máy thật thứ hai; điểm phát Wi-Fi đúng loại đó | [benchmark.md](benchmark.md), mục mvp N6 (viết ở Giai đoạn 5) |
+| D7 | mvp N10: các hệ điều hành mvp N10 nêu gửi/nhận qua lại, gồm N1 và truyền file cho từng cặp | Máy thật cho từng hệ điều hành đó | [benchmark.md](benchmark.md), mục mvp N10 (viết khi đo) |
+| D8 | Kiểm thủ công trên thiết bị thật (mục 7, dòng “Thủ công trên thiết bị thật”) | Hai máy thật, nhiều mạng | Mục 7 |
+
+- Không thuộc đợt đo (đo được trên một máy, theo giai đoạn của chúng): mvp N3 lúc rảnh của app có giao diện, N4 và N5 bằng test tự động, N7, N8, N9, N11, N12.
+- Một mã D chỉ xong khi [benchmark.md](benchmark.md) có kết luận ĐẠT cho nó, hoặc người dùng chấp nhận kết quả khác và mvp được sửa theo.
+- Phần nào đo sớm được trên máy ảo (ví dụ một phần D7 với Ubuntu) thì cứ đo và ghi vào benchmark kèm giới hạn; mã D đó vẫn mở tới khi đo trên thiết bị thật, trừ khi người dùng chấp nhận số đo máy ảo như ở Giai đoạn 1.
+- Kết quả không đạt thì sửa code trong giai đoạn đang làm lúc đó, rồi đo lại mã D đó.
+- Giai đoạn còn mã D mở thì chưa gắn tag. Đợt đo chạy trên `main` lúc đo; sau đợt đo chỉ gắn tag của giai đoạn mới nhất có cả hai dòng “Xong khi” đã đạt, lên đúng commit `main` đã dùng để đo. Tag của các giai đoạn ⏸ cũ hơn bị bỏ qua, và mục phiên bản của tag đó trong `CHANGELOG.md` gộp mọi thay đổi từ trước. Đợt đo phải xong trước `v1.0.0` (mvp mục 12). Sau đợt đo, giai đoạn nào không còn mã D mở thì đổi ⏸ thành ✅ ở mục 5.1.
+
 ---
 
 ## 6. Quy trình phát triển
 Bản chính thức: [CONTRIBUTING.md](CONTRIBUTING.md). Tóm tắt:
 - **Nhánh:** `main` luôn chạy được và được bảo vệ (chỉ merge qua Pull Request khi CI xanh). Mỗi việc làm trên nhánh riêng `feat/...`, `fix/...`.
 - **Commit:** theo [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `chore:`), giúp viết `CHANGELOG.md` dễ dàng.
-- **CI** (`.github/workflows/ci.yml`): `ruff check`, `ruff format --check`, `mypy src`, `pytest` trên Windows/macOS/Linux × Python 3.12/3.14 (bản thấp nhất và mới nhất được hỗ trợ). `mypy` có từ đầu Giai đoạn 2 (cấu hình trong `pyproject.toml`).
+- **CI** (`.github/workflows/ci.yml`): các bước kiểm tra và ma trận hệ điều hành × Python ở [CONTRIBUTING.md](CONTRIBUTING.md). `mypy` có từ đầu Giai đoạn 2 (cấu hình trong `pyproject.toml`).
 - **Đội subagent** trong `.claude/agents/`: vai trò và quy trình ở `.claude/CLAUDE.md`. Chỉ commit và push khi người dùng đồng ý.
-- **Phát hành:** gắn tag `vX.Y.Z` → GitHub Actions build bộ cài và tạo GitHub Release kèm ghi chú từ `CHANGELOG.md`.
+- **Phát hành:** các bước, cách đánh số và cách phát hành bản thử nghiệm ở [CONTRIBUTING.md](CONTRIBUTING.md). Build bộ cài tự động khi gắn tag và GitHub Release là việc của Giai đoạn 6; hiện chỉ có build thử bản CLI, chạy tay (`workflow_dispatch`).
 - **Theo dõi công việc:** GitHub Issues + Milestones tương ứng từng bản phát hành ở mục 5.1.
 
 ---
@@ -345,7 +372,8 @@ Bản chính thức: [CONTRIBUTING.md](CONTRIBUTING.md). Tóm tắt:
 | Property test (`hypothesis`) | Ngắt tại vị trí ngẫu nhiên, nối lại nhiều lần → hash file cuối luôn khớp. Fuzz bộ đọc message bằng dữ liệu ngẫu nhiên | N5, N8 |
 | Benchmark | Tốc độ so với SMB, RSS theo thời gian, thời gian phát hiện, byte gửi lại | N1–N4 |
 | Soak test | 100 lượt truyền liên tiếp, kiểm tra không rò bộ nhớ, không còn file tạm | N7 |
-| Thủ công trước mỗi bản beta/1.0 | 2 máy thật trên Wi-Fi nhà, văn phòng, quán cà phê; ma trận Windows 10/11, macOS, Ubuntu; giao diện, trợ năng | N10, N12, AC giao diện |
+| Thủ công trước mỗi bản beta/1.0 | Trên một máy: giao diện, trợ năng (bàn phím, tương phản, chế độ sáng/tối) | N12, AC giao diện |
+| Thủ công trên thiết bị thật | 2 máy thật trên Wi-Fi nhà, văn phòng, quán cà phê; các hệ điều hành của mvp N10; phát hiện tường lửa và cô lập thiết bị (mvp mục 8). Làm trong đợt đo (mục 5.4) | N10, AC giao diện |
 
 Quy ước viết test (marker, fixture, chỗ test thay được): [architecture.md](architecture.md) mục 6.
 
@@ -359,12 +387,12 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 |---|---|
 | Mới làm quen `asyncio` | Giai đoạn 0 dành riêng để học; làm CLI trước UI |
 | Trộn Qt với asyncio phức tạp | Dùng `qasync`; lõi không phụ thuộc Qt nên test riêng được |
-| Python chậm hơn mong đợi (N2) | Đo sớm ở Giai đoạn 2; tăng kích thước khối hoặc bộ đệm socket; module C++ nếu thật sự cần |
+| Python chậm hơn mong đợi (N2) | Đo trong đợt đo trên thiết bị thật (mục 5.4, D2); thông lượng loopback tham khảo: [benchmark.md](benchmark.md) mục 4.6; tăng kích thước khối hoặc bộ đệm socket; module C++ nếu thật sự cần |
 | Python + Qt khó đạt ngưỡng RAM lúc rảnh của mvp N3 | Đo sớm từ `v0.3.0-beta`; tối ưu, hoặc nới yêu cầu có lý do và sửa N3 trong mvp.md |
 | Vi phạm điều kiện LGPL/GPL khi đóng gói | Đóng gói `--onedir`, không sửa mã thư viện LGPL, kèm văn bản giấy phép và chỉ dẫn lấy mã nguồn; kiểm lại trong Giai đoạn 6 |
 | Bộ cài PyInstaller nặng (N11) hoặc bị antivirus báo nhầm | Build thử từ Giai đoạn 2; gửi mẫu cho các hãng antivirus nếu bị báo nhầm |
 | Windows Firewall chặn | Bộ cài tạo rule; app phát hiện và hướng dẫn khi bị chặn |
-| python-zeroconf nâng TTL bản ghi PTR nhận được lên ≥ 1125 s, nên máy tắt đột ngột không tự biến mất trong thời hạn mvp N1 | Bên nhận tự kiểm còn sống bằng cách resolve lại SRV/TXT/A theo chu kỳ (`protocol.md` mục 8); đo N1 ([benchmark.md](benchmark.md), đo lại trên 2 máy thật ở Giai đoạn 4); kiểm lại hành vi này mỗi khi nâng phiên bản zeroconf |
+| python-zeroconf nâng TTL bản ghi PTR nhận được lên ≥ 1125 s, nên máy tắt đột ngột không tự biến mất trong thời hạn mvp N1 | Bên nhận tự kiểm còn sống bằng cách resolve lại SRV/TXT/A theo chu kỳ (`protocol.md` mục 8); đo N1 ([benchmark.md](benchmark.md), đo lại trên hai máy thật: mục 5.4, D1); kiểm lại hành vi này mỗi khi nâng phiên bản zeroconf |
 | VPN full-tunnel chiếm tuyến ra ngoài LAN: IP của card VPN thành địa chỉ nguồn ưu tiên (`protocol.md` mục 2.1), nên được quảng bá ra LAN dù là card ảo và được `teleport listen` gợi ý | Việc sau: ngoại lệ “luôn giữ địa chỉ nguồn ưu tiên” không áp cho card dạng đường hầm (tun, wg, utun, ppp, ipsec, wintun, wireguard, openvpn, vpn, tailscale, zt…), vẫn áp cho Hyper-V/bridge (External vSwitch) |
 | `NetworkWatch` so cả thứ tự địa chỉ quảng bá: địa chỉ ưu tiên đổi (ví dụ tuyến ra ngoài chuyển từ Wi-Fi sang Ethernet) mà tập địa chỉ giữ nguyên vẫn bị coi là đổi mạng: khởi động lại mDNS và báo `network_changed` cho các kết nối điều khiển, không cần thiết | Việc sau: `NetworkWatch` so tập địa chỉ thay vì dãy có thứ tự (`protocol.md` mục 8) |
 | Từ chối dịch vụ ghép đôi trong LAN (giữ phiên, đổi IP, làm đầy giới hạn kết nối ẩn danh, bắt tay TLS với chuỗi chứng chỉ client lớn) | Chờ tăng dần theo IP, giới hạn số mã hiện ra, hạn chờ `pair_nonce` ngắn (`protocol.md` mục 2.3); phần còn lại chấp nhận theo `protocol.md` mục 5.3. Giới hạn kết nối đang mở đầu một mình không đủ giữ event loop nhanh khi máy lạ gửi chuỗi chứng chỉ client lớn (đã đo, `protocol.md` mục 2.3), nên đã thêm ✅ giới hạn tốc độ bắt tay mới theo IP và ngân sách chung, áp trước `start_tls`, cùng pool ưu tiên cho IP đã xác thực mTLS để thiết bị đã ghép đôi vẫn nối lại được (`teleport.core.admission`, `protocol.md` mục 2.3; giới hạn còn lại ở đó) |
@@ -374,9 +402,10 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | Bộ đệm socket do hệ điều hành tự điều chỉnh có thể lớn, làm tăng phần gửi thừa ở mvp N4 (`protocol.md` mục 4.3) | Đo ở Giai đoạn 3; vượt ngưỡng thì đặt bộ đệm theo từng hệ điều hành, đặt trước `connect` ở phía client |
 | Thư mục nhận nằm trên FAT32 (mỗi file phải nhỏ hơn 4 GiB) mà lượt truyền có file lớn hơn: ghi `.part` thất bại giữa chừng | Giai đoạn 2: bên nhận kiểm hệ file của thư mục nhận trước `accept`; có file không chứa được thì tự `reject` cả lượt, không hỏi người dùng (mvp F4, thông báo ở mvp mục 8). Nhận dạng hệ file ở `teleport.app.storage.volume_info` ([architecture.md](architecture.md) mục 4 “Thư mục nhận”); không nhận ra hệ file thì không giới hạn, lỗi `EFBIG` đi theo lỗi ghi đĩa |
 | Kết nối điều khiển **đi ra** từng dùng `CERT_NONE` và gửi chứng chỉ client trong lúc bắt tay, trước khi so fingerprint của server: máy giả bản ghi mDNS (SRV/A) của một thiết bị tin cậy thu được `device_id` và fingerprint cố định của máy này, kể cả khi máy này đang ẩn | Đã làm ✅: client của kết nối điều khiển và kết nối dữ liệu kiểm chứng chỉ server ngay trong bắt tay bằng đúng chứng chỉ đã lưu (`CERT_REQUIRED`), nên từ chối server sai trước khi gửi chứng chỉ client; lỗi kiểm chứng chỉ đó tính là danh tính không khớp, không phải không kết nối được (`protocol.md` mục 2.2, 8) |
+| `teleport send --address` trỏ nhầm tới **một thiết bị tin cậy khác** (không phải máy ở `--to`): chứng chỉ server không khớp chứng chỉ đã lưu của máy ở `--to`, nên CLI báo danh tính khác, có thể có người giả mạo (mvp mục 8, “Danh tính thiết bị thay đổi”), dù không có ai giả mạo | Chấp nhận ở `v0.1.0-alpha`: kết nối bị từ chối trong bắt tay, không lộ gì và không gửi gì, chỉ là câu báo gây hiểu nhầm. Việc sau: nhận ra chứng chỉ server là của một thiết bị tin cậy khác để báo đúng là địa chỉ đó thuộc máy nào |
 | Lỗ hổng bảo mật (path traversal, dữ liệu độc hại từ máy khác) | Kiểm tra hợp lệ mọi trường nhận được; fuzz test; `SECURITY.md` để nhận báo lỗi |
 | Làm một mình, không có hạn → kéo dài, ôm thêm tính năng | Bám các bản phát hành ở mục 5.1; ý tưởng mới ghi Issues nhãn `after-1.0`; nếu trễ thì cắt theo thứ tự ở mvp mục 14 |
-| Chỉ có 1 máy để thử | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật; N1 đã đo theo cách này ([benchmark.md](benchmark.md) mục 3.3) |
+| Chỉ có 1 máy để thử | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật; N1 đã đo theo cách này ([benchmark.md](benchmark.md) mục 3.3); mọi phép đo cần thiết bị thật dồn vào đợt đo (mục 5.4) |
 
 ---
 

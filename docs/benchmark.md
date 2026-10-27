@@ -3,7 +3,7 @@
 > **Vai trò:** số đo thực tế của các yêu cầu phi chức năng.
 > **Nguồn duy nhất cho:** định nghĩa từng phép đo, môi trường, kết quả từng lần đo và kết luận so với ngưỡng.
 > **Không chứa:** ngưỡng yêu cầu → [mvp.md](mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](ke_hoach.md) mục 5.1.
-> **Cập nhật:** 2026-10-26
+> **Cập nhật:** 2026-10-27
 
 ## 1. Quy ước
 
@@ -19,8 +19,8 @@
 | Mã | Lần đo gần nhất | Kết luận |
 |---|---|---|
 | mvp N1 | 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged trên cùng máy (mục 3.3) | **ĐẠT trên máy ảo bridged**; chưa đo trên hai máy thật (mục 3.4) |
-| mvp N2 | — | chưa đo |
-| mvp N3 | 2026-10-26: đo sơ bộ Giai đoạn 2, hai tiến trình trên một máy Windows 11, loopback, file 64 MiB và 1 GiB (mục 4.3) | **CHƯA ĐỦ DỮ LIỆU**: phần “RSS tăng khi truyền” ĐẠT với 1 GiB và không tăng theo kích thước; 5 GB, 10 GB, lúc rảnh, ổ đích chậm, hai máy thật chưa đo (mục 4.4) |
+| mvp N2 | — | chưa đo; định nghĩa và tiêu chí đã viết trước khi đo (mục 5.1) |
+| mvp N3 | 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), 10 GiB qua card mạng giữa hai máy, lúc rảnh của app có giao diện chưa đo (mục 4.4) |
 | mvp N4 | — | chưa đo |
 | mvp N5 | — | chưa đo |
 | mvp N6 | — | chưa đo |
@@ -142,9 +142,9 @@ Không có lần nào quá hạn hay lỗi đo (0 / 0 ở mọi ca). Ở bốn c
 
 ### 3.4. Việc còn lại
 
-- Đo N1 trên hai máy thật trong cùng mạng Wi-Fi, và trên mạng dây, để bỏ được giới hạn “chuyển gói trong máy” ở mục 3.3: **chưa đo**.
-- Kiểm kịch bản mất gói ở hai lần resolve đầu (protocol mục 8): **chưa đo**.
-- Thêm cặp hệ điều hành khác (macOS, Windows ↔ Windows) theo mvp N10: **chưa đo**.
+- Đo N1 trên hai máy thật trong cùng mạng Wi-Fi, và trên mạng dây, để bỏ được giới hạn “chuyển gói trong máy” ở mục 3.3: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D1).
+- Kiểm kịch bản mất gói ở hai lần resolve đầu (protocol mục 8): **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D1).
+- Thêm cặp hệ điều hành khác (macOS, Windows ↔ Windows) theo mvp N10: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D7).
 - Tìm hiểu hai ghi nhận ở mục 3.3 (thấy lại ≈ 17 s sau khi VM chạy tiếp; địa chỉ card Hyper-V được quảng bá).
 
 ### 3.5. Cách đo lại
@@ -184,6 +184,28 @@ Lệnh trên host viết cho PowerShell (Python trên Windows không tự mở r
 
 Kết luận phần truyền: so RSS tăng (cận trên) với ngưỡng RSS tăng của mvp N3 theo cách hiểu chặt hơn (MB = 10⁶ byte); “không tăng theo kích thước” xét bằng hai cách: RSS tăng của 1 GiB so với 64 MiB, và đỉnh RSS lấy mẫu theo từng phần tư thời gian truyền 1 GiB.
 
+**Phép đo qua CLI thật (từ mục 4.6).** Hai node là hai lệnh `teleport` thật, mỗi bên `TELEPORT_HOME` riêng: bên nhận `teleport receive --yes --json --dir <D> --port <p>`, bên gửi `teleport send <file> --to <mã máy nhận> --address 127.0.0.1:<p> --json`; cả hai để `--host` mặc định nên bật mDNS như khi người dùng chạy. Mốc của mỗi tiến trình là lúc điều phối đọc được dòng JSON tương ứng trên stdout của chính tiến trình đó. Các đại lượng khác bảng trên:
+
+| Đại lượng | Cách lấy (chế độ CLI) |
+|---|---|
+| RSS lúc bắt đầu | Working set đọc ngay khi đọc được dòng `offer` của tiến trình đó (bên gửi: lượt vừa tạo, chưa gửi dữ liệu; bên nhận: vừa nhận `offer`). Ghi kèm `PeakWorkingSetSize` lúc đó (đỉnh lúc bắt đầu) |
+| RSS đỉnh | Giá trị lớn hơn giữa `PeakWorkingSetSize` đọc 0,5 s sau dòng `result` muộn hơn của hai bên và working set lớn nhất trong các mẫu 10 ms; ghi kèm private bytes (mẫu 10 ms và `PeakPagefileUsage`) |
+| Thời gian truyền của một tiến trình | Từ dòng `offer` tới dòng `result` của chính tiến trình đó, chia bốn phần bằng nhau Q1…Q4; max RSS Qk là working set lớn nhất trong các mẫu 10 ms của phần k |
+| CPU | Thời gian CPU (người dùng + nhân) từ `GetProcessTimes`, đọc ở dòng `offer` và dòng `result` |
+| Thông lượng (chỉ tham khảo) | Kích thước file / (dòng `result` − dòng `offer` của bên gửi) |
+
+Tiêu chí phần truyền qua CLI, viết ngày 2026-10-26 **trước khi đo** và không đổi sau:
+
+1. RSS tăng (cận trên) dưới ngưỡng RSS tăng của mvp N3, hiểu MB = 10⁶ byte, ở **mọi** lần đo, cả tiến trình gửi lẫn tiến trình nhận.
+2. Đường RAM phẳng: ở mọi lần và cả hai tiến trình, max RSS Q4 − max RSS Q1 ≤ 4 MiB; và với mỗi tiến trình, trung vị RSS tăng (cận trên) của 10 GiB − trung vị của 1 GiB ≤ dao động của các lần 1 GiB (lớn nhất − nhỏ nhất RSS tăng, cận trên).
+3. Mọi lần: SHA-256 file nhận khớp file nguồn; thư mục `.teleport` trong thư mục nhận không còn file nào sau khi bên nhận thoát; `send` thoát mã 0 và `receive` thoát mã 0 khi dừng bằng Ctrl+C (`CTRL_BREAK_EVENT`).
+
+Số lần: 1 GiB × 10, 5 GiB × 5, 10 GiB × 5, xen thứ tự. **ĐẠT** khi đủ số lần hợp lệ và cả ba tiêu chí đúng ở mọi lần; lần nào sai tiêu chí 3 hoặc quá hạn thì **KHÔNG ĐẠT**; lỗi đo (môi trường hỏng) không tính, đo bù.
+
+**Qua card mạng giữa hai máy** (viết ngày 2026-10-26, trước khi đo). Bên gửi là `teleport send … --address <IP máy nhận>:47474 --json` trên host, đo như bảng trên. Bên nhận là `teleport receive --yes --json --dir <D> --port 47474` trên máy thật thứ hai, đo bằng một script chạy trên chính máy đó, cùng các đại lượng và cùng cách lấy mốc như bảng trên nhưng trên đồng hồ của máy nhận (không so mốc giữa hai máy); hai phía ghép theo `transfer_id`. Mỗi lần đo bật `receive` mới; máy nhận rảnh 3 s sau dòng `receiving` rồi mới báo sẵn sàng, host chờ báo đó mới gửi. Lý do: `receive` mở cổng trước khi in `receiving` và in dồn các sự kiện tới sớm, nên lượt bắt đầu trước mốc sẵn sàng thì mốc `offer` không dùng được; lần như vậy là **lỗi đo**. Tiêu chí 1, 2 (phần Q4 − Q1) và 3 ở trên áp dụng cho từng lần, cả hai phía; phần so 10 GiB với 1 GiB của tiêu chí 2 dùng các lần 1 GiB qua cùng mạng (lượt đo mvp N2, mục 5.1) nếu có, không có thì ghi chưa xét.
+
+**Lúc rảnh qua CLI (chỉ ghi nhận).** `teleport receive --yes --json --dir <D> --port <p>` (mDNS bật như mặc định) chạy 10 phút, một thiết bị tin cậy giữ kết nối điều khiển với nó suốt thời gian đó. Mỗi giây đọc working set, private bytes, và CPU tính theo % một lõi (Δ thời gian CPU / Δ thời gian thực × 100). Không dùng để kết luận phần lúc rảnh của mvp N3: phần đó cần app có giao diện (Giai đoạn 4).
+
 ### 4.2. Phương pháp
 
 - Hai node là **hai tiến trình Python riêng**, mỗi bên một thư mục cấu hình riêng (danh tính riêng), đã tin nhau: `trusted.json` dựng sẵn bằng `TrustStore.add` như fixture `trust_each_other` của test, không qua ghép đôi. Nghe `127.0.0.1` cổng ngẫu nhiên, không mDNS. Bên gửi nối kết nối điều khiển tới bên nhận bằng `Node.connect_hint`; kết nối dữ liệu đi cùng chiều.
@@ -191,9 +213,9 @@ Kết luận phần truyền: so RSS tăng (cận trên) với ngưỡng RSS tă
 - File nguồn là dữ liệu ngẫu nhiên (`os.urandom`), tạo một lần mỗi lượt, đặt cùng ổ với thư mục nhận. Mỗi lần đo bật hai tiến trình mới, truyền một file, so SHA-256 file nhận với file nguồn, xóa file nhận, tắt hai node (`Node.close()`).
 - Lặp 10 vòng; mỗi vòng đo cả 64 MiB và 1 GiB, đổi thứ tự xen kẽ giữa các vòng. Mọi lần chờ có giới hạn (một lần truyền tối đa 600 s, cả lượt tối đa 3 giờ); kết thúc thì tắt mọi tiến trình và xóa thư mục làm việc (file nguồn, thư mục nhận, thư mục cấu hình).
 
-### 4.3. Lần đo 2026-10-26: đo sơ bộ Giai đoạn 2 (P2-6b), loopback trên một máy
+### 4.3. Lần đo 2026-10-26: đo sơ bộ Giai đoạn 2, loopback trên một máy
 
-Lượt `run-20261025T182834Z` (giờ UTC). Mã đo: nhánh `feat/transfer-manager`, commit `5c2ed74` cộng thay đổi chưa commit của P2-6b (`src/teleport/app/node.py` sửa, `src/teleport/app/transfers.py` mới); digest mã nguồn `src/teleport` (SHA-256 trên đường dẫn + nội dung mọi file `.py`) `a7143d814e2b7637582f1c7cd61f7ca8f91ae62647e4e9526675694e030624d4`. Script: `n3_bench.py`, `n3_node.py` (mục 4.5).
+Lượt `run-20261025T182834Z` (giờ UTC). Mã đo: nhánh `feat/transfer-manager`, commit `5c2ed74` cộng thay đổi chưa commit của bước gắn engine truyền file vào `Node` (`src/teleport/app/node.py` sửa, `src/teleport/app/transfers.py` mới); digest mã nguồn `src/teleport` (SHA-256 trên đường dẫn + nội dung mọi file `.py`) `a7143d814e2b7637582f1c7cd61f7ca8f91ae62647e4e9526675694e030624d4`. Script: `n3_bench.py`, `n3_node.py` (mục 4.5).
 
 **Môi trường**
 
@@ -245,7 +267,7 @@ Lần chậm nhất của 64 MiB (18,2 MB/s, 3,70 s) là lần đo đầu tiên 
 
 **Kết luận**
 
-- RSS tăng khi truyền 1 GiB: cận trên lớn nhất 12,6 MiB (tiến trình nhận), 4,2 MiB (tiến trình gửi), dưới ngưỡng của mvp N3 ở cả 10 lần, cả hai tiến trình: **ĐẠT** (tiêu chí sơ bộ của P2-6b).
+- RSS tăng khi truyền 1 GiB: cận trên lớn nhất 12,6 MiB (tiến trình nhận), 4,2 MiB (tiến trình gửi), dưới ngưỡng của mvp N3 ở cả 10 lần, cả hai tiến trình: **ĐẠT** (tiêu chí sơ bộ).
 - Không tăng theo kích thước: RSS tăng của 1 GiB so với 64 MiB khác nhau trong khoảng dao động giữa các lần (gửi: trung vị 3,8 so với 3,9 MiB; nhận: 11,7 so với 11,2 MiB, cỡ 64 MiB tự dao động 6,5–12,0 MiB); trong lúc truyền 1 GiB, đường RSS phẳng (bảng trên, không phần tư nào tăng dần): **ĐẠT** với hai cỡ đã đo.
 - **mvp N3 nói chung: CHƯA ĐỦ DỮ LIỆU**: mvp N3 đòi cả các cỡ lớn hơn và phần lúc rảnh (mục 4.4).
 
@@ -264,10 +286,11 @@ Lần chậm nhất của 64 MiB (18,2 MB/s, 3,70 s) là lần đo đầu tiên 
 
 ### 4.4. Việc còn lại
 
-- File 5 GB và 10 GB theo mvp N3: **chưa đo** (cần khoảng 2 lần dung lượng file trống trên ổ; script có sẵn cỡ `5GiB`, cần thêm cỡ 10 GiB).
-- Phần lúc rảnh của mvp N3 (RAM và CPU của app hoàn chỉnh có mDNS, sau này có giao diện): **chưa đo**. Đo CPU cần tránh bẫy lõi tiết kiệm điện của Windows (EcoQoS).
-- Ổ đích chậm mà RAM không tăng (điều kiện xong Giai đoạn 2, ke_hoach mục 5.2): **chưa đo**; cần ổ chậm thật (USB, thẻ nhớ) hoặc giới hạn tốc độ ghi.
-- Hai máy thật trong mạng LAN, và hệ điều hành khác: **chưa đo**.
+- File 1 GiB, 5 GiB và 10 GiB qua CLI thật trên loopback: đã đo, ĐẠT (mục 4.6).
+- Ổ đích chậm mà RAM không tăng: **chưa đo**; USB có sẵn không dùng được (FAT32, mục 4.8). Cần một USB định dạng NTFS hoặc exFAT, còn ≥ 8 GB trống (định dạng lại USB hiện có thì xóa dữ liệu trên đó: người dùng quyết), hoặc ổ ảo giới hạn tốc độ trong máy ảo. Script đã có `--recv-dir` (mục 4.5). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D4).
+- 10 GiB từ host sang máy thật thứ hai (Windows, Wi-Fi) qua card mạng, RAM hai phía: **chưa đo**; định nghĩa ở mục 4.1 (“Qua card mạng giữa hai máy”), script và hướng dẫn đã có (mục 4.5), cần người dùng chạy trên máy thứ hai. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D3).
+- Phần lúc rảnh của mvp N3: lệnh CLI đã ghi nhận (mục 4.7); app có giao diện **chưa đo** (Giai đoạn 4). Đo CPU cần tránh bẫy lõi tiết kiệm điện của Windows (EcoQoS).
+- Hệ điều hành khác (Linux, macOS làm bên nhận và bên gửi), Python 3.12: **chưa đo**. Hệ điều hành khác thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D7); Python 3.12 đo được trên máy này, không thuộc đợt đo.
 
 ### 4.5. Cách đo lại
 
@@ -279,3 +302,200 @@ $env:PYTHONPATH = "<thư mục repo hoặc worktree>\src"
 ```
 
 `--sizes` nhận `64MiB`, `256MiB`, `1GiB`, `5GiB`; `--settle` (mặc định 3 s) là thời gian rảnh trước khi gửi, `--sample-ms` (mặc định 10) là nhịp lấy mẫu, `--work` là thư mục làm việc (mặc định `work/` cạnh script; bị xóa khi xong, trừ khi có `--keep`). Mỗi lượt ghi vào `results/run-<giờ UTC>/`: `results.jsonl` (môi trường, cấu hình, từng lần đo kèm mọi sự kiện của hai node), `samples-<lần>-<cỡ>.csv` (đường RSS và private bytes theo thời gian), `summary.md`, `summary.json`, và stderr của từng tiến trình node.
+
+**Qua CLI thật (mục 4.6, 4.7).** Cùng thư mục có `n3_cli.py` (chạy lệnh `teleport` thật bằng `python -m teleport`, dùng lại phần đọc bộ nhớ của `n3_bench.py` và `n3_node.py` làm thiết bị giữ kết nối ở chế độ `idle`) và `n3_cli_report.py` (in bảng từ `results.jsonl`). `.venv\Scripts\python.exe` là trình chuyển tiếp: nó bật python gốc làm tiến trình con, nên script tìm tiến trình con đó (Toolhelp32 theo PID cha) và đo nó. Ctrl+C cho `receive` là `CTRL_BREAK_EVENT` gửi tới nhóm tiến trình riêng của lệnh.
+
+```
+$env:PYTHONPATH = "<thư mục repo hoặc worktree>\src"
+$PY = "<repo>\.venv\Scripts\python.exe"
+& $PY n3_cli.py transfer --plan 1GiB:10,5GiB:5,10GiB:5      # mục 4.6
+& $PY n3_cli.py transfer --plan 1GiB:5,5GiB:1 --recv-dir E:\  # thư mục nhận trên ổ khác (ổ chậm), chưa chạy
+& $PY n3_cli.py idle --duration 600                          # mục 4.7
+$env:PYTHONIOENCODING = "utf-8"; & $PY n3_cli_report.py results\cli-transfer-<giờ UTC>\results.jsonl
+```
+
+`transfer` kiểm chỗ trống trước (mặc định ≥ 30 GiB, `--min-free-gib`; trước mỗi lần còn kiểm ≥ cỡ file + 2 GiB trên ổ nhận), tạo file nguồn ngẫu nhiên một lần mỗi cỡ, xếp thứ tự xen kẽ các cỡ, xóa file nhận sau mỗi lần và xóa thư mục làm việc khi xong. Kết quả ở `results/cli-transfer-<giờ UTC>/` và `results/cli-idle-<giờ UTC>/` (`results.jsonl` hoặc `results.json`, mẫu `.csv`, `summary.md`, stderr của từng lệnh).
+
+**Qua card mạng với máy thật thứ hai (mục 4.1, 5.1).** Cùng thư mục có `n3_net_host.py` (host: chạy `teleport send` và `robocopy`, đo RAM bên gửi), `may2_nhan.py` (máy thứ hai, một file độc lập chỉ cần thư viện chuẩn: chạy `teleport receive`, đo RAM bên nhận, SHA-256 file nhận, mã thoát; ghi file sẵn sàng vào share), `may2_chuanbi.ps1` (máy thứ hai: quy tắc tường lửa tạm chỉ cho IP host và hồ sơ Private, share SMB và tài khoản tạm; `-Action close` gỡ hết) và `n3_net_report.py` (ghép hai phía theo `transfer_id`, in bảng). Hướng dẫn từng bước cho cả hai máy, kể cả dọn dẹp: `HUONG-DAN-MAY-THU-HAI.md` trong thư mục đó. Lệnh chính:
+
+```
+# máy thứ hai (c3: bỏ --no-sha; c4: giữ --no-sha)
+& $PY2 may2_nhan.py --home C:\tp-bench\home --dir C:\tp-bench\share\teleport --runs 0 [--no-sha]
+# host
+& $PY n3_net_host.py --home <home đo> --to May2-Bench --address <IP2>:47474 --ready-file \\<IP2>\tpbench\san-sang.txt --plan 10GiB:3
+& $PY n3_net_host.py --home <home đo> --to May2-Bench --address <IP2>:47474 --ready-file \\<IP2>\tpbench\san-sang.txt --smb \\<IP2>\tpbench\smb --plan 1GiB:5,5GiB:5
+& $PY n3_net_report.py --host results\net-<giờ UTC>\results.jsonl --may2 <thư mục may2-…>\results.jsonl
+```
+
+Hai script đã chạy thử trọn vòng trên một máy (hai danh tính tạm, loopback, “SMB” là thư mục cục bộ, file 64 MiB), kể cả nhánh máy nhận chưa sẵn sàng; chưa chạy giữa hai máy thật.
+
+### 4.6. Lần đo 2026-10-26: qua CLI thật, loopback trên một máy
+
+Lượt `cli-transfer-20261026T023051Z` (giờ UTC; lần đo đầu bắt đầu 02:34, lần cuối 02:56; cả lượt 1574 s, gồm 219 s tạo file nguồn). Tiêu chí: mục 4.1, viết trước lượt này.
+
+Mã đo: worktree `p2-8`, nhánh `chore/phase2-close`, commit `ce6dc2f`, `src/` không sửa. Lệnh chạy bằng `python.exe` của `.venv` ở checkout chính, nhưng mã nạp từ `src/` của worktree `p2-8` qua `PYTHONPATH` (đã kiểm `teleport.__file__`), không phải từ bản cài editable. Cây `src` của `ce6dc2f` trùng cây `src` của `513c963` (merge #29 trên `main`): cùng git tree `7977d30`. Digest `src/teleport` (cách tính ở mục 4.3) của worktree: `6c973c2ab839ce60b53153236decbe1bce893c98cd3fa4b89f0e92e920e7c301`; checkout chính cho digest khác chỉ vì kết thúc dòng CRLF ở 4 file (so bỏ CR thì không khác). Kết quả dưới đây áp dụng cho commit khác khi `src/teleport/core`, `trust`, `net`, `app` không đổi so với cây này; đổi các phần đó thì phải đo lại.
+
+**Môi trường**
+
+| | |
+|---|---|
+| Hệ điều hành | Windows 11 Pro, bản 10.0.26300 |
+| Python | 3.14.5 (64 bit, `C:\Python314`, qua `.venv`) |
+| Teleport | `__version__` 0.0.1 |
+| cryptography / zeroconf / ifaddr | 50.0.2 / 0.151.5 / 0.2.0; mDNS bật ở cả hai lệnh (`receiving.discovery: true` ở mọi lần) |
+| CPU | Intel Core i7-12800H, 20 luồng |
+| RAM | 15,7 GiB; còn trống lúc bắt đầu lượt 5,1 GiB |
+| Ổ đĩa | NVMe SSD SSSTC CL1-3D512-Q11 512 GB; file nguồn và thư mục nhận cùng ổ; trống 50,7 GiB trước lượt, 33,6–34,5 GiB trước từng lần đo |
+| Mạng | loopback: `send --address 127.0.0.1:<p>`; hai lệnh vẫn nghe `0.0.0.0` như mặc định |
+| Nguồn điện | cắm sạc, không bật tiết kiệm pin; power plan Balanced, chế độ nguồn của Windows 11 là **Best power efficiency** (overlay `961cc777-2547-4f9d-8174-7d86181b8a7a`), không phải Best performance như kế hoạch đo đề ra; người đo không đổi cài đặt này |
+| Defender | bảo vệ thời gian thực bật (giữ như thực tế) |
+| Tiến trình node | không ở Efficiency mode: `ProcessPowerThrottling` không đặt (ControlMask = StateMask = 0) và lớp ưu tiên Normal ở cả hai tiến trình, mọi lần |
+| Tải khác | lúc bắt đầu lượt không có tiến trình python, pytest hay PyInstaller nào khác; theo phiên điều phối, các agent khác chạy pytest và build PyInstaller trên máy này trong lúc lượt chạy (script không ghi tên tiến trình). CPU cả máy bận (`GetSystemTimes`, trong từng lần đo): 12,1–21,9 %, trong đó hai node Teleport chiếm chừng một lõi (khoảng 5 % của 20 luồng) |
+
+Ảnh hưởng của tải khác: working set là bộ nhớ của chính tiến trình, tải CPU của tiến trình khác không làm nó tăng. Thiếu RAM thì Windows có thể cắt working set, làm số đo *thấp* hơn thật; private bytes (bộ nhớ cam kết, không bị cắt) dùng để đối chiếu: private bytes tăng (cận trên) lớn nhất 13,0 MiB, cùng cỡ RSS tăng lớn nhất 12,6 MiB, nên không thấy dấu hiệu working set bị cắt. Thông lượng thì chịu ảnh hưởng (chỉ tham khảo).
+
+**Kết quả** (20 lần hợp lệ, 0 lần hỏng; thứ tự 1, 5, 10, 1 | 1, 10, 5, 1 | … GiB, xem `results.jsonl`). Đơn vị MiB; mỗi ô là trung vị / p95 / min / max.
+
+| Cỡ file | Số lần | Tiến trình | RSS lúc bắt đầu | RSS đỉnh | RSS tăng, cận trên | RSS tăng, lấy mẫu | Max Q4 − max Q1 | Private bytes lúc bắt đầu | Private bytes tăng, cận trên |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 GiB | 10 | gửi | 52,7 / 53,3 / 52,4 / 53,3 | 57,3 / 58,3 / 56,8 / 58,3 | 4,5 / 5,0 / 4,2 / 5,0 | 4,5 / 5,0 / 4,2 / 5,0 | 0,0 / 0,2 / 0,0 / 0,2 | 33,2 / 34,0 / 32,5 / 34,0 | 4,1 / 4,5 / 3,5 / 4,5 |
+| 1 GiB | 10 | nhận | 54,0 / 54,8 / 53,6 / 54,8 | 65,1 / 66,3 / 64,6 / 66,3 | 11,0 / 12,5 / 10,3 / 12,5 | 9,5 / 11,4 / 8,2 / 11,4 | −0,2 / 2,0 / −2,5 / 2,0 | 34,2 / 34,8 / 33,6 / 34,8 | 11,9 / 13,0 / 11,3 / 13,0 |
+| 5 GiB | 5 | gửi | 52,7 / 53,1 / 52,5 / 53,1 | 57,5 / 57,9 / 57,1 / 57,9 | 4,8 / 4,9 / 4,6 / 4,9 | 4,8 / 4,9 / 4,6 / 4,9 | 0,0 / 0,3 / 0,0 / 0,3 | 33,4 / 33,6 / 33,0 / 33,6 | 4,1 / 4,3 / 4,0 / 4,3 |
+| 5 GiB | 5 | nhận | 54,2 / 54,5 / 54,1 / 54,5 | 65,8 / 66,1 / 64,5 / 66,1 | 11,6 / 11,7 / 10,3 / 11,7 | 10,9 / 11,5 / 9,7 / 11,5 | −0,4 / 0,8 / −2,3 / 0,8 | 34,7 / 34,9 / 34,5 / 34,9 | 12,0 / 12,9 / 11,2 / 12,9 |
+| 10 GiB | 5 | gửi | 52,6 / 52,8 / 52,5 / 52,8 | 57,9 / 58,2 / 57,1 / 58,2 | 5,3 / 5,4 / 4,6 / 5,4 | 5,3 / 5,4 / 4,6 / 5,4 | −0,1 / 0,6 / −0,7 / 0,6 | 33,2 / 33,6 / 33,1 / 33,6 | 4,3 / 4,8 / 4,2 / 4,8 |
+| 10 GiB | 5 | nhận | 54,2 / 54,5 / 53,4 / 54,5 | 66,1 / 66,9 / 65,4 / 66,9 | 12,0 / 12,6 / 11,7 / 12,6 | 11,2 / 11,4 / 10,6 / 11,4 | −0,4 / 0,5 / −1,2 / 0,5 | 34,5 / 35,1 / 33,7 / 35,1 | 12,7 / 13,0 / 11,9 / 13,0 |
+
+Ở cả 40 cặp (20 lần × 2 tiến trình), đỉnh nhân đọc lúc `offer` bằng đúng RSS lúc bắt đầu, và đỉnh nhân sau cùng lớn hơn nó: RSS đỉnh là đỉnh trong lúc truyền, không lẫn đỉnh lúc khởi động. Tiến trình gửi đã thoát trước lúc đọc đỉnh (20/20 lần); đỉnh vẫn đọc được qua handle còn mở và gồm cả lúc đóng node, nên vẫn là cận trên. Nhịp mẫu: trung vị 10,4 ms, khe lớn nhất 64,1 ms (đỉnh nhân không lỡ gì trong các khe đó).
+
+**Đường RSS khi truyền 5 GiB và 10 GiB** (working set lớn nhất trong từng phần tư thời gian truyền của mỗi tiến trình, MiB, theo mẫu)
+
+| Lần | Cỡ | Thời gian gửi (s) | Gửi: Q1 / Q2 / Q3 / Q4 | Nhận: Q1 / Q2 / Q3 / Q4 |
+|---|---|---|---|---|
+| 2 | 5 GiB | 131,4 | 57,9 / 57,9 / 57,9 / 57,9 | 64,8 / 64,7 / 65,5 / 65,6 |
+| 3 | 10 GiB | 172,6 | 57,9 / 57,2 / 57,2 / 57,2 | 64,2 / 63,7 / 63,6 / 63,6 |
+| 6 | 10 GiB | 143,4 | 57,8 / 57,9 / 57,4 / 57,5 | 64,8 / 65,7 / 65,7 / 65,2 |
+| 7 | 5 GiB | 70,9 | 57,5 / 57,4 / 57,5 / 57,5 | 64,1 / 64,6 / 64,5 / 64,5 |
+| 10 | 5 GiB | 52,6 | 57,6 / 57,6 / 57,6 / 57,6 | 65,4 / 64,9 / 65,2 / 63,1 |
+| 11 | 10 GiB | 111,3 | 57,8 / 57,8 / 57,8 / 57,9 | 65,4 / 65,2 / 64,7 / 65,2 |
+| 14 | 10 GiB | 126,2 | 57,0 / 57,1 / 56,9 / 56,9 | 65,1 / 65,1 / 64,5 / 63,9 |
+| 15 | 5 GiB | 56,3 | 57,0 / 57,0 / 57,3 / 57,3 | 63,7 / 63,7 / 64,0 / 63,3 |
+| 18 | 5 GiB | 52,0 | 56,9 / 57,1 / 57,1 / 57,1 | 65,1 / 65,1 / 65,5 / 64,6 |
+| 19 | 10 GiB | 115,3 | 57,6 / 57,6 / 58,2 / 58,2 | 65,4 / 64,6 / 65,1 / 65,0 |
+
+Các lần 1 GiB nằm trong cột “Max Q4 − max Q1” của bảng trên (lớn nhất 2,0 MiB, lần 12, tiến trình nhận).
+
+**Thông lượng loopback và CPU** (chỉ tham khảo, không phải mvp N2; trung vị / p95 / min / max; CPU tính theo % một lõi trong thời gian truyền của tiến trình đó)
+
+| Cỡ file | MB/s (10⁶ byte/s) | Thời gian gửi (s) | CPU gửi (%) | CPU nhận (%) | CPU cả máy bận (%) |
+|---|---|---|---|---|---|
+| 1 GiB | 120,7 / 159,0 / 38,6 / 159,0 | 8,9 / 27,8 / 6,8 / 27,8 | 27,9 / 37,8 / 9,9 / 37,8 | 67,8 / 85,5 / 21,1 / 85,5 | 16,2 / 21,9 / 12,3 / 21,9 |
+| 5 GiB | 95,3 / 103,2 / 40,9 / 103,2 | 56,3 / 131,4 / 52,0 / 131,4 | 28,1 / 31,9 / 13,8 / 31,9 | 62,4 / 81,8 / 34,2 / 81,8 | 16,1 / 21,1 / 12,1 / 21,1 |
+| 10 GiB | 85,1 / 96,5 / 62,2 / 96,5 | 126,2 / 172,6 / 111,3 / 172,6 | 25,8 / 31,1 / 15,6 / 31,1 | 67,6 / 74,5 / 37,4 / 74,5 | 19,0 / 20,2 / 15,0 / 20,2 |
+
+Bốn lần đầu của lượt (lần 1–4, ngay sau khi tạo 16 GiB file nguồn, lúc máy có tải khác) chậm hơn rõ: 38,6–62,2 MB/s; lần đo này không tách nguyên nhân. Thời gian gửi tính từ dòng `offer` tới dòng `result` của `send`, gồm cả `fsync`, đọc lại và kiểm Merkle ở bên nhận.
+
+**Đánh giá theo tiêu chí mục 4.1**
+
+| Tiêu chí | Số đo | Kết quả |
+|---|---|---|
+| 1. RSS tăng (cận trên) dưới ngưỡng mvp N3 mọi lần, hai tiến trình | lớn nhất: gửi 5,4 MiB, nhận 12,6 MiB (13 164 544 byte, lần 6, 10 GiB) | **ĐẠT** (20/20 lần, cả hai tiến trình) |
+| 2a. Max Q4 − max Q1 ≤ 4 MiB mọi lần, hai tiến trình | lớn nhất 2,0 MiB (lần 12, nhận) | **ĐẠT** (40/40) |
+| 2b. Trung vị RSS tăng 10 GiB − trung vị 1 GiB ≤ dao động các lần 1 GiB | gửi: 5,27 − 4,54 = 0,73 MiB ≤ 0,85 MiB (4,18–5,03); nhận: 12,01 − 10,97 = 1,03 MiB ≤ 2,25 MiB (10,29–12,54) | **ĐẠT** (cả hai tiến trình) |
+| 3. SHA-256 khớp, `.teleport` không còn file, `send` và `receive` thoát mã 0 | 20/20 lần: hai bên `result: done`, SHA-256 khớp, `.teleport` trống, mã thoát 0 / 0 (cả trình chuyển tiếp lẫn python con); `receive` dừng sau Ctrl+C trong 0,30–0,40 s | **ĐẠT** |
+
+**Kết luận phần truyền qua CLI trên loopback (1 GiB, 5 GiB, 10 GiB; hai tiến trình): ĐẠT** cả ba tiêu chí, đủ số lần (10 / 5 / 5), không lần nào quá hạn hay hỏng. mvp N3 nói chung vẫn **CHƯA ĐỦ DỮ LIỆU**: còn ổ đích chậm, 10 GiB qua card mạng giữa hai máy, và phần lúc rảnh (mục 4.4).
+
+**Ghi nhận** (không phải kết luận)
+
+- Trung vị RSS tăng của tiến trình gửi nhích dần theo cỡ: 4,54 / 4,81 / 5,27 MiB với 1 / 5 / 10 GiB (nhận: 10,97 / 11,58 / 12,01 MiB). Phần chênh nằm trong tiêu chí 2b nhưng sát biên ở bên gửi (0,73 so với 0,85 MiB); trong từng lần, đường RSS vẫn phẳng (tiêu chí 2a). Lần đo này không tách phần chênh đó đến từ đâu; đo thêm cỡ lớn hơn (ví dụ 20 GiB) sẽ cho biết nó có tiếp tục tăng không: **chưa đo**.
+- Mức RSS lúc bắt đầu qua CLI (gửi khoảng 52,7 MiB, nhận khoảng 54 MiB) cao hơn node API không mDNS ở mục 4.3 (khoảng 49,5 MiB); lệnh CLI có bật mDNS và nạp thêm mã CLI, nhưng lần đo này không tách phần chênh thuộc về đâu. Phần tăng khi truyền gần với mục 4.3.
+
+**Giới hạn của lần đo này**
+
+- Hai tiến trình trên một máy qua loopback; ổ đích là NVMe nhanh, dùng chung với ổ nguồn. Ổ đích chậm và hai máy thật qua card mạng chưa đo (mục 4.4).
+- Máy đang ở chế độ nguồn Best power efficiency và có tải của các agent khác: ảnh hưởng thông lượng và CPU, không thấy ảnh hưởng tới RAM (đối chiếu private bytes ở trên).
+- Một file mỗi lượt, không giới hạn tốc độ; chỉ Windows 11 và Python 3.14.
+
+### 4.7. Lần đo 2026-10-26: lúc rảnh qua CLI, chỉ ghi nhận
+
+Lượt `cli-idle-20261026T025718Z` (giờ UTC, 02:57:26–03:07:32). Cùng mã đo và cách nạp mã như mục 4.6 (commit `ce6dc2f`, `src/` của worktree `p2-8`), cùng máy và chế độ nguồn. Định nghĩa: mục 4.1, “Lúc rảnh qua CLI”. Script: `n3_cli.py idle --duration 600` (mục 4.5).
+
+**Cấu hình**
+
+- `teleport receive --yes --json --dir <D> --port <p>`, `--host` mặc định nên nghe `0.0.0.0` và bật mDNS (quảng bá và duyệt); `receiving` báo `discovery: true`, quảng bá `192.168.1.7` (Wi-Fi). Thư mục nhận trống, không có lượt truyền nào.
+- Thiết bị tin cậy giữ kết nối: một node API (`n3_node.py`, tiến trình riêng, không mDNS, nghe `127.0.0.1`) nối kết nối điều khiển tới `receive` bằng `connect_hint`; `receive` báo `device_connected` lúc 02:57:27 và chỉ báo `device_disconnected` lúc dừng (03:07:32), nên kết nối được giữ suốt 10 phút (có ping giữ kết nối của protocol mục 2.3).
+- Lấy mẫu bắt đầu 5 s sau khi kết nối xong, mỗi giây một mẫu, 600 mẫu. Tiến trình `receive` không ở Efficiency mode (ControlMask = StateMask = 0, ưu tiên Normal).
+- Tải khác: lúc bắt đầu có 5 tiến trình python của các agent khác đang chạy; CPU cả máy bận trung vị 12,7 %, nhỏ nhất 3,1 %, lớn nhất 41,4 % (theo từng giây); trung bình cả 10 phút 14,2 %. RAM trống lúc bắt đầu 5,6 GiB.
+
+**Kết quả** (600 mẫu; trung vị / p95 / min / max)
+
+| Đại lượng | Giá trị |
+|---|---|
+| Working set (MiB) | 55,2 / 55,3 / 53,6 / 55,3; mẫu đầu 54,4, mẫu cuối 54,0; đỉnh nhân lúc cuối 55,3 |
+| Private bytes (MiB) | 35,1 / 35,2 / 34,5 / 35,2; mẫu đầu 34,5, mẫu cuối 34,7 |
+| CPU (% một lõi, từng giây) | 0,0 / 0,0 / 0,0 / 1,6; 580 giây bằng 0, 20 giây bằng 1,6 |
+| CPU trung bình 10 phút (% một lõi) | 0,05 (0,3125 s CPU trong 600,0 s) |
+
+`GetProcessTimes` tăng theo bước 15,625 ms, nên CPU từng giây chỉ nhận các giá trị 0 hoặc bội của 1,5625 %; giá trị trung bình 10 phút mới có ý nghĩa ở mức dưới 1 %. `receive` thoát mã 0 sau Ctrl+C, node giữ kết nối thoát mã 0.
+
+**Ghi nhận, không phải kết luận phần lúc rảnh của mvp N3.** Đây là lệnh CLI không giao diện; phần lúc rảnh của mvp N3 xét cho app có giao diện, đo ở Giai đoạn 4 (cửa chặn ở đó). Working set và private bytes không tăng dần trong 10 phút (mẫu cuối thấp hơn trung vị).
+
+**Giới hạn của lần đo này**
+
+- Một thiết bị tin cậy, nối qua loopback; không có thiết bị nào khác quảng bá mDNS trong mạng mà `receive` thấy được trong lúc đo (không ghi `device_online`), nên chưa đo tải của nhiều thiết bị hay của mạng có nhiều gói mDNS.
+- 10 phút; chưa đo lâu hơn (rò rỉ chậm) hay sau khi đã truyền file.
+- Có tải của các agent khác trên máy; số CPU ở trên là thời gian CPU của riêng tiến trình `receive`, không gồm tải đó.
+
+### 4.8. Lần thử 2026-10-26: ổ đích chậm trên USB, dừng ở bước kiểm ổ
+
+Kế hoạch: `n3_cli.py transfer --plan 1GiB:5,5GiB:1 --recv-dir D:\<thư mục mới>`, file nguồn trên SSD, thư mục nhận trên USB, xét theo ba tiêu chí CLI của mục 4.1. Trước khi ghi, người đo kiểm ổ `D:` (chỉ đọc): phải là ổ USB, hệ file NTFS hoặc exFAT (không FAT32), còn ≥ 8 GB trống. Một điều kiện sai thì dừng, không ghi gì lên ổ.
+
+| Kiểm | Kết quả đọc được | Đạt? |
+|---|---|---|
+| Ổ USB thật | `Get-Disk`: “General UDisk”, BusType USB, 62 914 560 000 byte, MBR; thiết bị `USB\VID_048D&PID_1234`; `Get-Volume`: DriveType Removable | đạt |
+| Hệ file | **FAT32** (cụm 32 KiB) | **không đạt** |
+| Chỗ trống | 36 420 714 496 byte (≈ 33,9 GiB) | đạt |
+| Tình trạng volume (ghi thêm) | HealthStatus Warning, OperationalStatus “Full Repair Needed”; `fsutil dirty query D:` báo volume “Dirty” | — |
+
+Vì hệ file là FAT32, lượt đo **không chạy**; không có file nào được ghi lên `D:`, nên không có gì phải xóa. Ngoài quy tắc đã đặt, FAT32 không chứa được file ≥ 4 GiB nên lần 5 GiB chắc chắn hỏng vì hệ file, không phải vì Teleport. Tốc độ ghi tuần tự của USB: **chưa đo** (cần ghi lên ổ).
+
+| Tiêu chí (mục 4.1) | Kết quả |
+|---|---|
+| 1. RSS tăng (cận trên) dưới ngưỡng mvp N3 | **chưa đo** |
+| 2. Đường RAM phẳng | **chưa đo** |
+| 3. SHA-256 khớp, `.teleport` trống, mã thoát 0 / 0 | **chưa đo** |
+
+**Kết luận phần ổ đích chậm: CHƯA ĐỦ DỮ LIỆU** (chưa đo). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D4).
+
+**Việc cần để đo:** một USB NTFS hoặc exFAT còn ≥ 8 GB trống. Định dạng lại ổ hiện có thành exFAT/NTFS sẽ xóa khoảng 26 GB dữ liệu đang có trên đó: người dùng quyết, người đo không làm. Ổ đang báo cần sửa lỗi, nên sửa lỗi (hoặc định dạng lại) trước. VID/PID `048D:1234` là mã chung, hay gặp ở USB không rõ hãng; nếu dùng lại ổ này, kiểm dung lượng thật trước, vì USB khai khống dung lượng làm hỏng dữ liệu ghi và khiến SHA-256 không khớp mà không do Teleport.
+
+## 5. mvp N2: Hiệu năng so với SMB
+
+### 5.1. Định nghĩa phép đo
+
+Viết ngày 2026-10-26, **trước khi đo**, không đổi sau.
+
+- **Chiều và mạng:** host → máy thật thứ hai trong cùng LAN, ghi rõ loại mạng (dây hay Wi-Fi, băng tần, tốc độ liên kết hai phía). Đích của Teleport và của SMB nằm trên cùng một ổ của máy nhận (hai thư mục con của cùng một share).
+- **Teleport:** `teleport send <file> --to <máy nhận> --address <IP>:47474 --json` tới `teleport receive --yes --json` (danh tính đo đạc riêng, đã ghép đôi). Thời gian = từ ngay trước khi bật lệnh `send` tới lúc host đọc được dòng `result` của nó, trên `time.perf_counter()` của host: gồm khởi động tiến trình, bắt tay TLS, `offer` / `accept`, truyền, `fsync` và kiểm Merkle ở bên nhận. Ghi kèm thời gian từ dòng `offer` tới dòng `result`. Lần nào kết quả khác `done` thì không phải lần hợp lệ của Teleport và được ghi riêng.
+- **SMB:** `robocopy <thư mục nguồn> \<IP>\<share>\<thư mục> <tên file> /R:0 /W:0 /NP /NJH /NJS /NFL /NDL` (mặc định của robocopy, không `/J`, không `/MT`), phiên SMB đã mở sẵn bằng `net use` với tài khoản cục bộ, cấu hình ký / mã hóa SMB mặc định của Windows (ghi lại). Thời gian = từ lúc bật tới lúc robocopy thoát, cùng đồng hồ. Hợp lệ khi mã thoát 1 (đã chép) và cỡ file đích đúng. File đích bị xóa sau mỗi lần.
+- **Cùng một file nguồn** ngẫu nhiên trên SSD của host cho cả hai cách, mỗi cỡ một file. Cỡ 1 GiB và 5 GiB, mỗi cỡ 5 lần mỗi cách, xen thứ tự: mỗi vòng đảo thứ tự cỡ, và đảo Teleport / SMB theo vòng và cỡ; nghỉ 10 s giữa hai lần.
+- **Tỉ số** theo từng cỡ = trung vị thời gian SMB / trung vị thời gian Teleport (bằng tốc độ Teleport / tốc độ SMB). Ghi kèm tỉ số từng cặp (lần Teleport thứ k với lần SMB thứ k cùng cỡ): nhỏ nhất, trung vị, lớn nhất.
+- **Kết luận:** **ĐẠT** khi đủ 5 lần hợp lệ mỗi cách mỗi cỡ, không lần Teleport nào kết thúc khác `done` vì lỗi của Teleport, và tỉ số của cả hai cỡ ≥ ngưỡng của mvp N2; **KHÔNG ĐẠT** khi tỉ số của một cỡ dưới ngưỡng; còn lại **CHƯA ĐỦ DỮ LIỆU**. Kết luận chỉ có giá trị cho loại mạng đã đo.
+
+**Nguồn sai số đã biết**
+
+| Nguồn | Xử lý |
+|---|---|
+| Bộ đệm ghi của máy chủ SMB: robocopy có thể thoát khi dữ liệu còn trong bộ đệm của máy nhận, còn Teleport chờ `fsync` | Không bù; ghi là thiên lệch bất lợi cho Teleport |
+| File nguồn nằm trong bộ đệm file của host | Như nhau cho hai cách (cùng file, xen thứ tự) |
+| Thời gian khởi động tiến trình Python của `send` | Tính vào Teleport (người dùng cũng chịu); ghi kèm thời gian `offer` → `result` |
+| Tốc độ Wi-Fi dao động theo thời gian | Xen thứ tự; ghi `netsh wlan show interfaces` hai phía trước mỗi lần |
+
+### 5.2. Phương pháp
+
+Script `n3_net_host.py` (host), `may2_nhan.py` và `may2_chuanbi.ps1` (máy thứ hai), `n3_net_report.py` (tổng hợp); lệnh và hướng dẫn ở mục 4.5. Mỗi lần Teleport cũng đo RAM hai phía theo mục 4.1 (“Qua card mạng giữa hai máy”), nên các lần 1 GiB và 5 GiB của lượt này là thêm số đo mvp N3 qua mạng. Trên máy thứ hai, script không băm file nhận trong lượt này, để máy rảnh giữa các lần.
+
+### 5.3. Việc còn lại
+
+- Lượt đầu (host Windows 11 → máy thứ hai Windows 10/11, **cả hai qua Wi-Fi**): **chưa đo**; chờ người dùng chuẩn bị máy thứ hai theo hướng dẫn. Giới hạn đã biết trước: qua Wi-Fi, mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách, nên tỉ số đo được không cho biết Teleport có theo kịp SMB trên mạng dây gigabit (khi CPU và Python mới là giới hạn). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2, D3).
+- Mạng dây gigabit giữa hai máy thật: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2).

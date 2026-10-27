@@ -29,7 +29,7 @@ CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check 
 
 Mức kiểm tra kiểu của từng gói nằm ở `[tool.mypy]` trong `pyproject.toml`. Lỗi kiểu thì sửa chú thích; chỉ dùng `# type: ignore[<mã lỗi>]` kèm lý do khi không còn cách nào khác.
 
-Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (`tests/net/test_discovery.py`, `tests/app/test_node_mdns.py`).
+Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (`tests/net/test_discovery.py`, `tests/app/test_node_mdns.py`, `tests/test_cli.py`).
 
 ## Build thử bản CLI (Windows)
 Bản CLI được đóng gói thử bằng PyInstaller để sớm phát hiện lỗi đóng gói và antivirus. Đây chưa phải bản phát hành: không gắn tag, không tạo GitHub Release. File build nằm trong `packaging/pyinstaller/`: `teleport-cli.spec` (cấu hình build), `third_party.py` (kiểm giấy phép, sinh file giấy phép) và `requirements.txt` (công cụ build, ghim phiên bản).
@@ -53,14 +53,22 @@ $env:TELEPORT_FROZEN_EXE = "$PWD\dist\teleport\teleport.exe"
 pytest -m frozen
 ```
 
-Build trên GitHub: workflow `build-cli` ([.github/workflows/build-cli.yml](../.github/workflows/build-cli.yml)) chỉ chạy tay (`workflow_dispatch`). Vào tab Actions → “Build CLI (thử)” → Run workflow, chọn nhánh `main` (hoặc `gh workflow run build-cli.yml --ref main`); nút chạy tay chỉ hiện khi file workflow đã có trên nhánh mặc định. Workflow build bằng đúng lệnh trên, chạy `pytest -m frozen` trên exe, rồi tải lên artifact `teleport-cli-<phiên bản>-<sha7>-windows`. Artifact là bản tạm, tự xóa sau thời hạn `retention-days` của workflow. File zip tải về chứa thẳng `teleport.exe`, `_internal\` và ba file giấy phép, không có thư mục bọc ngoài, nên hãy giải nén vào một thư mục riêng (ví dụ `C:\tp\teleport\`).
+Build trên GitHub: workflow `build-cli` ([.github/workflows/build-cli.yml](../.github/workflows/build-cli.yml)) chỉ chạy tay (`workflow_dispatch`). Vào tab Actions → “Build CLI (thử)” → Run workflow, chọn nhánh `main` hoặc tag `vX.Y.Z` (hoặc `gh workflow run build-cli.yml --ref main`, `--ref vX.Y.Z`); nút chạy tay chỉ hiện khi file workflow đã có trên nhánh mặc định. Workflow build bằng đúng lệnh trên, chạy `pytest -m frozen` trên exe, rồi tải lên artifact `teleport-cli-<phiên bản>-<sha7>-windows`. Artifact là bản tạm, tự xóa sau thời hạn `retention-days` của workflow. File zip tải về chứa thẳng `teleport.exe`, `_internal\` và ba file giấy phép, không có thư mục bọc ngoài, nên hãy giải nén vào một thư mục riêng (ví dụ `C:\tp\teleport\`).
 
 ## Phát hành
-1. Chuyển mục `[Unreleased]` trong `CHANGELOG.md` thành `[X.Y.Z] - YYYY-MM-DD`.
+1. Chuyển mục `[Unreleased]` trong `CHANGELOG.md` thành `[X.Y.Z] - YYYY-MM-DD`, đúng số của tag (bản thử nghiệm: `[0.1.0-alpha] - YYYY-MM-DD`).
 2. Cập nhật `__version__` trong `src/teleport/__init__.py`. Đây là nguồn duy nhất của số phiên bản; `pyproject.toml` tự đọc từ đó.
-3. Gắn tag `vX.Y.Z` lên `main` rồi push tag.
+3. Sửa các câu nói về hiện trạng nếu bản này làm chúng đổi: khung NOTE và bảng Lộ trình của `README.md`, mục “Phiên bản được hỗ trợ” của [SECURITY.md](SECURITY.md).
+4. Gắn tag `vX.Y.Z` lên `main` rồi push tag.
 
 Đánh số theo [SemVer](https://semver.org/lang/vi/). Phiên bản giao thức mạng đánh số riêng, độc lập với phiên bản app.
+
+Bản thử nghiệm (alpha, beta) ghi số ở hai dạng, và đây là nơi duy nhất ghi luật này:
+- Tag và tiêu đề trong `CHANGELOG.md` theo SemVer: `v0.1.0-alpha`, `[0.1.0-alpha]`.
+- `__version__` theo PEP 440, dạng mà công cụ đóng gói Python tự chuẩn hóa về: `0.1.0a0` (beta: `0.3.0b0`). `teleport --version` và tên artifact build thử hiện dạng này.
+- `__version__` có thể đã mang số của bản sắp gắn tag; bản build thử từ `main` khi chưa có tag cũng hiện số đó, phân biệt bằng `<sha7>`.
+
+Bản thử nghiệm trước `v1.0.0` chỉ gắn tag, không tạo GitHub Release. Bản build thử là artifact của workflow `build-cli` chạy tay trên tag hay `main` (mục “Build thử bản CLI”), và tự xóa sau thời hạn của workflow. Bộ cài build tự động khi gắn tag và GitHub Release có từ Giai đoạn 6 ([ke_hoach.md](ke_hoach.md) mục 5.2).
 
 ## Thay đổi giao thức
 Mọi thay đổi định dạng trên dây phải cập nhật [protocol.md](protocol.md) trong cùng Pull Request. Thay đổi không tương thích thì tăng số phiên bản giao thức.

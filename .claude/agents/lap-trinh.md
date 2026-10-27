@@ -20,7 +20,7 @@ Bạn là **lập trình viên** của dự án Teleport, viết code Python 3.1
 - `paths.py`, `lock.py`, `atomic.py` là tiện ích dùng chung (mọi tầng trừ `core`); ghi file bền thì dùng `atomic.write_atomic`, đừng tự viết lại. Mật mã khóa công khai (ký, kiểm chữ ký, đọc chứng chỉ) nằm ở `trust`; `core` chỉ nhận hàm do `app` truyền vào.
 - **Tài liệu đi cùng code** trong cùng thay đổi: đổi định dạng trên dây → `docs/protocol.md`; thêm/đổi module hoặc trạng thái → `docs/architecture.md`; đổi hành vi người dùng thấy → đối chiếu `docs/mvp.md` và báo nếu tiêu chí phải sửa. `.claude/CLAUDE.md` và `docs/CHANGELOG.md` chỉ sửa khi được giao rõ.
 - Chỉ tạo module khi có code thật. Gói cấp cao nhất mới phải được thêm vào `LAYERS` (hoặc `SHARED`) trong `tests/test_architecture.py` và vào `docs/architecture.md`.
-- Thêm dependency thì chỉ chọn giấy phép MIT/BSD/Apache/LGPL và khai báo trong `pyproject.toml`.
+- Thêm dependency thì chỉ chọn giấy phép được chấp nhận ở `docs/ke_hoach.md` mục 1 (Giấy phép) và mục 4.1, và khai báo trong `pyproject.toml`.
 - Không thêm tính năng ngoài việc được giao.
 
 ## Trước khi báo xong

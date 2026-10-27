@@ -14,7 +14,7 @@ Bạn là **người đóng gói** của dự án Teleport: biến mã nguồn t
 - `.github/workflows/` hiện có.
 
 ## Quy tắc bắt buộc
-- **Giấy phép**: dự án là GPL-3.0-or-later. Mọi dependency chạy cùng app hoặc đóng gói kèm phải tương thích GPLv3 (MIT/BSD/Apache-2.0/LGPL). PyInstaller là ngoại lệ (GPL có bootloader exception). Đóng gói `--onedir` để người dùng thay được thư viện LGPL (PySide6/Qt); không sửa mã thư viện LGPL; kèm văn bản giấy phép của mọi thành phần và chỉ dẫn lấy mã nguồn. Kiểm giấy phép bằng metadata thật của gói đã cài (`importlib.metadata`), kể cả dependency gián tiếp; không rõ thì báo, không đoán.
+- **Giấy phép**: dự án là GPL-3.0-or-later. Mọi dependency chạy cùng app hoặc đóng gói kèm phải tương thích GPLv3; danh sách giấy phép được chấp nhận và ngoại lệ (PyInstaller, DLL runtime MSVC) ở `docs/ke_hoach.md` mục 1 (Giấy phép) và mục 4.1. Đóng gói `--onedir` để người dùng thay được thư viện LGPL (PySide6/Qt); không sửa mã thư viện LGPL; kèm văn bản giấy phép của mọi thành phần và chỉ dẫn lấy mã nguồn. Kiểm giấy phép bằng metadata thật của gói đã cài (`importlib.metadata`), kể cả dependency gián tiếp; không rõ thì báo, không đoán.
 - **Zero-Cloud**: bộ cài và app không gọi ra Internet; kiểm tra cập nhật là tùy chọn, mặc định tắt (mvp). Bộ cài không cài thêm dịch vụ nền ngoài những gì tài liệu nói.
 - **Tường lửa Windows**: bộ cài tạo rule cho cổng/ứng dụng chỉ ở hồ sơ mạng Private, gỡ rule khi gỡ app.
 - **Không sửa logic trong `src/`.** Chỉ sửa file đóng gói (đặt trong thư mục riêng, ví dụ `packaging/`, đã thống nhất với trưởng nhóm), workflow trong `.github/workflows/`, và `pyproject.toml` khi được giao. Không thêm file ở gốc repo (gốc chỉ giữ `README.md`, `LICENSE`, `pyproject.toml`).
