@@ -192,7 +192,7 @@ class TransferResult(StrEnum):
     UNPAIRED = "unpaired"  # máy này hủy ghép đôi khi lượt chưa kết thúc
     CANCELLED_USER = "cancelled_user"
     SOURCE_CHANGED = "source_changed"
-    EXPIRED = "expired"  # mất kết nối điều khiển quá `RECONNECT_GRACE`
+    EXPIRED = "expired"  # mất kết nối điều khiển quá `RECONNECT_GRACE` (24 h, protocol §6.2)
     DISK_FAILED = "disk_failed"
     TEMP_EXISTS = "temp_exists"  # thư mục tạm của lượt còn sót lại từ lần trước
     CORRUPT = "corrupt"  # khối sai quá trần, hoặc đọc lại / Merkle sai quá trần

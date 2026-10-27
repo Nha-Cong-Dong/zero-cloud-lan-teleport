@@ -21,6 +21,9 @@ không import được conftest: lớp phụ trợ (`CliRun`, `Proc`, mDNS giả
   `fast` riêng, ghi đè bản này trong `tests/net/`.
 - `fast_cli`, `cli_no_leaks`, `cli_runs` (`CliRun`), `procs` (`Proc`), `cli_mdns` (trước ở
   `tests/test_cli.py`). `cli_runs` chạy được `listen`, `pair`, `send`, `receive` trong tiến trình.
+- `tcp_proxy` (`TcpProxy`, P3-0; dùng tiếp ở P3-5): proxy TCP chèn giữa hai node để cắt RST, chặn
+  (ngừng chuyển byte, không đóng) rồi RST, hay chặn rồi đi tiếp; bộ đệm nhỏ có backpressure. Test của
+  chính proxy: `tests/test_tcp_proxy.py`.
 
 Module `teleport.*` ngoài `core.admission` chỉ được import **bên trong** fixture, để một module đang
 viết dở chỉ làm đỏ các test dùng tới nó.
@@ -35,6 +38,8 @@ import json
 import os
 import queue
 import signal
+import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -547,3 +552,289 @@ def cli_mdns(monkeypatch):
     monkeypatch.setattr(node_mod, "MdnsDiscovery", lambda **kw: CliFakeMdns(ctl, **kw))
     monkeypatch.setattr(net_discovery, "local_ipv4_addresses", lambda: ("192.0.2.5",))
     return ctl
+
+
+# =================================================================================================
+# Proxy TCP chèn giữa hai node (P3-0, dùng tiếp ở P3-5): cắt RST, chặn, chặn rồi đi tiếp
+# =================================================================================================
+
+
+def _rst_writer(writer: asyncio.StreamWriter | None) -> None:
+    """Đóng kiểu RST, để máy kia thấy reset chứ không phải EOF: `SO_LINGER` = (1, 0), `abort()`, rồi
+    đóng ngay socket thật. Bẫy: trên Windows, transport proactor gọi `shutdown(SHUT_RDWR)` (gửi FIN)
+    trước khi đóng, nên máy kia đọc được EOF trước reset; đóng socket thật trước lúc đó (fileno thành
+    -1) thì transport bỏ qua `shutdown`."""
+    if writer is None:
+        return
+    tsock = writer.get_extra_info("socket")
+    raw = getattr(tsock, "_sock", tsock)  # `asyncio.trsock.TransportSocket` bọc socket thật
+    if raw is not None:
+        with contextlib.suppress(OSError, ValueError):
+            raw.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    with contextlib.suppress(Exception):
+        writer.transport.abort()
+    if raw is not None:
+        with contextlib.suppress(OSError):
+            raw.close()
+
+
+class _ProxyPair:
+    """Một kết nối qua proxy: phía client (đã accept) và phía server (chỉ nối khi không bị chặn)."""
+
+    def __init__(self, c_writer: asyncio.StreamWriter) -> None:
+        self.c_writer = c_writer
+        self.s_writer: asyncio.StreamWriter | None = None
+        self.task: asyncio.Task | None = None
+
+    def rst(self) -> None:
+        _rst_writer(self.c_writer)
+        _rst_writer(self.s_writer)
+
+
+class TcpProxy:
+    """Proxy TCP `host:port` → `target_host:target_port`, chạy event loop riêng trong một thread daemon,
+    nên dùng được cả từ test async (node trong tiến trình) lẫn test đồng bộ (node là tiến trình con).
+
+    Điều khiển (gọi từ thread nào cũng được, có hiệu lực khi trả về):
+
+    - `block()`: mạng “tắt” mà không đóng gì: ngừng chuyển byte cả hai chiều (đoạn đang cầm, tối đa
+      `chunk` byte, được giữ lại), không đọc thêm, không chuyển EOF hay reset. Khi `block()` trả về,
+      proxy không ghi thêm byte nào; phần đã ghi trước đó (≤ một đoạn mỗi chiều mỗi kết nối trong bộ
+      đệm transport, cộng bộ đệm hệ điều hành) vẫn có thể tới nơi. Kết nối mới vẫn được
+      accept ở mức TCP nhưng **không** được nối tới server cho tới khi hết chặn (bắt tay TLS treo như
+      khi mạng mất thật).
+    - `resume()`: chuyển tiếp lại, đúng thứ tự, không mất hay lặp byte (“chặn rồi đi tiếp”). Phía nào
+      đã tự đóng trong lúc chặn thì proxy thấy lỗi khi chuyển tiếp lại và RST phía kia.
+    - `rst()`: cắt **mọi** kết nối hiện có bằng RST cả hai phía (kể cả kết nối đang treo vì chặn);
+      kết nối mới sau đó chạy bình thường nếu không còn chặn. “Chặn rồi RST” = `block()`, chờ, `rst()`
+      rồi `resume()` (test async: `await outage(seconds, end="rst")`).
+
+    Bộ đệm nhỏ, có backpressure, để proxy không làm phình lượng byte mất khi cắt (byte nằm trong proxy
+    lúc RST là byte bên gửi phải gửi lại): mỗi chiều đọc tối đa `chunk` byte, ghi xong phải `drain()`
+    (ngưỡng ghi của transport = `chunk`) mới đọc tiếp; `SO_RCVBUF`/`SO_SNDBUF` của socket proxy đặt
+    `sock_buf` byte. EOF một chiều chuyển bằng `write_eof()` (đóng nửa, như TCP thật); lỗi socket ở
+    một phía → RST phía kia.
+
+    Đếm: `accepted` (kết nối vào), `forwarded["c2s"]` / `forwarded["s2c"]` (byte đã chuyển), `resets`
+    (kết nối bị `rst()` cắt), `live()` (kết nối đang mở).
+    """
+
+    def __init__(
+        self,
+        target_port: int,
+        *,
+        target_host: str = "127.0.0.1",
+        host: str = "127.0.0.1",
+        chunk: int = 64 * 1024,
+        sock_buf: int = 64 * 1024,
+    ) -> None:
+        self.target = (target_host, target_port)
+        self.host = host
+        self.chunk = chunk
+        self.sock_buf = sock_buf
+        self.port = 0
+        self.accepted = 0
+        self.resets = 0
+        self.forwarded = {"c2s": 0, "s2c": 0}
+        self._blocked = False
+        self._pairs: set[_ProxyPair] = set()
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._loop.run_forever, name="test-tcp-proxy", daemon=True)
+        self._server: asyncio.Server | None = None
+        self._resumed: asyncio.Event | None = None
+        self._closed = False
+
+    # ---- vòng đời ----
+
+    def start(self) -> TcpProxy:
+        self._thread.start()
+        self._run(self._start())
+        return self
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        with contextlib.suppress(Exception):
+            self._run(self._close(), timeout=10)
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(10)
+        if not self._thread.is_alive():
+            self._loop.close()
+
+    def _run(self, coro, timeout: float = 5.0):
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
+
+    def _sock(self) -> socket.socket:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        for opt in (socket.SO_RCVBUF, socket.SO_SNDBUF):
+            with contextlib.suppress(OSError):
+                s.setsockopt(socket.SOL_SOCKET, opt, self.sock_buf)
+        return s
+
+    async def _start(self) -> None:
+        self._resumed = asyncio.Event()
+        self._resumed.set()
+        lsock = self._sock()
+        lsock.bind((self.host, 0))
+        lsock.listen(64)
+        lsock.setblocking(False)
+        self.port = lsock.getsockname()[1]
+        self._server = await asyncio.start_server(self._handle, sock=lsock, limit=self.chunk)
+
+    async def _close(self) -> None:
+        if self._server is not None:
+            self._server.close()
+        self._blocked = False
+        if self._resumed is not None:
+            self._resumed.set()
+        tasks = self._rst_all(count=False)
+        if tasks:
+            await asyncio.wait(tasks, timeout=5)
+        if self._server is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._server.wait_closed(), 5)
+
+    # ---- điều khiển ----
+
+    def block(self) -> None:
+        """Chặn. Trả về sau khi loop proxy đã qua một vòng: từ đó proxy không ghi thêm byte nào ra
+        bất kỳ phía nào. Byte proxy đã ghi trước đó vẫn có thể tới nơi: tối đa một đoạn (`chunk`) mỗi
+        chiều mỗi kết nối còn trong bộ đệm transport, cộng phần đã nằm trong bộ đệm hệ điều hành."""
+        self._blocked = True  # pump đọc cờ ở mỗi đoạn; sự kiện được xóa trong loop proxy (`_gate`)
+        if self._thread.is_alive() and threading.current_thread() is not self._thread and not self._closed:
+            # Đồng bộ với loop proxy: bước nào đang chạy (đã qua `_gate`, sắp ghi) xong trước khi trả về.
+            self._run(asyncio.sleep(0))
+
+    def resume(self) -> None:
+        self._blocked = False  # đặt cờ trước rồi mới đánh thức (xem `_gate`)
+        if self._resumed is not None and not self._closed:
+            self._loop.call_soon_threadsafe(self._resumed.set)
+
+    @property
+    def blocked(self) -> bool:
+        return self._blocked
+
+    def rst(self) -> int:
+        """Cắt RST mọi kết nối hiện có (chờ tới khi đã cắt xong); trả số kết nối bị cắt."""
+
+        async def go() -> int:
+            n = len(self._pairs)
+            tasks = self._rst_all(count=True)
+            if tasks:
+                await asyncio.wait(tasks, timeout=5)
+            return n
+
+        return self._run(go())
+
+    async def outage(self, seconds: float, *, end: str = "rst") -> None:
+        """Chặn `seconds` giây (thời gian thật) rồi `end`: `"rst"` (cắt RST, kết nối mới đi bình thường)
+        hoặc `"resume"` (đi tiếp). Cho test async; test đồng bộ tự gọi `block()`, `time.sleep`, …"""
+        if end not in ("rst", "resume"):
+            raise ValueError(end)
+        self.block()
+        await asyncio.sleep(seconds)
+        if end == "rst":
+            self.rst()
+        self.resume()
+
+    def live(self) -> int:
+        return len(self._pairs)
+
+    # ---- trong loop proxy ----
+
+    def _rst_all(self, *, count: bool) -> list[asyncio.Task]:
+        tasks = []
+        for pair in list(self._pairs):
+            pair.rst()
+            if count:
+                self.resets += 1
+            if pair.task is not None and not pair.task.done():
+                pair.task.cancel()
+                tasks.append(pair.task)
+        return tasks
+
+    async def _gate(self) -> None:
+        while self._blocked:
+            assert self._resumed is not None
+            # Xóa trong loop proxy rồi mới chờ: `resume()` đặt cờ trước khi hẹn `set()`, nên không mất
+            # lần đánh thức, và không quay vòng bận khi sự kiện còn bật từ lần trước.
+            self._resumed.clear()
+            if not self._blocked:
+                break
+            await self._resumed.wait()
+
+    async def _pump(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter, direction: str) -> None:
+        while True:
+            await self._gate()
+            data = await src.read(self.chunk)
+            if not data:
+                await self._gate()  # EOF cũng không đi qua khi mạng “tắt”
+                if dst.can_write_eof():
+                    dst.write_eof()
+                return
+            await self._gate()  # bị chặn trong lúc đọc: giữ đoạn này (≤ chunk) tới khi hết chặn
+            dst.write(data)
+            self.forwarded[direction] += len(data)
+            await dst.drain()
+
+    async def _handle(self, c_reader: asyncio.StreamReader, c_writer: asyncio.StreamWriter) -> None:
+        self.accepted += 1
+        pair = _ProxyPair(c_writer)
+        pair.task = asyncio.current_task()
+        self._pairs.add(pair)
+        c_writer.transport.set_write_buffer_limits(high=self.chunk)
+        pumps: list[asyncio.Task] = []
+        clean = False
+        try:
+            await self._gate()  # mạng đang “tắt”: chưa nối tới server
+            sock = self._sock()
+            sock.setblocking(False)
+            try:
+                await asyncio.get_running_loop().sock_connect(sock, self.target)
+                s_reader, s_writer = await asyncio.open_connection(sock=sock, limit=self.chunk)
+            except OSError:
+                sock.close()
+                return
+            except BaseException:
+                sock.close()
+                raise
+            pair.s_writer = s_writer
+            s_writer.transport.set_write_buffer_limits(high=self.chunk)
+            pumps = [
+                asyncio.create_task(self._pump(c_reader, s_writer, "c2s")),
+                asyncio.create_task(self._pump(s_reader, c_writer, "s2c")),
+            ]
+            await asyncio.wait(pumps, return_when=asyncio.FIRST_EXCEPTION)
+            clean = all(t.done() and not t.cancelled() and t.exception() is None for t in pumps)
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            for t in pumps:
+                t.cancel()
+            if pumps:
+                await asyncio.gather(*pumps, return_exceptions=True)
+            if clean:  # hai chiều đều EOF: đóng thường
+                for w in (c_writer, pair.s_writer):
+                    if w is not None:
+                        with contextlib.suppress(Exception):
+                            w.close()
+            else:
+                pair.rst()
+            self._pairs.discard(pair)
+
+
+@pytest.fixture
+def tcp_proxy():
+    """`tcp_proxy(target_port, **kw)` → `TcpProxy` đã chạy (cổng ở `.port`); mọi proxy được đóng khi
+    test xong. Dùng được trong test async lẫn đồng bộ (proxy chạy event loop riêng)."""
+    made: list[TcpProxy] = []
+
+    def make(target_port: int, **kwargs) -> TcpProxy:
+        proxy = TcpProxy(target_port, **kwargs).start()
+        made.append(proxy)
+        return proxy
+
+    yield make
+    for proxy in reversed(made):
+        proxy.close()

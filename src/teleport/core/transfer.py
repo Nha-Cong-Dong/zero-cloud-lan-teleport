@@ -79,6 +79,12 @@ Bẫy:
   (có thể là của lượt khác mang cùng `transfer_id`).
 - Hạn chót chỉ được xử lý trong `tick` (hạn ≤ `now`); lời gọi khác không tự xử lý, kể cả khi
   đã quá hạn. TTL của bảng nhớ được kiểm lười lúc tra.
+- Chờ nối lại (protocol §6.2): còn lượt với một máy mà không có kết nối điều khiển (mất kết nối,
+  hoặc `send` khi chưa có) thì ghi mốc `offline_since`; `tick` lúc `now ≥ offline_since +
+  RECONNECT_GRACE` (24 h) kết thúc mọi lượt với máy đó bằng `expired`, không sớm hơn. `control_up`
+  hay hết lượt thì xóa mốc, nên mỗi lần mất kết nối được chờ đủ hạn từ đầu. Hạn đo bằng đồng hồ
+  monotonic của node (`loop.time()`): trên Linux/macOS đồng hồ này không chạy khi máy ngủ, nên
+  tính theo giờ thật lượt có thể chờ lâu hơn 24 h. `REMEMBER_TTL` dài hơn hạn này (comment ở hằng).
 - Trên đường đi của từng khối (`block_received`, `synced`, `block_read`) và khi tính trạng thái
   không gọi `Bitfield.count()`/`all_set()`/`missing()`: dùng bộ đếm O(1). O(n) chỉ một lần mỗi
   `resume` (file 4 TiB có 4 194 304 khối).
@@ -127,8 +133,13 @@ DATA_OPEN_WAIT = 10.0  # protocol §4.1: chờ `resume` khớp `data_open`
 DATA_RETRY_BASE = 1.0  # protocol §4.1 → lịch §6.2: 1, 2, 4… giây
 DATA_RETRY_MAX = 30.0  # … tối đa 30 s
 DATA_FAIL_REPORT_AFTER = 3  # protocol §4.1: báo tường lửa sau 3 lần mở thất bại liên tiếp
-RECONNECT_GRACE = 30.0  # ke_hoach §5.2 Giai đoạn 2 (A2): chờ nối lại kết nối điều khiển
-REMEMBER_TTL = 86400.0  # protocol §6.3: giữ bia mộ / `reject` / lượt đã xong 24 h
+RECONNECT_GRACE = 86400.0  # protocol §6.2: chờ nối lại kết nối điều khiển tối đa 24 h
+# protocol §6.3: giữ bia mộ / `reject` / lượt đã xong. Phải dài hơn hạn nối lại của máy kia: máy
+# đó tính hạn từ lúc nó phát hiện mất kết nối (muộn hơn máy này tới `keepalive.DEAD_AFTER`) và
+# còn thử lại theo lịch §6.2, nên bằng đúng `RECONNECT_GRACE` thì `offer` gửi lại sát mốc bị coi
+# là mới (`receive --yes` nhận lại lượt đã hủy). Một giờ dư phủ cả hai độ lệch. Vá
+# `RECONNECT_GRACE` bằng monkeypatch không đổi hằng này (tính lúc import).
+REMEMBER_TTL = RECONNECT_GRACE + 3600.0
 MAX_REMEMBERED = 1024  # protocol §6.3: số mục nhớ tối đa mỗi thiết bị
 
 _MAX_RETRY_EXPONENT = 20  # chặn số mũ của lịch thử lại, như `core.links`
@@ -909,7 +920,7 @@ class TransferEngine:
         return self._finish()
 
     def control_lost(self, device_id: str, control_id: int, now: float) -> list[TransferAction]:
-        """Kết nối điều khiển `control_id` đã mất; là kết nối hiện tại thì bắt đầu chờ nối lại (A2)."""
+        """Kết nối điều khiển `control_id` đã mất; là kết nối hiện tại thì chờ nối lại (protocol §6.2)."""
         validate_device_id(device_id)
         _check_id("control_id", control_id)
         now = self._check_now(now)
@@ -1815,7 +1826,7 @@ class TransferEngine:
         self._end(t, Outcome.CANCELLED, reason=reason, by_peer=True)
 
     def _expire(self, t: _Transfer, now: float) -> None:
-        """Hết hạn chờ nối lại (A2): bia mộ `expired`, gửi `cancel` ở lần `control_up` sau."""
+        """Hết hạn chờ nối lại (protocol §6.2): bia mộ `expired`, gửi `cancel` ở lần `control_up` sau."""
         self._tombstone(self._peers[t.key.device_id], t, CancelReason.EXPIRED, True, now)
         self._end(t, Outcome.CANCELLED, reason=CancelReason.EXPIRED, advance=False)
 
