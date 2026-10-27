@@ -1393,7 +1393,9 @@ def test_decode_tombstones_skips_only_the_bad_entry(why: str, bad: Any):
         ("thiếu entries", _dumps({"version": 1})),
         ("entries không phải mảng", _tomb({"a": 1})),
         ("gốc là mảng", _dumps([_entry()])),
-        ("lồng sâu", b'{"version": 1, "entries": ' + b"[" * 100_000 + b"]" * 100_000 + b"}"),
+        # Lồng ở `version`, không ở `entries`: từ Python 3.14 `json` giải được mảng lồng 100 000 tầng
+        # thay vì báo RecursionError, và trong `entries` nó chỉ là một mục hỏng bị bỏ riêng.
+        ("lồng sâu", b'{"version": ' + b"[" * 100_000 + b"]" * 100_000 + b', "entries": []}'),
         ("số khổng lồ", b'{"version": 1' + b"0" * 5000 + b', "entries": []}'),
     ],
     ids=_case_id,
