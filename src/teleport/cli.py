@@ -40,13 +40,13 @@ thiết bị. `pair <tên>` duyệt mDNS (không quảng bá, không tự kết 
 máy; `pair <ip>` không dùng mDNS. mDNS bật khi nghe trên mọi địa chỉ (mặc định), hoặc
 khi có cờ ẩn `--mdns-interface` (test).
 
-`listen` và `pair` chạy một node trong tiến trình này (tới v0.3) và hỏi người dùng qua
-stdin. stdin được đọc bằng `os.read` trong một thread daemon, không dùng `input()`:
-thread bị chặn trong bộ đệm của `sys.stdin` có thể làm Python báo “Fatal Python error”
-lúc thoát. Mỗi dòng mang mốc `time.perf_counter()` lúc đọc; dòng gõ trước lúc hiện mã
-bị bỏ, nên gõ sẵn `c` không xác nhận được một mã chưa thấy. Dùng `perf_counter` chứ
-không dùng `monotonic`: trên Windows `monotonic` chỉ chính xác tới ~15,6 ms, nên một
-dòng đọc trước lúc hiện mã vài ms vẫn có thể mang cùng mốc.
+`listen`, `pair`, `send` và `receive` chạy một node trong tiến trình này (tới v0.3); `listen`,
+`pair` và `receive` (không `--yes`) hỏi người dùng qua stdin. stdin được đọc bằng `os.read`
+trong một thread daemon, không dùng `input()`: thread bị chặn trong bộ đệm của `sys.stdin` có
+thể làm Python báo “Fatal Python error” lúc thoát. Mỗi dòng mang mốc `time.perf_counter()` lúc
+đọc; dòng gõ trước lúc hiện mã bị bỏ, nên gõ sẵn `c` không xác nhận được một mã chưa thấy. Dùng
+`perf_counter` chứ không dùng `monotonic`: trên Windows `monotonic` chỉ chính xác tới ~15,6 ms,
+nên một dòng đọc trước lúc hiện mã vài ms vẫn có thể mang cùng mốc.
 
 Lời hỏi ghép đôi theo bố cục docs/mvp.md mục 7.2: dòng mã chỉ gồm nhãn cố định và mã, đứng
 trước mọi chữ do máy kia đặt; tên máy kia (chưa xác thực) hiện qua `display_name`, trong “…”.
@@ -54,8 +54,8 @@ trước mọi chữ do máy kia đặt; tên máy kia (chưa xác thực) hiệ
 `pair` bị Ctrl+C khi kết quả đã có (ví dụ lúc đang đóng kết nối sau khi đã ghép đôi) thì
 vẫn báo đúng kết quả đó và trả mã thoát theo nó; chỉ khi chưa có kết quả mới báo đã hủy.
 
-`--json`: `listen` / `pair` in JSON Lines (mỗi sự kiện một dòng), các lệnh khác in một
-object. Khóa tiếng Anh, có `time` UTC.
+`--json`: `listen`, `pair`, `send` và `receive` in JSON Lines (mỗi sự kiện một dòng), các lệnh
+khác in một object. Khóa tiếng Anh, có `time` UTC.
 """
 
 from __future__ import annotations

@@ -9,7 +9,7 @@ Bạn là **người đo đạc** của dự án Teleport. Bạn trả lời câ
 
 ## Đọc trước
 - `docs/mvp.md`: định nghĩa và ngưỡng của từng yêu cầu N1–N12. Đây là **nguồn duy nhất** của các con số; trong `docs/benchmark.md` hãy tham chiếu theo mã (`mvp N1`), đừng chép lại ngưỡng.
-- `docs/ke_hoach.md` mục 7 (kiểm thử, benchmark) và mục 8 (rủi ro), `docs/protocol.md` phần liên quan (ví dụ mục 8 cho mDNS), `docs/architecture.md`.
+- `docs/ke_hoach.md` mục 5.4 (đợt đo trên thiết bị thật, mã D1…: ghi mã D vào kết quả), mục 7 (kiểm thử, benchmark) và mục 8 (rủi ro), `docs/protocol.md` phần liên quan (ví dụ mục 8 cho mDNS), `docs/architecture.md`.
 - `docs/benchmark.md` nếu đã có: giữ cấu trúc và các lần đo cũ, thêm lần đo mới.
 - Code của phần được đo, để biết cần đo từ sự kiện nào tới sự kiện nào.
 

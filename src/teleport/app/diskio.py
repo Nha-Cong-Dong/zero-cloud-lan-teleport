@@ -14,7 +14,7 @@ dùng `asyncio.to_thread`. Khác `asyncio.to_thread`:
   tới muộn.
 - Hủy task đang `await` không dừng việc đã bắt đầu; việc chưa bắt đầu thì `run` bỏ nó.
 - `busy` và `wait_idle` đếm phía loop: một việc tính là bận từ lúc thread nhận nó tới khi loop
-  đã giao kết quả (`done` True, các bên chờ `settled()` đã được đánh thức). Dù vậy bên gọi (P2-6b)
+  đã giao kết quả (`done` True, các bên chờ `settled()` đã được đánh thức). Dù vậy bên gọi (`app.transfers`)
   vẫn phải `await settled()` của mọi việc mình giữ và chạy xong việc dọn của nó trước
   `shutdown()`: `wait_idle` chỉ nói thread đã rảnh, không nói việc dọn phía loop đã xong.
 

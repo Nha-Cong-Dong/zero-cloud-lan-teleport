@@ -16,10 +16,11 @@
 </div>
 
 > [!NOTE]
-> **Teleport đang được phát triển và chưa có bản phát hành.**
-> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khung message điều khiển, khám phá thiết bị qua mDNS, ghép đôi qua mạng bằng mã 6 số có nonce cam kết, kho thiết bị tin cậy, tự giữ kết nối điều khiển tới thiết bị đã ghép đôi, khóa một node mỗi thư mục cấu hình, các lệnh `teleport identity` / `list` / `listen` / `pair` / `unpair`.
-> - **Tiếp theo:** gửi file lớn qua dòng lệnh (`v0.1.0-alpha`). Thời gian tìm thấy nhau (mvp N1) đã đạt khi đo trên máy ảo ([docs/benchmark.md](docs/benchmark.md)).
-> - **Chưa có:** gửi file, nối lại, clipboard, giao diện.
+> **Teleport đang được phát triển. Bản thử nghiệm đầu tiên sẽ là `v0.1.0-alpha` (chưa phát hành): chỉ có dòng lệnh, chưa có bộ cài.**
+> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khám phá thiết bị qua mDNS, ghép đôi qua mạng bằng mã 6 số có nonce cam kết, tự giữ kết nối tới thiết bị đã ghép đôi, các lệnh `teleport identity` / `list` / `listen` / `pair` / `unpair`. Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi (`teleport send` / `receive`): hỏi trước khi nhận, kiểm tra toàn vẹn từng khối và cả file, không bao giờ ghi đè file sẵn có, mất kết nối ngắn thì tự nối lại khi cả hai bên vẫn đang chạy. Số đo thực tế: [docs/benchmark.md](docs/benchmark.md).
+> - **Tiếp theo:** tự nối lại sau khi rớt mạng lâu hay tắt app, chỉ gửi phần còn thiếu (`v0.2.0-alpha`).
+> - **Chưa có:** nối lại sau khi tắt app, clipboard, giao diện.
+> - **Chưa đo trên thiết bị thật:** số đo hiện có là trên một máy (loopback) và máy ảo; đo qua mạng thật giữa hai máy, với ổ đích chậm và trên các hệ điều hành khác sẽ làm một đợt sau, và các bản thử nghiệm được phát hành sau đợt đo đó ([docs/ke_hoach.md](docs/ke_hoach.md) mục 5.4).
 >
 > Các tính năng bên dưới là **mục tiêu của v1.0**. Tiến độ xem ở [Lộ trình](#lộ-trình); lịch sử thay đổi ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
@@ -147,9 +148,9 @@ Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 | Phiên bản | Nội dung |
 |---|---|
 | — | ✅ Nền tảng: khung dự án, CI 3 hệ điều hành, danh tính thiết bị, TLS 1.3 + mTLS |
-| — | ✅ Khám phá thiết bị & ghép đôi: mDNS, ghép đôi qua mạng, tự giữ kết nối, lệnh `teleport list` / `listen` / `pair` / `unpair`; đạt mvp N1 |
-| `v0.1.0-alpha` | Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi |
-| `v0.2.0-alpha` | Kiểm tra toàn vẹn, tự nối lại |
+| — | ✅ Khám phá thiết bị & ghép đôi: mDNS, ghép đôi qua mạng, tự giữ kết nối, lệnh `teleport list` / `listen` / `pair` / `unpair`; đạt mvp N1 (đo trên máy ảo bridged) |
+| `v0.1.0-alpha` | ⏳ Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi: lệnh `teleport send` / `receive` (code xong; phát hành sau đợt đo trên thiết bị thật) |
+| `v0.2.0-alpha` | Tự nối lại cả sau khi rớt mạng lâu, tắt app nhận hay khởi động lại máy nhận; chỉ gửi phần còn thiếu |
 | `v0.3.0-beta` | Giao diện radar, khay hệ thống, Tiếng Việt / English |
 | `v0.4.0-beta` | Đồng bộ clipboard |
 | `v1.0.0` | Bộ cài cho Windows, macOS, Linux; tài liệu người dùng |
@@ -201,7 +202,7 @@ $env:TELEPORT_HOME = ".teleport-a"; teleport identity
 $env:TELEPORT_HOME = ".teleport-b"; teleport identity
 ```
 
-Thư mục cấu hình mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Library/Application Support/Teleport`, Linux `~/.config/teleport`.
+Thư mục cấu hình mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Library/Application Support/Teleport`, Linux `$XDG_CONFIG_HOME/teleport` (mặc định `~/.config/teleport`).
 
 ## Kiến trúc
 
@@ -229,7 +230,8 @@ src/teleport/
   ui/                        # sẽ được thêm khi có code thật
   cli.py  __main__.py        # lệnh `teleport`
   paths.py  lock.py  atomic.py  # thư mục cấu hình, khóa file, ghi file nguyên tử
-tests/                       # chia theo tầng: core/, trust/, net/, app/ + test phân tầng
+tests/                       # chia theo tầng: core/, trust/, net/, app/ + test phân tầng;
+                             #   packaging/: test đóng gói (giấy phép, test khói bản build)
 docs/                      # toàn bộ tài liệu
 ```
 
@@ -245,7 +247,7 @@ Mục lục, thuật ngữ và quy tắc đồng bộ tài liệu: [docs/README.
 | [docs/mvp.md](docs/mvp.md) | Làm gì: phạm vi v1.0, tính năng F1–F12 kèm tiêu chí chấp nhận, yêu cầu N1–N12 |
 | [docs/ke_hoach.md](docs/ke_hoach.md) | Làm thế nào, khi nào: thiết kế kỹ thuật, lộ trình và trạng thái, kiểm thử, rủi ro |
 | [docs/architecture.md](docs/architecture.md) | Phân tầng, mô hình tiến trình, bản đồ module và trạng thái, dữ liệu trên đĩa |
-| [docs/protocol.md](docs/protocol.md) | Đặc tả giao thức trên dây (phiên bản 1, dự thảo) |
+| [docs/protocol.md](docs/protocol.md) | Đặc tả giao thức trên dây (phiên bản 1) |
 | [docs/benchmark.md](docs/benchmark.md) | Số đo thực tế của các yêu cầu chất lượng |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Nhánh, commit, kiểm tra trước Pull Request, phát hành |
 | [docs/SECURITY.md](docs/SECURITY.md) | Cách báo lỗ hổng bảo mật |
@@ -280,7 +282,7 @@ Thường gặp ở Wi-Fi công cộng bật cô lập thiết bị, hoặc khi 
 <details>
 <summary><b>Nếu tôi tắt máy giữa chừng thì sao?</b></summary>
 
-Phần đã nhận vẫn nằm an toàn trên đĩa. Nếu máy **nhận** tắt hoặc khởi động lại, mở lại Teleport trên máy đó thì lượt truyền tự tiếp tục từ chỗ còn thiếu, miễn là Teleport trên máy gửi vẫn chạy. Nếu máy **gửi** tắt Teleport (hoặc tắt máy), lượt gửi bị hủy: máy nhận báo và dọn file tạm, bạn chỉ cần gửi lại. Nếu file gốc đã bị sửa trong lúc đó, Teleport sẽ báo và yêu cầu gửi lại.
+Các file đã nhận xong vẫn giữ nguyên. Từ `v0.2.0-alpha`, nếu máy **nhận** tắt hoặc khởi động lại, mở lại Teleport trên máy đó thì lượt truyền tự tiếp tục từ chỗ còn thiếu, miễn là Teleport trên máy gửi vẫn chạy. Ở `v0.1.0-alpha` thì chưa: hãy gửi lại thành một lượt mới, và file đang nhận dở được gửi lại từ đầu. Phần nhận dở nằm lại trong thư mục ẩn `.teleport` của thư mục nhận; có thể xóa thư mục đó khi không chạy `teleport receive`. Nếu máy **gửi** tắt Teleport (hoặc tắt máy), lượt gửi bị hủy: máy nhận báo và dọn file tạm, bạn chỉ cần gửi lại. Nếu file gốc đã bị sửa trong lúc đó, Teleport sẽ báo và yêu cầu gửi lại.
 </details>
 
 <details>

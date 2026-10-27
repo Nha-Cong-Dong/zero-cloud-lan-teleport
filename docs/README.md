@@ -12,14 +12,14 @@ Mọi tài liệu của dự án nằm trong thư mục này (trừ `.claude/CLA
 |---|---|---|---|
 | [y_tuong.md](y_tuong.md) | **Vì sao** làm, cho ai, hướng tới đâu? | Nỗi đau, giá trị cốt lõi, trải nghiệm mong muốn, **nguyên tắc sản phẩm**, tầm nhìn sau v1.0 | Đổi định hướng sản phẩm |
 | [mvp.md](mvp.md) | Làm **cái gì**, đạt chuẩn nào? | Phạm vi; tính năng & tiêu chí chấp nhận **F1–F12**; yêu cầu phi chức năng **N1–N12**; thông báo lỗi; tiêu chí phát hành | Đổi phạm vi, tính năng hoặc con số chất lượng |
-| [ke_hoach.md](ke_hoach.md) | Làm **thế nào**, **khi nào**, đang tới đâu? | Quyết định đã chốt; thiết kế kỹ thuật; lộ trình và **trạng thái giai đoạn**; kiểm thử; rủi ro kỹ thuật; việc cần chốt | Đổi thiết kế, xong một giai đoạn, chốt một câu hỏi |
+| [ke_hoach.md](ke_hoach.md) | Làm **thế nào**, **khi nào**, đang tới đâu? | Quyết định đã chốt; thiết kế kỹ thuật; lộ trình và **trạng thái giai đoạn**; danh sách phép đo của đợt đo trên thiết bị thật (mã D1…); kiểm thử; rủi ro kỹ thuật; việc cần chốt | Đổi thiết kế, xong một giai đoạn, chốt một câu hỏi |
 
 ### Kỹ thuật & quy trình
 
 | Tài liệu | Trả lời câu hỏi | Nguồn duy nhất cho | Cập nhật khi |
 |---|---|---|---|
 | [architecture.md](architecture.md) | Code chia thế nào, module nào đã có? | Phân tầng, mô hình tiến trình, **trạng thái từng module**, dữ liệu trên đĩa, quy ước viết test (marker, fixture, chỗ test thay được) | Thêm hoặc xong một module |
-| [protocol.md](protocol.md) | Byte nào đi trên dây? | Đặc tả giao thức (phiên bản 1, dự thảo) | Mọi thay đổi định dạng trên dây, trong cùng Pull Request |
+| [protocol.md](protocol.md) | Byte nào đi trên dây? | Đặc tả giao thức (phiên bản 1) | Mọi thay đổi định dạng trên dây, trong cùng Pull Request |
 | [benchmark.md](benchmark.md) | Đo thực tế thì có đạt không? | Số đo thực tế của mvp N1–N12: định nghĩa phép đo, môi trường, kết quả, kết luận | Mỗi lần đo |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Làm việc với repo thế nào? | Nhánh, commit, kiểm tra trước Pull Request, phát hành | Đổi quy trình |
 | [SECURITY.md](SECURITY.md) | Báo lỗ hổng ở đâu? | Cách báo lỗ hổng, phạm vi | Đổi chính sách |
@@ -53,6 +53,7 @@ Mọi tài liệu của dự án nằm trong thư mục này (trừ `.claude/CLA
 | **Kết nối ghép đôi / điều khiển / dữ liệu** | Ba loại kết nối trên cùng một cổng (`protocol.md` mục 2). |
 | **Node** | Một tiến trình Teleport đang chạy, gắn với một thư mục cấu hình. |
 | **Cô lập thiết bị** (AP isolation) | Wi-Fi chặn các máy trong mạng nói chuyện với nhau. |
+| **Đợt đo trên thiết bị thật** | Các phép đo cần máy thật thứ hai hay thiết bị khác (USB, điểm phát Wi-Fi, máy macOS), dồn lại làm một lượt khi có thiết bị; danh sách và mã D1… ở [ke_hoach.md](ke_hoach.md) mục 5.4. |
 
 ## 4. Quy ước viết
 
@@ -61,4 +62,4 @@ Mọi tài liệu của dự án nằm trong thư mục này (trừ `.claude/CLA
 - Đơn vị: `MiB` cho kích thước kỹ thuật (khối, giới hạn message); `MB`/`GB` cho con số hướng tới người dùng.
 - Phiên bản app: `v0.1.0-alpha`, `v1.0.0` (SemVer); phiên bản giao thức đánh số riêng.
 - Tham chiếu chéo: `mvp F6`, `mvp N4`, `mvp mục 8`, `ke_hoach mục 3.4`.
-- Trạng thái: ✅ đã xong · ⏳ đang làm · ⬜ chưa làm.
+- Trạng thái: ✅ đã xong · ⏳ đang làm · ⬜ chưa làm. Riêng giai đoạn ở [ke_hoach.md](ke_hoach.md) mục 5.1 có thêm ⏸: phần “Xong khi” kiểm được ngay đã đạt, chỉ còn phép đo thuộc đợt đo trên thiết bị thật (ke_hoach mục 5.4). Riêng `protocol.md` dùng ✅ đã cài đặt · 📝 đã đặc tả, chưa cài đặt.

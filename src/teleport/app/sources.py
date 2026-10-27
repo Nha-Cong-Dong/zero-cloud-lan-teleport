@@ -15,12 +15,12 @@ trên event loop. Lỗi I/O thật → `OSError` nguyên trạng, trừ `prepare
 Log và tên file (mvp N9): thông điệp của các ngoại lệ module này tự tạo (`SourceError`,
 `SourceChanged`, ValueError, TypeError) không chứa tên hay đường dẫn file; đường dẫn chỉ nằm ở
 thuộc tính `SourceError.path`. `OSError` bay ra nguyên trạng (kể cả `SourceError.__cause__`) thì
-**có thể** mang đường dẫn trong `str(e)` / `e.filename`, nên bên gọi (P2-6b) chỉ log
+**có thể** mang đường dẫn trong `str(e)` / `e.filename`, nên bên gọi (`app.transfers`) chỉ log
 `type(e).__name__` và `errno`, không log `str(e)` hay traceback, kể cả ở mức DEBUG.
 
 Bẫy:
 - `SourceReader` không thread-safe: không gọi `close()` song song với `read_block()`/`open()`
-  đang chạy ở thread khác. Bên gọi (P2-6b) chỉ đóng sau `DiskJob.settled()` của mọi việc đọc.
+  đang chạy ở thread khác. Bên gọi (`app.transfers`) chỉ đóng sau `DiskJob.settled()` của mọi việc đọc.
 - Windows: trong lúc một `SourceReader` mở (một kết nối dữ liệu đang gửi), file nguồn không xóa
   hay đổi tên được. Chấp nhận: handle chỉ mở trong lúc một `SendBlocks` chạy.
 - POSIX: mở một FIFO để đọc sẽ chặn tới khi có bên ghi, nên mọi lần mở dùng `O_NONBLOCK`, kiểm

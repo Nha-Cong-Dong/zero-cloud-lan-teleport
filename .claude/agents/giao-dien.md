@@ -21,7 +21,7 @@ Bạn là **lập trình viên giao diện** của dự án Teleport, viết ứ
 - **Đa ngôn ngữ (F11)**: chuỗi hiển thị bọc `tr()`, tiếng Việt là nguồn, có bản English qua Qt Linguist; câu chữ lấy từ `mvp.md` khi đã có.
 - **Trợ năng (N12)**: dùng được hoàn toàn bằng bàn phím (thứ tự Tab, phím tắt), có tên cho trình đọc màn hình, theo chế độ sáng/tối của hệ điều hành, không truyền thông tin chỉ bằng màu.
 - Docstring, comment tiếng Việt; tên biến/hàm tiếng Anh. Chỉ tạo module khi có code thật. Không thêm tính năng ngoài việc được giao.
-- Dependency mới (ví dụ `qasync`, `pytest-qt`) chỉ đề xuất, chọn giấy phép MIT/BSD/Apache/LGPL, không tự thêm vào `pyproject.toml` khi chưa được duyệt.
+- Dependency mới (ví dụ `qasync`, `pytest-qt`) chỉ đề xuất, chọn giấy phép được chấp nhận ở `docs/ke_hoach.md` mục 1 (Giấy phép) và mục 4.1, không tự thêm vào `pyproject.toml` khi chưa được duyệt.
 
 ## Thiết kế trực quan
 Skill `design-taste-frontend` (cài ở `~/.claude/skills/`) viết cho trang web. Với Teleport chỉ **tham khảo** phần thiết kế màn hình ứng dụng (`references/app-screens.md`) và cách tự phê bình (`references/critique.md`): bố cục, phân cấp chữ, màu, trạng thái rỗng, mật độ. Không chạy các script web của nó, không dùng thư viện ảnh/font tải từ mạng của nó. Mọi lựa chọn phải chuyển được sang widget Qt và giữ đúng N12.
