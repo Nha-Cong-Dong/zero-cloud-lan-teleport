@@ -16,6 +16,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+import teleport.core.keepalive as keepalive
 import teleport.core.ratelimit as ratelimit
 import teleport.core.transfer as transfer
 from teleport.core.bitfield import Bitfield
@@ -469,9 +470,8 @@ def test_events_for_own_device_are_ignored(tx):
 # ---- Hằng số khớp tài liệu, core không I/O ----------------------------------------------------------
 
 
-def test_constants_match_protocol_and_plan_text():
+def test_constants_match_protocol_text():
     protocol = (ROOT / "docs" / "protocol.md").read_text(encoding="utf-8")
-    plan = (ROOT / "docs" / "ke_hoach.md").read_text(encoding="utf-8")
     assert f"**Mỗi {transfer.SYNC_EVERY} khối**" in protocol
     assert f"tối đa **{transfer.MAX_QUEUED_OFFERS} `offer` chưa trả lời**" in protocol
     assert f"tối đa **{transfer.MAX_PENDING_DATA} kết nối dữ liệu đang chờ `resume`**" in protocol
@@ -481,9 +481,22 @@ def test_constants_match_protocol_and_plan_text():
     assert f"tối đa **{transfer.MAX_REMEMBERED}** mục" in protocol
     assert f"sau {transfer.DATA_FAIL_REPORT_AFTER} lần thất bại liên tiếp" in protocol
     assert f"lịch {transfer.DATA_RETRY_BASE:g} s, 2 s, 4 s… tối đa {transfer.DATA_RETRY_MAX:g} s" in protocol
-    assert transfer.REMEMBER_TTL == 24 * 3600 and "trong 24 giờ" in protocol
+    # soat-code P3-0: thời hạn nhớ (bia mộ, `reject`, lượt đã xong) ghi một chỗ ở gạch “Bia mộ” của
+    # protocol §6.3, tính bằng giờ; phải dài hơn hạn nối lại của máy kia cộng độ lệch keepalive.
+    sec63 = protocol.split("### 6.3.", 1)[1].split("\n## ", 1)[0]
+    ttl_hours = transfer.REMEMBER_TTL / 3600
+    assert ttl_hours == int(ttl_hours)
+    assert f"trong **{ttl_hours:g} giờ**" in sec63
+    assert transfer.REMEMBER_TTL > transfer.RECONNECT_GRACE + keepalive.DEAD_AFTER
+    assert "trong 24 giờ, bằng thời hạn bên kia còn thử nối lại" not in sec63
     assert f"từng đoạn {ratelimit.CHUNK_SIZE // 1024} KiB" in protocol
-    assert f"chờ nối lại tối đa {transfer.RECONNECT_GRACE:g} s" in plan
+    # spec-p3 P3-0: hạn chờ nối lại là 24 giờ, ghi ở protocol §6.2; gạch “Giai đoạn 2 dừng sớm hơn” đã bỏ.
+    # (ke_hoach §5.2 Giai đoạn 2 còn ghi 30 s như lịch sử của giai đoạn đó, không phải giá trị hiện tại.)
+    sec62 = protocol.split("### 6.2.", 1)[1].split("### 6.3.", 1)[0]
+    assert transfer.RECONNECT_GRACE == 24 * 3600
+    assert "trong tối đa 24 giờ" in sec62
+    assert "dừng sớm hơn 24 giờ" not in sec62
+    assert "thời hạn chờ nối lại ngắn hơn" not in sec62
 
 
 def test_architecture_lists_transfer_and_ratelimit_as_done():

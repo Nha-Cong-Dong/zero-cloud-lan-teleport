@@ -1027,8 +1027,9 @@ def decode_tombstones(data: bytes | bytearray | memoryview) -> list[TombstoneRec
 
     Cả file hỏng → StateError: vượt `MAX_TOMBSTONE_FILE` byte (kiểm trước khi giải mã), không
     phải JSON UTF-8 (chấp nhận BOM), không phải object, `version` khác 1, `entries` không phải
-    mảng. Mục thiếu hay sai trường bị bỏ. Không lọc thiết bị còn tin cậy, tuổi < 24 giờ hay số
-    mục mỗi thiết bị: việc của `app` và `core.transfer`. Trường lạ bị bỏ qua.
+    mảng. Mục thiếu hay sai trường bị bỏ. Không lọc thiết bị còn tin cậy, tuổi (hạn nhớ
+    `core.transfer.REMEMBER_TTL`) hay số mục mỗi thiết bị: việc của `app` và `core.transfer`.
+    Trường lạ bị bỏ qua.
     """
     obj = _load_json(data, MAX_TOMBSTONE_FILE, "tombstones.json")
     if not isinstance(obj, dict):

@@ -23,7 +23,6 @@ from teleport.core.messages import (
 )
 from teleport.core.transfer import (
     MAX_REMEMBERED,
-    RECONNECT_GRACE,
     REMEMBER_TTL,
     AskUser,
     CheckSpace,
@@ -41,6 +40,15 @@ from teleport.core.transfer import (
 )
 
 EPS = 1e-6
+# Giá trị thật của hằng, đọc lúc import (trước mọi monkeypatch): spec-p3 P3-0, 24 giờ.
+REAL_GRACE = transfer.RECONNECT_GRACE
+
+
+@pytest.fixture(params=[REAL_GRACE, 2.0], ids=["grace-that", "grace-va-nho"])
+def grace(request, monkeypatch):
+    """Chạy ca hết hạn với `RECONNECT_GRACE` thật và với hằng vá nhỏ (engine đọc hằng lúc dùng)."""
+    monkeypatch.setattr(transfer, "RECONNECT_GRACE", request.param)
+    return request.param
 
 
 # ---- AC-6: đồng bộ lại ---------------------------------------------------------------------------
@@ -206,7 +214,7 @@ def test_control_lost_of_old_connection_is_ignored(tx):
 
 
 @pytest.mark.parametrize("side", ["recv", "send"])
-def test_control_lost_reports_reconnecting_and_quick_return_resyncs(tx, side):
+def test_control_lost_reports_reconnecting_and_quick_return_resyncs(tx, side, grace):
     d = tx.Recv(tx.entries(1)) if side == "recv" else tx.Send(tx.entries(1))
     if side == "recv":
         d.accept()
@@ -214,14 +222,14 @@ def test_control_lost_reports_reconnecting_and_quick_return_resyncs(tx, side):
         d.start()
     acts = d.lost(now=50.0)
     assert tx.statuses(acts, d.key) == [TransferStatus.RECONNECTING]
-    assert tx.ended(d.tick(now=50.0 + RECONNECT_GRACE - 1)) == []
-    acts = d.up(cid=2, now=50.0 + RECONNECT_GRACE - 1)
+    assert tx.ended(d.tick(now=50.0 + grace - 1)) == []
+    acts = d.up(cid=2, now=50.0 + grace - 1)
     assert tx.statuses(acts, d.key) == [TransferStatus.TRANSFERRING]
     # Hạn A2 đã bỏ. Bên nhận là server chỉ còn hạn chờ `data_open` của `resume` thiếu khối vừa gửi
     # (protocol §4.1: “Server là bên nhận… trong thời hạn đó”).
     expected = d.now + transfer.DATA_OPEN_WAIT if side == "recv" else None
     assert d.e.next_wakeup() == expected
-    assert tx.ended(d.tick(now=50.0 + RECONNECT_GRACE)) == []
+    assert tx.ended(d.tick(now=50.0 + grace)) == []
     if side == "recv":
         acts = d.finish_all()
     else:
@@ -230,14 +238,14 @@ def test_control_lost_reports_reconnecting_and_quick_return_resyncs(tx, side):
     assert tx.one(tx.ended(acts), object).outcome == Outcome.DONE
 
 
-def test_running_receive_expires_exactly_at_grace(tx):
+def test_running_receive_expires_exactly_at_grace(tx, grace):
     r = tx.Recv(tx.entries(2))
     r.accept()
     r.lost(now=100.0)
-    assert r.e.next_wakeup() == 100.0 + RECONNECT_GRACE
-    assert tx.ended(r.tick(now=100.0 + RECONNECT_GRACE - EPS)) == []
+    assert r.e.next_wakeup() == 100.0 + grace
+    assert tx.ended(r.tick(now=100.0 + grace - EPS)) == []
     assert r.e.info(r.key) is not None
-    acts = r.tick(now=100.0 + RECONNECT_GRACE)
+    acts = r.tick(now=100.0 + grace)
     end = tx.one(tx.ended(acts), object)
     assert (end.key, end.outcome, end.reason, end.by_peer, end.detail) == (
         r.key,
@@ -251,13 +259,13 @@ def test_running_receive_expires_exactly_at_grace(tx):
     assert r.e.info(r.key) is None
 
 
-def test_unanswered_offer_expires_too(tx):
+def test_unanswered_offer_expires_too(tx, grace):
     r = tx.Recv(tx.entries(2))
     r.to_asking()
     acts = r.lost(now=100.0)
     assert tx.statuses(acts, r.key) == []  # ASKING vẫn là WAITING khi mất kết nối
-    assert tx.ended(r.tick(now=100.0 + RECONNECT_GRACE - EPS)) == []
-    acts = r.tick(now=100.0 + RECONNECT_GRACE)
+    assert tx.ended(r.tick(now=100.0 + grace - EPS)) == []
+    acts = r.tick(now=100.0 + grace)
     end = tx.one(tx.ended(acts), object)
     assert (end.outcome, end.reason, end.by_peer) == (Outcome.CANCELLED, "expired", False)
     assert not tx.of(acts, RemoveTemp)
@@ -265,37 +273,38 @@ def test_unanswered_offer_expires_too(tx):
     assert r.call("decide", tx.PEER, r.T, True) == []
 
 
-def test_sending_side_expires_exactly_at_grace(tx):
+def test_sending_side_expires_exactly_at_grace(tx, grace):
     s = tx.Send(tx.entries(2))
     s.start()
     s.lost(now=10.0)
-    assert tx.ended(s.tick(now=10.0 + RECONNECT_GRACE - EPS)) == []
-    end = tx.one(tx.ended(s.tick(now=10.0 + RECONNECT_GRACE)), object)
+    assert tx.ended(s.tick(now=10.0 + grace - EPS)) == []
+    end = tx.one(tx.ended(s.tick(now=10.0 + grace)), object)
     assert (end.key, end.reason, end.by_peer) == (s.key, "expired", False)
 
 
-def test_send_without_connection_starts_the_grace_clock(tx):
+def test_send_without_connection_starts_the_grace_clock(tx, grace):
     s1 = tx.Send(tx.entries(1), T=tx.T1)
     s2 = tx.Send(tx.entries(1), T=tx.T2, like=s1)
     acts = s1.call("send", tx.PEER, s1.T, list(s1.files), now=5.0)
     assert tx.sent(acts) == []
     assert tx.statuses(acts, s1.key) == [TransferStatus.RECONNECTING]
-    s2.call("send", tx.PEER, s2.T, list(s2.files), now=20.0)  # không dời mốc offline_since
-    assert s1.e.next_wakeup() == 5.0 + RECONNECT_GRACE
-    assert tx.ended(s1.tick(now=5.0 + RECONNECT_GRACE - EPS)) == []
-    acts = s1.tick(now=5.0 + RECONNECT_GRACE)
+    s2.call("send", tx.PEER, s2.T, list(s2.files), now=5.0 + grace / 2)  # không dời mốc offline_since
+    assert s1.e.next_wakeup() == 5.0 + grace
+    assert tx.ended(s1.tick(now=5.0 + grace - EPS)) == []
+    acts = s1.tick(now=5.0 + grace)
     assert {e.key for e in tx.ended(acts)} == {s1.key, s2.key}
     assert {e.reason for e in tx.ended(acts)} == {"expired"}
 
 
-def test_grace_clock_restarts_after_all_transfers_ended(tx):
+def test_grace_clock_restarts_after_all_transfers_ended(tx, grace):
     s1 = tx.Send(tx.entries(1), T=tx.T1)
     s1.call("send", tx.PEER, s1.T, list(s1.files), now=5.0)
-    s1.tick(now=5.0 + RECONNECT_GRACE)
+    s1.tick(now=5.0 + grace)
     s2 = tx.Send(tx.entries(1), T=tx.T2, like=s1)
-    s2.call("send", tx.PEER, s2.T, list(s2.files), now=200.0)
-    assert tx.ended(s2.tick(now=200.0 + RECONNECT_GRACE - EPS)) == []
-    assert tx.one(tx.ended(s2.tick(now=200.0 + RECONNECT_GRACE)), object).key == s2.key
+    t2 = 5.0 + grace + 50.0
+    s2.call("send", tx.PEER, s2.T, list(s2.files), now=t2)
+    assert tx.ended(s2.tick(now=t2 + grace - EPS)) == []
+    assert tx.one(tx.ended(s2.tick(now=t2 + grace)), object).key == s2.key
 
 
 def test_send_while_offline_sends_offer_on_connect(tx):
@@ -306,38 +315,38 @@ def test_send_while_offline_sends_offer_on_connect(tx):
     assert s.e.next_wakeup() is None
 
 
-def test_expired_sender_sends_cancel_expired_on_next_connection(tx):
+def test_expired_sender_sends_cancel_expired_on_next_connection(tx, grace):
     s = tx.Send(tx.entries(2))
     s.start()
     s.lost(now=10.0)
-    s.tick(now=10.0 + RECONNECT_GRACE)
-    acts = s.up(cid=2, now=100.0)
+    s.tick(now=10.0 + grace)
+    acts = s.up(cid=2, now=10.0 + grace + 90.0)
     assert tx.sent(acts) == [Cancel(transfer_id=s.T, reason="expired")]
     # Message tới sau đó: `cancel` cùng lý do.
     acts = s.resume(0)
     assert tx.sent(acts) == [Cancel(transfer_id=s.T, reason="expired")]
-    s.lost(now=110.0)
-    assert tx.sent(s.up(cid=3, now=111.0)) == []
+    s.lost(now=10.0 + grace + 100.0)
+    assert tx.sent(s.up(cid=3, now=10.0 + grace + 101.0)) == []
 
 
-def test_expired_receiver_sends_cancel_expired_on_next_connection(tx):
+def test_expired_receiver_sends_cancel_expired_on_next_connection(tx, grace):
     r = tx.Recv(tx.entries(2))
     r.accept()
     r.lost(now=10.0)
-    r.tick(now=10.0 + RECONNECT_GRACE)
-    acts = r.up(cid=2, now=100.0)
+    r.tick(now=10.0 + grace)
+    acts = r.up(cid=2, now=10.0 + grace + 90.0)
     assert tx.sent(acts) == [Cancel(transfer_id=r.T, reason="expired")]
     assert tx.sent(r.send_offer()) == [Cancel(transfer_id=r.T, reason="expired")]
     assert tx.sent(r.complete(0)) == [Cancel(transfer_id=r.T, reason="expired")]
 
 
-def test_expiry_counts_from_receiver_control_lost_not_from_last_message(tx):
+def test_expiry_counts_from_receiver_control_lost_not_from_last_message(tx, grace):
     r = tx.Recv(tx.entries(2))
     r.accept()
     r.tick(now=500.0)  # thời gian trôi khi còn kết nối: không tính
     r.lost(now=600.0)
-    assert tx.ended(r.tick(now=600.0 + RECONNECT_GRACE - EPS)) == []
-    assert tx.ended(r.tick(now=600.0 + RECONNECT_GRACE))
+    assert tx.ended(r.tick(now=600.0 + grace - EPS)) == []
+    assert tx.ended(r.tick(now=600.0 + grace))
 
 
 def test_grace_is_read_at_use(tx, monkeypatch):

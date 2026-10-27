@@ -1959,7 +1959,7 @@ class _SendSession(_Session):
         self.peer_name: str | None = None  # tên trong trusted.json, chưa qua display_name
         self.connected = False  # đã có DeviceConnected của máy nhận (có thể tới trước khi chờ)
         self.failure: ConnectFailed | None = None  # ConnectFailed đầu tiên trước khi gửi
-        self.sending = False  # đã gọi transfers.send: ConnectFailed sau đó chỉ in (nối lại 30 s)
+        self.sending = False  # đã gọi transfers.send: ConnectFailed sau đó chỉ in (nối lại tới 24 h)
         self.offered = False  # đã phát `offer` (JSON) cho lượt gửi
         self.result: TransferFinished | None = None
         self.wake = asyncio.Event()  # có sự kiện kết nối mới
