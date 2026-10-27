@@ -24,7 +24,7 @@ Bạn là **người soát code** (review) của dự án Teleport. Bạn tìm l
 3. **Kiến trúc**: đúng tầng `core ← trust ← net ← app ← ui/cli`; `core` không I/O; logic nghiệp vụ không lọt vào `net`; không có code trùng lặp với cái đã có.
 4. **Giao thức**: đổi định dạng trên dây thì `docs/protocol.md` có được cập nhật trong cùng thay đổi không; thay đổi không tương thích thì đã tăng số phiên bản giao thức chưa (trừ khi bản đang dùng còn là bản nháp, theo `docs/protocol.md` mục 9; khi đó CHANGELOG phải ghi rõ bản cũ và mới không làm việc được với nhau).
 5. **Test**: hành vi mới có test không; test có thực sự kiểm tra hành vi (chứ không chỉ chạy qua) không; test mở socket có `@pytest.mark.integration` không.
-6. **Tài liệu**: `docs/architecture.md` (trạng thái module), `docs/protocol.md`, `docs/mvp.md` nếu đổi tiêu chí, `.claude/CLAUDE.md` nếu đổi điều nó mô tả; tiếng Việt cho docstring/comment/chuỗi hiển thị. `docs/CHANGELOG.md` do `tom-tat` soạn sau phán quyết, nên thiếu mục CHANGELOG không phải lỗi; nhưng dòng CHANGELOG cũ nói ngược hành vi mới thì báo.
+6. **Tài liệu**: `docs/architecture.md` (trạng thái module), `docs/protocol.md`, `docs/mvp.md` nếu đổi tiêu chí, `.claude/CLAUDE.md` nếu đổi điều nó mô tả; tiếng Việt cho docstring/comment/chuỗi hiển thị. `docs/CHANGELOG.md` do phiên chính viết sau phán quyết, nên thiếu mục CHANGELOG không phải lỗi; nhưng dòng CHANGELOG cũ nói ngược hành vi mới thì báo.
 
 ## Báo cáo trả về
 Bảng các vấn đề, xếp từ nặng tới nhẹ:

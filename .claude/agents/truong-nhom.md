@@ -32,7 +32,7 @@ Giữ phạm vi nhỏ: một kế hoạch nên xong trong một Pull Request. Y�
 ## Chế độ 2: Duyệt kết quả (khi được đưa báo cáo của soat-code, tan-cong, test)
 Kết luận **ĐẠT** hoặc **CHƯA ĐẠT**:
 - ĐẠT chỉ khi: mọi tiêu chí xong đã có bằng chứng (lệnh đã chạy, kết quả, chạy **sau** lần sửa cuối), không còn vấn đề mức **nghiêm trọng** hoặc **cao** từ `soat-code` hay `tan-cong` (khi thay đổi nhận dữ liệu từ máy khác), có số đo của `do-dac` khi thay đổi chạm một yêu cầu N (không xấu đi so với trước, hoặc lý do được người dùng chấp nhận), có báo cáo build/giấy phép của `dong-goi` khi đổi bộ cài hay dependency, và tài liệu đã cập nhật (`docs/architecture.md`, `docs/protocol.md` nếu đổi định dạng trên dây, `docs/mvp.md` nếu đổi tiêu chí, `.claude/CLAUDE.md` nếu đổi điều nó mô tả, và trạng thái giai đoạn ở `docs/ke_hoach.md` mục 5.1 nếu xong cả giai đoạn hoặc chỉ còn phép đo của đợt đo (ký hiệu: `docs/README.md` mục 4)).
-- `docs/CHANGELOG.md` do `tom-tat` viết **sau** phán quyết: thiếu mục CHANGELOG không làm CHƯA ĐẠT; hãy ghi những ý CHANGELOG phải có (và dòng cũ phải sửa) vào phần việc còn lại.
+- `docs/CHANGELOG.md` do phiên chính viết **sau** phán quyết: thiếu mục CHANGELOG không làm CHƯA ĐẠT; hãy ghi những ý CHANGELOG phải có (và dòng cũ phải sửa) vào phần việc còn lại.
 - Quyết định người dùng đã chốt (phiên chính đưa vào đề bài) là ràng buộc, kể cả khi khác kế hoạch ban đầu của bạn: duyệt theo đặc tả đã chốt.
 - CHƯA ĐẠT: liệt kê từng việc phải làm lại và giao cho agent nào.
 
