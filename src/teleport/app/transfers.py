@@ -87,6 +87,7 @@ from teleport.core.messages import (
     validate_device_id,
 )
 from teleport.core.ratelimit import TokenBucket
+from teleport.core.resume_state import TransferRecord
 from teleport.core.transfer import (
     AskUser,
     CheckSource,
@@ -391,11 +392,12 @@ _DISK_OPS: dict[type, DiskOp] = {
     OpenPart: DiskOp.OPEN_PART,
     WriteBlock: DiskOp.WRITE,
     SyncPart: DiskOp.SYNC,
+    ClearBlocks: DiskOp.SYNC,  # lỗi ghi `.state` như lỗi ghi `.state` khác (`ClearBlocks` docstring)
     Reread: DiskOp.REREAD,
     Finalize: DiskOp.FINALIZE,
 }
 
-_LaneAction = CreateTemp | OpenPart | WriteBlock | SyncPart | Reread | Finalize
+_LaneAction = CreateTemp | OpenPart | WriteBlock | SyncPart | ClearBlocks | Reread | Finalize
 
 
 @dataclass(eq=False)
@@ -873,7 +875,7 @@ class TransferManager:
                 ctl.outbox.put(action.message)
         elif isinstance(action, WriteBlock):
             self._enqueue_write(action)
-        elif isinstance(action, SyncPart | OpenPart | Reread | Finalize):
+        elif isinstance(action, SyncPart | ClearBlocks | OpenPart | Reread | Finalize):
             self._enqueue_disk(action)
         elif isinstance(action, Report):
             self._report(action.event)
@@ -887,9 +889,10 @@ class TransferManager:
         elif isinstance(action, OpenData):
             self._open_data(action)
         elif isinstance(action, CreateTemp):
-            self._create_lane(action)  # `action.offer` (ghi `transfer.json`): P3-3a
+            self._create_lane(action)  # `transfer.json` ghi từ `action.offer` trong `_lane_op`
         elif isinstance(action, RemoveTemp):
-            # `keep_record` chưa dùng: chưa có `transfer.json` để giữ (P3-3a).
+            # `keep_record` chưa dùng: thư mục tạm luôn bị xóa cả `transfer.json` (P3-3b giữ nó cho
+            # lượt DONE).
             lane = self._lanes.get((action.device_id, action.transfer_id))
             if lane is not None:
                 self._close_lane(lane)
@@ -899,10 +902,9 @@ class TransferManager:
             self._spawn(self._check_source(action), f"transfer-check {action.transfer_id[:8]}")
         elif isinstance(action, AskUser):
             self._ask_user(action)
-        elif isinstance(action, ClearBlocks | TombstonesChanged | SuspendTemp):
-            # Tạm thời không làm gì: chưa có `.state` để nối `CLEAR` (P3-3a), chưa lưu
-            # `tombstones.json` (P3-3b); `SuspendTemp` chưa được phát vì chưa gọi
-            # `suspend_receiving` (P3-3b).
+        elif isinstance(action, TombstonesChanged | SuspendTemp):
+            # Tạm thời không làm gì: chưa lưu `tombstones.json` (P3-3b); `SuspendTemp` chưa được
+            # phát vì chưa gọi `suspend_receiving` (P3-3b).
             pass
 
     def _cancel_every(self) -> None:
@@ -1388,7 +1390,7 @@ class TransferManager:
         lane.pending_writes += 1
         lane.wake.set()
 
-    def _enqueue_disk(self, action: OpenPart | SyncPart | Reread | Finalize) -> None:
+    def _enqueue_disk(self, action: OpenPart | SyncPart | ClearBlocks | Reread | Finalize) -> None:
         lane = self._lane_for(action)
         if lane is None or lane.failed or lane.closing:
             return
@@ -1463,7 +1465,15 @@ class TransferManager:
         submit = self._executor.submit
         try:
             if isinstance(action, CreateTemp):
-                lane.create_job = submit(rd.create_temp, transfer_id)
+                # `transfer.json` bền trước khi `create_temp` trả về: `temp_created` nghĩa là đã bền.
+                record = TransferRecord(
+                    receiver=self._identity.device_id,
+                    sender=device_id,
+                    offer=action.offer,
+                    verified=0,
+                    done_at=None,
+                )
+                lane.create_job = submit(rd.create_temp, transfer_id, record)
                 lane.temp = await self._lane_job(lane, lane.create_job, DISK_OP_TIMEOUT)
                 # Báo trước kết quả của mọi thao tác sau nó (hợp đồng mục 5): engine mới gửi `accept`.
                 # Quá hạn thì `DiskTimeout` đã bay ra ở trên: xong muộn cũng không báo.
@@ -1478,10 +1488,15 @@ class TransferManager:
                 part = self._part(lane, action.file_index)
                 await self._lane_job(lane, submit(part.write_at, action.index, payload), DISK_OP_TIMEOUT)
             elif isinstance(action, SyncPart):
+                # `fsync` `.part` → nối `MARK` → `fsync` `.state`; `synced` chỉ sau khi `MARK` đã bền.
                 part = self._part(lane, action.file_index)
-                await self._lane_job(lane, submit(part.sync), DISK_SYNC_TIMEOUT)
+                await self._lane_job(lane, submit(part.commit, action.blocks), DISK_SYNC_TIMEOUT)
                 if not lane.closing:
                     self._call(self._engine.synced, device_id, transfer_id, action.file_index, action.token)
+            elif isinstance(action, ClearBlocks):
+                # Nối `CLEAR` / `CLEAR_ALL`, không `fsync` và không báo engine (architecture mục 4).
+                part = self._part(lane, action.file_index)
+                await self._lane_job(lane, submit(part.clear, action.indices), DISK_OP_TIMEOUT)
             elif isinstance(action, Reread):
                 part = self._part(lane, action.file_index)
                 n = len(action.leaves) // DIGEST_SIZE

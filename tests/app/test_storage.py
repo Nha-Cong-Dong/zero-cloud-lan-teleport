@@ -7,8 +7,11 @@ architecture §4 (bố cục `<thư mục nhận>/.teleport/<transfer_id>/<file_
 Luật kiểm ở đây:
 - `ReceiveDir.open` tạo thư mục nhận (kể cả thư mục cha), không tạo `.teleport`; thư mục nhận được
   là symlink/junction; `.teleport` có sẵn mà là link hay file → `UnsafeReceiveDirError` ngay ở `open`.
-- `create_temp`: `transfer_id` sai → `ValueError`, không đụng đĩa; `<id>` đã có → `TempExistsError`,
-  nội dung cũ còn nguyên; `.teleport` bị thay bằng link sau `open` → `UnsafeReceiveDirError`;
+- `create_temp`: `transfer_id` sai → `ValueError`, không đụng đĩa; `<id>` đã có (có `.part`, file lạ,
+  liên kết…) → `TempExistsError`, nội dung cũ còn nguyên; P3-3a (spec-p3-3a mục 4 V1, 8.1): `record`
+  bắt buộc (`record_for` trong conftest), thư mục tạm luôn có `transfer.json`, part có `<i>.state`;
+  ma trận H2 và đường ghi `.state` ở `test_storage_resume.py`; `.teleport` bị thay bằng link sau
+  `open` → `UnsafeReceiveDirError`;
   POSIX: quyền `0o700`, chủ hợp lệ là euid hoặc chủ thư mục nhận; Windows: `.teleport` mới tạo bị ẩn.
 - File nhận xong mang quyền như file tải về thường (D10): POSIX `0o666` trừ umask; Windows DACL kế
   thừa từ thư mục nhận, không bị bảo vệ, cùng ACE với file tạo thẳng trong đó.
@@ -302,7 +305,7 @@ def test_constants_match_spec(storage):
     assert storage.FAT_MAX_FILE_SIZE == (1 << 32) - 1
     assert frozenset({"fat", "fat12", "fat16", "fat32", "vfat", "msdos", "umsdos"}) == storage.FAT_FS_TYPES
     assert storage.WINDOWS_MAX_PATH == 259
-    assert storage.TEMP_PATH_RESERVE == 55
+    assert storage.TEMP_PATH_RESERVE == 78  # P3-3a (đã chốt): tên tạm `transfer.json.<16 hex>.tmp`
     assert storage.MAX_NAME_CANDIDATES == 100_000
 
 
@@ -318,14 +321,26 @@ def test_movefile_flags(storage):
     assert storage.MOVEFILE_WRITE_THROUGH == 0x8
 
 
-def test_temp_path_reserve_matches_layout(storage):
-    # Spec mục 2.2: (a) `.part` dài nhất = root + 52 ≤ 259; (b) `<root>\.teleport\<id>` = root + 43 ≤ 247.
-    part_extra = len("\\.teleport\\") + 32 + len("\\999.part")
+def test_temp_path_reserve_matches_layout(storage, resume_helpers):
+    # Spec P2-5 mục 2.2 (b): `<root>\.teleport\<id>` = root + 43 ≤ 247. P3-3a (đã chốt): file dài nhất
+    # của bố cục thư mục tạm (regex spec-p3 mục 2.2) là `transfer.json.<16 hex>.tmp`, root + 78 ≤ 259.
+    hexes = "0" * 16
+    layout_names = [
+        "transfer.json",
+        "999.part",
+        "999.state",
+        f"transfer.json.{hexes}.tmp",
+        f"999.state.{hexes}.tmp",
+    ]
+    assert all(resume_helpers.LAYOUT_RE.fullmatch(n) for n in layout_names)
+    longest = max(layout_names, key=len)
+    assert longest == f"transfer.json.{hexes}.tmp"
+    file_extra = len("\\.teleport\\") + 32 + len("\\") + len(longest)
     dir_extra = len("\\.teleport\\") + 32
-    assert (part_extra, dir_extra) == (52, 43)
-    max_root = min(storage.WINDOWS_MAX_PATH - part_extra, 247 - dir_extra)
-    assert max_root == 204
-    assert storage.WINDOWS_MAX_PATH - max_root == storage.TEMP_PATH_RESERVE
+    assert (file_extra, dir_extra) == (78, 43)
+    max_root = min(storage.WINDOWS_MAX_PATH - file_extra, 247 - dir_extra)
+    assert max_root == 181
+    assert storage.WINDOWS_MAX_PATH - max_root == storage.TEMP_PATH_RESERVE == 78
 
 
 EXCEPTIONS = [
@@ -484,27 +499,27 @@ def test_open_root_under_a_file_raises_os_error(storage, tmp_path):
     assert not isinstance(exc.value, storage.StorageError)
 
 
-def test_open_root_through_symlink(storage, tmp_path):
+def test_open_root_through_symlink(storage, tmp_path, record_for):
     real = tmp_path / "real"
     real.mkdir()
     link = tmp_path / "link"
     make_symlink(real, link, is_dir=True)
     with storage.ReceiveDir.open(link) as rd:
         assert rd.root == Path(os.path.abspath(link))  # không resolve symlink
-        temp = rd.create_temp(ID)
+        temp = rd.create_temp(ID, record_for(ID, [0]))
         assert (real / ".teleport" / ID).is_dir()
         assert rd.remove_temp(temp) is True
 
 
 @windows_only
-def test_open_root_through_junction(storage, tmp_path):
+def test_open_root_through_junction(storage, tmp_path, record_for):
     real = tmp_path / "real"
     real.mkdir()
     link = tmp_path / "junction"
     link_dir("junction", real, link)
     with storage.ReceiveDir.open(link) as rd:
         assert rd.root == Path(os.path.abspath(link))
-        temp = rd.create_temp(ID)
+        temp = rd.create_temp(ID, record_for(ID, [0]))
         assert (real / ".teleport" / ID).is_dir()
         assert rd.remove_temp(temp) is True
 
@@ -549,9 +564,9 @@ def test_close_is_idempotent_and_context_manager_returns_self(storage, root):
     assert rd.closed
 
 
-def test_close_closes_temps_and_parts_without_deleting(storage, root):
+def test_close_closes_temps_and_parts_without_deleting(storage, root, record_for):
     rd = storage.ReceiveDir.open(root)
-    temp = rd.create_temp(ID)
+    temp = rd.create_temp(ID, record_for(ID, [10, 1]))
     part = temp.create_part(0, 10)
     part.write_at(0, b"0123456789")
     rd.close()
@@ -560,8 +575,11 @@ def test_close_closes_temps_and_parts_without_deleting(storage, root):
     assert part.closed
     assert part.path.read_bytes() == b"0123456789"
     assert temp.path.is_dir()
-    # Windows chỉ xóa được file khi không còn handle nào mở: chứng minh fd đã đóng.
-    os.unlink(part.path)
+    # Windows chỉ xóa được file khi không còn handle nào mở: chứng minh fd đã đóng, kể cả handle
+    # nối thêm của `0.state` (P3-3a: thư mục tạm có thêm `transfer.json` và `<i>.state`).
+    assert sorted(os.listdir(temp.path)) == ["0.part", "0.state", "transfer.json"]
+    for name in ("0.part", "0.state", "transfer.json"):
+        os.unlink(temp.path / name)
     os.rmdir(temp.path)
     with pytest.raises(ValueError):
         part.write_at(0, b"0123456789")
@@ -575,7 +593,7 @@ def test_close_closes_temps_and_parts_without_deleting(storage, root):
 
 
 @pytest.mark.parametrize("kind", ["symlink", "junction", "dangling", "file"])
-def test_open_rejects_existing_temp_dir_of_wrong_kind(storage, tmp_path, kind):
+def test_open_rejects_existing_temp_dir_of_wrong_kind(storage, tmp_path, kind, record_for):
     root = tmp_path / "recv"
     root.mkdir()
     victim = tmp_path / "victim"
@@ -588,7 +606,7 @@ def test_open_rejects_existing_temp_dir_of_wrong_kind(storage, tmp_path, kind):
         link_dir(kind, victim, temp_dir)
     before = snapshot(tmp_path)
     with pytest.raises(storage.UnsafeReceiveDirError), storage.ReceiveDir.open(root) as rd:
-        rd.create_temp(ID)  # chỉ chạy tới đây nếu `open` không báo lỗi như spec
+        rd.create_temp(ID, record_for(ID, [0]))  # chỉ chạy tới đây nếu `open` không báo lỗi như spec
     assert snapshot(tmp_path) == before
 
 
@@ -597,54 +615,60 @@ def test_open_rejects_existing_temp_dir_of_wrong_kind(storage, tmp_path, kind):
 # ---------------------------------------------------------------------------------------------
 
 
-def test_create_temp_creates_transfer_dir(rd):
-    temp = rd.create_temp(ID)
+def test_create_temp_creates_transfer_dir(rd, record_for):
+    from teleport.core.resume_state import encode_transfer_record
+
+    record = record_for(ID, [0])
+    temp = rd.create_temp(ID, record)
     assert temp.transfer_id == ID
     assert temp.path == rd.root / ".teleport" / ID
     assert temp.path.is_dir()
     assert not temp.closed
-    assert os.listdir(temp.path) == []
+    # P3-3a: `transfer.json` bền ngay khi `create_temp` trả về (spec-p3-3a mục 2.3 ý 1).
+    assert os.listdir(temp.path) == ["transfer.json"]
+    assert (temp.path / "transfer.json").read_bytes() == encode_transfer_record(record)
+    assert temp.record == record
     assert os.listdir(rd.root) == [".teleport"]
 
 
-def test_create_temp_for_two_transfers_shares_temp_dir(rd):
-    t1 = rd.create_temp(ID)
-    t2 = rd.create_temp(ID2)
+def test_create_temp_for_two_transfers_shares_temp_dir(rd, record_for):
+    t1 = rd.create_temp(ID, record_for(ID, [0]))
+    t2 = rd.create_temp(ID2, record_for(ID2, [0]))
     assert t1.path.parent == t2.path.parent == rd.root / ".teleport"
     assert sorted(os.listdir(rd.root / ".teleport")) == sorted([ID, ID2])
 
 
 @posix_only
-def test_temp_dirs_are_private(rd):
-    temp = rd.create_temp(ID)
+def test_temp_dirs_are_private(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [0]))
     assert stat.S_IMODE(os.stat(rd.root / ".teleport").st_mode) == 0o700
     assert stat.S_IMODE(os.stat(temp.path).st_mode) == 0o700
 
 
 @posix_only
-def test_existing_temp_dir_permissions_are_tightened_on_create_temp(storage, root):
+def test_existing_temp_dir_permissions_are_tightened_on_create_temp(storage, root, record_for):
     temp_dir = root / ".teleport"
     temp_dir.mkdir(parents=True)
     os.chmod(temp_dir, 0o755)
     with storage.ReceiveDir.open(root) as rd:
         assert stat.S_IMODE(os.stat(temp_dir).st_mode) == 0o755  # `open` không fchmod
-        rd.create_temp(ID)
+        rd.create_temp(ID, record_for(ID, [0]))
         assert stat.S_IMODE(os.stat(temp_dir).st_mode) == 0o700
 
 
 @windows_only
-def test_new_temp_dir_is_hidden_on_windows(rd):
-    rd.create_temp(ID)
+def test_new_temp_dir_is_hidden_on_windows(rd, record_for):
+    rd.create_temp(ID, record_for(ID, [0]))
     attrs = os.stat(rd.root / ".teleport").st_file_attributes
     assert attrs & stat.FILE_ATTRIBUTE_HIDDEN
 
 
 @windows_only
-def test_existing_temp_dir_is_not_made_hidden(storage, root):
+def test_existing_temp_dir_is_not_made_hidden(storage, root, record_for):
     # Spec mục 3.2 bước 1: chỉ đặt HIDDEN khi vừa tạo `.teleport`.
     (root / ".teleport").mkdir(parents=True)
     with storage.ReceiveDir.open(root) as rd:
-        rd.create_temp(ID)
+        rd.create_temp(ID, record_for(ID, [0]))
     assert not os.stat(root / ".teleport").st_file_attributes & stat.FILE_ATTRIBUTE_HIDDEN
 
 
@@ -680,10 +704,10 @@ BAD_TRANSFER_IDS = [
 
 
 @pytest.mark.parametrize("bad", BAD_TRANSFER_IDS)
-def test_create_temp_rejects_bad_transfer_id_without_touching_disk(rd, tmp_path, bad):
+def test_create_temp_rejects_bad_transfer_id_without_touching_disk(rd, tmp_path, bad, record_for):
     before = snapshot(tmp_path)
     with pytest.raises(ValueError):
-        rd.create_temp(bad)
+        rd.create_temp(bad, record_for(ID, [0]))
     assert snapshot(tmp_path) == before
 
 
@@ -692,7 +716,7 @@ def test_create_temp_rejects_bad_transfer_id_without_touching_disk(rd, tmp_path,
     [ID.upper(), ID[:31], ID.encode(), int(ID, 16), None, "0" * 31 + "\x00", ID + "\n"],
     ids=["hoa", "31-ky-tu", "bytes", "so", "none", "nul", "xuong-dong"],
 )
-def test_create_temp_bad_transfer_id_uses_message_validator(rd, tmp_path, bad):
+def test_create_temp_bad_transfer_id_uses_message_validator(rd, tmp_path, bad, record_for):
     """P2-6a ST1 (plan-p2-6 mục 2.3): `create_temp` kiểm id bằng `core.messages.validate_transfer_id`.
 
     Vẫn là `ValueError` như cũ (`MessageError` là lớp con), thông điệp là của `MessageError`, không đụng đĩa.
@@ -703,7 +727,7 @@ def test_create_temp_bad_transfer_id_uses_message_validator(rd, tmp_path, bad):
         validate_transfer_id(bad)
     before = snapshot(tmp_path)
     with pytest.raises(ValueError) as got:
-        rd.create_temp(bad)
+        rd.create_temp(bad, record_for(ID, [0]))
     assert isinstance(got.value, MessageError)
     assert str(got.value) == str(expected.value)
     assert snapshot(tmp_path) == before
@@ -722,7 +746,7 @@ def test_storage_docstring_no_longer_promises_validator_switch(storage):
 # ---------------------------------------------------------------------------------------------
 
 
-def test_existing_transfer_dir_raises_temp_exists(storage, root):
+def test_existing_transfer_dir_raises_temp_exists(storage, root, record_for):
     old = root / ".teleport" / ID
     old.mkdir(parents=True)
     sentinel = old / "0.part"
@@ -730,15 +754,15 @@ def test_existing_transfer_dir_raises_temp_exists(storage, root):
     before = snapshot(old)
     with storage.ReceiveDir.open(root) as rd:
         with pytest.raises(storage.TempExistsError):
-            rd.create_temp(ID)
-        other = rd.create_temp(ID2)  # lượt khác vẫn tạo được
+            rd.create_temp(ID, record_for(ID, [0]))
+        other = rd.create_temp(ID2, record_for(ID2, [0]))  # lượt khác vẫn tạo được
         assert rd.remove_temp(other) is True
     assert snapshot(old) == before
     assert sentinel.read_bytes() == payload(5000, seed=7)
 
 
 @pytest.mark.parametrize("kind", ["file", "symlink"])
-def test_existing_transfer_entry_of_other_kind_raises_temp_exists(storage, tmp_path, kind):
+def test_existing_transfer_entry_of_other_kind_raises_temp_exists(storage, tmp_path, kind, record_for):
     root = tmp_path / "recv"
     (root / ".teleport").mkdir(parents=True)
     victim = tmp_path / "victim.txt"
@@ -750,7 +774,7 @@ def test_existing_transfer_entry_of_other_kind_raises_temp_exists(storage, tmp_p
         make_symlink(victim, entry, is_dir=False)
     before = snapshot(tmp_path)
     with storage.ReceiveDir.open(root) as rd, pytest.raises(storage.TempExistsError):
-        rd.create_temp(ID)
+        rd.create_temp(ID, record_for(ID, [0]))
     assert snapshot(tmp_path) == before
 
 
@@ -761,7 +785,7 @@ def test_existing_transfer_entry_of_other_kind_raises_temp_exists(storage, tmp_p
 
 @pytest.mark.parametrize("existed", [False, True], ids=["chua-co", "da-co"])
 @pytest.mark.parametrize("kind", ["symlink", "junction", "dangling"])
-def test_temp_dir_swapped_for_link_after_open_is_rejected(storage, tmp_path, kind, existed):
+def test_temp_dir_swapped_for_link_after_open_is_rejected(storage, tmp_path, kind, existed, record_for):
     root = tmp_path / "recv"
     root.mkdir()
     victim = tmp_path / "victim"
@@ -775,39 +799,39 @@ def test_temp_dir_swapped_for_link_after_open_is_rejected(storage, tmp_path, kin
         link_dir(kind, victim, root / ".teleport")
         before = snapshot(tmp_path)
         with pytest.raises(storage.UnsafeReceiveDirError):
-            rd.create_temp(ID)
+            rd.create_temp(ID, record_for(ID, [0]))
         assert snapshot(tmp_path) == before
     assert sorted(os.listdir(victim)) == ["giu.txt"]
 
 
 @posix_only
-def test_temp_dir_owned_by_stranger_is_rejected(storage, root, monkeypatch):
+def test_temp_dir_owned_by_stranger_is_rejected(storage, root, monkeypatch, record_for):
     temp_dir = root / ".teleport"
     temp_dir.mkdir(parents=True, mode=0o700)
     stranger = os.geteuid() + 4242  # khác euid và khác chủ thư mục nhận (chính là euid)
     fake_owner(monkeypatch, {identity(temp_dir): stranger})
     with pytest.raises(storage.UnsafeReceiveDirError), storage.ReceiveDir.open(root) as rd:
-        rd.create_temp(ID)
+        rd.create_temp(ID, record_for(ID, [0]))
     monkeypatch.undo()
     assert os.listdir(temp_dir) == []
 
 
 @posix_only
-def test_temp_dir_owned_by_receive_dir_owner_is_accepted(storage, root, monkeypatch):
+def test_temp_dir_owned_by_receive_dir_owner_is_accepted(storage, root, monkeypatch, record_for):
     # USB mount theo uid cố định: `.teleport` mang uid của chủ thư mục nhận, khác euid (D23).
     temp_dir = root / ".teleport"
     temp_dir.mkdir(parents=True, mode=0o700)
     owner = os.geteuid() + 4242
     fake_owner(monkeypatch, {identity(root): owner, identity(temp_dir): owner})
     with storage.ReceiveDir.open(root) as rd:
-        temp = rd.create_temp(ID)
+        temp = rd.create_temp(ID, record_for(ID, [0]))
         assert temp.path.is_dir()
         assert rd.remove_temp(temp) is True
 
 
 @posix_only
 @pytest.mark.parametrize("err", [errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EROFS, errno.EINVAL])
-def test_unsupported_fchmod_is_ignored(storage, root, monkeypatch, err):
+def test_unsupported_fchmod_is_ignored(storage, root, monkeypatch, err, record_for):
     temp_dir = root / ".teleport"
     temp_dir.mkdir(parents=True)
     os.chmod(temp_dir, 0o755)
@@ -817,13 +841,13 @@ def test_unsupported_fchmod_is_ignored(storage, root, monkeypatch, err):
 
     monkeypatch.setattr(os, "fchmod", fchmod)
     with storage.ReceiveDir.open(root) as rd:
-        temp = rd.create_temp(ID)
+        temp = rd.create_temp(ID, record_for(ID, [0]))
         assert temp.path.is_dir()
         assert rd.remove_temp(temp) is True
 
 
 @posix_only
-def test_other_fchmod_error_propagates(storage, root, monkeypatch):
+def test_other_fchmod_error_propagates(storage, root, monkeypatch, record_for):
     temp_dir = root / ".teleport"
     temp_dir.mkdir(parents=True)
     os.chmod(temp_dir, 0o755)
@@ -833,7 +857,7 @@ def test_other_fchmod_error_propagates(storage, root, monkeypatch):
 
     monkeypatch.setattr(os, "fchmod", fchmod)
     with storage.ReceiveDir.open(root) as rd, pytest.raises(OSError) as exc:
-        rd.create_temp(ID)
+        rd.create_temp(ID, record_for(ID, [0]))
     assert exc.value.errno == errno.EIO
 
 
@@ -854,41 +878,74 @@ def test_open_rejects_root_without_room_for_temp_files(storage, root, monkeypatc
         pass
 
 
-def test_root_at_exact_reserve_allows_whole_chain(storage, root, monkeypatch):
+def _record_temp_paths(storage, monkeypatch) -> list[str]:
+    """Ghi đường dẫn đầy đủ của mọi file trong thư mục tạm lúc `_write_atomic_in` sắp đổi tên (P3-3a):
+    gồm cả tên tạm `<name>.<16 hex>.tmp`, file dài nhất của bố cục."""
+    seen: list[str] = []
+    real = storage._before_atomic_replace
+
+    def spy(temp_path, name):
+        seen.extend(os.path.join(str(temp_path), entry) for entry in os.listdir(temp_path))
+        return real(temp_path, name)
+
+    monkeypatch.setattr(storage, "_before_atomic_replace", spy)
+    return seen
+
+
+def test_root_at_exact_reserve_allows_whole_chain(storage, root, monkeypatch, record_for):
+    # P3-3a: `finalize` chỉ nhận file kế tiếp (`record.verified == file_index`), nên file 999 (tên
+    # `.part`/`.state` dài nhất) chỉ dùng để đo thư mục tạm; file cuối đi qua file 0.
     max_path = _limit_root(storage, monkeypatch, root, storage.TEMP_PATH_RESERVE)
+    temp_paths = _record_temp_paths(storage, monkeypatch)
     with storage.ReceiveDir.open(root) as rd:
-        temp = rd.create_temp(ID)
-        part = temp.create_part(999, 1)
-        assert units(str(part.path)) <= max_path
+        temp = rd.create_temp(ID, record_for(ID, {0: 1, 999: 1}))
+        last = temp.create_part(999, 1)
+        assert units(str(last.path)) <= max_path
+        last.write_at(0, b"\n")
+        assert bytes(last.reread()) == hashlib.sha256(b"\n").digest()
+        part = temp.create_part(0, 1)
         part.write_at(0, b"\n")
-        assert bytes(part.reread()) == hashlib.sha256(b"\n").digest()
         final = rd.finalize(part, "a" * 246 + ".mp4")
         assert units(str(final)) <= max_path
         assert final.name.endswith(".mp4")
         assert final.read_bytes() == b"\n"
         assert rd.remove_temp(temp) is True
+    # Mọi file của thư mục tạm, kể cả `transfer.json.<16 hex>.tmp`, phải vừa phần chừa `TEMP_PATH_RESERVE`
+    # (architecture mục 4 “Độ dài đường dẫn”): không thì thư mục nhận đã được nhận ở `open` lại không
+    # nhận được file.
+    assert any(p.endswith(".tmp") for p in temp_paths)
+    too_long = [p for p in temp_paths if units(p) > max_path]
+    assert too_long == [], f"đường dẫn trong thư mục tạm vượt giới hạn: {too_long}"
 
 
 @windows_only
-def test_windows_real_root_of_204_units_works(storage, tmp_path):
+def test_windows_real_root_of_181_units_works(storage, tmp_path, monkeypatch, record_for):
     base = str(tmp_path)
     if units(base) > 150:
-        pytest.skip("tmp_path quá dài để dựng thư mục 204 đơn vị")
-    root = nested_dir(base, 204)
+        pytest.skip("tmp_path quá dài để dựng thư mục 181 đơn vị")
+    root = nested_dir(base, 181)
+    temp_paths = _record_temp_paths(storage, monkeypatch)
     with storage.ReceiveDir.open(root) as rd:
-        temp = rd.create_temp(ID)
-        part = temp.create_part(999, 1)
-        # Spec mục 2.2 (a)(b), D22: `<root>\.teleport\<id>` = root + 43 ≤ 247 (CreateDirectoryW khi
-        # chưa bật long path) và `.part` dài nhất = root + 52 ≤ 259. Kiểm trên đường dẫn thật, vì máy
-        # đã bật LongPathsEnabled thì mkdir không tự chặn ở 247 và test chạy được cũng chưa chứng minh gì.
-        assert units(str(temp.path)) == 204 + 43 <= 247
-        assert units(str(part.path)) == 204 + 52 <= storage.WINDOWS_MAX_PATH
+        temp = rd.create_temp(ID, record_for(ID, {0: 1, 999: 1}))
+        last = temp.create_part(999, 1)
+        # Spec P2-5 mục 2.2, D22: `<root>\.teleport\<id>` = root + 43 ≤ 247 (CreateDirectoryW khi chưa
+        # bật long path); P3-3a (đã chốt): file dài nhất `transfer.json.<16 hex>.tmp` = root + 78 ≤ 259.
+        # Kiểm trên đường dẫn thật, vì máy đã bật LongPathsEnabled thì Windows không tự chặn ở 247/259
+        # và test chạy được cũng chưa chứng minh gì.
+        assert units(str(temp.path)) == 181 + 43 <= 247
+        assert units(str(last.path)) == 181 + 52 <= storage.WINDOWS_MAX_PATH
+        last.write_at(0, b"x")
+        assert bytes(last.reread()) == hashlib.sha256(b"x").digest()
+        part = temp.create_part(0, 1)
         part.write_at(0, b"x")
-        assert bytes(part.reread()) == hashlib.sha256(b"x").digest()
         final = rd.finalize(part, "a" * 246 + ".mp4")
         assert units(str(final)) <= 259
         assert final.read_bytes() == b"x"
         assert rd.remove_temp(temp) is True
+    assert any(p.endswith(".tmp") and "transfer.json." in p for p in temp_paths)
+    assert max(units(p) for p in temp_paths) == 181 + 78 == storage.WINDOWS_MAX_PATH
+    too_long = [p for p in temp_paths if units(p) > storage.WINDOWS_MAX_PATH]
+    assert too_long == [], f"đường dẫn trong thư mục tạm vượt MAX_PATH: {too_long}"
 
 
 def test_open_drive_root_without_writing(storage, tmp_path):
@@ -907,15 +964,16 @@ def test_open_drive_root_without_writing(storage, tmp_path):
 
 
 @windows_only
-def test_windows_real_root_of_205_units_rejected(storage, tmp_path):
+def test_windows_real_root_of_182_units_rejected(storage, tmp_path):
     base = str(tmp_path)
     if units(base) > 150:
-        pytest.skip("tmp_path quá dài để dựng thư mục 205 đơn vị")
-    root = nested_dir(base, 205)
-    # Với 205, thư mục `<root>\.teleport\<id>` dài 248 > 247: mkdir sẽ hỏng khi chưa bật long path.
-    assert units(os.path.join(root, ".teleport", ID)) == 248
+        pytest.skip("tmp_path quá dài để dựng thư mục 182 đơn vị")
+    root = nested_dir(base, 182)
+    # Với 182, `<root>\.teleport\<id>\transfer.json.<16 hex>.tmp` dài 260 > 259 (MAX_PATH).
+    assert units(os.path.join(root, ".teleport", ID, "transfer.json." + "0" * 16 + ".tmp")) == 260
     with pytest.raises(storage.PathTooLongError), storage.ReceiveDir.open(root):
         pass
+    assert not os.path.lexists(os.path.join(root, ".teleport"))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -965,12 +1023,12 @@ def _violations(calls, roots: set[str], *, exempt: set[str] = frozenset()) -> li
 
 
 @posix_only
-def test_posix_operations_inside_root_use_dir_fd(storage, root, monkeypatch):
+def test_posix_operations_inside_root_use_dir_fd(storage, root, monkeypatch, record_for):
     roots = {os.path.abspath(root), os.path.realpath(root)}
     with storage.ReceiveDir.open(root) as rd:
         phase = ["create_temp"]
         calls = _install_recorder(monkeypatch, phase)
-        temp = rd.create_temp(ID)
+        temp = rd.create_temp(ID, record_for(ID, [10, 5]))
         phase[0] = "create_part"
         part = temp.create_part(0, 10)
         part.write_at(0, b"0123456789")
@@ -1018,8 +1076,8 @@ def test_posix_open_checks_existing_temp_dir_through_dir_fd(storage, root, monke
 # ---------------------------------------------------------------------------------------------
 
 
-def test_create_part_creates_empty_file(rd):
-    temp = rd.create_temp(ID)
+def test_create_part_creates_empty_file(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, {3: 10}))
     part = temp.create_part(3, 10)
     assert part.path == temp.path / "3.part"
     assert part.path.is_file()
@@ -1029,20 +1087,20 @@ def test_create_part_creates_empty_file(rd):
 
 
 @pytest.mark.parametrize("size", [0, 1, BS, BS + 1, 1 << 42])
-def test_create_part_block_count_matches_core(rd, size):
-    part = rd.create_temp(ID).create_part(0, size)
+def test_create_part_block_count_matches_core(rd, size, record_for):
+    part = rd.create_temp(ID, record_for(ID, {0: size})).create_part(0, size)
     assert part.block_count == block_count(size)
     assert os.path.getsize(part.path) == 0  # không cấp trước dung lượng
 
 
 @posix_only
-def test_part_and_final_file_follow_umask(rd):
+def test_part_and_final_file_follow_umask(rd, record_for):
     # D10: `.part` tạo với 0o666 và umask vẫn áp, nên file cuối mang quyền như file tải về thường
     # (thư mục `0o700` mới là thứ che dữ liệu đang nhận).
     mask = os.umask(0o022)
     os.umask(mask)
     expected = 0o666 & ~mask
-    part = rd.create_temp(ID).create_part(0, 3)
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
     assert stat.S_IMODE(os.stat(part.path).st_mode) == expected
     part.write_at(0, b"abc")
     final = rd.finalize(part, "a.txt")
@@ -1050,7 +1108,7 @@ def test_part_and_final_file_follow_umask(rd):
 
 
 @windows_only
-def test_finalized_file_inherits_receive_dir_acl_on_windows(storage, root):
+def test_finalized_file_inherits_receive_dir_acl_on_windows(storage, root, record_for):
     # D10 (“file đã xong phải dùng được như file trình duyệt tải về”), architecture §4 “Thư mục
     # nhận”: trên Windows, file nhận xong mang DACL kế thừa từ thư mục nhận y như một file tạo thẳng
     # trong đó: DACL không bị bảo vệ khỏi kế thừa, cùng các ACE. Thư mục nhận được cấp thêm quyền
@@ -1069,7 +1127,7 @@ def test_finalized_file_inherits_receive_dir_acl_on_windows(storage, root):
     assert not expected_protected
     assert ";;;BU)" in expected
     with storage.ReceiveDir.open(root) as rd:
-        part = rd.create_temp(ID).create_part(0, 3)
+        part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
         part.write_at(0, b"abc")
         final = rd.finalize(part, "a.txt")
         protected, actual = windows_dacl(final)
@@ -1077,33 +1135,35 @@ def test_finalized_file_inherits_receive_dir_acl_on_windows(storage, root):
     assert actual == expected
 
 
-def test_create_part_accepts_last_file_index(rd):
-    part = rd.create_temp(ID).create_part(999, 0)
+def test_create_part_accepts_last_file_index(rd, record_for):
+    part = rd.create_temp(ID, record_for(ID, {999: 0})).create_part(999, 0)
     assert part.path.name == "999.part"
 
 
-def test_create_part_same_index_twice_raises_value_error(rd):
-    temp = rd.create_temp(ID)
+def test_create_part_same_index_twice_raises_value_error(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [1]))
     part = temp.create_part(0, 1)
     with pytest.raises(ValueError):
         temp.create_part(0, 1)
     part.close()
     with pytest.raises(ValueError):
         temp.create_part(0, 1)
-    assert os.listdir(temp.path) == ["0.part"]
+    # P3-3a: `create_part` tạo thêm header `0.state`; thư mục tạm luôn có `transfer.json`.
+    assert sorted(os.listdir(temp.path)) == ["0.part", "0.state", "transfer.json"]
 
 
-def test_create_part_over_existing_file_raises_file_exists(rd):
-    temp = rd.create_temp(ID)
+def test_create_part_over_existing_file_raises_file_exists(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [3]))
     planted = temp.path / "0.part"
     planted.write_bytes(b"cu")
     with pytest.raises(FileExistsError):
         temp.create_part(0, 3)
     assert planted.read_bytes() == b"cu"
+    assert not os.path.lexists(temp.path / "0.state")  # `.part` tạo trước, lỗi thì không có header
 
 
-def test_create_part_over_planted_symlink_raises_and_keeps_victim(rd, tmp_path):
-    temp = rd.create_temp(ID)
+def test_create_part_over_planted_symlink_raises_and_keeps_victim(rd, tmp_path, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [8]))
     victim = tmp_path / "victim.txt"
     victim.write_bytes(b"nan nhan")
     make_symlink(victim, temp.path / "0.part", is_dir=False)
@@ -1131,11 +1191,11 @@ def test_create_part_over_planted_symlink_raises_and_keeps_victim(rd, tmp_path):
         (0, None),
     ],
 )
-def test_create_part_rejects_bad_arguments(rd, file_index, size):
-    temp = rd.create_temp(ID)
+def test_create_part_rejects_bad_arguments(rd, file_index, size, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [1]))
     with pytest.raises(ValueError):
         temp.create_part(file_index, size)
-    assert os.listdir(temp.path) == []
+    assert os.listdir(temp.path) == ["transfer.json"]  # P3-3a: chỉ có bản ghi lượt, không `.part`/`.state`
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1144,11 +1204,11 @@ def test_create_part_rejects_bad_arguments(rd, file_index, size):
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])
-def test_writes_in_allowed_random_order_give_exact_file(rd, seed):
+def test_writes_in_allowed_random_order_give_exact_file(rd, seed, record_for):
     size = 4 * BS + 777  # 5 khối, khối cuối ngắn
     data = payload(size, seed)
     count = block_count(size)
-    part = rd.create_temp(ID).create_part(0, size)
+    part = rd.create_temp(ID, record_for(ID, {0: size})).create_part(0, size)
     rng = random.Random(seed)
     end = 0
     written: set[int] = set()
@@ -1166,19 +1226,19 @@ def test_writes_in_allowed_random_order_give_exact_file(rd, seed):
 
 
 @pytest.mark.parametrize("kind", ["bytes", "bytearray", "memoryview"])
-def test_write_at_accepts_bytes_like(rd, kind):
+def test_write_at_accepts_bytes_like(rd, kind, record_for):
     data = payload(BS + 10)
-    part = rd.create_temp(ID).create_part(0, len(data))
+    part = rd.create_temp(ID, record_for(ID, {0: len(data)})).create_part(0, len(data))
     convert = {"bytes": bytes, "bytearray": bytearray, "memoryview": lambda b: memoryview(bytearray(b))}[kind]
     part.write_at(0, convert(data[:BS]))
     part.write_at(1, convert(data[BS:]))
     assert part.path.read_bytes() == data
 
 
-def test_write_at_memoryview_length_is_nbytes(rd):
+def test_write_at_memoryview_length_is_nbytes(rd, record_for):
     # Spec mục 3.3: với memoryview, độ dài là `nbytes` chứ không phải số phần tử.
     data = b"\r\n\x1a\nABCD"
-    part = rd.create_temp(ID).create_part(0, len(data))
+    part = rd.create_temp(ID, record_for(ID, {0: len(data)})).create_part(0, len(data))
     view = memoryview(bytearray(data)).cast("I")
     assert len(view) != view.nbytes == len(data)
     part.write_at(0, view)
@@ -1208,11 +1268,11 @@ def _bad_write_cases():
 
 
 @pytest.mark.parametrize("case", _bad_write_cases(), ids=lambda c: c[0])
-def test_write_at_rejects_bad_arguments_and_leaves_file_unchanged(rd, case):
+def test_write_at_rejects_bad_arguments_and_leaves_file_unchanged(rd, case, record_for):
     _, index, spec = case
     size = 2 * BS + 100
     data = payload(size)
-    part = rd.create_temp(ID).create_part(0, size)
+    part = rd.create_temp(ID, record_for(ID, {0: size})).create_part(0, size)
     # _end = 2·BS: mọi chỉ số 0…2 hợp lệ về vị trí, nên lỗi chỉ có thể đến từ tham số đang thử.
     part.write_at(0, data[:BS])
     part.write_at(1, data[BS : 2 * BS])
@@ -1229,10 +1289,10 @@ def _write_seam() -> str:
     return "write" if WINDOWS else "pwrite"
 
 
-def test_short_writes_are_continued(rd, monkeypatch):
+def test_short_writes_are_continued(rd, monkeypatch, record_for):
     size = BS + 1000
     data = payload(size)
-    part = rd.create_temp(ID).create_part(0, size)
+    part = rd.create_temp(ID, record_for(ID, {0: size})).create_part(0, size)
     name = _write_seam()
     real = getattr(os, name)
     calls = []
@@ -1250,9 +1310,9 @@ def test_short_writes_are_continued(rd, monkeypatch):
     assert part.path.read_bytes() == data
 
 
-def test_disk_full_error_propagates_and_part_stays_open(rd, monkeypatch):
+def test_disk_full_error_propagates_and_part_stays_open(rd, monkeypatch, record_for):
     data = payload(100)
-    part = rd.create_temp(ID).create_part(0, 100)
+    part = rd.create_temp(ID, record_for(ID, {0: 100})).create_part(0, 100)
 
     def full(*args, **kwargs):
         raise OSError(errno.ENOSPC, "het cho")
@@ -1285,8 +1345,8 @@ def _spy_writes(monkeypatch) -> list[str]:
     return calls
 
 
-def test_gap_write_on_empty_file_rejected_before_io(storage, rd, monkeypatch):
-    part = rd.create_temp(ID).create_part(0, SIZE4)
+def test_gap_write_on_empty_file_rejected_before_io(storage, rd, monkeypatch, record_for):
+    part = rd.create_temp(ID, record_for(ID, {0: SIZE4})).create_part(0, SIZE4)
     writes = _spy_writes(monkeypatch)
     with pytest.raises(storage.WriteGapError) as exc:
         part.write_at(2, payload(BS))
@@ -1298,9 +1358,9 @@ def test_gap_write_on_empty_file_rejected_before_io(storage, rd, monkeypatch):
     assert not part.closed
 
 
-def test_gap_after_two_blocks_rejected(storage, rd):
+def test_gap_after_two_blocks_rejected(storage, rd, record_for):
     data = payload(SIZE4)
-    part = rd.create_temp(ID).create_part(0, SIZE4)
+    part = rd.create_temp(ID, record_for(ID, {0: SIZE4})).create_part(0, SIZE4)
     part.write_at(0, data[:BS])
     part.write_at(1, data[BS : 2 * BS])
     with pytest.raises(storage.WriteGapError):
@@ -1308,17 +1368,17 @@ def test_gap_after_two_blocks_rejected(storage, rd):
     assert part.path.read_bytes() == data[: 2 * BS]
 
 
-def test_sequential_writes_and_rewrite_allowed(rd):
+def test_sequential_writes_and_rewrite_allowed(rd, record_for):
     data = payload(SIZE4)
-    part = rd.create_temp(ID).create_part(0, SIZE4)
+    part = rd.create_temp(ID, record_for(ID, {0: SIZE4})).create_part(0, SIZE4)
     for i in range(4):
         part.write_at(i, data[i * BS : i * BS + block_length(SIZE4, i)])
     part.write_at(1, data[BS : 2 * BS])
     assert part.path.read_bytes() == data
 
 
-def test_write_after_close_raises_value_error(rd):
-    part = rd.create_temp(ID).create_part(0, 3)
+def test_write_after_close_raises_value_error(rd, record_for):
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
     part.close()
     part.close()  # gọi lại được
     assert part.closed
@@ -1337,10 +1397,10 @@ def test_write_after_close_raises_value_error(rd):
     last=st.integers(min_value=1, max_value=BS - 1),
     ops=st.lists(st.integers(min_value=0, max_value=5), min_size=1, max_size=10),
 )
-def test_property_write_succeeds_iff_no_gap(storage, nblocks, last, ops):
+def test_property_write_succeeds_iff_no_gap(storage, nblocks, last, ops, record_for):
     size = (nblocks - 1) * BS + last
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d, storage.ReceiveDir.open(d) as rd:
-        part = rd.create_temp(ID).create_part(0, size)
+        part = rd.create_temp(ID, record_for(ID, {0: size})).create_part(0, size)
         model = bytearray()
         end = 0
         for step, raw in enumerate(ops):
@@ -1370,8 +1430,8 @@ def _same_file(fd: int, path) -> bool:
 
 
 @not_macos
-def test_sync_fsyncs_the_part_fd(rd, monkeypatch):
-    part = rd.create_temp(ID).create_part(0, 3)
+def test_sync_fsyncs_the_part_fd(rd, monkeypatch, record_for):
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
     part.write_at(0, b"abc")
     real = os.fsync
     synced = []
@@ -1386,16 +1446,16 @@ def test_sync_fsyncs_the_part_fd(rd, monkeypatch):
     assert any(synced)
 
 
-def test_sync_goes_through_full_fsync_seam(storage, rd, monkeypatch):
-    part = rd.create_temp(ID).create_part(0, 3)
+def test_sync_goes_through_full_fsync_seam(storage, rd, monkeypatch, record_for):
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
     seen = []
     monkeypatch.setattr(storage, "_full_fsync", lambda fd: seen.append(_same_file(fd, part.path)))
     part.sync()
     assert seen == [True]
 
 
-def test_sync_error_propagates(storage, rd, monkeypatch):
-    part = rd.create_temp(ID).create_part(0, 3)
+def test_sync_error_propagates(storage, rd, monkeypatch, record_for):
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
 
     def boom(fd):
         raise OSError(errno.EIO, "loi fsync")
@@ -1406,18 +1466,18 @@ def test_sync_error_propagates(storage, rd, monkeypatch):
     assert exc.value.errno == errno.EIO
 
 
-def test_sync_after_close_raises_value_error(rd):
-    part = rd.create_temp(ID).create_part(0, 3)
+def test_sync_after_close_raises_value_error(rd, record_for):
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
     part.close()
     with pytest.raises(ValueError):
         part.sync()
 
 
 @macos_only
-def test_macos_sync_uses_f_fullfsync(rd, monkeypatch):
+def test_macos_sync_uses_f_fullfsync(rd, monkeypatch, record_for):
     import fcntl
 
-    part = rd.create_temp(ID).create_part(0, 3)
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
     real = fcntl.fcntl
     commands = []
 
@@ -1431,10 +1491,10 @@ def test_macos_sync_uses_f_fullfsync(rd, monkeypatch):
 
 
 @macos_only
-def test_macos_unsupported_full_fsync_falls_back_to_fsync(rd, monkeypatch):
+def test_macos_unsupported_full_fsync_falls_back_to_fsync(rd, monkeypatch, record_for):
     import fcntl
 
-    part = rd.create_temp(ID).create_part(0, 3)
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
     real_fcntl = fcntl.fcntl
     real_fsync = os.fsync
     fsynced = []
@@ -1455,10 +1515,10 @@ def test_macos_unsupported_full_fsync_falls_back_to_fsync(rd, monkeypatch):
 
 
 @macos_only
-def test_macos_full_fsync_io_error_propagates(rd, monkeypatch):
+def test_macos_full_fsync_io_error_propagates(rd, monkeypatch, record_for):
     import fcntl
 
-    part = rd.create_temp(ID).create_part(0, 3)
+    part = rd.create_temp(ID, record_for(ID, {0: 3})).create_part(0, 3)
     real_fcntl = fcntl.fcntl
 
     def broken(fd, cmd, *args):
@@ -1480,9 +1540,9 @@ SIZE_R = 3 * BS + 123
 
 
 @pytest.fixture
-def full_part(rd):
+def full_part(rd, record_for):
     data = payload(SIZE_R, seed=5)
-    part = rd.create_temp(ID).create_part(0, SIZE_R)
+    part = rd.create_temp(ID, record_for(ID, {0: SIZE_R})).create_part(0, SIZE_R)
     write_all(part, data)
     return part, data
 
@@ -1551,8 +1611,8 @@ def test_reread_short_file_gives_zero_hashes_and_resets_end(storage, full_part):
         part.write_at(3, data[3 * BS :])
 
 
-def test_reread_empty_file(rd):
-    part = rd.create_temp(ID).create_part(0, 0)
+def test_reread_empty_file(rd, record_for):
+    part = rd.create_temp(ID, record_for(ID, {0: 0})).create_part(0, 0)
     digests = part.reread()
     assert type(digests) is bytearray
     assert digests == bytearray()
@@ -1583,9 +1643,9 @@ class LateStop(threading.Event):
         return self.calls >= 3
 
 
-def test_reread_stops_midway_within_a_block(storage, rd, monkeypatch):
+def test_reread_stops_midway_within_a_block(storage, rd, monkeypatch, record_for):
     block = payload(BS, seed=9)
-    part = rd.create_temp(ID).create_part(0, 32 * BS)
+    part = rd.create_temp(ID, record_for(ID, {0: 32 * BS})).create_part(0, 32 * BS)
     for i in range(32):
         part.write_at(i, block)
     read = [0]
@@ -1634,9 +1694,9 @@ def test_reread_after_close_raises_value_error(full_part):
         part.reread()
 
 
-def test_reread_memory_peak_is_bounded(rd):
+def test_reread_memory_peak_is_bounded(rd, record_for):
     block = payload(BS, seed=11)
-    part = rd.create_temp(ID).create_part(0, 32 * BS)
+    part = rd.create_temp(ID, record_for(ID, {0: 32 * BS})).create_part(0, 32 * BS)
     for i in range(32):
         part.write_at(i, block)
     tracemalloc.start()
@@ -1675,12 +1735,12 @@ def test_reread_reads_own_fd_not_the_path(full_part, tmp_path):
         st.tuples(st.just("append"), st.integers(min_value=1, max_value=5000)),
     ),
 )
-def test_property_reread_reports_each_block(storage, nblocks, last, flips, tail):
+def test_property_reread_reports_each_block(storage, nblocks, last, flips, tail, record_for):
     size = (nblocks - 1) * BS + last
     data = random.Random(size).randbytes(size)
     flips = {k for k in flips if k < nblocks}
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d, storage.ReceiveDir.open(d) as rd:
-        part = rd.create_temp(ID).create_part(0, size)
+        part = rd.create_temp(ID, record_for(ID, {0: size})).create_part(0, size)
         write_all(part, data)
         mutated = bytearray(data)
         for k in flips:
@@ -1714,8 +1774,8 @@ def test_property_reread_reports_each_block(storage, nblocks, last, flips, tail)
 # ---------------------------------------------------------------------------------------------
 
 
-def test_remove_temp_deletes_own_parts_even_when_open(rd):
-    temp = rd.create_temp(ID)
+def test_remove_temp_deletes_own_parts_even_when_open(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [10, 0]))
     p0 = temp.create_part(0, 10)
     p0.write_at(0, b"0123456789")
     p1 = temp.create_part(1, 0)
@@ -1726,14 +1786,14 @@ def test_remove_temp_deletes_own_parts_even_when_open(rd):
     assert rd.remove_temp(temp) is True  # gọi lại
 
 
-def test_remove_temp_of_empty_temp(rd):
-    temp = rd.create_temp(ID)
+def test_remove_temp_of_empty_temp(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [0]))
     assert rd.remove_temp(temp) is True
     assert os.listdir(rd.root / ".teleport") == []
 
 
-def test_remove_temp_keeps_finalized_file(rd):
-    temp = rd.create_temp(ID)
+def test_remove_temp_keeps_finalized_file(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [3, 3]))
     done = temp.create_part(0, 3)
     done.write_at(0, b"xon")
     final = rd.finalize(done, "a.txt")
@@ -1744,8 +1804,8 @@ def test_remove_temp_keeps_finalized_file(rd):
     assert sorted(os.listdir(rd.root)) == sorted([".teleport", "a.txt"])
 
 
-def test_remove_temp_leaves_foreign_file_and_dir(rd):
-    temp = rd.create_temp(ID)
+def test_remove_temp_leaves_foreign_file_and_dir(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [3]))
     part = temp.create_part(0, 3)
     part.write_at(0, b"abc")
     foreign = temp.path / "la.bin"
@@ -1763,8 +1823,8 @@ def test_remove_temp_leaves_foreign_file_and_dir(rd):
     assert rd.remove_temp(temp) is True
 
 
-def test_remove_temp_keeps_part_replaced_by_other_file(rd):
-    temp = rd.create_temp(ID)
+def test_remove_temp_keeps_part_replaced_by_other_file(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [4]))
     part = temp.create_part(0, 4)
     part.write_at(0, b"mine")
     part.close()
@@ -1775,8 +1835,8 @@ def test_remove_temp_keeps_part_replaced_by_other_file(rd):
     assert part.path.read_bytes() == b"ours"
 
 
-def test_remove_temp_keeps_part_replaced_by_symlink(rd, tmp_path):
-    temp = rd.create_temp(ID)
+def test_remove_temp_keeps_part_replaced_by_symlink(rd, tmp_path, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [4]))
     part = temp.create_part(0, 4)
     part.write_at(0, b"mine")
     part.close()
@@ -1789,9 +1849,9 @@ def test_remove_temp_keeps_part_replaced_by_symlink(rd, tmp_path):
     assert victim.read_bytes() == b"nan nhan"
 
 
-def test_remove_temp_does_not_touch_other_transfer(rd):
-    t1 = rd.create_temp(ID)
-    t2 = rd.create_temp(ID2)
+def test_remove_temp_does_not_touch_other_transfer(rd, record_for):
+    t1 = rd.create_temp(ID, record_for(ID, [3]))
+    t2 = rd.create_temp(ID2, record_for(ID2, [3 + BS]))
     p1 = t1.create_part(0, 3)
     p1.write_at(0, b"one")
     p2 = t2.create_part(0, 3 + BS)
@@ -1803,9 +1863,9 @@ def test_remove_temp_does_not_touch_other_transfer(rd):
     assert p2.path.read_bytes() == b"t" * BS + b"two"
 
 
-def test_remove_temp_of_other_receive_dir_raises(storage, tmp_path):
+def test_remove_temp_of_other_receive_dir_raises(storage, tmp_path, record_for):
     with storage.ReceiveDir.open(tmp_path / "a") as rd1, storage.ReceiveDir.open(tmp_path / "b") as rd2:
-        temp = rd2.create_temp(ID)
+        temp = rd2.create_temp(ID, record_for(ID, [0]))
         with pytest.raises(ValueError):
             rd1.remove_temp(temp)
         assert temp.path.is_dir() and not temp.closed
@@ -1839,8 +1899,8 @@ def _flaky_unlink(monkeypatch, suffix: str, failures: int | None) -> list[str]:
     return calls
 
 
-def test_remove_temp_retries_unlink_permission_error(rd, monkeypatch, quick_retry):
-    temp = rd.create_temp(ID)
+def test_remove_temp_retries_unlink_permission_error(rd, monkeypatch, quick_retry, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [3]))
     part = temp.create_part(0, 3)
     part.write_at(0, b"abc")
     calls = _flaky_unlink(monkeypatch, ".part", failures=2)
@@ -1850,8 +1910,8 @@ def test_remove_temp_retries_unlink_permission_error(rd, monkeypatch, quick_retr
     assert not os.path.lexists(temp.path)
 
 
-def test_remove_temp_retries_rmdir_permission_error(rd, monkeypatch, quick_retry):
-    temp = rd.create_temp(ID)
+def test_remove_temp_retries_rmdir_permission_error(rd, monkeypatch, quick_retry, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [0]))
     real = os.rmdir
     calls = []
 
@@ -1868,8 +1928,8 @@ def test_remove_temp_retries_rmdir_permission_error(rd, monkeypatch, quick_retry
     assert not os.path.lexists(temp.path)
 
 
-def test_remove_temp_never_raises_os_error(rd, monkeypatch, quick_retry):
-    temp = rd.create_temp(ID)
+def test_remove_temp_never_raises_os_error(rd, monkeypatch, quick_retry, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [3]))
     part = temp.create_part(0, 3)
     part.write_at(0, b"abc")
     _flaky_unlink(monkeypatch, ".part", failures=None)

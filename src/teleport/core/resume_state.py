@@ -9,7 +9,8 @@ cắt file và đổi giờ tường ra tuổi là việc của `app`.
   `encode_clear`, `encode_clear_all`, `encode_target`, `encode_reserved`); `StateReplay` đọc
   lại cả file theo từng đoạn (header rồi các bản ghi), dừng sạch ở bản ghi hỏng đầu tiên và
   báo chỗ cắt (`ReplayResult.good_end`); trần độ dài `max_state_length`; gộp
-  (`needs_compaction`, `compact_records`); bảng “Phục hồi tên đích” (`recover_target`).
+  (`needs_compaction`, `compact_records`, độ dài bản gọn `compact_length_for`); bảng “Phục hồi
+  tên đích” (`recover_target`).
 - `transfer.json`: `TransferRecord`, `encode_transfer_record`, `decode_transfer_record`.
 - `tombstones.json`: `TombstoneRecord`, `encode_tombstones`, `decode_tombstones`.
 
@@ -305,6 +306,21 @@ def _compact_length(count: int, target: bytes | None, reserved: bool) -> int:
         if reserved:
             length += _name_record_length(len(target))
     return length
+
+
+def compact_length_for(marked: int, target: str | None, reserved: str | None) -> int:
+    """Độ dài bản gọn (kể cả header): `marked` khối bật, `TARGET` cuối `target`, `RESERVED` `reserved`.
+
+    Cùng công thức với `ReplayResult.compact_length` và độ dài thật của header + `compact_records`
+    (mỗi `MARK` tối đa `COMPACT_MARK_BLOCKS` khối). `RESERVED` chỉ được tính khi trùng tên
+    `target`, như khi đọc lại. Bên ghi nhật ký dùng hàm này để biết khi nào gộp mà không đọc lại
+    file. `marked` ngoài 0…`MAX_BLOCKS`, tên sai luật `encode_target` → StateError.
+    """
+    count = _check_int(marked, "marked", 0, MAX_BLOCKS)
+    raw = None if target is None else _check_name(target)
+    if reserved is not None:
+        _check_name(reserved)
+    return _compact_length(count, raw, raw is not None and reserved == target)
 
 
 def compact_records(

@@ -888,7 +888,185 @@ async def find_leaks(before: set[asyncio.Task]) -> list[str]:
     return problems
 
 
+# --- Lưu trạng thái nối lại (P3-3a, specs/spec-p3-3a.md) -----------------------------------------
+
+# `device_id` mặc định của `record_for`: máy nhận (máy này) và máy gửi.
+RECORD_RECEIVER = "e" * 32
+RECORD_SENDER = "a" * 32
+RECORD_MTIME = 1_700_000_000_000
+RECORD_DONE_AT = datetime.datetime(2026, 10, 27, 10, 0, 0, tzinfo=datetime.UTC)
+# Bố cục thư mục tạm một lượt, chép nguyên văn từ spec-p3 mục 2.2 (luôn dùng `fullmatch`).
+LAYOUT_PATTERN = (
+    r"^(transfer\.json|(0|[1-9][0-9]{0,2})\.(part|state)"
+    r"|(transfer\.json|(0|[1-9][0-9]{0,2})\.state)\.[0-9a-f]{16}\.tmp)$"
+)
+_STATE_HEADER_LEN = 41  # architecture mục 4: header `.state` 41 byte
+
+
+def record_for(
+    tid: str,
+    sizes,
+    *,
+    verified: int = 0,
+    receiver: str = RECORD_RECEIVER,
+    sender: str = RECORD_SENDER,
+    names=None,
+    done_at: datetime.datetime | None = None,
+):
+    """`TransferRecord` của lượt `tid` khớp các `size` của part (spec-p3-3a mục 8.1 (c)).
+
+    `sizes`: list `size` theo `file_index`, hoặc dict `{file_index: size}` (các index khác có size 0,
+    số file = index lớn nhất + 1). `verified` = số file → `done_at` mặc định `RECORD_DONE_AT`.
+    """
+    from teleport.core.blocks import BLOCK_SIZE
+    from teleport.core.messages import FileEntry, Offer
+    from teleport.core.resume_state import TransferRecord
+
+    if isinstance(sizes, dict):
+        count = max(sizes) + 1
+        sizes = [sizes.get(i, 0) for i in range(count)]
+    sizes = list(sizes)
+    if names is None:
+        names = [f"f{i}.bin" for i in range(len(sizes))]
+    files = tuple(FileEntry(name, size, RECORD_MTIME) for name, size in zip(names, sizes, strict=True))
+    offer = Offer(transfer_id=tid, block_size=BLOCK_SIZE, files=files)
+    if done_at is None and verified == len(files):
+        done_at = RECORD_DONE_AT
+    return TransferRecord(receiver=receiver, sender=sender, offer=offer, verified=verified, done_at=done_at)
+
+
+def parse_state(data: bytes) -> tuple[bytes, list[tuple]]:
+    """Tách `.state` thành (header 41 byte, các bản ghi) theo architecture mục 4, độc lập với code.
+
+    Bản ghi: `("mark", [(index, sha256), …])`, `("clear", [index, …])`, `("clear_all",)`,
+    `("target", tên)`, `("reserved", tên)`. Bản ghi cụt, sai crc32 hay loại lạ → AssertionError.
+    """
+    import struct
+    import zlib
+
+    assert len(data) >= _STATE_HEADER_LEN, f".state ngắn hơn header: {len(data)} byte"
+    header = data[:_STATE_HEADER_LEN]
+    records: list[tuple] = []
+    pos = _STATE_HEADER_LEN
+    while pos < len(data):
+        kind = data[pos]
+        if kind == 0x03:
+            length = 5
+        else:
+            assert kind in (0x01, 0x02, 0x04, 0x05), f"loại bản ghi lạ {kind:#x} ở byte {pos}"
+            assert pos + 3 <= len(data), f"bản ghi cụt ở byte {pos}"
+            (n,) = struct.unpack_from("!H", data, pos + 1)
+            length = 7 + n * {0x01: 36, 0x02: 4, 0x04: 1, 0x05: 1}[kind]
+        assert pos + length <= len(data), f"bản ghi cụt ở byte {pos}"
+        body = data[pos : pos + length - 4]
+        (crc,) = struct.unpack_from("!I", data, pos + length - 4)
+        assert crc == zlib.crc32(body), f"sai crc32 ở byte {pos}"
+        payload = body[3:]
+        if kind == 0x01:
+            records.append(("mark", [(i, h) for i, h in struct.iter_unpack("!I32s", payload)]))
+        elif kind == 0x02:
+            records.append(("clear", [i for (i,) in struct.iter_unpack("!I", payload)]))
+        elif kind == 0x03:
+            records.append(("clear_all",))
+        else:
+            records.append(("target" if kind == 0x04 else "reserved", payload.decode("utf-8")))
+        pos += length
+    return header, records
+
+
+def tree_snapshot(top) -> dict[str, tuple]:
+    """Mọi mục dưới `top`, không theo liên kết: loại, kích thước, SHA-256, `st_mtime_ns` (file), đích link."""
+    import os
+
+    result: dict[str, tuple] = {}
+
+    def visit(path: str, rel: str) -> None:
+        with os.scandir(path) as it:
+            found = sorted(it, key=lambda e: e.name)
+        for entry in found:
+            name = f"{rel}/{entry.name}"
+            if entry.is_symlink() or entry.is_junction():
+                result[name] = ("link", os.readlink(entry.path))
+            elif entry.is_dir(follow_symlinks=False):
+                result[name] = ("dir",)
+                visit(entry.path, name)
+            else:
+                with open(entry.path, "rb") as f:
+                    content = f.read()
+                st = os.lstat(entry.path)
+                result[name] = ("file", len(content), hashlib.sha256(content).hexdigest(), st.st_mtime_ns)
+
+    visit(os.fspath(top), "")
+    return result
+
+
+def crash_copy(root, dest) -> Path:
+    """“Sập” (spec-p3-3a mục 4): chép cây thư mục nhận `root` sang `dest`, giữ mtime, không theo link.
+
+    Gọi trong seam: bản chép là đĩa sau khi sập đúng ở điểm đó. Test mở bản chép bằng `ReceiveDir` mới.
+    """
+    import shutil
+
+    shutil.copytree(root, dest, symlinks=True, copy_function=shutil.copy2)
+    return Path(dest)
+
+
+def block_hashes(data: bytes) -> list[bytes]:
+    """SHA-256 từng khối 1 MiB của `data` (khối cuối có thể ngắn)."""
+    from teleport.core.blocks import BLOCK_SIZE, block_count
+
+    return [
+        hashlib.sha256(data[i * BLOCK_SIZE : (i + 1) * BLOCK_SIZE]).digest()
+        for i in range(block_count(len(data)))
+    ]
+
+
+def write_blocks(part, data: bytes, indices=None) -> list[tuple[int, bytes]]:
+    """Ghi các khối `indices` (mặc định mọi khối) của `data` vào `part`; trả `(index, sha256)` để `commit`."""
+    from teleport.core.blocks import BLOCK_SIZE, block_count
+
+    if indices is None:
+        indices = range(block_count(len(data)))
+    out = []
+    for i in indices:
+        chunk = data[i * BLOCK_SIZE : (i + 1) * BLOCK_SIZE]
+        part.write_at(i, chunk)
+        out.append((i, hashlib.sha256(chunk).digest()))
+    return out
+
+
 # --- Fixture -------------------------------------------------------------------------------------
+
+
+@pytest.fixture(name="record_for", scope="session")
+def record_for_fixture():
+    """`record_for(tid, sizes, *, verified=0, receiver=…, sender=…, names=None, done_at=None)`.
+
+    Bản ghi `transfer.json` cho `ReceiveDir.create_temp(tid, record)` (spec-p3-3a mục 4 V1, 8.1).
+    Phạm vi session (hàm thuần) để dùng được trong test `hypothesis`.
+    """
+    return record_for
+
+
+@pytest.fixture(scope="session")
+def resume_helpers():
+    """Hàm và hằng phụ trợ cho test `.state` / `transfer.json` / dọn tạm (P3-3a)."""
+    import re
+
+    return SimpleNamespace(
+        RECEIVER=RECORD_RECEIVER,
+        SENDER=RECORD_SENDER,
+        MTIME=RECORD_MTIME,
+        DONE_AT=RECORD_DONE_AT,
+        LAYOUT_PATTERN=LAYOUT_PATTERN,
+        LAYOUT_RE=re.compile(LAYOUT_PATTERN),
+        record_for=record_for,
+        parse_state=parse_state,
+        snapshot=tree_snapshot,
+        crash_copy=crash_copy,
+        block_hashes=block_hashes,
+        write_blocks=write_blocks,
+    )
 
 
 @pytest.fixture
