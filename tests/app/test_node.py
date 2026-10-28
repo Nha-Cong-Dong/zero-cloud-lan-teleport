@@ -1172,7 +1172,8 @@ def _close_terms():
 def test_p27_close_time_limit_covers_every_close_step(monkeypatch):
     """spec-p2-7 A2: trần ≥ ghép đôi (CLOSE_SESSIONS + ABORT_ON_CANCEL + 1) + Listener.close
     (2×CLOSE_TIMEOUT + 1) + task nền (CLOSE_TIMEOUT + 1) + CANCEL_FLUSH + CLOSE_DISK_WAIT + mDNS
-    (ít nhất một instance × MDNS_CLOSE_ALLOWANCE)."""
+    (ít nhất một instance × MDNS_CLOSE_ALLOWANCE); P3-3b (spec-p3-3b mục 2.6): + xả bia mộ
+    (TOMBSTONE_FLUSH_TIMEOUT)."""
     app_pairing, app_transfers, connection = _close_terms()
     assert node_mod.MDNS_CLOSE_ALLOWANCE > 0
     limit = node_mod.close_time_limit()
@@ -1186,6 +1187,7 @@ def test_p27_close_time_limit_covers_every_close_step(monkeypatch):
         + 1
         + app_transfers.CANCEL_FLUSH_TIMEOUT
         + app_transfers.CLOSE_DISK_WAIT
+        + app_transfers.TOMBSTONE_FLUSH_TIMEOUT
         + node_mod.MDNS_CLOSE_ALLOWANCE
     )
     assert isinstance(limit, float | int) and limit >= floor - 1e-9, (limit, floor)
@@ -1199,6 +1201,7 @@ def test_p27_close_time_limit_covers_every_close_step(monkeypatch):
         ("connection", "CLOSE_TIMEOUT", 3),
         ("transfers", "CANCEL_FLUSH_TIMEOUT", 1),
         ("transfers", "CLOSE_DISK_WAIT", 1),
+        ("transfers", "TOMBSTONE_FLUSH_TIMEOUT", 1),
         ("node", "MDNS_CLOSE_ALLOWANCE", 1),
     ],
 )

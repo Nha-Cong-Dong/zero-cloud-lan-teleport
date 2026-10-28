@@ -754,3 +754,118 @@ def test_open_for_resume_restart_writes_state_header_before_new_part(
     assert "truoc-tao-.part" in labels and "sau-tao-.part" in labels, labels
     for label, root in copies:
         check_crash_copy(storage, h, label, root, x_bytes, data)
+
+
+# ---------------------------------------------------------------------------------------------
+# V5 (spec-p3 “Sau phán quyết P3-3a”, spec-p3-3b mục 4): `drop_target` lỗi `fstat` sau khi đã tạo
+# `.part` mới → `.part` rỗng sót lại; `open_for_resume` và `cleanup` phải xử lý được
+# ---------------------------------------------------------------------------------------------
+
+
+def _fail_fstat_of_new_part(storage, mp) -> dict:
+    """Lần `fstat` đầu tiên trên fd của `0.part` vừa tạo bằng `O_EXCL` ném `OSError(EIO)`."""
+    import errno
+
+    real_open, real_fstat = storage.os.open, storage.os.fstat
+    seen: dict = {"fd": None, "failed": 0}
+
+    def fake_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if seen["fd"] is None and os.fspath(path).endswith("0.part") and flags & os.O_EXCL:
+            seen["fd"] = fd
+        return fd
+
+    def fake_fstat(fd, *args, **kwargs):
+        if fd == seen["fd"] and not seen["failed"]:
+            seen["failed"] += 1
+            raise OSError(errno.EIO, "fstat giả lỗi")
+        return real_fstat(fd, *args, **kwargs)
+
+    mp.setattr(storage.os, "open", fake_open)
+    mp.setattr(storage.os, "fstat", fake_fstat)
+    return seen
+
+
+def _drop_target_fails_after_part_created(storage, tmp_path, record_for, h, *, end: str = "close"):
+    """File đích sai ở dòng “đúng `size`” (`VERIFY_TARGET`), `drop_target` lỗi `fstat` ngay sau khi tạo
+    `.part`. Rồi app đóng lượt: `end="close"` → `close_temp` (tạm dừng), `"remove"` → `remove_temp` (lượt
+    lỗi `storage_failed(REREAD)` bị dọn). Trả (thư mục nhận, thư mục tạm, dữ liệu nguồn, nội dung file đích
+    sai); `ReceiveDir` đã đóng."""
+    crash, (data,) = finalize_with_crash(storage, tmp_path, record_for, h, "_after_replace")
+    target = crash / TARGET
+    wrong = payload(SIZE, seed=77)
+    target.write_bytes(wrong)
+    tdir = crash / ".teleport" / ID
+    rd, _, handle = resume_from(storage, crash, h)
+    with rd:
+        assert handle.mode == storage.ResumeMode.VERIFY_TARGET
+        with pytest.MonkeyPatch.context() as mp:
+            seen = _fail_fstat_of_new_part(storage, mp)
+            with pytest.raises(OSError):
+                handle.part.drop_target()
+        assert seen["failed"] == 1, "fstat của .part mới không được gọi"
+        # `.part` rỗng sót lại cạnh header `.state` đã bền (quên TARGET + RESERVED); file đích không đổi.
+        assert os.path.getsize(tdir / "0.part") == 0
+        assert (tdir / "0.state").read_bytes() == rs.encode_header(ID, 0, SIZE)
+        assert target.read_bytes() == wrong
+        if end == "close":
+            rd.close_temp(handle.temp)
+        else:
+            rd.remove_temp(handle.temp)
+    return crash, tdir, data, wrong
+
+
+def test_v5_part_left_by_failed_drop_target_is_resumed_as_new_part(storage, tmp_path, record_for, h):
+    crash, _, data, wrong = _drop_target_fails_after_part_created(storage, tmp_path, record_for, h)
+    rd, _, handle = resume_from(storage, crash, h)
+    with rd:
+        assert handle.mode == storage.ResumeMode.NORMAL
+        assert handle.part_blocks == 0
+        assert bit_set(handle.bits, 3) == set()
+        handle.part.commit(h.write_blocks(handle.part, data))
+        final = rd.finalize(handle.part, NAME)
+        assert final not in (crash / TARGET, crash / NAME)
+        assert final.read_bytes() == data
+    assert (crash / TARGET).read_bytes() == wrong, "file đích sai phải để nguyên"
+    check_sentinels(crash)
+
+
+def test_v5_part_left_by_failed_drop_target_is_removed_by_cleanup_after_grace(
+    storage, tmp_path, record_for, h
+):
+    import time
+
+    from teleport.core import transfer as core_transfer
+
+    crash, tdir, _, wrong = _drop_target_fails_after_part_created(storage, tmp_path, record_for, h)
+    now = time.time()
+    with storage.ReceiveDir.open(crash) as rd:
+        kw = {"own_device_id": h.RECEIVER, "skip": frozenset(), "retention": storage.TEMP_RETENTION}
+        assert rd.cleanup(now, **kw) == 0  # còn trong hạn nối lại
+        assert tdir.is_dir()
+        assert rd.cleanup(now + core_transfer.RECONNECT_GRACE + 3600, **kw) == 1
+    assert not tdir.exists()
+    assert (crash / ".teleport").is_dir()
+    assert (crash / TARGET).read_bytes() == wrong
+    check_sentinels(crash)
+
+
+def test_v5_part_left_by_failed_drop_target_survives_remove_temp_then_cleanup_removes_it(
+    storage, tmp_path, record_for, h
+):
+    """App dọn lượt lỗi bằng `remove_temp`: `.part` chưa rõ danh tính có thể bị để lại; phần còn lại chỉ là
+    tên của bố cục và lần dọn tạm sau `TEMP_RETENTION` xóa hết; không đụng file đích hay file canh gác."""
+    import time
+
+    crash, tdir, _, wrong = _drop_target_fails_after_part_created(
+        storage, tmp_path, record_for, h, end="remove"
+    )
+    if tdir.exists():
+        assert all(h.LAYOUT_RE.fullmatch(n) for n in os.listdir(tdir)), os.listdir(tdir)
+        with storage.ReceiveDir.open(crash) as rd:
+            later = time.time() + storage.TEMP_RETENTION + 3600
+            kw = {"own_device_id": h.RECEIVER, "skip": frozenset(), "retention": storage.TEMP_RETENTION}
+            assert rd.cleanup(later, **kw) == 1
+    assert not tdir.exists()
+    assert (crash / TARGET).read_bytes() == wrong
+    check_sentinels(crash)

@@ -312,7 +312,8 @@ def close_time_limit() -> float:
     Cộng các bước có hạn của `close()`: chờ đẩy `cancel` (`CANCEL_FLUSH_TIMEOUT`); đóng ghép đôi
     (`CLOSE_SESSIONS_TIMEOUT` + `ABORT_ON_CANCEL_TIMEOUT` + 1); đóng mDNS (`MDNS_CLOSE_ALLOWANCE`
     mỗi instance, tối đa hai instance); `Listener.close` (2 × `CLOSE_TIMEOUT` + 1); chờ task nền
-    (`CLOSE_TIMEOUT` + 1); chờ đĩa (`CLOSE_DISK_WAIT`). Thread đĩa treo không kéo dài thêm (daemon).
+    (`CLOSE_TIMEOUT` + 1); chờ đĩa (`CLOSE_DISK_WAIT`); xả bia mộ (`TOMBSTONE_FLUSH_TIMEOUT`).
+    Thread đĩa treo không kéo dài thêm (daemon).
     """
     return (
         app_transfers.CANCEL_FLUSH_TIMEOUT
@@ -325,6 +326,7 @@ def close_time_limit() -> float:
         + net_connection.CLOSE_TIMEOUT
         + 1
         + app_transfers.CLOSE_DISK_WAIT
+        + app_transfers.TOMBSTONE_FLUSH_TIMEOUT
     )
 
 
@@ -548,6 +550,7 @@ class Node:
         self._timer_deadline: float | None = None  # thời điểm bộ hẹn giờ đang chờ tới
         self._timer_task: asyncio.Task | None = None
         self._netwatch_task: asyncio.Task | None = None
+        self._cleanup_task: asyncio.Task | None = None  # hẹn giờ dọn tạm (chỉ khi có thư mục nhận)
         self._mdns: MdnsDiscovery | None = None
         self._mdns_closing: set[MdnsDiscovery] = set()  # instance cũ đang đóng (khởi động lại)
         self._mdns_lock = asyncio.Lock()
@@ -560,8 +563,13 @@ class Node:
     async def start(self) -> None:
         """Lấy `node.lock`, nạp danh tính và kho tin cậy, mở cổng, bật mDNS (nếu có).
 
-        Có `receive_dir` thì mở thư mục nhận (qua `DiskExecutor`, hạn `DISK_OP_TIMEOUT`) và
-        tạo `TransferManager` trước khi mở cổng.
+        Có `receive_dir` thì mở thư mục nhận (qua `DiskExecutor`, hạn `DISK_OP_TIMEOUT`). Tạo
+        `TransferManager` và chạy `TransferManager.restore()` trước khi mở cổng: khôi phục bia mộ
+        (`tombstones.json`), lượt đã xong và lượt nhận dở; `start` có thể chậm thêm tối đa hạn đọc
+        bia mộ (`DISK_OP_TIMEOUT`) + hạn quét (`DISK_SYNC_TIMEOUT`) + hạn tổng của bước mở lại
+        (docs/architecture.md mục 5). Sau khi mở cổng
+        và mDNS, có `receive_dir` thì bật hẹn giờ dọn tạm (`cleanup_temps`, lần đầu chạy ngay, rồi
+        mỗi `CLEANUP_INTERVAL`).
 
         Lỗi bay ra sau khi đã dọn (đóng cổng, đóng mDNS, nhả khóa): NodeLockedError,
         IdentityError (cả khi `PairingService` không đọc được khóa để ký lúc ghép đôi),
@@ -621,6 +629,7 @@ class Node:
                 store=store,
                 executor=disk,
                 receive_dir=receive_dir,
+                config_dir=self._config_dir,
                 auto_accept=self._auto_accept,
                 rate_limit=self._rate_limit,
                 on_event=self._on_transfer_event,
@@ -629,6 +638,10 @@ class Node:
             )
             self._transfers = transfers
             transfers.start()
+            # Khôi phục lượt nhận dở, bia mộ, lượt đã xong trước khi mở cổng (lời gọi engine đầu tiên).
+            await transfers.restore()
+            if self._close_done is not None:
+                raise RuntimeError("Node đã bị đóng trong lúc khởi động")
             await self._listen(listener)
             if self._close_done is not None:
                 raise RuntimeError("Node đã bị đóng trong lúc khởi động")
@@ -639,6 +652,10 @@ class Node:
             self._timer_task = asyncio.create_task(self._links_timer(), name=f"{_TASK_NAME}.links-timer")
             if self._mdns_opts is not None and self._mdns_opts.advertise:
                 self._netwatch_task = asyncio.create_task(self._netwatch(), name=f"{_TASK_NAME}.netwatch")
+            if receive_dir is not None:
+                self._cleanup_task = asyncio.create_task(
+                    self._cleanup_temps(transfers), name=f"{_TASK_NAME}.cleanup-temps"
+                )
         except BaseException:
             self._closing = True  # _apply không tạo task mới nữa
             try:
@@ -661,7 +678,7 @@ class Node:
         `close()`: đóng cổng ngay (đồng bộ), đóng mDNS chạy nền, rồi để lỗi bay ra — bên
         gọi chỉ nhả khóa sau khi cổng đã đóng.
         """
-        tasks = [t for t in (self._timer_task, self._netwatch_task) if t is not None]
+        tasks = [t for t in (self._timer_task, self._netwatch_task, self._cleanup_task) if t is not None]
         tasks += [*self._attempts.values(), *self._link_tasks]
         for task in tasks:
             task.cancel()
@@ -745,14 +762,17 @@ class Node:
             log.warning("không lưu được cổng dự phòng vào settings.json (%s)", type(e).__name__)
 
     async def close(self) -> None:
-        """Hủy mọi lượt truyền và phiên ghép đôi, gửi goodbye mDNS, đóng cổng và mọi kết nối,
-        dọn thư mục tạm, nhả `node.lock`.
+        """Tạm dừng lượt đang nhận, hủy các lượt truyền khác và phiên ghép đôi, gửi goodbye mDNS,
+        đóng cổng và mọi kết nối, dọn thư mục tạm, lưu bia mộ, nhả `node.lock`.
 
-        Thứ tự (docs/architecture.md mục 5): hủy mọi lượt truyền (trước `await` đầu tiên); dừng hẹn
-        giờ; chờ đẩy các `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi
-        cổng cắt kết nối dữ liệu; đóng ghép đôi, mDNS (mỗi instance chờ tối đa
-        `MDNS_CLOSE_ALLOWANCE`), cổng, kết nối; rồi chờ các hàng đĩa xóa thư mục tạm tối đa
-        `CLOSE_DISK_WAIT` và đóng thư mục nhận (bỏ qua nếu còn thread đĩa bận). Gọi nhiều lần hay
+        Thứ tự (docs/architecture.md mục 5): `TransferManager.begin_close()` (trước `await` đầu
+        tiên): tạm dừng lượt đang nhận (không `cancel`, thư mục tạm giữ cho lần chạy sau), hủy lượt
+        gửi và `offer` đang chờ; dừng hẹn giờ (`core.links`, theo dõi mạng, dọn tạm); chờ đẩy các
+        `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi cổng cắt kết nối
+        dữ liệu; đóng ghép đôi, mDNS (mỗi instance chờ tối đa `MDNS_CLOSE_ALLOWANCE`), cổng, kết
+        nối; rồi `TransferManager.close()`: chờ các hàng đĩa tối đa `CLOSE_DISK_WAIT`, xả
+        `tombstones.json` tối đa `TOMBSTONE_FLUSH_TIMEOUT`, đóng thư mục nhận (bỏ qua nếu còn
+        thread đĩa bận). Gọi nhiều lần hay
         đồng thời đều được; trước `start` hay sau khi `start` thất bại thì không làm gì. Bị hủy
         giữa chừng thì vẫn hủy cứng mọi phiên ghép đôi (không ghi `trusted.json` nữa), mọi task
         truyền file (không chờ đĩa), ngừng nhận kết nối và hủy mọi kết nối trước khi nhả khóa
@@ -771,8 +791,9 @@ class Node:
         transfers = self._transfers
         try:
             if transfers is not None:
-                transfers.begin_close()  # đồng bộ, trước await đầu tiên: ngừng nhận offer, hủy mọi lượt
-            await self._stop_tasks([self._timer_task, self._netwatch_task])
+                # Đồng bộ, trước await đầu tiên: tạm dừng lượt đang nhận, ngừng nhận offer, hủy lượt khác.
+                transfers.begin_close()
+            await self._stop_tasks([self._timer_task, self._netwatch_task, self._cleanup_task])
             if transfers is not None:
                 await transfers.flush_control(app_transfers.CANCEL_FLUSH_TIMEOUT)
             await self._pairing.close()  # phiên đang chạy gửi pair_abort{user}
@@ -789,7 +810,9 @@ class Node:
                 task.cancel()  # kết nối ra: ControlChannel đóng gọn
             await self._drain_background()
             if transfers is not None:
-                await transfers.close()  # task dữ liệu, hàng đĩa (≤ CLOSE_DISK_WAIT), thư mục nhận
+                # Task dữ liệu, hàng đĩa (≤ CLOSE_DISK_WAIT), bia mộ (≤ TOMBSTONE_FLUSH_TIMEOUT),
+                # thư mục nhận.
+                await transfers.close()
         except BaseException:
             self._pairing.abort_all()
             if transfers is not None:
@@ -830,7 +853,7 @@ class Node:
         return instances
 
     def _all_node_tasks(self) -> list[asyncio.Task]:
-        tasks = [t for t in (self._timer_task, self._netwatch_task) if t is not None]
+        tasks = [t for t in (self._timer_task, self._netwatch_task, self._cleanup_task) if t is not None]
         return [*tasks, *self._attempts.values(), *self._link_tasks, *self._background]
 
     @staticmethod
@@ -1294,6 +1317,16 @@ class Node:
                             await self._links_wake.wait()
             self._links_wake.clear()
             self._apply(links.tick(self._now()))
+
+    @staticmethod
+    async def _cleanup_temps(transfers: TransferManager) -> None:
+        """Hẹn giờ dọn tạm: lần đầu ngay sau khi mở cổng, rồi mỗi `CLEANUP_INTERVAL` (đọc lúc dùng)."""
+        while True:
+            try:
+                await transfers.cleanup_temps()
+            except Exception:  # cleanup_temps không ném (trừ CancelledError): phòng thủ
+                log.exception("dọn tạm lỗi")
+            await asyncio.sleep(app_transfers.CLEANUP_INTERVAL)
 
     def _spawn(self, coro: Coroutine[Any, Any, None], name: str) -> asyncio.Task:
         task = asyncio.create_task(coro, name=name)

@@ -624,6 +624,14 @@ def test_transfer_result_message_receiver_silent_rejections(cli, result, rej):
 
 
 @pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
+def test_transfer_result_message_receiver_suspended_is_silent(cli, status):
+    """P3-3b Q1 (spec-p3-3b mục 2.1, 3): `receive` không in câu nào cho lượt tạm dừng (`SUSPENDED`, nằm
+    trong `_RECEIVE_SILENT`); câu chữ thuộc P3-4."""
+    fin = finished("receive", "suspended", by_peer=False, status=status)
+    assert message(cli, fin, peer=SENDER) == []
+
+
+@pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
 @pytest.mark.parametrize(("file_index", "info_index"), [(None, 0), (0, 0), (2, 1), (None, 3)])
 def test_m16_sender_sentence_for_receiver_error_names_no_file(cli, status, file_index, info_index):
     """M16 (spec-p2-8 A): bên nhận gửi `cancel{error}` (lỗi ghi đĩa, dữ liệu hỏng, thư mục tạm còn sót —
@@ -704,6 +712,7 @@ _RESULTS = [
     "peer_error",
     "unknown_transfer",
     "cancelled_other",
+    "suspended",  # P3-3b (spec-p3-3b mục 8.2)
 ]
 _REJECT_FOR = {
     "rejected_user": ("user", {}),
@@ -1614,23 +1623,39 @@ async def test_send_text_mode_ctrl_c_prints_stopping_line(pair_dirs, transfer_en
 
 @with_marks(socket_test)
 async def test_i7_ctrl_c_on_receive_mid_transfer(pair_dirs, transfer_env, cli_runs):
+    """I7 sửa ở P3-3b (spec-p3-3b mục 2.4, 5.2, Q1): Ctrl+C `receive` giữa lượt → lượt **tạm dừng**:
+    `result` = `suspended` (by_peer false, `message` rỗng: chưa có câu, P3-4), thoát 0, sự kiện cuối
+    `stopped`, thư mục tạm còn `transfer.json`, `0.part`, `0.state`. `send` không nhận `cancelled_user`
+    mà sang “Đang nối lại…”; test tự dừng `send` (Ctrl+C → `cancelled_user` của chính nó, mã 1)."""
     net = pair_dirs
     recv = cli_runs("receive", receive_argv(net))
     port = (await recv.wait_event("receiving"))["port"]
     f = make_file(net.src, "lon.bin", 2 * MiB)
     send = cli_runs("send", send_argv(net, [f], port, extra=["--limit-rate", "64K"]))
-    await transferring(recv)
+    status = await transferring(recv)
+    tid = status["transfer_id"]
     recv.press()
     assert await recv.code(15) == 0
     [mine] = recv.events_of("result")
-    assert (mine["result"], mine["by_peer"]) == ("cancelled_user", False)
-    assert mine["message"] == R_SELF_CANCELLED.format(s=SENDER)
+    assert (mine["result"], mine["by_peer"]) == ("suspended", False), mine
+    assert mine["message"] == ""
     assert recv.events()[-1]["event"] == "stopped"
+    assert lock_is_free(net.R)
+    left = set(os.listdir(net.recv / ".teleport" / tid))
+    assert {"transfer.json", "0.part", "0.state"} <= left, left
+    assert not (net.recv / "lon.bin").exists()
+
+    await wait_until(
+        lambda: any(e["status"] == "reconnecting" for e in send.events_of("status")),
+        5,
+        "send chưa chuyển sang “Đang nối lại…”",
+    )
+    assert send.events_of("result") == [], send.events_of("result")
+    assert not send.task.done()
+    send.press()
     assert await send.code(10) == 1
     [res] = send.events_of("result")
-    assert (res["result"], res["by_peer"]) == ("cancelled_user", True)
-    assert res["message"] == S_PEER_STOPPED.format(p=RECEIVER)
-    assert lock_is_free(net.R)
+    assert (res["result"], res["by_peer"]) == ("cancelled_user", False), res
 
 
 @with_marks(socket_test)

@@ -1418,8 +1418,14 @@ _REJECTED = frozenset(
     }
 )
 # Bên nhận: kết quả chỉ báo qua JSON (máy này tự trả lời, không phải lỗi người dùng cần biết).
+# `SUSPENDED` (Ctrl+C khi đang nhận: tạm dừng, không hủy) tạm im lặng; câu chữ ở P3-4.
 _RECEIVE_SILENT = frozenset(
-    {TransferResult.REJECTED_BUSY, TransferResult.REJECTED_OTHER, TransferResult.REJECTED_NOT_RECEIVING}
+    {
+        TransferResult.REJECTED_BUSY,
+        TransferResult.REJECTED_OTHER,
+        TransferResult.REJECTED_NOT_RECEIVING,
+        TransferResult.SUSPENDED,
+    }
 )
 _KEPT = "Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại."
 
