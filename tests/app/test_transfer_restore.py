@@ -5,6 +5,8 @@ xếp loại, mở lại song song có hạn, một khối đồng bộ, `Transf
 trước khi mở cổng; hẹn giờ dọn tạm với `skip` chụp đồng bộ), 3 (Q4, Q6), 5 (V2 (c), V3), 8.1 mục 6
 (hạn tổng của bước mở lại), 8 (lỗi `engine.restore` → gọi lại một lần với `receives=()`); `specs/spec-p3.md`
 mục P3-3b (“Xong khi”); protocol §6.2, §6.3; architecture mục 4 (“Khôi phục”, “Dọn tạm”).
+`specs/spec-fix-app.md` (1a: `Node.start` bị hủy lúc đang mở lại → handle và `ReceiveDir` đóng sau khi
+việc đĩa treo xong; 1d: máy gửi không còn tin cậy; mục 9 thắng 1–8).
 
 Hai cách dựng trạng thái: (1) chạy lượt thật B → A rồi đóng A có trật tự (tạm dừng), mở lại A bằng
 `node_factory` cùng nhãn; (2) dựng thẳng thư mục nhận bằng API `teleport.app.storage` (lượt nhận dở của
@@ -228,33 +230,112 @@ def write_spy(monkeypatch):
     return spy
 
 
+class DiskOrder:
+    """Nhật ký có thứ tự (an toàn giữa các thread) của các bước đóng: `("rd_close", rd)` lúc một
+    `ReceiveDir` còn mở bắt đầu `close()`, `("close_temp", transfer_id)`, `("remove_temp", transfer_id)`,
+    và các mốc test tự thêm (`add`). `opened`: mọi `ReceiveDir` mở qua `ReceiveDir.open` sau `install`."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.events: list[tuple[str, object]] = []
+        self.opened: list[storage.ReceiveDir] = []
+
+    def add(self, kind: str, what: object) -> None:
+        with self.lock:
+            self.events.append((kind, what))
+
+    def reset(self) -> None:
+        """Quên mọi thứ đã ghi (gọi sau khi test tự dựng thư mục nhận, trước khi mở node)."""
+        with self.lock:
+            self.events.clear()
+            self.opened.clear()
+
+    def index(self, kind: str, what: object) -> int | None:
+        """Vị trí lần đầu có `(kind, what)` (so `rd` bằng `is`), không có → None."""
+        with self.lock:
+            for i, (k, w) in enumerate(self.events):
+                if k == kind and (w is what or w == what):
+                    return i
+        return None
+
+    def of(self, kind: str) -> list[object]:
+        with self.lock:
+            return [w for k, w in self.events if k == kind]
+
+    def install(self, monkeypatch) -> None:
+        spy = self
+        real_open = storage.ReceiveDir.open
+        real_close = storage.ReceiveDir.close
+        real_close_temp = storage.ReceiveDir.close_temp
+        real_remove = storage.ReceiveDir.remove_temp
+
+        def open_(cls, root):
+            rd = real_open(root)
+            with spy.lock:
+                spy.opened.append(rd)
+            return rd
+
+        def close(rd):
+            if not rd.closed:
+                spy.add("rd_close", rd)
+            return real_close(rd)
+
+        def close_temp(rd, temp):
+            spy.add("close_temp", temp.transfer_id)
+            return real_close_temp(rd, temp)
+
+        def remove_temp(rd, temp, *, keep_record=False):
+            spy.add("remove_temp", temp.transfer_id)
+            return real_remove(rd, temp, keep_record=keep_record)
+
+        monkeypatch.setattr(storage.ReceiveDir, "open", classmethod(open_))
+        monkeypatch.setattr(storage.ReceiveDir, "close", close)
+        monkeypatch.setattr(storage.ReceiveDir, "close_temp", close_temp)
+        monkeypatch.setattr(storage.ReceiveDir, "remove_temp", remove_temp)
+
+
+@pytest.fixture
+def disk_order(monkeypatch):
+    order = DiskOrder()
+    order.install(monkeypatch)
+    return order
+
+
 class HangingOpen:
     """Thay `ReceiveDir.open_for_resume`: lượt trong `hung` chặn ở cổng (trong thread đĩa) rồi mới gọi bản
     thật với đúng `stop` nó nhận; ghi lại `stop` để kiểm nó đã được đặt khi quá hạn.
 
     `ignore_stop=True`: sau cổng gọi bản thật với `stop=None`, nên việc treo trả một `ResumeHandle` thật
-    (kết quả tới muộn mà bên gọi phải tự đóng); `returned` giữ các handle đã trả như thế."""
+    (kết quả tới muộn mà bên gọi phải tự đóng); `returned` giữ các handle đã trả như thế. `order`
+    (`DiskOrder`): thêm `("open_done", transfer_id)` khi bản thật của việc treo trả về hay ném lỗi."""
 
-    def __init__(self, hung, *, ignore_stop: bool = False) -> None:
+    def __init__(self, hung, *, ignore_stop: bool = False, order: DiskOrder | None = None) -> None:
         self.hung = set(hung)
         self.gate = threading.Event()
         self.stops: dict[str, object] = {}
         self.real = storage.ReceiveDir.open_for_resume
         self.ignore_stop = ignore_stop
+        self.order = order
         self.returned: dict[str, storage.ResumeHandle] = {}
 
     def install(self, monkeypatch) -> None:
         spy = self
 
         def open_for_resume(rd, scan, *, stop=None):
-            if scan.transfer_id in spy.hung:
-                spy.stops[scan.transfer_id] = stop
-                spy.gate.wait(30)
+            tid = scan.transfer_id
+            if tid not in spy.hung:
+                return spy.real(rd, scan, stop=stop)
+            spy.stops[tid] = stop
+            spy.gate.wait(30)
+            try:
                 if spy.ignore_stop:
                     handle = spy.real(rd, scan, stop=None)
-                    spy.returned[scan.transfer_id] = handle
+                    spy.returned[tid] = handle
                     return handle
-            return spy.real(rd, scan, stop=stop)
+                return spy.real(rd, scan, stop=stop)
+            finally:
+                if spy.order is not None:
+                    spy.order.add("open_done", tid)
 
         monkeypatch.setattr(storage.ReceiveDir, "open_for_resume", open_for_resume)
 
@@ -846,8 +927,10 @@ async def test_node_start_cleans_orphan_and_other_node_temps_only_past_temp_rete
     (−1 giờ) thì giữ nguyên từng byte. Giờ tường vá qua `_wall_time` (mẫu ở test REMEMBER_TTL).
 
     Không có ca “máy gửi không còn tin cậy” (`receiver` là máy này): `ReceiveDir.cleanup` xếp nó vào lượt
-    của máy này, ngưỡng `RECONNECT_GRACE`, khác architecture mục 4 (đoạn `transfer.json`: “dọn theo luật
-    thư mục mồ côi”); đã báo lại, chờ quyết định."""
+    của máy này, ngưỡng `RECONNECT_GRACE` (architecture mục 4); ca đó có ở
+    `test_running_transfer_of_untrusted_sender_is_not_reopened_and_is_cleaned_after_reconnect_grace` (qua
+    `Node.start`, cuối file này) và
+    `test_storage_cleanup.py::test_cleanup_running_with_untrusted_sender_is_still_this_nodes`."""
     a_id, ids = world("C")
     root = tmp_path / "nhan"
     other_node = uuid.uuid4().hex
@@ -980,7 +1063,8 @@ async def test_open_for_resume_error_logs_label_only_and_other_transfer_still_re
     """spec-p3-5 V11e (mục 3): `open_for_resume` của một lượt ném lỗi khi `Node.start`.
 
     `NotResumableError` / `StorageError` / `ValueError` / `OSError` → đúng một INFO có `transfer_id[:8]` và
-    tên loại lỗi, không `transfer_id` đầy đủ, tên file hay đường dẫn (mvp N9), không WARNING+ nào.
+    tên loại lỗi, không `transfer_id` đầy đủ, tên file hay đường dẫn (mvp N9, kế hoạch mục 3.7), không
+    WARNING+ nào.
     `RuntimeError` (không lường trước) → một ERROR kèm traceback. Cả hai: node chạy, thư mục tạm của lượt
     lỗi giữ nguyên từng byte, lượt của máy gửi khác vẫn `TransferResumed`."""
     caplog.set_level(logging.INFO)
@@ -1155,13 +1239,23 @@ async def test_start_cancelled_during_restore_sets_stop_and_leaves_disk_untouche
     await wait_until(lambda: app_helpers.lock_is_free(tmp_path / "A"), 5, "node.lock chưa được nhả")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "lỗi src (P3-5 V11c): `_restore_open` hẹn `_close_late_handle` vào `_disk_tasks` rồi `abort_now` "
-        "hủy nó trước khi nó chạy; handle mở lại tới muộn không bao giờ được đóng"
-    ),
-)
+def receive_dir_of_node(order: DiskOrder) -> storage.ReceiveDir:
+    """`ReceiveDir` duy nhất mở qua `ReceiveDir.open` từ lần `order.reset()` cuối (của node đang thử)."""
+    assert len(order.opened) == 1, f"mong đúng một ReceiveDir được node mở, có {len(order.opened)}"
+    return order.opened[0]
+
+
+def assert_closed_after(order: DiskOrder, rd: storage.ReceiveDir, *steps: tuple[str, object]) -> None:
+    """`rd` được đóng đúng một lần và sau mọi mốc `steps` (mỗi mốc phải có trong nhật ký)."""
+    closes = [w for w in order.of("rd_close") if w is rd]
+    assert len(closes) == 1, f"ReceiveDir đóng {len(closes)} lần"
+    at = order.index("rd_close", rd)
+    for step in steps:
+        i = order.index(*step)
+        assert i is not None, f"thiếu mốc {step} trong nhật ký {order.events}"
+        assert i < at, f"ReceiveDir đóng trước mốc {step}: {order.events}"
+
+
 @leakcheck
 async def test_late_resume_handle_after_cancelled_start_is_closed_and_shutdown_submit_is_swallowed(
     world,
@@ -1170,15 +1264,18 @@ async def test_late_resume_handle_after_cancelled_start_is_closed_and_shutdown_s
     record_for,
     resume_helpers,
     submit_spy,
+    disk_order,
     tmp_path,
     monkeypatch,
     caplog,
     grace_real,
 ):
-    """V11c (1) (spec-p3-5 mục 3, 9.2 N8): việc mở lại treo trả handle thật sau khi `Node.start` đã bị hủy
-    (kết quả tới muộn) → bên gọi phải đóng nó (`_close_late_handle` → `_close_temp`): `submit` sau
-    `abort_now` ném `RuntimeError` (executor đã shutdown), bên gọi nuốt lỗi đó và đóng handle ngay trên
-    loop; không có ERROR, kể cả ngoại lệ task không ai lấy; đĩa để nguyên."""
+    """V11c (1) (spec-p3-5 mục 3, 9.2 N8) và spec-fix-app (1a): việc mở lại treo trả handle thật sau khi
+    `Node.start` đã bị hủy (kết quả tới muộn) → bên gọi phải đóng nó (`_close_late_handle` → `_close_temp`):
+    `submit` sau `abort_now` ném `RuntimeError` (executor đã shutdown, ít nhất một lần, spec-fix-app S8),
+    bên gọi nuốt lỗi đó và đóng handle ngay trên loop; rồi `ReceiveDir` của node được đóng (đuôi đĩa)
+    trong 3 s, **sau** khi việc treo trả về và sau `close_temp` của đúng lượt đó (spy có thứ tự,
+    spec-fix-app S7); không có ERROR, kể cả ngoại lệ task không ai lấy; đĩa để nguyên."""
     caplog.set_level(logging.WARNING)
     a_id, ids = world("C")
     root = tmp_path / "nhan"
@@ -1187,16 +1284,23 @@ async def test_late_resume_handle_after_cancelled_start_is_closed_and_shutdown_s
         storage, root, record_for, resume_helpers, tid, sender=ids["C"], receiver=a_id, blocks=(0,), age=50
     )
     before = resume_helpers.snapshot(d)
-    fake = HangingOpen([tid], ignore_stop=True)
+    fake = HangingOpen([tid], ignore_stop=True, order=disk_order)
     fake.install(monkeypatch)
+    disk_order.reset()
     await cancel_start_during_restore(node_factory, root, tid, fake, submit_spy)
+    rd = receive_dir_of_node(disk_order)
     await wait_until(lambda: tid in fake.returned, 10, "việc mở lại treo chưa trả handle")
     handle = fake.returned[tid]
     try:
         await wait_until(lambda: handle.temp.closed, 3, "handle mở lại tới muộn không được đóng")
+        await wait_until(lambda: rd.closed, 3, "ReceiveDir không được đóng sau khi việc treo xong")
         assert submit_spy.rejected_after_abort(), (
             "không lần `submit` nào sau abort_now ném RuntimeError: chưa đi qua nhánh executor đã shutdown"
         )
+        assert disk_order.of("close_temp") == [tid], disk_order.events
+        assert disk_order.index("open_done", tid) < disk_order.index("close_temp", tid), disk_order.events
+        assert_closed_after(disk_order, rd, ("open_done", tid), ("close_temp", tid))
+        assert disk_order.of("remove_temp") == []
         gc.collect()
         await asyncio.sleep(0)
         assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
@@ -1204,4 +1308,152 @@ async def test_late_resume_handle_after_cancelled_start_is_closed_and_shutdown_s
     finally:
         if not handle.temp.closed:  # lỗi đang kiểm: đóng giùm để không giữ file trên Windows
             handle.temp._close_quietly()
+        if not rd.closed:
+            rd.close()
     await wait_until(lambda: app_helpers.lock_is_free(tmp_path / "A"), 5, "node.lock chưa được nhả")
+
+
+@leakcheck
+async def test_receive_dir_is_closed_only_after_hanging_restore_returns_when_start_is_cancelled(
+    world,
+    node_factory,
+    app_helpers,
+    record_for,
+    resume_helpers,
+    disk_order,
+    tmp_path,
+    monkeypatch,
+    caplog,
+    grace_real,
+):
+    """spec-fix-app (1a): `Node.start` bị hủy khi một lần mở lại đang treo trong thread đĩa (việc đó tôn
+    trọng `stop`, không trả handle). Lúc `start` ném `CancelledError` thì `ReceiveDir` chưa được đóng (thread
+    còn dùng nó); mở cổng → trong 3 s `ReceiveDir` được đóng, và lần đóng xảy ra sau khi việc treo trả
+    về; không ERROR; không xóa gì (`remove_temp` không được gọi), lượt để nguyên trên đĩa."""
+    caplog.set_level(logging.WARNING)
+    a_id, ids = world("C")
+    root = tmp_path / "nhan"
+    tid = uuid.uuid4().hex
+    d = build_running(
+        storage, root, record_for, resume_helpers, tid, sender=ids["C"], receiver=a_id, blocks=(0,), age=50
+    )
+    before = resume_helpers.snapshot(d)
+    fake = HangingOpen([tid], order=disk_order)
+    fake.install(monkeypatch)
+    disk_order.reset()
+    A = await node_factory("A", start=False, node_kwargs={"receive_dir": root, "auto_accept": True})
+    starting = asyncio.create_task(A.node.start())
+    rd = None
+    try:
+        await wait_until(lambda: tid in fake.stops, 10, "chưa tới bước mở lại")
+        rd = receive_dir_of_node(disk_order)
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+        assert not rd.closed, "ReceiveDir bị đóng khi thread đĩa còn đang dùng nó"
+        assert disk_order.of("rd_close") == []
+        fake.gate.set()
+        await wait_until(lambda: disk_order.index("open_done", tid) is not None, 10, "việc treo chưa trả về")
+        await wait_until(lambda: rd.closed, 3, "ReceiveDir không được đóng sau khi việc treo xong")
+        assert_closed_after(disk_order, rd, ("open_done", tid))
+        assert disk_order.of("remove_temp") == []
+        gc.collect()
+        await asyncio.sleep(0)
+        assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
+        assert resume_helpers.snapshot(d) == before
+    finally:
+        fake.gate.set()
+        if rd is not None and not rd.closed:
+            await asyncio.sleep(0.5)
+            if not rd.closed:  # lỗi đang kiểm: đóng giùm để không giữ file trên Windows
+                rd.close()
+    await wait_until(lambda: app_helpers.lock_is_free(tmp_path / "A"), 5, "node.lock chưa được nhả")
+
+
+# =================================================================================================
+# spec-fix-app (1d): `receiver` là máy này, `sender` không còn tin cậy, qua `Node.start`
+# =================================================================================================
+
+
+@pytest.fixture
+def resume_open_spy(monkeypatch):
+    """`transfer_id` của mọi lời gọi `ReceiveDir.open_for_resume` (bản thật vẫn chạy)."""
+    calls: list[str] = []
+    real = storage.ReceiveDir.open_for_resume
+
+    def open_for_resume(rd, scan, *, stop=None):
+        calls.append(scan.transfer_id)
+        return real(rd, scan, stop=stop)
+
+    monkeypatch.setattr(storage.ReceiveDir, "open_for_resume", open_for_resume)
+    return calls
+
+
+@leakcheck
+@pytest.mark.parametrize("scan_stale", [False, True], ids=["quet-dung", "quet-con-tin"])
+@pytest.mark.parametrize(
+    ("offset", "removed"), [(-3600.0, False), (3600.0, True)], ids=["con-han-noi-lai", "qua-han-noi-lai"]
+)
+async def test_running_transfer_of_untrusted_sender_is_not_reopened_and_is_cleaned_after_reconnect_grace(
+    T,
+    world,
+    restart,
+    cleanup_spy,
+    resume_open_spy,
+    record_for,
+    resume_helpers,
+    tmp_path,
+    monkeypatch,
+    grace_real,
+    offset,
+    removed,
+    scan_stale,
+):
+    """spec-fix-app (1d), architecture mục 4 (“Dọn tạm”, `transfer.json`): lượt nhận dở có `receiver` là
+    máy này, `sender` là một `device_id` hợp lệ không có trong `trusted.json`. `Node.start` không mở lại nó
+    (không lời gọi `open_for_resume` nào cho lượt đó, không `TransferResumed`); lần dọn đầu sau
+    `Node.start` dùng ngưỡng `RECONNECT_GRACE` của lượt máy này: hoạt động cuối + `RECONNECT_GRACE` − 1 giờ
+    → giữ nguyên từng byte; + `RECONNECT_GRACE` + 1 giờ (vẫn dưới `TEMP_RETENTION`) → bị xóa.
+
+    `quet-con-tin`: bước quét (`scan_temps`) còn thấy máy gửi trong danh sách tin cậy nó nhận (như khi máy
+    gửi bị bỏ ghép đôi giữa lúc quét và lúc xếp loại), nên lượt hiện là RUNNING; `restore` vẫn phải đối
+    chiếu danh sách tin cậy hiện tại và bỏ lượt đó (spec-fix-app mục 4, dòng 1d `:846`)."""
+    assert REAL_GRACE + 3600 < storage.TEMP_RETENTION, "tiền đề: ca quá hạn phải dưới TEMP_RETENTION"
+    a_id, _ = world()
+    stranger = uuid.uuid4().hex
+    assert stranger not in {dev.device_id for dev in TrustStore.load(tmp_path / "A").devices()}
+    root = tmp_path / "nhan"
+    tid = uuid.uuid4().hex
+    d = build_running(
+        storage, root, record_for, resume_helpers, tid, sender=stranger, receiver=a_id, blocks=(0, 1), age=0
+    )
+    before = resume_helpers.snapshot(d)
+    wall = newest_mtime(d) + REAL_GRACE + offset
+    monkeypatch.setattr(T, "_wall_time", lambda: wall)
+    kinds: list[storage.TempKind] = []
+    if scan_stale:
+        real_scan = storage.ReceiveDir.scan_temps
+
+        def scan_temps(rd, own_device_id, trusted_ids):
+            scans = real_scan(rd, own_device_id, {*trusted_ids, stranger})
+            kinds.extend(s.kind for s in scans if s.transfer_id == tid)
+            return scans
+
+        monkeypatch.setattr(storage.ReceiveDir, "scan_temps", scan_temps)
+
+    A = await restart("A", receive_dir=root, auto_accept=True)
+    if scan_stale:
+        assert kinds == [storage.TempKind.RUNNING], f"tiền đề: bước quét phải thấy lượt RUNNING, có {kinds}"
+    assert tid not in resume_open_spy, "lượt của máy gửi không còn tin cậy không được mở lại"
+    assert A.trec.of("TransferResumed") == [] and A.transfers.transfers() == ()
+    await wait_until(lambda: len(cleanup_spy) >= 1, 5, "lần dọn đầu sau Node.start chưa chạy")
+    first = cleanup_spy[0]
+    assert first.wall_now == wall
+    if removed:
+        assert first.removed == 1
+        assert not d.exists()
+    else:
+        assert first.removed == 0
+        assert resume_helpers.snapshot(d) == before
+    assert tid not in resume_open_spy
+    assert (root / ".teleport").is_dir()

@@ -143,7 +143,7 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 | `complete` | gửi → nhận | `transfer_id`, `file_index`, `merkle_root` |
 | `verified` | nhận → gửi | file đã kiểm tra xong và mang tên thật |
 | `cancel` | ↔ | `transfer_id`, lý do (danh sách: `protocol.md` mục 3.3) |
-| `clipboard` | ↔ | `kind` (`text` / `image/png`), `sha256`, dữ liệu (văn bản hoặc base64), chia thành nhiều mảnh |
+| `clipboard` | ↔ | một mảnh của một clip: `clip_id`, `kind` (`text` / `image/png`), `sha256`, `total`, `index`, `count`, dữ liệu (văn bản hoặc base64); trường và luật: `protocol.md` mục 3.2, 3.3 |
 | `ping` / `pong` | ↔ | giữ kết nối, phát hiện mất kết nối |
 
 **Khung khối nhị phân** (rút gọn từ bảng gói tin trong bản ý tưởng ban đầu), đóng gói bằng `struct.pack("!BII32s", ...)`:
@@ -159,10 +159,11 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 ### 3.6. Đồng bộ clipboard
 *(mvp F8, N6)*
 - Dùng `QClipboard.dataChanged` (văn bản + ảnh). Nếu signal không đáng tin trên một hệ điều hành thì chuyển sang polling 500ms. Lõi làm việc qua giao diện `ClipboardBackend`; bản Qt do tầng `ui` cung cấp.
-- **Chống vòng lặp:** nhớ hash nội dung vừa nhận; không gửi lại nội dung trùng hash.
+- Phần sans-IO (chia, ráp, chống vòng lặp, giới hạn tốc độ, lọc nhạy cảm) ở `teleport.core.clipboard`; hành vi và hợp đồng với `app`/`ui` ở docstring của module đó.
+- **Chống vòng lặp** bằng fingerprint: văn bản là SHA-256 của văn bản đã chuẩn hóa như trên dây (`\r\n` thành `\n`, `protocol.md` mục 3.3), nên hệ điều hành đổi xuống dòng khi ghi clipboard không làm đổi fingerprint; bên nhận tính fingerprint từ văn bản đã ráp, không lấy `sha256` trên dây (bên gửi khác có thể không chuẩn hóa); ảnh là SHA-256 của **pixel** đã giải mã (kèm kích thước và định dạng pixel), không phải của byte PNG, vì mã hóa lại PNG ra byte khác. **Một** `LoopGuard` cho cả node nhớ các fingerprint vừa ghi từ máy khác (cả fingerprint đọc lại sau khi ghi); clipboard đổi thành nội dung trùng thì không gửi. Máy chỉ gửi nội dung do chính người dùng nó tạo ra, **không chuyển tiếp** clip nhận được: với 3 máy, máy thứ hai không gửi tiếp cho máy thứ ba clip mà máy thứ nhất đã gửi thẳng cho cả hai.
 - Bật/tắt theo từng thiết bị đã ghép đôi, **mặc định tắt** (clipboard có thể chứa mật khẩu).
-- Bỏ qua nội dung được trình quản lý mật khẩu đánh dấu nhạy cảm (`ExcludeClipboardContentFromMonitorProcessing` trên Windows, `org.nspasteboard.ConcealedType` trên macOS, `x-kde-passwordManagerHint` trên Linux).
-- Văn bản và ảnh lớn được chia thành nhiều message nhỏ (giới hạn: [protocol.md](protocol.md) mục 3.2), nên một lần gửi clipboard không giữ kết nối điều khiển lâu và `ping`/`pong` vẫn chen vào được giữa các mảnh; khối dữ liệu file đi trên kết nối riêng. Cách chia chốt ở Giai đoạn 5.
+- Bỏ qua nội dung được trình quản lý mật khẩu đánh dấu nhạy cảm. Windows: có định dạng `ExcludeClipboardContentFromMonitorProcessing`, hoặc `CanIncludeInClipboardHistory` / `CanUploadToCloudClipboard` mang DWORD bằng 0. macOS: `org.nspasteboard.ConcealedType`; Linux: `x-kde-passwordManagerHint`. So tên không phân biệt hoa thường, cả tên trần lẫn dạng `application/x-qt-…-mime;value="…"` của Qt. Không đọc được giá trị DWORD thì coi là nhạy cảm. Tên trên macOS/Linux chưa kiểm tay (Giai đoạn 5, phần giao diện).
+- Văn bản và ảnh lớn được chia thành nhiều message nhỏ, nên một lần gửi clipboard không giữ kết nối điều khiển lâu và `ping`/`pong` vẫn chen vào được giữa các mảnh; khối dữ liệu file đi trên kết nối riêng. Cách chia, trần dung lượng và luật ráp: [protocol.md](protocol.md) mục 3.3.
 
 ### 3.7. Quyền riêng tư & “Zero-Cloud”
 *(mvp N9)*
@@ -299,6 +300,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Khay hệ thống, chạy nền (F9); node chạy trong tiến trình giao diện, một bản giao diện mỗi thư mục cấu hình ([architecture.md](architecture.md) mục 2).
 - IPC CLI↔giao diện (CLI gửi lệnh cho node của giao diện thay vì tự chạy node): **dời ra khỏi Giai đoạn 4**, chưa có lịch. Tới khi có, CLI và giao diện cùng thư mục cấu hình loại trừ nhau và CLI báo phải thoát giao diện trước (mvp mục 8).
   - Lưu ý khi làm IPC: tới `v0.2`, CLI in ra stdout đồng bộ ngay trên event loop của node, nên terminal ngừng đọc (ví dụ đang tạm dừng cuộn) có thể làm cả node đứng chờ. Máy khác trong LAN không gây ra được việc này. Khi node chạy trong tiến trình giao diện, việc in hay gửi sự kiện cho CLI qua IPC không được chặn event loop của node.
+  - Node sống lâu trong tiến trình giao diện: mở lại `Node` (cùng tiến trình) hay để tiến trình khác lấy `node.lock` vừa nhả phải chờ đuôi đĩa của node cũ xong, không thì có thể mở lại đúng lượt mà thread đĩa cũ còn ghi và lượt nối lại hỏng; giữ một event loop suốt đời ứng dụng để đuôi đĩa chạy xong (đuôi đĩa: [architecture.md](architecture.md) mục 5, “Thứ tự `Node.close()`”).
 - Tiếng Việt và English bằng Qt Linguist (F11); dùng được bằng bàn phím, theo chế độ sáng/tối (N12).
 - Đo RAM khi rảnh (N3) ngay ở bản này.
 - Đo lại N1 trên hai máy thật: chuyển vào đợt đo (mục 5.4).
