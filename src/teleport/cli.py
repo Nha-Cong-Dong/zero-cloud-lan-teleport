@@ -12,17 +12,19 @@ Mã thoát của truyền file:
   `DONE`, file không gửi được (trừ thư mục), `--to` không khớp đúng một thiết bị tin cậy, khóa
   bận, không kết nối được, hay Ctrl+C trước khi xong; 2 khi `--limit-rate` / `--address` sai,
   quá `MAX_OFFER_FILES` file, chọn thư mục, hay chọn một file hai lần.
-- `receive`: 0 khi dừng bằng Ctrl+C (kể cả lần hai, kể cả khi có lượt lỗi); 1 khi lỗi khởi động
-  (khóa bận, thư mục nhận không dùng được…); 2 khi tham số sai.
+- `receive`: 0 khi dừng bằng Ctrl+C (kể cả lần hai, kể cả khi có lượt lỗi, kể cả khi có lượt
+  tạm dừng); 1 khi lỗi khởi động (khóa bận, thư mục nhận không dùng được…); 2 khi tham số sai.
 
 `send` kiểm `--to` (`find_trusted`) và các file (`preview_sources`) trước khi lấy `node.lock`
 hay đụng mạng; node của nó nghe cổng 0 (không lưu), chỉ duyệt mDNS và chỉ tự nối tới đích
 (`--address`: `connect_hint`, lần thử thất bại được báo ngay). Một tiến trình gửi đúng một
-lượt. `receive` quảng bá mDNS, giữ kết nối với mọi thiết bị tin cậy, hỏi `[c/k]` từng `offer`
-theo docs/mvp.md mục 7.3 (`--yes`: tự nhận, không đọc stdin).
+lượt; mất kết nối thì chờ nối lại tới `RECONNECT_GRACE`. `receive` quảng bá mDNS, giữ kết nối
+với mọi thiết bị tin cậy, hỏi `[c/k]` từng `offer` theo docs/mvp.md mục 7.3 (`--yes`: tự nhận,
+không đọc stdin); lượt nhận dở được khôi phục khi khởi động thì nhận tiếp, không hỏi lại.
 
-Bẫy tín hiệu của `send` / `receive`: `cancel{user}` chỉ ra dây trong `Node.close()` có trật tự
-(`begin_close` rồi `flush_control`). Không dùng `task.cancel()` cho Ctrl+C như các lệnh khác: sau
+Bẫy tín hiệu của `send` / `receive`: `cancel{user}` của `send` và `reject{user}` cho `offer` đang
+chờ của `receive` chỉ ra dây trong `Node.close()` có trật tự (`begin_close` rồi `flush_control`);
+lượt đang nhận thì tạm dừng, không gửi gì. Không dùng `task.cancel()` cho Ctrl+C như các lệnh khác: sau
 một lần hủy, `Task.cancelling()` ≥ 1 suốt lúc `close()` chạy trong task đó, zeroconf thấy vậy thì
 dừng giữa chừng; còn Ctrl+C lần hai qua handler mặc định của `asyncio.Runner` ném
 KeyboardInterrupt. Vì vậy `cmd_send` / `cmd_receive` gắn handler trước `runner.run` (Runner thấy
@@ -55,7 +57,10 @@ trước mọi chữ do máy kia đặt; tên máy kia (chưa xác thực) hiệ
 vẫn báo đúng kết quả đó và trả mã thoát theo nó; chỉ khi chưa có kết quả mới báo đã hủy.
 
 `--json`: `listen`, `pair`, `send` và `receive` in JSON Lines (mỗi sự kiện một dòng), các lệnh
-khác in một object. Khóa tiếng Anh, có `time` UTC.
+khác in một object. Khóa tiếng Anh, có `time` UTC. `receive` phát `restored` cho mỗi lượt nhận
+dở được khôi phục còn trong hạn nối lại (thay cho `offer`; lượt quá hạn chỉ có `result: expired`),
+và `result` với `result: "suspended"` cho lượt tạm dừng khi Ctrl+C; `payload_sent` (byte payload
+đã gửi) chỉ có trong `result` của `send`.
 """
 
 from __future__ import annotations
@@ -130,6 +135,7 @@ from teleport.app.transfers import (
     TransferKey,
     TransferProgress,
     TransferResult,
+    TransferResumed,
     TransferStatus,
     TransferStatusChanged,
     TransferUpdate,
@@ -444,7 +450,7 @@ def connect_failed_message(view: DeviceView, result: ConnectResult) -> list[str]
 def _print_event(output: _Output, event: NodeEvent) -> None:
     """In một `NodeEvent` của `teleport listen`."""
     view = event.device
-    who = f"“{display_name(view.name)}” ({view.device_id[:8]}"
+    who = f"“{_name_label(view.name)}” ({view.device_id[:8]}"
     if isinstance(event, DeviceOnline):
         where = f"{view.addresses[0]}:{view.port}" if view.addresses else "?"
         output.text(f"Thấy {who}, {_os_label(view.os)}, {_paired_label(view)}) tại {where}.")
@@ -528,10 +534,10 @@ def _prompt_lines(prompt: PairingPrompt, *, listening: bool) -> list[str]:
     warning = _code_warning(prompt)
     if warning is not None:
         lines.append(warning)
-    name = display_name(prompt.peer_name)
+    name = _name_label(prompt.peer_name)
     lines.append(f"Máy kia tự xưng là “{name}” (mã máy {short_id}, {prompt.address}).")
     if prompt.known_name is not None:
-        known = display_name(prompt.known_name)
+        known = _name_label(prompt.known_name)
         lines.append(f"Máy này đã ghép đôi với mã máy {short_id} trước đây, tên đã lưu: “{known}”.")
         # Ghép đôi lại cập nhật tên theo hello ở cả hai vai (protocol mục 5.5).
         if prompt.known_name != prompt.peer_name:
@@ -957,7 +963,7 @@ async def _pair_by_name(
         assert view.port is not None and view.addresses
         state.seen_name = view.name
         output.text(
-            f"Đang kết nối tới “{display_name(view.name)}” ({view.device_id[:8]}) "
+            f"Đang kết nối tới “{_name_label(view.name)}” ({view.device_id[:8]}) "
             f"tại {view.addresses[0]}:{view.port}…"
         )
         result = await _pair_with(node, lines, prompter, view.addresses, view.port, state=state)
@@ -1311,9 +1317,18 @@ def _file_label(name: str) -> str:
     return display_filename(_printable(name))
 
 
+def _name_label(name: str) -> str:
+    """Tên máy để in (không ngoặc): `_printable` rồi `display_name`.
+
+    Tên máy đã qua `validate_device_name` (ở `trusted.json`, mDNS hay ghép đôi); vẫn qua `_printable`
+    (phòng thủ chiều sâu, không đổi tên hợp lệ), nên mọi chỗ in cùng một tên ra cùng một chuỗi.
+    """
+    return display_name(_printable(name))
+
+
 def _peer_label(name: str | None, device_id: str) -> str:
-    """Tên máy kia trong câu (không ngoặc): `display_name`, không có tên thì 8 ký tự đầu của mã."""
-    return display_name(name) if name else device_id[:8]
+    """Tên máy kia trong câu (không ngoặc): `_name_label`, không có tên thì 8 ký tự đầu của mã."""
+    return _name_label(name) if name else _printable(device_id[:8])
 
 
 def _file_at(info: TransferInfo, index: int | None) -> str:
@@ -1418,13 +1433,12 @@ _REJECTED = frozenset(
     }
 )
 # Bên nhận: kết quả chỉ báo qua JSON (máy này tự trả lời, không phải lỗi người dùng cần biết).
-# `SUSPENDED` (Ctrl+C khi đang nhận: tạm dừng, không hủy) tạm im lặng; câu chữ ở P3-4.
+# `SUSPENDED` (Ctrl+C khi đang nhận: tạm dừng, không hủy) có câu riêng, không thuộc nhóm này.
 _RECEIVE_SILENT = frozenset(
     {
         TransferResult.REJECTED_BUSY,
         TransferResult.REJECTED_OTHER,
         TransferResult.REJECTED_NOT_RECEIVING,
-        TransferResult.SUSPENDED,
     }
 )
 _KEPT = "Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại."
@@ -1457,6 +1471,14 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
         return [_RECEIVE_REJECTED]
     if result in _RECEIVE_SILENT:
         return []
+    if result is TransferResult.SUSPENDED:
+        # “24 giờ” là `RECONNECT_GRACE`, viết thẳng trong câu. Không in `--dir` thật.
+        what = f"{n} file" if n > 1 else file
+        return [
+            f"Đã tạm dừng nhận {what} từ {s}. Chạy lại `teleport receive` (cùng thư mục nhận) để nhận "
+            "tiếp phần còn thiếu, miễn là máy gửi vẫn đang chờ; quá 24 giờ kể từ lúc mất kết nối thì "
+            "lần chạy sau sẽ xóa phần nhận dở."
+        ]
     if (
         result is TransferResult.REJECTED_NO_SPACE
         and reject is not None
@@ -1498,8 +1520,8 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
         ]
     if result is TransferResult.TEMP_EXISTS:
         return [
-            f"Không nhận được lượt gửi từ {s} vì thư mục tạm của lượt này còn sót lại từ lần trước "
-            "(ví dụ Teleport vừa bị tắt đột ngột). Hãy nhờ gửi lại."
+            f"Không nhận được lượt gửi từ {s} vì thư mục tạm của lượt này đã có sẵn mà Teleport "
+            "không dùng tiếp được. Hãy nhờ gửi lại."
         ]
     if result is TransferResult.CORRUPT:
         return [f"Dữ liệu nhận từ {s} bị hỏng nhiều lần liên tiếp nên đã dừng nhận {file}. {_KEPT}"]
@@ -1510,6 +1532,21 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
     if result is TransferResult.PROTOCOL_ERROR:
         return [_protocol_error(s)]
     return [f"{s} đã dừng lượt gửi."]  # CANCELLED_OTHER, UNPAIRED…
+
+
+def transfer_resumed_message(info: TransferInfo, *, peer_name: str | None) -> str:
+    """Câu báo lượt nhận dở được khôi phục khi khởi động (`TransferResumed`, docs/mvp.md mục 8).
+
+    `peer_name`: tên máy gửi (chưa qua `display_name`; None → 8 ký tự đầu của mã). Số file là
+    `len(info.files)`; dung lượng đã nhận / tổng qua `format_size`.
+    """
+    p = _peer_label(peer_name, info.key.device_id)
+    done = format_size(max(0, info.done_bytes))
+    total = format_size(max(0, info.total_bytes))
+    return (
+        f"Tiếp tục nhận {len(info.files)} file từ {p} (đã nhận {done} / {total}). "
+        "Đang chờ máy đó kết nối lại…"
+    )
 
 
 def offer_prompt_lines(offer: OfferReceived, *, peer_name: str | None, receive_dir: Path | None) -> list[str]:
@@ -1670,6 +1707,17 @@ def receive_dir_error_message(error: ReceiveDirUnavailable) -> list[str]:
     return [f"{head} {tail}"]
 
 
+def _reconnect_unreachable_message(p: str) -> str:
+    """`send` đang chờ nối lại mà `core.links` báo không tới được máy nhận (mvp mục 8).
+
+    “24 giờ” là `RECONNECT_GRACE`, viết thẳng trong câu.
+    """
+    return (
+        f"Chưa nối lại được với {p}. Teleport vẫn đang thử lại (tối đa 24 giờ). "
+        "Hãy kiểm tra máy đó vẫn đang chạy `teleport receive` và hai máy còn chung một mạng."
+    )
+
+
 def _unreachable_data_message(p: str) -> str:
     return (
         f"Không mở được kết nối truyền dữ liệu tới {p}; tường lửa trên máy đó có thể đang chặn Teleport. "
@@ -1709,6 +1757,9 @@ class _Session:
         """Ctrl+C lần đầu (trước khi in “Đang dừng…”)."""
         self.stopping = True
 
+    def after_stopping(self) -> None:
+        """Đã in “Đang dừng…”, trước khi hủy task làm việc và đóng node."""
+
 
 async def _close_node(node: Node, interrupts: Interrupts) -> None:
     """`node.close()` có trật tự trong task riêng (không bị hủy), tối đa `close_time_limit()` giây.
@@ -1745,6 +1796,7 @@ async def _supervise(
         if not task.done():
             session.on_stop()
             output.text(_STOPPING)
+            session.after_stopping()
             task.cancel()
             await asyncio.wait({task})
     finally:
@@ -1808,7 +1860,7 @@ async def _start_transfer_node(node: Node, output: _Output) -> int | None:
 def _key_of(update: TransferUpdate) -> TransferKey | None:
     if isinstance(update, OfferReceived | FileDone):
         return update.key
-    if isinstance(update, TransferStatusChanged | TransferProgress | TransferFinished):
+    if isinstance(update, TransferStatusChanged | TransferProgress | TransferFinished | TransferResumed):
         return update.info.key
     return None  # DataUnreachable: chỉ có device_id
 
@@ -1847,7 +1899,9 @@ class _TransferPrinter:
 
     def handle(self, update: TransferUpdate) -> None:
         if isinstance(update, TransferStatusChanged):
-            self._status(update.info)
+            self.status(update.info)
+        elif isinstance(update, TransferResumed):
+            self._resumed(update.info)
         elif isinstance(update, TransferProgress):
             self._progress(update)
         elif isinstance(update, FileDone):
@@ -1857,7 +1911,8 @@ class _TransferPrinter:
         elif isinstance(update, DataUnreachable):
             self._unreachable(update.device_id)
 
-    def _status(self, info: TransferInfo) -> None:
+    def status(self, info: TransferInfo, *, quiet_reconnecting: bool = False) -> None:
+        """Trạng thái mới của lượt. `quiet_reconnecting`: không in dòng “Đang nối lại…” (JSON vẫn có)."""
         key = info.key
         self.note_files(key, len(info.files))
         out = self._output
@@ -1869,9 +1924,30 @@ class _TransferPrinter:
         elif status is TransferStatus.WAITING and sending:
             out.text(f"Đang chờ {self._peer(key.device_id)} trả lời…")
         elif status is TransferStatus.RECONNECTING:
-            out.text(_RECONNECTING)
+            if not quiet_reconnecting:
+                out.text(_RECONNECTING)
         elif status is TransferStatus.VERIFYING:
             out.text(f"Đang kiểm tra {_file_at(info, None)}…")
+
+    def _resumed(self, info: TransferInfo) -> None:
+        """Lượt nhận dở được khôi phục khi khởi động: câu (mvp mục 8) và sự kiện JSON `restored`."""
+        key = info.key
+        self.note_files(key, len(info.files))
+        name = self._name_of(key.device_id)
+        receive_dir = self._receive_dir()
+        out = self._output
+        out.text(transfer_resumed_message(info, peer_name=name))
+        out.event(
+            "restored",
+            **_transfer_fields(key),
+            device_name=name,
+            files=[{"name": n, "size": e.size} for n, e in zip(info.names, info.files, strict=False)],
+            total_bytes=info.total_bytes,
+            done_bytes=info.done_bytes,
+            file_index=info.file_index,
+            file_count=len(info.files),
+            receive_dir=None if receive_dir is None else str(receive_dir),
+        )
 
     def _progress(self, update: TransferProgress) -> None:
         info = update.info
@@ -1931,6 +2007,8 @@ class _TransferPrinter:
         message = transfer_result_message(finished, peer_name=name, receive_dir=self._receive_dir())
         out = self._output
         out.text(*(message if lines is None else lines))
+        # `payload_sent` chỉ có ở chiều gửi (bên nhận luôn 0, không in).
+        sent = {"payload_sent": finished.payload_sent} if key.direction is Direction.SEND else {}
         out.event(
             "result",
             **_transfer_fields(key),
@@ -1943,6 +2021,7 @@ class _TransferPrinter:
             file_count=len(info.files),
             done_bytes=info.done_bytes,
             total_bytes=info.total_bytes,
+            **sent,
             message=" ".join(message),
         )
 
@@ -1982,7 +2061,11 @@ class _SendSession(_Session):
             self.connected = True
             self.wake.set()
         elif isinstance(event, ConnectFailed):
-            if self.sending:
+            if self.sending and event.result is ConnectResult.UNREACHABLE:
+                # Đang chờ nối lại: không phải câu “mạng chặn” (mvp mục 8, “Mất mạng”). Mỗi đợt mất
+                # kết nối `core.links` chỉ báo một lần.
+                self.output.text(_reconnect_unreachable_message(_peer_label(self.peer_name, self.device_id)))
+            elif self.sending:
                 self.output.text(*connect_failed_message(view, event.result))
             elif self.failure is None:
                 self.failure = event
@@ -2138,7 +2221,7 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
     except ValueError:
         return _duplicate_error(output)
     total = sum(f.entry.size for f in files)
-    name = display_name(device.name)
+    name = _name_label(device.name)
     mdns = _mdns_options(args, advertise=False)
     if mdns is None and endpoint is None:
         output.error("discovery_error", _no_discovery_message(name, "đang tắt"))
@@ -2169,7 +2252,7 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
         _trusted_lookup_error(output, query, DeviceNotFound(query, node.store.devices()))
         return 1
     session.peer_name = current.name
-    name = display_name(current.name)
+    name = _name_label(current.name)
     if endpoint is not None:
         node.connect_hint(current.device_id, [endpoint[0]], endpoint[1])
         output.text(f"Đang kết nối tới “{name}” tại {endpoint[0]}:{endpoint[1]}…")
@@ -2287,6 +2370,27 @@ class _ReceiveSession(_Session):
     - Ctrl+C (`node.close()` từ chối mọi lượt còn chờ): lượt đang hỏi không in gì (đã có “Đang
       dừng…”); lượt chưa hiện lời hỏi (đang xếp hàng, hay chưa có `offer` vì `core` còn giữ trong
       hàng của thiết bị) in “Đã từ chối N file từ X vì đang dừng nhận.”
+
+    Ctrl+C khi đang nhận: `node.close()` tạm dừng lượt (`TransferFinished(SUSPENDED)`), mỗi lượt
+    một câu tạm dừng, sau “Đang dừng…”. Ctrl+C sau khi `Node.start` trả về mà trước khi in xong
+    phần đầu thì các sự kiện đang giữ được in ngay sau “Đang dừng…” (`after_stopping`).
+
+    Giới hạn đã biết: Ctrl+C trong lúc `Node.start` (sau bước khôi phục, lúc mở cổng hay mDNS) thì
+    `node.close()` không tạm dừng lượt khôi phục, nên không có câu tạm dừng: mọi sự kiện đang giữ và
+    tới sau bị bỏ (không có “Tiếp tục nhận…”, `restored` hay `result` của lượt đó). Lượt dở vẫn
+    nằm trên đĩa và được khôi phục ở lần chạy sau.
+
+    Lượt khôi phục khi khởi động (`TransferResumed`, phát trong `Node.start()`, nên in sau phần
+    đầu): một câu “Tiếp tục nhận…” và sự kiện JSON `restored` thay cho `offer`, không hỏi `[c/k]`
+    kể cả khi không có `--yes`. Sau đó lượt được in như lượt đã nhận, trừ dòng “Đang nối lại…”
+    của trạng thái `reconnecting` ban đầu (JSON `status` vẫn có); lượt rời `reconnecting` một
+    lần thì các lần mất kết nối sau in như thường. `status` chỉ được in cho lượt đã có `offer`
+    hay `TransferResumed`: lượt khôi phục đã quá hạn nối lại (không có `TransferResumed`) chỉ
+    có `result: expired`.
+
+    Giới hạn: lượt bị tạm dừng trước khi thư mục tạm của nó được tạo (vài ms sau khi nhận) không
+    có `transfer.json`, nên lần chạy sau không khôi phục nó mà hỏi lại `[c/k]` khi máy gửi gửi
+    lại `offer`.
     """
 
     def __init__(self, output: _Output) -> None:
@@ -2296,12 +2400,16 @@ class _ReceiveSession(_Session):
             output, name_of=self._name_of, receive_dir=self._receive_dir, prefix=True
         )
         self._pending: list[Callable[[], None]] | None = []
+        self._muted = False  # Ctrl+C trong lúc `Node.start`: bỏ mọi sự kiện (`after_stopping`)
+        self.started = False  # `Node.start` đã trả về thành công
         self._queue: deque[tuple[OfferReceived, float]] = deque()  # (offer, lúc in sự kiện offer)
         self._current: OfferReceived | None = None
         self._shown_at = 0.0
         self._stdin_closed = False
         self._told_closed = False
         self._offered: set[TransferKey] = set()  # lượt đã phát `offer`
+        self._resumed: set[TransferKey] = set()  # lượt khôi phục đã phát `restored`
+        self._quiet_reconnect: set[TransferKey] = set()  # lượt khôi phục chưa rời `reconnecting` ban đầu
         self._shown: set[TransferKey] = set()  # lượt đã hiện lời hỏi (`--json`: đã tới lượt hỏi)
         self._eof_rejected: set[TransferKey] = set()  # đã từ chối vì đầu vào đóng (B13 / M14 thay C6)
 
@@ -2323,6 +2431,8 @@ class _ReceiveSession(_Session):
             return None
 
     def _later(self, fn: Callable[[], None]) -> None:
+        if self._muted:
+            return
         if self._pending is not None:
             self._pending.append(fn)
         else:
@@ -2333,6 +2443,19 @@ class _ReceiveSession(_Session):
         pending, self._pending = self._pending, None
         for fn in pending or ():
             fn()
+
+    def after_stopping(self) -> None:
+        if self.started:
+            # Ctrl+C sau `Node.start` mà trước khi in xong phần đầu: in các sự kiện đã giữ lại ngay
+            # sau “Đang dừng…”, để câu tạm dừng (và JSON `result`) của các lượt đóng trong
+            # `node.close()` không bị mất.
+            self.ready()
+            return
+        # Ctrl+C trong lúc `Node.start` (sau khi khôi phục, lúc mở cổng hay mDNS): `close()` không
+        # tạm dừng lượt khôi phục (không có `SUSPENDED`), nên bỏ mọi sự kiện đang giữ và tới sau,
+        # để không in câu “Tiếp tục nhận…” / `restored` mà không có kết quả. Đĩa giữ nguyên.
+        self._pending = None
+        self._muted = True
 
     def on_event(self, event: NodeEvent) -> None:
         if isinstance(event, DeviceConnected | DeviceDisconnected | ConnectFailed):
@@ -2351,11 +2474,27 @@ class _ReceiveSession(_Session):
         if isinstance(update, OfferReceived):
             self._offered.add(key)
             self._offer(update)
+        elif isinstance(update, TransferResumed):
+            if key in self._resumed or key in self._offered:
+                return  # phòng thủ: mỗi lượt chỉ một sự kiện đầu
+            self._resumed.add(key)
+            self._quiet_reconnect.add(key)
+            self.printer.handle(update)
         elif isinstance(update, TransferFinished):
             self._offered.discard(key)
+            self._resumed.discard(key)
+            self._quiet_reconnect.discard(key)
             self._finished(update)
-        elif isinstance(update, TransferStatusChanged) and key not in self._offered:
-            return  # kiểm chỗ trống / xếp hàng trước khi hỏi: `offer` là sự kiện đầu của lượt
+        elif isinstance(update, TransferStatusChanged):
+            if key not in self._offered and key not in self._resumed:
+                # Kiểm chỗ trống / xếp hàng trước khi hỏi (`offer` là sự kiện đầu của lượt), hay lượt
+                # khôi phục đã quá hạn nối lại (chỉ báo kết quả).
+                return
+            reconnecting = update.info.status is TransferStatus.RECONNECTING
+            quiet = reconnecting and key in self._quiet_reconnect
+            if not reconnecting:
+                self._quiet_reconnect.discard(key)  # đã rời `reconnecting` ban đầu
+            self.printer.status(update.info, quiet_reconnecting=quiet)
         else:
             self.printer.handle(update)
 
@@ -2515,6 +2654,7 @@ async def _receive_main(
     code = await _start_transfer_node(node, output)
     if code is not None:
         return code
+    session.started = True  # cùng bước với lúc `start` trả về (không `await` xen giữa)
     addresses = await node.local_addresses()
     port = node.port
     root = node.transfers.receive_dir or receive_dir

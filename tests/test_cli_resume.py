@@ -10,6 +10,10 @@ xong). `send` nối tới máy nhận qua proxy TCP (`tcp_proxy`) để khi `rec
 `Popen.kill()` (Windows: TerminateProcess; POSIX: SIGKILL). Ca “lúc đọc lại”: một `sitecustomize.py` trong
 thư mục riêng (chỉ nạp khi có biến môi trường của test) làm `PartFile.reread` của tiến trình nhận báo một
 dấu lên stderr rồi treo, để test giết đúng lúc đang đọc lại.
+
+P3-4 (`specs/spec-p3-4.md` việc V3, mục 9 S4): giữ `--json`; lần chạy lại phải có `restored` của lượt dở,
+`result` của `send` có `payload_sent`, Ctrl+C có `message` = câu (a). Bản text và câu (e) của `send` được
+kiểm trong tiến trình (`tests/test_cli_transfer.py`, mục P3-4), vì bản text không in cổng để dựng proxy.
 """
 
 from __future__ import annotations
@@ -32,6 +36,13 @@ LOCAL = "127.0.0.1"
 SENDER = "Laptop-Minh"
 RECEIVER = "PC-Nha"
 MiB = 1024 * 1024
+N4_EXTRA = 64 * MiB  # mvp N4: gửi lại ≤ phần chưa nhận + 64 MiB
+# Câu (a) của P3-4 (spec-p3-4 mục 9.1 Q3), lượt một file
+R_SUSPENDED = (
+    "Đã tạm dừng nhận {what} từ {s}. Chạy lại `teleport receive` (cùng thư mục nhận) để nhận tiếp phần "
+    "còn thiếu, miễn là máy gửi vẫn đang chờ; quá 24 giờ kể từ lúc mất kết nối thì lần chạy sau sẽ xóa "
+    "phần nhận dở."
+)
 HANG_MARK = "TEST-REREAD-HANG"
 HANG_ENV = "TELEPORT_TEST_HANG_REREAD"
 
@@ -155,16 +166,36 @@ def assert_clean_exit(proc) -> None:
     assert "Traceback" not in err and "Fatal Python error" not in err, err
 
 
+def restart_receive(net, procs, proxy, tid: str):
+    """Chạy lại `receive`, chờ `restored` của lượt dở `tid` (P3-4, spec-p3-4 mục 3.2), rồi đổi đích proxy."""
+    recv2 = procs(receive_cmd(net))
+    port2 = recv2.wait_json("receiving")["port"]
+    restored = recv2.wait_json("restored", 30)
+    assert (restored["transfer_id"], restored["direction"]) == (tid, "receive"), restored
+    assert restored["device_name"] == SENDER and "message" not in restored, restored
+    proxy.target = (LOCAL, port2)
+    return recv2
+
+
 def finish_send_and_receive(net, send, recv2, src: Path) -> None:
-    """`send` nối lại tới `receive` mới, lượt xong ở cả hai bên, file khớp nguồn; rồi dừng `receive`."""
+    """`send` nối lại tới `receive` mới, lượt xong ở cả hai bên, file khớp nguồn; rồi dừng `receive`.
+
+    P3-4 (mục 3.2): `result` của `send` có `payload_sent` (int, ≥ cỡ file, phần thừa trong ngưỡng mvp N4);
+    `result` của `receive` không có; `receive` chạy lại không phát `offer` cho lượt khôi phục.
+    """
     assert send.finish(180) == 0, f"{send.out!r} {send.err_text()}"
     results = [e for e in send.events() if e["event"] == "result"]
     assert [r["result"] for r in results] == ["done"], results
+    size = src.stat().st_size
+    sent = results[0]["payload_sent"]
+    assert type(sent) is int and size <= sent <= size + N4_EXTRA, results
     res = recv2.wait_json("result", 60)
     assert res["result"] == "done", res
+    assert "payload_sent" not in res
     assert sha256_of(net.recv / src.name) == sha256_of(src)
     recv2.interrupt()
     assert recv2.finish(30) == 0
+    assert not [e for e in recv2.events() if e["event"] == "offer"], recv2.out
     assert_clean_exit(send)
     assert_clean_exit(recv2)
 
@@ -186,9 +217,7 @@ def test_killed_receive_mid_transfer_then_restarted_finishes(pair_dirs, procs, t
     assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(tdir))
     wait_lock_free(net.R)
 
-    recv2 = procs(receive_cmd(net))
-    port2 = recv2.wait_json("receiving")["port"]
-    proxy.target = (LOCAL, port2)
+    recv2 = restart_receive(net, procs, proxy, tid)
     finish_send_and_receive(net, send, recv2, src)
 
 
@@ -210,9 +239,7 @@ def test_killed_receive_during_reread_then_restarted_finishes(pair_dirs, procs, 
     assert not (net.recv / src.name).exists()
     wait_lock_free(net.R)
 
-    recv2 = procs(receive_cmd(net))
-    port2 = recv2.wait_json("receiving")["port"]
-    proxy.target = (LOCAL, port2)
+    recv2 = restart_receive(net, procs, proxy, tid)
     finish_send_and_receive(net, send, recv2, src)
 
 
@@ -234,6 +261,8 @@ def test_ctrl_c_receive_mid_transfer_suspends_then_restarted_finishes(pair_dirs,
     assert recv.finish(30) == 0, recv.err_text()
     results = [e for e in recv.events() if e["event"] == "result"]
     assert [(r["result"], r["by_peer"]) for r in results] == [("suspended", False)], results
+    assert results[0]["message"] == R_SUSPENDED.format(what="lon.bin", s=SENDER), results
+    assert "payload_sent" not in results[0]
     assert recv.events()[-1]["event"] == "stopped"
     tdir = net.recv / ".teleport" / tid
     left = set(os.listdir(tdir))
@@ -241,7 +270,5 @@ def test_ctrl_c_receive_mid_transfer_suspends_then_restarted_finishes(pair_dirs,
     assert send.p.poll() is None, "send phải còn chờ nối lại"
     assert_clean_exit(recv)
 
-    recv2 = procs(receive_cmd(net))
-    port2 = recv2.wait_json("receiving")["port"]
-    proxy.target = (LOCAL, port2)
+    recv2 = restart_receive(net, procs, proxy, tid)
     finish_send_and_receive(net, send, recv2, src)

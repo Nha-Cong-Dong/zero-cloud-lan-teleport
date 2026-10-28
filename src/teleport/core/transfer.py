@@ -221,7 +221,7 @@ class FailureDetail(StrEnum):
     """Nguyên nhân cụ thể của `cancel{error}` do máy này phát hiện."""
 
     DISK = "disk"
-    TEMP_EXISTS = "temp_exists"  # thư mục tạm của lượt đã có sẵn (sót lại từ lần trước)
+    TEMP_EXISTS = "temp_exists"  # thư mục tạm của lượt đã có sẵn mà không dùng tiếp được
     CORRUPT_BLOCKS = "corrupt_blocks"
     VERIFY_FAILED = "verify_failed"
     PROTOCOL = "protocol"

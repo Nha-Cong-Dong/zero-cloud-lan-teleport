@@ -102,9 +102,25 @@ R_DISK_FAILED = (  # 6b
     "Không lưu được {file} vào {dir} vì ổ đĩa báo lỗi khi ghi (ổ có thể đã đầy, bị rút ra hoặc bị hỏng). "
     "Đã dừng nhận từ {s}; các file đã nhận xong vẫn giữ nguyên."
 )
-R_TEMP_EXISTS = (  # M11
-    "Không nhận được lượt gửi từ {s} vì thư mục tạm của lượt này còn sót lại từ lần trước (ví dụ "
-    "Teleport vừa bị tắt đột ngột). Hãy nhờ gửi lại."
+R_TEMP_EXISTS = (  # M11, sửa ở P3-4 (spec-p3-4 mục 3.1(d), 9.1 Q1)
+    "Không nhận được lượt gửi từ {s} vì thư mục tạm của lượt này đã có sẵn mà Teleport không dùng tiếp "
+    "được. Hãy nhờ gửi lại."
+)
+# P3-4 (spec-p3-4 mục 9.1 thắng 3.1): {what} là tên file (lượt một file) hay “{N} file” (nhiều file)
+R_SUSPENDED = (  # câu (a)
+    "Đã tạm dừng nhận {what} từ {s}. Chạy lại `teleport receive` (cùng thư mục nhận) để nhận tiếp phần "
+    "còn thiếu, miễn là máy gửi vẫn đang chờ; quá 24 giờ kể từ lúc mất kết nối thì lần chạy sau sẽ xóa "
+    "phần nhận dở."
+)
+R_RESUMED = (  # câu (b)
+    "Tiếp tục nhận {n} file từ {s} (đã nhận {done} / {total}). Đang chờ máy đó kết nối lại…"
+)
+S_NOT_RECONNECTED_YET = (  # câu (e), mục 9.1 Q2
+    "Chưa nối lại được với {p}. Teleport vẫn đang thử lại (tối đa 24 giờ). Hãy kiểm tra máy đó vẫn đang "
+    "chạy `teleport receive` và hai máy còn chung một mạng."
+)
+WIFI_BLOCKING = (
+    "Mạng Wi-Fi này có thể đang chặn"  # phần của `_unreachable_seen`, không được in khi chờ nối lại
 )
 R_CORRUPT = (  # M12
     "Dữ liệu nhận từ {s} bị hỏng nhiều lần liên tiếp nên đã dừng nhận {file}. Các file đã nhận xong vẫn "
@@ -446,7 +462,10 @@ def make_info(
     file_index: int = 0,
     done_bytes: int = 0,
     device_id: str | None = None,
+    shown=None,
 ):
+    """`shown`: `TransferInfo.names` khác tên trong `files` (mặc định: bằng `names`); dùng để thử tên đã
+    qua tầng dưới mà vẫn có ký tự lạ, vì `FileEntry` tự từ chối tên có ký tự điều khiển."""
     from teleport.core.messages import FileEntry
     from teleport.core.transfer import Direction, TransferInfo, TransferKey, TransferStatus
 
@@ -458,7 +477,7 @@ def make_info(
         key=TransferKey(device_id=device_id, direction=d, transfer_id=TID),
         status=TransferStatus(status),
         files=files,
-        names=tuple(names),
+        names=tuple(names if shown is None else shown),
         file_index=file_index,
         done_bytes=done_bytes,
         total_bytes=sum(sizes),
@@ -623,12 +642,172 @@ def test_transfer_result_message_receiver_silent_rejections(cli, result, rej):
     assert message(cli, fin, peer=SENDER) == []
 
 
+# --- P3-4: câu (a) tạm dừng, câu (b) khôi phục (spec-p3-4 mục 3.1, 9.1) -----------------------------
+
+
 @pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
-def test_transfer_result_message_receiver_suspended_is_silent(cli, status):
-    """P3-3b Q1 (spec-p3-3b mục 2.1, 3): `receive` không in câu nào cho lượt tạm dừng (`SUSPENDED`, nằm
-    trong `_RECEIVE_SILENT`); câu chữ thuộc P3-4."""
-    fin = finished("receive", "suspended", by_peer=False, status=status)
-    assert message(cli, fin, peer=SENDER) == []
+@pytest.mark.parametrize(("file_index", "info_index"), [(None, 0), (2, 1), (None, 3), (7, 0)])
+def test_suspended_receive_of_many_files_says_n_files(cli, status, file_index, info_index):
+    """Câu (a), lượt nhiều file (mục 9.1 Q3): “*N* file”, N = `len(info.files)`, không nêu tên file nào,
+    với mọi trạng thái trước đó và mọi `file_index`."""
+    fin = finished(
+        "receive",
+        "suspended",
+        file_index=file_index,
+        file_index_info=info_index,
+        status=status,
+    )
+    lines = message(cli, fin, peer=SENDER)
+    assert lines == [R_SUSPENDED.format(what="3 file", s=SENDER)]
+    assert not any(name in lines[0] for name in NAMES)
+
+
+@pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
+@pytest.mark.parametrize(("file_index", "info_index"), [(None, 0), (0, 0), (None, 3), (5, 0)])
+def test_suspended_receive_of_one_file_names_the_file(cli, status, file_index, info_index):
+    """Câu (a), lượt một file: tên file theo luật chung (`finished.file_index`, rồi `info.file_index`,
+    kẹp vào khoảng hợp lệ), nên chỉ số ngoài khoảng vẫn ra đúng file duy nhất."""
+    fin = finished(
+        "receive",
+        "suspended",
+        file_index=file_index,
+        file_index_info=info_index,
+        status=status,
+        names=("video.mp4",),
+        sizes=(8 * GiB,),
+    )
+    assert message(cli, fin, peer=SENDER) == [R_SUSPENDED.format(what="video.mp4", s=SENDER)]
+
+
+def test_suspended_receive_without_peer_name_uses_short_device_id(cli):
+    fin = finished("receive", "suspended", names=("video.mp4",), sizes=(1,))
+    assert message(cli, fin, peer=None) == [R_SUSPENDED.format(what="video.mp4", s=SENDER_ID[:8])]
+
+
+def test_suspended_receive_does_not_print_control_chars_from_names(cli):
+    """Tên file và tên máy từ máy kia không in thẳng ký tự điều khiển (mvp mục 8; spec S1, S2)."""
+    fin = finished("receive", "suspended", names=("ab.mp4",), sizes=(1,), shown=("a\x1b[2Jb\x07.mp4",))
+    [line] = message(cli, fin, peer="May\x1b]0;x\x07Ban")
+    assert not any(unicodedata.category(ch) == "Cc" for ch in line), line
+    assert line.startswith("Đã tạm dừng nhận ")
+
+
+def test_reconnect_grace_is_24_hours_as_written_in_sentences(cli):
+    """S9: câu (a) và (e) viết thẳng “24 giờ”; đổi `RECONNECT_GRACE` thì phải sửa câu."""
+    from teleport.core import transfer
+
+    assert transfer.RECONNECT_GRACE == 86400
+    for text in (R_SUSPENDED, S_NOT_RECONNECTED_YET):
+        assert "24 giờ" in text
+
+
+def resumed(cli, info, *, peer=SENDER) -> str:
+    line = cli.transfer_resumed_message(info, peer_name=peer)
+    assert isinstance(line, str)
+    return line
+
+
+def test_transfer_resumed_message_matches_spec_sample(cli):
+    """Câu (b) nguyên văn mẫu ở spec mục 3.1(b): 3 file, 4,2 GB / 8,0 GB, “Laptop-Minh”."""
+    info = make_info("receive", status="reconnecting", done_bytes=int(4.2 * GiB))
+    assert resumed(cli, info) == (
+        "Tiếp tục nhận 3 file từ Laptop-Minh (đã nhận 4,2 GB / 8,0 GB). Đang chờ máy đó kết nối lại…"
+    )
+
+
+@pytest.mark.parametrize(
+    ("names", "sizes", "done"),
+    [
+        (("video.mp4",), (8 * GiB,), 0),
+        (("video.mp4",), (40 * MiB,), 16 * MiB),
+        (NAMES, SIZES, TOTAL - 1),
+        (("a.bin", "b.bin"), (0, 1000), 1000),
+    ],
+    ids=["mot-file-chua-nhan", "mot-file-16MiB", "ba-file-gan-xong", "file-rong-va-byte"],
+)
+def test_transfer_resumed_message_counts_files_and_formats_sizes(cli, names, sizes, done):
+    """N = `len(info.files)` (lượt một file vẫn là “1 file”, mục 9.2); hai dung lượng qua `format_size`."""
+    from teleport.core.display import format_size
+
+    info = make_info("receive", status="reconnecting", names=names, sizes=sizes, done_bytes=done)
+    assert resumed(cli, info) == R_RESUMED.format(
+        n=len(names), s=SENDER, done=format_size(done), total=format_size(sum(sizes))
+    )
+
+
+def test_transfer_resumed_message_without_peer_name_uses_short_device_id(cli):
+    from teleport.core.display import format_size
+
+    info = make_info("receive", status="reconnecting", done_bytes=int(4.2 * GiB))
+    assert resumed(cli, info, peer=None) == R_RESUMED.format(
+        n=3, s=SENDER_ID[:8], done=format_size(int(4.2 * GiB)), total=TOTAL_TEXT
+    )
+
+
+def test_transfer_resumed_message_shows_peer_name_through_display_name(cli):
+    from teleport.core.display import display_name
+
+    raw = "Laptop Minh　"
+    info = make_info("receive", status="reconnecting")
+    line = resumed(cli, info, peer=raw)
+    assert line == R_RESUMED.format(n=3, s=display_name(raw), done="0 byte", total=TOTAL_TEXT)
+    assert " " not in line and "　" not in line
+
+
+@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    peer=st.one_of(st.none(), st.text(max_size=80)),
+    names=st.lists(st.text(min_size=1, max_size=40), min_size=1, max_size=4),
+    done_ratio=st.floats(0, 1),
+)
+def test_transfer_resumed_message_is_one_clean_line(cli, peer, names, done_ratio):
+    """Tên máy (từ `trusted.json`) và tên file từ đĩa có thể chứa ký tự điều khiển: câu (b) luôn là một
+    dòng, không có ký tự điều khiển (Cc), không ném."""
+    sizes = tuple(1000 * (i + 1) for i in range(len(names)))
+    done = int(sum(sizes) * done_ratio)
+    raw = tuple(f"f{i}.bin" for i in range(len(names)))
+    info = make_info(
+        "receive", status="reconnecting", names=raw, sizes=sizes, done_bytes=done, shown=tuple(names)
+    )
+    line = resumed(cli, info, peer=peer)
+    assert not any(unicodedata.category(ch) == "Cc" for ch in line), line
+    assert line.startswith(f"Tiếp tục nhận {len(names)} file từ ")
+
+
+# --- F3 (spec-p3-4 mục 9.4): tên máy có U+061C (ALM, ký tự điều khiển hướng chữ) -----------------------
+
+ALM = "؜"
+ALM_SENDER = f"Laptop{ALM}Minh"  # tên thiết bị hợp lệ (`validate_device_name`) mà vẫn có ALM
+ALM_RECEIVER = f"PC{ALM}Nha"
+
+
+def test_alm_device_name_is_valid_so_it_can_reach_the_cli():
+    """Tiền đề của F3: ALM lọt qua kiểm tên thiết bị, nên CLI phải tự xử lý khi in."""
+    from teleport.core.messages import validate_device_name
+
+    assert validate_device_name(ALM_SENDER) == ALM_SENDER
+
+
+def test_alm_in_peer_name_is_never_printed_raw_and_is_shown_the_same_everywhere(cli):
+    """F3: mọi câu có tên máy (kết quả, khôi phục, lời hỏi, tiến độ) không in thẳng U+061C, và tên máy hiện
+    giống hệt nhau ở mọi câu (cùng một cách làm sạch)."""
+    fin = finished("receive", "suspended", names=("video.mp4",), sizes=(1,))
+    [suspended] = message(cli, fin, peer=ALM_SENDER)
+    [done] = message(cli, finished("send", "done"), peer=ALM_RECEIVER)
+    resumed_line = resumed(cli, make_info("receive", status="reconnecting"), peer=ALM_SENDER)
+    prompt = prompt_lines(cli, make_offer(NAMES, SIZES, device_name=ALM_SENDER), peer=ALM_SENDER)
+    progress = cli.progress_line(make_progress(direction="receive"), peer_name=ALM_SENDER, width=200)
+    for text in (suspended, done, resumed_line, progress, *prompt):
+        assert ALM not in text, ascii(text)
+
+    shown = suspended[len("Đã tạm dừng nhận video.mp4 từ ") :].split(". Chạy lại", 1)[0]
+    assert suspended == R_SUSPENDED.format(what="video.mp4", s=shown)
+    assert resumed_line.startswith(f"Tiếp tục nhận 3 file từ {shown} (đã nhận ")
+    assert prompt[0].startswith(f"“{shown}” muốn gửi "), prompt
+    assert shown in progress
+    shown_receiver = done[len("Đã gửi xong 3 file (8,0 GB) tới ") : -1]
+    assert done == S_DONE.format(n=3, size=TOTAL_TEXT, p=shown_receiver)
+    assert shown.replace("Laptop", "PC").replace("Minh", "Nha") == shown_receiver
 
 
 @pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
@@ -1424,9 +1603,11 @@ async def test_i1_send_three_files_by_address_to_auto_accepting_receiver(pair_di
     assert res["done_bytes"] == res["total_bytes"] == total
     assert res["message"] == S_DONE.format(n=3, size="2,3 MB", p=RECEIVER)
     assert res["transfer_id"] == offer["transfer_id"]
+    assert type(res["payload_sent"]) is int and res["payload_sent"] >= total, res  # P3-4 mục 3.2
 
     got = await recv.wait_event("result", timeout=10)
     assert got["result"] == "done" and got["direction"] == "receive" and got["device_name"] == SENDER
+    assert "payload_sent" not in got  # P3-4: chỉ `result` của `send` có trường này
     assert got["message"] == R_DONE.format(n=3, size="2,3 MB", s=SENDER)
     [r_offer] = recv.events_of("offer")
     assert r_offer["auto_accepted"] is True and r_offer["receive_dir"] == str(net.recv)
@@ -1623,10 +1804,11 @@ async def test_send_text_mode_ctrl_c_prints_stopping_line(pair_dirs, transfer_en
 
 @with_marks(socket_test)
 async def test_i7_ctrl_c_on_receive_mid_transfer(pair_dirs, transfer_env, cli_runs):
-    """I7 sửa ở P3-3b (spec-p3-3b mục 2.4, 5.2, Q1): Ctrl+C `receive` giữa lượt → lượt **tạm dừng**:
-    `result` = `suspended` (by_peer false, `message` rỗng: chưa có câu, P3-4), thoát 0, sự kiện cuối
-    `stopped`, thư mục tạm còn `transfer.json`, `0.part`, `0.state`. `send` không nhận `cancelled_user`
-    mà sang “Đang nối lại…”; test tự dừng `send` (Ctrl+C → `cancelled_user` của chính nó, mã 1)."""
+    """I7 sửa ở P3-3b (spec-p3-3b mục 2.4, 5.2, Q1) và P3-4 (spec-p3-4 mục 3.2, 9.1; V2 (i), (v)):
+    Ctrl+C `receive` giữa lượt → lượt **tạm dừng**: `result` = `suspended` (by_peer false, `message` =
+    câu (a)), không có `payload_sent` ở chiều nhận, thoát 0, sự kiện cuối `stopped`, thư mục tạm còn
+    `transfer.json`, `0.part`, `0.state`. `send` không nhận `cancelled_user` mà sang “Đang nối lại…”;
+    Ctrl+C `send` lúc đó → `cancelled_user` của chính nó, mã 1 (mục 3.3)."""
     net = pair_dirs
     recv = cli_runs("receive", receive_argv(net))
     port = (await recv.wait_event("receiving"))["port"]
@@ -1638,7 +1820,8 @@ async def test_i7_ctrl_c_on_receive_mid_transfer(pair_dirs, transfer_env, cli_ru
     assert await recv.code(15) == 0
     [mine] = recv.events_of("result")
     assert (mine["result"], mine["by_peer"]) == ("suspended", False), mine
-    assert mine["message"] == ""
+    assert mine["message"] == R_SUSPENDED.format(what="lon.bin", s=SENDER)
+    assert "payload_sent" not in mine
     assert recv.events()[-1]["event"] == "stopped"
     assert lock_is_free(net.R)
     left = set(os.listdir(net.recv / ".teleport" / tid))
@@ -1656,6 +1839,10 @@ async def test_i7_ctrl_c_on_receive_mid_transfer(pair_dirs, transfer_env, cli_ru
     assert await send.code(10) == 1
     [res] = send.events_of("result")
     assert (res["result"], res["by_peer"]) == ("cancelled_user", False), res
+    assert res["message"] == S_SELF_CANCELLED.format(p=RECEIVER)
+    # `payload_sent` có ở mọi `result` của `send` (spec-p3-4 mục 3.2): int ≥ 0, không phải bool.
+    sent = res["payload_sent"]
+    assert type(sent) is int and 0 < sent <= f.stat().st_size, res
 
 
 @with_marks(socket_test)
@@ -2256,6 +2443,520 @@ async def test_windows_glob_without_match_is_not_found(pair_dirs, cli_runs):
     assert await send.code(10) == 1
     [ev] = send.events_of("error")
     assert ev["error"] == "source_not_found"
+
+
+# =================================================================================================
+# P3-4 — `receive` tạm dừng / tiếp tục, `send` chờ nối lại (spec-p3-4 mục 6 việc V2; mục 9 thắng)
+#
+# Lượt “dài”: (2·SYNC_EVERY + 8) khối với `--limit-rate`, chờ có ít nhất một MARK bền trong `0.state`
+# (header 41 byte) rồi mới Ctrl+C, như tests/test_cli_resume.py (P3-3b). `receive` chạy lại mở cổng mới
+# (`--port 0`), nên `send` nối qua `tcp_proxy` và test đổi đích proxy (S3).
+# =================================================================================================
+
+RESUME_RATE = ["--limit-rate", "8M"]
+N4_EXTRA = 64 * MiB  # mvp N4: gửi lại ≤ phần chưa nhận + 64 MiB
+STATE_HEADER = 41
+SECOND = "May-Ban"
+RESTORED_FIELDS = {
+    "event",
+    "time",
+    "transfer_id",
+    "direction",
+    "device_id",
+    "device_name",
+    "files",
+    "total_bytes",
+    "done_bytes",
+    "file_index",
+    "file_count",
+    "receive_dir",
+}
+SIZE_TEXT_RE = re.compile(r"^\d+(,\d)? (byte|KB|MB|GB|TB)$")
+
+
+def resume_size() -> int:
+    from teleport.core.blocks import BLOCK_SIZE
+    from teleport.core.transfer import SYNC_EVERY
+
+    return (2 * SYNC_EVERY + 8) * BLOCK_SIZE
+
+
+@pytest.fixture
+def resume_env(transfer_env, monkeypatch):
+    """`transfer_env` với hạn nối lại dài (120 s, `core.transfer.RECONNECT_GRACE` đọc lúc dùng): máy gửi
+    không hết hạn trong lúc `receive` dừng rồi chạy lại, và lượt khôi phục chưa quá hạn."""
+    from teleport.core import transfer as core_transfer
+
+    monkeypatch.setattr(core_transfer, "RECONNECT_GRACE", 120.0)
+    return transfer_env
+
+
+def temp_root(net) -> Path:
+    return net.recv / ".teleport"
+
+
+def state_size(net, tid: str) -> int:
+    try:
+        return (temp_root(net) / tid / "0.state").stat().st_size
+    except OSError:
+        return 0
+
+
+async def marked_transfers(net, count: int = 1, timeout: float = 30.0) -> list[str]:
+    """Chờ `count` lượt nhận có ít nhất một MARK bền; trả các `transfer_id` (sắp xếp)."""
+
+    def marked() -> list[str]:
+        try:
+            names = os.listdir(temp_root(net))
+        except OSError:
+            return []
+        return sorted(n for n in names if state_size(net, n) > STATE_HEADER)
+
+    await wait_until(lambda: len(marked()) >= count, timeout, f"chưa có {count} lượt có MARK trong .state")
+    return marked()
+
+
+async def until_reconnecting(send, timeout: float = 10.0) -> None:
+    await wait_until(
+        lambda: any(e["status"] == "reconnecting" for e in send.events_of("status")),
+        timeout,
+        "send chưa chuyển sang “Đang nối lại…”",
+    )
+
+
+def of_transfer(run, tid: str) -> list[dict]:
+    return [e for e in run.events() if e.get("transfer_id") == tid]
+
+
+def resumed_lines(text: str, sender: str, total: int) -> list[str]:
+    """Các dòng câu (b) cho `sender`; kiểm luôn phần đuôi và dạng của “đã nhận …”."""
+    from teleport.core.display import format_size
+
+    head = f"Tiếp tục nhận 1 file từ {sender} (đã nhận "
+    tail = f" / {format_size(total)}). Đang chờ máy đó kết nối lại…"
+    found = [line for line in text.splitlines() if line.startswith(head)]
+    for line in found:
+        assert line.endswith(tail), line
+        assert SIZE_TEXT_RE.match(line[len(head) : -len(tail)]), line
+    return found
+
+
+# --- (i) + (ii) bản text, S8 ------------------------------------------------------------------------------
+
+
+@with_marks(socket_test)
+async def test_text_ctrl_c_receive_suspends_then_rerun_resumes_without_asking(
+    pair_dirs, resume_env, cli_runs, node_spy, tcp_proxy
+):
+    """V2 (i) bản text: Ctrl+C `receive` giữa lượt → “Đang dừng…”, câu (a), rồi “Đã dừng.”, mã 0, thư mục
+    tạm còn. `send` in “Đang nối lại…”, rồi sau vài lần thử hỏng in câu (e) **một lần** cho cả đợt (S8),
+    không in câu “Mạng Wi-Fi này có thể đang chặn…”. V2 (ii) bản text: chạy lại `receive` không `--yes`
+    → câu (b) sau phần đầu, không hỏi `[c/k]`, không in “Đang nối lại…” cho trạng thái ban đầu; hai bên
+    xong, file khớp."""
+    from teleport.core.display import format_size
+
+    net = pair_dirs
+    size = resume_size()
+    recv, port = await start_receiver(cli_runs, net, node_spy, json_mode=False)
+    proxy = tcp_proxy(port)
+    src = make_file(net.src, "lon.bin", size)
+    send = cli_runs("send", send_argv(net, [src], proxy.port, json_mode=False, extra=RESUME_RATE))
+    [tid] = await marked_transfers(net)
+    recv.press()
+    assert await recv.code(15) == 0
+    lines = [line for line in recv.out.getvalue().splitlines() if line.strip()]
+    a_line = R_SUSPENDED.format(what="lon.bin", s=SENDER)
+    assert lines.count(a_line) == 1, lines
+    assert lines.index(C12) < lines.index(a_line) < lines.index(STOPPED), lines
+    assert lines[-1] == STOPPED, lines
+    assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(temp_root(net) / tid))
+    assert not (net.recv / "lon.bin").exists()
+    assert lock_is_free(net.R)
+
+    e_line = S_NOT_RECONNECTED_YET.format(p=RECEIVER)
+    await send.wait_text(RECONNECTING, timeout=10)
+    await send.wait_text(e_line, timeout=40)
+    tried = proxy.accepted
+    await wait_until(lambda: proxy.accepted >= tried + 3, 40, "send chưa thử nối lại thêm 3 lần")
+    assert send.text().count(e_line) == 1, send.text()
+    assert WIFI_BLOCKING not in send.text()
+    assert not send.task.done()
+
+    recv2, port2 = await start_receiver(cli_runs, net, node_spy, json_mode=False, yes=False)
+    proxy.target = (LOCAL, port2)
+    assert await send.code(60) == 0, send.text()
+    assert S_DONE.format(n=1, size=format_size(size), p=RECEIVER) in send.text()
+    assert send.text().count(e_line) == 1
+    assert WIFI_BLOCKING not in send.text()
+    await recv2.wait_text(R_DONE.format(n=1, size=format_size(size), s=SENDER), timeout=20)
+    assert sha256_of(net.recv / "lon.bin") == sha256_of(src)
+
+    text2 = recv2.out.getvalue()
+    lines2 = text2.splitlines()
+    [b_line] = resumed_lines(text2, SENDER, size)
+    assert lines2.index(b_line) > lines2.index(C1_TAIL), lines2
+    assert "[c/k]" not in recv2.text() and C4_HEAD.format(s=SENDER, n=1, size=format_size(size)) not in text2
+    assert RECONNECTING not in recv2.text()
+    assert B13 not in recv2.text()
+
+
+# --- (ii) + (iii) bản JSON ----------------------------------------------------------------------------------
+
+
+@with_marks(socket_test)
+async def test_json_rerun_receive_emits_restored_and_send_reports_payload_sent(
+    pair_dirs, resume_env, cli_runs, tcp_proxy
+):
+    """V2 (ii) JSON: chạy lại `receive` không `--yes` → `restored` đủ trường (mục 3.2), sau `receiving` và
+    trước mọi sự kiện khác của lượt; không có `offer`; lượt khôi phục có `status` bắt đầu bằng
+    `reconnecting` (S1). V2 (iii): `result` của `send` có `payload_sent` (int, ≥ `total_bytes`, phần thừa
+    trong ngưỡng mvp N4); `result` của `receive` không có."""
+    from teleport.core.display import format_size
+
+    net = pair_dirs
+    size = resume_size()
+    recv = cli_runs("receive", receive_argv(net))
+    proxy = tcp_proxy((await recv.wait_event("receiving"))["port"])
+    src = make_file(net.src, "lon.bin", size)
+    send = cli_runs("send", send_argv(net, [src], proxy.port, extra=RESUME_RATE))
+    [tid] = await marked_transfers(net)
+    recv.press()
+    assert await recv.code(15) == 0
+    [mine] = recv.events_of("result")
+    assert (mine["result"], mine["transfer_id"], mine["by_peer"]) == ("suspended", tid, False), mine
+    assert mine["message"] == R_SUSPENDED.format(what="lon.bin", s=SENDER)
+    assert "payload_sent" not in mine
+    await until_reconnecting(send)
+
+    recv2 = cli_runs("receive", receive_argv(net, yes=False))
+    ready = await recv2.wait_event("receiving")
+    restored = await recv2.wait_event("restored", timeout=5)
+    proxy.target = (LOCAL, ready["port"])
+
+    assert restored.keys() >= RESTORED_FIELDS and "message" not in restored, restored
+    assert (restored["transfer_id"], restored["direction"]) == (tid, "receive")
+    assert (restored["device_id"], restored["device_name"]) == (net.sid, SENDER)
+    assert restored["files"] == [{"name": "lon.bin", "size": size}]
+    assert (restored["total_bytes"], restored["file_index"], restored["file_count"]) == (size, 0, 1)
+    assert type(restored["done_bytes"]) is int and 0 < restored["done_bytes"] < size, restored
+    assert restored["receive_dir"] == str(net.recv)
+
+    assert await send.code(60) == 0, send.text()
+    [res] = send.events_of("result")
+    assert (res["result"], res["transfer_id"]) == ("done", tid), res
+    sent = res["payload_sent"]
+    assert type(sent) is int and size <= sent <= size + N4_EXTRA, res
+    got = await recv2.wait_event("result", timeout=20)
+    assert (got["result"], got["transfer_id"]) == ("done", tid), got
+    assert got["message"] == R_DONE.format(n=1, size=format_size(size), s=SENDER)
+    assert "payload_sent" not in got
+    assert sha256_of(net.recv / "lon.bin") == sha256_of(src)
+
+    events = recv2.events()
+    kinds = [e["event"] for e in events]
+    assert "offer" not in kinds, kinds
+    assert kinds.count("restored") == 1
+    first_of_tid = next(i for i, e in enumerate(events) if e.get("transfer_id") == tid)
+    assert kinds.index("receiving") < first_of_tid == kinds.index("restored"), kinds
+    statuses = [e["status"] for e in of_transfer(recv2, tid) if e["event"] == "status"]
+    assert statuses[:1] == ["reconnecting"], statuses
+    assert_json_clean(recv2)
+
+
+# --- (iv) lượt dở quá hạn lúc khởi động ----------------------------------------------------------------
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_rerun_receive_after_grace_reports_expired_and_deletes_temp(
+    pair_dirs, transfer_env, cli_runs, monkeypatch, json_mode
+):
+    """V2 (iv), câu (c), S1: lượt dở có tuổi ≥ hạn nối lại (giờ tường bị đẩy qua
+    `teleport.app.transfers._wall_time`) → không câu (b), không `restored`, không `status`; chỉ một
+    `result: expired` với câu `EXPIRED`; thư mục tạm bị xóa; Ctrl+C sau đó vẫn thoát 0."""
+    from teleport.app import transfers as app_transfers
+    from teleport.core import transfer as core_transfer
+
+    net = pair_dirs
+    recv = cli_runs("receive", receive_argv(net))
+    port = (await recv.wait_event("receiving"))["port"]
+    send = cli_runs(
+        "send", send_argv(net, [make_file(net.src, "lon.bin", resume_size())], port, extra=RESUME_RATE)
+    )
+    [tid] = await marked_transfers(net)
+    recv.press()
+    assert await recv.code(15) == 0
+    await until_reconnecting(send)
+    send.press()  # máy gửi bỏ cuộc: lần chạy sau chỉ còn việc khôi phục lượt dở
+    assert await send.code(15) == 1
+    tdir = temp_root(net) / tid
+    assert (tdir / "transfer.json").exists()
+
+    real = app_transfers._wall_time
+    skew = core_transfer.RECONNECT_GRACE + 3600.0
+    monkeypatch.setattr(app_transfers, "_wall_time", lambda: real() + skew)
+    recv2 = cli_runs("receive", receive_argv(net, json_mode=json_mode))
+    expired = R_EXPIRED.format(s=SENDER)
+    if json_mode:
+        res = await recv2.wait_event("result", timeout=10)
+        assert (res["result"], res["transfer_id"], res["by_peer"]) == ("expired", tid, False), res
+        assert res["message"] == expired
+    else:
+        await recv2.wait_text(expired, timeout=10)
+    await wait_until(lambda: not tdir.exists(), 10, "thư mục tạm của lượt quá hạn chưa bị xóa")
+    recv2.press()
+    assert await recv2.code(15) == 0
+    if json_mode:
+        assert recv2.events_of("restored") == []
+        assert of_transfer(recv2, tid) == [res], of_transfer(recv2, tid)
+        assert recv2.events()[-1]["event"] == "stopped"
+    else:
+        text = recv2.text()
+        assert text.count(expired) == 1
+        assert "Tiếp tục nhận" not in text and RECONNECTING not in text
+    assert not (net.recv / "lon.bin").exists()
+
+
+# --- (vi) `send` hết hạn chờ nối lại ---------------------------------------------------------------------
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_send_gives_up_after_reconnect_grace_and_exits_1(pair_dirs, transfer_env, cli_runs, json_mode):
+    """V2 (vi), mục 3.3: `receive` dừng giữa lượt và không chạy lại → `send` chờ đúng hạn nối lại (ở đây
+    `transfer_env.RECONNECT_GRACE`), rồi kết thúc `expired` với câu `EXPIRED`, mã 1."""
+    net = pair_dirs
+    grace = transfer_env.RECONNECT_GRACE
+    recv = cli_runs("receive", receive_argv(net))
+    port = (await recv.wait_event("receiving"))["port"]
+    f = make_file(net.src, "lon.bin", 2 * MiB)
+    send = cli_runs("send", send_argv(net, [f], port, json_mode=json_mode, extra=["--limit-rate", "64K"]))
+    await transferring(recv)
+    t0 = time.monotonic()
+    recv.press()
+    assert await recv.code(15) == 0
+    assert await send.code(grace + 30) == 1, send.text()
+    assert time.monotonic() - t0 >= grace - 0.05, "send bỏ cuộc trước hạn nối lại"
+    line = S_EXPIRED.format(p=RECEIVER)
+    if json_mode:
+        [res] = send.events_of("result")
+        assert (res["result"], res["by_peer"], res["message"]) == ("expired", False, line), res
+        assert type(res["payload_sent"]) is int and res["payload_sent"] >= 0
+        assert any(e["status"] == "reconnecting" for e in send.events_of("status"))
+    else:
+        text = send.text()
+        assert text.count(line) == 1, text
+        assert RECONNECTING in text and text.index(RECONNECTING) < text.index(line)
+        assert WIFI_BLOCKING not in text
+
+
+# --- (vii) hai máy gửi có lượt dở ------------------------------------------------------------------------
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_rerun_receive_restores_one_transfer_per_sender(
+    pair_dirs, resume_env, cli_runs, node_spy, tcp_proxy, json_mode
+):
+    """V2 (vii): hai máy gửi đều có lượt dở → chạy lại `receive` in hai câu (b) / hai `restored` (mỗi máy
+    một), không hỏi `[c/k]`, không `offer`; cả hai lượt xong, file khớp."""
+    from teleport.core.display import format_size
+
+    net = pair_dirs
+    s2 = net.tmp / "S2"
+    ident2 = load_or_create_identity(s2)
+    ident_r = load_or_create_identity(net.R)
+    TrustStore.load(s2).add(peer_cert_from_pem(ident_r.cert_pem()), RECEIVER)
+    TrustStore.load(net.R).add(peer_cert_from_pem(ident2.cert_pem()), SECOND)
+    size = resume_size()
+
+    recv = cli_runs("receive", receive_argv(net))
+    proxy = tcp_proxy((await recv.wait_event("receiving"))["port"])
+    src1 = make_file(net.src, "lon.bin", size)
+    src2 = make_file(net.tmp / "nguon2", "khac.bin", size)
+    send1 = cli_runs("send", send_argv(net, [src1], proxy.port, extra=RESUME_RATE))
+    send2 = cli_runs("send", send_argv(net, [src2], proxy.port, config=s2, extra=RESUME_RATE))
+    tids = await marked_transfers(net, 2)
+    recv.press()
+    assert await recv.code(15) == 0
+    got = sorted((r["result"], r["device_name"], r["message"]) for r in recv.events_of("result"))
+    assert got == [
+        ("suspended", SENDER, R_SUSPENDED.format(what="lon.bin", s=SENDER)),
+        ("suspended", SECOND, R_SUSPENDED.format(what="khac.bin", s=SECOND)),
+    ]
+    await until_reconnecting(send1)
+    await until_reconnecting(send2)
+
+    recv2, port2 = await start_receiver(cli_runs, net, node_spy, json_mode=json_mode, yes=False)
+    proxy.target = (LOCAL, port2)
+    if json_mode:
+        await recv2.wait_event("restored", n=2, timeout=5)
+        restored = recv2.events_of("restored")
+        assert sorted((e["device_id"], e["device_name"], e["files"][0]["name"]) for e in restored) == sorted(
+            [(net.sid, SENDER, "lon.bin"), (ident2.device_id, SECOND, "khac.bin")]
+        )
+        assert sorted(e["transfer_id"] for e in restored) == tids
+    else:
+        await recv2.wait_text("Tiếp tục nhận", n=2, timeout=5)
+        text2 = recv2.out.getvalue()
+        lines2 = text2.splitlines()
+        for who in (SENDER, SECOND):
+            [b_line] = resumed_lines(text2, who, size)
+            assert lines2.index(b_line) > lines2.index(C1_TAIL), lines2
+
+    assert await send1.code(60) == 0, send1.text()
+    assert await send2.code(60) == 0, send2.text()
+    assert sha256_of(net.recv / "lon.bin") == sha256_of(src1)
+    assert sha256_of(net.recv / "khac.bin") == sha256_of(src2)
+    for who in (SENDER, SECOND):
+        done = R_DONE.format(n=1, size=format_size(size), s=who)
+        if json_mode:
+            await wait_until(
+                lambda d=done: any(e["message"] == d for e in recv2.events_of("result")), 20, "chưa xong"
+            )
+        else:
+            await recv2.wait_text(done, timeout=20)
+    if json_mode:
+        assert recv2.events_of("offer") == []
+        assert [e["result"] for e in recv2.events_of("result")] == ["done", "done"]
+    assert "[c/k]" not in recv2.text()
+
+
+# --- R1: Ctrl+C trước khi in xong phần đầu ---------------------------------------------------------------
+
+
+async def suspended_by_ctrl_c(net, cli_runs) -> tuple[object, str]:
+    """`receive` (JSON, `--yes`) nhận dở một lượt dài tới khi có MARK, rồi Ctrl+C → lượt tạm dừng; `send`
+    nối thẳng (không proxy) và đang chờ nối lại. Trả `(send, transfer_id)`."""
+    recv = cli_runs("receive", receive_argv(net))
+    port = (await recv.wait_event("receiving"))["port"]
+    send = cli_runs(
+        "send", send_argv(net, [make_file(net.src, "lon.bin", resume_size())], port, extra=RESUME_RATE)
+    )
+    [tid] = await marked_transfers(net)
+    recv.press()
+    assert await recv.code(15) == 0
+    await until_reconnecting(send)
+    return send, tid
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_ctrl_c_before_receive_header_still_reports_suspended(
+    pair_dirs, resume_env, cli_runs, monkeypatch, json_mode
+):
+    """R1 (mục 9.2), dựng lại theo F2 (mục 9.4): `Node.start` (kèm `restore`) đã xong, Ctrl+C tới lúc
+    `receive` còn đang lấy địa chỉ để in phần đầu (`Node.local_addresses` bị vá: bấm Ctrl+C rồi chờ 0,5 s)
+    → không có phần đầu / `receiving`, nhưng vẫn có câu (a) sau “Đang dừng…” / `result: suspended` với
+    `message` câu (a) (`restored` đứng trước nó), mã 0, thư mục tạm còn để lần sau nhận tiếp."""
+    from teleport.app.node import Node
+
+    net = pair_dirs
+    _send, tid = await suspended_by_ctrl_c(net, cli_runs)
+
+    target: list = []
+    real_addresses = Node.local_addresses
+
+    async def local_addresses(self):
+        for run in target:  # chỉ lần chạy lại của `receive`
+            run.press()
+            await asyncio.sleep(0.5)
+        return await real_addresses(self)
+
+    monkeypatch.setattr(Node, "local_addresses", local_addresses)
+    recv2 = cli_runs("receive", receive_argv(net, json_mode=json_mode))
+    target.append(recv2)
+    assert await recv2.code(15) == 0, recv2.text()
+    a_line = R_SUSPENDED.format(what="lon.bin", s=SENDER)
+    if json_mode:
+        assert recv2.events_of("receiving") == [], recv2.events()
+        [res] = recv2.events_of("result")
+        assert (res["result"], res["transfer_id"], res["by_peer"]) == ("suspended", tid, False), res
+        assert res["message"] == a_line
+        kinds = [e["event"] for e in of_transfer(recv2, tid)]
+        assert kinds.index("restored") < kinds.index("result"), kinds
+        assert recv2.events()[-1]["event"] == "stopped"
+    else:
+        lines = [line for line in recv2.out.getvalue().splitlines() if line.strip()]
+        assert C1_HEAD not in lines, lines
+        assert lines.count(a_line) == 1, lines
+        assert lines.index(C12) < lines.index(a_line) < lines.index(STOPPED), lines
+    assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(temp_root(net) / tid))
+    assert not (net.recv / "lon.bin").exists()
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_ctrl_c_while_rerun_receive_is_starting_prints_nothing_for_restored_transfer(
+    pair_dirs, resume_env, cli_runs, monkeypatch, json_mode
+):
+    """F1 (mục 9.4): Ctrl+C tới **trong** `Node.start` của lần chạy lại (sau `restore`, lúc mở cổng: vá
+    `Node._listen`) → app không tạm dừng lượt, CLI bỏ các sự kiện đang giữ: không câu (b), không `restored`,
+    không `result` / câu (a) của lượt; mã 0; thư mục tạm giữ nguyên; lần chạy kế tiếp vẫn có `restored`."""
+    from teleport.app.node import Node
+
+    net = pair_dirs
+    _send, tid = await suspended_by_ctrl_c(net, cli_runs)
+    tdir = temp_root(net) / tid
+
+    target: list = []
+    real_listen = Node._listen
+
+    async def listen(self, *args, **kwargs):
+        await real_listen(self, *args, **kwargs)
+        for run in target:  # chỉ lần chạy lại thứ nhất của `receive`
+            run.press()
+            await asyncio.sleep(1.0)  # Ctrl+C tới khi `Node.start` chưa trả về
+
+    monkeypatch.setattr(Node, "_listen", listen)
+    recv2 = cli_runs("receive", receive_argv(net, json_mode=json_mode))
+    target.append(recv2)
+    assert await recv2.code(15) == 0, recv2.text()
+    target.clear()
+    if json_mode:
+        assert recv2.events_of("restored") == [], recv2.events()
+        assert of_transfer(recv2, tid) == [], of_transfer(recv2, tid)
+        assert recv2.events_of("result") == []
+    else:
+        text = recv2.text()
+        assert "Tiếp tục nhận" not in text, text
+        assert "Đã tạm dừng nhận" not in text, text
+    assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(tdir))
+    assert not (net.recv / "lon.bin").exists()
+
+    recv3 = cli_runs("receive", receive_argv(net))
+    restored = await recv3.wait_event("restored", timeout=10)
+    assert (restored["transfer_id"], restored["device_name"]) == (tid, SENDER), restored
+
+
+# --- F3: tên máy có U+061C, hai tiến trình CLI thật trong tiến trình ----------------------------------------
+
+
+@with_marks(socket_test)
+async def test_alm_peer_name_shows_the_same_in_connected_line_and_result(
+    tmp_path, transfer_env, cli_runs, node_spy
+):
+    """F3 (mục 9.4): tên máy kia trong `trusted.json` có U+061C → dòng “Đã kết nối với “X”…” và câu kết quả
+    “Đã gửi xong … tới X.” của `send` hiện cùng một X; không chỗ nào của `send` hay `receive` in thẳng
+    U+061C."""
+    s_dir, r_dir = tmp_path / "S", tmp_path / "R"
+    ident_s, ident_r = load_or_create_identity(s_dir), load_or_create_identity(r_dir)
+    TrustStore.load(s_dir).add(peer_cert_from_pem(ident_r.cert_pem()), "PC؜Nha")
+    TrustStore.load(r_dir).add(peer_cert_from_pem(ident_s.cert_pem()), "Laptop؜Minh")
+    net = SimpleNamespace(S=s_dir, R=r_dir, recv=tmp_path / "nhan", src=tmp_path / "nguon")
+    recv, port = await start_receiver(cli_runs, net, node_spy, json_mode=False)
+    f = make_file(net.src, "a.bin", 1000)
+    send = cli_runs("send", send_argv(net, [f], port, json_mode=False, to=ident_r.device_id[:8]))
+    assert await send.code(30) == 0, send.text()
+    await recv.wait_text("Đã nhận xong 1 file", timeout=10)
+
+    lines = send.out.getvalue().splitlines()
+    [connected] = [line for line in lines if line.startswith("Đã kết nối với “")]
+    shown = connected[len("Đã kết nối với “") :].split("”", 1)[0]
+    assert connected == C3.format(x=shown, n=1, size="1000 byte"), connected
+    assert S_DONE.format(n=1, size="1000 byte", p=shown) in lines, lines
+    assert "؜" not in send.text(), ascii(send.text())
+    assert "؜" not in recv.text(), ascii(recv.text())
 
 
 # =================================================================================================
