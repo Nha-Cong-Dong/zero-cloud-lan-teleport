@@ -81,7 +81,11 @@ MVP_NOT_DONE = "Ghép đôi với {x} chưa xong. Nếu mã trên hai máy khác
 # `unpair` khi khóa node bận (spec-p2-8 mục B “8a”): cùng gợi ý như `send`/`receive` (mvp §8, dòng “CLI:
 # `send` / `receive` khi một node khác đang chạy cùng thư mục cấu hình”), nhắc cả `receive` lẫn `listen`.
 LOCKED = "Teleport đang chạy với thư mục cấu hình này"
-LOCKED_HINT = "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại."
+# P4-3 (spec-p4-3 mục 5 M1 + mục 10): nhắc thêm lối thoát của GUI (menu khay).
+LOCKED_HINT = (
+    "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy, hoặc chọn Thoát trong menu khay của "
+    "Teleport, rồi thử lại."
+)
 LOCKED_UNPAIR_OLD = "hãy dừng `teleport listen` trước"
 
 
@@ -325,6 +329,45 @@ def test_listen_on_busy_port_still_reports_port_error(tmp_path, capsys):
     assert CONFIG_DIR_ERROR not in err
     assert "Traceback" not in err
     assert lock_is_free(tmp_path / "B")
+
+
+@pytest.mark.parametrize("command", ["listen", "pair"])
+def test_listen_and_pair_print_tray_hint_when_node_lock_held(tmp_path, capsys, monkeypatch, command):
+    """P4-3 (spec-p4-3 mục 10, M1 phủ cả `listen`/`pair`): khóa node bận (ví dụ GUI đang chạy) → mã 1,
+    câu khóa bận kèm đúng gợi ý M1 (nhắc menu khay), không traceback; khóa của bên giữ không bị đụng."""
+    from teleport.app import node as node_mod
+
+    monkeypatch.setattr(node_mod, "LOCK_TIMEOUT", 0.2)
+    d = tmp_path / "cfg"
+    load_or_create_identity(d)
+    target = [f"{LOCAL}:47474"] if command == "pair" else []
+    holder = NodeLock(d)
+    holder.acquire()
+    try:
+        argv = ["--config-dir", str(d), command, *target, "--name", "B", *NODE_OPTS]
+        assert run_main_guarded(argv) == 1
+        err = capsys.readouterr().err
+        assert f"Lỗi: {LOCKED}" in err, err
+        assert LOCKED_HINT in err, err
+        assert "Traceback" not in err
+        assert holder.held
+    finally:
+        holder.release()
+
+
+@pytest.mark.parametrize("command", ["listen", "pair"])
+def test_listen_and_pair_json_report_node_locked(tmp_path, capsys, monkeypatch, command):
+    from teleport.app import node as node_mod
+
+    monkeypatch.setattr(node_mod, "LOCK_TIMEOUT", 0.2)
+    d = tmp_path / "cfg"
+    load_or_create_identity(d)
+    target = [f"{LOCAL}:47474"] if command == "pair" else []
+    with NodeLock(d):
+        argv = ["--config-dir", str(d), command, *target, "--json", "--name", "B", *NODE_OPTS]
+        assert run_main_guarded(argv) == 1
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert [e["error"] for e in events if e.get("event") == "error"] == ["node_locked"], events
 
 
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])

@@ -1229,9 +1229,10 @@ PAIRING_TYPES = frozenset(
     {"pair_request", "pair_commit", "pair_nonce", "pair_reveal", "pair_confirm", "pair_abort"}
 )
 # GĐ2 P2-1 thêm message truyền file vào kết nối điều khiển (protocol §3.2; test riêng ở
-# tests/core/test_transfer_messages.py).
+# tests/core/test_transfer_messages.py). GĐ5 P5-0 thêm `clipboard` (test riêng ở
+# tests/core/test_clipboard_messages.py).
 CONTROL_TYPES = frozenset(
-    {"ping", "pong", "offer", "accept", "reject", "resume", "complete", "verified", "cancel"}
+    {"ping", "pong", "offer", "accept", "reject", "resume", "complete", "verified", "cancel", "clipboard"}
 )
 EXPECTED_ALLOWED = {"pairing": PAIRING_TYPES, "control": CONTROL_TYPES, "data": frozenset()}
 KIND_INPUTS = [*ConnectionKind, "pairing", "control", "data"]

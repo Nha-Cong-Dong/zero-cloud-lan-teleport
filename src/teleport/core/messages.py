@@ -15,13 +15,19 @@ Message truyền file (`data_open`, `offer`, `accept`, `reject`, `resume`, `comp
 `verified`, `cancel`) chỉ được kiểm những gì kiểm được từ riêng message đó; các luật
 cần trạng thái (`file_index` < số file của `offer`, độ dài bitfield theo số khối, `seq`
 khớp `resume` gần nhất…) là việc của máy trạng thái truyền file.
+
+Message `clipboard` cũng vậy: ở đây chỉ kiểm dạng từng trường của **một mảnh**. Trần
+dung lượng theo `kind`, `count` ≤ `total`, cỡ mảnh và mọi luật so với clip đang ráp là
+việc của `teleport.core.clipboard` (bỏ clip, không đóng kết nối; protocol mục 3.3), để bản
+sau nâng trần thì bản này chỉ bỏ clip. `Clipboard.data` không bao giờ hiện trong `repr`
+hay thông điệp lỗi (mvp N9).
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, dataclass, field, fields
 from enum import StrEnum
 from typing import Any, ClassVar
 
@@ -38,6 +44,7 @@ MAX_CERT_PEM_LEN = 8192
 MAX_SAFE_INTEGER = 2**53 - 1
 MAX_OFFER_FILES = 1000
 MAX_FILE_NAME_BYTES = 255  # độ dài tên file trong `offer`, tính bằng byte UTF-8
+MAX_CLIP_KIND_LEN = 64
 
 CERT_PEM_HEADER = "-----BEGIN CERTIFICATE-----"
 
@@ -69,6 +76,10 @@ _FORBIDDEN_CATEGORIES = frozenset({"Cc", "Cs"})
 # kiểm ngay trên event loop. Cc là U+0000–U+001F và U+007F–U+009F, Cs là U+D800–U+DFFF;
 # Unicode cam kết không đổi hai tập này (test so với `unicodedata` trên mọi code point).
 _FILE_NAME_FORBIDDEN_RE = re.compile("[\\x00-\\x1f\\x7f-\\x9f\\ud800-\\udfff]")
+# `kind` của `clipboard`: kiểu MIME viết thường, phần sau `/` tùy chọn (protocol mục 3.3).
+_CLIP_KIND_RE = re.compile(r"[a-z0-9][a-z0-9.+-]*(?:/[a-z0-9][a-z0-9.+-]*)?")
+# `json.loads` tạo được surrogate lẻ từ `"\ud800"`; chuỗi như vậy không mã hóa được UTF-8.
+_SURROGATE_RE = re.compile("[\\ud800-\\udfff]")
 
 
 class MessageError(ValueError):
@@ -114,6 +125,13 @@ class CancelReason(StrEnum):
     UNKNOWN_TRANSFER = "unknown_transfer"
     ERROR = "error"
     EXPIRED = "expired"  # lượt đã thất bại vì mất kết nối quá lâu (protocol mục 6.3)
+
+
+class ClipKind(StrEnum):
+    """Các kind chuẩn của `clipboard`. Chỉ dùng để so sánh: `Clipboard.kind` luôn là `str`."""
+
+    TEXT = "text"
+    PNG = "image/png"
 
 
 def _validate_text(value: object, field: str, max_len: int) -> str:
@@ -567,6 +585,69 @@ class Cancel:
         object.__setattr__(self, "reason", _validate_reason(self.reason))
 
 
+# ---- Clipboard (protocol mục 3.2, 3.3) -----------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Clipboard:
+    """Một mảnh của clip `clip_id`: mảnh `index` trong `count` mảnh, cả clip dài `total` byte.
+
+    `data`: đoạn văn bản (kind `text`) hoặc base64 chuẩn của một đoạn byte (kind
+    `image/png`); kind lạ đúng dạng chỉ cần chuỗi không rỗng. Mọi kind: không surrogate lẻ.
+    Mọi luật cần biết các mảnh khác (trần theo kind, `count` ≤ `total`, thứ tự, `sha256`)
+    ở `teleport.core.clipboard`.
+    `data` không hiện trong `repr` và không bao giờ nằm trong thông điệp lỗi (mvp N9).
+    """
+
+    TYPE: ClassVar[str] = "clipboard"
+
+    clip_id: str
+    kind: str
+    sha256: str
+    total: int
+    index: int
+    count: int
+    data: str = field(repr=False)  # N9: repr/log không lộ nội dung
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.clip_id, str) or not _DEVICE_ID_RE.fullmatch(self.clip_id):
+            raise MessageError("clip_id phải là đúng 32 ký tự hex thường")
+        # `kind` kiểm trước `data`, vì luật của `data` tùy theo `kind`.
+        kind: object = self.kind
+        if (
+            not isinstance(kind, str)
+            or not 1 <= len(kind) <= MAX_CLIP_KIND_LEN
+            or not _CLIP_KIND_RE.fullmatch(kind)
+        ):
+            raise MessageError(f"kind phải dài 1–{MAX_CLIP_KIND_LEN} ký tự, dạng kiểu MIME viết thường")
+        if type(kind) is not str:
+            # Ví dụ ClipKind.PNG: đổi về str thuần để so sánh và mã hóa nhất quán.
+            kind = str.__str__(kind)
+            object.__setattr__(self, "kind", kind)
+        _validate_hex32(self.sha256, "sha256")
+        _validate_int(self.total, "total", 1, MAX_SAFE_INTEGER)
+        _validate_int(self.index, "index", 0, MAX_SAFE_INTEGER)
+        _validate_int(self.count, "count", 1, MAX_SAFE_INTEGER)
+        if self.index >= self.count:
+            raise MessageError("index phải nhỏ hơn count")
+        # Thông điệp lỗi dưới đây không bao giờ chép `data` (mvp N9).
+        data: object = self.data
+        if not isinstance(data, str) or not data:
+            raise MessageError("data phải là chuỗi không rỗng")
+        # Mọi kind: `data` phải mã hóa lại được UTF-8 (JSON viết được "\ud800").
+        if _SURROGATE_RE.search(data):
+            raise MessageError("data chứa surrogate lẻ (không mã hóa được UTF-8)")
+        if kind == ClipKind.PNG:
+            try:
+                raw = decode_base64(data)
+            except ValueError:
+                raise MessageError("data không phải base64 chuẩn") from None
+            if not raw:
+                raise MessageError("data phải giải ra ít nhất 1 byte")
+        if type(data) is not str:
+            object.__setattr__(self, "data", str.__str__(data))
+
+
 Message = (
     Hello
     | PairRequest
@@ -586,6 +667,7 @@ Message = (
     | Complete
     | Verified
     | Cancel
+    | Clipboard
 )
 
 _MESSAGE_TYPES: dict[str, type[Message]] = {
@@ -609,6 +691,7 @@ _MESSAGE_TYPES: dict[str, type[Message]] = {
         Complete,
         Verified,
         Cancel,
+        Clipboard,
     )
 }
 
@@ -691,7 +774,19 @@ _ALLOWED_TYPES: dict[ConnectionKind, frozenset[str]] = {
         cls.TYPE for cls in (PairRequest, PairCommit, PairNonce, PairReveal, PairConfirm, PairAbort)
     ),
     ConnectionKind.CONTROL: frozenset(
-        cls.TYPE for cls in (Ping, Pong, Offer, Accept, Reject, Resume, Complete, Verified, Cancel)
+        cls.TYPE
+        for cls in (
+            Ping,
+            Pong,
+            Offer,
+            Accept,
+            Reject,
+            Resume,
+            Complete,
+            Verified,
+            Cancel,
+            Clipboard,
+        )
     ),
     # Sau `data_open` chỉ có khung khối nhị phân (protocol.md mục 4.2).
     ConnectionKind.DATA: frozenset(),
