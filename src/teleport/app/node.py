@@ -312,7 +312,8 @@ def close_time_limit() -> float:
     Cộng các bước có hạn của `close()`: chờ đẩy `cancel` (`CANCEL_FLUSH_TIMEOUT`); đóng ghép đôi
     (`CLOSE_SESSIONS_TIMEOUT` + `ABORT_ON_CANCEL_TIMEOUT` + 1); đóng mDNS (`MDNS_CLOSE_ALLOWANCE`
     mỗi instance, tối đa hai instance); `Listener.close` (2 × `CLOSE_TIMEOUT` + 1); chờ task nền
-    (`CLOSE_TIMEOUT` + 1); chờ đĩa (`CLOSE_DISK_WAIT`); xả bia mộ (`TOMBSTONE_FLUSH_TIMEOUT`).
+    (`CLOSE_TIMEOUT` + 1); chờ đĩa (`CLOSE_DISK_WAIT`); xả bia mộ và lịch sử, song song
+    (`TOMBSTONE_FLUSH_TIMEOUT`).
     Thread đĩa treo không kéo dài thêm (daemon).
     """
     return (
@@ -565,11 +566,11 @@ class Node:
 
         Có `receive_dir` thì mở thư mục nhận (qua `DiskExecutor`, hạn `DISK_OP_TIMEOUT`). Tạo
         `TransferManager` và chạy `TransferManager.restore()` trước khi mở cổng: khôi phục bia mộ
-        (`tombstones.json`), lượt đã xong và lượt nhận dở; `start` có thể chậm thêm tối đa hạn đọc
-        bia mộ (`DISK_OP_TIMEOUT`) + hạn quét (`DISK_SYNC_TIMEOUT`) + hạn tổng của bước mở lại
-        (docs/architecture.md mục 5). Sau khi mở cổng
-        và mDNS, có `receive_dir` thì bật hẹn giờ dọn tạm (`cleanup_temps`, lần đầu chạy ngay, rồi
-        mỗi `CLEANUP_INTERVAL`).
+        (`tombstones.json`, nạp song song với `history.json`), lượt đã xong và lượt nhận dở; `start`
+        có thể chậm thêm tối đa hạn đọc bia mộ (`DISK_OP_TIMEOUT`) + hạn quét (`DISK_SYNC_TIMEOUT`)
+        + hạn tổng của bước mở lại (docs/architecture.md mục 5). Sau khi mở cổng và mDNS, có
+        `receive_dir` thì bật hẹn giờ dọn tạm (`cleanup_temps`, lần đầu chạy ngay, rồi mỗi
+        `CLEANUP_INTERVAL`).
 
         Lỗi bay ra sau khi đã dọn (đóng cổng, đóng mDNS, nhả khóa): NodeLockedError,
         IdentityError (cả khi `PairingService` không đọc được khóa để ký lúc ghép đôi),
@@ -771,8 +772,8 @@ class Node:
         `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi cổng cắt kết nối
         dữ liệu; đóng ghép đôi, mDNS (mỗi instance chờ tối đa `MDNS_CLOSE_ALLOWANCE`), cổng, kết
         nối; rồi `TransferManager.close()`: chờ các hàng đĩa tối đa `CLOSE_DISK_WAIT`, xả
-        `tombstones.json` tối đa `TOMBSTONE_FLUSH_TIMEOUT`, đóng thư mục nhận (bỏ qua nếu còn
-        thread đĩa bận). Gọi nhiều lần hay
+        `tombstones.json` và `history.json` (song song) tối đa `TOMBSTONE_FLUSH_TIMEOUT`, đóng thư
+        mục nhận (bỏ qua nếu còn thread đĩa bận). Gọi nhiều lần hay
         đồng thời đều được; trước `start` hay sau khi `start` thất bại thì không làm gì. Bị hủy
         giữa chừng thì vẫn hủy cứng mọi phiên ghép đôi (không ghi `trusted.json` nữa), mọi task
         truyền file (không chờ đĩa), ngừng nhận kết nối và hủy mọi kết nối trước khi nhả khóa
@@ -810,8 +811,8 @@ class Node:
                 task.cancel()  # kết nối ra: ControlChannel đóng gọn
             await self._drain_background()
             if transfers is not None:
-                # Task dữ liệu, hàng đĩa (≤ CLOSE_DISK_WAIT), bia mộ (≤ TOMBSTONE_FLUSH_TIMEOUT),
-                # thư mục nhận.
+                # Task dữ liệu, hàng đĩa (≤ CLOSE_DISK_WAIT), bia mộ và lịch sử (song song,
+                # ≤ TOMBSTONE_FLUSH_TIMEOUT), thư mục nhận.
                 await transfers.close()
         except BaseException:
             self._pairing.abort_all()

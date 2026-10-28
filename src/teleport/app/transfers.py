@@ -51,6 +51,9 @@
   `tombstones.json` qua executor (mã hóa trong thread). Tối đa một lần ghi tại một thời điểm, và
   lần sau chỉ bắt đầu khi việc trước đã `settled` (tên `.tmp` cố định), kể cả khi quá hạn.
   `close()` xả ảnh chụp cuối tối đa `TOMBSTONE_FLUSH_TIMEOUT`; `abort_now()` không xả.
+- **Lịch sử** (mvp F5, `app/history.py`): mỗi `TransferEnded` trừ `SUSPENDED` thành một mục
+  (`_record_history`, trước `_forget_transfer` và trước `_emit`); nạp song song với bia mộ trong
+  `restore`, xả song song với bia mộ trong `close()` cùng hạn `TOMBSTONE_FLUSH_TIMEOUT`.
 - **Dọn tạm** (`cleanup_temps`, `Node` hẹn giờ mỗi `CLEANUP_INTERVAL`): `skip` là lượt nhận engine
   còn giữ và hàng đĩa còn sống, chụp đồng bộ ngay trước khi giao việc.
 
@@ -68,7 +71,8 @@ ghi `str(e)` hay traceback của nó).
 Seam cho test (biến cấp module, đọc lúc dùng): các hằng dưới đây, `open_data`, `uuid4`,
 `_wall_time` (giờ tường: tuổi khi khôi phục, mốc `at` của bia mộ, `cleanup`); module `sources`
 được gọi qua thuộc tính (`sources.prepare_sources`, `sources.SourceReader`,
-`sources.check_source`), `tombstones.load` / `tombstones.save` cũng vậy; `storage.TEMP_RETENTION`,
+`sources.check_source`), `tombstones.load` / `tombstones.save` cũng vậy, như `history.load` /
+`history.save` / `history._read_limited` (gọi trong `app/history.py`); `storage.TEMP_RETENTION`,
 `diskio.DISK_THREADS`, `core.transfer.RECONNECT_GRACE` đọc lúc dùng.
 """
 
@@ -93,6 +97,7 @@ from uuid import uuid4
 
 from teleport.app import diskio, sources, storage, tombstones
 from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
+from teleport.app.history import HistoryStore
 from teleport.app.sources import SourceChanged, SourceError, SourceErrorKind, SourceFile, SourceReader
 from teleport.app.storage import (
     NotResumableError,
@@ -110,6 +115,7 @@ from teleport.app.storage import (
 from teleport.core import ratelimit
 from teleport.core import transfer as core_transfer
 from teleport.core.blocks import DIGEST_SIZE, BlockError
+from teleport.core.history import HistoryEntry, HistoryError, entry_from_info
 from teleport.core.merkle import merkle_root
 from teleport.core.messages import (
     Accept,
@@ -701,6 +707,7 @@ class TransferManager:
         self._tomb_last_write: float | None = None  # `loop.time()` lúc lần ghi trước xong
         self._tomb_stopped = False  # đang xả lúc đóng hay đã hủy: không hẹn ghi nữa
         self._cleanup_job: DiskJob[int] | None = None  # lần dọn tạm gần nhất
+        self._history = HistoryStore(executor=executor, config_dir=self._config_dir)
 
     def start(self) -> None:
         """Bật bộ hẹn giờ của engine và task tiến độ."""
@@ -812,13 +819,25 @@ class TransferManager:
         """Mọi lượt chưa kết thúc, theo thứ tự tạo."""
         return self._engine.transfers()
 
+    def history(self) -> tuple[HistoryEntry, ...]:
+        """Lịch sử các lượt đã kết thúc (mvp F5), mới nhất trước; gọi được ở mọi lúc."""
+        return self._history.entries()
+
+    def clear_history(self) -> None:
+        """Xóa lịch sử: rỗng ngay trong bộ nhớ, ghi `history.json` rỗng (không xóa file).
+
+        Sau `close` chỉ xóa trong bộ nhớ (WARNING).
+        """
+        self._history.clear()
+
     # ---- Cho Node ---------------------------------------------------------------------------
 
     async def restore(self) -> None:
         """Khôi phục lúc khởi động (mục “Khôi phục” ở docstring module); gọi đúng một lần, sau
         `start()`, trước khi mở cổng. Gọi lần hai → RuntimeError; ngoài ra chỉ ném CancelledError.
 
-        Đọc `tombstones.json` và quét thư mục nhận (nếu có) qua `DiskExecutor`, mở lại song song
+        Đọc `tombstones.json` (song song với `history.json`) và quét thư mục nhận (nếu có) qua
+        `DiskExecutor`, mở lại song song
         lượt nhận dở gần nhất của mỗi máy gửi (hạn riêng mỗi lượt và hạn tổng; quá hạn hay lỗi
         thì bỏ lượt đó, để nguyên trên đĩa), rồi trong một khối đồng bộ: dựng hàng đĩa cho lượt
         mở được, gọi `engine.restore` (lời gọi engine đầu tiên, kể cả khi không có gì), phát
@@ -829,7 +848,11 @@ class TransferManager:
             raise RuntimeError("restore() chỉ gọi được một lần")
         self._restore_called = True
         own = self._identity.device_id
-        records = await self._restore_load_tombstones()
+        # Lịch sử nạp song song với bia mộ (cả hai chỉ ném CancelledError), xong trước
+        # `_restore_apply` vì `engine.restore` có thể sinh `TransferEnded`.
+        records, _ = await asyncio.gather(
+            self._restore_load_tombstones(), self._history.load(DISK_OP_TIMEOUT)
+        )
         rd = self._receive_dir
         scans: list[TempScan] = []
         if rd is not None and not self._closing:
@@ -999,7 +1022,7 @@ class TransferManager:
 
         Thứ tự: `begin_close()` (nếu chưa); hủy task mạng; chờ các hàng đĩa dọn xong (`RemoveTemp`)
         hay chạy nốt thao tác của lượt tạm dừng (`SuspendTemp`) tối đa `CLOSE_DISK_WAIT`; xả
-        `tombstones.json` tối đa `TOMBSTONE_FLUSH_TIMEOUT` (`_flush_tombstones`);
+        `tombstones.json` và `history.json` song song, cùng hạn `TOMBSTONE_FLUSH_TIMEOUT`;
         `DiskExecutor.shutdown()`; `ReceiveDir.close()` chỉ khi không còn thread đĩa nào bận (không
         thì bỏ qua, WARNING). Gọi lại được. Bị hủy giữa chừng → bên gọi dùng `abort_now()`.
         """
@@ -1025,16 +1048,17 @@ class TransferManager:
             if pending:
                 log.warning("còn %d việc dọn đĩa chưa xong khi đóng", len(pending))
                 await asyncio.wait(pending)
-        await self._flush_tombstones()
+        await asyncio.gather(self._flush_tombstones(), self._history.flush(TOMBSTONE_FLUSH_TIMEOUT))
         self._shutdown_disk()
         self._closed = True
 
     def abort_now(self) -> None:
-        """`Node.close` bị hủy: hủy mọi task, không chờ đĩa, không xả bia mộ; dừng mọi lần mở lại
-        của `restore`; không đóng thư mục nhận khi còn thread."""
+        """`Node.close` bị hủy: hủy mọi task, không chờ đĩa, không xả bia mộ và lịch sử; dừng mọi
+        lần mở lại của `restore`; không đóng thư mục nhận khi còn thread."""
         self._closing = True
         self._closed = True
         self._stop_tombstones()
+        self._history.stop()
         for stop in self._restore_stops:
             stop.set()
         for ctl in self._controls.values():
@@ -1236,6 +1260,9 @@ class TransferManager:
             sent = 0
             if event.key.direction is Direction.SEND:
                 sent = self._payload_sent.pop((event.key.device_id, event.key.transfer_id), 0)
+            if result is not TransferResult.SUSPENDED:
+                # Trước `_forget_transfer` (xóa `_final_paths`) và trước `_emit`.
+                self._record_history(event.info, result)
             self._forget_transfer(event.key)
             ended = TransferFinished(
                 event.info, result, event.by_peer, event.reason, event.file_index, event.reject, sent
@@ -1243,6 +1270,44 @@ class TransferManager:
             self._emit(ended)
         elif isinstance(event, DataUnreachable):
             self._emit(event)
+
+    def _record_history(self, info: TransferInfo, result: TransferResult) -> None:
+        """Thêm mục lịch sử cho lượt vừa kết thúc (đồng bộ, không ném; mục “Lịch sử” ở docstring).
+
+        `device_name`: tên trong `trusted.json` lúc này (None nếu đã hủy ghép đôi). `saved_path`:
+        chỉ chiều nhận, đường dẫn file cuối có `file_index` nhỏ nhất còn trong `_final_paths`
+        (lượt nối lại: file xong trước khi tạm dừng không có ở đó); đường dẫn không lưu được
+        (không mã hóa được UTF-8, quá dài, có ký tự điều khiển) → None.
+        """
+        key = info.key
+        try:
+            device = self._store.get(key.device_id)
+            device_name = None if device is None else device.name
+            saved_path: str | None = None
+            if key.direction is Direction.RECEIVE:
+                pair = (key.device_id, key.transfer_id)
+                indexes = [k[2] for k in self._final_paths if k[:2] == pair]
+                if indexes:
+                    text = str(self._final_paths[(*pair, min(indexes))])
+                    with contextlib.suppress(UnicodeEncodeError):
+                        text.encode("utf-8")
+                        saved_path = text
+            wall = _wall_time()
+            try:
+                entry = entry_from_info(
+                    info, result=result, device_name=device_name, wall_now=wall, saved_path=saved_path
+                )
+            except HistoryError:
+                if saved_path is None:
+                    raise
+                # Đường dẫn không lưu được (quá dài, ký tự lạ): vẫn giữ mục, không có đường dẫn.
+                entry = entry_from_info(
+                    info, result=result, device_name=device_name, wall_now=wall, saved_path=None
+                )
+        except Exception as e:
+            log.warning("không ghi được lịch sử lượt %s: %s", key.transfer_id[:8], type(e).__name__)
+            return
+        self._history.record(entry)
 
     def _forget_transfer(self, key: TransferKey) -> None:
         """Lượt đã kết thúc: gỡ hàng đĩa, file nguồn, đường dẫn file cuối, dấu hủy ghép đôi."""

@@ -72,6 +72,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - zeroconf (LGPL) được đóng thành các file riêng trong `_internal\zeroconf\`, người dùng có thể thay bằng bản khác.
 - Kiểm giấy phép tự động khi build: gặp gói, file hoặc giấy phép chưa được duyệt thì build dừng và không tạo `teleport.exe`.
 - Test khói chạy trên chính exe vừa build (`pytest -m frozen`), và hướng dẫn build thử trong `docs/CONTRIBUTING.md`.
+- Lịch sử 100 lượt truyền gần nhất (cả gửi lẫn nhận), lưu trong `history.json` ở thư mục cấu hình và xóa được; giao diện sẽ hiện ở bản sau. File chỉ chứa metadata: tối đa 10 tên file đầu, kích thước, kết quả, giờ kết thúc, tên máy kia và đường dẫn đã lưu ở máy nhận, không bao giờ có nội dung file. File hỏng thì lịch sử bắt đầu lại từ rỗng.
 
 ### Changed
 - CLI: câu báo khi thư mục tạm của lượt đã có sẵn mà Teleport không dùng tiếp được không còn đổ cho việc Teleport bị tắt đột ngột (lượt như vậy nay được khôi phục); tên máy do máy kia tự đặt được làm sạch giống nhau ở mọi câu (ký tự định dạng ẩn không còn in thẳng).
