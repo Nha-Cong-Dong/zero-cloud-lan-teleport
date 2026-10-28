@@ -20,6 +20,10 @@ P3-5 (`specs/spec-p3-5.md`, mục 9 thắng): ngưỡng mvp N4 lấy từ fixtur
 - V5: giết / Ctrl+C `receive` ở 85 % của file 96 MiB, vị trí cắt do proxy tự chặn (`TcpProxy.block_at`,
   chiều c2s vì `send` là bên mở kết nối); tiền đề `byte_lúc_cắt > n4_extra`, rồi `payload_sent − cỡ file
   ≤ n4_extra`. Ctrl+C lúc proxy đang chặn: `receive` chờ thêm tới `CLOSE_TIMEOUT` khi đóng (N10).
+  fix(app) 1e (`specs/spec-fix-app.md` mục 2 (1e), 9 S10): ca Ctrl+C còn chạy `sitecustomize` với cổng
+  `TRACE_ENV` (log mỗi `write_at`, `commit`), rồi khẳng định lô dở lúc Ctrl+C đã có `MARK` bền: tập khối
+  `MARK` trong `.state` (đọc độc lập, fixture `read_state`) = tập khối đã ghi. Hook nạp tiếp
+  `sitecustomize` kế tiếp trên `sys.path` (nó che), để kiểm đột biến bằng hook riêng.
 - V9: bên **gửi** khởi động lại (bị giết, rồi một `send` mới gửi file khác) → `receive` kết thúc lượt cũ
   bằng `unknown_transfer` (by_peer), xóa tạm của nó, lượt mới xong.
 - V12c: câu (e) của `send` bản text theo lịch thử lại thật: `receive` (JSON, in cổng) dừng, proxy chuyển
@@ -64,6 +68,14 @@ N4_SIZE = 96 * MiB  # spec-p3-5 quyết định 6: file 96 MiB, cắt ở 85 %
 CUT_AT = 0.85
 HANG_MARK = "TEST-REREAD-HANG"
 HANG_ENV = "TELEPORT_TEST_HANG_REREAD"
+# fix(app) 1e: giá trị là đường dẫn file log. Mỗi dòng `<perf_counter_ns> <loại> …`:
+#   W <file_index> <index>                      `PartFile.write_at` thành công
+#   CS <file_index> <n> <i1,i2,…|->             `PartFile.commit` bắt đầu (n khối)
+#   CE <file_index> <n> ok|err:<lỗi>            `PartFile.commit` kết thúc
+#   SUSP <số khối mỗi SyncPart, ',' | ->        `TransferEngine.suspend_receiving` trả (chỉ để chẩn đoán)
+#   INT                                         test gửi Ctrl+C (test tự ghi, sau khi tiến trình đã thoát)
+# `perf_counter` dùng chung cho mọi tiến trình trên một máy (QPC / CLOCK_MONOTONIC / mach), nên so được.
+TRACE_ENV = "TELEPORT_TEST_DISK_TRACE"
 
 SITECUSTOMIZE = f'''
 import os, sys, time
@@ -79,7 +91,70 @@ if os.environ.get("{HANG_ENV}"):
         return _real(self, stop=stop)
 
     _storage.PartFile.reread = _reread
+
+_trace_path = os.environ.get("{TRACE_ENV}")
+if _trace_path:
+    import threading
+    from teleport.app import storage as _tstorage
+    from teleport.core import transfer as _ttransfer
+
+    _trace_lock = threading.Lock()
+    _trace_fd = os.open(_trace_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0))
+
+    def _trace(*parts):
+        with _trace_lock:
+            line = " ".join(str(p) for p in (time.perf_counter_ns(), *parts)) + "\\n"
+            os.write(_trace_fd, line.encode("ascii"))
+
+    _real_write_at = _tstorage.PartFile.write_at
+    _real_commit = _tstorage.PartFile.commit
+    _real_suspend = _ttransfer.TransferEngine.suspend_receiving
+
+    def _write_at(self, index, data):
+        _real_write_at(self, index, data)
+        _trace("W", self.file_index, index)
+
+    def _commit(self, blocks):
+        idx = [i for i, _ in blocks]
+        _trace("CS", self.file_index, len(idx), ",".join(map(str, idx)) or "-")
+        try:
+            _real_commit(self, blocks)
+        except BaseException as exc:
+            _trace("CE", self.file_index, len(idx), "err:" + type(exc).__name__)
+            raise
+        _trace("CE", self.file_index, len(idx), "ok")
+
+    def _suspend_receiving(self, now):
+        actions = _real_suspend(self, now)
+        sizes = [len(a.blocks) for a in actions if isinstance(a, _ttransfer.SyncPart)]
+        _trace("SUSP", ",".join(map(str, sizes)) or "-")
+        return actions
+
+    _tstorage.PartFile.write_at = _write_at
+    _tstorage.PartFile.commit = _commit
+    _ttransfer.TransferEngine.suspend_receiving = _suspend_receiving
+
+# Hook này che `sitecustomize` kế tiếp trên `sys.path` (của môi trường, hay hook đột biến khi kiểm chính
+# test này): nạp tiếp nó, sau các vá ở trên.
+import importlib.util as _ilu
+_here = os.path.dirname(os.path.abspath(__file__))
+for _d in sys.path:
+    _p = os.path.join(_d or os.getcwd(), "sitecustomize.py")
+    if os.path.abspath(os.path.dirname(_p)) != _here and os.path.isfile(_p):
+        _spec = _ilu.spec_from_file_location("_teleport_test_chained_sitecustomize", _p)
+        _spec.loader.exec_module(_ilu.module_from_spec(_spec))
+        break
 '''
+
+
+def hook_env(tmp_path: Path, **env: str) -> dict[str, str]:
+    """Ghi `sitecustomize.py` (SITECUSTOMIZE) vào `tmp_path/hook`; trả `env` cho `procs` (PYTHONPATH có
+    thư mục hook đứng đầu, cộng các biến cổng `env`)."""
+    hook = tmp_path / "hook"
+    hook.mkdir(exist_ok=True)
+    (hook / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
+    pythonpath = os.pathsep.join(p for p in (str(hook), os.environ.get("PYTHONPATH", "")) if p)
+    return {"PYTHONPATH": pythonpath, **env}
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------
@@ -247,12 +322,8 @@ def test_killed_receive_mid_transfer_then_restarted_finishes(pair_dirs, procs, t
 def test_killed_receive_during_reread_then_restarted_finishes(
     pair_dirs, procs, tcp_proxy, tmp_path, n4_extra
 ):
-    hook = tmp_path / "hook"
-    hook.mkdir()
-    (hook / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
-    pythonpath = os.pathsep.join(p for p in (str(hook), os.environ.get("PYTHONPATH", "")) if p)
     net = pair_dirs
-    recv = procs(receive_cmd(net), env={HANG_ENV: "1", "PYTHONPATH": pythonpath})
+    recv = procs(receive_cmd(net), env=hook_env(tmp_path, **{HANG_ENV: "1"}))
     proxy = tcp_proxy(recv.wait_json("receiving")["port"])
     src = make_file(net.src, "f.bin", 6 * MiB + 9)
     send = procs(send_cmd(net, [src], proxy.port))
@@ -313,11 +384,12 @@ def results_of(proc) -> list[dict]:
     return [e for e in proc.events() if e.get("event") == "result"]
 
 
-def transfer_cut_at_85_percent(net, procs, tcp_proxy, n4_extra):
-    """`receive` (JSON) ← proxy ← `send` file 96 MiB; proxy tự chặn khi chiều c2s (payload) chạm 85 % cỡ
-    file. Trả `(recv, proxy, send, src, tid)` sau khi đã chặn; kiểm hai tiền đề N4 (spec-p3-5 mục 8.4)."""
+def transfer_cut_at_85_percent(net, procs, tcp_proxy, n4_extra, *, env=None):
+    """`receive` (JSON, biến môi trường thêm `env`) ← proxy ← `send` file 96 MiB; proxy tự chặn khi chiều
+    c2s (payload) chạm 85 % cỡ file. Trả `(recv, proxy, send, src, tid)` sau khi đã chặn; kiểm hai tiền đề
+    N4 (spec-p3-5 mục 8.4)."""
     assert n4_extra < CUT_AT * N4_SIZE, "tiền đề: gửi lại từ đầu ở 85 % phải vượt ngưỡng mvp N4"
-    recv = procs(receive_cmd(net))
+    recv = procs(receive_cmd(net), env=env)
     proxy = tcp_proxy(recv.wait_json("receiving")["port"])
     proxy.block_at("c2s", int(CUT_AT * N4_SIZE))
     src = make_file(net.src, "lon.bin", N4_SIZE)
@@ -354,29 +426,138 @@ def test_killed_receive_at_85_percent_of_96_mib_resends_within_n4(pair_dirs, pro
     print(f"V5 kill: cut_c2s={proxy.fired_forwarded['c2s']} excess_bytes={excess}")
 
 
-def test_ctrl_c_receive_at_85_percent_of_96_mib_resends_within_n4(pair_dirs, procs, tcp_proxy, n4_extra):
+def parse_disk_trace(path: Path) -> SimpleNamespace:
+    """Đọc log của hook `TRACE_ENV` (file 0): `written` (tập khối `write_at` xong), `commits` (danh sách
+    `SimpleNamespace(start, end, blocks, outcome)`; `end`/`outcome` None nếu không có dòng kết thúc),
+    `suspend` (các dòng SUSP), `interrupt` (mốc INT hay None). Mốc là `perf_counter_ns`."""
+    written: set[int] = set()
+    commits: list[SimpleNamespace] = []
+    suspend: list[tuple[int, str]] = []
+    interrupt = None
+    for line in path.read_text(encoding="ascii").split("\n")[:-1]:  # bỏ dòng cuối đang ghi dở
+        stamp, kind, *rest = line.rstrip("\r").split(" ")
+        ts = int(stamp)
+        if kind == "W" and rest[0] == "0":
+            written.add(int(rest[1]))
+        elif kind == "CS" and rest[0] == "0":
+            blocks = () if rest[2] == "-" else tuple(int(i) for i in rest[2].split(","))
+            commits.append(SimpleNamespace(start=ts, end=None, blocks=blocks, outcome=None))
+        elif kind == "CE" and rest[0] == "0":
+            # Lần commit kết thúc là lần mở cũ nhất chưa kết thúc cùng số khối (commit chạy tuần tự
+            # trong một hàng đĩa, nên thực tế chỉ có một lần mở).
+            c = next(c for c in commits if c.end is None and len(c.blocks) == int(rest[1]))
+            c.end, c.outcome = ts, rest[2]
+        elif kind == "SUSP":
+            suspend.append((ts, rest[0]))
+        elif kind == "INT":
+            interrupt = ts
+    return SimpleNamespace(written=written, commits=commits, suspend=suspend, interrupt=interrupt)
+
+
+def wait_disk_quiet(trace: Path, *, quiet: float, timeout: float) -> None:
+    """Chờ tới khi log `TRACE_ENV` không thêm khối ghi hay commit nào trong `quiet` giây và mọi commit đã
+    bắt đầu đều đã kết thúc."""
+    deadline = time.monotonic() + timeout
+    last, since = None, time.monotonic()
+    while True:
+        log = parse_disk_trace(trace) if trace.exists() else None
+        key = (
+            None
+            if log is None
+            else (len(log.written), len(log.commits), sum(c.end is None for c in log.commits))
+        )
+        now = time.monotonic()
+        if key != last:
+            last, since = key, now
+        elif key is not None and key[2] == 0 and now - since >= quiet:
+            return
+        if now > deadline:
+            raise AssertionError(f"hết {timeout} s mà tiến trình nhận vẫn còn ghi/commit: {key}")
+        time.sleep(0.05)
+
+
+def test_ctrl_c_receive_at_85_percent_of_96_mib_resends_within_n4(
+    pair_dirs, procs, tcp_proxy, n4_extra, tmp_path, read_state
+):
     """V5 (spec-p3-5, mvp N4; N10 của mục 9.2): Ctrl+C `receive` khi proxy đang chặn ở 85 % → `receive`
-    thoát 0 (đóng có trật tự, chờ thêm tới `CLOSE_TIMEOUT` vì kết nối không đi được), lượt `suspended`,
-    phần đã nhận bền (`restored.done_bytes` > 0); chạy lại, mạng có lại → hoàn tất, file khớp,
-    `payload_sent − cỡ file ≤ n4_extra`."""
+    thoát 0 (đóng có trật tự, chờ thêm tới `CLOSE_TIMEOUT` vì kết nối không đi được), lượt `suspended`;
+    chạy lại, mạng có lại → hoàn tất, file khớp, `payload_sent − cỡ file ≤ n4_extra`.
+
+    fix(app) 1e (spec-fix-app mục 2 (1e), 9 S10): đóng có trật tự làm bền cả lô dở. Hook `TRACE_ENV`
+    ghi mỗi `write_at` xong và mỗi `commit` bắt đầu/kết thúc; test chờ đĩa yên (đã ghi hết phần qua proxy,
+    mọi commit đã bắt đầu đều xong) rồi mới Ctrl+C, và ghi mốc lúc gửi Ctrl+C. Tiền đề: có
+    khối đã ghi không thuộc `commit` nào bắt đầu trước Ctrl+C (lô dở khác rỗng). Khẳng định: tập khối có
+    `MARK` trong `.state` (đọc độc lập, `read_state`) đúng bằng tập khối đã ghi, hash `MARK` khớp nguồn,
+    và `restored.done_bytes` bằng tổng byte các khối đó (> `n4_extra`)."""
+    from teleport.core.transfer import SYNC_EVERY
+
+    # Tiền đề lô dở chỉ ổn định khi số khối ở mốc cắt không là bội của SYNC_EVERY: đổi CUT_AT/N4_SIZE
+    # mà rơi vào bội thì phải chọn lại mốc, đừng để test đỏ ở tiền đề.
+    assert int(CUT_AT * N4_SIZE) // MiB % SYNC_EVERY != 0, "mốc cắt rơi vào biên lô: chọn lại CUT_AT"
     net = pair_dirs
-    recv, proxy, send, src, tid = transfer_cut_at_85_percent(net, procs, tcp_proxy, n4_extra)
+    trace = tmp_path / "disk-trace.log"
+    env = hook_env(tmp_path, **{TRACE_ENV: str(trace)})
+    recv, proxy, send, src, tid = transfer_cut_at_85_percent(net, procs, tcp_proxy, n4_extra, env=env)
+    # Proxy đã chặn: chờ tiến trình nhận ghi hết phần đã tới và xong mọi commit đã bắt đầu, để lô dở lúc
+    # Ctrl+C đúng là phần dư của số khối đã nhận chia SYNC_EVERY (không còn lô thường xếp hàng trên đĩa).
+    # Hạn ngắn hơn hẳn `IDLE_TIMEOUT` của kết nối dữ liệu (tự cắt thì lô dở bị đẩy trước Ctrl+C).
+    wait_disk_quiet(trace, quiet=1.0, timeout=15.0)
+    interrupt_at = time.perf_counter_ns()
     recv.interrupt()
     assert recv.finish(60) == 0, recv.err_text()
+    exited_at = time.perf_counter_ns()
+    with open(trace, "a", encoding="ascii") as f:  # tiến trình nhận đã thoát: không ghi chen
+        f.write(f"{interrupt_at} INT\n")
     results = results_of(recv)
     assert [(r["result"], r["by_peer"]) for r in results] == [("suspended", False)], results
     assert recv.events()[-1]["event"] == "stopped"
     assert_clean_exit(recv)
     assert send.p.poll() is None, "send phải còn chờ nối lại"
 
+    log = parse_disk_trace(trace)
+    before = {i for c in log.commits if c.start < log.interrupt for i in c.blocks}
+    unbatched = log.written - before
+
+    def ms(ts: int | None) -> str:
+        return "-" if ts is None else f"{(ts - log.interrupt) / 1e6:+.1f}ms"
+
+    # Mỗi commit bắt đầu từ Ctrl+C trở đi: (số khối, kết quả, bắt đầu, kết thúc) so với mốc Ctrl+C.
+    late = [
+        (len(c.blocks), c.outcome, ms(c.start), ms(c.end)) for c in log.commits if c.start >= log.interrupt
+    ]
+    summary = (
+        f"written={len(log.written)} committed_before_int={len(before)} unbatched={len(unbatched)} "
+        f"commits_from_int={late} susp={[(s, ms(t)) for t, s in log.suspend]} exit={ms(exited_at)}"
+    )
+    assert log.written, f"hook không ghi được dòng nào (PYTHONPATH/cổng sai?): {summary}"
+    assert unbatched, (
+        "tiền đề 1e không đạt: mọi khối đã ghi đều thuộc một commit bắt đầu trước Ctrl+C, test không "
+        f"kiểm được lô dở: {summary}"
+    )
+
+    state = read_state(net.recv / ".teleport" / tid / "0.state")
+    marked = set(state.marks)
+    assert state.size == N4_SIZE, state.size
+    assert marked == log.written, (
+        f"MARK ≠ khối đã ghi: thiếu {sorted(log.written - marked)}, thừa {sorted(marked - log.written)}; "
+        f"{summary}"
+    )
+    data = src.read_bytes()
+    bs = state.block_size
+    wrong = [
+        i for i in sorted(marked) if hashlib.sha256(data[i * bs : (i + 1) * bs]).digest() != state.marks[i]
+    ]
+    assert not wrong, f"hash MARK khác nguồn ở khối {wrong}"
+    marked_bytes = sum(min(bs, N4_SIZE - i * bs) for i in marked)
+
     recv2 = restart_receive(net, procs, proxy, tid)
     done = recv2.restored["done_bytes"]
-    # Không đòi `done > n4_extra`: lô `SyncPart` cuối có thể chưa bền khi `receive` thoát (tiến trình con
-    # dùng hạn chờ đĩa thật), `done` lùi về đúng biên. Tiền đề N4 là byte lúc cắt (đã kiểm ở trên).
-    assert 0 < done < N4_SIZE, (done, n4_extra, proxy.fired_forwarded)
+    assert done == marked_bytes, (done, marked_bytes, summary)
+    assert n4_extra < done < N4_SIZE, (done, n4_extra, proxy.fired_forwarded)
     reconnect_through_proxy(proxy)
     excess = finish_send_and_receive(net, send, recv2, src, n4_extra)
     print(f"V5 ctrl-c: cut_c2s={proxy.fired_forwarded['c2s']} restored_done={done} excess_bytes={excess}")
+    print(f"1e: {summary}")
 
 
 # --- P3-5 V9: bên gửi khởi động lại -------------------------------------------------------------------------
