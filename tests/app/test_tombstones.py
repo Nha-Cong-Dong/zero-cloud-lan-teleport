@@ -23,6 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support import wait_until
 
 from teleport.core import resume_state as rs
 from teleport.core import transfer as core_transfer
@@ -336,14 +337,6 @@ async def wait_saved(config: Path, tids, timeout: float = 5.0) -> None:
     )
 
 
-async def wait_until(predicate, timeout: float = 5.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
-
-
 @integration
 async def test_burst_of_tombstones_is_written_at_most_twice_never_overlapping(lone_sender, save_spy):
     net = await lone_sender()
@@ -359,6 +352,7 @@ async def test_burst_of_tombstones_is_written_at_most_twice_never_overlapping(lo
     assert [e.transfer_id for e in entries] == tids, "giữ thứ tự lập bia mộ"
 
 
+@pytest.mark.slow
 @integration
 async def test_second_write_waits_for_overdue_first_write_to_settle(lone_sender, save_spy, T, monkeypatch):
     """Lần ghi quá `DISK_OP_TIMEOUT` vẫn chạy trong thread: lần ghi sau chỉ bắt đầu khi nó đã xong (tên
@@ -536,6 +530,7 @@ async def test_tombstone_write_after_executor_shutdown_warns_once_and_close_stay
     assert not (net.config / "tombstones.json").exists()
 
 
+@pytest.mark.slow
 @integration
 async def test_close_flush_is_bounded_by_tombstone_flush_timeout_and_never_writes_twice(
     lone_sender, save_spy, T, monkeypatch

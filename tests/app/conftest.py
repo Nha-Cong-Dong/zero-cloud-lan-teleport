@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.x509.oid import ExtensionOID, NameOID
+from support import wait_until
 
 from teleport.core.framing import HEADER, MAX_PAIRING_MESSAGE_SIZE, FramingError, encode_message
 from teleport.core.messages import PROTOCOL_VERSION
@@ -50,14 +51,6 @@ CLOSED_ERRORS: tuple[type[BaseException], ...] = (ConnectionError, ssl.SSLError)
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------
-
-
-async def wait_until(predicate: Callable[[], bool], timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 async def expect_closed(reader: asyncio.StreamReader, within: float) -> tuple[float, bytes]:

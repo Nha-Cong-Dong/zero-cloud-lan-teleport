@@ -12,9 +12,9 @@ Hằng thời gian rút ngắn bằng `fast` (tests/app/conftest.py). Listener c
 """
 
 import asyncio
-import time
 
 import pytest
+from support import wait_until
 
 from teleport.app.node import ConnectFailed, MdnsOptions
 from teleport.app.pairing import PairingOutcome
@@ -32,14 +32,6 @@ pytestmark = [
 ]
 
 LOCAL = "127.0.0.1"
-
-
-async def wait_until(predicate, timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def listener_of(node):
@@ -70,6 +62,7 @@ def shared_link(a, b) -> tuple[bool, int] | None:
     return (client is ca, port) if server.peer.port == port else None
 
 
+@pytest.mark.slow
 @pytest.mark.real_admission_limits
 async def test_pairing_then_auto_connect_then_reconnect_with_real_default_limits(
     node_factory, fake_mdns, app_helpers, count_open_control
@@ -134,6 +127,7 @@ async def test_outgoing_priority_kept_after_connection_drops(
     assert listener_of(A).is_priority(LOCAL) is True, "đóng rồi vẫn ưu tiên trong PRIORITY_TTL"
 
 
+@pytest.mark.slow
 async def test_impostor_trusting_our_cert_gets_no_connection_and_no_scheduled_retry(
     node_factory, fake_mdns, count_open_control, tmp_path, app_helpers
 ):

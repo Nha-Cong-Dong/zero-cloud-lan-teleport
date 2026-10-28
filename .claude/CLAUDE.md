@@ -29,6 +29,7 @@ python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"                          # cryptography, zeroconf, ifaddr + pytest, pytest-asyncio, hypothesis, ruff, mypy
 pytest                                           # all tests
 pytest -m "not integration"                      # skip tests that open real sockets on 127.0.0.1
+pytest -m "not slow"                             # fast loop while iterating; still run the full pytest before a PR
 pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal   # single test
 ruff check . ; ruff format --check .             # CI runs exactly: ruff check, ruff format --check, mypy src, pytest
 mypy src                                         # type check; config in [tool.mypy] of pyproject.toml

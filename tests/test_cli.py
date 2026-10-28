@@ -623,6 +623,7 @@ async def test_line_read_just_before_prompt_is_ignored(tmp_path, fast_cli, cli_r
     assert (await listen.wait_event("pair_result"))["outcome"] == "user_rejected"
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_cl10_answer_after_prompt_expired_does_nothing(tmp_path, fast_cli, cli_runs):
     listen = cli_runs("listen", listen_argv(tmp_path / "B"))
@@ -645,6 +646,7 @@ async def test_cl10_answer_after_prompt_expired_does_nothing(tmp_path, fast_cli,
     assert listen.err.getvalue() == ""
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_cl11_stdin_eof_rejects_immediately_and_later(tmp_path, fast_cli, cli_runs):
     listen = cli_runs("listen", listen_argv(tmp_path / "B"))
@@ -705,6 +707,7 @@ async def test_cl12_json_mode_invalid_answer_is_silent(tmp_path, fast_cli, cli_r
     assert (await listen.wait_event("pair_result"))["outcome"] == "user_rejected"
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_pair_unreachable_message(tmp_path, fast_cli, cli_runs):
     s = socket.socket()
@@ -767,6 +770,7 @@ def pair_cmd(d, port: int, *, json_mode: bool = True) -> list[str]:
     return ["--config-dir", str(d), "pair", f"{LOCAL}:{port}", *mode, "--name", "A", *NODE_OPTS]
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_cl13_subprocess_end_to_end(tmp_path, procs):
     listen = procs(listen_cmd(tmp_path / "B"))
@@ -806,6 +810,7 @@ def test_cl14_interrupt_stops_listen_cleanly(tmp_path, procs):
     assert "Traceback" not in err
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_cl14_interrupt_while_prompt_is_open(tmp_path, procs):
     """3.9 mục 2: Ctrl+C khi đang hỏi → listen thoát 0, máy kia nhận pair_abort{user}."""
@@ -823,6 +828,7 @@ def test_cl14_interrupt_while_prompt_is_open(tmp_path, procs):
     assert "Fatal Python error" not in err and "Traceback" not in err
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_cl14_interrupt_pair_while_waiting(tmp_path, procs):
     """`pair` bị Ctrl+C khi đang chờ người dùng → in “Đã hủy ghép đôi.”, mã 1; máy kia PEER_REJECTED."""
@@ -853,6 +859,7 @@ def test_cl15_unpair_while_listen_runs(tmp_path, procs, capsys, monkeypatch):
     assert listen.finish(30) == 0
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_unpair_while_receive_runs_names_receive_and_listen(tmp_path, procs, capsys, monkeypatch):
     """spec-p2-8 mục B “8a”: `teleport receive` đang giữ khóa → `unpair` mã 1, gợi ý nhắc cả
@@ -1323,6 +1330,7 @@ def test_list_interrupted_prints_cancelled(tmp_path, procs):
 # --- CL23–CL26: pair theo tên ------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_cl23_pair_by_name_then_by_prefix(
     tmp_path, fast_links, cli_mdns, browse_fast, open_control_calls, cli_runs
@@ -1426,6 +1434,7 @@ async def test_cl24_pair_by_name_paired_but_offline(tmp_path, fast_links, cli_md
     assert pair.events_of("error")[0]["error"] == "offline"
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_cl25_seen_but_unreachable(tmp_path, fast_links, cli_mdns, browse_fast, cli_runs):
     b = load_or_create_identity(tmp_path / "peer-B")
@@ -1476,6 +1485,7 @@ def test_pair_by_name_bad_name_option_exits_2(tmp_path):
     assert not (d / "node.lock").exists()
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_pair_by_ip_does_not_use_mdns(tmp_path, fast_links, cli_mdns, cli_runs):
     """Chốt thêm 8: `pair <ip>` không bật mDNS, kể cả khi có `--mdns-interface`."""
@@ -2480,6 +2490,7 @@ _PROMPT_NAME_CHARS = st.one_of(
 )
 
 
+@pytest.mark.slow
 @settings(
     max_examples=150,
     deadline=None,
@@ -3412,6 +3423,7 @@ def test_m4_ctrl_c_while_closing_after_paired_reports_paired(
     assert lock_is_free(d)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 @pytest.mark.parametrize("outcome", ["paired", "unreachable"])

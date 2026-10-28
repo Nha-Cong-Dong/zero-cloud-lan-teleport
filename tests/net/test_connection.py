@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from support import wait_until
 
 from teleport.core import admission
 from teleport.core.framing import HEADER, MAX_PAIRING_MESSAGE_SIZE, FramingError, decode_body, encode_message
@@ -201,14 +202,6 @@ async def cancel_wait(*tasks: asyncio.Task) -> None:
     for t in tasks:
         with contextlib.suppress(BaseException):
             await t
-
-
-async def wait_until(predicate, timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 async def receive_closed(conn, timeout: float = 2.0) -> None:
@@ -952,6 +945,7 @@ async def test_silent_tcp_without_tls_times_out(fast, listener_factory, raw_clie
     assert h.calls == 0
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_slowloris_deadline_is_not_extended(fast, monkeypatch, listener_factory, raw_client, ids):
     """R10: hello gửi 1 byte mỗi 100 ms → đóng ở ≈ 1 s tính từ lúc kết nối, không gia hạn."""
@@ -1132,6 +1126,7 @@ def fuzz_ids(tmp_path_factory):
     return load_or_create_identity(base / "server"), load_or_create_identity(base / "client")
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @settings(
     max_examples=25,
@@ -1156,6 +1151,7 @@ async def open_silent_tcp(raw_client, h, n: int):
     return [await raw_client(h.port, use_tls=False) for _ in range(n)]
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_fifth_opening_from_same_ip_is_refused(fast, monkeypatch, listener_factory, raw_client, ids):
     """L1: 4 kết nối đang mở đầu mỗi IP; cái thứ 5 bị đóng ngay; trả chỗ khi một cái đóng."""
@@ -1302,6 +1298,7 @@ ALL_REJECTIONS = {
 }
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.parametrize("case", list(ALL_REJECTIONS))
 async def test_counters_are_released_after_every_rejection(
@@ -1698,6 +1695,7 @@ async def test_dead_address_next_to_good_one_does_not_delay(monkeypatch, listene
         await conn.close()
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_all_addresses_fail_reports_most_relevant_error(fast, monkeypatch, listener_factory, ids):
     """C8: TEST-NET (Unreachable/treo) + 127.0.0.1 sai fingerprint → IdentityMismatch trong ≤ 2,5 s."""
@@ -1988,6 +1986,7 @@ async def test_close_is_bounded_when_peer_never_answers(fast, listener_factory, 
         sock.close()
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_send_gives_up_when_peer_never_reads(fast, listener_factory, ids):
     """A6: DRAIN_TIMEOUT = 0,5 s; máy kia không đọc; gửi Ping liên tục → ConnectionLostError ≤ 10 s."""
@@ -2062,6 +2061,7 @@ async def test_channel_dies_after_silence(fast, listener_factory, raw_client, id
     await peer.expect_closed(2.0)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_two_channels_keep_each_other_alive(fast, listener_factory, ids):
     """K-3: hai ControlChannel ở hai đầu chạy 2 s, không bên nào kết thúc."""
@@ -2084,6 +2084,7 @@ async def test_two_channels_keep_each_other_alive(fast, listener_factory, ids):
         await cancel_wait(t1, t2)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_partial_message_counts_as_alive(fast, listener_factory, raw_client, ids):
     """K-4: một message lớn tới từng mẩu 1 KB mỗi 20 ms, lâu hơn dead_after nhiều lần → không chết.
@@ -2186,6 +2187,7 @@ async def test_idle_channel_sends_valid_ping(fast, listener_factory, raw_client,
         await cancel_wait(task)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_app_sends_suppress_pings(fast, listener_factory, raw_client, ids):
     """K-7: app gửi Pong mỗi 0,1 s qua conn.send, ping_interval = 0,3 → máy kia không nhận Ping nào."""
@@ -3360,6 +3362,7 @@ async def test_reader_keeps_delivering_while_send_lock_is_held(
         await cancel_wait(task, app_send)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_reader_keeps_delivering_under_real_backpressure(fast, monkeypatch, listener_factory, ids):
     """D3 trên socket thật: máy kia không đọc nên lần gửi của app kẹt ở drain (không vá drain).
@@ -3420,6 +3423,7 @@ async def test_reader_keeps_delivering_under_real_backpressure(fast, monkeypatch
         sock.close()
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.parametrize("arrival", ["mot-lan-ghi", "tung-cai"])
 @pytest.mark.parametrize("n", [2, 50])
@@ -3548,6 +3552,7 @@ async def test_pending_pong_is_flushed_before_close_on_protocol_error(
     assert {"type": "pong", "t": 41} in frames_in(data)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 async def test_pong_flush_and_close_share_one_close_timeout(fast, monkeypatch, listener_factory, ids):
     """D3, dọn dẹp: gửi nốt pong và đóng gọn dùng **chung một** hạn CLOSE_TIMEOUT, quá thì abort.

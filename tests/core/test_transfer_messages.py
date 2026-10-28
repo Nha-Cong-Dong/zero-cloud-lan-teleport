@@ -1010,6 +1010,7 @@ def _check_only_message_error(obj) -> None:
     encode_message(d)
 
 
+@pytest.mark.slow
 @settings(max_examples=600, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(near_valid | offers_with_fuzzed_files | json_values | st.builds(lambda t: {"type": t}, json_values))
 def test_fuzz_parse_message_only_raises_message_error(obj):
@@ -1023,6 +1024,7 @@ def test_fuzz_raw_json_with_escaped_surrogates_only_raises_message_error(body):
     _check_only_message_error(decode_body(body.encode("ascii")))
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(st.lists(entry_values, min_size=1, max_size=4))
 def test_property_offer_accepted_iff_every_file_follows_rules(entries):
