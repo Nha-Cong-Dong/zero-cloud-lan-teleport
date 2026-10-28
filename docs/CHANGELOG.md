@@ -149,6 +149,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport send`: khi máy nhận dừng vì lỗi của chính nó (ghi đĩa, dữ liệu hỏng, thư mục tạm còn sót lại), câu báo là “… gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại.”. Trong `--json`, `message` của sự kiện `result` theo câu này; `result` và `by_peer` không đổi.
 - `teleport unpair` khi có node đang chạy cùng thư mục cấu hình: dòng gợi ý nằm riêng, nêu `teleport receive` và `teleport listen`. Trong `--json`, `message` của lỗi `node_locked` chỉ còn câu “Teleport đang chạy với thư mục cấu hình này.”, không có gợi ý.
 - Build bản CLI thử không dừng ở bước kiểm giấy phép khi máy build có Universal CRT trên `PATH` (ví dụ JDK). Bản build không mang Universal CRT, vì Windows 10 trở lên đã có sẵn.
+- Đóng `Node` khi đĩa chậm (quá hạn chờ dọn đĩa), hoặc hủy khởi động lúc đang mở lại một lượt dở, không còn giữ file `.part` / `.state` và thư mục nhận mở tới khi tiến trình thoát: việc đĩa đang chạy được làm nốt rồi thư mục nhận mới đóng. Trước đây, mở lại node trong cùng tiến trình trên Windows có thể làm lượt nối lại hỏng vì `PermissionError`.
 
 ### Security
 - Ghép đôi qua CLI chỉ lưu thiết bị khi người dùng xác nhận `[c/k]` ở cả hai máy sau khi mã đã hiện (dòng gõ sẵn trước lúc hiện mã bị bỏ); hủy ghép đôi đóng ngay kết nối đang mở với máy đó; mỗi thiết bị tin cậy chỉ giữ một kết nối điều khiển.

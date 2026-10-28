@@ -27,6 +27,8 @@ không import được conftest: lớp phụ trợ (`CliRun`, `Proc`, mDNS giả
   chiều (mọi kết nối, kể cả byte TLS và kết nối điều khiển) chạm `nbytes`. Test của chính proxy:
   `tests/test_tcp_proxy.py`.
 - `n4_extra` (P3-5, phạm vi session): phần cộng thêm của mvp N4 tính bằng byte, đọc từ `docs/mvp.md`.
+- `read_state` (fix(app) 1e, phạm vi session): đọc `.state` độc lập theo định dạng ở architecture mục 4,
+  không qua `teleport.*`.
 
 Module `teleport.*` ngoài `core.admission` chỉ được import **bên trong** fixture, để một module đang
 viết dở chỉ làm đỏ các test dùng tới nó.
@@ -95,6 +97,66 @@ def n4_extra() -> int:
     extra = int(m.group(1)) * MiB
     assert extra > 0
     return extra
+
+
+def _read_state_file(path) -> SimpleNamespace:
+    """Đọc `<file_index>.state` theo đặc tả `docs/architecture.md` mục 4 (“`<file_index>.state`”), không
+    dùng `teleport.core.resume_state` hay `teleport.app.storage`.
+
+    Header 41 byte (`TPRS`, version, transfer_id, file_index, size, block_size, crc32) sai → AssertionError
+    (test dùng helper này chỉ đọc `.state` do Teleport ghi). Bản ghi phát lần lượt từ bitfield rỗng:
+    `MARK` bật bit và lưu hash (bản sau thắng), `CLEAR` tắt bit, `CLEAR_ALL` tắt mọi bit, `TARGET` /
+    `RESERVED` bỏ qua; bản ghi cụt, loại lạ hay sai `crc32` → dừng (phần còn lại là rác).
+    Trả `SimpleNamespace(size, block_size, marks={index: sha256}, records=[(loại, n)], tail=byte_rác)`.
+    """
+    import zlib
+
+    with open(path, "rb") as f:
+        data = f.read()
+    head = struct.Struct("!4sB16sIQII")
+    assert len(data) >= head.size, f"{path}: .state ngắn hơn header ({len(data)} byte)"
+    magic, version, _tid, _fi, size, block_size, crc = head.unpack_from(data, 0)
+    assert magic == b"TPRS" and version == 1, (magic, version)
+    assert zlib.crc32(data[: head.size - 4]) == crc, f"{path}: crc32 header sai"
+    marks: dict[int, bytes] = {}
+    records: list[tuple[int, int]] = []
+    pos = head.size
+    while pos < len(data):
+        kind = data[pos]
+        if kind == 0x03:
+            end = pos + 1 + 4
+        elif kind in (0x01, 0x02, 0x04, 0x05):
+            if pos + 3 > len(data):
+                break
+            (n,) = struct.unpack_from("!H", data, pos + 1)
+            width = {0x01: 36, 0x02: 4, 0x04: 1, 0x05: 1}[kind]
+            end = pos + 3 + n * width + 4
+        else:
+            break
+        if end > len(data) or zlib.crc32(data[pos : end - 4]) != struct.unpack_from("!I", data, end - 4)[0]:
+            break
+        if kind == 0x01:
+            for k in range(n):
+                index, digest = struct.unpack_from("!I32s", data, pos + 3 + 36 * k)
+                marks[index] = digest
+            records.append((kind, n))
+        elif kind == 0x02:
+            for k in range(n):
+                marks.pop(struct.unpack_from("!I", data, pos + 3 + 4 * k)[0], None)
+            records.append((kind, n))
+        elif kind == 0x03:
+            marks.clear()
+            records.append((kind, 0))
+        pos = end
+    return SimpleNamespace(
+        size=size, block_size=block_size, marks=marks, records=records, tail=len(data) - pos
+    )
+
+
+@pytest.fixture(scope="session")
+def read_state():
+    """`read_state(path)` → nội dung `.state` đọc độc lập theo đặc tả (xem `_read_state_file`)."""
+    return _read_state_file
 
 
 @pytest.fixture(autouse=True)

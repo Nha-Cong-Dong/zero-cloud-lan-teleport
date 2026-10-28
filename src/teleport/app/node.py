@@ -578,7 +578,9 @@ class Node:
         tính hay kho tin cậy), ReceiveDirUnavailable (không mở được thư mục nhận), OSError
         (không mở được cổng), ValueError (`host` sai). Bị
         hủy lần nữa trong lúc dọn thì cổng vẫn đóng đồng bộ trước khi nhả khóa, còn mDNS
-        đóng nền sau khi đã nhả khóa. Lỗi mDNS không làm `start` thất bại (xem
+        đóng nền sau khi đã nhả khóa. Thất bại hay bị hủy trong lúc khôi phục: lần mở lại xong muộn
+        được đóng nền, thư mục nhận đóng sau khi mọi việc đĩa dùng nó đã xong (đuôi đĩa,
+        `TransferManager.abort_now`), có thể sau khi đã nhả khóa. Lỗi mDNS không làm `start` thất bại (xem
         `discovery_error`). Gọi lần hai, sau khi `start` thất bại hoặc sau `close()` →
         RuntimeError.
         """
@@ -683,8 +685,9 @@ class Node:
         tasks += [*self._attempts.values(), *self._link_tasks]
         for task in tasks:
             task.cancel()
-        # Truyền file: chưa có lượt nào (cổng chưa nhận kết nối) — hủy task, shutdown executor,
-        # đóng thư mục nhận khi không còn thread đĩa nào bận.
+        # Truyền file: chưa có lượt nào (cổng chưa nhận kết nối) — hủy task mạng, shutdown executor;
+        # task đĩa (như đóng handle mở lại tới muộn của `restore`) không bị hủy, thư mục nhận đóng
+        # ngay hay ở đuôi đĩa khi mọi việc dùng nó đã xong (`TransferManager.abort_now`).
         if self._transfers is not None:
             self._transfers.abort_now()
         elif self._disk is not None:
@@ -773,11 +776,14 @@ class Node:
         dữ liệu; đóng ghép đôi, mDNS (mỗi instance chờ tối đa `MDNS_CLOSE_ALLOWANCE`), cổng, kết
         nối; rồi `TransferManager.close()`: chờ các hàng đĩa tối đa `CLOSE_DISK_WAIT`, xả
         `tombstones.json` và `history.json` (song song) tối đa `TOMBSTONE_FLUSH_TIMEOUT`, đóng thư
-        mục nhận (bỏ qua nếu còn thread đĩa bận). Gọi nhiều lần hay
-        đồng thời đều được; trước `start` hay sau khi `start` thất bại thì không làm gì. Bị hủy
-        giữa chừng thì vẫn hủy cứng mọi phiên ghép đôi (không ghi `trusted.json` nữa), mọi task
-        truyền file (không chờ đĩa), ngừng nhận kết nối và hủy mọi kết nối trước khi nhả khóa
+        mục nhận (ngay, hay ở đuôi đĩa chạy nền khi còn thread đĩa bận: `TransferManager.close`).
+        Gọi nhiều lần hay đồng thời đều được; trước `start` hay sau khi `start` thất bại thì không
+        làm gì. Bị hủy giữa chừng thì vẫn hủy cứng mọi phiên ghép đôi (không ghi `trusted.json`
+        nữa), mọi task
+        mạng của truyền file (không chờ đĩa: task đĩa không bị hủy mà chạy nốt bước dọn nền,
+        `TransferManager.abort_now`), ngừng nhận kết nối và hủy mọi kết nối trước khi nhả khóa
         (phần chờ đóng xong, kể cả mDNS, chạy nền, có giới hạn), rồi để CancelledError bay ra.
+        Đuôi đĩa có thể còn chạy sau khi khóa đã nhả.
         """
         if self._close_done is not None:
             await self._close_done.wait()

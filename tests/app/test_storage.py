@@ -43,6 +43,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import tracemalloc
 from pathlib import Path
 
@@ -1908,6 +1909,46 @@ def test_remove_temp_retries_unlink_permission_error(rd, monkeypatch, quick_retr
     monkeypatch.undo()
     assert len(calls) >= 3
     assert not os.path.lexists(temp.path)
+
+
+# spec-fix-app (1c): mọi file của bố cục lượt (không chỉ `.part`) được thử lại khi `unlink` gặp
+# `PermissionError` (chương trình ngoài như trình quét virus giữ file một lúc; architecture mục 4).
+LAYOUT_SUFFIXES = pytest.mark.parametrize("suffix", [".part", ".state", "transfer.json"])
+
+
+@LAYOUT_SUFFIXES
+def test_remove_temp_retries_permission_error_once_for_each_layout_file(
+    rd, monkeypatch, quick_retry, record_for, suffix
+):
+    temp = rd.create_temp(ID, record_for(ID, [3]))
+    part = temp.create_part(0, 3)
+    part.write_at(0, b"abc")
+    assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(temp.path))
+    calls = _flaky_unlink(monkeypatch, suffix, failures=1)
+    assert rd.remove_temp(temp) is True
+    monkeypatch.undo()
+    assert len(calls) == 2, calls  # lần đầu bị từ chối, lần thử lại xóa được
+    assert not os.path.lexists(temp.path)
+
+
+@LAYOUT_SUFFIXES
+def test_cleanup_retries_permission_error_once_for_each_layout_file(
+    rd, root, monkeypatch, quick_retry, record_for, suffix
+):
+    """`cleanup` xóa lượt quá ngưỡng qua cùng đường xóa theo bố cục: thử lại như `remove_temp`."""
+    other = "c" * 32  # lượt của node khác: ngưỡng `retention`
+    temp = rd.create_temp(ID, record_for(ID, [3], receiver=other))
+    part = temp.create_part(0, 3)
+    part.write_at(0, b"abc")
+    rd.close_temp(temp)
+    calls = _flaky_unlink(monkeypatch, suffix, failures=1)
+    wall = time.time() + 3600
+    removed = rd.cleanup(wall, own_device_id="e" * 32, skip=frozenset(), retention=60.0)
+    monkeypatch.undo()
+    assert removed == 1
+    assert len(calls) == 2, calls
+    assert not os.path.lexists(temp.path)
+    assert (root / ".teleport").is_dir()
 
 
 def test_remove_temp_retries_rmdir_permission_error(rd, monkeypatch, quick_retry, record_for):
