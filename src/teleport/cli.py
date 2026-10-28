@@ -706,7 +706,7 @@ async def _start(node: Node, output: _Output) -> int | None:
     try:
         await node.start()
     except NodeLockedError:
-        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.")
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
         return 1
     except IdentityError as e:
         output.error("identity_error", str(e))
@@ -1288,7 +1288,10 @@ _REPLACEMENT = "�"  # U+FFFD: ký tự điều khiển trong tên file cục b
 _STOPPING = "Đang dừng… (nhấn Ctrl+C lần nữa để thoát ngay)"
 _CANCELLED = "Đã hủy."
 _RECONNECTING = "Đang nối lại…"
-_NODE_LOCKED_HINT = "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại."
+_NODE_LOCKED_HINT = (
+    "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy, "
+    "hoặc chọn Thoát trong menu khay của Teleport, rồi thử lại."
+)
 _ASK_RECEIVE = "Nhận? [c/k]: "
 _STDIN_CLOSED = "Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận."
 _RECEIVE_REJECTED = "Đã từ chối."

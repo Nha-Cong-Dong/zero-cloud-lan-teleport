@@ -762,8 +762,8 @@ def recover_target(
 # ---- Giờ trên đĩa và JSON ------------------------------------------------------------------
 
 
-def _check_time(value: object, field: str) -> datetime.datetime:
-    """Thời điểm có múi giờ → UTC, làm tròn xuống giây (dạng lưu trên đĩa)."""
+def check_time(value: object, field: str) -> datetime.datetime:
+    """Thời điểm có múi giờ → UTC, làm tròn xuống giây (dạng lưu trên đĩa); sai → StateError nêu `field`."""
     if not isinstance(value, datetime.datetime) or value.utcoffset() is None:
         raise StateError(f"{field} phải là datetime có múi giờ")
     try:
@@ -772,7 +772,9 @@ def _check_time(value: object, field: str) -> datetime.datetime:
         raise StateError(f"{field} ngoài khoảng biểu diễn được") from None
 
 
-def _format_time(value: datetime.datetime) -> str:
+def format_time(value: datetime.datetime) -> str:
+    """Dạng giờ trên đĩa `YYYY-MM-DDTHH:MM:SSZ` của một thời điểm đã đổi sang UTC (dùng chung với
+    `core.history`). Không đổi múi giờ hay làm tròn: bên gọi đưa giá trị đã qua bước đó."""
     # Không dùng strftime: `%Y` không đệm số 0 cho năm < 1000 trên mọi nền tảng.
     return (
         f"{value.year:04d}-{value.month:02d}-{value.day:02d}T"
@@ -780,7 +782,8 @@ def _format_time(value: datetime.datetime) -> str:
     )
 
 
-def _parse_time(value: object, field: str) -> datetime.datetime:
+def parse_time(value: object, field: str) -> datetime.datetime:
+    """Đọc `YYYY-MM-DDTHH:MM:SSZ` (chỉ chữ số ASCII) → datetime UTC; sai → StateError nêu `field`."""
     if not isinstance(value, str):
         raise StateError(f"{field} phải là chuỗi YYYY-MM-DDTHH:MM:SSZ")
     match = _TIME_RE.fullmatch(value)
@@ -864,7 +867,7 @@ class TransferRecord:
         n = len(self.offer.files)
         _check_int(self.verified, "verified", 0, n)
         if self.done_at is not None:
-            object.__setattr__(self, "done_at", _check_time(self.done_at, "done_at"))
+            object.__setattr__(self, "done_at", check_time(self.done_at, "done_at"))
         if (self.done_at is not None) != (self.verified == n):
             raise StateError("done_at có khi và chỉ khi mọi file đã verified")
 
@@ -893,7 +896,7 @@ def encode_transfer_record(record: TransferRecord) -> bytes:
         "block_size": record.offer.block_size,
         "files": [f.to_dict() for f in record.offer.files],
         "verified": record.verified,
-        "done_at": None if record.done_at is None else _format_time(record.done_at),
+        "done_at": None if record.done_at is None else format_time(record.done_at),
     }
     data = (json.dumps(obj, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     # Không xảy ra với `offer` hợp lệ (1000 tên dài nhất cỡ 0,6 MiB), nhưng bộ đọc từ chối file quá trần.
@@ -931,7 +934,7 @@ def decode_transfer_record(data: bytes | bytearray | memoryview, *, dir_name: st
         sender=obj["sender"],
         offer=offer,
         verified=obj["verified"],
-        done_at=None if done_at is None else _parse_time(done_at, "done_at"),
+        done_at=None if done_at is None else parse_time(done_at, "done_at"),
     )
 
 
@@ -969,7 +972,7 @@ class TombstoneRecord:
         object.__setattr__(self, "direction", str.__str__(self.direction))
         object.__setattr__(self, "transfer_id", str.__str__(cancel.transfer_id))
         object.__setattr__(self, "reason", cancel.reason)
-        object.__setattr__(self, "at", _check_time(self.at, "at"))
+        object.__setattr__(self, "at", check_time(self.at, "at"))
 
     def _to_line(self) -> str:
         return json.dumps(
@@ -979,7 +982,7 @@ class TombstoneRecord:
                 "transfer_id": self.transfer_id,
                 "reason": self.reason,
                 "unsent": self.unsent,
-                "at": _format_time(self.at),
+                "at": format_time(self.at),
             }
         )
 
@@ -1034,7 +1037,7 @@ def _tombstone_from_dict(obj: object) -> TombstoneRecord:
         transfer_id=obj["transfer_id"],
         reason=obj["reason"],
         unsent=obj["unsent"],
-        at=_parse_time(obj["at"], "at"),
+        at=parse_time(obj["at"], "at"),
     )
 
 

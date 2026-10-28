@@ -3,7 +3,7 @@
 > **Vai trò:** đặc tả sản phẩm — giải quyết vấn đề gì, cho ai, gồm những gì, trông ra sao, đạt chuẩn nào thì được phát hành.
 > **Nguồn duy nhất cho:** phạm vi MVP, tính năng và tiêu chí chấp nhận (F1–F12), yêu cầu phi chức năng (N1–N12), thông báo lỗi, tiêu chí phát hành.
 > **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
-> **Cập nhật:** 2026-10-28
+> **Cập nhật:** 2026-10-29
 
 ---
 
@@ -74,6 +74,28 @@
 | Dòng lệnh (CLI) cho người dùng nâng cao | Plugin / API cho bên thứ ba |
 
 Thứ tự làm các mục “không có” sau v1.0: [ke_hoach.md](ke_hoach.md) mục 5.3. Nếu trễ tiến độ, một số mục “có” được hoãn theo thứ tự ở mục 14.
+
+### 4.1. MVP hackathon
+
+Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 ở trên. Lịch làm: [ke_hoach.md](ke_hoach.md) mục 5.5.
+
+**Có:** giao diện tối thiểu trên Windows: radar (danh sách thiết bị, nút nhập IP), ghép đôi bằng mã 6 số, kéo thả hoặc “Gửi file…”, hộp thoại Nhận / Từ chối, danh sách lượt truyền có tiến độ, tốc độ, trạng thái “Đang nối lại…” và nút hủy; tự nối lại và kiểm tra toàn vẹn như F6, F7; bản zip chạy không cần cài Python. CLI giữ như F12.
+
+**Để sau hackathon:** chế độ ẩn và màn hình “Chờ ghép đôi” (F3, F10), màn hình cài đặt (F10), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện.
+
+**Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](benchmark.md).
+
+| Mã | Tiêu chí | Cách kiểm |
+|---|---|---|
+| H1 | Máy kia hiện trên radar trong thời gian mvp N1 nêu; ghép đôi xong bằng mã 6 số xác nhận ở cả hai máy | Bấm giờ từ lúc mở app máy B tới lúc B hiện trên radar máy A |
+| H2 | Kéo một file ≥ 1 GiB thả vào máy kia; máy nhận hiện hộp thoại, bấm Nhận; file nhận có SHA-256 trùng file gốc | `Get-FileHash` ở hai máy |
+| H3 | Đang gửi file ở H2, tắt Wi-Fi một máy khi tiến độ khoảng 50%, chờ 10 giây rồi bật lại: lượt truyền tự chạy tiếp, tiến độ không về 0, SHA-256 trùng | Quan sát tiến độ; `Get-FileHash` |
+| H4 | Đóng hẳn app nhận giữa lượt truyền rồi mở lại: lượt truyền tự chạy tiếp và hoàn tất, SHA-256 trùng (F6) | Như H3 |
+| H5 | Gửi lại đúng file ở H2: máy nhận lưu thành `ten (1).ext`, file cũ không đổi; máy thứ ba chưa ghép đôi (hoặc máy B sau khi hủy ghép đôi) không gửi được file tới máy A | Xem thư mục nhận; `Get-FileHash` file cũ |
+
+Đạt đủ H1–H5 thì **dừng thêm tính năng** tới hết buổi demo, chỉ sửa lỗi. Không đạt kịp thì demo bằng CLI cho phần giao diện còn thiếu; H2–H5 vẫn phải đạt bằng CLI.
+
+Kịch bản demo hackathon (5 phút): các dòng 0:00–3:00 của mục 13, thêm H4 (đóng app nhận rồi mở lại) và dòng 4:00 (tắt Internet của router). Bỏ clipboard và so sánh với Google Drive.
 
 ---
 
@@ -439,9 +461,20 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Chọn gửi file không tồn tại | “Không tìm thấy file *D:\x\video.mp4*.” | Lượt gửi không bắt đầu |
 | Ổ đĩa báo lỗi khi kiểm file chọn gửi | “Không đọc được *video.mp4*: ổ đĩa báo lỗi.” | Lượt gửi không bắt đầu |
 | Chọn quá số file một lượt | “Mỗi lần gửi được tối đa *1000* file.” | Lượt gửi không bắt đầu |
+| Giao diện: đóng cửa sổ khi app chạy được ở khay hệ thống (lần đầu trong mỗi lần mở app) | Bóng thoại ở khay: “Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn.” | — |
+| Giao diện (tạm, tới khi có hộp thoại ở mục 7.3): có file gửi tới | ““*Laptop-Minh*” muốn gửi *3* file (*8,4 GB*) tới máy này.”, rồi tên tối đa 5 file (mục 7.3), còn lại gộp thành “và *k* file khác” | Nút “Nhận”, “Từ chối” |
+| Giao diện: khởi động khi một lệnh CLI đang chạy cùng thư mục cấu hình | “Teleport đang chạy ở nơi khác với thư mục cấu hình này (ví dụ lệnh “teleport receive” trong cửa sổ dòng lệnh).” kèm dòng “Hãy dừng nó rồi bấm Thử lại.” | Nút “Thử lại” |
+| Giao diện: mở app khi một bản Teleport khác cùng thư mục cấu hình đang tắt hoặc không phản hồi | “Teleport đang tắt hoặc chưa phản hồi.” kèm dòng “Hãy thử lại sau giây lát.” | Nút “OK” |
+| Giao diện: không dùng được thư mục cấu hình khi khởi động | “Không dùng được thư mục cấu hình *D:\X* (*lỗi*).” kèm dòng “Hãy kiểm tra quyền ghi vào thư mục đó rồi bấm Thử lại.” | Nút “Thử lại” |
+| Giao diện: không dùng được thư mục cấu hình ngay lúc mở app (trước khi có cửa sổ) | Câu chính như dòng trên, kèm dòng “Hãy kiểm tra quyền ghi vào thư mục đó rồi mở lại Teleport.” | Nút “OK” |
+| Giao diện: danh tính của máy này hỏng khi khởi động | Câu của dòng “Danh tính của chính máy này bị hỏng”, kèm dòng “Hãy chạy “teleport identity” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” (nút “Tạo danh tính mới” làm sau) |
+| Giao diện: không đọc được `trusted.json` khi khởi động | “Không đọc được danh sách thiết bị đã ghép đôi. Teleport sẽ không tự xóa nó để khỏi mất các ghép đôi.” kèm dòng “Hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” |
+| Giao diện: không dùng được thư mục nhận khi khởi động | “Không dùng được thư mục nhận *D:\Downloads\Teleport*.” kèm dòng “Hãy kiểm tra ổ đĩa và quyền ghi rồi bấm Thử lại.” | Nút “Thử lại” |
+| Giao diện: không mở được cổng khi khởi động | “Không mở được cổng để nhận kết nối (*lỗi*).” kèm dòng “Hãy đóng ứng dụng đang dùng cổng đó rồi bấm Thử lại.” | Nút “Thử lại” |
+| Giao diện: lỗi khác khi khởi động | “Teleport không khởi động được vì một lỗi không mong đợi.” kèm dòng “Hãy bấm Thử lại; nếu vẫn lỗi, hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” |
 | CLI: `--limit-rate` sai | “Tốc độ không hợp lệ: “*x*”. Hãy nhập ví dụ 20M (20 MB/s) hoặc 512K; tối thiểu 64K.” | — |
 | CLI: `--address` của `send` sai | “*x* không phải địa chỉ IPv4 hợp lệ. Hãy nhập ví dụ 192.168.1.5 hoặc 192.168.1.5:47474.” | — |
-| CLI: `send` / `receive` / `unpair` khi một node khác đang chạy cùng thư mục cấu hình | “Teleport đang chạy với thư mục cấu hình này.” kèm dòng “Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại.” | — |
+| CLI: `send` / `receive` / `unpair` / `listen` / `pair` khi một node khác (lệnh CLI khác hay giao diện) đang chạy cùng thư mục cấu hình | “Teleport đang chạy với thư mục cấu hình này.” kèm dòng “Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy, hoặc chọn Thoát trong menu khay của Teleport, rồi thử lại.” | — |
 | CLI: `send` không thấy máy nhận trong mạng | “Không thấy *PC-Nha* trong mạng. Hãy kiểm tra máy đó đang chạy `teleport receive` và hai máy dùng chung một mạng; nếu mạng chặn mDNS, hãy thêm `--address <ip[:cổng]>`.” | — |
 | CLI: `send` không bật được khám phá mDNS | “Không tìm được *PC-Nha* vì không bật được khám phá mDNS (*lý do*). Hãy thêm `--address <ip[:cổng]>`.” | — |
 | CLI: không dùng được thư mục nhận | “Không dùng được thư mục nhận *D:\X*:” rồi một trong các đuôi: “thư mục ẩn `.teleport` bên trong là liên kết hoặc thuộc người dùng khác. Hãy xóa nó hoặc chọn thư mục khác bằng `--dir`.” / “đường dẫn quá dài. Hãy chọn thư mục có đường dẫn ngắn hơn bằng `--dir`.” / “máy này không có quyền ghi vào đó. Hãy chọn thư mục khác bằng `--dir`.” / “ổ đĩa báo lỗi hoặc không phản hồi. Hãy chọn thư mục khác bằng `--dir`.” / “đó không phải là thư mục (có thể là một file trùng tên). Hãy chọn thư mục khác bằng `--dir`.” | — |

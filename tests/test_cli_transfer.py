@@ -160,7 +160,10 @@ BAD_NAME = (  # mvp §8
     "Không gửi được {file}: tên file có ký tự không hiển thị được. Hãy đổi tên file rồi gửi lại."
 )
 LOCKED = "Teleport đang chạy với thư mục cấu hình này."  # câu đã có trong cli.py
-B7 = "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy rồi thử lại."
+B7 = (  # M1 của spec-p4-3 (mục 5 + mục 10): nhắc thêm menu khay của GUI
+    "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy, hoặc chọn Thoát trong menu khay của "
+    "Teleport, rồi thử lại."
+)
 B8A = (
     "Không thấy {x} trong mạng. Hãy kiểm tra máy đó đang chạy `teleport receive` và hai máy dùng chung "
     "một mạng; nếu mạng chặn mDNS, hãy thêm `--address <ip[:cổng]>`."
