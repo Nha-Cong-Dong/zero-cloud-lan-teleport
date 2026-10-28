@@ -26,7 +26,7 @@ Run from this folder on Windows/PowerShell. The venv lives at `.venv/`.
 
 ```powershell
 python -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"                          # cryptography, zeroconf, ifaddr + pytest, pytest-asyncio, hypothesis, ruff, mypy
+pip install -e ".[dev,gui]"                      # runtime deps + PySide6-Essentials (gui) + test/lint tools (dev also pulls gui, for pytest-qt)
 pytest                                           # all tests
 pytest -m "not integration"                      # skip tests that open real sockets on 127.0.0.1
 pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal   # single test
@@ -40,6 +40,8 @@ teleport pair PC-Nha                             # pair by name or device_id pre
 teleport receive                                 # receive files from paired machines, asks [c/k] per offer (--yes, --dir D)
 teleport send video.mp4 --to PC-Nha              # send to a paired machine running `teleport receive`
 teleport send a.zip --to PC-Nha --address 192.168.1.5:47474 --limit-rate 20M   # when mDNS is blocked; --to still required
+teleport-gui --config-dir D                      # desktop UI (also: python -m teleport.ui); one instance per config dir, --background starts in the tray
+pytest tests/ui                                  # UI tests, offscreen (marker gui)
 ```
 
 CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the admission fixture, monkeypatch seams, CLI test seams): `architecture.md` §6. The distribution name is `zero-cloud-lan-teleport` and the import name is `teleport`. Set `TELEPORT_HOME` (or pass `--config-dir`) to give each node its own identity when running several nodes on one machine.
@@ -48,7 +50,7 @@ CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the a
 
 - Layers are `core ← trust ← net ← app ← ui / cli`, plus the shared utilities `paths`, `lock`, `atomic`. The rules (imports only go down, `core` is sans-IO, every top-level package is registered) are in `architecture.md` §1 and enforced by `tests/test_architecture.py`.
 - Hard logic is a sans-IO state machine in `core`: events plus a monotonic `now` in, actions out (pairing, links, admission, discovery, transfer, and the coming resume state). `net` and `app` only execute the actions. Transfer logic never goes in `net`.
-- `app` is the only orchestration layer. It returns outcome codes; user-facing wording lives in `cli.py` (later the UI).
+- `app` is the only orchestration layer. It returns outcome codes; user-facing wording lives in `cli.py` and `ui/texts.py`.
 - Create a module only when there is real code for it; no empty placeholder files.
 - All peer input is untrusted. `core/messages.py` is the single place for checks that one message alone can show; checks against the `offer` or the transfer state belong to the transfer state machine (`protocol.md` §3.3). Received file names always go through `core/filenames.py`, and a received file never overwrites an existing one (`protocol.md` §4.4).
 
@@ -61,6 +63,7 @@ CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the a
 - **CLI stdin:** read only with `os.read` in a daemon thread, never `input()` or `sys.stdin.readline()`, which can cause “Fatal Python error” at shutdown (`cli.py` docstring).
 - **Transfer disk I/O:** every file-system call of a transfer goes through the node's `DiskExecutor` with `submit`, and a timed-out job still runs: wait for `DiskJob.settled()` before closing what it uses (`architecture.md` §5, `app/diskio.py`).
 - **Never call `TransferEngine` re-entrantly:** while an action list is being executed (including from `on_transfer_event`), engine calls go to the `_deferred` queue; read `now` when the call really happens (`core/transfer.py` docstring, `architecture.md` §5).
+- **Never touch `Node` from the Qt thread:** the UI's node lives on its own thread and loop; the UI reaches it only through `NodeHost.call` / `submit`, and node callbacks only emit Qt signals. Only `ui` imports PySide6 (`architecture.md` §1, §5; `ui/bridge.py` docstring).
 - **Tests run from 127.0.0.1:** `tests/conftest.py` relaxes the handshake rate limits for every test, so a test of the real limits needs `@pytest.mark.real_admission_limits` (`architecture.md` §6).
 
 ## Team of subagents

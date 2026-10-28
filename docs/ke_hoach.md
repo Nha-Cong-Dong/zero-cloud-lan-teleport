@@ -48,7 +48,7 @@
 ```
 ┌────────────────────────── App Teleport (mỗi máy) ──────────────────────────┐
 │  ui (PySide6)   radar, lượt truyền, ghép đôi, khay  │  cli   lệnh `teleport` │
-│                 ▲ Qt signals (qasync: chung một event loop)                 │
+│                 ▲ Qt signals (NodeHost: node chạy ở thread asyncio riêng)  │
 │  app      Node · PairingService · TransferManager · ClipboardSync          │
 │  net      tls (TLS 1.3 + mTLS) · stream · discovery (zeroconf) · connection │
 │  trust    identity (khóa + chứng chỉ tự ký) · store (thiết bị tin cậy)     │
@@ -60,7 +60,7 @@
 ```
 
 - Phân tầng `core ← trust ← net ← app ← ui / cli`, được kiểm tra tự động trong repo. Logic truyền file và nối lại nằm ở `core` dưới dạng máy trạng thái thuần (sự kiện vào, hành động ra); `net` chỉ đọc/ghi socket.
-- Mô hình tiến trình: mỗi thư mục cấu hình một node. Tới `v0.2`, mỗi lần chạy CLI là một node. Từ `v0.3`, giao diện giữ node và CLI nói chuyện với nó qua IPC cục bộ.
+- Mô hình tiến trình: mỗi thư mục cấu hình một node. Tới `v0.2`, mỗi lần chạy CLI là một node. Từ `v0.3`, giao diện chạy node trong một thread riêng của tiến trình giao diện; CLI và giao diện cùng thư mục cấu hình loại trừ nhau qua `node.lock`, còn IPC CLI↔giao diện hoãn lại ([architecture.md](architecture.md) mục 2, 5).
 - Mô tả chính thức và trạng thái từng module: [architecture.md](architecture.md).
 
 ### 3.1. Khám phá, kết nối & ghép đôi
@@ -184,9 +184,9 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 | Mạng bất đồng bộ, TLS | `asyncio`, `ssl` (có sẵn) | PSF |
 | mDNS, đọc card mạng | `zeroconf` (≥ 0.148, < 0.152), `ifaddr` | LGPL-2.1-or-later / MIT |
 | Tạo chứng chỉ | `cryptography` | Apache/BSD |
-| Giao diện | `PySide6` + `qasync` | LGPL / BSD |
+| Giao diện (extra `gui`) | `PySide6-Essentials` (kèm `shiboken6`) | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only (dùng theo LGPL-3.0, mục 1) |
 | Đo RAM | `psutil` | BSD |
-| Kiểm thử | `pytest`, `pytest-asyncio`, `hypothesis` | MIT / Apache / MPL |
+| Kiểm thử | `pytest`, `pytest-asyncio`, `hypothesis`, `pytest-qt` | MIT / Apache / MPL / MIT |
 | Lint & format | `ruff` | MIT |
 | Kiểm tra kiểu | `mypy` (từ Giai đoạn 2) | MIT |
 | CI / phát hành | GitHub Actions | — |
@@ -297,7 +297,8 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Công tắc “Cho máy chưa ghép đôi thấy máy này” (mvp F10, mặc định bật): tắt thì node ngừng quảng bá mDNS nhưng vẫn duyệt và tự kết nối ra tới thiết bị tin cậy; đang ẩn mà không ở chế độ chờ ghép đôi (mvp F3) thì cắt kết nối ẩn danh ngay sau bắt tay TLS, không gửi `hello` (`protocol.md` mục 2.3, 8).
 - Nút và màn hình “Chờ ghép đôi” (mvp F3, mục 7.5). Giao diện bật/tắt việc nhận ghép đôi trong lúc node đang chạy, theo công tắc ở F10 và việc mở/đóng màn hình đó, qua `Node.accept_pairing` (đã đổi được lúc chạy).
 - Các thông báo lỗi theo mvp mục 8.
-- Khay hệ thống, chạy nền (F9); chuyển node sang tiến trình giao diện, CLI nói chuyện qua IPC cục bộ.
+- Khay hệ thống, chạy nền (F9); node chạy trong tiến trình giao diện, một bản giao diện mỗi thư mục cấu hình ([architecture.md](architecture.md) mục 2).
+- IPC CLI↔giao diện (CLI gửi lệnh cho node của giao diện thay vì tự chạy node): **dời ra khỏi Giai đoạn 4**, chưa có lịch. Tới khi có, CLI và giao diện cùng thư mục cấu hình loại trừ nhau và CLI báo phải thoát giao diện trước (mvp mục 8).
   - Lưu ý khi làm IPC: tới `v0.2`, CLI in ra stdout đồng bộ ngay trên event loop của node, nên terminal ngừng đọc (ví dụ đang tạm dừng cuộn) có thể làm cả node đứng chờ. Máy khác trong LAN không gây ra được việc này. Khi node chạy trong tiến trình giao diện, việc in hay gửi sự kiện cho CLI qua IPC không được chặn event loop của node.
   - Node sống lâu trong tiến trình giao diện: mở lại `Node` (cùng tiến trình) hay để tiến trình khác lấy `node.lock` vừa nhả phải chờ đuôi đĩa của node cũ xong, không thì có thể mở lại đúng lượt mà thread đĩa cũ còn ghi và lượt nối lại hỏng; giữ một event loop suốt đời ứng dụng để đuôi đĩa chạy xong (đuôi đĩa: [architecture.md](architecture.md) mục 5, “Thứ tự `Node.close()`”).
 - Tiếng Việt và English bằng Qt Linguist (F11); dùng được bằng bàn phím, theo chế độ sáng/tối (N12).
@@ -388,7 +389,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | Rủi ro | Giảm thiểu |
 |---|---|
 | Mới làm quen `asyncio` | Giai đoạn 0 dành riêng để học; làm CLI trước UI |
-| Trộn Qt với asyncio phức tạp | Dùng `qasync`; lõi không phụ thuộc Qt nên test riêng được |
+| Trộn Qt với asyncio phức tạp | Không trộn hai event loop: node chạy loop `asyncio` chuẩn trong thread riêng, Qt chỉ gọi node qua cầu `NodeHost`, thoát có hạn ([architecture.md](architecture.md) mục 5); lõi không phụ thuộc Qt nên test riêng được |
 | Python chậm hơn mong đợi (N2) | Đo trong đợt đo trên thiết bị thật (mục 5.4, D2); thông lượng loopback tham khảo: [benchmark.md](benchmark.md) mục 4.6; tăng kích thước khối hoặc bộ đệm socket; module C++ nếu thật sự cần |
 | Python + Qt khó đạt ngưỡng RAM lúc rảnh của mvp N3 | Đo sớm từ `v0.3.0-beta`; tối ưu, hoặc nới yêu cầu có lý do và sửa N3 trong mvp.md |
 | Vi phạm điều kiện LGPL/GPL khi đóng gói | Đóng gói `--onedir`, không sửa mã thư viện LGPL, kèm văn bản giấy phép và chỉ dẫn lấy mã nguồn; kiểm lại trong Giai đoạn 6 |
