@@ -76,6 +76,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Cài phần giao diện bằng extra `gui` (`PySide6-Essentials`, LGPL-3.0); extra `dev` kéo theo `gui` và `pytest-qt` (MIT).
 - Message `clipboard` trong giao thức 1 (`docs/protocol.md` mục 3.2, 3.3), thêm theo kiểu tương thích nên **không tăng số phiên bản**: bản hiện tại bỏ qua `clipboard` hợp lệ; `clipboard` sai dạng làm đóng kết nối điều khiển (rồi nối lại), trên kết nối ghép đôi thì nhận `pair_abort{invalid}`.
 - `teleport.core.clipboard`: lõi sans-IO chia và ráp clipboard (văn bản ≤ 1 MiB, ảnh PNG ≤ 10 MiB, mỗi khung ≤ 768 KiB), mảnh sai, thiếu, trùng, quá trần hay quá hạn thì bỏ clip mà không đóng kết nối, tối đa 5 clip mới mỗi giây cho mỗi thiết bị, chống vòng lặp bằng fingerprint và lọc nội dung trình quản lý mật khẩu đánh dấu nhạy cảm. Chưa đồng bộ clipboard thật giữa hai máy.
+- Lịch sử 100 lượt truyền gần nhất (cả gửi lẫn nhận), lưu trong `history.json` ở thư mục cấu hình và xóa được; giao diện sẽ hiện ở bản sau. File chỉ chứa metadata: tối đa 10 tên file đầu, kích thước, kết quả, giờ kết thúc, tên máy kia và đường dẫn đã lưu ở máy nhận, không bao giờ có nội dung file. File hỏng thì lịch sử bắt đầu lại từ rỗng.
 
 ### Changed
 - CLI: câu báo khi thư mục tạm của lượt đã có sẵn mà Teleport không dùng tiếp được không còn đổ cho việc Teleport bị tắt đột ngột (lượt như vậy nay được khôi phục); tên máy do máy kia tự đặt được làm sạch giống nhau ở mọi câu (ký tự định dạng ẩn không còn in thẳng).
