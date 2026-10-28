@@ -6,6 +6,8 @@ ngữ thì hộp đang mở dịch lại.
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -103,7 +105,8 @@ def test_language_change_retranslates_open_offer_box(qtbot, prompts, translator,
     qtbot.waitUntil(lambda: PREFIX in box.text(), timeout=3_000)
     buttons = [ui_helpers.plain(b.text()) for b in box.buttons()]
     assert buttons and all(PREFIX in t for t in buttons), buttons
-    assert PREFIX in box.windowTitle()
+    if sys.platform != "darwin":  # macOS: QMessageBox bỏ qua tiêu đề cửa sổ (quy ước của Apple)
+        assert PREFIX in box.windowTitle()
     QCoreApplication.removeTranslator(translator)
     qtbot.waitUntil(lambda: PREFIX not in box.text(), timeout=3_000)
     assert len(ui_helpers.buttons_with_text(box, ui_helpers.M6_ACCEPT)) == 1
