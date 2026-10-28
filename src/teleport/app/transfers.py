@@ -250,7 +250,7 @@ class TransferResult(StrEnum):
     SOURCE_CHANGED = "source_changed"
     EXPIRED = "expired"  # mất kết nối điều khiển quá `RECONNECT_GRACE` (24 h, protocol §6.2)
     DISK_FAILED = "disk_failed"
-    TEMP_EXISTS = "temp_exists"  # thư mục tạm của lượt còn sót lại từ lần trước
+    TEMP_EXISTS = "temp_exists"  # thư mục tạm của lượt đã có sẵn mà không dùng tiếp được
     CORRUPT = "corrupt"  # khối sai quá trần, hoặc đọc lại / Merkle sai quá trần
     PROTOCOL_ERROR = "protocol_error"
     SOURCE_READ_FAILED = "source_read_failed"
@@ -1808,7 +1808,7 @@ class TransferManager:
             log.warning("%s của lượt %s bị bỏ khi đóng", _DISK_OPS[type(action)].value, transfer_id[:8])
             self._fail_lane(lane, _DISK_OPS[type(action)])
         except TempExistsError:
-            log.info("thư mục tạm của lượt %s đã có sẵn (sót lại từ lần trước)", transfer_id[:8])
+            log.info("thư mục tạm của lượt %s đã có sẵn mà không dùng tiếp được", transfer_id[:8])
             self._fail_lane(lane, DiskOp.CREATE_TEMP, FailureDetail.TEMP_EXISTS)
         except Exception as e:
             op = _DISK_OPS[type(action)]

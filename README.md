@@ -17,9 +17,9 @@
 
 > [!NOTE]
 > **Teleport đang được phát triển. Bản thử nghiệm đầu tiên sẽ là `v0.1.0-alpha` (chưa phát hành): chỉ có dòng lệnh, chưa có bộ cài.**
-> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khám phá thiết bị qua mDNS, ghép đôi qua mạng bằng mã 6 số có nonce cam kết, tự giữ kết nối tới thiết bị đã ghép đôi, các lệnh `teleport identity` / `list` / `listen` / `pair` / `unpair`. Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi (`teleport send` / `receive`): hỏi trước khi nhận, kiểm tra toàn vẹn từng khối và cả file, không bao giờ ghi đè file sẵn có, mất kết nối ngắn thì tự nối lại khi cả hai bên vẫn đang chạy. Số đo thực tế: [docs/benchmark.md](docs/benchmark.md).
-> - **Tiếp theo:** tự nối lại sau khi rớt mạng lâu hay tắt app, chỉ gửi phần còn thiếu (`v0.2.0-alpha`).
-> - **Chưa có:** nối lại sau khi tắt app, clipboard, giao diện.
+> - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khám phá thiết bị qua mDNS, ghép đôi qua mạng bằng mã 6 số có nonce cam kết, tự giữ kết nối tới thiết bị đã ghép đôi, các lệnh `teleport identity` / `list` / `listen` / `pair` / `unpair`. Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi (`teleport send` / `receive`): hỏi trước khi nhận, kiểm tra toàn vẹn từng khối và cả file, không bao giờ ghi đè file sẵn có, mất kết nối thì tự nối lại (chờ tới 24 giờ), kể cả sau khi dừng hay tắt `teleport receive` rồi chạy lại, chỉ gửi phần còn thiếu. Số đo thực tế: [docs/benchmark.md](docs/benchmark.md).
+> - **Tiếp theo:** kiểm thử và đo phần nối lại trước bản `v0.2.0-alpha`; sau đó giao diện (`v0.3.0-beta`).
+> - **Chưa có:** clipboard, giao diện.
 > - **Chưa đo trên thiết bị thật:** số đo hiện có là trên một máy (loopback) và máy ảo; đo qua mạng thật giữa hai máy, với ổ đích chậm và trên các hệ điều hành khác sẽ làm một đợt sau, và các bản thử nghiệm được phát hành sau đợt đo đó ([docs/ke_hoach.md](docs/ke_hoach.md) mục 5.4).
 >
 > Các tính năng bên dưới là **mục tiêu của v1.0**. Tiến độ xem ở [Lộ trình](#lộ-trình); lịch sử thay đổi ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
@@ -189,8 +189,8 @@ Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope Curre
 | `teleport listen` | Chờ ghép đôi: hiện mã 6 số, hỏi xác nhận |
 | `teleport pair <tên \| tiền tố mã \| ip[:cổng]>` | Ghép đôi với một máy |
 | `teleport unpair <thiết bị>` | Hủy ghép đôi (khi không có node nào — `listen`, `receive`, `send` — đang chạy) |
-| `teleport receive [--dir <thư mục>] [--yes]` | Chờ nhận file từ các máy đã ghép đôi, hỏi `[c/k]` mỗi lượt (`--yes`: tự nhận); mặc định lưu vào `Teleport` trong thư mục Tải về |
-| `teleport send <file...> --to <thiết bị> [--address ip[:cổng]] [--limit-rate 20M]` | Gửi file tới một máy đã ghép đôi (máy đó chạy `teleport receive`); Ctrl+C để hủy |
+| `teleport receive [--dir <thư mục>] [--yes]` | Chờ nhận file từ các máy đã ghép đôi, hỏi `[c/k]` mỗi lượt (`--yes`: tự nhận); mặc định lưu vào `Teleport` trong thư mục Tải về; Ctrl+C tạm dừng lượt đang nhận, chạy lại để nhận tiếp |
+| `teleport send <file...> --to <thiết bị> [--address ip[:cổng]] [--limit-rate 20M]` | Gửi file tới một máy đã ghép đôi (máy đó chạy `teleport receive`); Ctrl+C để hủy; mất kết nối thì tự nối lại, chờ tới 24 giờ |
 | `teleport --version` | Xem phiên bản |
 
 ### Chạy nhiều node trên một máy
@@ -282,7 +282,7 @@ Thường gặp ở Wi-Fi công cộng bật cô lập thiết bị, hoặc khi 
 <details>
 <summary><b>Nếu tôi tắt máy giữa chừng thì sao?</b></summary>
 
-Các file đã nhận xong vẫn giữ nguyên. Từ `v0.2.0-alpha`, nếu máy **nhận** tắt hoặc khởi động lại, mở lại Teleport trên máy đó thì lượt truyền tự tiếp tục từ chỗ còn thiếu, miễn là Teleport trên máy gửi vẫn chạy. Ở `v0.1.0-alpha` thì chưa: hãy gửi lại thành một lượt mới, và file đang nhận dở được gửi lại từ đầu. Phần nhận dở nằm lại trong thư mục ẩn `.teleport` của thư mục nhận; có thể xóa thư mục đó khi không chạy `teleport receive`. Nếu máy **gửi** tắt Teleport (hoặc tắt máy), lượt gửi bị hủy: máy nhận báo và dọn file tạm, bạn chỉ cần gửi lại. Nếu file gốc đã bị sửa trong lúc đó, Teleport sẽ báo và yêu cầu gửi lại.
+Các file đã nhận xong vẫn giữ nguyên. Nếu máy **nhận** tắt, khởi động lại hay dừng `teleport receive`, chạy lại `teleport receive` (cùng thư mục nhận) thì lượt truyền tự tiếp tục từ chỗ còn thiếu, không hỏi lại, miễn là `teleport send` trên máy gửi vẫn chạy (nó chờ tới 24 giờ). Chạy lại sau hơn 24 giờ thì phần nhận dở bị xóa ngay khi `teleport receive` khởi động. Chạy `teleport listen` (hay `teleport send` tới chính máy gửi) trên máy nhận trong lúc đó thì lượt gửi dừng (máy gửi được báo máy kia chưa bật nhận file). Nếu `teleport send` trên máy gửi đã dừng (ví dụ bị Ctrl+C, hay bị từ chối như trên), `teleport receive` vẫn in “Tiếp tục nhận…” và giữ phần nhận dở cho tới khi quá 24 giờ, hoặc tới khi Teleport trên máy gửi được chạy lại, kết nối tới máy này và báo lượt cũ đã hủy. Phần nhận dở nằm trong thư mục ẩn `.teleport` của thư mục nhận; muốn bỏ hẳn thì xóa thư mục đó lúc không chạy `teleport receive` (lượt dở khi đó phải gửi lại từ đầu). Nếu máy **gửi** tắt Teleport (hoặc tắt máy), lượt gửi bị hủy: máy nhận báo và dọn file tạm, bạn chỉ cần gửi lại. Nếu file gốc đã bị sửa trong lúc đó, Teleport sẽ báo và yêu cầu gửi lại.
 </details>
 
 <details>

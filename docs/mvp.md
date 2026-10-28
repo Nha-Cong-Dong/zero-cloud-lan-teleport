@@ -3,7 +3,7 @@
 > **Vai trò:** đặc tả sản phẩm — giải quyết vấn đề gì, cho ai, gồm những gì, trông ra sao, đạt chuẩn nào thì được phát hành.
 > **Nguồn duy nhất cho:** phạm vi MVP, tính năng và tiêu chí chấp nhận (F1–F12), yêu cầu phi chức năng (N1–N12), thông báo lỗi, tiêu chí phát hành.
 > **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
-> **Cập nhật:** 2026-10-26
+> **Cập nhật:** 2026-10-28
 
 ---
 
@@ -152,7 +152,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Tắt hẳn app nhận (hoặc khởi động lại máy) rồi mở lại → vẫn nối lại được, cùng giới hạn gửi lại như trên.
   - File nguồn bị sửa trong lúc gián đoạn hoặc trong lúc gửi → hủy lượt truyền, báo rõ lý do.
   - Tắt app **gửi** thì lượt truyền không nối lại được: máy nhận báo “máy gửi đã hủy” và dọn file tạm.
-  - File tạm bỏ dở quá 7 ngày được tự dọn (chỉnh được trong cài đặt).
+  - Lượt quá hạn nối lại thì file tạm của nó bị xóa: ngay lúc đó nếu app nhận đang chạy, không thì ngay khi app nhận được mở lại (CLI: lần chạy `teleport receive` kế tiếp với cùng thư mục nhận). File tạm không thuộc lượt nào còn sống, bỏ dở quá 7 ngày, được tự dọn khi app nhận chạy (chỉnh được trong cài đặt).
 
 > Vì sao là 64 MiB: khối đã nhận nhưng chưa kịp ghi bền xuống đĩa (máy nhận `fsync` mỗi 16 khối 1 MiB, cộng hàng đợi ghi và bộ đệm mạng) phải gửi lại. Xem [ke_hoach.md](ke_hoach.md) mục 3.4.
 
@@ -202,9 +202,9 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **AC:**
   - Các lệnh: `teleport list`, `teleport listen` (chờ máy khác ghép đôi), `teleport pair <thiết bị>`, `teleport unpair <thiết bị>`, `teleport send <file...> --to <thiết bị>`, `teleport receive`.
   - `<thiết bị>` là tên hoặc tiền tố `device_id` (ít nhất 4 ký tự, như `teleport list` hiện). Khớp nhiều thiết bị → báo lỗi kèm danh sách để chọn, không tự đoán. Riêng `teleport pair` còn nhận `ip` hoặc `ip:cổng`, để ghép đôi được khi mạng chặn mDNS.
-  - `teleport send` chỉ gửi tới thiết bị đã ghép đôi (`--to` tìm trong thiết bị tin cậy). Khi mạng chặn mDNS: thêm `--address ip[:cổng]` (vẫn cần `--to`, để kiểm đúng danh tính máy đó). `--limit-rate R` giới hạn tốc độ gửi, tính theo byte/giây hệ nhị phân (`20M` = 20 MB/s, `512K`), tối thiểu `64K`. Một lần chạy gửi một lượt (1–1000 file, không gửi thư mục); Ctrl+C hủy lượt và máy nhận được báo ngay.
-  - `teleport receive` nhận file từ mọi thiết bị đã ghép đôi tới khi Ctrl+C, hỏi `[c/k]` cho từng lượt (mục 7.3); `--yes` tự nhận mọi lượt, không hỏi (cảnh báo lúc khởi động); `--dir D` đổi thư mục nhận, mặc định là `Teleport` trong thư mục Tải về của hệ điều hành. Không nhận yêu cầu ghép đôi (dùng `teleport listen`).
-  - Mã thoát khác 0 khi lỗi (0 thành công, 1 lỗi lúc chạy, 2 cú pháp lệnh sai); `send` trả 0 chỉ khi lượt gửi xong, `receive` trả 0 khi dừng bằng Ctrl+C. Có `--json` cho đầu ra máy đọc được.
+  - `teleport send` chỉ gửi tới thiết bị đã ghép đôi (`--to` tìm trong thiết bị tin cậy). Khi mạng chặn mDNS: thêm `--address ip[:cổng]` (vẫn cần `--to`, để kiểm đúng danh tính máy đó). `--limit-rate R` giới hạn tốc độ gửi, tính theo byte/giây hệ nhị phân (`20M` = 20 MB/s, `512K`), tối thiểu `64K`. Một lần chạy gửi một lượt (1–1000 file, không gửi thư mục). Mất kết nối thì tự nối lại như F6. Ctrl+C hủy lượt; máy nhận được báo ngay, hoặc khi hai máy nối lại được.
+  - `teleport receive` nhận file từ mọi thiết bị đã ghép đôi tới khi Ctrl+C, hỏi `[c/k]` cho từng lượt (mục 7.3); `--yes` tự nhận mọi lượt, không hỏi (cảnh báo lúc khởi động); `--dir D` đổi thư mục nhận, mặc định là `Teleport` trong thư mục Tải về của hệ điều hành. Không nhận yêu cầu ghép đôi (dùng `teleport listen`). Ctrl+C tạm dừng các lượt đang nhận, không hủy; chạy lại `teleport receive` với cùng thư mục nhận thì nhận tiếp phần còn thiếu, không hỏi lại (thời hạn như F6).
+  - Mã thoát khác 0 khi lỗi (0 thành công, 1 lỗi lúc chạy, 2 cú pháp lệnh sai); `send` trả 0 chỉ khi lượt gửi xong, `receive` trả 0 khi dừng bằng Ctrl+C (kể cả khi có lượt tạm dừng). Có `--json` cho đầu ra máy đọc được.
 
 ---
 
@@ -340,7 +340,7 @@ Các dòng khác của `teleport receive` / `teleport send` (*nghiêng* là ch�
 
 | Khi nào | Dòng |
 |---|---|
-| `receive` khởi động | “Teleport đang chờ nhận file.” / “  Tên:      *X*” / “  Mã máy:   *a71c04d2*” / “  Lưu vào:  *D:\Downloads\Teleport*”, các cảnh báo (mục 8), rồi “Nhấn Ctrl+C để dừng.” |
+| `receive` khởi động | “Teleport đang chờ nhận file.” / “  Tên:      *X*” / “  Mã máy:   *a71c04d2*” / “  Lưu vào:  *D:\Downloads\Teleport*”, các cảnh báo (mục 8), rồi “Nhấn Ctrl+C để dừng.”; có lượt nhận dở thì sau đó mỗi lượt một dòng (mục 8, dòng “CLI: `receive` mở lại khi có lượt nhận dở”) |
 | `send` khởi động | “Đang tìm “*PC-Nha*” trong mạng…” hoặc “Đang kết nối tới “*PC-Nha*” tại *192.168.1.5:47474*…”; có `--limit-rate`: “Giới hạn tốc độ gửi: *20 MB/s*.” |
 | `send` đã kết nối | “Đã kết nối với “*PC-Nha*”. Gửi *3* file (*8,4 GB*).” |
 | `send` chờ máy nhận trả lời | “Đang chờ *PC-Nha* trả lời…” |
@@ -352,7 +352,7 @@ Các dòng khác của `teleport receive` / `teleport send` (*nghiêng* là ch�
 | `send`: cả lượt xong | “Đã gửi xong *3* file (*8,4 GB*) tới *PC-Nha*.” |
 | `receive`: một file xong | “Đã lưu: *D:\…\video (1).mp4*” |
 | `receive`: cả lượt xong | “Đã nhận xong *3* file (*8,4 GB*) từ *Laptop-Minh*.” |
-| Ctrl+C lần đầu | “Đang dừng… (nhấn Ctrl+C lần nữa để thoát ngay)”; `receive` dừng xong in “Đã dừng.”, `send` dừng trước khi có lượt in “Đã hủy.” |
+| Ctrl+C lần đầu | “Đang dừng… (nhấn Ctrl+C lần nữa để thoát ngay)”; `receive` in câu tạm dừng cho mỗi lượt đang nhận (mục 8, dòng “CLI: `receive` dừng (Ctrl+C) khi đang nhận”); `receive` dừng xong in “Đã dừng.”, `send` dừng trước khi có lượt in “Đã hủy.” |
 
 Trên terminal, dòng tiến độ được vẽ lại tại chỗ, cắt vừa bề ngang và không vẽ khi đang có lời hỏi.
 
@@ -423,16 +423,16 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Máy nhận chưa bật nhận file (đang chạy `teleport listen`, hay chỉ đang gửi) | “*PC-Nha* chưa bật nhận file. Trên máy đó hãy chạy `teleport receive` rồi gửi lại.” | — |
 | Máy nhận đang nhận một lượt khác từ máy này | Trạng thái “Đang chờ *PC-Nha* nhận xong lượt trước…” (không phải lỗi, lượt xếp hàng) | Tự xử lý |
 | Người gửi hủy | Máy nhận: “*Laptop-Minh* đã hủy lượt gửi. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.”; hủy khi máy nhận còn đang hỏi: “*Laptop-Minh* đã hủy lượt gửi.” Máy gửi (tự hủy): “Đã hủy lượt gửi tới *PC-Nha*. Các file đã gửi xong vẫn nằm trên máy đó.” | — |
-| Người nhận hủy giữa chừng | Máy gửi: “*PC-Nha* đã dừng nhận giữa chừng. Các file đã gửi xong vẫn nằm trên máy đó.” Máy nhận (tự hủy): “Đã hủy nhận từ *Laptop-Minh*. File đã nhận xong vẫn giữ nguyên.” | Máy gửi: nút “Gửi lại” |
+| Người nhận hủy giữa chừng (giao diện: nút Hủy; CLI `receive` khi Ctrl+C thì tạm dừng, không hủy) | Máy gửi: “*PC-Nha* đã dừng nhận giữa chừng. Các file đã gửi xong vẫn nằm trên máy đó.” Máy nhận (tự hủy): “Đã hủy nhận từ *Laptop-Minh*. File đã nhận xong vẫn giữ nguyên.” | Máy gửi: nút “Gửi lại” |
 | Lỗi ghi đĩa ở máy nhận (ghi, `fsync` hay đổi tên lỗi) | Máy nhận: “Không lưu được *video.mp4* vào *D:\Downloads\Teleport* vì ổ đĩa báo lỗi khi ghi (ổ có thể đã đầy, bị rút ra hoặc bị hỏng). Đã dừng nhận từ *Laptop-Minh*; các file đã nhận xong vẫn giữ nguyên.” Máy gửi: “*PC-Nha* gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại.” (máy nhận chỉ gửi `cancel{error}`) | Máy nhận: nút “Đổi thư mục nhận”. Máy gửi: nút “Gửi lại” |
 | Không đọc được file nguồn khi đang gửi | Máy gửi: “Không đọc được *video.mp4* trên máy này nữa (file có thể đang bị chương trình khác khóa, hoặc nằm trên ổ vừa bị rút ra). Đã dừng gửi tới *PC-Nha*.” Máy nhận: “*Laptop-Minh* đã dừng gửi *video.mp4* vì gặp lỗi trên máy đó. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” | Nút “Gửi lại” |
 | Dữ liệu nhận bị hỏng quá số lần gửi lại cho phép | Máy nhận: “Dữ liệu nhận từ *Laptop-Minh* bị hỏng nhiều lần liên tiếp nên đã dừng nhận *video.mp4*. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” Máy gửi: câu máy gửi của dòng “Lỗi ghi đĩa ở máy nhận” | Nút “Gửi lại” |
 | Máy kia gửi dữ liệu không đúng giao thức | “Lượt gửi với *PC-Nha* đã dừng vì máy đó gửi dữ liệu không hợp lệ. Hãy cập nhật Teleport trên cả hai máy rồi thử lại.” | — |
-| Thư mục tạm của lượt còn sót lại từ lần trước (máy nhận bị tắt đột ngột rồi máy gửi gửi lại lượt đó) | Máy nhận: “Không nhận được lượt gửi từ *Laptop-Minh* vì thư mục tạm của lượt này còn sót lại từ lần trước (ví dụ Teleport vừa bị tắt đột ngột). Hãy nhờ gửi lại.” Máy gửi: câu máy gửi của dòng “Lỗi ghi đĩa ở máy nhận” | Nút “Gửi lại” |
+| Thư mục tạm của lượt đã có sẵn mà Teleport không dùng tiếp được (hỏng, lỗi đĩa, hay không do Teleport trên máy này tạo; hiếm) | Máy nhận: “Không nhận được lượt gửi từ *Laptop-Minh* vì thư mục tạm của lượt này đã có sẵn mà Teleport không dùng tiếp được. Hãy nhờ gửi lại.” Máy gửi: câu máy gửi của dòng “Lỗi ghi đĩa ở máy nhận” | Nút “Gửi lại” |
 | Lượt dừng vì lý do khác (lý do máy này không biết, máy kia không còn biết lượt này…) | Máy gửi: “*PC-Nha* đã dừng lượt gửi.” Máy nhận: “*Laptop-Minh* đã dừng lượt gửi.” | — |
 | Đã tắt app gửi khi lượt truyền đang gián đoạn | “*Laptop-Minh* đã hủy lượt gửi *video.mp4*. Hãy nhờ gửi lại.” | — |
 | Mất mạng | “Đang nối lại…” (không phải lỗi) | Tự xử lý |
-| Mất kết nối quá lâu (quá hạn nối lại) | Máy gửi: “Mất kết nối với *PC-Nha* quá lâu nên lượt gửi đã dừng. Hãy gửi lại.” Máy nhận: “Mất kết nối với *Laptop-Minh* quá lâu nên đã dừng nhận. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.” | Nút “Gửi lại” |
+| Mất kết nối quá lâu (quá hạn nối lại; kể cả lượt nhận dở khi app nhận mở lại sau hạn nối lại) | Máy gửi: “Mất kết nối với *PC-Nha* quá lâu nên lượt gửi đã dừng. Hãy gửi lại.” Máy nhận: “Mất kết nối với *Laptop-Minh* quá lâu nên đã dừng nhận. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.” | Nút “Gửi lại” |
 | Chọn gửi file không có quyền đọc | “Không mở được *video.mp4*: máy này không có quyền đọc file đó.” | Lượt gửi không bắt đầu |
 | Chọn gửi một thư mục | “*ảnh* không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file.” | Lượt gửi không bắt đầu |
 | Chọn một file hai lần | “Có file được chọn hai lần. Hãy chọn mỗi file một lần.” | Lượt gửi không bắt đầu |
@@ -449,7 +449,10 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | CLI: `receive` khi chưa ghép đôi với thiết bị nào | “Máy này chưa ghép đôi với thiết bị nào nên chưa nhận được file. Hãy ghép đôi trước: `teleport listen` trên một máy, `teleport pair` trên máy kia.” | — |
 | CLI: `receive` không quảng bá được qua mDNS | “Cảnh báo: chưa quảng bá được qua mDNS (*lý do*); máy khác vẫn gửi được bằng `teleport send … --address <IP của máy này>`.” | — |
 | CLI: `receive` không đọc được câu trả lời `[c/k]` (đầu vào đã đóng) | “Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận.” (in một lần); mỗi lượt bị từ chối khi chưa hiện lời hỏi (đang xếp hàng, hay tới sau khi đầu vào đóng) thêm: “Đã từ chối *3* file từ *Laptop-Minh* vì không đọc được câu trả lời (đầu vào đã đóng).” | — |
-| CLI: `receive` dừng (Ctrl+C) khi còn lượt chưa hiện lời hỏi | Mỗi lượt đó: “Đã từ chối *3* file từ *Laptop-Minh* vì đang dừng nhận.” (lượt đang hỏi thì không in “Đã từ chối.”) | — |
+| CLI: `receive` dừng (Ctrl+C) khi còn lượt chưa hiện lời hỏi | Mỗi lượt đó: “Đã từ chối *3* file từ *Laptop-Minh* vì đang dừng nhận.” (lượt đang hỏi thì không in “Đã từ chối.”); lượt đang nhận thì tạm dừng (dòng “CLI: `receive` dừng (Ctrl+C) khi đang nhận”) | — |
+| CLI: `receive` dừng (Ctrl+C) khi đang nhận | Máy nhận, mỗi lượt: “Đã tạm dừng nhận *video.mp4* từ *Laptop-Minh*. Chạy lại `teleport receive` (cùng thư mục nhận) để nhận tiếp phần còn thiếu, miễn là máy gửi vẫn đang chờ; quá 24 giờ kể từ lúc mất kết nối thì lần chạy sau sẽ xóa phần nhận dở.” (lượt nhiều file: “*3* file” thay cho tên file). Máy gửi: “Đang nối lại…” (dòng “Mất mạng”); chưa nối lại được thì thêm câu ở dòng “CLI: `send` chưa nối lại được trong lúc chờ nối lại” | — |
+| CLI: `receive` mở lại khi có lượt nhận dở | Ngay sau phần đầu (mục 7.3), mỗi lượt: “Tiếp tục nhận *3* file từ *Laptop-Minh* (đã nhận *4,2 GB* / *8,0 GB*). Đang chờ máy đó kết nối lại…”, không hỏi `[c/k]`. Lượt đã quá hạn nối lại: dòng “Mất kết nối quá lâu” | Tự xử lý |
+| CLI: `send` chưa nối lại được trong lúc chờ nối lại | “Chưa nối lại được với *PC-Nha*. Teleport vẫn đang thử lại (tối đa 24 giờ). Hãy kiểm tra máy đó vẫn đang chạy `teleport receive` và hai máy còn chung một mạng.” (một lần mỗi đợt mất kết nối) | Kiểm tra máy nhận đang chạy `teleport receive` và cùng mạng |
 
 ---
 
