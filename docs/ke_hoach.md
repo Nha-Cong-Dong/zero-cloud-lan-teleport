@@ -4,7 +4,7 @@
 > **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, danh sách phép đo của đợt đo trên thiết bị thật (mục 5.4), quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
 > **Không chứa:** phạm vi, tính năng, tiêu chí chấp nhận và con số chất lượng → [mvp.md](mvp.md) (tham chiếu theo mã F1–F12, N1–N12). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
 > **Bản chính thức về kỹ thuật:** đặc tả giao thức [protocol.md](protocol.md) và trạng thái từng module [architecture.md](architecture.md); khi lệch nhau thì hai file đó đúng.
-> **Cập nhật:** 2026-10-28
+> **Cập nhật:** 2026-10-29
 
 ---
 
@@ -351,6 +351,18 @@ Hiện chỉ có một máy, cộng một máy ảo Ubuntu bridged ([benchmark.m
 - Phần nào đo sớm được trên máy ảo (ví dụ một phần D7 với Ubuntu) thì cứ đo và ghi vào benchmark kèm giới hạn; mã D đó vẫn mở tới khi đo trên thiết bị thật, trừ khi người dùng chấp nhận số đo máy ảo như ở Giai đoạn 1.
 - Kết quả không đạt thì sửa code trong giai đoạn đang làm lúc đó, rồi đo lại mã D đó.
 - Giai đoạn còn mã D mở thì chưa gắn tag. Đợt đo chạy trên `main` lúc đo; sau đợt đo chỉ gắn tag của giai đoạn mới nhất có cả hai dòng “Xong khi” đã đạt, lên đúng commit `main` đã dùng để đo. Tag của các giai đoạn ⏸ cũ hơn bị bỏ qua, và mục phiên bản của tag đó trong `CHANGELOG.md` gộp mọi thay đổi từ trước. Đợt đo phải xong trước `v1.0.0` (mvp mục 12). Sau đợt đo, giai đoạn nào không còn mã D mở thì đổi ⏸ thành ✅ ở mục 5.1.
+
+### 5.5. Lịch tới buổi demo hackathon
+
+Phạm vi và tiêu chí H1–H5: [mvp.md](mvp.md) mục 4.1. Buổi demo hết tuần 4 của hackathon, khoảng 08/11/2026. Tới lúc đó lịch này đi trước mục 5.2: chỉ làm phần Giai đoạn 4 mà mvp mục 4.1 cần, mọi việc khác của Giai đoạn 4–5 làm sau buổi demo.
+
+| Ngày | Việc | Xong khi |
+|---|---|---|
+| 29/10–01/11 | Merge khung giao diện; radar; ghép đôi trên giao diện (không có chế độ ẩn) | Hai node trên một máy thấy nhau và ghép đôi được bằng giao diện |
+| 02/11–05/11 | Gửi/nhận trên giao diện: kéo thả, hộp thoại nhận, danh sách lượt truyền; bản zip `--onedir` | H2 đạt giữa hai node trên một máy; bản zip chạy trên Windows Sandbox |
+| 06/11–07/11 | Kiểm H1–H5 trên hai máy thật, sửa lỗi, tập kịch bản demo | H1–H5 có kết quả trong [benchmark.md](benchmark.md) |
+
+Đợt kiểm trên hai máy thật này đo luôn được D1, D3, D5 (mục 5.4) nếu kịp; không kịp thì để lại cho đợt đo.
 
 ---
 

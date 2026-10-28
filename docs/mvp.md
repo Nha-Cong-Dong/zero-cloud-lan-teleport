@@ -3,7 +3,7 @@
 > **Vai trò:** đặc tả sản phẩm — giải quyết vấn đề gì, cho ai, gồm những gì, trông ra sao, đạt chuẩn nào thì được phát hành.
 > **Nguồn duy nhất cho:** phạm vi MVP, tính năng và tiêu chí chấp nhận (F1–F12), yêu cầu phi chức năng (N1–N12), thông báo lỗi, tiêu chí phát hành.
 > **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
-> **Cập nhật:** 2026-10-28
+> **Cập nhật:** 2026-10-29
 
 ---
 
@@ -74,6 +74,28 @@
 | Dòng lệnh (CLI) cho người dùng nâng cao | Plugin / API cho bên thứ ba |
 
 Thứ tự làm các mục “không có” sau v1.0: [ke_hoach.md](ke_hoach.md) mục 5.3. Nếu trễ tiến độ, một số mục “có” được hoãn theo thứ tự ở mục 14.
+
+### 4.1. MVP hackathon
+
+Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 ở trên. Lịch làm: [ke_hoach.md](ke_hoach.md) mục 5.5.
+
+**Có:** giao diện tối thiểu trên Windows: radar (danh sách thiết bị, nút nhập IP), ghép đôi bằng mã 6 số, kéo thả hoặc “Gửi file…”, hộp thoại Nhận / Từ chối, danh sách lượt truyền có tiến độ, tốc độ, trạng thái “Đang nối lại…” và nút hủy; tự nối lại và kiểm tra toàn vẹn như F6, F7; bản zip chạy không cần cài Python. CLI giữ như F12.
+
+**Để sau hackathon:** chế độ ẩn và màn hình “Chờ ghép đôi” (F3, F10), màn hình cài đặt (F10), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện.
+
+**Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](benchmark.md).
+
+| Mã | Tiêu chí | Cách kiểm |
+|---|---|---|
+| H1 | Máy kia hiện trên radar trong thời gian mvp N1 nêu; ghép đôi xong bằng mã 6 số xác nhận ở cả hai máy | Bấm giờ từ lúc mở app máy B tới lúc B hiện trên radar máy A |
+| H2 | Kéo một file ≥ 1 GiB thả vào máy kia; máy nhận hiện hộp thoại, bấm Nhận; file nhận có SHA-256 trùng file gốc | `Get-FileHash` ở hai máy |
+| H3 | Đang gửi file ở H2, tắt Wi-Fi một máy khi tiến độ khoảng 50%, chờ 10 giây rồi bật lại: lượt truyền tự chạy tiếp, tiến độ không về 0, SHA-256 trùng | Quan sát tiến độ; `Get-FileHash` |
+| H4 | Đóng hẳn app nhận giữa lượt truyền rồi mở lại: lượt truyền tự chạy tiếp và hoàn tất, SHA-256 trùng (F6) | Như H3 |
+| H5 | Gửi lại đúng file ở H2: máy nhận lưu thành `ten (1).ext`, file cũ không đổi; máy thứ ba chưa ghép đôi (hoặc máy B sau khi hủy ghép đôi) không gửi được file tới máy A | Xem thư mục nhận; `Get-FileHash` file cũ |
+
+Đạt đủ H1–H5 thì **dừng thêm tính năng** tới hết buổi demo, chỉ sửa lỗi. Không đạt kịp thì demo bằng CLI cho phần giao diện còn thiếu; H2–H5 vẫn phải đạt bằng CLI.
+
+Kịch bản demo hackathon (5 phút): các dòng 0:00–3:00 của mục 13, thêm H4 (đóng app nhận rồi mở lại) và dòng 4:00 (tắt Internet của router). Bỏ clipboard và so sánh với Google Drive.
 
 ---
 
