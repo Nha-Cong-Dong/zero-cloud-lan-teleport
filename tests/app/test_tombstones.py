@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import gc
 import logging
 import threading
 import time
@@ -393,22 +394,146 @@ async def test_writes_are_spaced_by_tombstone_min_interval(lone_sender, save_spy
     assert gap >= interval - 0.05, f"hai lần ghi cách nhau {gap:.3f} s < {interval} s"
 
 
-@integration
-async def test_close_flushes_last_snapshot_without_waiting_for_interval(
-    lone_sender, save_spy, T, monkeypatch
-):
-    monkeypatch.setattr(T, "TOMBSTONE_MIN_INTERVAL", 60.0)
-    net = await lone_sender()
+@pytest.fixture
+async def tomb_timers(monkeypatch):
+    """Mọi lần hẹn chụp bia mộ bằng `loop.call_later` (bọc `call_later` của loop đang chạy): danh sách
+    `asyncio.TimerHandle` có callback `_snapshot_tombstones`, theo thứ tự hẹn."""
+    loop = asyncio.get_running_loop()
+    real = loop.call_later
+    handles: list[asyncio.TimerHandle] = []
+
+    def call_later(delay, callback, *args, **kwargs):
+        handle = real(delay, callback, *args, **kwargs)
+        if getattr(callback, "__name__", "") == "_snapshot_tombstones":
+            handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(loop, "call_later", call_later)
+    return handles
+
+
+def errors_logged(caplog) -> list[logging.LogRecord]:
+    """Bản ghi ERROR+ của mọi logger (kể cả `asyncio`: “Task exception was never retrieved”)."""
+    return [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def burst_waiting_for_interval(net, save_spy, tomb_timers):
+    """Loạt bia mộ đầu được ghi; loạt sau chờ `TOMBSTONE_MIN_INTERVAL` (đã vá 60 s) ở một `TimerHandle`.
+    Trả (loạt đầu, loạt sau, handle đang chờ)."""
     first = await send_and_cancel(net, net.files[:3])
     await wait_saved(net.config, first)
+    await wait_until(lambda: save_spy.calls and save_spy.calls[-1].t1 is not None, 5, "lần ghi đầu chưa xong")
     second = await send_and_cancel(net, net.files[3:6])
-    await asyncio.sleep(0.2)
+    await wait_until(lambda: tomb_timers, 5, "lần ghi sau chưa được hẹn bằng call_later")
     assert len(save_spy.calls) == 1  # lần ghi sau đang chờ khoảng cách 60 s
+    [handle] = tomb_timers
+    assert not handle.cancelled()
+    assert handle.when() - asyncio.get_running_loop().time() > 30, "lần hẹn phải chờ khoảng cách 60 s"
+    return first, second, handle
+
+
+@integration
+async def test_close_flushes_last_snapshot_without_waiting_for_interval(
+    lone_sender, save_spy, tomb_timers, T, monkeypatch
+):
+    """Kèm V11b (spec-p3-5 mục 3): lần hẹn `call_later` đang chờ bị hủy khi `close()` xả bia mộ."""
+    monkeypatch.setattr(T, "TOMBSTONE_MIN_INTERVAL", 60.0)
+    net = await lone_sender()
+    first, second, handle = await burst_waiting_for_interval(net, save_spy, tomb_timers)
     t0 = time.monotonic()
     await asyncio.wait_for(net.B.close(), 10)
     assert time.monotonic() - t0 < 5.0
     assert saved_ids(net.config) == first + second
     assert save_spy.max_running == 1
+    assert handle.cancelled(), "close() phải hủy lần hẹn ghi bia mộ đang chờ (TimerHandle)"
+
+
+@integration
+async def test_close_cancelled_before_transfers_close_aborts_without_flushing_tombstones(
+    lone_sender, save_spy, tomb_timers, T, monkeypatch, caplog
+):
+    """V11a (spec-p3-5 mục 3, 9.2 N7): `Node.close` bị hủy khi đang giữ ở seam ngay trước
+    `TransferManager.close()` → `abort_now` đúng một lần: hủy `TimerHandle` đang chờ, **không** xả bia
+    mộ (sau 0,5 s vẫn chỉ một lần ghi, `tombstones.json` chỉ có loạt đầu); không có ERROR."""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(T, "TOMBSTONE_MIN_INTERVAL", 60.0)
+    aborts: list[object] = []
+    real_abort = T.TransferManager.abort_now
+
+    def abort_now(self):
+        aborts.append(self)
+        return real_abort(self)
+
+    monkeypatch.setattr(T.TransferManager, "abort_now", abort_now)
+    net = await lone_sender()
+    first, _second, handle = await burst_waiting_for_interval(net, save_spy, tomb_timers)
+
+    held = asyncio.Event()
+    real_close = T.TransferManager.close
+
+    async def close(self):
+        if self is net.B.transfers:
+            held.set()
+            await asyncio.Event().wait()  # giữ tới khi bị hủy
+        return await real_close(self)
+
+    monkeypatch.setattr(T.TransferManager, "close", close)
+    manager = net.B.transfers
+    closing = asyncio.create_task(net.B.close())
+    await asyncio.wait_for(held.wait(), 10)
+    assert aborts == []
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    assert aborts == [manager], f"abort_now chạy {len(aborts)} lần"
+    assert handle.cancelled(), "abort_now phải hủy lần hẹn ghi bia mộ đang chờ (TimerHandle)"
+    await asyncio.sleep(0.5)
+    assert len(save_spy.calls) == 1, "abort_now không được xả bia mộ"
+    assert saved_ids(net.config) == first
+    gc.collect()  # ngoại lệ task không ai lấy chỉ được báo khi task bị thu gom
+    await asyncio.sleep(0)
+    assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
+
+
+@integration
+async def test_tombstone_write_after_executor_shutdown_warns_once_and_close_stays_bounded(
+    lone_sender, save_spy, T, monkeypatch, caplog
+):
+    """V11c (2) (spec-p3-5 mục 3): `DiskExecutor.submit` ném `RuntimeError` (executor đã shutdown) đúng
+    lúc giao việc ghi bia mộ → một WARNING “node đã đóng”, không ngoại lệ task, không ghi gì;
+    `Node.close()` xong trong `close_time_limit()`."""
+    from teleport.app import diskio
+    from teleport.app.node import close_time_limit
+
+    caplog.set_level(logging.WARNING)
+    injected: list[str] = []
+    real_submit = diskio.DiskExecutor.submit
+
+    def submit(self, fn, /, *args):
+        if fn is T._encode_and_save:
+            injected.append(fn.__name__)
+            raise RuntimeError("DiskExecutor đã shutdown")
+        return real_submit(self, fn, *args)
+
+    monkeypatch.setattr(diskio.DiskExecutor, "submit", submit)
+    net = await lone_sender()
+
+    def closed_warnings() -> list[logging.LogRecord]:
+        return [r for r in teleport_warnings(caplog) if "node đã đóng" in r.getMessage()]
+
+    await send_and_cancel(net, net.files[:3])
+    await wait_until(lambda: injected and closed_warnings(), 5, "chưa có WARNING “node đã đóng”")
+    limit = close_time_limit()
+    t0 = time.monotonic()
+    await asyncio.wait_for(net.B.close(), limit + 5)
+    elapsed = time.monotonic() - t0
+    assert elapsed <= limit, f"close() mất {elapsed:.2f} s > close_time_limit() = {limit:.2f} s"
+    gc.collect()
+    await asyncio.sleep(0)
+    assert len(closed_warnings()) == 1, [r.getMessage() for r in closed_warnings()]
+    assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
+    assert save_spy.calls == []
+    assert not (net.config / "tombstones.json").exists()
 
 
 @integration

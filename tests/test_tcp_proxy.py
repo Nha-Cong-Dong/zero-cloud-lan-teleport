@@ -323,3 +323,130 @@ def test_usable_from_synchronous_test(tcp_proxy):
         for c in accepted:
             c.close()
         listener.close()
+
+
+# ---- tự chặn ở một ngưỡng byte (`block_at`, P3-5) ------------------------------------------------------
+
+
+async def test_block_at_stops_exactly_at_threshold_then_resume_delivers_rest_in_order(tcp_proxy, sink):
+    """Ngưỡng không chia hết cho `chunk`: đúng `nbytes` byte tới server, không lọt thêm byte nào trong
+    lúc chặn, không đóng gì; `resume()` → phần còn lại tới đủ, đúng thứ tự."""
+    proxy = tcp_proxy(sink.port)
+    threshold = MiB + 12345
+    proxy.block_at("c2s", threshold)
+    assert not proxy.blocked and not proxy.fired
+    data = os.urandom(3 * MiB)
+    _reader, writer = await asyncio.open_connection(LOCAL, proxy.port)
+    try:
+        writer.write(data)
+        s_reader, _ = await sink.nth()
+        assert await read_exactly_within(s_reader, threshold, 10) == data[:threshold]
+        assert proxy.wait_fired(3) and proxy.blocked
+        assert proxy.forwarded["c2s"] == threshold
+        assert proxy.fired_forwarded == {"c2s": threshold, "s2c": 0}
+        assert proxy.fired_at is not None and proxy.fired_at <= time.monotonic()
+        # Trong lúc chặn: không thêm byte nào, kết nối vẫn mở.
+        assert await read_outcome(s_reader, 1.0) == "open"
+        assert proxy.forwarded["c2s"] == threshold and proxy.live() == 1
+        proxy.resume()
+        assert await read_exactly_within(s_reader, len(data) - threshold, 10) == data[threshold:]
+        assert proxy.forwarded["c2s"] == len(data)
+    finally:
+        writer.transport.abort()
+
+
+async def test_block_at_fires_only_once_and_not_again_after_resume(tcp_proxy, sink):
+    """N3 (spec-p3-5 mục 9.2): sau `resume()` bộ đếm vẫn ≥ ngưỡng nhưng proxy không chặn lại."""
+    proxy = tcp_proxy(sink.port)
+    proxy.block_at("c2s", 1000)
+    _reader, writer = await asyncio.open_connection(LOCAL, proxy.port)
+    try:
+        writer.write(b"a" * 4000)
+        s_reader, _ = await sink.nth()
+        assert await read_exactly_within(s_reader, 1000, 5) == b"a" * 1000
+        assert proxy.wait_fired(3)
+        first_at = proxy.fired_at
+        proxy.resume()
+        assert await read_exactly_within(s_reader, 3000, 5) == b"a" * 3000
+        more = os.urandom(2 * MiB)
+        writer.write(more)
+        assert await read_exactly_within(s_reader, len(more), 10) == more
+        assert not proxy.blocked
+        assert proxy.fired_at == first_at
+    finally:
+        writer.transport.abort()
+
+
+async def test_block_at_counts_bytes_of_all_connections_including_closed_ones(tcp_proxy, sink):
+    """Bộ đếm là tổng mọi kết nối qua proxy (kết nối đã bị cắt vẫn tính), không phải của một kết nối."""
+    proxy = tcp_proxy(sink.port)
+    _r1, w1 = await asyncio.open_connection(LOCAL, proxy.port)
+    try:
+        w1.write(b"x" * 3000)
+        s1, _ = await sink.nth(0)
+        await read_exactly_within(s1, 3000, 5)
+        proxy.rst()
+    finally:
+        w1.transport.abort()
+    proxy.block_at("c2s", 5000)  # kết nối mới chỉ cần thêm 2000 byte
+    _r2, w2 = await asyncio.open_connection(LOCAL, proxy.port)
+    try:
+        w2.write(b"y" * 4000)
+        s2, _ = await sink.nth(1)
+        assert await read_exactly_within(s2, 2000, 5) == b"y" * 2000
+        assert proxy.wait_fired(3)
+        assert proxy.forwarded["c2s"] == 5000
+        assert await read_outcome(s2, 0.5) == "open"
+    finally:
+        w2.transport.abort()
+
+
+async def test_block_at_also_holds_the_other_direction_and_new_connections(tcp_proxy, sink):
+    """Chặn theo ngưỡng chiều s2c là chặn cả mạng: chiều c2s cũng đứng, kết nối mới không tới server."""
+    proxy = tcp_proxy(sink.port)
+    proxy.block_at("s2c", 10_000)
+    reader, writer = await asyncio.open_connection(LOCAL, proxy.port)
+    try:
+        s_reader, s_writer = await sink.nth(0)
+        s_writer.write(b"s" * 50_000)
+        assert await read_exactly_within(reader, 10_000, 5) == b"s" * 10_000
+        assert proxy.wait_fired(3)
+        assert proxy.forwarded == {"c2s": 0, "s2c": 10_000}
+        writer.write(b"c" * 100)
+        assert await read_outcome(s_reader, 0.8) == "open"
+        assert proxy.forwarded["c2s"] == 0
+        _r2, w2 = await asyncio.open_connection(LOCAL, proxy.port)
+        try:
+            await asyncio.sleep(0.3)
+            assert len(sink.conns) == 1, "lúc chặn mà proxy đã nối kết nối mới tới server"
+            proxy.rst()
+            proxy.resume()
+        finally:
+            w2.transport.abort()
+        assert proxy.resets == 2
+    finally:
+        writer.transport.abort()
+
+
+async def test_block_at_with_threshold_already_passed_blocks_at_once(tcp_proxy, sink):
+    proxy = tcp_proxy(sink.port)
+    _reader, writer = await asyncio.open_connection(LOCAL, proxy.port)
+    try:
+        writer.write(b"z" * 500)
+        s_reader, _ = await sink.nth()
+        await read_exactly_within(s_reader, 500, 5)
+        proxy.block_at("c2s", 100)
+        assert proxy.fired and proxy.blocked
+        assert proxy.fired_forwarded["c2s"] == 500
+        writer.write(b"w" * 10)
+        assert await read_outcome(s_reader, 0.5) == "open"
+        proxy.resume()
+        assert await read_exactly_within(s_reader, 10, 5) == b"w" * 10
+    finally:
+        writer.transport.abort()
+
+
+def test_block_at_rejects_unknown_direction(tcp_proxy):
+    proxy = tcp_proxy(1)
+    with pytest.raises(ValueError):
+        proxy.block_at("both", 10)

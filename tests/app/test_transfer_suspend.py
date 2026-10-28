@@ -10,17 +10,26 @@ trước trong hàng đĩa; `close_temp` thay `remove_temp`; `RemoveTemp.keep_re
 Quy ước như `test_transfers.py`: hai node thật trên 127.0.0.1 (`transfer_nodes`), **A nhận, B gửi**. Mở
 lại một node = `node_factory` cùng nhãn (cùng thư mục cấu hình) với `TransferRecorder` mới. Hạn chờ nối
 lại đặt lại giá trị thật (24 giờ) để lượt không hết hạn trong lúc A tắt (fixture `fast` đặt 4 s).
+
+P3-5 (`specs/spec-p3-5.md` V5, V6, V7, V8 (ii); mục 9 thắng 1–8): đóng trật tự lúc proxy chặn ở 85 % của
+96 MiB rồi mở lại, trong ngưỡng mvp N4 (`n4_extra`, đọc từ `docs/mvp.md`; tiền đề `byte lúc cắt >
+n4_extra`); lật một byte `.part` của khối đã `MARK` khi tạm dừng → đúng khối đó được gửi lại (mvp F7 AC3,
+N5); lật một byte `.state` (MARK đầu, MARK cuối, header; mục 9.2 C4); nguồn đổi lúc bên nhận tạm dừng
+(mvp F6 AC4). Byte payload bên gửi và chỉ số khối được đếm qua `payload_meter` (`tests/app/conftest.py`).
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
-import re
+import random
+import struct
 import threading
 import time
 import uuid
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,21 +48,10 @@ pytestmark = [
 integration = pytest.mark.integration
 leakcheck = pytest.mark.usefixtures("no_leaks")
 
-ROOT = Path(__file__).resolve().parents[2]
+
 LOCAL = "127.0.0.1"
 MiB = 1024 * 1024
 REAL_GRACE = core_transfer.RECONNECT_GRACE  # đọc lúc import, trước khi `fast` vá
-
-
-def n4_slack_bytes() -> int:
-    """Phần cộng thêm của mvp N4 (“gửi lại ≤ phần chưa nhận + X MiB”), đọc từ bảng yêu cầu."""
-    text = (ROOT / "docs" / "mvp.md").read_text(encoding="utf-8")
-    m = re.search(r"^\| N4 \|[^\n]*?phần chưa nhận \+ (\d+) MiB", text, re.MULTILINE)
-    assert m, "không tìm thấy ngưỡng N4 trong docs/mvp.md"
-    return int(m.group(1)) * MiB
-
-
-N4_SLACK = n4_slack_bytes()
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------
@@ -85,6 +83,38 @@ def sha256_of(path: Path) -> str:
         while chunk := f.read(4 * MiB):
             h.update(chunk)
     return h.hexdigest()
+
+
+async def wait_gone(path: Path, timeout: float = 20.0) -> None:
+    """Chờ tới khi thư mục tạm `path` không còn; quá hạn thì báo các file còn lại (để chẩn đoán)."""
+    deadline = time.monotonic() + timeout
+    while path.exists():
+        if time.monotonic() > deadline:
+            try:
+                left = sorted(os.listdir(path))
+            except OSError as e:
+                left = [f"<không liệt kê được: {type(e).__name__}>"]
+            raise AssertionError(f"hết {timeout} s mà thư mục tạm của lượt chưa bị xóa; còn: {left}")
+        await asyncio.sleep(0.05)
+
+
+# Cảnh báo của `TransferManager.close` khi hàng đĩa chưa xong trong `CLOSE_DISK_WAIT` (handle của lượt
+# không được đóng): một lần đóng như thế làm hỏng các bước sau của test (Windows giữ khóa file).
+CLOSE_WARNINGS = ("việc dọn đĩa chưa xong", "không đóng thư mục nhận")
+
+
+async def close_cleanly(node, caplog, timeout: float = 45.0) -> None:
+    """Đóng `node` (test đã nới `transfers.CLOSE_DISK_WAIT`) rồi khẳng định hàng đĩa xong trước hạn: không
+    có cảnh báo `CLOSE_WARNINGS` của `teleport.app.transfers`."""
+    caplog.set_level(logging.WARNING, logger="teleport.app.transfers")
+    start = len(caplog.records)
+    await asyncio.wait_for(node.close(), timeout)
+    bad = [
+        r.getMessage()
+        for r in caplog.records[start:]
+        if r.name == "teleport.app.transfers" and any(w in r.getMessage() for w in CLOSE_WARNINGS)
+    ]
+    assert not bad, f"đóng node mà hàng đĩa chưa xong: {bad}"
 
 
 def temp_dir(receive_dir: Path, tid: str) -> Path:
@@ -529,9 +559,11 @@ async def test_s1_complete_offer_and_data_open_during_close_do_not_cancel_suspen
 @integration
 @leakcheck
 @pytest.mark.parametrize("client", ["sender", "receiver"])
-async def test_orderly_close_mid_transfer_then_reopen_finishes_within_n4(
-    T, transfer_nodes, restart, write_spy, grace_real, client
+async def test_orderly_close_mid_transfer_then_reopen_finishes(
+    T, transfer_nodes, restart, write_spy, grace_real, n4_extra, monkeypatch, caplog, client
 ):
+    """Test chức năng: file 24 MiB nhỏ hơn ngưỡng N4 nên chưa chứng minh N4 (gửi lại từ đầu vẫn qua).
+    N4 thật: `test_orderly_close_while_network_blocked_at_85_percent_then_reopen_finishes_within_n4`."""
     net = await transfer_nodes(sender_opts={"rate_limit": 8 * MiB}, client=client)
     A, B = net.A, net.B
     size = 24 * MiB + 3
@@ -539,7 +571,10 @@ async def test_orderly_close_mid_transfer_then_reopen_finishes_within_n4(
     key = await B.transfers.send(A.id, [src])
     tid = key.transfer_id
     await wait_until(lambda: write_spy.count(tid, done=True) >= 20, 30, "A chưa ghi đủ 20 khối")
-    await asyncio.wait_for(A.close(), 15)
+    # Máy bận / macOS `F_FULLFSYNC`: `SyncPart` lúc đóng có thể quá `CLOSE_DISK_WAIT` thật (rủi ro R5 đã
+    # chấp nhận); test này kiểm mở lại, không kiểm thời gian đóng.
+    monkeypatch.setattr(T, "CLOSE_DISK_WAIT", 30.0)
+    await close_cleanly(A, caplog)
     d = temp_dir(net.receive_dir, tid)
     assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(d))
     assert A.trec.finished(tid).result == T.TransferResult.SUSPENDED
@@ -565,7 +600,9 @@ async def test_orderly_close_mid_transfer_then_reopen_finishes_within_n4(
     assert A2.trec.of("OfferReceived", tid) == [], "lượt khôi phục không được hỏi lại"
     assert sha256_of(net.receive_dir / "lon.bin") == sha256_of(src)
     excess = fin_b.payload_sent - size
-    assert 0 <= excess <= N4_SLACK, f"gửi thừa {excess / MiB:.1f} MiB (ngưỡng mvp N4 {N4_SLACK // MiB} MiB)"
+    assert 0 <= excess <= n4_extra, (
+        f"gửi thừa {excess / MiB:.1f} MiB (phần cộng thêm mvp N4 {n4_extra // MiB} MiB)"
+    )
     assert fin_a.payload_sent == 0
 
 
@@ -657,3 +694,364 @@ async def test_suspend_drops_queued_finalize_of_last_file_then_reopen_finishes(
     assert fin_b.result == T.TransferResult.DONE, describe(fin_b)
     assert fin_a.result == T.TransferResult.DONE, describe(fin_a)
     assert sha256_of(net.receive_dir / "f.bin") == sha256_of(src)
+
+
+# =================================================================================================
+# P3-5: đóng trật tự lúc mạng bị chặn ở 85 % rồi mở lại (V5, V7, V8 (ii)); lật byte khi tạm dừng (V6)
+# =================================================================================================
+
+CUT_AT = 0.85  # mvp N4: “ở 85 %”
+BIG = 96 * MiB  # đủ lớn để gửi lại từ đầu ở 85 % vượt ngưỡng N4 (tiền đề kiểm ở từng test)
+
+
+def block_len(size: int, index: int) -> int:
+    return min(BLOCK_SIZE, size - index * BLOCK_SIZE)
+
+
+def all_blocks(size: int) -> set[int]:
+    return set(range(-(-size // BLOCK_SIZE)))
+
+
+def state_records(data: bytes) -> list[SimpleNamespace]:
+    """Vị trí và nội dung từng bản ghi của `.state` (architecture mục 4: header 41 byte, rồi
+    `[u8 loại][u16 n][payload][u32 crc32]`; `CLEAR_ALL` 5 byte), đọc độc lập với code. Mỗi bản ghi:
+    `offset`, `length`, `kind` (`"mark"`, `"clear"`, `"clear_all"`, `"target"`, `"reserved"`), `blocks`."""
+    pos, out = 41, []
+    names = {0x01: "mark", 0x02: "clear", 0x03: "clear_all", 0x04: "target", 0x05: "reserved"}
+    while pos < len(data):
+        kind = data[pos]
+        if kind == 0x03:
+            length, blocks = 5, []
+        else:
+            (n,) = struct.unpack_from("!H", data, pos + 1)
+            length = 7 + n * {0x01: 36, 0x02: 4, 0x04: 1, 0x05: 1}[kind]
+            payload = data[pos + 3 : pos + length - 4]
+            if kind == 0x01:
+                blocks = [i for i, _ in struct.iter_unpack("!I32s", payload)]
+            elif kind == 0x02:
+                blocks = [i for (i,) in struct.iter_unpack("!I", payload)]
+            else:
+                blocks = []
+        (crc,) = struct.unpack_from("!I", data, pos + length - 4)
+        assert crc == zlib.crc32(data[pos : pos + length - 4]), f"bản ghi hỏng sẵn ở byte {pos}"
+        out.append(SimpleNamespace(offset=pos, length=length, kind=names[kind], blocks=blocks))
+        pos += length
+    assert pos == len(data)
+    return out
+
+
+def marked_by(records) -> set[int]:
+    marked: set[int] = set()
+    for r in records:
+        if r.kind == "mark":
+            marked |= set(r.blocks)
+        elif r.kind == "clear":
+            marked -= set(r.blocks)
+        elif r.kind == "clear_all":
+            marked.clear()
+    return marked
+
+
+def flip_byte(path: Path, offset: int) -> None:
+    with open(path, "r+b") as f:
+        f.seek(offset)
+        b = f.read(1)
+        assert len(b) == 1, f"{path.name} ngắn hơn byte {offset}"
+        f.seek(offset)
+        f.write(bytes([b[0] ^ 0x5A]))
+
+
+async def wait_stable(
+    value, quiet: float = 0.5, timeout: float = 15.0, what: str = "giá trị còn đổi"
+) -> None:
+    """Chờ tới khi `value()` không đổi trong `quiet` giây (hạn `timeout`)."""
+    deadline = time.monotonic() + timeout
+    last, since = value(), time.monotonic()
+    while time.monotonic() - since < quiet:
+        if time.monotonic() > deadline:
+            raise AssertionError(f"hết {timeout} s mà {what}")
+        await asyncio.sleep(0.05)
+        if (now := value()) != last:
+            last, since = now, time.monotonic()
+
+
+@pytest.fixture
+def suspend_blocked(T, transfer_nodes, tcp_proxy, payload_meter, write_spy, monkeypatch, caplog):
+    """`await suspend_blocked(size, client="sender", cut_at=CUT_AT, name="lon.bin")`: hai node nối kết
+    nối điều khiển qua proxy đặt trước node bị nối tới; B gửi `size` byte; proxy tự chặn khi chiều payload
+    đã chuyển `cut_at × size` byte (`block_at`); trong lúc chặn A đóng có trật tự (lượt `SUSPENDED`); rồi
+    proxy RST mọi kết nối và hết chặn. Trả `SimpleNamespace(net, A, B, proxy, src, tid, size, client,
+    cut_sent, temp)`; `cut_sent` = payload bên gửi đã giao lúc thấy proxy chặn."""
+
+    async def make(size: int, *, client: str = "sender", cut_at: float = CUT_AT, name: str = "lon.bin"):
+        net = await transfer_nodes(client=client, connect=False)
+        A, B = net.A, net.B
+        opener, other = (B, A) if client == "sender" else (A, B)
+        proxy = tcp_proxy(other.port)
+        opener.connect_hint(other.id, [LOCAL], proxy.port)
+        await wait_until(
+            lambda: other.id in opener.connected_devices() and opener.id in other.connected_devices(),
+            5,
+            "chưa nối được kết nối điều khiển qua proxy",
+        )
+        src = make_file(net.src, name, size)
+        proxy.block_at("c2s" if client == "sender" else "s2c", int(cut_at * size))
+        key = await B.transfers.send(A.id, [src])
+        tid = key.transfer_id
+        await wait_until(lambda: proxy.fired, 60, "lượt chưa tới vị trí cắt")
+        # Byte proxy đã chuyển có thể còn nằm trong bộ đệm socket của A (máy bận): chờ A ghi xong những
+        # gì đã tới rồi mới đóng, để `.state` phản ánh phần đã nhận (mạng vẫn đang chặn).
+        await wait_stable(lambda: write_spy.count(tid, done=True), what="A còn đang ghi khối")
+        cut_sent = payload_meter.sent
+        # Như `test_orderly_close_mid_transfer_then_reopen_finishes`: hàng đĩa phải xong trước khi đóng
+        # thư mục nhận, kể cả trên máy bận (không thì handle của A không bao giờ đóng).
+        monkeypatch.setattr(T, "CLOSE_DISK_WAIT", 30.0)
+        await close_cleanly(A, caplog)
+        fin = A.trec.finished(tid)
+        assert fin is not None and fin.result == T.TransferResult.SUSPENDED, describe(fin)
+        assert B.trec.finished(tid) is None
+        proxy.rst()
+        proxy.resume()
+        temp = temp_dir(net.receive_dir, tid)
+        assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(temp))
+        return SimpleNamespace(
+            net=net,
+            A=A,
+            B=B,
+            proxy=proxy,
+            src=src,
+            tid=tid,
+            size=size,
+            client=client,
+            cut_sent=cut_sent,
+            temp=temp,
+        )
+
+    return make
+
+
+async def reopen_and_connect(restart, s):
+    """Mở lại A (cùng thư mục cấu hình và thư mục nhận) rồi nối thẳng, không qua proxy, theo chiều cũ."""
+    A2 = await restart("A", receive_dir=s.net.receive_dir, auto_accept=True)
+    if s.client == "sender":
+        s.B.connect_hint(A2.id, [LOCAL], A2.port)
+    else:
+        A2.connect_hint(s.B.id, [LOCAL], s.B.port)
+    return A2
+
+
+@integration
+@leakcheck
+@pytest.mark.parametrize("client", ["sender", "receiver"])
+async def test_orderly_close_while_network_blocked_at_85_percent_then_reopen_finishes_within_n4(
+    T, suspend_blocked, restart, payload_meter, grace_real, n4_extra, client
+):
+    """V5 (spec-p3-5): mạng bị chặn ở 85 % của 96 MiB, A đóng trật tự lúc đó (tạm dừng), mở lại → hoàn tất,
+    file khớp, `payload_sent − cỡ file ≤ n4_extra` (mvp N4 “tắt app nhận ở bất kỳ điểm nào”)."""
+    assert n4_extra < CUT_AT * BIG, "tiền đề N4: 85 % của file thử phải lớn hơn phần cộng thêm của N4"
+    s = await suspend_blocked(BIG, client=client)
+    assert s.cut_sent > n4_extra, f"tiền đề N4: lúc cắt mới gửi {s.cut_sent / MiB:.1f} MiB"
+    A2 = await reopen_and_connect(restart, s)
+    assert len(A2.trec.of("TransferResumed", s.tid)) == 1
+    fin_b = await s.B.trec.wait_finished(s.tid, 90)
+    fin_a = await A2.trec.wait_finished(s.tid, 90)
+    assert fin_b.result == T.TransferResult.DONE, describe(fin_b)
+    assert fin_a.result == T.TransferResult.DONE, describe(fin_a)
+    assert sha256_of(s.net.receive_dir / "lon.bin") == sha256_of(s.src)
+    assert fin_a.payload_sent == 0
+    for label, sent in (("payload_sent", fin_b.payload_sent), ("payload_meter", payload_meter.sent)):
+        excess = sent - BIG
+        assert 0 <= excess <= n4_extra, (
+            f"{label}: gửi thừa {excess / MiB:.1f} MiB (ngưỡng mvp N4 {n4_extra // MiB} MiB; "
+            f"lúc cắt đã gửi {s.cut_sent / MiB:.1f} MiB)"
+        )
+
+
+# --- V6: lật một byte `.part` của khối đã MARK khi tạm dừng (mvp F7 AC3, N5; spec-p3-5 mục 9.1 Q3) -------
+
+
+def pick_flip(case: str, marked: set[int], size: int) -> tuple[int, int]:
+    """(khối k, vị trí byte tuyệt đối) theo ca: byte đầu / byte cuối của một khối đã MARK ở giữa, hoặc
+    khối và byte ngẫu nhiên theo seed `random.Random` cố định."""
+    ordered = sorted(marked)
+    if case == "byte-dau-khoi":
+        k = ordered[len(ordered) // 2]
+        return k, k * BLOCK_SIZE
+    if case == "byte-cuoi-khoi":
+        k = ordered[len(ordered) // 2]
+        return k, k * BLOCK_SIZE + block_len(size, k) - 1
+    rnd = random.Random(int(case.removeprefix("seed-")))
+    k = rnd.choice(ordered)
+    return k, k * BLOCK_SIZE + rnd.randrange(block_len(size, k))
+
+
+@integration
+@leakcheck
+@pytest.mark.parametrize("case", ["byte-dau-khoi", "byte-cuoi-khoi", "seed-7", "seed-1234"])
+async def test_flipped_byte_in_marked_block_while_suspended_resends_only_that_block(
+    T, suspend_blocked, restart, payload_meter, resume_helpers, grace_real, case
+):
+    """V6: tạm dừng giữa lượt; lật một byte của khối k đã MARK trong `.part`; mở lại → khối k được gửi lại
+    đúng một lần (đọc lại phát hiện), các khối MARK khác không gửi lại, tập khối gửi lại sau khi mở lại =
+    (chưa MARK) ∪ {k}; DONE, file khớp nguồn."""
+    size = 24 * MiB + 5
+    s = await suspend_blocked(size, cut_at=0.5, name="v6.bin")
+    marked = marked_blocks(resume_helpers, s.temp / "0.state")
+    assert len(marked) >= 3 and marked != all_blocks(size), (
+        f"tiền đề: cần vài khối MARK và còn khối thiếu {marked}"
+    )
+    k, offset = pick_flip(case, marked, size)
+    flip_byte(s.temp / "0.part", offset)
+    pos = payload_meter.pos()
+    A2 = await reopen_and_connect(restart, s)
+    fin_b = await s.B.trec.wait_finished(s.tid, 60)
+    fin_a = await A2.trec.wait_finished(s.tid, 60)
+    assert fin_b.result == T.TransferResult.DONE, describe(fin_b)
+    assert fin_a.result == T.TransferResult.DONE, describe(fin_a)
+    assert sha256_of(s.net.receive_dir / "v6.bin") == sha256_of(s.src)
+    sent = payload_meter.counts(pos)
+    assert sent[k] == 1, f"khối hỏng {k} gửi {sent[k]} lần"
+    assert {j: sent[j] for j in marked - {k} if sent[j]} == {}, "khối MARK còn tốt bị gửi lại"
+    assert set(sent) == (all_blocks(size) - marked) | {k}
+    assert max(sent.values()) == 1, sent
+
+
+@integration
+@leakcheck
+async def test_flipped_byte_in_short_last_block_while_suspended_in_reread_resends_only_that_block(
+    T, transfer_nodes, restart, payload_meter, resume_helpers, grace_real, monkeypatch
+):
+    """V6, ca khối cuối ngắn: mọi khối đã MARK, A đóng trật tự lúc đang đọc lại (giữ `PartFile.reread` ở
+    một cổng); lật một byte ngẫu nhiên (seed cố định) trong khối cuối ngắn hơn 1 MiB; mở lại → chỉ khối cuối
+    được gửi lại, đúng một lần; DONE, file khớp."""
+    monkeypatch.setattr(T, "CLOSE_DISK_WAIT", 30.0)
+    hit, gate = threading.Event(), threading.Event()
+    real_reread = storage.PartFile.reread
+
+    def reread(self, *, stop=None):
+        if not hit.is_set():
+            hit.set()
+            gate.wait(30)
+        return real_reread(self, stop=stop)
+
+    monkeypatch.setattr(storage.PartFile, "reread", reread)
+    size = 6 * MiB + 12345
+    net = await transfer_nodes()
+    A, B = net.A, net.B
+    src = make_file(net.src, "ngan.bin", size)
+    key = await B.transfers.send(A.id, [src])
+    tid = key.transfer_id
+    try:
+        await wait_until(hit.is_set, 30, "chưa tới lượt đọc lại")
+        closing = asyncio.create_task(A.close())
+        await A.trec.wait_kind("TransferFinished", tid, timeout=5)
+        assert A.trec.finished(tid).result == T.TransferResult.SUSPENDED, describe(A.trec.finished(tid))
+        gate.set()
+        await asyncio.wait_for(closing, 30)
+    finally:
+        gate.set()
+    temp = temp_dir(net.receive_dir, tid)
+    assert marked_blocks(resume_helpers, temp / "0.state") == all_blocks(size), "tiền đề: mọi khối đã MARK"
+    last = size // BLOCK_SIZE
+    assert block_len(size, last) == 12345
+    flip_byte(temp / "0.part", last * BLOCK_SIZE + random.Random(5).randrange(12345))
+    pos = payload_meter.pos()
+    A2 = await restart("A", receive_dir=net.receive_dir, auto_accept=True)
+    B.connect_hint(A2.id, [LOCAL], A2.port)
+    fin_b = await B.trec.wait_finished(tid, 60)
+    fin_a = await A2.trec.wait_finished(tid, 60)
+    assert fin_b.result == T.TransferResult.DONE, describe(fin_b)
+    assert fin_a.result == T.TransferResult.DONE, describe(fin_a)
+    assert sha256_of(net.receive_dir / "ngan.bin") == sha256_of(src)
+    assert dict(payload_meter.counts(pos)) == {last: 1}
+
+
+# --- V7: lật một byte `.state` khi tạm dừng (mvp N5; spec-p3-5 mục 9.2 C4) ---------------------------
+
+
+@integration
+@leakcheck
+@pytest.mark.parametrize("where", ["mark-dau", "mark-cuoi", "header"])
+async def test_flipped_byte_in_state_resumes_from_last_good_record(
+    T, suspend_blocked, restart, payload_meter, grace_real, n4_extra, where
+):
+    """V7: tạm dừng ở 85 % của 96 MiB; lật một byte trong bản ghi MARK đầu / MARK cuối / header của
+    `.state`. Bản ghi hỏng và mọi bản ghi sau nó bị bỏ (header hỏng: như chưa có trạng thái, bitfield 0,
+    architecture mục 4): `TransferResumed.info.done_bytes` = byte của các khối MARK trước bản ghi hỏng; sau
+    khi mở lại, khối từ bản ghi hỏng trở đi (và khối chưa MARK) được gửi lại, khối MARK trước đó không;
+    DONE, file khớp. Ca MARK cuối (mất tối đa một lô): trong ngưỡng mvp N4."""
+    s = await suspend_blocked(BIG, name="v7.bin")
+    state = s.temp / "0.state"
+    records = state_records(state.read_bytes())
+    marks = [i for i, r in enumerate(records) if r.kind == "mark"]
+    assert len(marks) >= 2, f"tiền đề: cần ≥ 2 bản ghi MARK, có {len(marks)}"
+    if where == "header":
+        flip_byte(state, 9)
+        kept = []
+    else:
+        bad = marks[0] if where == "mark-dau" else marks[-1]
+        flip_byte(state, records[bad].offset + 3 + 4 + 5)  # một byte sha256 của khối đầu trong bản ghi
+        kept = records[:bad]
+    before = marked_by(kept)
+    expected_done = sum(block_len(BIG, j) for j in before)
+    pos = payload_meter.pos()
+    A2 = await reopen_and_connect(restart, s)
+    [resumed] = A2.trec.of("TransferResumed", s.tid)
+    assert resumed.info.done_bytes == expected_done, (resumed.info.done_bytes, expected_done)
+    fin_b = await s.B.trec.wait_finished(s.tid, 90)
+    fin_a = await A2.trec.wait_finished(s.tid, 90)
+    assert fin_b.result == T.TransferResult.DONE, describe(fin_b)
+    assert fin_a.result == T.TransferResult.DONE, describe(fin_a)
+    assert sha256_of(s.net.receive_dir / "v7.bin") == sha256_of(s.src)
+    sent = payload_meter.counts(pos)
+    assert set(sent) == all_blocks(BIG) - before, (
+        f"gửi lại sai tập khối: thừa {sorted(set(sent) & before)[:5]}, "
+        f"thiếu {sorted(all_blocks(BIG) - before - set(sent))[:5]}"
+    )
+    if where == "mark-cuoi":
+        assert s.cut_sent > n4_extra, "tiền đề N4: lúc cắt phải đã gửi hơn phần cộng thêm của N4"
+        excess = fin_b.payload_sent - BIG
+        assert 0 <= excess <= n4_extra, (
+            f"gửi thừa {excess / MiB:.1f} MiB (ngưỡng mvp N4 {n4_extra // MiB} MiB)"
+        )
+
+
+# --- V8 (ii): nguồn đổi trong lúc bên nhận tạm dừng (mvp F6 AC4) ---------------------------------------
+
+
+def change_source(path: Path, how: str) -> None:
+    st = os.stat(path)
+    if how == "them-byte":
+        with open(path, "ab") as f:
+            f.write(b"\x00")
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))  # chỉ cỡ đổi, mtime giữ nguyên
+        after = os.stat(path)
+        assert after.st_size == st.st_size + 1 and after.st_mtime_ns == st.st_mtime_ns
+    else:
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        after = os.stat(path)
+        assert after.st_size == st.st_size and after.st_mtime_ns != st.st_mtime_ns
+
+
+@integration
+@leakcheck
+@pytest.mark.parametrize("how", ["them-byte", "chi-mtime"])
+async def test_source_changed_while_receiver_suspended_cancels_both_sides_and_cleans_temp(
+    T, suspend_blocked, restart, payload_meter, grace_real, how
+):
+    """V8 (ii): A tạm dừng ở 85 %; file nguồn đổi (thêm 1 byte / chỉ mtime); mở A2 → khi nối lại, bên gửi
+    phát hiện lúc mở lại nguồn: B `SOURCE_CHANGED` (`by_peer=False`), A2 `SOURCE_CHANGED` (`by_peer=True`),
+    không gửi thêm payload nào sau lúc đổi, thư mục tạm bị xóa, không có file mang tên thật."""
+    s = await suspend_blocked(16 * MiB + 5, name="doi.bin")
+    before_change = payload_meter.sent
+    change_source(s.src, how)
+    A2 = await reopen_and_connect(restart, s)
+    fin_b = await s.B.trec.wait_finished(s.tid, 30)
+    fin_a = await A2.trec.wait_finished(s.tid, 30)
+    assert (fin_b.result, fin_b.by_peer) == (T.TransferResult.SOURCE_CHANGED, False), describe(fin_b)
+    assert (fin_a.result, fin_a.by_peer) == (T.TransferResult.SOURCE_CHANGED, True), describe(fin_a)
+    assert payload_meter.sent == before_change, (
+        f"bên gửi giao thêm {(payload_meter.sent - before_change) / MiB:.1f} MiB sau khi nguồn đổi"
+    )
+    await wait_gone(s.temp)
+    assert not (s.net.receive_dir / "doi.bin").exists(), "có file mang tên thật dù nguồn đã đổi"

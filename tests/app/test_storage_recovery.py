@@ -13,6 +13,12 @@ Kỹ thuật “sập” (spec-p3-3a mục 4): trong seam của bước cần x�
 Mỗi kịch bản có hai file canh gác của người khác trong thư mục nhận (`a.txt` trùng tên đích, nên tên
 đích thật là `a (1).txt`, và `canh.txt`): chúng không bao giờ được đổi byte.
 
+Cuối file là test hồi quy từ tan-cong T1 của P3-5 (`specs/spec-p3-5.md`, việc V13): tên độc hại hợp lệ
+trên dây đi tới `TARGET` rồi sập quanh `TARGET`/`RESERVED` (mục 5), và lượt `REUSE_PLACEHOLDER` bị hủy
+hay hết hạn (mục 9). Đặt ở đây vì dùng chung kỹ thuật sập và các helper module của file này
+(`finalize_with_crash`, `running_scan`, `resume_from`); với `--import-mode=importlib` không nhập được
+helper của file test khác.
+
 Không mở socket.
 """
 
@@ -23,12 +29,15 @@ import importlib
 import os
 import random
 import threading
+import time
+import unicodedata
 from pathlib import Path
 
 import pytest
 
 from teleport.core import resume_state as rs
 from teleport.core.blocks import BLOCK_SIZE
+from teleport.core.messages import validate_file_name
 
 BS = BLOCK_SIZE
 ID = "0123456789abcdef0123456789abcdef"
@@ -868,4 +877,253 @@ def test_v5_part_left_by_failed_drop_target_survives_remove_temp_then_cleanup_re
             assert rd.cleanup(later, **kw) == 1
     assert not tdir.exists()
     assert (crash / TARGET).read_bytes() == wrong
+    check_sentinels(crash)
+
+
+# ---------------------------------------------------------------------------------------------
+# V13 / tan-cong T1 mục 5: tên độc hại hợp lệ trên dây → `TARGET`, sập quanh `TARGET` / `RESERVED`
+# ---------------------------------------------------------------------------------------------
+# Luật tên ở bên nhận: protocol.md mục 3.3 (trên dây chỉ cấm > 255 byte UTF-8 và ký tự Cc/Cs, nên mọi
+# tên dưới đây vào được) và mục 4.4 / ke_hoach mục 3.3 (bên nhận làm sạch, không bao giờ ghi đè file có
+# sẵn). Tên thô được đưa thẳng vào `finalize`, chặt hơn đường thật (engine đã làm sạch bằng
+# `dedupe_offer_names`): `storage` là chỗ dựng đường dẫn nên phải tự an toàn. Không khẳng định chuỗi kết
+# quả của bộ làm sạch, chỉ khẳng định tính chất; tên mà bên nhận chọn được dò bằng một lượt sạch ở thư
+# mục nhận khác cùng độ dài đường dẫn (ngân sách cắt tên như nhau).
+
+HOSTILE_NAMES = [
+    pytest.param("../../x", id="cha-cha"),
+    pytest.param("C:\\Windows\\x", id="duong-dan-windows"),
+    pytest.param("CON", id="CON"),
+    pytest.param("NUL.txt", id="NUL.txt"),
+    pytest.param("a.txt:ads", id="ads"),
+    pytest.param("x.", id="cham-cuoi"),
+    pytest.param("x.part.state", id="x.part.state"),
+    pytest.param("\u1ebf" * 83 + "ab.bin", id="255-byte"),  # 83 × 3 byte + 6 byte
+    pytest.param("anh\u202egpj.exe", id="U+202E"),
+    pytest.param("so\u061cfile.txt", id="U+061C"),
+]
+HOSTILE_SIZE = 4099  # một khối ngắn: test này về tên, không về khối; giữ test nhanh
+VICTIM = b"file cua nguoi dung, khong duoc doi " * 20
+# Ký tự có thuộc tính Unicode Bidi_Control (ALM, LRM, RLM, LRE…RLO, LRI…PDI).
+BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+# Tên thiết bị của Windows (so phần trước dấu chấm đầu, bỏ dấu cách hai đầu, viết hoa).
+WINDOWS_DEVICES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"{port}{d}" for port in ("COM", "LPT") for d in "0123456789\u00b9\u00b2\u00b3"}
+)
+
+
+def test_hostile_names_are_valid_on_the_wire():
+    """Tiền đề cho các test bên dưới: máy gửi gửi được đúng các tên này (protocol mục 3.3)."""
+    for param in HOSTILE_NAMES:
+        (raw,) = param.values
+        assert validate_file_name(raw) == raw
+    assert len(HOSTILE_NAMES[7].values[0].encode("utf-8")) == 255
+
+
+def check_safe_name(name: str) -> None:
+    """Tính chất của tên file đặt trong thư mục nhận (protocol mục 4.4, ke_hoach mục 3.3)."""
+    assert name and len(name.encode("utf-8")) <= 255, name
+    assert unicodedata.is_normalized("NFC", name), name
+    assert not set(name) & set('/\\<>:"|?*'), name
+    assert all(unicodedata.category(ch) not in ("Cc", "Cs") for ch in name), name
+    assert not set(name) & BIDI_CONTROLS, ascii(name)
+    assert not name.endswith((".", " ")), name
+    assert name.split(".", 1)[0].strip(" ").upper() not in WINDOWS_DEVICES, name
+    assert name.casefold() != ".teleport", name
+
+
+def check_in_root(root: Path, final: Path) -> None:
+    """`final` là file thường nằm thẳng trong `root`, đúng tên đó trên đĩa, và tên an toàn."""
+    assert final.parent == root, final
+    assert os.path.dirname(os.path.realpath(final)) == os.path.realpath(root), final
+    assert final.name in os.listdir(root), (final.name, os.listdir(root))
+    assert final.is_file()
+    check_safe_name(final.name)
+
+
+def hostile_roots(tmp_path: Path) -> dict[str, Path]:
+    """Ba thư mục nhận cùng độ dài đường dẫn: `p` dò tên, `a` lượt chính, `s` bản chép sau sập (chưa tạo).
+
+    Mỗi thư mục nhận nằm sâu hai cấp để `../../x` vẫn rơi vào `tmp_path`; ở hai cấp cha đặt canary, kể
+    cả một file tên đúng `x`.
+    """
+    roots = {}
+    for tag in "pas":
+        top = tmp_path / tag
+        (top / "q").mkdir(parents=True)
+        (top / "x").write_bytes(b"canary ong " + tag.encode())
+        (top / "q" / "x").write_bytes(b"canary cha " + tag.encode())
+        (top / "q" / "canh-cha.txt").write_bytes(b"canary cha " + tag.encode())
+        roots[tag] = top / "q" / "r"
+    roots["p"].mkdir()
+    roots["a"].mkdir()
+    (roots["a"] / "canh.txt").write_bytes(SENTINELS["canh.txt"])
+    return roots
+
+
+def outside_snapshot(h, tmp_path: Path, roots: dict[str, Path]) -> dict[str, tuple]:
+    """Mọi mục dưới `tmp_path` không nằm trong các thư mục nhận."""
+    prefixes = ["/" + r.relative_to(tmp_path).as_posix() for r in roots.values()]
+    return {
+        k: v
+        for k, v in h.snapshot(tmp_path).items()
+        if not any(k == p or k.startswith(p + "/") for p in prefixes)
+    }
+
+
+def without(snapshot: dict[str, tuple], *names: str) -> dict[str, tuple]:
+    """Bỏ `.teleport` (cả cây) và các mục `names` ở cấp đầu khỏi ảnh chụp `h.snapshot(root)`."""
+    drop = {"/" + n for n in names}
+    return {k: v for k, v in snapshot.items() if k not in drop and not k.startswith("/.teleport")}
+
+
+def receive_hostile(storage, root: Path, record_for, h, raw: str, data: bytes, *, seam=None, crash=None):
+    """Nhận trọn một file `offer` tên `raw` rồi `finalize(part, raw)`; có `seam` thì lần đầu seam chạy
+    chép cây `root` sang `crash` (sập ở đúng điểm đó). Trả đường dẫn `finalize` trả về."""
+    taken: list[tuple] = []
+
+    def hook(*args):
+        if not taken:
+            taken.append(args)
+            h.crash_copy(root, crash)
+
+    with storage.ReceiveDir.open(root) as rd:
+        temp = rd.create_temp(ID, record_for(ID, [len(data)], names=[raw]))
+        part = temp.create_part(0, len(data))
+        part.commit(h.write_blocks(part, data))
+        with pytest.MonkeyPatch.context() as mp:
+            if seam is not None:
+                mp.setattr(storage, seam, hook)
+            final = rd.finalize(part, raw)
+    if seam is not None:
+        assert taken, f"seam {seam} không chạy"
+    return final
+
+
+@pytest.mark.parametrize("raw", HOSTILE_NAMES)
+def test_hostile_name_finishes_inside_receive_dir_without_touching_victim(
+    storage, tmp_path, record_for, h, raw
+):
+    """Đã có file của người dùng mang đúng tên mà bên nhận sẽ chọn cho `raw`: lượt xong vào tên khác,
+    trong thư mục nhận, file đó không đổi byte, không file nào ngoài thư mục nhận bị tạo hay sửa."""
+    assert validate_file_name(raw) == raw
+    roots = hostile_roots(tmp_path)
+    outside = outside_snapshot(h, tmp_path, roots)
+    data = payload(HOSTILE_SIZE, seed=5)
+    probe = receive_hostile(storage, roots["p"], record_for, h, raw, data)
+    check_in_root(roots["p"], probe)
+
+    root = roots["a"]
+    victim = root / probe.name
+    victim.write_bytes(VICTIM)
+    before = h.snapshot(root)
+    names_before = set(os.listdir(root))
+    final = receive_hostile(storage, root, record_for, h, raw, data)
+    check_in_root(root, final)
+    assert final != victim
+    assert final.read_bytes() == data
+    assert set(os.listdir(root)) - names_before == {final.name, ".teleport"}
+    assert without(h.snapshot(root), final.name) == without(before), "file có sẵn bị đụng"
+    assert victim.read_bytes() == VICTIM
+    assert outside_snapshot(h, tmp_path, roots) == outside, "có file ngoài thư mục nhận bị tạo hay sửa"
+
+
+@pytest.mark.parametrize("seam", ["_after_target", "_after_reserved"])
+@pytest.mark.parametrize("raw", HOSTILE_NAMES)
+def test_hostile_name_crash_around_target_resumes_inside_receive_dir(
+    storage, tmp_path, record_for, h, raw, seam
+):
+    """Sập ngay sau `TARGET` bền (chưa giữ chỗ) hay ngay sau `RESERVED` bền, với tên `raw` độc hại.
+
+    `.state` của đĩa sau sập đọc lại được bằng bộ đọc độc lập và ghi đúng tên mà một lượt sạch chọn;
+    mở lại: sau `TARGET`, một file 0 byte người khác tạo đúng tên đó không phải của mình nên không bị
+    dùng (architecture mục 4, “Phục hồi tên đích”); sau `RESERVED`, file giữ chỗ được dùng lại. Lượt xong
+    trong thư mục nhận, đúng nội dung, không file nào khác (trong hay ngoài thư mục nhận) bị đụng.
+    """
+    assert validate_file_name(raw) == raw
+    roots = hostile_roots(tmp_path)
+    outside = outside_snapshot(h, tmp_path, roots)
+    data = payload(HOSTILE_SIZE, seed=6)
+    n = 1
+    probe = receive_hostile(storage, roots["p"], record_for, h, raw, data)
+    check_in_root(roots["p"], probe)
+
+    root, crash = roots["a"], roots["s"]
+    receive_hostile(storage, root, record_for, h, raw, data, seam=seam, crash=crash)
+    _, records = h.parse_state((crash / ".teleport" / ID / "0.state").read_bytes())
+    expected = [("target", probe.name)]
+    if seam == "_after_reserved":
+        expected.append(("reserved", probe.name))
+    assert [r for r in records if r[0] in ("target", "reserved")] == expected
+
+    target = crash / probe.name
+    if seam == "_after_target":
+        assert not target.exists(), "sập trước bước giữ chỗ"
+        target.write_bytes(b"")  # ứng dụng khác tạo file 0 byte đúng tên đó sau khi sập
+        mode = storage.ResumeMode.NORMAL
+    else:
+        assert target.read_bytes() == b""  # file giữ chỗ của mình
+        mode = storage.ResumeMode.REUSE_PLACEHOLDER
+    before = h.snapshot(crash)
+    rd, _, handle = resume_from(storage, crash, h)
+    with rd:
+        assert handle.mode == mode
+        assert bit_set(handle.bits, n) == set(range(n))
+        final = rd.finalize(handle.part, raw)
+    check_in_root(crash, final)
+    assert final.read_bytes() == data
+    if seam == "_after_target":
+        assert final != target
+        assert target.read_bytes() == b""
+    else:
+        assert final == target
+    assert without(h.snapshot(crash), final.name) == without(before, final.name), "file có sẵn bị đụng"
+    assert (crash / "canh.txt").read_bytes() == SENTINELS["canh.txt"]
+    assert outside_snapshot(h, tmp_path, roots) == outside, "có file ngoài thư mục nhận bị tạo hay sửa"
+
+
+# ---------------------------------------------------------------------------------------------
+# V13 / tan-cong T1 mục 9: lượt `REUSE_PLACEHOLDER` bị hủy hay hết hạn
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("how", ["discard_temp", "cleanup-het-han", "remove_temp"])
+def test_cancelled_reuse_placeholder_leaves_only_its_zero_byte_file(storage, tmp_path, record_for, h, how):
+    """Khóa giới hạn đã ghi: dọn tạm chỉ dọn trong `.teleport/`, nên file giữ chỗ 0 byte mang tên thật
+    của một lượt bị bỏ dở được để lại cho người dùng.
+
+    Nguồn: docs/architecture.md mục 4, “Thư mục nhận”: đoạn cuối của “Phục hồi tên đích” (“Còn một khe
+    được chấp nhận…”), cùng gạch “Dọn một lượt” và “Dọn tạm” (chỉ xóa file khớp bố cục trong thư mục
+    lượt, không bao giờ ngoài `.teleport/`). Ở đây lượt đã qua `RESERVED` (mở lại là
+    `REUSE_PLACEHOLDER`) rồi bị hủy bằng `discard_temp`, `cleanup` quá hạn nối lại, hay `remove_temp`:
+    `.teleport/<transfer_id>` mất hết, còn đúng một file 0 byte tên thật, không file nào khác bị đụng.
+    Đổi hành vi này (dọn cả file giữ chỗ) thì sửa đoạn docs đó cùng lúc với test.
+    """
+    crash, _ = finalize_with_crash(storage, tmp_path, record_for, h, "_after_reserved")
+    tdir = crash / ".teleport" / ID
+    placeholder = crash / TARGET
+    assert placeholder.read_bytes() == b""
+    before = without(h.snapshot(crash))
+    with storage.ReceiveDir.open(crash) as rd:
+        handle = rd.open_for_resume(running_scan(storage, rd, h))
+        assert handle.mode == storage.ResumeMode.REUSE_PLACEHOLDER
+        if how == "remove_temp":
+            assert rd.remove_temp(handle.temp) is True
+        else:
+            rd.close_temp(handle.temp)
+            if how == "discard_temp":
+                assert rd.discard_temp(ID, own_device_id=h.RECEIVER) is True
+            else:
+                from teleport.core import transfer as core_transfer
+
+                kw = {"own_device_id": h.RECEIVER, "skip": frozenset(), "retention": storage.TEMP_RETENTION}
+                assert rd.cleanup(time.time(), **kw) == 0  # còn trong hạn nối lại: chưa dọn
+                assert tdir.is_dir()
+                assert rd.cleanup(time.time() + core_transfer.RECONNECT_GRACE + 3600, **kw) == 1
+    assert not tdir.exists()
+    assert (crash / ".teleport").is_dir()
+    assert without(h.snapshot(crash)) == before, "file ngoài .teleport bị đụng"
+    zero = sorted(e.name for e in os.scandir(crash) if e.is_file() and e.stat().st_size == 0)
+    assert zero == [TARGET]
     check_sentinels(crash)

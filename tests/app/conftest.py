@@ -1069,6 +1069,78 @@ def resume_helpers():
     )
 
 
+class PayloadMeter:
+    """Đếm byte payload bên gửi giao cho kết nối dữ liệu, qua seam `Connection.write_block` (fixture
+    `payload_meter`). Đếm payload của mỗi lần gọi **ngay khi gọi** (kể cả lần ghi bị cắt giữa chừng hay
+    thất bại), nên `sent` là cận trên của byte thật sự đã đi: kiểm mvp N4 theo số này là kiểm chặt hơn.
+
+    `sent`, `calls`; `log`: chỉ số khối của mỗi lần gọi, theo thứ tự (mọi kết nối, mọi node trong tiến
+    trình; test một file nên chỉ số khối đủ phân biệt); `hooks`: hàm `(meter)` gọi đồng bộ (trong event
+    loop của node) sau mỗi lần cộng. `pos()` → vị trí hiện tại của `log`; `counts(since=0)` → `Counter`
+    chỉ số khối → số lần gửi kể từ vị trí đó.
+    """
+
+    def __init__(self) -> None:
+        self.sent = 0
+        self.calls = 0
+        self.log: list[int] = []
+        self.hooks: list[Callable[[PayloadMeter], None]] = []
+
+    def pos(self) -> int:
+        return len(self.log)
+
+    def counts(self, since: int = 0):
+        from collections import Counter
+
+        return Counter(self.log[since:])
+
+
+@pytest.fixture
+def payload_meter(monkeypatch):
+    """`PayloadMeter` đếm payload bên gửi qua `Connection.write_block` (spec-p3-5 V3; trước ở
+    `tests/app/test_transfer_reconnect.py`)."""
+    from teleport.net import connection
+
+    meter = PayloadMeter()
+    real = connection.Connection.write_block
+
+    async def write_block(self, index, sha256, payload, *args, **kwargs):
+        meter.sent += memoryview(payload).nbytes
+        meter.calls += 1
+        meter.log.append(index)
+        for hook in list(meter.hooks):
+            hook(meter)
+        return await real(self, index, sha256, payload, *args, **kwargs)
+
+    monkeypatch.setattr(connection.Connection, "write_block", write_block)
+    return meter
+
+
+@pytest.fixture
+def short_keepalive(monkeypatch):
+    """`short_keepalive(dead_after=1.5, ping_interval=None)` → `SimpleNamespace(dead_after, ping_interval)`.
+
+    Keepalive rút ngắn cho test nối lại (spec-p3-5 V3, N2): thay `teleport.app.node.ControlChannel` bằng
+    lớp con có `ping_interval`/`dead_after` cho trước (hằng keepalive là giá trị mặc định của tham số nên
+    vá hằng không có tác dụng, `architecture.md` §6). `ping_interval` mặc định `dead_after / 6`. Gọi
+    trước khi node nối kết nối điều khiển; gọi lại thì giá trị mới thay giá trị cũ.
+    """
+    from teleport.app import node as node_mod
+    from teleport.net import connection
+
+    def install(dead_after: float = 1.5, ping_interval: float | None = None) -> SimpleNamespace:
+        ping = dead_after / 6 if ping_interval is None else ping_interval
+
+        class ShortKeepaliveChannel(connection.ControlChannel):
+            def __init__(self, conn, *, ping_interval: float = ping, dead_after: float = dead_after) -> None:
+                super().__init__(conn, ping_interval=ping_interval, dead_after=dead_after)
+
+        monkeypatch.setattr(node_mod, "ControlChannel", ShortKeepaliveChannel)
+        return SimpleNamespace(dead_after=dead_after, ping_interval=ping)
+
+    return install
+
+
 @pytest.fixture
 def fake_mdns(monkeypatch):
     """Thay `teleport.app.node.MdnsDiscovery` bằng `FakeMdns`; trả `FakeMdnsControl`.

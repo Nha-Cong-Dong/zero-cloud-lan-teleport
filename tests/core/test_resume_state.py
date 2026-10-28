@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from hypothesis import HealthCheck, assume, given, settings
+from hypothesis import HealthCheck, assume, event, given, settings
 from hypothesis import strategies as st
 
 from teleport.core import resume_state as rs
@@ -1912,3 +1912,161 @@ def test_decoded_records_have_plain_str_ids():
     (tomb,) = rs.decode_tombstones(_tomb([_entry()]))
     for name in ("device_id", "direction", "transfer_id", "reason"):
         assert type(getattr(tomb, name)) is str, name
+
+
+# =================================================================================================
+# V13 / tan-cong T1 mục 7 (spec-p3-5): bên ghi gộp theo ngưỡng → `.state` không bao giờ chạm trần đọc
+# =================================================================================================
+# Mô hình bên ghi theo architecture mục 4 “Gộp”: sau mỗi lần nối, nếu nhật ký dài hơn 2 × kích thước gọn
+# + 64 KiB thì ghi lại bản gọn; kích thước gọn là cận trên `compact_length_for` của số khối đã đánh dấu
+# (bit lúc mở + mọi khối trong các `MARK` đã nối, kể cả đánh dấu lại, không quá số khối), đặt lại bằng
+# đúng độ dài bản vừa ghi sau mỗi lần gộp. Hệ quả cần chứng minh (docstring `max_state_length`): nhật ký
+# dài hơn ngưỡng đó nhiều nhất một bản ghi, nên luôn ≤ `max_state_length(n)` và đọc lại trọn.
+# Với n nhỏ trần đọc có thêm một `MARK` 65 535 khối (≈ 2,36 MB), nên chỉ trần đọc thì phải nối hàng
+# trăm nghìn bản ghi mới thấy vượt; test hypothesis kiểm thêm ngưỡng chặt hơn của architecture, test
+# tất định cuối nối chính bản ghi lớn nhất để chạm thẳng trần đọc.
+
+
+def _model_apply(bits: set[int], leaves: dict[int, bytes], op: tuple) -> None:
+    if op[0] == "mark":
+        for i, digest in op[1]:
+            bits.add(i)
+            leaves[i] = digest
+    elif op[0] == "clear":
+        bits.difference_update(op[1])
+    else:
+        bits.clear()
+
+
+def _read_back_exact(n: int, data: bytes, bits: set[int], leaves: dict[int, bytes]) -> None:
+    """`data` đọc lại trọn (không cắt) và khớp mô hình bitfield tham chiếu."""
+    result = _replay(n, data, chunks=[4096])
+    assert result.good_end == len(data) and result.truncated is False
+    assert _snap(result, n) == (frozenset(bits), {i: leaves[i] for i in bits}, None, False)
+
+
+class _Writer:
+    """Bên ghi `.state` theo architecture mục 4 “Gộp”, chỉ dùng hàm của `rs`; giữ cả mô hình tham chiếu."""
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+        self.header = rs.encode_header(TID, 0, n * BLOCK_SIZE)
+        self.log = bytearray(self.header)
+        self.marked = 0
+        self.bits: set[int] = set()
+        self.leaves: dict[int, bytes] = {}
+        self.limit = rs.max_state_length(n)
+        self.compactions = 0
+        self.longest = len(self.log)
+
+    def append(self, op: tuple) -> None:
+        if op[0] == "mark":
+            record = rs.encode_mark(op[1])
+            self.marked = min(self.n, self.marked + len(op[1]))
+        elif op[0] == "clear":
+            record = rs.encode_clear(op[1])
+        else:
+            record = rs.encode_clear_all()
+        _model_apply(self.bits, self.leaves, op)
+        self.log += record
+        self.longest = max(self.longest, len(self.log))
+        estimate = rs.compact_length_for(self.marked, None, None)
+        assert len(self.log) <= self.limit, "nhật ký vượt trần đọc"
+        assert len(self.log) <= 2 * estimate + KIB64 + len(record), "chưa gộp khi đã vượt ngưỡng"
+        if rs.needs_compaction(len(self.log), estimate):
+            self.compact()
+        assert len(self.log) <= 2 * rs.compact_length_for(self.marked, None, None) + KIB64
+
+    def compact(self) -> None:
+        # Sập ngay trước khi ghi bản gọn: nhật ký dài nhất vẫn đọc lại trọn.
+        _read_back_exact(self.n, bytes(self.log), self.bits, self.leaves)
+        result = _replay(self.n, bytes(self.log))
+        compact = self.header + b"".join(_compact_bytes(result))
+        assert len(compact) == result.compact_length <= self.limit, "bản gọn vượt trần đọc"
+        _read_back_exact(self.n, compact, self.bits, self.leaves)
+        self.log = bytearray(compact)
+        self.marked = len(self.bits)
+        self.compactions += 1
+
+
+@st.composite
+def _writer_steps(draw: st.DrawFn) -> tuple[int, list[tuple[str, tuple, int]]]:
+    """(n, các bước (loại, khối, số lần lặp)). `flip` = `MARK` rồi `CLEAR` cùng khối (đồng bộ lại lặp);
+    số lần lặp đôi khi đủ lớn để một mình bước đó ép gộp."""
+    n = draw(st.integers(1, 200))
+    index = st.integers(0, n - 1)
+    steps = []
+    for _ in range(draw(st.integers(1, 8))):
+        kind = draw(st.sampled_from(["mark", "mark", "clear", "clear_all", "flip"]))
+        if kind == "clear_all":
+            blocks: tuple = ()
+            size = 5
+        elif kind == "clear":
+            blocks = tuple(draw(st.lists(index, min_size=1, max_size=4, unique=True)))
+            size = 7 + 4 * len(blocks)
+        else:
+            idx = draw(st.lists(index, min_size=1, max_size=min(n, 24), unique=True))
+            salt = draw(st.integers(0, 255))
+            blocks = tuple((i, _digest(i, salt)) for i in idx)
+            size = 7 + 36 * len(blocks) + (7 + 4 * len(blocks) if kind == "flip" else 0)
+        if draw(st.integers(0, 3)) == 0:
+            reps = draw(st.integers(KIB64 // size, 3 * KIB64 // (2 * size) + 2))
+        else:
+            reps = draw(st.integers(1, 3))
+        steps.append((kind, blocks, reps))
+    return n, steps
+
+
+def _run_writer(n: int, steps: list[tuple[str, tuple, int]]) -> _Writer:
+    w = _Writer(n)
+    for kind, blocks, reps in steps:
+        for _ in range(reps):
+            if kind == "flip":
+                w.append(("mark", blocks))
+                w.append(("clear", tuple(i for i, _ in blocks)))
+            else:
+                w.append((kind, blocks))
+    _read_back_exact(n, bytes(w.log), w.bits, w.leaves)
+    return w
+
+
+@SETTINGS
+@given(_writer_steps())
+def test_writer_compacting_at_threshold_keeps_log_within_read_ceiling(case: tuple[int, list]):
+    n, steps = case
+    w = _run_writer(n, steps)
+    event(f"số lần gộp: {min(w.compactions, 3)}{'+' if w.compactions > 3 else ''}")
+
+
+@pytest.mark.parametrize(
+    ("n", "steps"),
+    [
+        pytest.param(1, [("mark", ((0, _digest(0)),), 1), ("clear", (0,), 13_000)], id="clear-1-khoi-lap"),
+        pytest.param(1, [("mark", ((0, _digest(0, 1)),), 3_500)], id="mark-1-khoi-lap"),
+        pytest.param(5, [("mark", ((4, _digest(4)),), 1), ("clear_all", (), 30_000)], id="clear-all-lap"),
+        pytest.param(3, [("flip", ((1, _digest(1)), (2, _digest(2))), 2_000)], id="mark-clear-xen-ke"),
+    ],
+)
+def test_writer_forced_compaction_by_repeated_tiny_records(n: int, steps: list):
+    """Các mẫu tan-cong mục 7 dùng để ép gộp: mỗi mẫu phải gộp ít nhất hai lần."""
+    w = _run_writer(n, steps)
+    assert w.compactions >= 2, w.compactions
+
+
+def test_writer_appending_largest_record_right_at_threshold_stays_within_read_ceiling():
+    """Nhật ký vừa chưa tới ngưỡng gộp rồi nối `MARK` lớn nhất (65 535 khối, chỉ số trùng được phép):
+    dài nhất đúng là ngưỡng + một bản ghi lớn nhất, vẫn ≤ trần đọc; gộp xong lại nối tiếp được."""
+    n = 1
+    w = _Writer(n)
+    w.append(("mark", ((0, _digest(0)),)))
+    one = len(rs.encode_clear([0]))
+    while len(w.log) + one <= 2 * rs.compact_length_for(w.marked, None, None) + KIB64:
+        w.append(("clear", (0,)))
+    assert w.compactions == 0
+    largest = ("mark", ((0, _digest(0, 9)),) * MAX_MARK)
+    for _ in range(3):
+        w.append(largest)
+    assert w.longest > 2 * rs.compact_length_for(1, None, None) + KIB64, "phải vượt ngưỡng đúng một bản ghi"
+    assert w.longest <= rs.max_state_length(n)
+    assert w.compactions == 3
+    _read_back_exact(n, bytes(w.log), w.bits, w.leaves)

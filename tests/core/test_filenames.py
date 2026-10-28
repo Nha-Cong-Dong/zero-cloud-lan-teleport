@@ -55,7 +55,7 @@ INVISIBLE = frozenset(
         "\u200f",
         *(chr(c) for c in range(0x202A, 0x202F)),
         *(chr(c) for c in range(0x2066, 0x206A)),
-        "؜",  # ALM: đủ bộ Bidi_Control, tên file bỏ cả ký tự này
+        "\u061c",  # ALM: đủ bộ Bidi_Control, tên file bỏ cả ký tự này
     ]
 )
 
