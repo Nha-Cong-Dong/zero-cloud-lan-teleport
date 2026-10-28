@@ -72,6 +72,8 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - zeroconf (LGPL) được đóng thành các file riêng trong `_internal\zeroconf\`, người dùng có thể thay bằng bản khác.
 - Kiểm giấy phép tự động khi build: gặp gói, file hoặc giấy phép chưa được duyệt thì build dừng và không tạo `teleport.exe`.
 - Test khói chạy trên chính exe vừa build (`pytest -m frozen`), và hướng dẫn build thử trong `docs/CONTRIBUTING.md`.
+- Giao diện bản đầu: lệnh `teleport-gui` (và `python -m teleport.ui`) với `--config-dir`, `--background`, `--selftest`. Cửa sổ cho biết Teleport đang chạy, tên máy và thư mục nhận, hoặc báo lỗi khởi động kèm nút “Thử lại”. Đóng cửa sổ thì Teleport thu xuống khay hệ thống và vẫn nhận file; menu khay có “Mở Teleport”, “Gửi file…”, “Tạm dừng nhận”, “Thoát” (“Gửi file…” và “Tạm dừng nhận” chưa dùng được). Có file gửi tới thì hiện hộp hỏi “Nhận” / “Từ chối” (bản tạm, nút mặc định là “Từ chối”). Mỗi thư mục cấu hình chỉ chạy một bản giao diện (khóa mới `gui.lock`); mở lần hai thì cửa sổ cũ hiện lên. Theo chế độ sáng/tối của hệ điều hành; mọi chữ đã sẵn sàng để dịch (bản English làm sau). Hạn chế: máy chưa có danh tính phải chạy `teleport identity` một lần trước khi mở giao diện; giao diện chưa ghi log ra file.
+- Cài phần giao diện bằng extra `gui` (`PySide6-Essentials`, LGPL-3.0); extra `dev` kéo theo `gui` và `pytest-qt` (MIT).
 
 ### Changed
 - CLI: câu báo khi thư mục tạm của lượt đã có sẵn mà Teleport không dùng tiếp được không còn đổ cho việc Teleport bị tắt đột ngột (lượt như vậy nay được khôi phục); tên máy do máy kia tự đặt được làm sạch giống nhau ở mọi câu (ký tự định dạng ẩn không còn in thẳng).
@@ -146,7 +148,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `teleport receive` khi dừng bằng Ctrl+C: mỗi lượt chưa hiện lời hỏi (kể cả lượt đang xếp hàng hoặc chưa kịp có lời hỏi) có dòng “Đã từ chối N file từ X vì đang dừng nhận.”; lượt đang hỏi không in thêm “Đã từ chối.”. Hai trường hợp trên không đổi `result` và `message` trong `--json`.
 - `teleport receive --dir <file>`: khi đường dẫn là một file (trùng tên thư mục mong muốn), báo “Không dùng được thư mục nhận …: đó không phải là thư mục (có thể là một file trùng tên). Hãy chọn thư mục khác bằng `--dir`.” và thoát mã 1. Trên Windows, khi một thư mục cha là file, vẫn hiện câu về ổ đĩa.
 - `teleport send`: khi máy nhận dừng vì lỗi của chính nó (ghi đĩa, dữ liệu hỏng, thư mục tạm còn sót lại), câu báo là “… gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại.”. Trong `--json`, `message` của sự kiện `result` theo câu này; `result` và `by_peer` không đổi.
-- `teleport unpair` khi có node đang chạy cùng thư mục cấu hình: dòng gợi ý nằm riêng, nêu `teleport receive` và `teleport listen`. Trong `--json`, `message` của lỗi `node_locked` chỉ còn câu “Teleport đang chạy với thư mục cấu hình này.”, không có gợi ý.
+- `teleport send` / `receive` / `unpair` / `listen` / `pair` khi có node đang chạy cùng thư mục cấu hình: dòng gợi ý nằm riêng, nêu `teleport receive`, `teleport listen` và “Thoát” trong menu khay của Teleport (trước đây `listen` / `pair` không có dòng gợi ý). Trong `--json`, `message` của lỗi `node_locked` chỉ còn câu “Teleport đang chạy với thư mục cấu hình này.”, không có gợi ý.
 - Build bản CLI thử không dừng ở bước kiểm giấy phép khi máy build có Universal CRT trên `PATH` (ví dụ JDK). Bản build không mang Universal CRT, vì Windows 10 trở lên đã có sẵn.
 
 ### Security
