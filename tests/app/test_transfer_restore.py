@@ -16,6 +16,8 @@ trên cổng mới. Hạn chờ nối lại đặt lại giá trị thật (fixt
 from __future__ import annotations
 
 import asyncio
+import errno
+import gc
 import hashlib
 import logging
 import os
@@ -228,13 +230,18 @@ def write_spy(monkeypatch):
 
 class HangingOpen:
     """Thay `ReceiveDir.open_for_resume`: lượt trong `hung` chặn ở cổng (trong thread đĩa) rồi mới gọi bản
-    thật với đúng `stop` nó nhận; ghi lại `stop` để kiểm nó đã được đặt khi quá hạn."""
+    thật với đúng `stop` nó nhận; ghi lại `stop` để kiểm nó đã được đặt khi quá hạn.
 
-    def __init__(self, hung) -> None:
+    `ignore_stop=True`: sau cổng gọi bản thật với `stop=None`, nên việc treo trả một `ResumeHandle` thật
+    (kết quả tới muộn mà bên gọi phải tự đóng); `returned` giữ các handle đã trả như thế."""
+
+    def __init__(self, hung, *, ignore_stop: bool = False) -> None:
         self.hung = set(hung)
         self.gate = threading.Event()
         self.stops: dict[str, object] = {}
         self.real = storage.ReceiveDir.open_for_resume
+        self.ignore_stop = ignore_stop
+        self.returned: dict[str, storage.ResumeHandle] = {}
 
     def install(self, monkeypatch) -> None:
         spy = self
@@ -243,6 +250,10 @@ class HangingOpen:
             if scan.transfer_id in spy.hung:
                 spy.stops[scan.transfer_id] = stop
                 spy.gate.wait(30)
+                if spy.ignore_stop:
+                    handle = spy.real(rd, scan, stop=None)
+                    spy.returned[scan.transfer_id] = handle
+                    return handle
             return spy.real(rd, scan, stop=stop)
 
         monkeypatch.setattr(storage.ReceiveDir, "open_for_resume", open_for_resume)
@@ -803,6 +814,224 @@ async def test_cleanup_timer_never_removes_running_transfer(
 
 
 # =================================================================================================
+# P3-5 V10: dọn tạm 7 ngày qua `Node.start` (mvp F6; architecture mục 4 “Dọn tạm”)
+# =================================================================================================
+
+
+def newest_mtime(d: Path) -> float:
+    """mtime lớn nhất của thư mục `d` và mọi file trong nó (giây)."""
+    return max([d.stat().st_mtime, *(p.stat().st_mtime for p in d.iterdir())])
+
+
+@leakcheck
+@pytest.mark.parametrize(
+    ("offset", "removed"), [(3600.0, True), (-3600.0, False)], ids=["qua-han", "con-han"]
+)
+async def test_node_start_cleans_orphan_and_other_node_temps_only_past_temp_retention(
+    T,
+    world,
+    restart,
+    cleanup_spy,
+    record_for,
+    resume_helpers,
+    tmp_path,
+    monkeypatch,
+    grace_real,
+    offset,
+    removed,
+):
+    """spec-p3-5 V10 (mục 3, 9.2): thư mục tạm không thuộc lượt nào còn sống (mồ côi: không có
+    `transfer.json`; hỏng: `transfer.json` không đọc được; node khác dùng chung thư mục nhận) bị dọn ở lần
+    dọn đầu tiên sau `Node.start` khi hoạt động cuối cách giờ tường hơn `TEMP_RETENTION` (+1 giờ); còn hạn
+    (−1 giờ) thì giữ nguyên từng byte. Giờ tường vá qua `_wall_time` (mẫu ở test REMEMBER_TTL).
+
+    Không có ca “máy gửi không còn tin cậy” (`receiver` là máy này): `ReceiveDir.cleanup` xếp nó vào lượt
+    của máy này, ngưỡng `RECONNECT_GRACE`, khác architecture mục 4 (đoạn `transfer.json`: “dọn theo luật
+    thư mục mồ côi”); đã báo lại, chờ quyết định."""
+    a_id, ids = world("C")
+    root = tmp_path / "nhan"
+    other_node = uuid.uuid4().hex
+    tids = {kind: uuid.uuid4().hex for kind in ("mo-coi", "hong", "node-khac")}
+    owners = {"mo-coi": a_id, "hong": a_id, "node-khac": other_node}
+    dirs = {}
+    for kind, tid in tids.items():
+        dirs[kind] = build_running(
+            storage,
+            root,
+            record_for,
+            resume_helpers,
+            tid,
+            sender=ids["C"],
+            receiver=owners[kind],
+            blocks=(0, 1),
+            age=0,
+        )
+    (dirs["mo-coi"] / "transfer.json").unlink()
+    (dirs["hong"] / "transfer.json").write_bytes(b"{khong phai json")
+    before = {kind: resume_helpers.snapshot(d) for kind, d in dirs.items()}
+    wall = max(newest_mtime(d) for d in dirs.values()) + storage.TEMP_RETENTION + offset
+    monkeypatch.setattr(T, "_wall_time", lambda: wall)
+
+    A = await restart("A", receive_dir=root, auto_accept=True)
+    await wait_until(lambda: len(cleanup_spy) >= 1, 5, "lần dọn đầu sau Node.start chưa chạy")
+    first = cleanup_spy[0]
+    assert first.wall_now == wall and first.retention == storage.TEMP_RETENTION
+    assert A.trec.of("TransferResumed") == [] and A.transfers.transfers() == ()
+    if removed:
+        assert first.removed == len(dirs)
+        assert {kind for kind, d in dirs.items() if d.exists()} == set()
+    else:
+        assert first.removed == 0
+        assert {kind: resume_helpers.snapshot(d) for kind, d in dirs.items()} == before
+    assert (root / ".teleport").is_dir(), ".teleport không bao giờ bị xóa"
+
+
+# =================================================================================================
+# P3-5 V11d: `skip` gồm hàng đĩa còn sống của lượt engine đã quên (transfers.py `cleanup_temps`)
+# =================================================================================================
+
+
+@leakcheck
+async def test_cleanup_skips_transfer_forgotten_by_engine_while_its_disk_lane_still_runs(
+    T, transfer_nodes, cleanup_spy, monkeypatch, grace_real
+):
+    """spec-p3-5 V11d (mục 3, 9.2 N8): hàng đĩa của lượt nhận kẹt ở một lần ghi (cổng trong
+    `PartFile.write_at`); A hủy lượt → engine quên lượt (`get` → None) nhưng hàng đĩa chưa dọn xong. Lần
+    dọn tạm lúc đó (giờ tường vá xa hơn mọi ngưỡng) phải nhận `skip` có `transfer_id` của lượt (spy tham
+    số: `ReceiveDir.cleanup` tự bỏ thư mục đang mở nên chỉ nhìn đĩa thì không phân biệt được); thư mục
+    còn. Mở cổng → `RemoveTemp` của hàng đĩa xóa nó."""
+    net = await transfer_nodes(sender_opts={"rate_limit": 8 * MiB})
+    A, B = net.A, net.B
+    gate, hit = threading.Event(), threading.Event()
+    real_write = storage.PartFile.write_at
+
+    def write_at(self, index, data):
+        if index == 1 and not gate.is_set():
+            hit.set()
+            gate.wait(30)
+        real_write(self, index, data)
+
+    monkeypatch.setattr(storage.PartFile, "write_at", write_at)
+    key = await B.transfers.send(A.id, [make_file(net.src, "f.bin", 16 * MiB)])
+    tid = key.transfer_id
+    rkey = core_transfer.TransferKey(B.id, RECEIVE, tid)
+    d = temp_dir(net.receive_dir, tid)
+    future = time.time() + 10 * max(core_transfer.REMEMBER_TTL, storage.TEMP_RETENTION)
+    try:
+        await asyncio.wait_for(asyncio.to_thread(hit.wait, 20), 25)
+        assert A.transfers.get(rkey) is not None
+        A.transfers.cancel(rkey)
+        await wait_until(lambda: A.transfers.get(rkey) is None, 5, "engine chưa quên lượt đã hủy")
+        monkeypatch.setattr(T, "_wall_time", lambda: future)
+        n = len(cleanup_spy)
+        while True:
+            assert A.transfers.get(rkey) is None  # không `await` giữa kiểm này và lúc chụp `skip`
+            result = await A.transfers.cleanup_temps()
+            if result is not None:
+                break
+            await asyncio.sleep(0.05)  # lần dọn lúc khởi động chưa xong
+        calls = [c for c in cleanup_spy[n:] if c.wall_now == future]
+        assert len(calls) == 1, calls
+        assert tid in calls[0].skip, f"skip = {sorted(calls[0].skip)} thiếu lượt có hàng đĩa còn sống"
+        assert d.is_dir(), "thư mục tạm của lượt có hàng đĩa còn sống bị dọn"
+        assert not gate.is_set()
+    finally:
+        gate.set()
+    await wait_until(lambda: not d.exists(), 10, "RemoveTemp chưa xóa thư mục tạm sau khi mở cổng")
+    fin_b = await B.trec.wait_finished(tid, 10)
+    assert fin_b.result == T.TransferResult.CANCELLED_USER and fin_b.by_peer is True, describe(fin_b)
+
+
+# =================================================================================================
+# P3-5 V11e: lỗi của `open_for_resume` khi khôi phục (transfers.py `_restore_open`)
+# =================================================================================================
+
+
+def open_error(kind: str, tid: str, path: Path) -> BaseException:
+    """Lỗi giả của `open_for_resume`, mang `transfer_id` đầy đủ và đường dẫn trong thông điệp."""
+    text = f"lỗi giả {tid} {path}"
+    if kind == "OSError":
+        return OSError(errno.EIO, text, str(path))
+    return {
+        "NotResumableError": storage.NotResumableError,
+        "StorageError": storage.StorageError,
+        "ValueError": ValueError,
+        "RuntimeError": RuntimeError,
+    }[kind](text)
+
+
+@leakcheck
+@pytest.mark.parametrize(
+    "kind", ["NotResumableError", "StorageError", "ValueError", "OSError", "RuntimeError"]
+)
+async def test_open_for_resume_error_logs_label_only_and_other_transfer_still_resumes(
+    T,
+    world,
+    restart,
+    cleanup_spy,
+    record_for,
+    resume_helpers,
+    tmp_path,
+    monkeypatch,
+    caplog,
+    grace_real,
+    kind,
+):
+    """spec-p3-5 V11e (mục 3): `open_for_resume` của một lượt ném lỗi khi `Node.start`.
+
+    `NotResumableError` / `StorageError` / `ValueError` / `OSError` → đúng một INFO có `transfer_id[:8]` và
+    tên loại lỗi, không `transfer_id` đầy đủ, tên file hay đường dẫn (mvp N9), không WARNING+ nào.
+    `RuntimeError` (không lường trước) → một ERROR kèm traceback. Cả hai: node chạy, thư mục tạm của lượt
+    lỗi giữ nguyên từng byte, lượt của máy gửi khác vẫn `TransferResumed`."""
+    caplog.set_level(logging.INFO)
+    a_id, ids = world("C", "D")
+    root = tmp_path / "nhan"
+    bad, ok = uuid.uuid4().hex, uuid.uuid4().hex
+    d_bad = build_running(
+        storage, root, record_for, resume_helpers, bad, sender=ids["C"], receiver=a_id, blocks=(0,), age=50
+    )
+    build_running(
+        storage, root, record_for, resume_helpers, ok, sender=ids["D"], receiver=a_id, blocks=(0, 1), age=50
+    )
+    before = resume_helpers.snapshot(d_bad)
+    error = open_error(kind, bad, d_bad / "0.part")
+    real_open = storage.ReceiveDir.open_for_resume
+    raised: list[str] = []
+
+    def open_for_resume(rd, scan, *, stop=None):
+        if scan.transfer_id == bad:
+            raised.append(bad)
+            raise error
+        return real_open(rd, scan, stop=stop)
+
+    monkeypatch.setattr(storage.ReceiveDir, "open_for_resume", open_for_resume)
+    A = await restart("A", receive_dir=root, auto_accept=True)
+    assert raised == [bad]
+    assert A.node.port is not None
+    assert [u.info.key.transfer_id for u in A.trec.of("TransferResumed")] == [ok]
+    assert [i.key.transfer_id for i in A.transfers.transfers()] == [ok]
+    await wait_until(lambda: len(cleanup_spy) >= 1, 5, "lần dọn đầu sau Node.start chưa chạy")
+    assert resume_helpers.snapshot(d_bad) == before
+
+    records = [r for r in caplog.records if r.name.startswith("teleport")]
+    about = [r for r in records if bad[:8] in r.getMessage()]
+    assert len(about) == 1, [(r.levelname, r.getMessage()) for r in about]
+    [rec] = about
+    if kind == "RuntimeError":
+        assert rec.levelno == logging.ERROR, rec.levelname
+        assert rec.exc_info is not None and rec.exc_info[1] is error, "ERROR phải kèm traceback"
+    else:
+        assert rec.levelno == logging.INFO, rec.levelname
+        assert type(error).__name__ in rec.getMessage(), rec.getMessage()
+        loud = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert loud == [], [(r.name, r.levelname, r.getMessage()) for r in loud]
+        assert rec.exc_info is None
+    for r in records:
+        text = r.getMessage()
+        assert bad not in text and str(root) not in text and "f0.bin" not in text, text
+
+
+# =================================================================================================
 # API của `TransferManager`: `restore` một lần, `cleanup_temps`, `abort_now` giữa lúc khôi phục
 # =================================================================================================
 
@@ -835,21 +1064,47 @@ async def test_cleanup_temps_is_none_without_receive_dir_or_when_closing(node_fa
     assert await A.transfers.cleanup_temps() is None
 
 
-@leakcheck
-async def test_start_cancelled_during_restore_sets_stop_and_leaves_disk_untouched(
-    world, node_factory, app_helpers, record_for, resume_helpers, tmp_path, monkeypatch, grace_real
-):
-    """`Node.start` bị hủy khi đang mở lại một lượt (thread đĩa treo) → `abort_now` đặt `stop` của việc mở
-    lại; lượt đó để nguyên trên đĩa, `node.lock` được nhả."""
-    a_id, ids = world("C")
-    root = tmp_path / "nhan"
-    tid = uuid.uuid4().hex
-    d = build_running(
-        storage, root, record_for, resume_helpers, tid, sender=ids["C"], receiver=a_id, blocks=(0,), age=50
-    )
-    before = resume_helpers.snapshot(d)
-    fake = HangingOpen([tid])
-    fake.install(monkeypatch)
+@pytest.fixture
+def submit_spy(monkeypatch, T):
+    """Mọi lời gọi `DiskExecutor.submit`: tên hàm được giao, có ném `RuntimeError` không, và đã có
+    `TransferManager.abort_now` trước đó chưa (spy `abort_now` đếm số lần)."""
+    from teleport.app import diskio
+
+    spy = SimpleNamespace(calls=[], aborts=0)
+    real_submit = diskio.DiskExecutor.submit
+    real_abort = T.TransferManager.abort_now
+
+    def submit(self, fn, /, *args):
+        name = getattr(getattr(fn, "func", fn), "__name__", repr(fn))
+        rec = SimpleNamespace(name=name, raised=None, after_abort=spy.aborts > 0)
+        spy.calls.append(rec)
+        try:
+            return real_submit(self, fn, *args)
+        except RuntimeError as e:
+            rec.raised = e
+            raise
+
+    def abort_now(self):
+        spy.aborts += 1
+        return real_abort(self)
+
+    def rejected_after_abort() -> list[SimpleNamespace]:
+        return [c for c in spy.calls if c.after_abort and c.raised is not None]
+
+    spy.rejected_after_abort = rejected_after_abort
+    monkeypatch.setattr(diskio.DiskExecutor, "submit", submit)
+    monkeypatch.setattr(T.TransferManager, "abort_now", abort_now)
+    return spy
+
+
+def errors_logged(caplog) -> list[logging.LogRecord]:
+    """Bản ghi ERROR+ của mọi logger (kể cả `asyncio`: “Task exception was never retrieved”)."""
+    return [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def cancel_start_during_restore(node_factory, root: Path, tid: str, fake: HangingOpen, submit_spy):
+    """Mở A với thư mục nhận `root`, hủy `Node.start` khi việc mở lại lượt `tid` đang treo ở cổng của
+    `fake`, rồi mở cổng. Trả `stop` mà việc mở lại đã nhận (đã kiểm là `threading.Event`, đã đặt)."""
     A = await node_factory("A", start=False, node_kwargs={"receive_dir": root, "auto_accept": True})
     starting = asyncio.create_task(A.node.start())
     try:
@@ -859,8 +1114,94 @@ async def test_start_cancelled_during_restore_sets_stop_and_leaves_disk_untouche
             await starting
         stop = fake.stops[tid]
         assert isinstance(stop, threading.Event) and stop.is_set()
+        assert submit_spy.aborts == 1, f"abort_now chạy {submit_spy.aborts} lần"
     finally:
         fake.gate.set()
-    await asyncio.sleep(0.5)
+    return stop
+
+
+@leakcheck
+async def test_start_cancelled_during_restore_sets_stop_and_leaves_disk_untouched(
+    world,
+    node_factory,
+    app_helpers,
+    record_for,
+    resume_helpers,
+    submit_spy,
+    tmp_path,
+    monkeypatch,
+    caplog,
+    grace_real,
+):
+    """`Node.start` bị hủy khi đang mở lại một lượt (thread đĩa treo) → `abort_now` (đúng một lần) đặt
+    `stop` của việc mở lại; lượt đó để nguyên trên đĩa, `node.lock` được nhả; không có ERROR nào, kể cả
+    ngoại lệ task không ai lấy (V11c, spec-p3-5 mục 3)."""
+    caplog.set_level(logging.WARNING)
+    a_id, ids = world("C")
+    root = tmp_path / "nhan"
+    tid = uuid.uuid4().hex
+    d = build_running(
+        storage, root, record_for, resume_helpers, tid, sender=ids["C"], receiver=a_id, blocks=(0,), age=50
+    )
+    before = resume_helpers.snapshot(d)
+    fake = HangingOpen([tid])
+    fake.install(monkeypatch)
+    await cancel_start_during_restore(node_factory, root, tid, fake, submit_spy)
+    await asyncio.sleep(0.5)  # việc treo chạy nốt (bị `stop` chặn), không được đụng đĩa
+    gc.collect()  # ngoại lệ task không ai lấy chỉ được báo khi task bị thu gom
+    await asyncio.sleep(0)
+    assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
     assert resume_helpers.snapshot(d) == before
+    await wait_until(lambda: app_helpers.lock_is_free(tmp_path / "A"), 5, "node.lock chưa được nhả")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "lỗi src (P3-5 V11c): `_restore_open` hẹn `_close_late_handle` vào `_disk_tasks` rồi `abort_now` "
+        "hủy nó trước khi nó chạy; handle mở lại tới muộn không bao giờ được đóng"
+    ),
+)
+@leakcheck
+async def test_late_resume_handle_after_cancelled_start_is_closed_and_shutdown_submit_is_swallowed(
+    world,
+    node_factory,
+    app_helpers,
+    record_for,
+    resume_helpers,
+    submit_spy,
+    tmp_path,
+    monkeypatch,
+    caplog,
+    grace_real,
+):
+    """V11c (1) (spec-p3-5 mục 3, 9.2 N8): việc mở lại treo trả handle thật sau khi `Node.start` đã bị hủy
+    (kết quả tới muộn) → bên gọi phải đóng nó (`_close_late_handle` → `_close_temp`): `submit` sau
+    `abort_now` ném `RuntimeError` (executor đã shutdown), bên gọi nuốt lỗi đó và đóng handle ngay trên
+    loop; không có ERROR, kể cả ngoại lệ task không ai lấy; đĩa để nguyên."""
+    caplog.set_level(logging.WARNING)
+    a_id, ids = world("C")
+    root = tmp_path / "nhan"
+    tid = uuid.uuid4().hex
+    d = build_running(
+        storage, root, record_for, resume_helpers, tid, sender=ids["C"], receiver=a_id, blocks=(0,), age=50
+    )
+    before = resume_helpers.snapshot(d)
+    fake = HangingOpen([tid], ignore_stop=True)
+    fake.install(monkeypatch)
+    await cancel_start_during_restore(node_factory, root, tid, fake, submit_spy)
+    await wait_until(lambda: tid in fake.returned, 10, "việc mở lại treo chưa trả handle")
+    handle = fake.returned[tid]
+    try:
+        await wait_until(lambda: handle.temp.closed, 3, "handle mở lại tới muộn không được đóng")
+        assert submit_spy.rejected_after_abort(), (
+            "không lần `submit` nào sau abort_now ném RuntimeError: chưa đi qua nhánh executor đã shutdown"
+        )
+        gc.collect()
+        await asyncio.sleep(0)
+        assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
+        assert resume_helpers.snapshot(d) == before
+    finally:
+        if not handle.temp.closed:  # lỗi đang kiểm: đóng giùm để không giữ file trên Windows
+            handle.temp._close_quietly()
     await wait_until(lambda: app_helpers.lock_is_free(tmp_path / "A"), 5, "node.lock chưa được nhả")

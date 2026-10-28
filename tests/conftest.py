@@ -22,8 +22,11 @@ không import được conftest: lớp phụ trợ (`CliRun`, `Proc`, mDNS giả
 - `fast_cli`, `cli_no_leaks`, `cli_runs` (`CliRun`), `procs` (`Proc`), `cli_mdns` (trước ở
   `tests/test_cli.py`). `cli_runs` chạy được `listen`, `pair`, `send`, `receive` trong tiến trình.
 - `tcp_proxy` (`TcpProxy`, P3-0; dùng tiếp ở P3-5): proxy TCP chèn giữa hai node để cắt RST, chặn
-  (ngừng chuyển byte, không đóng) rồi RST, hay chặn rồi đi tiếp; bộ đệm nhỏ có backpressure. Test của
-  chính proxy: `tests/test_tcp_proxy.py`.
+  (ngừng chuyển byte, không đóng) rồi RST, hay chặn rồi đi tiếp; bộ đệm nhỏ có backpressure.
+  `block_at(direction, nbytes)` (P3-5): proxy tự chặn đúng một lần khi tổng byte đã chuyển theo một
+  chiều (mọi kết nối, kể cả byte TLS và kết nối điều khiển) chạm `nbytes`. Test của chính proxy:
+  `tests/test_tcp_proxy.py`.
+- `n4_extra` (P3-5, phạm vi session): phần cộng thêm của mvp N4 tính bằng byte, đọc từ `docs/mvp.md`.
 
 Module `teleport.*` ngoài `core.admission` chỉ được import **bên trong** fixture, để một module đang
 viết dở chỉ làm đỏ các test dùng tới nó.
@@ -71,6 +74,27 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         f"{REAL_LIMITS_MARKER}: không nới tốc độ/burst bắt tay của teleport.core.admission (mặc định thật)",
     )
+
+
+MiB = 1024 * 1024
+_MVP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "mvp.md")
+
+
+@pytest.fixture(scope="session")
+def n4_extra() -> int:
+    """Phần cộng thêm X của mvp N4 (“gửi lại ≤ phần chưa nhận + X MiB”), tính bằng byte, đọc từ hàng
+    `| N4 |` của `docs/mvp.md` (spec-p3-5 quyết định 1). Không thấy hàng hay con số → AssertionError,
+    để test N4 không lặng lẽ chạy với một ngưỡng chép tay. Test N4 phải tự kiểm tiền đề
+    `byte_lúc_cắt > n4_extra` (gửi lại từ đầu thì vượt ngưỡng), không thì test kiểm rỗng."""
+    import re
+
+    with open(_MVP, encoding="utf-8") as f:
+        text = f.read()
+    m = re.search(r"^\| N4 \|[^\n]*?phần chưa nhận \+ (\d+) MiB", text, re.MULTILINE)
+    assert m, "không tìm thấy ngưỡng N4 (“phần chưa nhận + X MiB”) trong hàng | N4 | của docs/mvp.md"
+    extra = int(m.group(1)) * MiB
+    assert extra > 0
+    return extra
 
 
 @pytest.fixture(autouse=True)
@@ -608,6 +632,15 @@ class TcpProxy:
     - `rst()`: cắt **mọi** kết nối hiện có bằng RST cả hai phía (kể cả kết nối đang treo vì chặn);
       kết nối mới sau đó chạy bình thường nếu không còn chặn. “Chặn rồi RST” = `block()`, chờ, `rst()`
       rồi `resume()` (test async: `await outage(seconds, end="rst")`).
+    - `block_at(direction, nbytes)` (P3-5): hẹn proxy **tự** `block()` trong vòng bơm, đúng lúc
+      `forwarded[direction]` chạm `nbytes`: đoạn đang chuyển bị cắt đôi, phần tới ngưỡng đi qua, phần
+      còn lại bị giữ, nên lúc chặn `forwarded[direction] == nbytes` (không lọt quá ngưỡng byte nào theo
+      chiều đó; chiều kia dừng ở đoạn kế tiếp). Bộ đếm là **tổng mọi kết nối** qua proxy từ lúc tạo
+      (byte TCP: gồm TLS, kết nối điều khiển và mọi kết nối dữ liệu, kể cả kết nối đã bị cắt), không
+      phải byte payload. Chặn **đúng một lần**: sau `resume()` không chặn lại dù `forwarded` vẫn ≥ ngưỡng
+      (hẹn lần nữa thì gọi `block_at` lần nữa). Nếu lúc hẹn `forwarded[direction]` đã ≥ `nbytes` thì chặn
+      ngay. Sau khi chặn: `fired_at` = `time.monotonic()` lúc chặn, `fired_forwarded` = ảnh chụp
+      `forwarded` lúc đó, `wait_fired(timeout)` (đồng bộ) trả True khi đã chặn.
 
     Bộ đệm nhỏ, có backpressure, để proxy không làm phình lượng byte mất khi cắt (byte nằm trong proxy
     lúc RST là byte bên gửi phải gửi lại): mỗi chiều đọc tối đa `chunk` byte, ghi xong phải `drain()`
@@ -637,6 +670,10 @@ class TcpProxy:
         self.resets = 0
         self.forwarded = {"c2s": 0, "s2c": 0}
         self._blocked = False
+        self._trip: tuple[str, int] | None = None  # `block_at` đang hẹn: (chiều, ngưỡng)
+        self._fired = threading.Event()
+        self.fired_at: float | None = None
+        self.fired_forwarded: dict[str, int] | None = None
         self._pairs: set[_ProxyPair] = set()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, name="test-tcp-proxy", daemon=True)
@@ -715,6 +752,31 @@ class TcpProxy:
     def blocked(self) -> bool:
         return self._blocked
 
+    def block_at(self, direction: str, nbytes: int) -> None:
+        """Hẹn tự chặn một lần khi `forwarded[direction]` chạm `nbytes` (xem docstring lớp)."""
+        if direction not in ("c2s", "s2c"):
+            raise ValueError(direction)
+        if nbytes < 0:
+            raise ValueError(nbytes)
+
+        async def arm() -> None:
+            self._fired.clear()
+            self.fired_at = None
+            self.fired_forwarded = None
+            self._trip = (direction, nbytes)
+            if self.forwarded[direction] >= nbytes:
+                self._fire()
+
+        self._run(arm())
+
+    def wait_fired(self, timeout: float) -> bool:
+        """Chờ (đồng bộ) tới khi `block_at` đã chặn; trả False nếu hết `timeout` giây."""
+        return self._fired.wait(timeout)
+
+    @property
+    def fired(self) -> bool:
+        return self._fired.is_set()
+
     def rst(self) -> int:
         """Cắt RST mọi kết nối hiện có (chờ tới khi đã cắt xong); trả số kết nối bị cắt."""
 
@@ -774,9 +836,31 @@ class TcpProxy:
                     dst.write_eof()
                 return
             await self._gate()  # bị chặn trong lúc đọc: giữ đoạn này (≤ chunk) tới khi hết chặn
+            trip = self._trip
+            if trip is not None and trip[0] == direction and self.forwarded[direction] + len(data) >= trip[1]:
+                # `block_at`: cho qua đúng phần tới ngưỡng, chặn (không `await` giữa kiểm và chặn, nên
+                # không pump nào khác chen vào), rồi giữ phần còn lại tới khi hết chặn.
+                head = max(0, trip[1] - self.forwarded[direction])
+                if head:
+                    dst.write(data[:head])
+                    self.forwarded[direction] += head
+                self._fire()
+                data = data[head:]
+                if not data:
+                    await dst.drain()
+                    continue
+                await self._gate()
             dst.write(data)
             self.forwarded[direction] += len(data)
             await dst.drain()
+
+    def _fire(self) -> None:
+        """Trong loop proxy: thực hiện lần chặn đã hẹn bằng `block_at` (một lần)."""
+        self._trip = None
+        self._blocked = True
+        self.fired_at = time.monotonic()
+        self.fired_forwarded = dict(self.forwarded)
+        self._fired.set()
 
     async def _handle(self, c_reader: asyncio.StreamReader, c_writer: asyncio.StreamWriter) -> None:
         self.accepted += 1

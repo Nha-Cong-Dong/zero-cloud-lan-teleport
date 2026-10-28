@@ -27,8 +27,10 @@ import os
 import re
 import socket
 import sys
+import threading
 import time
 import unicodedata
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -776,7 +778,7 @@ def test_transfer_resumed_message_is_one_clean_line(cli, peer, names, done_ratio
 
 # --- F3 (spec-p3-4 mục 9.4): tên máy có U+061C (ALM, ký tự điều khiển hướng chữ) -----------------------
 
-ALM = "؜"
+ALM = "\u061c"
 ALM_SENDER = f"Laptop{ALM}Minh"  # tên thiết bị hợp lệ (`validate_device_name`) mà vẫn có ALM
 ALM_RECEIVER = f"PC{ALM}Nha"
 
@@ -2454,7 +2456,6 @@ async def test_windows_glob_without_match_is_not_found(pair_dirs, cli_runs):
 # =================================================================================================
 
 RESUME_RATE = ["--limit-rate", "8M"]
-N4_EXTRA = 64 * MiB  # mvp N4: gửi lại ≤ phần chưa nhận + 64 MiB
 STATE_HEADER = 41
 SECOND = "May-Ban"
 RESTORED_FIELDS = {
@@ -2605,7 +2606,7 @@ async def test_text_ctrl_c_receive_suspends_then_rerun_resumes_without_asking(
 
 @with_marks(socket_test)
 async def test_json_rerun_receive_emits_restored_and_send_reports_payload_sent(
-    pair_dirs, resume_env, cli_runs, tcp_proxy
+    pair_dirs, resume_env, cli_runs, tcp_proxy, n4_extra
 ):
     """V2 (ii) JSON: chạy lại `receive` không `--yes` → `restored` đủ trường (mục 3.2), sau `receiving` và
     trước mọi sự kiện khác của lượt; không có `offer`; lượt khôi phục có `status` bắt đầu bằng
@@ -2645,7 +2646,7 @@ async def test_json_rerun_receive_emits_restored_and_send_reports_payload_sent(
     [res] = send.events_of("result")
     assert (res["result"], res["transfer_id"]) == ("done", tid), res
     sent = res["payload_sent"]
-    assert type(sent) is int and size <= sent <= size + N4_EXTRA, res
+    assert type(sent) is int and size <= sent <= size + n4_extra, res
     got = await recv2.wait_event("result", timeout=20)
     assert (got["result"], got["transfer_id"]) == ("done", tid), got
     assert got["message"] == R_DONE.format(n=1, size=format_size(size), s=SENDER)
@@ -2941,8 +2942,8 @@ async def test_alm_peer_name_shows_the_same_in_connected_line_and_result(
     U+061C."""
     s_dir, r_dir = tmp_path / "S", tmp_path / "R"
     ident_s, ident_r = load_or_create_identity(s_dir), load_or_create_identity(r_dir)
-    TrustStore.load(s_dir).add(peer_cert_from_pem(ident_r.cert_pem()), "PC؜Nha")
-    TrustStore.load(r_dir).add(peer_cert_from_pem(ident_s.cert_pem()), "Laptop؜Minh")
+    TrustStore.load(s_dir).add(peer_cert_from_pem(ident_r.cert_pem()), "PC\u061cNha")
+    TrustStore.load(r_dir).add(peer_cert_from_pem(ident_s.cert_pem()), "Laptop\u061cMinh")
     net = SimpleNamespace(S=s_dir, R=r_dir, recv=tmp_path / "nhan", src=tmp_path / "nguon")
     recv, port = await start_receiver(cli_runs, net, node_spy, json_mode=False)
     f = make_file(net.src, "a.bin", 1000)
@@ -2955,8 +2956,234 @@ async def test_alm_peer_name_shows_the_same_in_connected_line_and_result(
     shown = connected[len("Đã kết nối với “") :].split("”", 1)[0]
     assert connected == C3.format(x=shown, n=1, size="1000 byte"), connected
     assert S_DONE.format(n=1, size="1000 byte", p=shown) in lines, lines
-    assert "؜" not in send.text(), ascii(send.text())
-    assert "؜" not in recv.text(), ascii(recv.text())
+    assert "\u061c" not in send.text(), ascii(send.text())
+    assert "\u061c" not in recv.text(), ascii(recv.text())
+
+
+# =================================================================================================
+# P3-5 — phần CLI trong tiến trình (specs/spec-p3-5.md mục 3 việc V12a, V12b, V12d; mục 9 thắng)
+# =================================================================================================
+
+
+def read_state_bits(path: Path, *, tid: str, file_index: int, size: int) -> set[int]:
+    """Bộ đọc `.state` độc lập với `teleport` (architecture §4 “`<file_index>.state`”): kiểm header 41
+    byte (`TPRS`, version 1, `transfer_id`, `file_index`, `size`, `block_size`, crc32), rồi phát lại các
+    bản ghi `MARK`/`CLEAR`/`CLEAR_ALL`/`TARGET`/`RESERVED`; trả tập khối đang bật. File do một lần dừng có
+    trật tự để lại phải đọc được trọn: bản ghi hỏng hay cụt → AssertionError."""
+    from teleport.core.blocks import BLOCK_SIZE
+
+    data = path.read_bytes()
+    head = data[:STATE_HEADER]
+    assert len(head) == STATE_HEADER and head[:4] == b"TPRS" and head[4] == 1, head
+    assert zlib.crc32(head[:-4]) == int.from_bytes(head[-4:], "big"), "crc32 header sai"
+    assert head[5:21] == bytes.fromhex(tid)
+    assert int.from_bytes(head[21:25], "big") == file_index
+    assert int.from_bytes(head[25:33], "big") == size
+    assert int.from_bytes(head[33:37], "big") == BLOCK_SIZE
+    n = -(-size // BLOCK_SIZE)
+    bits: set[int] = set()
+    pos = STATE_HEADER
+    while pos < len(data):
+        kind = data[pos]
+        item = 36 if kind == 1 else 4  # MARK: u32 index ‖ 32 byte sha256; CLEAR: u32 index
+        if kind == 3:  # CLEAR_ALL
+            end = pos + 5
+        elif kind in (1, 2):
+            count = int.from_bytes(data[pos + 1 : pos + 3], "big")
+            assert count >= 1, f"bản ghi rỗng ở byte {pos}"
+            end = pos + 3 + count * item + 4
+        elif kind in (4, 5):  # TARGET / RESERVED: u16 len + tên UTF-8
+            end = pos + 3 + int.from_bytes(data[pos + 1 : pos + 3], "big") + 4
+        else:
+            raise AssertionError(f"loại bản ghi lạ {kind} ở byte {pos}")
+        assert end <= len(data), f"bản ghi cụt ở byte {pos}"
+        assert zlib.crc32(data[pos : end - 4]) == int.from_bytes(data[end - 4 : end], "big"), pos
+        if kind == 3:
+            bits.clear()
+        elif kind in (1, 2):
+            found = {int.from_bytes(data[k : k + 4], "big") for k in range(pos + 3, end - 4, item)}
+            assert all(0 <= j < n for j in found), found
+            bits = bits | found if kind == 1 else bits - found
+        pos = end
+    return bits
+
+
+def block_len(size: int, index: int) -> int:
+    from teleport.core.blocks import BLOCK_SIZE
+
+    return min(BLOCK_SIZE, size - index * BLOCK_SIZE)
+
+
+def statuses_of(run, tid: str) -> list[str]:
+    return [e["status"] for e in of_transfer(run, tid) if e["event"] == "status"]
+
+
+# --- V12a: Ctrl+C `send` (bản text) lúc đang “Đang nối lại…” ------------------------------------------------
+
+
+@with_marks(socket_test)
+async def test_text_ctrl_c_send_while_reconnecting_prints_stopping_line_then_cancelled_and_exits_1(
+    pair_dirs, resume_env, cli_runs
+):
+    """V12a (spec-p3-5): `receive` tạm dừng giữa lượt → `send` (bản text) in “Đang nối lại…”; Ctrl+C lúc
+    đó → “Đang dừng…” rồi câu M2 của chính nó, mã 1, đúng thứ tự `RECONNECTING` < `C12` <
+    `S_SELF_CANCELLED`; không in câu “Mạng Wi-Fi này có thể đang chặn…”."""
+    net = pair_dirs
+    recv = cli_runs("receive", receive_argv(net))
+    port = (await recv.wait_event("receiving"))["port"]
+    f = make_file(net.src, "lon.bin", 2 * MiB)
+    send = cli_runs("send", send_argv(net, [f], port, json_mode=False, extra=["--limit-rate", "64K"]))
+    await transferring(recv)
+    recv.press()
+    assert await recv.code(15) == 0
+    assert [r["result"] for r in recv.events_of("result")] == ["suspended"], recv.events_of("result")
+    await send.wait_text(RECONNECTING, timeout=10)
+    assert not send.task.done(), send.text()
+    send.press()
+    assert await send.code(10) == 1, send.text()
+    text = send.text()
+    cancelled = S_SELF_CANCELLED.format(p=RECEIVER)
+    assert text.count(cancelled) == 1, text
+    assert C12 in text, text
+    assert text.index(RECONNECTING) < text.index(C12) < text.index(cancelled), text
+    assert WIFI_BLOCKING not in text, text
+    assert lock_is_free(net.S)
+
+
+# --- V12b: `restored.done_bytes` chính xác ------------------------------------------------------------------
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("phase", ["giua-file-1", "doc-lai-file-1"])
+async def test_restored_done_bytes_is_verified_files_plus_marked_block_lengths(
+    pair_dirs, resume_env, cli_runs, node_spy, tcp_proxy, monkeypatch, phase
+):
+    """V12b (+ C6, spec-p3-5 mục 9.2): lượt 2 file, file 0 có cỡ không chia hết `BLOCK_SIZE` và đã nhận
+    xong; Ctrl+C `receive` khi file 1 có `MARK` (giữa file) hoặc khi file 1 đã `MARK` đủ mà đang đọc lại
+    (`PartFile.reread` của file 1 bị giữ ở một cổng, vẫn tôn trọng `stop`) → chạy lại: `restored.done_bytes`
+    = cỡ file 0 + tổng độ dài các khối đang bật trong `1.state` (đọc bằng bộ đọc độc lập; khối cuối của
+    file 1 ngắn); câu (b) bản text có “đã nhận” = `format_size` của đúng số đó. Rồi lượt hoàn tất."""
+    from teleport.app import storage
+    from teleport.core.blocks import BLOCK_SIZE
+    from teleport.core.display import format_size
+
+    net = pair_dirs
+    size0 = 3 * BLOCK_SIZE + 12_345
+    size1 = resume_size() + 777  # khối cuối ngắn
+    n1 = -(-size1 // BLOCK_SIZE)
+    total = size0 + size1
+
+    entered = threading.Event()
+    release = threading.Event()
+    if phase == "doc-lai-file-1":
+        real_reread = storage.PartFile.reread
+
+        def reread(self, *, stop=None):
+            if getattr(self, "_file_index", None) == 1 and not release.is_set():
+                entered.set()
+                while not release.wait(0.02):
+                    if stop is not None and stop.is_set():
+                        break
+            return real_reread(self, stop=stop)
+
+        monkeypatch.setattr(storage.PartFile, "reread", reread)
+
+    recv = cli_runs("receive", receive_argv(net))
+    proxy = tcp_proxy((await recv.wait_event("receiving"))["port"])
+    f0 = make_file(net.src, "dau.bin", size0)
+    f1 = make_file(net.src, "sau.bin", size1)
+    send = cli_runs("send", send_argv(net, [f0, f1], proxy.port, extra=RESUME_RATE))
+    tid = (await transferring(recv, settle=0))["transfer_id"]
+    state1 = temp_root(net) / tid / "1.state"
+
+    def file1_marked() -> bool:
+        try:
+            return state1.stat().st_size > STATE_HEADER
+        except OSError:
+            return False
+
+    if phase == "giua-file-1":
+        await wait_until(file1_marked, 30, "file 1 chưa có MARK nào")
+    else:
+        await wait_until(entered.is_set, 60, "file 1 chưa tới bước đọc lại")
+    recv.press()
+    assert await recv.code(15) == 0, recv.text()
+    release.set()
+    assert [r["result"] for r in recv.events_of("result")] == ["suspended"], recv.events_of("result")
+
+    bits = read_state_bits(state1, tid=tid, file_index=1, size=size1)
+    if phase == "giua-file-1":
+        assert bits and n1 - 1 not in bits, sorted(bits)
+    else:
+        assert bits == set(range(n1)), sorted(set(range(n1)) - bits)
+    expected = size0 + sum(block_len(size1, j) for j in bits)
+
+    recv2 = cli_runs("receive", receive_argv(net, yes=False))
+    await recv2.wait_event("receiving")
+    restored = await recv2.wait_event("restored", timeout=10)
+    assert (restored["transfer_id"], restored["file_index"], restored["file_count"]) == (tid, 1, 2), restored
+    assert restored["total_bytes"] == total
+    assert restored["done_bytes"] == expected, (restored["done_bytes"], expected, sorted(bits))
+    recv2.press()  # chưa đổi đích proxy: lượt chỉ được khôi phục rồi tạm dừng lại, đĩa không đổi
+    assert await recv2.code(15) == 0, recv2.text()
+    assert read_state_bits(state1, tid=tid, file_index=1, size=size1) == bits
+
+    recv3, port3 = await start_receiver(cli_runs, net, node_spy, json_mode=False, yes=False)
+    b_line = R_RESUMED.format(n=2, s=SENDER, done=format_size(expected), total=format_size(total))
+    await recv3.wait_text(b_line, timeout=10)
+    proxy.target = (LOCAL, port3)
+    assert await send.code(60) == 0, send.text()
+    await recv3.wait_text(R_DONE.format(n=2, size=format_size(total), s=SENDER), timeout=20)
+    assert sha256_of(net.recv / "dau.bin") == sha256_of(f0)
+    assert sha256_of(net.recv / "sau.bin") == sha256_of(f1)
+
+
+# --- V12d: câu (e) mỗi đợt mất kết nối một lần --------------------------------------------------------
+
+
+@with_marks(socket_test)
+async def test_not_reconnected_sentence_is_printed_once_per_outage(
+    pair_dirs, resume_env, cli_runs, tcp_proxy
+):
+    """V12d (spec-p3-5): hai đợt mất kết nối trong cùng một lượt (Ctrl+C `receive` rồi chạy lại, hai lần).
+    `send` (bản text) in câu (e) đúng một lần mỗi đợt (sau câu đó vẫn còn lần thử hỏng mà không in thêm),
+    tổng hai câu, không câu Wi-Fi; nối lại xong thì lượt hoàn tất, mã 0."""
+    from teleport.core.blocks import BLOCK_SIZE
+    from teleport.core.transfer import SYNC_EVERY
+
+    net = pair_dirs
+    size = 4 * SYNC_EVERY * BLOCK_SIZE
+    recv = cli_runs("receive", receive_argv(net))
+    proxy = tcp_proxy((await recv.wait_event("receiving"))["port"])
+    src = make_file(net.src, "lon.bin", size)
+    send = cli_runs("send", send_argv(net, [src], proxy.port, json_mode=False, extra=RESUME_RATE))
+    e_line = S_NOT_RECONNECTED_YET.format(p=RECEIVER)
+    [tid] = await marked_transfers(net)
+    marks = []
+    for outage in (1, 2):
+        assert not send.task.done(), f"lượt đã xong trước đợt mất kết nối thứ {outage}"
+        marks.append(len(send.text()))
+        recv.press()
+        assert await recv.code(15) == 0, recv.text()
+        await send.wait_text(e_line, n=outage, timeout=30)
+        tried = proxy.accepted
+        await wait_until(lambda t=tried: proxy.accepted >= t + 1, 30, "send không thử nối lại thêm lần nào")
+        assert send.text().count(e_line) == outage, send.text()
+        recv = cli_runs("receive", receive_argv(net))
+        port = (await recv.wait_event("receiving"))["port"]
+        assert (await recv.wait_event("restored", timeout=10))["transfer_id"] == tid
+        proxy.target = (LOCAL, port)
+        await wait_until(
+            lambda r=recv: "transferring" in statuses_of(r, tid), 30, f"chưa nối lại sau đợt {outage}"
+        )
+    assert await send.code(60) == 0, send.text()
+    assert (await recv.wait_event("result", timeout=20))["result"] == "done"
+    assert sha256_of(net.recv / "lon.bin") == sha256_of(src)
+    text = send.text()
+    assert text[: marks[0]].count(e_line) == 0, text
+    assert text[marks[0] : marks[1]].count(e_line) == 1, text
+    assert text[marks[1] :].count(e_line) == 1, text
+    assert WIFI_BLOCKING not in text, text
 
 
 # =================================================================================================
