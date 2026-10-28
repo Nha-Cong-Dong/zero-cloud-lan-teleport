@@ -298,6 +298,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - Các thông báo lỗi theo mvp mục 8.
 - Khay hệ thống, chạy nền (F9); chuyển node sang tiến trình giao diện, CLI nói chuyện qua IPC cục bộ.
   - Lưu ý khi làm IPC: tới `v0.2`, CLI in ra stdout đồng bộ ngay trên event loop của node, nên terminal ngừng đọc (ví dụ đang tạm dừng cuộn) có thể làm cả node đứng chờ. Máy khác trong LAN không gây ra được việc này. Khi node chạy trong tiến trình giao diện, việc in hay gửi sự kiện cho CLI qua IPC không được chặn event loop của node.
+  - Node sống lâu trong tiến trình giao diện: mở lại `Node` (cùng tiến trình) hay để tiến trình khác lấy `node.lock` vừa nhả phải chờ đuôi đĩa của node cũ xong, không thì có thể mở lại đúng lượt mà thread đĩa cũ còn ghi và lượt nối lại hỏng; giữ một event loop suốt đời ứng dụng để đuôi đĩa chạy xong (đuôi đĩa: [architecture.md](architecture.md) mục 5, “Thứ tự `Node.close()`”).
 - Tiếng Việt và English bằng Qt Linguist (F11); dùng được bằng bàn phím, theo chế độ sáng/tối (N12).
 - Đo RAM khi rảnh (N3) ngay ở bản này.
 - Đo lại N1 trên hai máy thật: chuyển vào đợt đo (mục 5.4).

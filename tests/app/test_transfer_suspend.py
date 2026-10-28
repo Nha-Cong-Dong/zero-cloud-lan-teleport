@@ -98,9 +98,10 @@ async def wait_gone(path: Path, timeout: float = 20.0) -> None:
         await asyncio.sleep(0.05)
 
 
-# Cảnh báo của `TransferManager.close` khi hàng đĩa chưa xong trong `CLOSE_DISK_WAIT` (handle của lượt
-# không được đóng): một lần đóng như thế làm hỏng các bước sau của test (Windows giữ khóa file).
-CLOSE_WARNINGS = ("việc dọn đĩa chưa xong", "không đóng thư mục nhận")
+# Cảnh báo của `TransferManager.close` khi hàng đĩa chưa xong trong `CLOSE_DISK_WAIT` (thư mục nhận chỉ
+# được đóng sau, khi thread đĩa xong: spec-fix-app 1b): test mở lại ngay sau `close` thì đụng file còn mở
+# (Windows giữ khóa file), nên `close_cleanly` coi đó là lỗi.
+CLOSE_WARNINGS = ("việc dọn đĩa chưa xong", "đóng thư mục nhận sau khi thread đĩa xong")
 
 
 async def close_cleanly(node, caplog, timeout: float = 45.0) -> None:
@@ -694,6 +695,234 @@ async def test_suspend_drops_queued_finalize_of_last_file_then_reopen_finishes(
     assert fin_b.result == T.TransferResult.DONE, describe(fin_b)
     assert fin_a.result == T.TransferResult.DONE, describe(fin_a)
     assert sha256_of(net.receive_dir / "f.bin") == sha256_of(src)
+
+
+# =================================================================================================
+# spec-fix-app (1b): đóng quá `CLOSE_DISK_WAIT` khi `SyncPart` chậm; `Node.close` bị hủy lúc `SyncPart`
+# đang chạy. Thread đĩa chạy xong thì handle của lượt và thư mục nhận vẫn được đóng (“đuôi đĩa”).
+# =================================================================================================
+
+
+class DiskOrder:
+    """Nhật ký có thứ tự (an toàn giữa các thread): `("rd_close", rd)` lúc một `ReceiveDir` còn mở bắt đầu
+    `close()`, `("close_temp", transfer_id)`, `("remove_temp", transfer_id)`, `("commit_start" /
+    "commit_end", transfer_id)` của lần `commit` bị giữ. `opened`: mọi `ReceiveDir` mở qua
+    `ReceiveDir.open` sau khi cài."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.events: list[tuple[str, object]] = []
+        self.opened: list[storage.ReceiveDir] = []
+
+    def add(self, kind: str, what: object) -> None:
+        with self.lock:
+            self.events.append((kind, what))
+
+    def index(self, kind: str, what: object) -> int | None:
+        with self.lock:
+            for i, (k, w) in enumerate(self.events):
+                if k == kind and (w is what or w == what):
+                    return i
+        return None
+
+    def of(self, kind: str, what: object = None) -> list[object]:
+        with self.lock:
+            return [w for k, w in self.events if k == kind and (what is None or w is what or w == what)]
+
+
+@pytest.fixture
+def held_commit(monkeypatch):
+    """Giữ lần `PartFile.commit` **đầu tiên** của lượt `held.tid` (đặt sau khi có `transfer_id`) ở cổng
+    `held.gate` (trong thread đĩa) rồi mới chạy bản thật; mọi lần khác chạy thẳng. `held.started` /
+    `held.ended`: lần bị giữ đã bắt đầu / đã trả về. Kèm `held.order` (`DiskOrder`) đã cài spy
+    `ReceiveDir.open` / `close` / `close_temp` / `remove_temp`."""
+    order = DiskOrder()
+    held = SimpleNamespace(
+        tid=None,
+        used=False,
+        gate=threading.Event(),
+        started=threading.Event(),
+        ended=threading.Event(),
+        order=order,
+    )
+    real_open = storage.ReceiveDir.open
+    real_close = storage.ReceiveDir.close
+    real_close_temp = storage.ReceiveDir.close_temp
+    real_remove = storage.ReceiveDir.remove_temp
+    real_commit = storage.PartFile.commit
+
+    def open_(cls, root):
+        rd = real_open(root)
+        with order.lock:
+            order.opened.append(rd)
+        return rd
+
+    def close(rd):
+        if not rd.closed:
+            order.add("rd_close", rd)
+        return real_close(rd)
+
+    def close_temp(rd, temp):
+        order.add("close_temp", temp.transfer_id)
+        return real_close_temp(rd, temp)
+
+    def remove_temp(rd, temp, *, keep_record=False):
+        order.add("remove_temp", temp.transfer_id)
+        return real_remove(rd, temp, keep_record=keep_record)
+
+    def commit(part, blocks):
+        tid = part.path.parent.name
+        if tid != held.tid or held.used:
+            return real_commit(part, blocks)
+        held.used = True
+        order.add("commit_start", tid)
+        held.started.set()
+        try:
+            held.gate.wait(30)
+            return real_commit(part, blocks)
+        finally:
+            order.add("commit_end", tid)
+            held.ended.set()
+
+    monkeypatch.setattr(storage.ReceiveDir, "open", classmethod(open_))
+    monkeypatch.setattr(storage.ReceiveDir, "close", close)
+    monkeypatch.setattr(storage.ReceiveDir, "close_temp", close_temp)
+    monkeypatch.setattr(storage.ReceiveDir, "remove_temp", remove_temp)
+    monkeypatch.setattr(storage.PartFile, "commit", commit)
+    yield held
+    held.gate.set()
+
+
+async def start_held_transfer(transfer_nodes, held_commit, size: int):
+    """B gửi `size` byte cho A; chờ tới khi `commit` đầu tiên của lượt bị giữ trong thread đĩa của A. Trả
+    `(net, src, tid, rd)`; `rd` là `ReceiveDir` của A."""
+    net = await transfer_nodes(sender_opts={"rate_limit": 8 * MiB})
+    assert len(held_commit.order.opened) == 1, "mong đúng một ReceiveDir (của A)"
+    rd = held_commit.order.opened[0]
+    src = make_file(net.src, "lon.bin", size)
+    key = await net.B.transfers.send(net.A.id, [src])
+    held_commit.tid = key.transfer_id
+    await asyncio.wait_for(asyncio.to_thread(held_commit.started.wait, 30), 35)
+    return net, src, key.transfer_id, rd
+
+
+async def finish_tail(held_commit, rd, tid: str) -> None:
+    """Mở cổng `commit`; chờ nó trả về rồi chờ thư mục nhận được đóng (đuôi đĩa xong)."""
+    held_commit.gate.set()
+    await asyncio.wait_for(asyncio.to_thread(held_commit.ended.wait, 30), 35)
+    await wait_until(lambda: rd.closed, 10, "ReceiveDir không được đóng sau khi thread đĩa xong")
+
+
+def assert_handles_closed_after_commit(order: DiskOrder, rd, tid: str) -> None:
+    """`commit` bị giữ trả về → `close_temp` đúng một lần cho lượt → `ReceiveDir.close` đúng một lần;
+    không `remove_temp` nào cho lượt (tạm dừng chỉ đóng handle)."""
+    events = order.events
+    assert order.of("close_temp", tid) == [tid], f"close_temp của lượt không được gọi đúng một lần: {events}"
+    assert order.of("remove_temp", tid) == [], events
+    assert len(order.of("rd_close", rd)) == 1, events
+    end, closed_temp, closed_rd = (
+        order.index("commit_end", tid),
+        order.index("close_temp", tid),
+        order.index("rd_close", rd),
+    )
+    assert end is not None and end < closed_temp < closed_rd, events
+
+
+def errors_logged(caplog) -> list[logging.LogRecord]:
+    """Bản ghi ERROR+ của mọi logger (kể cả `asyncio`: “Task exception was never retrieved”)."""
+    return [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+@integration
+@leakcheck
+async def test_close_past_close_disk_wait_closes_handles_after_slow_sync_and_reopen_finishes(
+    T, transfer_nodes, restart, write_spy, held_commit, resume_helpers, grace_real, monkeypatch, caplog
+):
+    """spec-fix-app (1b): `CLOSE_DISK_WAIT` = 0,3 s; `commit` (`SyncPart`) của lượt đang nhận kẹt trong
+    thread đĩa suốt lúc A đóng (cổng chỉ mở sau khi `close` trả về). `A.close()` trả về trong hạn
+    `close_time_limit()` với WARNING “việc dọn đĩa chưa xong”, thư mục nhận chưa đóng (thread còn dùng nó).
+    Mở cổng → `commit` trả về, rồi `close_temp` của lượt, rồi `ReceiveDir.close` (spy có thứ tự); `MARK` của
+    lô chậm bền (`marked == written`); không ERROR. Mở lại A cùng tiến trình, cùng thư mục nhận (sau khi
+    `commit` xong) → nối lại DONE, file khớp nguồn (handle cũ còn mở thì Windows từ chối đổi tên)."""
+    from teleport.app import node as node_mod
+
+    size = 24 * MiB + 3
+    net, src, tid, rd = await start_held_transfer(transfer_nodes, held_commit, size)
+    A, B = net.A, net.B
+    monkeypatch.setattr(T, "CLOSE_DISK_WAIT", 0.3)
+    caplog.set_level(logging.WARNING)
+    try:
+        limit = node_mod.close_time_limit()
+        t0 = time.monotonic()
+        await asyncio.wait_for(A.close(), limit + 5)
+        elapsed = time.monotonic() - t0
+        assert elapsed <= limit, f"A.close() mất {elapsed:.2f} s (hạn {limit:.1f} s)"
+        assert not held_commit.ended.is_set(), "tiền đề: commit phải còn kẹt khi close trả về"
+        slow = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "teleport.app.transfers" and "việc dọn đĩa chưa xong" in r.getMessage()
+        ]
+        assert slow, "đóng quá CLOSE_DISK_WAIT phải có WARNING “việc dọn đĩa chưa xong”"
+        assert not rd.closed, "ReceiveDir bị đóng khi thread đĩa còn đang dùng nó"
+        fin = A.trec.finished(tid)
+        assert fin is not None and fin.result == T.TransferResult.SUSPENDED, describe(fin)
+    finally:
+        held_commit.gate.set()
+    await finish_tail(held_commit, rd, tid)
+    assert_handles_closed_after_commit(held_commit.order, rd, tid)
+    d = temp_dir(net.receive_dir, tid)
+    assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(d))
+    written = {r[2] for r in write_spy.done if r[0] == tid and r[1] == 0}
+    assert written, "tiền đề: A đã ghi khối trước lần commit bị giữ"
+    assert marked_blocks(resume_helpers, d / "0.state") == written, "MARK của lô chậm phải bền"
+    assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
+
+    monkeypatch.setattr(T, "CLOSE_DISK_WAIT", 30.0)
+    A2 = await restart("A", receive_dir=net.receive_dir, auto_accept=True)
+    assert len(A2.trec.of("TransferResumed", tid)) == 1
+    B.connect_hint(A2.id, [LOCAL], A2.port)
+    fin_b = await B.trec.wait_finished(tid, 60)
+    fin_a = await A2.trec.wait_finished(tid, 60)
+    assert fin_b.result == T.TransferResult.DONE, describe(fin_b)
+    assert fin_a.result == T.TransferResult.DONE, describe(fin_a)
+    assert sha256_of(net.receive_dir / "lon.bin") == sha256_of(src)
+
+
+@integration
+@leakcheck
+async def test_node_close_cancelled_while_sync_runs_closes_handles_after_commit_and_keeps_mark(
+    T, transfer_nodes, write_spy, held_commit, resume_helpers, grace_real, monkeypatch, caplog
+):
+    """spec-fix-app (1b, mục 3 việc #4): `Node.close` bị hủy khi `commit` (`SyncPart`) của lượt đang nhận
+    còn chạy trong thread đĩa (→ `abort_now`). Lúc đó thư mục nhận chưa đóng; mở cổng → `commit` trả về,
+    rồi `close_temp` của lượt, rồi `ReceiveDir.close`; không `remove_temp`, `.part` / `.state` /
+    `transfer.json` còn; `MARK` của lô đó bền (`marked == written`); không ERROR."""
+    monkeypatch.setattr(T, "CLOSE_DISK_WAIT", 30.0)
+    net, _, tid, rd = await start_held_transfer(transfer_nodes, held_commit, 24 * MiB + 3)
+    A = net.A
+    caplog.set_level(logging.WARNING)
+    try:
+        closing = asyncio.create_task(A.close())
+        await A.trec.wait_kind("TransferFinished", tid, timeout=5)
+        assert A.trec.finished(tid).result == T.TransferResult.SUSPENDED
+        await asyncio.sleep(0.2)
+        assert not closing.done(), "tiền đề: close phải còn chờ hàng đĩa (commit đang kẹt)"
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert not held_commit.ended.is_set()
+        assert not rd.closed, "ReceiveDir bị đóng khi thread đĩa còn đang dùng nó"
+    finally:
+        held_commit.gate.set()
+    await finish_tail(held_commit, rd, tid)
+    assert_handles_closed_after_commit(held_commit.order, rd, tid)
+    d = temp_dir(net.receive_dir, tid)
+    assert {"transfer.json", "0.part", "0.state"} <= set(os.listdir(d))
+    written = {r[2] for r in write_spy.done if r[0] == tid and r[1] == 0}
+    assert written, "tiền đề: A đã ghi khối trước lần commit bị giữ"
+    assert marked_blocks(resume_helpers, d / "0.state") == written, "MARK của lô đang ghi phải bền"
+    assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
 
 
 # =================================================================================================

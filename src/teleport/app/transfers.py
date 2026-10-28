@@ -24,7 +24,10 @@
   `submit` (không `run`, để không mất handle khi bị hủy); mỗi lượt nhận có một hàng FIFO đĩa
   (`_DiskLane`) với luật `RemoveTemp` của hợp đồng (mục 5). Việc quá hạn vẫn chạy trong thread:
   kết quả tới muộn được dọn sau `DiskJob.settled()` (thư mục tạm tạo muộn bị xóa, file nguồn mở
-  muộn bị đóng). Băm payload nhận dùng `asyncio.to_thread` (chỉ tốn CPU).
+  muộn bị đóng). Băm payload nhận dùng `asyncio.to_thread` (chỉ tốn CPU). Khi node đóng, task
+  đĩa không bao giờ bị hủy (kể cả `abort_now`): chúng chờ việc đang chạy rồi chạy bước dọn; thư
+  mục nhận đóng khi mọi việc dùng nó đã `settled()`, nếu cần thì ở **đuôi đĩa** chạy nền sau khi
+  `close()` / `abort_now()` trả về (`_shutdown_disk`).
 - **Giữ địa chỉ:** thiết bị còn lượt chưa kết thúc được `hold` ở `core.links` (nối lại theo lịch
   kể cả khi mDNS báo máy đi, protocol §6.1, §6.2).
 - **Giới hạn tốc độ:** một `TokenBucket` chung cho mọi lượt gửi, áp theo từng đoạn 64 KiB
@@ -219,6 +222,25 @@ SPEED_WINDOW = 5.0  # tốc độ tính trên các mẫu trong 5 s gần nhất
 WRITE_QUEUE_BLOCKS = 8  # protocol §4.3: khối đã nhận chờ ghi đĩa tối đa
 
 _TASK_NAME = "teleport.node"
+
+# Đuôi đĩa (`TransferManager._shutdown_disk`): chu kỳ kiểm lại thread đĩa còn bận (`wait_idle` buộc
+# có hạn); không phải hạn chờ, đuôi chờ tới khi mọi thread xong.
+_TAIL_IDLE_POLL = 1.0
+
+# Tham chiếu mạnh tới task đuôi đĩa và task đĩa còn chạy sau khi executor đã dừng: `Node` có thể đã
+# bỏ `TransferManager` (`_abort_start`), mà event loop chỉ giữ tham chiếu yếu tới task.
+_detached_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _keep_detached(task: asyncio.Task[Any]) -> None:
+    """Giữ `task` tới khi xong; dọn task đã xong hay thuộc loop đã đóng (callback không chạy nữa)."""
+    stale = [t for t in _detached_tasks if t.done() or t.get_loop().is_closed()]
+    _detached_tasks.difference_update(stale)
+    if task in _detached_tasks or task.done():
+        return
+    _detached_tasks.add(task)
+    task.add_done_callback(_detached_tasks.discard)
+
 
 # Giờ tường (seam cho test, đọc lúc dùng): tuổi khi khôi phục, mốc `at` của bia mộ, `cleanup`.
 _wall_time = time.time
@@ -511,6 +533,9 @@ class _DiskLane:
     # `SuspendTemp`: thao tác đứng trước (trừ `Finalize` / `Reread` chưa chạy) vẫn chạy để `MARK`
     # bền, rồi chỉ đóng handle, không xóa.
     suspended: bool = False
+    # Node đóng quá hạn hay bị hủy (`_close_lane(abandon=True)`): bỏ mọi thao tác chưa bắt đầu, dọn
+    # chỉ đóng handle (`close_temp`), không bao giờ xóa.
+    abandoned: bool = False
     keep_record: bool = False  # `RemoveTemp(keep_record=True)` (lượt DONE): giữ `transfer.json`
     jobs: set[DiskJob[Any]] = field(default_factory=set)  # việc đã giao mà chưa `done`
     create_job: DiskJob[TransferTemp] | None = None
@@ -701,6 +726,9 @@ class TransferManager:
         self._tomb_last_write: float | None = None  # `loop.time()` lúc lần ghi trước xong
         self._tomb_stopped = False  # đang xả lúc đóng hay đã hủy: không hẹn ghi nữa
         self._cleanup_job: DiskJob[int] | None = None  # lần dọn tạm gần nhất
+        # Đuôi đĩa (`_shutdown_disk`): executor đã dừng; task đóng thư mục nhận khi thread đĩa xong.
+        self._disk_shut = False
+        self._disk_tail: asyncio.Task[None] | None = None
 
     def start(self) -> None:
         """Bật bộ hẹn giờ của engine và task tiến độ."""
@@ -999,9 +1027,18 @@ class TransferManager:
 
         Thứ tự: `begin_close()` (nếu chưa); hủy task mạng; chờ các hàng đĩa dọn xong (`RemoveTemp`)
         hay chạy nốt thao tác của lượt tạm dừng (`SuspendTemp`) tối đa `CLOSE_DISK_WAIT`; xả
-        `tombstones.json` tối đa `TOMBSTONE_FLUSH_TIMEOUT` (`_flush_tombstones`);
-        `DiskExecutor.shutdown()`; `ReceiveDir.close()` chỉ khi không còn thread đĩa nào bận (không
-        thì bỏ qua, WARNING). Gọi lại được. Bị hủy giữa chừng → bên gọi dùng `abort_now()`.
+        `tombstones.json` tối đa `TOMBSTONE_FLUSH_TIMEOUT` (`_flush_tombstones`); rồi
+        `_shutdown_disk()`: `DiskExecutor.shutdown()` và đóng thư mục nhận (ngay, hay ở đuôi đĩa).
+
+        Hết `CLOSE_DISK_WAIT` mà hàng đĩa chưa xong (WARNING): **không hủy** task của chúng (hủy
+        giữa `await` một việc đĩa thì không bao giờ tới bước dọn, handle rò tới khi tiến trình
+        thoát); mọi hàng bỏ thao tác chưa bắt đầu (`_close_lane(abandon=True)`) **trước** khi xả bia
+        mộ, để không việc mới nào chiếm thread của lần ghi `tombstones.json`. Việc đang chạy trong
+        thread xong thì hàng chỉ đóng handle (`close_temp`, không xóa) rồi đuôi đĩa đóng thư mục
+        nhận; `close()` không chờ phần này (`close_time_limit()` không đổi). Đuôi chỉ có tác dụng
+        khi event loop còn chạy: CLI thoát ngay sau `close()`, thread đĩa (daemon) chết theo; loop
+        kết thúc trước đuôi thì đuôi bị hủy và handle rò tới hết tiến trình.
+        Gọi lại được. Bị hủy giữa chừng → bên gọi dùng `abort_now()`.
         """
         if self._closed:
             return
@@ -1020,18 +1057,23 @@ class TransferManager:
         disk = set(self._disk_tasks)
         if disk:
             _, pending = await asyncio.wait(disk, timeout=CLOSE_DISK_WAIT)
-            for task in pending:
-                task.cancel()
             if pending:
                 log.warning("còn %d việc dọn đĩa chưa xong khi đóng", len(pending))
-                await asyncio.wait(pending)
+                self._abandon_lanes()  # trước khi xả bia mộ: không việc mới nào chiếm thread
         await self._flush_tombstones()
         self._shutdown_disk()
         self._closed = True
 
     def abort_now(self) -> None:
-        """`Node.close` bị hủy: hủy mọi task, không chờ đĩa, không xả bia mộ; dừng mọi lần mở lại
-        của `restore`; không đóng thư mục nhận khi còn thread."""
+        """`Node.close` (hay `Node.start`) bị hủy: hủy task mạng, hẹn giờ, tiến độ và lần ghi bia mộ,
+        không chờ đĩa, không xả bia mộ; dừng mọi lần mở lại của `restore`.
+
+        **Không hủy task đĩa** (`_disk_tasks`: hàng đĩa, đóng file nguồn, đóng handle mở lại tới
+        muộn): mọi hàng bỏ thao tác chưa bắt đầu (`_close_lane(abandon=True)`), rồi
+        `_shutdown_disk()` bỏ việc còn xếp hàng ở executor, nên các task này chỉ còn chờ việc đang
+        chạy trong thread rồi chạy bước dọn (đóng handle trên loop vì `submit` đã bị từ chối); thư
+        mục nhận đóng ngay hay ở đuôi đĩa. Đồng bộ.
+        """
         self._closing = True
         self._closed = True
         self._stop_tombstones()
@@ -1039,25 +1081,71 @@ class TransferManager:
             stop.set()
         for ctl in self._controls.values():
             ctl.outbox.close()
-        tasks = (self._timer_task, self._progress_task, self._tomb_task, *self._tasks, *self._disk_tasks)
+        tasks = (self._timer_task, self._progress_task, self._tomb_task, *self._tasks)
         for task in tasks:
             if task is not None:
                 task.cancel()
         for slot in list(self._data.values()):
             self._finish_slot(slot, abort=True)
+        self._abandon_lanes()
         self._shutdown_disk()
 
+    def _abandon_lanes(self) -> None:
+        """Mọi hàng đĩa còn sống (kể cả đang dọn hay tạm dừng): `_close_lane(abandon=True)`."""
+        for lane in {*self._lanes.values(), *self._live_lanes}:
+            self._close_lane(lane, abandon=True)
+
+    def _live_disk_tasks(self) -> list[asyncio.Task[Any]]:
+        return [t for t in self._disk_tasks if not t.done()]
+
     def _shutdown_disk(self) -> None:
-        # shutdown() trước: việc chưa chạy bị bỏ, không thread nào nhận việc mới; sau đó busy == 0
-        # nghĩa là không còn thread nào dùng ReceiveDir.
+        """`DiskExecutor.shutdown()` rồi đóng thư mục nhận: ngay, hay ở đuôi đĩa (gọi lại được).
+
+        `shutdown()` trước: việc chưa chạy bị bỏ, không thread nào nhận việc mới. Không còn task
+        đĩa sống và `busy == 0` → `ReceiveDir.close()` ngay. An toàn dù task đĩa sinh sau đó (ví dụ
+        `_close_reader` trong `finally` của task gửi vừa hủy): chúng không dùng thư mục nhận, và
+        `submit` của chúng bị từ chối. Còn task đĩa sống hay thread bận → một task đuôi duy nhất
+        (`_disk_tail`, `_close_receive_dir_when_idle`) đóng thư mục nhận khi mọi việc dùng nó đã
+        `settled()`. Không có hạn: đóng fd dưới tay một thread còn treo là không an toàn. Task đuôi
+        và task đĩa từ đây được giữ ở `_detached_tasks` (`Node` có thể bỏ `TransferManager`).
+        """
         self._executor.shutdown()
+        self._disk_shut = True
+        for task in self._live_disk_tasks():
+            _keep_detached(task)
         rd = self._receive_dir
-        if rd is None or rd.closed:
+        if rd is None or rd.closed or self._disk_tail is not None:
             return
-        if self._executor.busy == 0:
+        busy = self._executor.busy
+        if busy == 0 and not self._live_disk_tasks():
             rd.close()
-        else:
-            log.warning("còn %d thao tác đĩa đang chạy: không đóng thư mục nhận", self._executor.busy)
+            return
+        if busy:
+            log.warning("còn %d thao tác đĩa đang chạy: đóng thư mục nhận sau khi thread đĩa xong", busy)
+        self._disk_tail = self._loop.create_task(
+            self._close_receive_dir_when_idle(rd), name=f"{_TASK_NAME}.transfer-disk-tail"
+        )
+        _keep_detached(self._disk_tail)
+
+    async def _close_receive_dir_when_idle(self, rd: ReceiveDir) -> None:
+        """Đuôi đĩa: chờ mọi task đĩa xong (chụp lại `_disk_tasks` mỗi vòng: task mới có thể sinh
+        trong lúc chờ) và mọi thread đĩa rảnh, rồi đóng thư mục nhận.
+
+        Lần kiểm cuối và `rd.close()` nằm trong một khối đồng bộ (không `await` xen giữa).
+        """
+        try:
+            while True:
+                live = self._live_disk_tasks()
+                if live:
+                    await asyncio.wait(live)
+                    continue
+                if self._executor.busy == 0:
+                    if not rd.closed:
+                        rd.close()
+                    return
+                await self._executor.wait_idle(_TAIL_IDLE_POLL)
+        except Exception:
+            log.exception("đóng thư mục nhận sau khi thread đĩa xong lỗi")
 
     # ---- Gọi engine -------------------------------------------------------------------------
 
@@ -1164,6 +1252,8 @@ class TransferManager:
         tasks = self._disk_tasks if disk else self._tasks
         tasks.add(task)
         task.add_done_callback(tasks.discard)
+        if disk and self._disk_shut:
+            _keep_detached(task)  # sau `_shutdown_disk`: `Node` có thể đã bỏ `TransferManager`
         return task
 
     def _update_holds(self) -> None:
@@ -1671,7 +1761,7 @@ class TransferManager:
         """
         lane.ops = deque(item for item in lane.ops if not isinstance(item[0], Finalize | Reread))
 
-    def _close_lane(self, lane: _DiskLane) -> None:
+    def _close_lane(self, lane: _DiskLane, *, abandon: bool = False) -> None:
         """`RemoveTemp`, `SuspendTemp` hay lượt đã kết thúc: dừng `Reread`, gỡ hàng, thôi báo engine.
 
         Thường thì bỏ mọi thao tác chưa chạy. Lane `suspended` thì chỉ bỏ `Finalize` và `Reread`
@@ -1686,9 +1776,21 @@ class TransferManager:
         hạn đã biết: `Finalize` **đang chạy** (thread đã nhận việc) lúc tạm dừng thì chạy tới cùng
         (hợp đồng mục 5), nên trong cửa sổ đó (vài ms) lượt có thể đã xong trên đĩa dù báo
         `SUSPENDED`. Task của hàng chờ thao tác đang chạy xong rồi mới dọn (`_cleanup_lane`).
+
+        `abandon` (node đóng quá hạn hay bị hủy; áp cả cho hàng đã đóng, đang dọn hay tạm dừng):
+        bỏ mọi thao tác chưa bắt đầu, kể cả `Finalize` đã giao mà thread chưa nhận; khi dọn chỉ
+        đóng handle (`close_temp`), không bao giờ `remove_temp`.
         """
         if self._lanes.get((lane.device_id, lane.transfer_id)) is lane:
             del self._lanes[(lane.device_id, lane.transfer_id)]
+        if abandon:  # trước lần kiểm `closing`: hàng đã đóng cũng phải bỏ thao tác còn lại
+            lane.abandoned = True
+            lane.stop.set()
+            self._drop_ops(lane)
+            if lane.finalize_job is not None:
+                lane.finalize_job.cancel()  # chỉ bỏ được khi thread chưa nhận việc
+            self._notify_lane(lane)
+            lane.wake.set()
         if lane.closing:
             return
         lane.closing = True
@@ -1744,7 +1846,17 @@ class TransferManager:
         device_id, transfer_id = lane.device_id, lane.transfer_id
         rd = self._receive_dir
         assert rd is not None
-        submit = self._executor.submit
+
+        def submit[R](fn: Callable[..., R], /, *args: object) -> DiskJob[R]:
+            # Executor đã dừng (node đóng) khi hàng đang đóng: như việc bị bỏ trước khi chạy.
+            # `RuntimeError` do chính hàm đĩa ném (qua `job.result`) không đi qua đây.
+            try:
+                return self._executor.submit(fn, *args)
+            except RuntimeError:
+                if lane.closing:
+                    raise _JobDropped("executor đã dừng") from None
+                raise
+
         try:
             if isinstance(action, CreateTemp):
                 # `transfer.json` bền trước khi `create_temp` trả về: `temp_created` nghĩa là đã bền.
@@ -1830,8 +1942,8 @@ class TransferManager:
     async def _cleanup_lane(self, lane: _DiskLane) -> None:
         """Chờ mọi việc của hàng thật sự xong, rồi dọn thư mục tạm của chính lượt này (nếu có).
 
-        Lane `suspended` (kể cả khi một thao tác đã lỗi): chỉ đóng handle (`close_temp`), không xóa
-        gì. Còn lại: `remove_temp` (giữ `transfer.json` khi `keep_record`).
+        Lane `suspended` hay `abandoned` (kể cả khi một thao tác đã lỗi): chỉ đóng handle
+        (`close_temp`), không xóa gì. Còn lại: `remove_temp` (giữ `transfer.json` khi `keep_record`).
         """
         lane.stop.set()
         self._drop_ops(lane)
@@ -1848,7 +1960,7 @@ class TransferManager:
         rd = self._receive_dir
         if temp is None or rd is None:
             return
-        if lane.suspended:
+        if lane.suspended or lane.abandoned:
             await self._close_temp(temp)
             return
         # `remove_temp` đóng mọi `.part` của lượt (kể cả `.part` tạo muộn) rồi mới xóa.
