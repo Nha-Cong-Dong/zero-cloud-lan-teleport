@@ -24,7 +24,9 @@ Ba phần:
 Hành vi chính của `PairingController`:
 
 - `pairing_finished` là nguồn kết quả duy nhất ở cả hai vai (spec D4). Kết quả `on_done` của
-  `submit(pair_with)` chỉ dùng để xóa trạng thái việc đang chạy và bắt lỗi tham số / host dừng.
+  `submit(pair_with)` chỉ dùng để xóa trạng thái việc đang chạy, bắt lỗi tham số / host dừng, và
+  phát `job_done(device_id, paired)` đúng một lần khi việc chủ động kết thúc (trừ khi đổi host);
+  `paired` chỉ đúng khi PAIRED với chính thiết bị được nhắm (`ui.app` dùng cho “ghép rồi gửi”).
 - Hết `expires_at` chỉ đóng hộp, KHÔNG `decide(False)`: lõi tự kết thúc phiên (TIMEOUT) và báo
   qua `pairing_finished`. `expires_at` tính theo `loop.time()` của asyncio, tức
   `time.monotonic()`; đồng hồ tiêm được qua `clock`.
@@ -656,6 +658,9 @@ class PairingController(QObject):
     paired = Signal(str)  # device_id, sau PAIRED (cả hai vai)
     finished = Signal(object)  # PairingFinished, mọi kết quả (cả hai vai)
     prompt_opened = Signal(int)  # session_id vừa mở hộp
+    # Việc ghép chủ động (`pair_device` / `pair_address`) kết thúc, mọi đường (kể cả lỗi, hủy):
+    # device_id của thiết bị trên radar (None nếu ghép bằng IP), PAIRED hay không.
+    job_done = Signal(object, bool)
 
     def __init__(
         self,
@@ -791,6 +796,13 @@ class PairingController(QObject):
             return
         self._pairing = None
         self._close_progress()
+        self.job_done.emit(
+            pairing.device_id,
+            isinstance(result, PairingFinished)
+            and result.outcome is PairingOutcome.PAIRED
+            # Địa chỉ cũ của radar có thể là của máy khác: chỉ tính khi ghép đúng thiết bị được nhắm.
+            and (pairing.device_id is None or result.peer_device_id == pairing.device_id),
+        )
         if result is None:
             self._show_result(device_gone_text(pairing.label))
         elif isinstance(result, ValueError):

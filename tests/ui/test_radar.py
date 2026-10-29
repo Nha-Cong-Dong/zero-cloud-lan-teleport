@@ -446,7 +446,7 @@ def test_connected_event_marks_row_connected(radar):
         "PC-A" + chr(0x3000) * 12 + "382 104",  # khoảng trắng giả đẩy “mã” ra xa
         "PC-B" + "\u2800" * 10 + "Laptop-Minh",  # chữ nổi trống
         "N" * 64,  # dài hơn DISPLAY_NAME_WIDTH
-        "\u202eMay-Nguoc",  # RLO: không phải ký tự trống, display_name giữ nguyên
+        "\u202eMay-Nguoc",  # RLO: display_name thay bằng `·`, tên thô không được hiện
     ],
 )
 def test_toxic_peer_names_are_shown_through_display_name(radar, toxic):
