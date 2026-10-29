@@ -151,6 +151,7 @@ async def test_new_connection_after_rst_works_normally(tcp_proxy, sink):
 # ---- chặn -------------------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_block_moves_no_bytes_and_closes_nothing_then_resume_delivers_in_order(tcp_proxy, sink):
     proxy = tcp_proxy(sink.port)
     reader, writer = await asyncio.open_connection(LOCAL, proxy.port)
@@ -260,6 +261,7 @@ class Flood:
         return self.sent - self.writer.transport.get_write_buffer_size()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("how", ["blocked", "server-not-reading"])
 async def test_pipe_through_proxy_has_backpressure(tcp_proxy, sink, how):
     """Proxy đang chặn, hoặc server không đọc: bên gửi bị chặn lại (backpressure) và lượng byte nó đẩy
@@ -328,6 +330,7 @@ def test_usable_from_synchronous_test(tcp_proxy):
 # ---- tự chặn ở một ngưỡng byte (`block_at`, P3-5) ------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_block_at_stops_exactly_at_threshold_then_resume_delivers_rest_in_order(tcp_proxy, sink):
     """Ngưỡng không chia hết cho `chunk`: đúng `nbytes` byte tới server, không lọt thêm byte nào trong
     lúc chặn, không đóng gì; `resume()` → phần còn lại tới đủ, đúng thứ tự."""
@@ -401,6 +404,7 @@ async def test_block_at_counts_bytes_of_all_connections_including_closed_ones(tc
         w2.transport.abort()
 
 
+@pytest.mark.slow
 async def test_block_at_also_holds_the_other_direction_and_new_connections(tcp_proxy, sink):
     """Chặn theo ngưỡng chiều s2c là chặn cả mạng: chiều c2s cũng đứng, kết nối mới không tới server."""
     proxy = tcp_proxy(sink.port)

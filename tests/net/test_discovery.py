@@ -186,6 +186,7 @@ async def advertise(d: MdnsDiscovery, device_id: str, name: str = "PC", **kw) ->
 # --- (a)–(e): khám phá giữa hai MdnsDiscovery trên 127.0.0.1 -------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_a_advertised_device_is_discovered_with_all_fields():
@@ -206,6 +207,7 @@ async def test_a_advertised_device_is_discovered_with_all_fields():
         assert b.devices[x] == expected
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_a2_device_advertised_before_browsing_is_found():
@@ -218,6 +220,7 @@ async def test_a2_device_advertised_before_browsing_is_found():
         assert ev.device.name == "Có sẵn"
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_b_long_name_is_truncated_to_200_bytes():
@@ -230,6 +233,7 @@ async def test_b_long_name_is_truncated_to_200_bytes():
         assert ev.device.name == E * 50
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_c_rename_emits_device_updated():
@@ -246,6 +250,7 @@ async def test_c_rename_emits_device_updated():
         assert b.devices[x].name == "Tên mới"
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_d_stop_advertising_emits_device_removed():
@@ -261,6 +266,7 @@ async def test_d_stop_advertising_emits_device_removed():
         assert x not in b.devices
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_e_browser_never_reports_itself():
@@ -299,6 +305,7 @@ def raw_txt(device_id: str, **override: bytes) -> dict[bytes, bytes]:
     return txt
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_f_malformed_records_are_ignored_quietly(caplog):
@@ -360,6 +367,7 @@ def test_g_local_ipv4_addresses_are_usable():
 # --- (h): đóng ----------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_h_close_twice_and_no_event_after_close():
@@ -438,6 +446,7 @@ async def test_advertise_without_usable_address_raises_discovery_error(addresses
             await d.advertise(device_id=new_id(), name="PC", os="windows", port=47474, addresses=addresses)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_advertise_cannot_change_device_id():
@@ -447,6 +456,7 @@ async def test_advertise_cannot_change_device_id():
             await advertise(d, new_id())
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_duplicate_instance_name_raises_discovery_error():
@@ -458,6 +468,7 @@ async def test_duplicate_instance_name_raises_discovery_error():
                 await advertise(b, x, "Bản trùng")
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_on_event_exception_is_logged_and_later_events_still_arrive(caplog):
@@ -503,6 +514,7 @@ def ptr_only_packet(instance: str) -> DNSOutgoing:
     return out
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_close_while_resolve_pending_finishes_tasks_and_emits_nothing(caplog):
@@ -582,6 +594,7 @@ async def test_cancelled_close_still_closes_zeroconf(monkeypatch):
     assert await eventually(lambda: len(closed) == 1 and closed[0].zeroconf.done)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_second_close_waits_for_cancelled_close_to_finish(monkeypatch):
@@ -613,6 +626,7 @@ async def test_second_close_waits_for_cancelled_close_to_finish(monkeypatch):
         await d.close()  # thêm lần nữa: vẫn không lỗi
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_concurrent_close_waits_until_zeroconf_closed(monkeypatch):
@@ -1153,6 +1167,7 @@ def test_time_params_reject_non_number_with_type_error(param, bad):
         MdnsDiscovery(interfaces=LOOPBACK, **{param: bad})
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_probe_tick_sets_how_often_tracker_is_asked_for_probes(monkeypatch):
@@ -1297,6 +1312,7 @@ DEAD_TTL = 2  # giây, TTL của SRV/TXT/A trên máy sắp chết
 DEAD_DEADLINE = 15.0  # giây từ lúc thấy thiết bị tới DeviceRemoved
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_device_dying_without_goodbye_is_removed_by_liveness_probe():
@@ -1324,6 +1340,7 @@ async def test_device_dying_without_goodbye_is_removed_by_liveness_probe():
         assert loop.time() - added_at >= DEAD_TTL - 0.5
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_tracker_full_of_ghosts_admits_real_device_after_ghosts_are_dropped():
@@ -1355,6 +1372,7 @@ async def test_tracker_full_of_ghosts_admits_real_device_after_ghosts_are_droppe
         assert not set(ghosts) & set(b.devices)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_set_priority_after_browsing_admits_device_waiting_behind_ghosts():
@@ -1379,6 +1397,7 @@ async def test_set_priority_after_browsing_admits_device_waiting_behind_ghosts()
         assert real in b.devices
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @mdns
 async def test_set_priority_before_start_is_applied_when_browsing_starts():

@@ -64,6 +64,28 @@ pytest -m frozen
 
 Build trên GitHub: workflow `build-cli` ([.github/workflows/build-cli.yml](../.github/workflows/build-cli.yml)) chỉ chạy tay (`workflow_dispatch`). Vào tab Actions → “Build CLI (thử)” → Run workflow, chọn nhánh `main` hoặc tag `vX.Y.Z` (hoặc `gh workflow run build-cli.yml --ref main`, `--ref vX.Y.Z`); nút chạy tay chỉ hiện khi file workflow đã có trên nhánh mặc định. Workflow build bằng đúng lệnh trên, chạy `pytest -m frozen` trên exe, rồi tải lên artifact `teleport-cli-<phiên bản>-<sha7>-windows`. Artifact là bản tạm, tự xóa sau thời hạn `retention-days` của workflow. File zip tải về chứa thẳng `teleport.exe`, `_internal\` và ba file giấy phép, không có thư mục bọc ngoài, nên hãy giải nén vào một thư mục riêng (ví dụ `C:\tp\teleport\`).
 
+## Build thử bản GUI (Windows)
+Bản GUI (`Teleport.exe`, cửa sổ, không mở cửa sổ dòng lệnh) đóng gói như bản CLI ở mục trên, cùng `third_party.py` và `requirements.txt`, nhưng dùng spec `teleport-gui.spec` và điểm vào `launcher_gui.py` (gọi `teleport.ui.app:main`). Đây là bản zip giải nén là chạy, chưa phải bộ cài: không gắn tag, không tạo GitHub Release. Môi trường build cần extra `gui` (đã nằm trong `.[dev]`).
+
+```powershell
+pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt
+$env:PYTHONUTF8 = "1"
+pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/pyinstaller/teleport-gui.spec
+```
+
+Kết quả nằm trong `dist/teleport-gui/` (tên thư mục khác `dist/teleport/` của bản CLI vì Windows không phân biệt hoa thường): `Teleport.exe`, `_internal/` và ba file giấy phép như bản CLI. Qt/PySide6 dùng theo LGPL-3.0 nên phải là `--onedir`: DLL Qt nằm riêng trong `_internal\PySide6\`, người dùng thay được; `SOURCE.txt` ghi cách thay và nơi lấy mã nguồn Qt, PySide6. Spec chỉ đóng phần Qt mà `ui` dùng; danh sách phần bị bỏ (QtQml, QtQuick, QtPdf, `opengl32sw.dll`, bản dịch và plugin không dùng) là `QT_UNUSED` trong spec, log build ghi số file đã bỏ.
+
+`third_party.py` kiểm thêm thành phần lồng bên trong DLL Qt (`QT_EMBEDDED`, rà theo `qt_attribution.json` của đúng phiên bản Qt, văn bản giấy phép chép sẵn trong `packaging/pyinstaller/licenses/qt-<phiên bản>/`). Build dừng khi phiên bản PySide6 khác phiên bản đã rà, hoặc khi có DLL/plugin Qt chưa rà (`QT_REVIEWED_FILES`), ví dụ sau khi `ui` dùng thêm một module Qt. Khi đó rà lại `qt_attribution.json` của qtbase và pyside-setup đúng tag mới rồi mới sửa các bảng đó (cách làm: docstring của `third_party.py`).
+
+Test khói (marker `frozen`) của bản GUI dùng biến riêng, để chạy được cùng lúc với test của bản CLI; exe không có stdout nên test chỉ kiểm mã thoát của `--selftest` và bố cục thư mục:
+
+```powershell
+$env:TELEPORT_FROZEN_GUI_EXE = "$PWD\dist\teleport-gui\Teleport.exe"
+pytest -m frozen
+```
+
+Build trên GitHub: workflow `build-gui` ([.github/workflows/build-gui.yml](../.github/workflows/build-gui.yml)), chạy tay như `build-cli` (“Build GUI (thử)”, hoặc `gh workflow run build-gui.yml --ref main`). Artifact `teleport-gui-<phiên bản>-<sha7>-windows` riêng với zip CLI, cũng không có thư mục bọc ngoài. Lần đầu `Teleport.exe` nghe cổng, Windows hỏi tường lửa: chọn cho phép ở mạng Private; bấm Cancel thì Windows tạo rule **chặn**, phải gỡ trong Windows Defender Firewall. Giải nén sang thư mục khác là một exe mới với Windows, sẽ bị hỏi lại. Exe chưa ký mã nên SmartScreen có thể chặn lần chạy đầu (“More info” → “Run anyway”).
+
 ## Phát hành
 1. Chuyển mục `[Unreleased]` trong `CHANGELOG.md` thành `[X.Y.Z] - YYYY-MM-DD`, đúng số của tag (bản thử nghiệm: `[0.1.0-alpha] - YYYY-MM-DD`).
 2. Cập nhật `__version__` trong `src/teleport/__init__.py`. Đây là nguồn duy nhất của số phiên bản; `pyproject.toml` tự đọc từ đó.

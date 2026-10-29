@@ -462,12 +462,14 @@ NAMES = st.one_of(
 PROPERTY_SETTINGS = settings(max_examples=400, deadline=None)
 
 
+@pytest.mark.slow
 @PROPERTY_SETTINGS
 @given(NAMES)
 def test_property_sanitized_name_is_always_safe(fn, raw):
     assert_safe(fn.sanitize_filename(raw))
 
 
+@pytest.mark.slow
 @PROPERTY_SETTINGS
 @given(NAMES)
 def test_property_sanitize_is_idempotent(fn, raw):
@@ -475,6 +477,7 @@ def test_property_sanitize_is_idempotent(fn, raw):
     assert fn.sanitize_filename(out) == out
 
 
+@pytest.mark.slow
 @PROPERTY_SETTINGS
 @given(NAMES)
 def test_property_nfd_and_nfc_inputs_give_same_result(fn, raw):
@@ -483,6 +486,7 @@ def test_property_nfd_and_nfc_inputs_give_same_result(fn, raw):
     assert fn.sanitize_filename(nfd) == fn.sanitize_filename(nfc)
 
 
+@pytest.mark.slow
 @PROPERTY_SETTINGS
 @given(NAMES)
 def test_property_result_is_last_component_only(fn, raw):
@@ -492,6 +496,7 @@ def test_property_result_is_last_component_only(fn, raw):
     assert fn.sanitize_filename("C:\\Windows\\" + out) == out
 
 
+@pytest.mark.slow
 @settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(st.lists(st.one_of(ANY_CHAR, TRICKY_PIECES), max_size=12).map("".join))
 def test_property_sanitized_short_name_creates_that_file_on_real_fs(fn, raw):
@@ -584,6 +589,7 @@ def test_numbered_device_like_and_dotfile_stay_safe(fn):
         assert key(out) != key(name)
 
 
+@pytest.mark.slow
 @PROPERTY_SETTINGS
 @given(NAMES, st.integers(min_value=1, max_value=10**12))
 def test_property_numbered_is_safe_and_distinct(fn, raw, n):
@@ -597,6 +603,7 @@ def test_property_numbered_is_safe_and_distinct(fn, raw, n):
     assert key(fn.numbered(name, n + 1)) != key(out)
 
 
+@pytest.mark.slow
 @PROPERTY_SETTINGS
 @given(NAMES, st.integers(min_value=1, max_value=10**6), st.integers(min_value=40, max_value=255))
 def test_property_numbered_respects_max_bytes(fn, raw, n, max_bytes):
@@ -618,6 +625,9 @@ def _assert_dedupe_contract(fn, names: list[str], out: list[str]) -> None:
     assert len(set(keys)) == len(keys), "các tên kết quả phải khác nhau theo casefold"
     clean = [fn.sanitize_filename(n) for n in names]
     seen: set[str] = set()
+    # Tập tên đánh số dựng một lần cho mỗi tên đã làm sạch: dựng lại cho từng bản là O(n²), riêng ca
+    # 1000 tên trùng đã mất hàng chục giây.
+    numbered: dict[str, set[str]] = {}
     for i, (o, c) in enumerate(zip(out, clean, strict=True)):
         assert_safe(o)
         if key(c) not in seen:
@@ -626,8 +636,9 @@ def _assert_dedupe_contract(fn, names: list[str], out: list[str]) -> None:
             assert o == c, (i, names, out)
         else:
             # Bản sau: tên đã làm sạch kèm ` (k)`; mỗi tên khác chặn tối đa một số k.
-            candidates = {fn.numbered(c, k) for k in range(1, len(names) + 2)}
-            assert o in candidates, (i, names, out)
+            if c not in numbered:
+                numbered[c] = {fn.numbered(c, k) for k in range(1, len(names) + 2)}
+            assert o in numbered[c], (i, names, out)
         seen.add(key(c))
 
 
@@ -740,6 +751,7 @@ DEDUPE_POOL = st.sampled_from(
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(st.lists(st.one_of(DEDUPE_POOL, NAMES), max_size=30))
 def test_property_dedupe_contract(fn, names):
