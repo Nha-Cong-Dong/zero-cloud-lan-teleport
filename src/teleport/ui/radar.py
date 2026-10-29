@@ -17,15 +17,26 @@ không hiện lỗi kết nối.
 điều khiển thành U+FFFD, ≤ 32 cột); hàng của `QListView` vẽ chữ thuần, không HTML. Tên hệ điều hành
 chỉ hiện khi là một trong các giá trị đã biết (`windows`, `macos`, `linux`).
 
-**Signal** (PR1 chỉ phát, `ui.app` nối ở PR2/PR3): `pair_requested(DeviceView)` (chỉ khi thiết bị
-chưa ghép đôi và đang trong mạng, spec mục 9.1); `manual_address_entered(ip, cổng)` (đã qua
-`app.devices.parse_manual_address`); `send_files_requested(device_id, list[Path])` (khung, PR3);
-`unpair_requested(device_id)`.
+**Signal** (`ui.app` / `ui.transfers` nối): `pair_requested(DeviceView)` (chỉ khi thiết bị chưa
+ghép đôi và đang trong mạng, spec mục 9.1); `manual_address_entered(ip, cổng)` (đã qua
+`app.devices.parse_manual_address`); `send_files_requested(device_id, list[Path])` (kéo thả);
+`pick_files_requested(device_id)` (menu “Gửi file…”); `drop_hint_requested(câu)` (thả vào chỗ
+không có thiết bị); `unpair_requested(device_id)`.
+
+**Kéo thả** (mvp F4): danh sách nhận kéo khi `mimeData().hasUrls()` có ít nhất một URL file cục bộ
+(`ui.send.local_paths`, không chạm đĩa), tô viền hàng dưới con trỏ (màu `Highlight` của palette)
+mà không đổi hàng đang chọn. Thả lên hàng → `drop_files(id, urls)` → `send_files_requested(id,
+paths)`, kể cả thiết bị chưa ghép đôi đang trong mạng (`ui.transfers` lo “ghép rồi gửi”); hàng của
+thiết bị chưa ghép đôi không trong mạng (`not can_receive_files`) thì `dragMoveEvent` từ chối thả
+(con trỏ hiện “không được thả”), không tô. Thả vào chỗ trống (hay
+vào câu “Chưa thấy thiết bị nào”) → `drop_hint_requested` với câu mvp mục 8 “Thả file lên một thiết
+bị để gửi.”. URL không phải file cục bộ bị bỏ. `drop_files` là hàm công khai (seam test).
 
 **Bàn phím và trình đọc màn hình** (mvp N12): Tab / Shift+Tab đi qua **từng** thiết bị rồi mới ra
 khỏi danh sách (vào bằng Tab thì tới thiết bị đầu, bằng Shift+Tab thì tới thiết bị cuối); Enter
 (hay nhấp đúp) trên thiết bị chưa ghép đôi đang trong mạng = “Ghép đôi…”; phím Menu (hay
-Shift+F10, chuột phải) mở menu của thiết bị đang chọn bằng `popup()` (không `exec()`). Mỗi hàng có
+Shift+F10, chuột phải) mở menu của thiết bị đang chọn bằng `popup()` (không `exec()`): “Gửi file…”
+(thiết bị đã ghép đôi, hay chưa ghép đôi mà đang trong mạng), “Ghép đôi…”, “Hủy ghép đôi…”. Mỗi hàng có
 `AccessibleTextRole` một dòng; trạng thái luôn nói bằng chữ, không chỉ bằng màu.
 
 **Nhập IP thủ công**: nút luôn hiện (mvp F2) mở một khung ngay trong radar (không hộp thoại chặn):
@@ -49,9 +60,24 @@ from PySide6.QtCore import (
     QPersistentModelIndex,
     QPoint,
     Qt,
+    QUrl,
     Signal,
 )
-from PySide6.QtGui import QAction, QContextMenuEvent, QFocusEvent, QFont, QKeyEvent
+from PySide6.QtGui import (
+    QAction,
+    QContextMenuEvent,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QFocusEvent,
+    QFont,
+    QKeyEvent,
+    QPainter,
+    QPaintEvent,
+    QPalette,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -75,7 +101,7 @@ from teleport.app.node import (
     NodeEvent,
 )
 from teleport.core.links import ConnectResult
-from teleport.ui import texts
+from teleport.ui import send, texts
 
 DEVICE_ROLE = Qt.ItemDataRole.UserRole + 1  # DeviceView của hàng
 DEVICE_ID_ROLE = Qt.ItemDataRole.UserRole + 2  # device_id (str)
@@ -134,6 +160,16 @@ def invalid_address_text(entered: str) -> str:
         ),
         address=shown,
     )
+
+
+def drop_hint_text() -> str:
+    """mvp mục 8: gợi ý khi thả file vào chỗ không có thiết bị."""
+    return QCoreApplication.translate("Radar", "Thả file lên một thiết bị để gửi.")
+
+
+def can_receive_files(view: DeviceView) -> bool:
+    """Gửi file tới được (kéo thả, “Gửi file…”): đã ghép đôi, hay chưa ghép đôi mà đang trong mạng."""
+    return view.paired or view.online
 
 
 def _paired_tag(paired: bool) -> str:
@@ -312,6 +348,82 @@ class _DeviceList(QListView):
     """`QListView` mà Tab đi qua từng hàng; menu ngữ cảnh báo qua `menu_requested`."""
 
     menu_requested = Signal(QModelIndex, QPoint)  # hàng (có thể không hợp lệ), vị trí toàn màn hình
+    files_dropped = Signal(QModelIndex, list)  # hàng (có thể không hợp lệ), list[QUrl]
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self._drop_index = QPersistentModelIndex()  # hàng đang được kéo file qua (tô viền)
+
+    # Kéo thả tự xử lý (model không hỗ trợ mime): chỉ nhận URL file cục bộ, không chạm đĩa.
+
+    def drop_target(self) -> str | None:
+        """device_id của hàng đang được tô vì có file kéo qua; không có → None (test)."""
+        if not self._drop_index.isValid():
+            return None
+        device_id = self._drop_index.data(DEVICE_ID_ROLE)
+        return device_id if isinstance(device_id, str) else None
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if _has_local_files(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if not _has_local_files(event):
+            self._set_drop_index(QModelIndex())
+            event.ignore()
+            return
+        index = self.indexAt(event.position().toPoint())
+        if index.isValid():
+            view = index.data(DEVICE_ROLE)
+            if not isinstance(view, DeviceView) or not can_receive_files(view):
+                # Thiết bị không gửi tới được (chưa ghép đôi, không trong mạng): không nhận thả ở đây.
+                self._set_drop_index(QModelIndex())
+                event.ignore(self.visualRect(index))
+                return
+        # Chỉ tô viền hàng dưới con trỏ, không đổi hàng đang chọn khi file chỉ được kéo qua.
+        self._set_drop_index(index)
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._set_drop_index(QModelIndex())
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._set_drop_index(QModelIndex())
+        urls = _event_urls(event)
+        if not send.local_paths(urls):
+            event.ignore()
+            return
+        index = self.indexAt(event.position().toPoint())
+        event.acceptProposedAction()
+        self.files_dropped.emit(QModelIndex(index), urls)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        model, drop = self.model(), self._drop_index
+        if model is None or not drop.isValid():
+            return
+        rect = self.visualRect(model.index(drop.row(), drop.column()))
+        if rect.isEmpty():
+            return
+        painter = QPainter(self.viewport())
+        try:
+            pen = QPen(self.palette().color(QPalette.ColorRole.Highlight))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawRect(rect.adjusted(1, 1, -2, -2))
+        finally:
+            painter.end()
+
+    def _set_drop_index(self, index: QModelIndex) -> None:
+        if QPersistentModelIndex(index) == self._drop_index:
+            return
+        self._drop_index = QPersistentModelIndex(index)
+        self.viewport().update()
 
     def focusNextPrevChild(self, next: bool) -> bool:
         model = self.model()
@@ -370,6 +482,15 @@ class _DeviceList(QListView):
         self.menu_requested.emit(QModelIndex(index), self.viewport().mapToGlobal(pos))
 
 
+def _event_urls(event: QDragEnterEvent | QDragMoveEvent | QDropEvent) -> list[QUrl]:
+    mime = event.mimeData()
+    return list(mime.urls()) if mime is not None and mime.hasUrls() else []
+
+
+def _has_local_files(event: QDragEnterEvent | QDragMoveEvent | QDropEvent) -> bool:
+    return bool(send.local_paths(_event_urls(event)))
+
+
 def _label(object_name: str, *, bold: bool = False, size_delta: int = 0) -> QLabel:
     label = QLabel()
     label.setObjectName(object_name)
@@ -389,7 +510,9 @@ class RadarView(QWidget):
 
     pair_requested = Signal(object)  # DeviceView: chưa ghép đôi, đang trong mạng
     manual_address_entered = Signal(str, int)  # ip, cổng
-    send_files_requested = Signal(str, list)  # device_id, list[Path] (PR3)
+    send_files_requested = Signal(str, list)  # device_id, list[Path] (kéo thả)
+    pick_files_requested = Signal(str)  # device_id (menu “Gửi file…”)
+    drop_hint_requested = Signal(str)  # câu gợi ý (thả vào chỗ không có thiết bị)
     unpair_requested = Signal(str)  # device_id
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -423,6 +546,8 @@ class RadarView(QWidget):
         self.list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.list_view.activated.connect(self._on_activated)
         self.list_view.menu_requested.connect(self._on_menu_requested)
+        self.list_view.files_dropped.connect(self._on_files_dropped)
+        self.setAcceptDrops(True)  # thả vào câu “Chưa thấy thiết bị nào” hay chỗ trống khác → gợi ý
 
         self.address_button = QPushButton(self)
         self.address_button.setObjectName("addressButton")
@@ -522,6 +647,10 @@ class RadarView(QWidget):
                 name=texts.peer_label(view.name, view.device_id),
             )
         )
+        if can_receive_files(view):
+            action = QAction(QCoreApplication.translate("Radar", "Gửi file…"), menu)
+            action.triggered.connect(lambda _=False, i=view.device_id: self._request_pick(i))
+            menu.addAction(action)
         if not view.paired and view.online:
             action = QAction(QCoreApplication.translate("Radar", "Ghép đôi…"), menu)
             action.triggered.connect(lambda _=False, i=view.device_id: self._request_pair(i))
@@ -567,6 +696,48 @@ class RadarView(QWidget):
         self.close_address_entry()
         self.manual_address_entered.emit(ip, port)
         return True
+
+    def drop_files(self, device_id: str | None, urls: list[QUrl]) -> bool:
+        """Thả `urls` lên thiết bị `device_id` (None: chỗ trống); True nếu đã phát `send_files_requested`.
+
+        Chỉ lấy URL file cục bộ (`send.local_paths`, không chạm đĩa); không có cái nào → bỏ qua.
+        Chỗ trống hay thiết bị không còn trên radar → `drop_hint_requested`. Thiết bị chưa ghép đôi
+        mà không trong mạng → bỏ qua.
+        """
+        paths = send.local_paths(urls)
+        if not paths:
+            return False
+        view = None if device_id is None else self.model.device(device_id)
+        if view is None:
+            self.drop_hint_requested.emit(drop_hint_text())
+            return False
+        if not can_receive_files(view):
+            return False
+        self.select_device(view.device_id)
+        self.send_files_requested.emit(view.device_id, paths)
+        return True
+
+    # ---- Kéo thả vào phần còn lại của radar --------------------------------------------------
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if _has_local_files(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if _has_local_files(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        urls = _event_urls(event)
+        if not send.local_paths(urls):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.drop_files(None, urls)
 
     # ---- Chữ -------------------------------------------------------------------------------------
 
@@ -654,6 +825,16 @@ class RadarView(QWidget):
         view = self.model.device(device_id)
         if view is not None and not view.paired and view.online:
             self.pair_requested.emit(view)
+
+    def _on_files_dropped(self, index: QModelIndex, urls: list[QUrl]) -> None:
+        device_id = index.data(DEVICE_ID_ROLE) if index.isValid() else None
+        self.drop_files(device_id if isinstance(device_id, str) else None, urls)
+
+    def _request_pick(self, device_id: str) -> None:
+        """Phát `pick_files_requested` nếu thiết bị vẫn còn trên radar và gửi tới được."""
+        view = self.model.device(device_id)
+        if view is not None and can_receive_files(view):
+            self.pick_files_requested.emit(device_id)
 
     def _request_unpair(self, device_id: str) -> None:
         view = self.model.device(device_id)

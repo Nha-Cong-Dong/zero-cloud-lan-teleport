@@ -8,7 +8,8 @@ Bốn trạng thái (`ViewState`):
   thư mục nhận) để P4-7.
 - STARTING: “Đang khởi động…”.
 - RUNNING: sẵn sàng nhận file, tên máy này và thư mục nhận; bên dưới là radar (`ui.radar.RadarView`,
-  bên trái) và `transfers_area` (bên phải, trống tới PR3).
+  bên trái) và `transfers_area` (bên phải; `ui.transfers.TransfersController` đặt danh sách lượt
+  truyền `TransfersView` vào đây).
 - ERROR: câu lỗi khởi động (`texts.start_error`) và gợi ý, nút “Thử lại”.
 
 Mọi chữ là chữ thuần (`Qt.PlainText`), đọc được bằng bàn phím (Tab đi qua từng dòng, từng thiết

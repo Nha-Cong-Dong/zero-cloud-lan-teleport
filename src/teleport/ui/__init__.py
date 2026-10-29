@@ -6,6 +6,8 @@ qua `bridge.NodeHost` (không bao giờ gọi `Node` từ thread Qt). Mọi ch�
 (tên máy, tên file) đi qua `core.display` và hiện dạng chữ thuần, không HTML.
 
 Module: `app` (điểm vào, một bản mỗi thư mục cấu hình, ráp các phần), `bridge` (thread node),
-`main_window`, `tray`, `offer_prompt` (hộp hỏi nhận file tạm tới P4-6), `texts` (câu chữ dùng
-chung), `i18n`, `theme`.
+`main_window`, `tray`, `radar` (danh sách thiết bị, kéo thả), `transfers` (điều phối gửi/nhận
+file), `offer` (hộp hỏi nhận file, mvp mục 7.3), `transfers_view` (danh sách lượt truyền),
+`send` (lấy đường dẫn, kiểm trước và câu lỗi khi gửi), `texts` (câu chữ dùng chung), `i18n`,
+`theme`.
 """

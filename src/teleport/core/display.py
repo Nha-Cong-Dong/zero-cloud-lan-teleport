@@ -1,16 +1,20 @@
 """Hiện chữ cho người dùng: tên do máy kia tự đặt, tên file, dung lượng, thời gian.
 
 Tên thiết bị: luật ở docs/mvp.md mục 7.2. Tên trong `hello` chưa được xác thực
-(docs/protocol.md mục 3.3): kẻ đứng giữa có thể đặt tên trông như một mã ghép đôi, hoặc chèn
-ký tự trông như khoảng trắng để đẩy chữ ra xa. `display_name` làm những ký tự đó lộ ra (thành
-`·`) và giữ tên trong `DISPLAY_NAME_WIDTH` cột. Ngoặc “…” và vị trí của tên (luôn sau mã) do
-người gọi lo.
+(docs/protocol.md mục 3.3): kẻ đứng giữa có thể đặt tên trông như một mã ghép đôi, chèn ký tự
+trông như khoảng trắng để đẩy chữ ra xa, hoặc chèn ký tự đổi hướng chữ (RLO U+202E…) để đảo
+hướng câu đứng sau tên. `display_name` làm những ký tự đó lộ ra (thành `·`) và giữ tên trong
+`DISPLAY_NAME_WIDTH` cột. Ngoặc “…” và vị trí của tên (luôn sau mã) do người gọi lo.
 
-Tên file (`display_filename`, docs/mvp.md mục 7.3): cùng luật ký tự trống, nhưng cắt ở giữa
-và giữ đuôi (phần mở rộng), tối đa `FILE_NAME_WIDTH` cột. Ký tự vô hình và điều khiển hướng chữ
-mà `core.filenames` bỏ khi làm sạch (`INVISIBLE_CHARS`) cũng thành `·`, để không phụ thuộc
-một tầng làm sạch duy nhất. Không thay ký tự điều khiển (Cc): tên file nhận đã được làm sạch,
-tên file cục bộ do bên gọi thay trước khi in.
+Ký tự thành `·` (`_shown`, chung cho tên máy và tên file): ký tự trống (`_is_blank`), ký tự
+mà `core.filenames` bỏ khi làm sạch (`INVISIBLE_CHARS`: điều khiển hướng chữ, ký tự vô hình,
+U+2028/U+2029) và mọi ký tự định dạng khác (loại Cf) trừ ZWJ U+200D và ZWNJ U+200C (emoji
+ghép và chữ Ba Tư cần chúng). Tên máy đã qua `validate_device_name` vẫn được thay, để không
+phụ thuộc một tầng kiểm tra duy nhất.
+
+Tên file (`display_filename`, docs/mvp.md mục 7.3): cùng luật ký tự, nhưng cắt ở giữa và giữ
+đuôi (phần mở rộng), tối đa `FILE_NAME_WIDTH` cột. Không thay ký tự điều khiển (Cc): tên file
+nhận đã được làm sạch, tên file cục bộ do bên gọi thay trước khi in.
 
 Dung lượng (`format_size`) theo hệ nhị phân của docs/mvp.md mục 8; thời gian (`format_duration`)
 cho “còn … ” của dòng tiến độ.
@@ -34,12 +38,26 @@ _ELLIPSIS = "…"  # … (1 cột)
 _ZWJ = "\u200d"  # ZWJ, viết bằng escape để mã nguồn không chứa ký tự ẩn
 # Ngoài khoảng trắng Unicode (loại Zs): các ký tự hiện ra trống trơn dù không phải khoảng trắng.
 _EXTRA_BLANKS = frozenset("\u2800\u3164\u115f\u1160\uffa0")  # chữ nổi trống, các ký tự lấp chỗ Hangul
+# Ký tự loại Cf được giữ nguyên khi hiện: ZWJ và ZWNJ, cùng luật với `core.filenames`.
+_KEPT_FORMAT_CHARS = frozenset((_ZWJ, "\u200c"))
 _SIZE_UNITS = ("KB", "MB", "GB", "TB")  # mvp mục 8: 1 KB = 1024 byte, 1 MB = 1024 KB…
 
 
 def _is_blank(ch: str) -> bool:
     """Ký tự trông như khoảng trắng mà không phải dấu cách thường U+0020."""
     return ch in _EXTRA_BLANKS or (ch != " " and unicodedata.category(ch) == "Zs")
+
+
+def _is_hidden(ch: str) -> bool:
+    """Ký tự vô hình hay đổi hướng chữ: `INVISIBLE_CHARS` và loại Cf, trừ ZWJ và ZWNJ."""
+    if ch in INVISIBLE_CHARS:
+        return True
+    return ch not in _KEPT_FORMAT_CHARS and unicodedata.category(ch) == "Cf"
+
+
+def _shown(text: str) -> str:
+    """`text` với ký tự trống và ký tự vô hình / đổi hướng chữ thay bằng `BLANK_MARK`."""
+    return "".join(BLANK_MARK if _is_blank(ch) or _is_hidden(ch) else ch for ch in text)
 
 
 def _width(ch: str) -> int:
@@ -50,18 +68,19 @@ def _width(ch: str) -> int:
 
 
 def display_name(name: str, *, max_width: int = DISPLAY_NAME_WIDTH) -> str:
-    """Tên để hiện cho người dùng: ký tự trống thành `·`, dài quá `max_width` cột thì cắt.
+    """Tên để hiện cho người dùng: ký tự lạ thành `·`, dài quá `max_width` cột thì cắt.
 
-    Mọi ký tự loại Zs trừ U+0020, cùng U+2800, U+3164, U+115F, U+1160, U+FFA0, thành
-    `BLANK_MARK` (1 cột); độ rộng đo sau bước này. Vượt `max_width` thì giữ phần đầu dài
-    nhất sao cho phần đó + `…` ≤ `max_width` cột, bỏ ZWJ thừa ở cuối phần giữ lại.
+    Mọi ký tự loại Zs trừ U+0020, cùng U+2800, U+3164, U+115F, U+1160, U+FFA0, và ký tự vô hình
+    / đổi hướng chữ (`INVISIBLE_CHARS`, loại Cf trừ ZWJ và ZWNJ) thành `BLANK_MARK` (1 cột);
+    độ rộng đo sau bước này. Vượt `max_width` thì giữ phần đầu dài nhất sao cho phần đó + `…`
+    ≤ `max_width` cột, bỏ ZWJ thừa ở cuối phần giữ lại.
     Không thêm ngoặc. `name` không phải chuỗi → TypeError; `max_width < 2` → ValueError.
     """
     if not isinstance(name, str):
         raise TypeError("name phải là chuỗi")
     if max_width < 2:
         raise ValueError("max_width phải ≥ 2")
-    shown = "".join(BLANK_MARK if _is_blank(ch) else ch for ch in name)
+    shown = _shown(name)
     widths = [_width(ch) for ch in shown]
     if sum(widths) <= max_width:
         return shown
@@ -81,15 +100,11 @@ def text_width(text: str) -> int:
     return sum(_width(ch) for ch in text)
 
 
-def _shown_filename(text: str) -> str:
-    return "".join(BLANK_MARK if ch in INVISIBLE_CHARS or _is_blank(ch) else ch for ch in text)
-
-
 def display_filename(name: str, *, max_width: int = FILE_NAME_WIDTH) -> str:
-    """Tên file để hiện: ký tự trống thành `·` như `display_name`, dài quá `max_width` cột thì cắt ở giữa.
+    """Tên file để hiện: thay ký tự như `display_name`, dài quá `max_width` cột thì cắt ở giữa.
 
-    Ký tự trong `core.filenames.INVISIBLE_CHARS` (điều khiển hướng chữ, U+2028/U+2029, U+200B,
-    U+FEFF, U+2060…) cũng thành `·`.
+    Ký tự trống, ký tự trong `core.filenames.INVISIBLE_CHARS` (điều khiển hướng chữ,
+    U+2028/U+2029, U+200B, U+FEFF, U+2060…) và loại Cf trừ ZWJ, ZWNJ thành `·`.
 
     Cắt: giữ phần cuối dài nhất ≤ nửa ngân sách (làm tròn lên) và phần đầu dài nhất trong phần
     ngân sách còn lại, nối bằng `…` (1 cột), nên đuôi file (phần mở rộng) vẫn còn và tổng ≤
@@ -100,7 +115,7 @@ def display_filename(name: str, *, max_width: int = FILE_NAME_WIDTH) -> str:
         raise TypeError("name phải là chuỗi")
     if max_width < 2:
         raise ValueError("max_width phải ≥ 2")
-    shown = _shown_filename(name)
+    shown = _shown(name)
     widths = [_width(ch) for ch in shown]
     if sum(widths) <= max_width:
         return shown

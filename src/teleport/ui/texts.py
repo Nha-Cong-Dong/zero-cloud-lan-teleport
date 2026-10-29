@@ -1,7 +1,8 @@
-"""Câu chữ dùng chung của giao diện: lỗi khởi động (E1–E6, M2), M4–M6 trong spec P4-3.
+"""Câu chữ dùng chung của giao diện: lỗi khởi động (E1–E6, M2), M4, M5 trong spec P4-3.
 
 M3 (máy chưa có danh tính) đã bỏ: thay bằng màn “Bắt đầu” của `ui.main_window` (spec hackathon
-mục 10 A1). Câu chữ riêng của một màn hình nằm ở module của màn hình đó (ví dụ `ui.radar`).
+mục 10 A1). M6 (hộp hỏi nhận file) nằm ở `ui.offer`. Câu chữ riêng của một màn hình nằm ở module
+của màn hình đó (ví dụ `ui.radar`, `ui.transfers_view`).
 
 Chuỗi nguồn tiếng Việt, mọi chuỗi qua `QCoreApplication.translate` với ngữ cảnh `Texts`, gọi lúc
 dùng (không lúc import) để đổi ngôn ngữ có hiệu lực ngay. Viết nguyên lời gọi `translate(...)` ở
@@ -11,8 +12,7 @@ Chèn giá trị bằng `fill` (một lượt, chỉ thay `{tên}` có trong b�
 lạ không làm hỏng câu, và chữ do máy kia đặt chứa `{size}` không bị thay tiếp. Chữ từ máy khác
 đi qua `peer_label` / `file_label` (`core.display`) trước khi chèn.
 
-Tên lệnh CLI trong câu của GUI nằm trong ngoặc kép “…” (không dùng backtick như ở CLI). Tên máy
-gửi trong M6 cũng nằm trong “…”, khớp CLI.
+Tên lệnh CLI trong câu của GUI nằm trong ngoặc kép “…” (không dùng backtick như ở CLI).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import unicodedata
 
 from PySide6.QtCore import QCoreApplication
 
-from teleport.core.display import display_filename, display_name, format_size
+from teleport.core.display import display_filename, display_name
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 _REPLACEMENT = "�"  # U+FFFD thay ký tự điều khiển, như `cli._printable`
@@ -163,36 +163,7 @@ def retry() -> str:
     return QCoreApplication.translate("Texts", "Thử lại")
 
 
-# ---- Hộp hỏi nhận file (M6) ----------------------------------------------------------------
-
-
-def offer_question(peer: str, count: int, total_bytes: int) -> str:
-    """M6: “{tên máy}” muốn gửi {n} file ({cỡ}) tới máy này. `peer` đã qua `peer_label`."""
-    template = QCoreApplication.translate(
-        "Texts", "“{name}” muốn gửi %n file ({size}) tới máy này.", None, count
-    )
-    return fill(template, name=peer, size=format_size(total_bytes))
-
-
-def offer_more(count: int) -> str:
-    """Dòng gộp các file không liệt kê."""
-    return QCoreApplication.translate("Texts", "và %n file khác", None, count)
-
-
-def offer_save_to(path: str) -> str:
-    return fill(QCoreApplication.translate("Texts", "Lưu vào: {path}"), path=path)
-
-
-def offer_title() -> str:
-    return QCoreApplication.translate("Texts", "Có file gửi tới")
-
-
-def offer_accept() -> str:
-    return QCoreApplication.translate("Texts", "Nhận")
-
-
-def offer_reject() -> str:
-    return QCoreApplication.translate("Texts", "Từ chối")
+# ---- Nhận file -----------------------------------------------------------------------------
 
 
 def offer_waiting() -> str:
