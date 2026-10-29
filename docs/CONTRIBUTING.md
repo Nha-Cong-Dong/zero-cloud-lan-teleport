@@ -14,7 +14,7 @@ docs: cập nhật hướng dẫn tường lửa
 test: thêm test nối lại khi rớt mạng
 ```
 
-Thay đổi nào người dùng nhận thấy được thì ghi thêm vào mục `[Unreleased]` của [CHANGELOG.md](CHANGELOG.md), chia `### Added` / `### Changed` / `### Fixed` / `### Security`, mỗi dòng viết cho người dùng hiểu. Mục `[Unreleased]` chưa phát hành, nên dòng cũ nói ngược hành vi mới thì sửa dòng cũ, không thêm dòng mâu thuẫn. Đổi định dạng trên dây mà không tăng phiên bản giao thức ([protocol.md](protocol.md) mục 9) thì ghi rõ bản cũ và bản mới không làm việc được với nhau.
+Thay đổi nào người dùng nhận thấy được thì ghi thêm vào mục `[Unreleased]` của [CHANGELOG.md](CHANGELOG.md), chia `### Added` / `### Changed` / `### Fixed` / `### Security`, mỗi dòng viết cho người dùng hiểu. Mục `[Unreleased]` chưa phát hành, nên dòng cũ nói ngược hành vi mới thì sửa dòng cũ, không thêm dòng mâu thuẫn. Thay đổi giao thức: mục “Thay đổi giao thức” bên dưới.
 
 ## Cài môi trường
 
@@ -102,7 +102,7 @@ Bản thử nghiệm (alpha, beta) ghi số ở hai dạng, và đây là nơi d
 Bản thử nghiệm trước `v1.0.0` chỉ gắn tag, không tạo GitHub Release. Bản build thử là artifact của workflow `build-cli` hay `build-gui` chạy tay trên tag hay `main` (mục “Build thử bản CLI”, “Build thử bản GUI”), và tự xóa sau thời hạn của workflow. Bộ cài build tự động khi gắn tag và GitHub Release có từ Giai đoạn 6 ([ke_hoach.md](ke_hoach.md) mục 5.2).
 
 ## Thay đổi giao thức
-Mọi thay đổi định dạng trên dây phải cập nhật [protocol.md](protocol.md) trong cùng Pull Request. Thay đổi không tương thích thì tăng số phiên bản giao thức.
+Mọi thay đổi định dạng trên dây phải cập nhật [protocol.md](protocol.md) trong cùng Pull Request. Thay đổi không tương thích thì tăng số phiên bản giao thức ([protocol.md](protocol.md) mục 9).
 
 ## Giấy phép
 Dự án theo giấy phép [GPL-3.0-or-later](../LICENSE). Gửi Pull Request nghĩa là bạn đồng ý đóng góp của mình được phát hành theo cùng giấy phép đó. Chỉ thêm thư viện có giấy phép tương thích GPLv3 (danh sách giấy phép được chấp nhận: [ke_hoach.md](ke_hoach.md) mục 1 (Giấy phép) và mục 4.1).

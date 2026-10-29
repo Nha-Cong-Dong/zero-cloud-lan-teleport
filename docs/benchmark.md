@@ -1,6 +1,6 @@
 # Benchmark
 
-> **Vai trò:** số đo thực tế của các yêu cầu phi chức năng.
+> **Vai trò:** số đo thực tế của các yêu cầu phi chức năng và kết quả kiểm tiêu chí MVP hackathon.
 > **Nguồn duy nhất cho:** định nghĩa từng phép đo, môi trường, kết quả từng lần đo và kết luận so với ngưỡng.
 > **Không chứa:** ngưỡng yêu cầu → [mvp.md](mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](ke_hoach.md) mục 5.1.
 > **Cập nhật:** 2026-10-30
@@ -30,6 +30,7 @@
 | mvp N10 | — | chưa đo |
 | mvp N11 | — | chưa đo |
 | mvp N12 | — | chưa đo |
+| mvp mục 4.1 (H1–H5) | — | chưa đo (mục 6) |
 
 ## 3. mvp N1: Khám phá
 
@@ -588,7 +589,7 @@ Script `n3_net_host.py` (host), `may2_nhan.py` và `may2_chuanbi.ps1` (máy th�
 
 ### 5.3. Việc còn lại
 
-- Lượt đầu (host Windows 11 → máy thứ hai Windows 10/11, **cả hai qua Wi-Fi**): **chưa đo**; chờ người dùng chuẩn bị máy thứ hai theo hướng dẫn. Giới hạn đã biết trước: qua Wi-Fi, mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách, nên tỉ số đo được không cho biết Teleport có theo kịp SMB trên mạng dây gigabit (khi CPU và Python mới là giới hạn). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2, D3).
+- Lượt đầu (host Windows 11 → máy thứ hai Windows 10/11, **cả hai qua Wi-Fi**) theo phương pháp mục 5.1: **chưa đo**; đã có một lần đo tay chỉ để tham khảo (mục 5.4). Giới hạn đã biết trước: qua Wi-Fi, mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách, nên tỉ số đo được không cho biết Teleport có theo kịp SMB trên mạng dây gigabit (khi CPU và Python mới là giới hạn). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2, D3).
 - Mạng dây gigabit giữa hai máy thật: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2).
 
 ### 5.4. Lần đo 2026-10-29/30: đo tay qua giao diện, Wi-Fi 2,4 GHz (chỉ tham khảo)
@@ -629,3 +630,17 @@ Tỉ số trung vị SMB / Teleport = 372 / 387 ≈ 0,96; theo từng cặp vớ
 - Cả hai máy qua Wi-Fi 2,4 GHz: mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách (mục 5.3), nên tỉ số không cho biết Teleport có theo kịp SMB trên mạng dây.
 - Một lần Teleport, hai lần SMB, một cỡ file; bấm giờ tay sai số cỡ vài giây.
 - Mốc của Teleport không gồm khởi động và bắt tay, còn SMB có `/J`: hai thiên lệch ngược chiều, không bù.
+
+## 6. MVP hackathon (mvp mục 4.1)
+
+Tiêu chí H1–H5, cách kiểm và điều kiện đạt (máy, mạng, bản chạy): [mvp.md](mvp.md) mục 4.1. Lịch kiểm: [ke_hoach.md](ke_hoach.md) mục 5.5. Mỗi lần kiểm là một mục con riêng theo quy ước mục 1: ngày, commit của bản zip, hai máy (hệ điều hành, card mạng), mạng Wi-Fi, kết quả từng bước và hash hai phía.
+
+| Mã | Lần kiểm gần nhất | Kết luận |
+|---|---|---|
+| H1 | — | chưa đo |
+| H2 | — | chưa đo |
+| H3 | — | chưa đo |
+| H4 | — | chưa đo |
+| H5 | — | chưa đo |
+
+Lần đo tay N2 ở mục 5.4 không tính cho H2: không so SHA-256 của file ở hai máy.

@@ -15,3 +15,9 @@ pycparser==3.11
 ifaddr==0.2.0
 # Trực tiếp (pyproject.toml: zeroconf>=0.148,<0.152). Giấy phép: LGPL-2.1-or-later (file riêng, --onedir).
 zeroconf==0.151.5
+# Trực tiếp, chỉ bản GUI (pyproject.toml: extra gui, PySide6-Essentials>=6.10.1,<7). Giấy phép:
+# LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only, dùng nhánh LGPL-3.0-only (file riêng, --onedir). Phải bằng
+# QT_LICENSE_VERSION trong third_party.py: nâng bản thì rà lại thành phần lồng trong Qt theo chú thích ở đó.
+PySide6-Essentials==6.12.0
+# Gián tiếp, qua PySide6-Essentials, luôn cùng bản với nó. Giấy phép: như PySide6-Essentials.
+shiboken6==6.12.0

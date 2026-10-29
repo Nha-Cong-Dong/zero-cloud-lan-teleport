@@ -233,7 +233,8 @@ VCRUNTIME_NOTE = (
 # ---- Bản GUI: Qt/PySide6 -------------------------------------------------------------------------
 # Bản phân phối mang DLL Qt (PySide6-Essentials) và phiên bản Qt mà QT_EMBEDDED đã rà. Nâng PySide6
 # thì build dừng (`qt_embedded_files`): rà lại qt_attribution.json của qtbase và pyside-setup đúng tag
-# mới, chép văn bản vào licenses/qt-<phiên bản>/ rồi sửa các hằng dưới đây.
+# mới, chép văn bản vào licenses/qt-<phiên bản>/ rồi sửa các hằng dưới đây và bản ghim của
+# PySide6-Essentials, shiboken6 trong constraints.txt.
 QT_OWNER = "pyside6-essentials"
 QT_LICENSE_VERSION = "6.12.0"
 QT_LICENSES_DIR = f"qt-{QT_LICENSE_VERSION}"

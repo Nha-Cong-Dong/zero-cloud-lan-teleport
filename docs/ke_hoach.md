@@ -4,7 +4,7 @@
 > **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, danh sách phép đo của đợt đo trên thiết bị thật (mục 5.4), quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
 > **Không chứa:** phạm vi, tính năng, tiêu chí chấp nhận và con số chất lượng → [mvp.md](mvp.md) (tham chiếu theo mã F1–F12, N1–N12). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
 > **Bản chính thức về kỹ thuật:** đặc tả giao thức [protocol.md](protocol.md) và trạng thái từng module [architecture.md](architecture.md); khi lệch nhau thì hai file đó đúng.
-> **Cập nhật:** 2026-10-29
+> **Cập nhật:** 2026-10-30
 
 ---
 
@@ -238,7 +238,7 @@ Nguyên tắc: **làm bằng dòng lệnh (CLI) trước, giao diện sau.** Ph�
 | 2 | Truyền file, backpressure, an toàn khi nhận | 3 tuần | 6 | `v0.1.0-alpha` | F4, F5 (CLI), F12 | Gửi file lớn qua CLI giữa 2 máy đã ghép đôi | ⏸ Code xong, chờ đợt đo (mục 5.4) |
 | 3 | Merkle & tự nối lại | 3 tuần | 9 | `v0.2.0-alpha` | F6, F7 | Rớt mạng vẫn tự nối lại, chỉ gửi phần còn thiếu. **Bản CLI đầu tiên đáng cho người dùng kỹ thuật dùng thử** | ⏳ Đang làm |
 | 4 | Giao diện, khay hệ thống, đa ngôn ngữ | 2 tuần | 11 | `v0.3.0-beta` | F2–F5 (giao diện), F9, F10, F11 | Dùng hoàn toàn bằng giao diện: radar, kéo thả, ghép đôi | ⏳ Đang làm phần cho buổi demo hackathon (mục 5.5) |
-| 5 | Đồng bộ clipboard | 1 tuần | 12 | `v0.4.0-beta` | F8 | Đồng bộ clipboard | ⬜ Chưa làm |
+| 5 | Đồng bộ clipboard | 1 tuần | 12 | `v0.4.0-beta` | F8 | Đồng bộ clipboard | ⏳ Lõi đã làm sớm (`core/clipboard.py`, message `clipboard`); phần app và giao diện làm sau buổi demo hackathon (mục 5.5) |
 | 6 | Hoàn thiện, bộ cài, phát hành | 3 tuần | 15 | `v1.0.0` | F1, toàn bộ N1–N12 | Bộ cài 3 hệ điều hành, tài liệu người dùng, đã thử với người dùng thật | ⬜ Chưa làm |
 
 Ký hiệu trạng thái: [README.md](README.md) mục 4. Giai đoạn ⏸ còn chờ gì: dòng “Xong khi” của nó ở mục 5.2.
@@ -284,8 +284,8 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D3, D4. → **`v0.1.0-alpha`** (thời điểm gắn tag: mục 5.4).
 
 #### Giai đoạn 3 — Merkle & tự nối lại
-- Trạng thái bền trên đĩa: `core/resume_state.py` (nhật ký `.state`, [architecture.md](architecture.md) mục 4) và `transfer.json`, đọc/ghi ở `app/storage.py` (nối vào lượt truyền ở `app/transfers.py`); bia mộ của lượt truyền đã hủy lưu trên đĩa (`protocol.md` mục 6.3).
-- Nối lại trong thời hạn mvp F6 sau khi mất kết nối điều khiển (`protocol.md` mục 6.2: hạn và lịch thử lại; trạng thái “Đang nối lại…”); tắt app nhận rồi mở lại vẫn nối tiếp; phát hiện file nguồn thay đổi khi nối lại; dọn file tạm cũ.
+- ✅ Trạng thái bền trên đĩa: `core/resume_state.py` (nhật ký `.state`, [architecture.md](architecture.md) mục 4) và `transfer.json`, đọc/ghi ở `app/storage.py` (nối vào lượt truyền ở `app/transfers.py`); bia mộ của lượt truyền đã hủy lưu trên đĩa (`protocol.md` mục 6.3).
+- ✅ Nối lại trong thời hạn mvp F6 sau khi mất kết nối điều khiển (`protocol.md` mục 6.2: hạn và lịch thử lại; trạng thái “Đang nối lại…”); tắt app nhận rồi mở lại vẫn nối tiếp; phát hiện file nguồn thay đổi khi nối lại; dọn file tạm cũ.
 - Đo phần gửi thừa do bộ đệm socket trên Windows và Linux và chốt `SO_RCVBUF`/`SO_SNDBUF` (`protocol.md` mục 4.3; phần còn lại: dòng “Xong khi” bên dưới).
 - **Xong khi** (kiểm được ngay: test tự động, loopback, máy ảo): đạt mọi AC của F6 (trừ việc chỉnh số ngày dọn file tạm trong cài đặt, Giai đoạn 4), F7 và N5, và N4 trong test tự động, cụ thể: (a) mất đường truyền ở mốc mvp N4 nêu (proxy trên loopback cắt hay chặn kết nối; cắt liên kết card mạng của máy ảo) → có lại → hoàn tất, lượng gửi lại trong ngưỡng mvp N4; (b) sửa 1 byte trong `.part` → phát hiện và gửi lại đúng 1 khối; (c) tắt hẳn app nhận (đóng có trật tự, và giết tiến trình) rồi mở lại → vẫn nối lại được, lượng gửi lại trong ngưỡng mvp N4; (d) test `hypothesis` ngắt kết nối ngẫu nhiên → file cuối luôn đúng; đã chốt `SO_RCVBUF`/`SO_SNDBUF` theo số đo trên Windows và Linux (`protocol.md` mục 4.3; card mạng thật và macOS: D5).
 - **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D5. → **`v0.2.0-alpha`** (thời điểm gắn tag: mục 5.4).
@@ -334,7 +334,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 
 ### 5.4. Đợt đo trên thiết bị thật
 
-Hiện chỉ có một máy, cộng một máy ảo Ubuntu bridged ([benchmark.md](benchmark.md) mục 3.3), nên mọi phép đo cần máy thật thứ hai hay thiết bị khác được **dồn vào một đợt**, làm một lượt khi có thiết bị. Việc code các giai đoạn không chờ đợt này: dòng “Xong khi” của mỗi giai đoạn ở mục 5.2 tách phần kiểm được ngay (test tự động, loopback, máy ảo) khỏi phần thuộc đợt đo, và chính các dòng đó ghi giai đoạn nào chờ mã D nào. Mục này là nơi duy nhất liệt kê các phép đo của đợt; định nghĩa phép đo, script và kết quả ở [benchmark.md](benchmark.md), ngưỡng và điều kiện đo ở [mvp.md](mvp.md) mục 9.
+Máy chính có thêm một máy ảo Ubuntu bridged ([benchmark.md](benchmark.md) mục 3.3) và hiện mượn tạm được một máy Windows 10 thật (mới có một lần đo tay, chỉ để tham khảo: [benchmark.md](benchmark.md) mục 5.4), nên mọi phép đo cần máy thật thứ hai hay thiết bị khác được **dồn vào một đợt**, làm một lượt khi có thiết bị. Việc code các giai đoạn không chờ đợt này: dòng “Xong khi” của mỗi giai đoạn ở mục 5.2 tách phần kiểm được ngay (test tự động, loopback, máy ảo) khỏi phần thuộc đợt đo, và chính các dòng đó ghi giai đoạn nào chờ mã D nào. Mục này là nơi duy nhất liệt kê các phép đo của đợt; định nghĩa phép đo, script và kết quả ở [benchmark.md](benchmark.md), ngưỡng và điều kiện đo ở [mvp.md](mvp.md) mục 9.
 
 | Mã | Phép đo | Thiết bị cần | Định nghĩa, cách đo |
 |---|---|---|---|
@@ -422,7 +422,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | `teleport send --address` trỏ nhầm tới **một thiết bị tin cậy khác** (không phải máy ở `--to`): chứng chỉ server không khớp chứng chỉ đã lưu của máy ở `--to`, nên CLI báo danh tính khác, có thể có người giả mạo (mvp mục 8, “Danh tính thiết bị thay đổi”), dù không có ai giả mạo | Chấp nhận ở `v0.1.0-alpha`: kết nối bị từ chối trong bắt tay, không lộ gì và không gửi gì, chỉ là câu báo gây hiểu nhầm. Việc sau: nhận ra chứng chỉ server là của một thiết bị tin cậy khác để báo đúng là địa chỉ đó thuộc máy nào |
 | Lỗ hổng bảo mật (path traversal, dữ liệu độc hại từ máy khác) | Kiểm tra hợp lệ mọi trường nhận được; fuzz test; `SECURITY.md` để nhận báo lỗi |
 | Làm một mình, không có hạn → kéo dài, ôm thêm tính năng | Bám các bản phát hành ở mục 5.1; ý tưởng mới ghi Issues nhãn `after-1.0`; nếu trễ thì cắt theo thứ tự ở mvp mục 14 |
-| Chỉ có 1 máy để thử | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật; N1 đã đo theo cách này ([benchmark.md](benchmark.md) mục 3.3); mọi phép đo cần thiết bị thật dồn vào đợt đo (mục 5.4) |
+| Chỉ có 1 máy để thử (máy thứ hai hiện chỉ mượn tạm, mục 5.4) | Chạy 2 node trên cùng máy qua `127.0.0.1` cho phát triển hằng ngày; mượn máy thứ 2 hoặc dùng máy ảo (VirtualBox, mạng bridged) cho test LAN thật; N1 đã đo theo cách này ([benchmark.md](benchmark.md) mục 3.3); mọi phép đo cần thiết bị thật dồn vào đợt đo (mục 5.4) |
 
 ---
 
