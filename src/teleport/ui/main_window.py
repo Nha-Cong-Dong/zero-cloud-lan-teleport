@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
         self.detail_label = _label("detailLabel")
         self.hint_label = _label("hintLabel")
 
-        # Phần thân của trạng thái RUNNING: radar bên trái, chỗ cho lượt truyền bên phải (PR3).
+        # Phần thân của trạng thái RUNNING: radar bên trái, danh sách lượt truyền bên phải (`ui.transfers`).
         self.body = QWidget(central)
         self.body.setObjectName("runningBody")
         body_layout = QHBoxLayout(self.body)

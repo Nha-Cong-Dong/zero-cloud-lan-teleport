@@ -332,6 +332,15 @@ Trùng khớp? [c/k]:
 - `<tên>` và `<tên đã lưu>` hiện theo cách ở trên; `<mã máy>` là 8 ký tự đầu của `device_id`.
 - Máy gửi yêu cầu là bên khởi xướng, máy nhận yêu cầu là bên trả lời ([protocol.md](protocol.md) mục 5.1). Thường `teleport pair` là bên khởi xướng; khi hai máy cùng ghép đôi với nhau thì một bên `teleport pair` chuyển sang vai trả lời ([protocol.md](protocol.md) mục 5.3). Vì vậy dòng 1 xét theo lệnh, còn dòng 3 xét theo vai.
 
+Bản giao diện dùng cùng các dòng, khác ở chỗ:
+- Hộp hiện ở **cả hai máy**, bất kể vai. Dòng 1 xét theo vai: bên trả lời dùng dòng 1 của `teleport listen`, bên khởi xướng dùng dòng 1 của `teleport pair`.
+- Dòng 2 không có nhãn: chỉ có mã, chữ rất lớn, căn giữa. Nhãn “Mã ghép đôi” chỉ dành cho trình đọc màn hình.
+- Dòng 3 là câu cảnh báo bản giao diện ở mục 8, kèm biểu tượng cảnh báo.
+- Dòng 4–6 nhỏ hơn, màu dịu.
+- Dòng 7 thay bằng hai nút “Không trùng” và “Trùng khớp”. Nút mặc định (Enter) là “Không trùng”; Esc hay đóng hộp cũng là “Không trùng”.
+- Hết thời gian xác nhận thì hộp tự đóng. Phiên kết thúc vì bất kỳ lý do gì thì hộp cũng tự đóng.
+- Cửa sổ chính đang ẩn thì hiện thêm bóng thoại ở khay (mục 8).
+
 ### 7.3. Có file gửi tới
 ```
 ┌─ Laptop-Minh muốn gửi 3 file (8,4 GB) ────┐
@@ -442,8 +451,8 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Ghép đôi với chính máy này | “Đó là chính máy này. Hãy nhập địa chỉ của máy kia.” | — |
 | Danh tính của chính máy này bị hỏng | “Không đọc được danh tính của máy này. Teleport sẽ không tự tạo danh tính mới để khỏi mất các ghép đôi.” | Nút “Tạo danh tính mới” (cảnh báo phải ghép đôi lại) |
 | Mã ghép đôi không trùng / hết giờ (sau khi đã hiện mã) | “Ghép đôi với *MacBook* chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo.” | Nút “Thử lại” |
-| Phiên ghép đôi dừng trước khi hiện mã (máy kia ngắt kết nối, gửi dữ liệu sai hoặc quá hạn chờ) | Máy gửi yêu cầu ghép đôi: “Ghép đôi với *MacBook* chưa xong vì phiên dừng trước khi hiện mã. Hãy thử lại.” Máy nhận yêu cầu ghép đôi: “Một máy tự xưng là *MacBook* đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã.” | Máy gửi yêu cầu: nút “Thử lại”. Máy nhận yêu cầu: không cần làm gì |
-| Máy nhận yêu cầu ghép đôi đã hiện từ 3 mã trở lên trong 1 phút | “Cảnh báo: máy này đã hiện *3* mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).” | Hiện ngay dưới mã; từ chối nếu không tự ghép đôi. Câu trên là bản CLI; giao diện thay “(gõ k)” bằng nút “Từ chối” |
+| Phiên ghép đôi dừng trước khi hiện mã (máy kia ngắt kết nối, gửi dữ liệu sai hoặc quá hạn chờ) | Máy gửi yêu cầu ghép đôi: “Ghép đôi với *MacBook* chưa xong vì phiên dừng trước khi hiện mã. Hãy thử lại.” Máy nhận yêu cầu ghép đôi (CLI; giao diện: dòng “Giao diện: phiên ghép đôi do máy khác gửi tới dừng trước khi hiện mã”): “Một máy tự xưng là *MacBook* đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã.” | Máy gửi yêu cầu: nút “Thử lại”. Máy nhận yêu cầu: không cần làm gì |
+| Máy nhận yêu cầu ghép đôi đã hiện từ 3 mã trở lên trong 1 phút | “Cảnh báo: máy này đã hiện *3* mã ghép đôi trong 1 phút qua. Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: hãy từ chối (gõ k).” | Hiện ngay dưới mã; từ chối nếu không tự ghép đôi. Câu trên là bản CLI; giao diện thay “hãy từ chối (gõ k)” bằng “hãy bấm “Không trùng”” |
 | Không hiện được mã ghép đôi (giao diện lỗi) | “Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại.” | Nút “Thử lại” |
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |
 | Chọn gửi file lớn hơn 4 TB | “Không gửi được *backup.img* (5,2 TB): Teleport chỉ gửi được file tối đa 4 TB. Hãy chia file thành nhiều phần nhỏ hơn rồi gửi.” | Lượt gửi không bắt đầu; bỏ file đó ra rồi gửi lại các file còn lại |
@@ -492,6 +501,15 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: lỗi khác khi khởi động | “Teleport không khởi động được vì một lỗi không mong đợi.” kèm dòng “Hãy bấm Thử lại; nếu vẫn lỗi, hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” |
 | Giao diện: mở app khi máy chưa có danh tính (tạm, tới khi có màn hình lần chạy đầu của F1) | “Bắt đầu dùng Teleport”, rồi “Tên của máy này trong mạng: *X*” (tên mặc định của F1), câu đầu của dòng ngay dưới ô tên thiết bị ở F1, và “Bấm Bắt đầu để Teleport chạy và hiện máy này với các máy khác trong mạng.” Chưa bấm thì Teleport không chạy, không quảng bá | Nút “Bắt đầu” |
 | Giao diện: trạng thái của một thiết bị trên radar | Sau tên và “(đã ghép)” / “(chưa ghép)” (mục 7.1): “đã kết nối”, “đang trong mạng” hoặc “không thấy trong mạng”. Thiết bị đã ghép đôi mà lần kết nối gần nhất lỗi thì thêm câu của dòng “Thấy nhưng không kết nối được” (chỉ khi còn thấy trong mạng), “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức”, tới khi kết nối lại được | — |
+| Giao diện: đang ghép đôi (máy này gửi yêu cầu, máy kia chưa hiện mã) | Hộp “Ghép đôi” có thanh chờ và câu “Đang ghép đôi với “*PC-Nha*”…” (ghép bằng IP: “*192.168.1.5:47474*” thay cho tên) | Nút “Hủy” |
+| Giao diện: ghép đôi xong | “Đã ghép đôi với “*PC-Nha*”.” | — |
+| Giao diện: bấm ghép đôi một thiết bị vừa rời mạng | “Không thấy “*PC-Nha*” trong mạng nữa. Hãy thử lại.” | — |
+| Giao diện: ghép đôi khi máy này đang có phiên ghép đôi khác | “Máy này đang có một phiên ghép đôi khác. Hãy thử lại sau.” | — |
+| Giao diện: đã xác nhận ghép đôi nhưng không lưu được | “Đã xác nhận ghép đôi với “*PC-Nha*” nhưng không lưu được danh sách thiết bị đã ghép đôi. Hãy kiểm tra quyền ghi thư mục cấu hình rồi ghép đôi lại.” | — |
+| Giao diện: danh tính thiết bị thay đổi khi máy này gửi yêu cầu ghép đôi | Câu của dòng “Danh tính thiết bị thay đổi”, kèm dòng “Muốn ghép đôi lại thì hãy hủy ghép đôi mục cũ trước (chuột phải vào thiết bị → Hủy ghép đôi…).” | — |
+| Giao diện: phiên ghép đôi do máy khác gửi tới dừng trước khi hiện mã | Không hiện gì (máy lạ không làm phiền được bằng cách mở rồi bỏ phiên). Ngoại lệ: máy này cũng vừa bấm ghép đôi với máy đó và phiên của máy này nhường cho phiên kia (hai máy cùng chủ động): hiện câu của máy gửi yêu cầu ở dòng “Phiên ghép đôi dừng trước khi hiện mã” | — |
+| Giao diện: có yêu cầu ghép đôi khi cửa sổ chính đang ẩn | Bóng thoại ở khay: “Có yêu cầu ghép đôi” | Hộp mã (mục 7.2) vẫn mở |
+| Giao diện: hủy ghép đôi (chuột phải vào thiết bị đã ghép → “Hủy ghép đôi…”) | Hộp “Hủy ghép đôi”: “Hủy ghép đôi với “*PC-Nha*”? Hai máy sẽ không gửi file cho nhau được nữa cho tới khi ghép đôi lại.” Xong: “Đã hủy ghép đôi với “*PC-Nha*”.” Lỗi: “Không hủy ghép đôi được với “*PC-Nha*”. Hãy thử lại.” | Nút “Hủy ghép đôi”, “Không” (mặc định) |
 | Giao diện: nhập IP thủ công sai | Câu của dòng “CLI: `--address` của `send` sai” (*x* là chữ đã nhập) | Sửa lại trong ô nhập |
 | CLI: `--limit-rate` sai | “Tốc độ không hợp lệ: “*x*”. Hãy nhập ví dụ 20M (20 MB/s) hoặc 512K; tối thiểu 64K.” | — |
 | CLI: `--address` của `send` sai | “*x* không phải địa chỉ IPv4 hợp lệ. Hãy nhập ví dụ 192.168.1.5 hoặc 192.168.1.5:47474.” | — |
