@@ -731,3 +731,185 @@ def test_remove_stale_dist_refuses_junction_to_sibling_inside_dist(dist: Path) -
     finally:
         if os.path.lexists(dist / "teleport"):
             os.rmdir(dist / "teleport")
+
+
+def test_remove_stale_dist_deletes_gui_dir_and_keeps_cli(dist: Path) -> None:
+    _touch(dist / tp.GUI_DIST_NAME / "Teleport.exe")
+    assert tp.GUI_DIST_NAME.lower() != tp.DIST_NAME.lower()  # Windows không phân biệt hoa thường
+    assert tp.remove_stale_dist(dist, tp.GUI_DIST_NAME) is True
+    assert not (dist / tp.GUI_DIST_NAME).exists()
+    assert (dist / tp.DIST_NAME / "teleport.exe").is_file()
+
+
+@pytest.mark.parametrize("name", ["Teleport", "teleport-GUI", "teleport-gui/", "../teleport-gui"])
+def test_remove_stale_dist_refuses_gui_name_variants(dist: Path, name: str) -> None:
+    _touch(dist / tp.GUI_DIST_NAME / "Teleport.exe")
+    with pytest.raises(ValueError):
+        tp.remove_stale_dist(dist, name)
+    assert (dist / tp.GUI_DIST_NAME / "Teleport.exe").is_file()
+
+
+# ---------------------------------------------------------- 6. drop_files (phần Qt không dùng)
+
+
+def test_drop_files_matches_dest_path_case_insensitive_with_either_separator() -> None:
+    toc = [
+        ("PySide6\\opengl32sw.dll", "src1", "BINARY"),
+        ("PySide6/plugins/tls/qschannelbackend.dll", "src2", "BINARY"),
+        ("PySide6\\Qt6Core.dll", "src3", "BINARY"),
+        ("PySide6/plugins/platforms/qwindows.dll", "src4", "BINARY"),
+    ]
+    kept, dropped = tp.drop_files(toc, ["pyside6/opengl32sw.dll", "PySide6/plugins/tls/*"])
+    assert [e[0] for e in kept] == ["PySide6\\Qt6Core.dll", "PySide6/plugins/platforms/qwindows.dll"]
+    assert dropped == ["PySide6\\opengl32sw.dll", "PySide6/plugins/tls/qschannelbackend.dll"]
+
+
+def test_drop_files_root_pattern_does_not_match_nested_file() -> None:
+    toc = [("libssl-3-x64.dll", "a", "BINARY"), ("x/libssl-3-x64.dll", "b", "BINARY")]
+    kept, dropped = tp.drop_files(toc, ["libssl-*-x64.dll"])
+    assert dropped == ["libssl-3-x64.dll"]
+    assert [e[0] for e in kept] == ["x/libssl-3-x64.dll"]
+
+
+# ---------------------------------------------------------- 7. Qt/PySide6 (bản GUI)
+
+
+def _qt_components(*files: str, version: str | None = None) -> dict[str, object]:
+    comp = tp.Component(tp.QT_OWNER, "PySide6_Essentials", version or tp.QT_LICENSE_VERSION, "x")
+    comp.files.extend(files)
+    return {tp.QT_OWNER: comp}
+
+
+def test_qt_embedded_files_empty_without_pyside() -> None:
+    assert tp.qt_embedded_files({}) == []
+
+
+def test_qt_embedded_files_lists_components_of_bundled_dlls_only() -> None:
+    found = tp.qt_embedded_files(_qt_components("PySide6\\Qt6Core.dll", "PySide6\\MSVCP140.dll"))
+    names = {entry[1] for entry, _files in found}
+    assert "zlib 1.3.2" in names
+    assert all(entry[0] == "pyside6/qt6core.dll" for entry, _files in found)
+
+
+def test_qt_embedded_files_rejects_unreviewed_native_file() -> None:
+    with pytest.raises(LicenseAuditError, match=r"qt6qml\.dll"):
+        tp.qt_embedded_files(_qt_components("PySide6\\Qt6Core.dll", "PySide6\\Qt6Qml.dll"))
+
+
+def test_qt_embedded_files_rejects_other_pyside_version() -> None:
+    with pytest.raises(LicenseAuditError, match="rà lại"):
+        tp.qt_embedded_files(_qt_components("PySide6\\Qt6Core.dll", version="6.99.0"))
+
+
+def test_qt_embedded_files_rejects_disallowed_license(monkeypatch: pytest.MonkeyPatch) -> None:
+    bad = ("pyside6/qt6core.dll", "Thanh phan gia", "GPL-2.0-only", (), "")
+    monkeypatch.setattr(tp, "QT_EMBEDDED", (*tp.QT_EMBEDDED, bad))
+    with pytest.raises(LicenseAuditError, match="Thanh phan gia"):
+        tp.qt_embedded_files(_qt_components("PySide6\\Qt6Core.dll"))
+
+
+def test_every_qt_embedded_entry_is_reviewed_compatible_and_has_text() -> None:
+    for pattern, name, lic, texts, _credit in tp.QT_EMBEDDED:
+        assert pattern in tp.QT_REVIEWED_FILES, name
+        assert tp._spdx_in(lic, tp.QT_SPDX_COMPATIBLE), name
+        assert texts, name
+        for file_name, source in texts:
+            assert (tp.LICENSES_DIR / tp.QT_LICENSES_DIR / file_name).is_file(), file_name
+            assert source.startswith("https://"), source
+    for _note, texts in tp.PACKAGE_LICENSE_TEXTS.values():
+        for file_name, _title, _source in texts:
+            assert (tp.LICENSES_DIR / file_name).is_file(), file_name
+
+
+@pytest.mark.parametrize("identifier", ["MPL-2.0", "FTL", "CC0-1.0", "Imlib2", "LicenseRef-ICC-License"])
+def test_qt_only_identifiers_do_not_widen_general_set(identifier: str) -> None:
+    assert identifier in tp.QT_SPDX_COMPATIBLE
+    assert tp.spdx_compatible(identifier) is False
+
+
+_REPO = _MODULE_PATH.parents[2]
+
+
+def _real(key: str, *files: str) -> object:
+    """Thành phần từ gói thật đã cài trong môi trường dev (PySide6-Essentials, shiboken6, ifaddr)."""
+    import importlib.metadata as md
+
+    dist = md.distribution(key)
+    comp = tp.Component(tp._normalize(dist.name), dist.name, dist.version, tp.declared_license(dist))
+    comp.files.extend(files)
+    return comp
+
+
+def _gui_components() -> dict[str, object]:
+    qt = _real("PySide6-Essentials", "PySide6\\Qt6Core.dll", "PySide6\\Qt6Gui.dll", "PySide6\\MSVCP140.dll")
+    shiboken = _real("shiboken6", "shiboken6\\shiboken6.abi3.dll")
+    return {qt.key: qt, shiboken.key: shiboken}
+
+
+def _gui_notices() -> str:
+    pytest.importorskip("PySide6")
+    comps = _gui_components()
+    if comps[tp.QT_OWNER].version != tp.QT_LICENSE_VERSION:
+        pytest.skip("môi trường dev cài PySide6 khác bản đã rà")
+    qt_files = tp.qt_embedded_files(comps)
+    return tp.build_notices(comps, {}, {}, app_version="9.9.9", edition=tp.GUI_EDITION, qt_files=qt_files)
+
+
+def test_gui_notices_have_edition_lgpl_text_ftl_credit_and_msvc_note() -> None:
+    notices = _gui_notices()
+    assert notices.startswith("Teleport 9.9.9 (bản GUI cho Windows)")
+    assert "GNU LESSER GENERAL PUBLIC LICENSE" in notices
+    assert "Ghi công: Portions of this software are copyright © 2025 The FreeType Project" in notices
+    assert tp.MSVC_RUNTIME_NOTE in notices
+    assert "zlib 1.3.2 (trong pyside6/qt6core.dll): Zlib" in notices
+    assert "LicenseRef-Qt-Commercial" not in notices  # dist-info chỉ có giấy phép thương mại: không dùng
+
+
+def test_gui_notices_source_line_points_to_qt_tarball_not_pypi() -> None:
+    notices = _gui_notices()
+    source_lines = [line for line in notices.splitlines() if line.startswith("Mã nguồn: ")]
+    assert source_lines
+    assert all(line.startswith(f"Mã nguồn: {tp.PYSIDE_SOURCE_URL}") for line in source_lines)
+    assert "pypi.org/project/PySide6" not in notices
+
+
+def test_cli_notices_have_no_qt_section() -> None:
+    comps = {"ifaddr": _real("ifaddr", "ifaddr/__init__.py")}
+    notices = tp.build_notices(comps, {}, {}, app_version="9.9.9")
+    assert notices.startswith("Teleport 9.9.9 (bản CLI cho Windows)")
+    assert "Qt" not in notices
+    assert tp.MSVC_RUNTIME_NOTE not in notices
+
+
+@pytest.fixture
+def build_tools_versions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`build_source` ghi phiên bản PyInstaller; CI chạy pytest không cài PyInstaller nên giả phiên bản."""
+    real = tp.md.version
+    fake = {"pyinstaller": "0.0.0-test", "pyinstaller-hooks-contrib": "0.0.0-test"}
+    monkeypatch.setattr(tp.md, "version", lambda name: fake.get(name) or real(name))
+
+
+@pytest.mark.usefixtures("build_tools_versions")
+def test_gui_source_has_qt_replacement_and_tarballs() -> None:
+    pytest.importorskip("PySide6")
+    text = tp.build_source(_gui_components(), repo_dir=_REPO, app_version="9.9.9", edition=tp.GUI_EDITION)
+    assert text.startswith("Teleport 9.9.9 (bản GUI cho Windows) - mã nguồn")
+    assert "_internal\\PySide6\\" in text
+    assert "không gộp vào Teleport.exe" in text
+    assert tp.QT_SOURCE_URL in text
+    assert tp.PYSIDE_SOURCE_URL in text
+
+
+@pytest.mark.usefixtures("build_tools_versions")
+def test_cli_source_has_no_qt_paragraph() -> None:
+    comps = {"ifaddr": _real("ifaddr", "ifaddr/__init__.py")}
+    text = tp.build_source(comps, repo_dir=_REPO, app_version="9.9.9")
+    assert text.startswith("Teleport 9.9.9 (bản CLI cho Windows) - mã nguồn")
+    assert "PySide6" not in text
+    assert "Qt" not in text
+
+
+def test_qt_set_still_rejects_gpl2_only_and_nested_lgpl() -> None:
+    assert tp._spdx_in("GPL-2.0-only", tp.QT_SPDX_COMPATIBLE) is False
+    assert tp._spdx_in("LGPL-2.1-or-later", tp.QT_SPDX_COMPATIBLE) is False
+    assert tp._spdx_in("FTL OR GPL-2.0-only", tp.QT_SPDX_COMPATIBLE) is True

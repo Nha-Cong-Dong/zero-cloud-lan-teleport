@@ -1,4 +1,4 @@
-# Công cụ build bản CLI bằng PyInstaller (chỉ dùng lúc build, không đóng vào bản phân phối,
+# Công cụ build bản CLI và bản GUI bằng PyInstaller (chỉ dùng lúc build, không đóng vào bản phân phối,
 # trừ bootloader và runtime hook của PyInstaller — xem THIRD-PARTY-NOTICES.txt sinh ra khi build).
 # Ghim đúng bản để build lặp lại được; nâng bản thì build lại và chạy `pytest -m frozen`.
 # Nguồn: PyPI (https://pypi.org/project/pyinstaller/, https://pypi.org/project/pyinstaller-hooks-contrib/).
@@ -6,3 +6,7 @@
 #   pyinstaller-hooks-contrib: GPL-2.0-or-later hoặc Apache-2.0 (runtime hook: Apache-2.0).
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.9
+# Bản GUI: ghim đúng bản Qt/PySide6 đã rà thành phần lồng bên trong (QT_LICENSE_VERSION trong
+# third_party.py); nâng thì rà lại rồi sửa cả hai chỗ. Nguồn: PyPI. Giấy phép: LGPL-3.0-only (dùng nhánh này).
+PySide6-Essentials==6.12.0
+shiboken6==6.12.0
