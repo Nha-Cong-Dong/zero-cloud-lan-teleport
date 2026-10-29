@@ -24,6 +24,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtensionOID, NameOID
+from support import wait_until
 
 from teleport.core.framing import MAX_MESSAGE_SIZE, encode_message
 from teleport.core.messages import PROTOCOL_VERSION, Hello
@@ -270,14 +271,6 @@ class ListenerHarness:
     async def wait_idle(self, timeout: float = 2.0) -> None:
         """Chờ tới khi không còn kết nối nào đang mở đầu."""
         await wait_until(lambda: self.listener.opening_count == 0, timeout, "opening_count không về 0")
-
-
-async def wait_until(predicate: Callable[[], bool], timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 class FakeServer:

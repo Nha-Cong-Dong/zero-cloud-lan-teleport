@@ -224,6 +224,7 @@ def test_s1_zero_paths_is_value_error():
     assert not isinstance(info.value, SourceError)
 
 
+@pytest.mark.slow
 def test_s1_path_count_limit(tmp_path):
     files = [make_file(tmp_path / f"{i}.bin") for i in range(MAX_OFFER_FILES + 1)]
     assert len(prepare_sources(files[:MAX_OFFER_FILES])) == MAX_OFFER_FILES

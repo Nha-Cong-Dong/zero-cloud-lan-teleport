@@ -904,16 +904,18 @@ class TcpProxy:
                 # không pump nào khác chen vào), rồi giữ phần còn lại tới khi hết chặn.
                 head = max(0, trip[1] - self.forwarded[direction])
                 if head:
-                    dst.write(data[:head])
                     self.forwarded[direction] += head
+                    dst.write(data[:head])
                 self._fire()
                 data = data[head:]
                 if not data:
                     await dst.drain()
                     continue
                 await self._gate()
-            dst.write(data)
+            # Đếm trước khi ghi: proxy chạy thread riêng, nên sau `write` thread của test có thể đọc
+            # hết byte ở đầu kia và xem `forwarded` trước khi thread này kịp cộng.
             self.forwarded[direction] += len(data)
+            dst.write(data)
             await dst.drain()
 
     def _fire(self) -> None:

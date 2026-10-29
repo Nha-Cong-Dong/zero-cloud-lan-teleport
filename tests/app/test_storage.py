@@ -1392,6 +1392,7 @@ def test_write_after_close_raises_value_error(rd, record_for):
 # ---------------------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     nblocks=st.integers(min_value=1, max_value=6),
@@ -1725,6 +1726,7 @@ def test_reread_reads_own_fd_not_the_path(full_part, tmp_path):
 # ---------------------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     nblocks=st.integers(min_value=1, max_value=3),

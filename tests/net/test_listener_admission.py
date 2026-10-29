@@ -21,6 +21,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from support import wait_until
 
 from teleport.core import admission
 from teleport.core.admission import Refusal
@@ -85,14 +86,6 @@ async def read_some(peer, timeout: float = 2.0) -> bytes:
 async def b_control(h, ids, identity=None):
     identity = identity if identity is not None else ids.b
     return await open_control([LOCAL], h.port, identity, hello_of(identity), h.identity.cert_pem())
-
-
-async def wait_until(predicate, timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def refusals(h) -> dict[str, int]:
@@ -280,6 +273,7 @@ async def test_priority_is_dropped_even_if_building_new_context_fails(slow, list
         await live.close()
 
 
+@pytest.mark.slow
 @real_limits
 async def test_priority_survives_close_of_incoming_control_within_ttl(
     slow, monkeypatch, listener_factory, raw_client, ids

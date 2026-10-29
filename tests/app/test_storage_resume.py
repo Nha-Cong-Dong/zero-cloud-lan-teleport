@@ -810,6 +810,7 @@ def log_ops(draw, n: int):
     return ops
 
 
+@pytest.mark.slow
 @settings(
     max_examples=25,
     deadline=None,
@@ -1024,6 +1025,7 @@ NAMES = st.one_of(
 )
 
 
+@pytest.mark.slow
 @settings(
     max_examples=40,
     deadline=None,

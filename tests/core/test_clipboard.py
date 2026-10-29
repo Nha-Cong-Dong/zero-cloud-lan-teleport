@@ -779,6 +779,7 @@ heavy_text = st.lists(st.tuples(st.sampled_from(HEAVY), run_length), min_size=1,
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(t=heavy_text)
 def test_property_large_text_fragments_fit_frame_limit(t):
@@ -1566,6 +1567,7 @@ def _check_events(events, device: str | None) -> None:
             assert isinstance(ev.kind, str)
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops=st.lists(op, max_size=25), data=st.data())
 def test_property_arbitrary_sequences_never_raise_and_stay_bounded(ops, data):

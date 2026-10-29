@@ -956,6 +956,7 @@ class Fuzz:
         self.call("tick")
 
 
+@pytest.mark.slow
 @settings(
     max_examples=200,
     deadline=None,

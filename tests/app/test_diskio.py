@@ -81,6 +81,8 @@ def make_executor() -> Iterator[Callable[..., DiskExecutor]]:
             ex.shutdown()
 
 
+# Bản riêng, không dùng `support.wait_until`: hỏi lại mỗi 5 ms và hạn mặc định `SLACK`, vì test ở đây
+# đo thời điểm việc đĩa xong.
 async def wait_until(predicate: Callable[[], bool], timeout: float = SLACK, what: str = "điều kiện") -> None:
     deadline = time.monotonic() + timeout
     while not predicate():
