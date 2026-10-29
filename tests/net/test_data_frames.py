@@ -1127,6 +1127,7 @@ async def test_idle_timeout_in_the_middle_of_a_header(peer):
     assert conn.closed
 
 
+@pytest.mark.slow
 async def test_trickling_bytes_reset_the_idle_timer(peer):
     """AC-11 (c): 1 byte mỗi 0,1 s trong 2 s, idle_timeout = 0,5 → không hết hạn."""
     conn, reader, _ = make_conn(peer)
@@ -1155,6 +1156,7 @@ async def test_idle_timeout_none_reads_module_constant_at_call_time(peer, monkey
     assert 0.25 <= time.monotonic() - start <= 1.3
 
 
+@pytest.mark.slow
 async def test_time_without_a_read_call_is_not_counted(peer):
     """AC-11 (e): khối đã nằm sẵn; bên đọc ngủ 3 × idle_timeout rồi mới đọc → thành công; khoảng giữa hai
     lần đọc cũng không tính."""
@@ -1395,6 +1397,7 @@ def encode_frames(frames) -> tuple[bytes, list[int]]:
     return bytes(out), bounds
 
 
+@pytest.mark.slow
 @PROPERTY
 @given(seq=frame_sequences(), data=st.data())
 def test_h1_round_trip_of_any_valid_frame_sequence_cut_anywhere(peer, seq, data):
@@ -1452,6 +1455,7 @@ def test_h2_any_rejected_header_is_block_error_and_payload_is_not_read(
     run_bounded(run())
 
 
+@pytest.mark.slow
 @PROPERTY
 @given(seq=frame_sequences(big_weight=20), data=st.data())
 def test_h3_truncated_stream_is_connection_lost_mid_frame_and_none_at_boundary(peer, seq, data):

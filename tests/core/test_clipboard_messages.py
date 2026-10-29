@@ -450,6 +450,7 @@ kind_data = st.one_of(
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(m=_valid_clipboards(kind_data))
 def test_property_valid_clipboard_round_trips_through_frame(m):

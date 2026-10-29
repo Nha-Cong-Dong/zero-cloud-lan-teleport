@@ -383,6 +383,7 @@ def test_existing_dangling_symlink_with_same_name(rd, new_temp, tmp_path):
     assert not os.path.lexists(target)
 
 
+@pytest.mark.slow
 def test_thousand_case_variants_of_same_name(storage, rd, new_temp, monkeypatch):
     temp = new_temp([2] * 1000)
     # Ca biên spec mục 5: 1000 tên trùng nhau, khác hoa thường. Test chỉ xét chọn tên, nên bỏ
@@ -1056,6 +1057,7 @@ def test_logs_never_contain_received_names(storage, fn, rd, new_temp, monkeypatc
 # ---------------------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_two_threads_finalizing_same_name(rd, record_for):
     def sizes(k: int) -> list[int]:
         return [len(f"luot {k} file {i}\n".encode()) * (i + 1) for i in range(20)]
@@ -1137,6 +1139,7 @@ NAMES = st.one_of(
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(data=st.data())
 def test_property_finalize_never_overwrites_and_names_are_distinct(storage, fn, data, record_for):

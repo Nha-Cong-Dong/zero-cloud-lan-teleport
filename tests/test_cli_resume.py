@@ -301,6 +301,7 @@ def finish_send_and_receive(net, send, recv2, src: Path, n4_extra: int) -> int:
 # --- Test -----------------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_killed_receive_mid_transfer_then_restarted_finishes(pair_dirs, procs, tcp_proxy, n4_extra):
     net = pair_dirs
     recv = procs(receive_cmd(net))
@@ -319,6 +320,7 @@ def test_killed_receive_mid_transfer_then_restarted_finishes(pair_dirs, procs, t
     finish_send_and_receive(net, send, recv2, src, n4_extra)
 
 
+@pytest.mark.slow
 def test_killed_receive_during_reread_then_restarted_finishes(
     pair_dirs, procs, tcp_proxy, tmp_path, n4_extra
 ):
@@ -339,6 +341,7 @@ def test_killed_receive_during_reread_then_restarted_finishes(
     finish_send_and_receive(net, send, recv2, src, n4_extra)
 
 
+@pytest.mark.slow
 def test_ctrl_c_receive_mid_transfer_suspends_then_restarted_finishes(pair_dirs, procs, tcp_proxy, n4_extra):
     """Ctrl+C khi đã có `MARK` bền mà lượt chưa sang đọc lại (spec-p3-3b mục 8.4 F2): file dài hơn hẳn
     `SYNC_EVERY` khối, để `MARK` đầu tới giữa lượt chứ không phải lúc đã đủ file."""
@@ -409,6 +412,7 @@ def reconnect_through_proxy(proxy) -> None:
     proxy.resume()
 
 
+@pytest.mark.slow
 def test_killed_receive_at_85_percent_of_96_mib_resends_within_n4(pair_dirs, procs, tcp_proxy, n4_extra):
     """V5 (spec-p3-5, mvp N4 “tắt app nhận ở bất kỳ điểm nào”): giết `receive` khi proxy chặn ở 85 % →
     chạy lại `receive` (có `restored`), mạng có lại → lượt hoàn tất, file khớp, `payload_sent − cỡ file
@@ -476,6 +480,7 @@ def wait_disk_quiet(trace: Path, *, quiet: float, timeout: float) -> None:
         time.sleep(0.05)
 
 
+@pytest.mark.slow
 def test_ctrl_c_receive_at_85_percent_of_96_mib_resends_within_n4(
     pair_dirs, procs, tcp_proxy, n4_extra, tmp_path, read_state
 ):
@@ -589,6 +594,7 @@ def new_send_ends_old_transfer_as_unknown(net, procs, recv, port: int, tid: str,
     assert_clean_exit(recv)
 
 
+@pytest.mark.slow
 def test_killed_send_then_new_send_receiver_drops_old_transfer_as_unknown(pair_dirs, procs):
     """V9 (i): `receive` vẫn chạy; `send` bị giết sau `MARK` đầu, rồi một `send` mới gửi file khác."""
     net = pair_dirs
@@ -603,6 +609,7 @@ def test_killed_send_then_new_send_receiver_drops_old_transfer_as_unknown(pair_d
     new_send_ends_old_transfer_as_unknown(net, procs, recv, port, tid, old)
 
 
+@pytest.mark.slow
 def test_send_killed_while_receive_restored_then_new_send_drops_old_transfer_as_unknown(pair_dirs, procs):
     """V9 (ii): Ctrl+C `receive` (lượt tạm dừng), chạy lại `receive` (`restored`), `send` bị giết, rồi
     một `send` mới gửi file khác tới `receive` đang chạy lại."""
@@ -629,6 +636,7 @@ def test_send_killed_while_receive_restored_then_new_send_drops_old_transfer_as_
 # --- P3-5 V12c: câu (e) của `send` theo lịch thử lại thật ------------------------------------------------
 
 
+@pytest.mark.slow
 def test_text_send_prints_not_reconnected_sentence_once_on_real_retry_schedule(pair_dirs, procs, tcp_proxy):
     """V12c (spec-p3-5, N6 của mục 9.2): `send` bản text nối qua proxy; `receive` (JSON) bị Ctrl+C giữa
     lượt, proxy vẫn chuyển tiếp tới cổng đã đóng → mỗi lần thử: proxy accept rồi RST. Câu (e) in trong

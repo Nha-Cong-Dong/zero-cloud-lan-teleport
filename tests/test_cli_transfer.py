@@ -37,6 +37,7 @@ from types import SimpleNamespace
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from support import wait_until
 
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import load_or_create_identity, peer_cert_from_pem
@@ -328,14 +329,6 @@ def closed_port() -> int:
 
 def parse_time(text: str) -> datetime.datetime:
     return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=datetime.UTC)
-
-
-async def wait_until(predicate, timeout: float = 5.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def run_main(argv: list[str]) -> int:
@@ -1850,6 +1843,7 @@ async def test_i7_ctrl_c_on_receive_mid_transfer(pair_dirs, transfer_env, cli_ru
     assert type(sent) is int and 0 < sent <= f.stat().st_size, res
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_i8_ctrl_c_after_done_still_exits_0(pair_dirs, transfer_env, cli_runs, node_spy, monkeypatch):
     net = pair_dirs
@@ -1887,6 +1881,7 @@ async def test_i9_second_ctrl_c_exits_within_one_second_when_close_hangs(
     assert code == 1
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.filterwarnings("ignore::ResourceWarning")
 async def test_i10_close_time_limit_bounds_exit_when_close_hangs(
@@ -1937,6 +1932,7 @@ async def test_i11_send_while_receive_holds_lock(pair_dirs, transfer_env, cli_ru
 # --- I13: --address không tới được / máy kia đã hủy ghép đôi ----------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 async def test_i13_address_with_closed_port_exits_1_quickly(pair_dirs, transfer_env, cli_runs, json_mode):
@@ -2007,6 +2003,7 @@ async def test_i14_device_not_seen_within_timeout(
         assert expected in send.text()
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_seen_by_mdns_but_unreachable(pair_dirs, transfer_env, cli_runs, cli_mdns, monkeypatch):
     from teleport import cli
@@ -2289,6 +2286,7 @@ PACED = ["--limit-rate", "4M"]
 PACED_SIZE = 12 * MiB
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_json_progress_is_paced_and_well_formed(pair_dirs, transfer_env, cli_runs):
     net = pair_dirs
@@ -2333,6 +2331,7 @@ async def test_text_send_shows_rate_limit_line(pair_dirs, transfer_env, cli_runs
     assert C2_LIMIT.format(rate="20 MB") in send.text()
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_tty_progress_redraws_with_cr_fits_width_and_paces(
     pair_dirs, transfer_env, cli_runs, monkeypatch
@@ -2360,6 +2359,7 @@ async def test_tty_progress_redraws_with_cr_fits_width_and_paces(
     assert len(clusters) <= span + 2, (len(clusters), span)
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_plain_progress_has_no_cr_and_respects_interval(pair_dirs, transfer_env, cli_runs, monkeypatch):
     from teleport import cli
@@ -2376,6 +2376,7 @@ async def test_plain_progress_has_no_cr_and_respects_interval(pair_dirs, transfe
     assert len(re.findall(r"(?m)\d+,\d% · ", out)) <= 1, out
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_control_connection_lost_prints_reconnecting_then_done(
     pair_dirs, transfer_env, cli_runs, node_spy
@@ -2396,6 +2397,7 @@ async def test_control_connection_lost_prints_reconnecting_then_done(
     assert sha256_of(net.recv / "a.bin") == sha256_of(f)
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_data_unreachable_prints_firewall_line_then_recovers(
     pair_dirs, transfer_env, cli_runs, monkeypatch
@@ -2548,6 +2550,7 @@ def resumed_lines(text: str, sender: str, total: int) -> list[str]:
 # --- (i) + (ii) bản text, S8 ------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_text_ctrl_c_receive_suspends_then_rerun_resumes_without_asking(
     pair_dirs, resume_env, cli_runs, node_spy, tcp_proxy
@@ -2607,6 +2610,7 @@ async def test_text_ctrl_c_receive_suspends_then_rerun_resumes_without_asking(
 # --- (ii) + (iii) bản JSON ----------------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_json_rerun_receive_emits_restored_and_send_reports_payload_sent(
     pair_dirs, resume_env, cli_runs, tcp_proxy, n4_extra
@@ -2670,6 +2674,7 @@ async def test_json_rerun_receive_emits_restored_and_send_reports_payload_sent(
 # --- (iv) lượt dở quá hạn lúc khởi động ----------------------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 async def test_rerun_receive_after_grace_reports_expired_and_deletes_temp(
@@ -2724,6 +2729,7 @@ async def test_rerun_receive_after_grace_reports_expired_and_deletes_temp(
 # --- (vi) `send` hết hạn chờ nối lại ---------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 async def test_send_gives_up_after_reconnect_grace_and_exits_1(pair_dirs, transfer_env, cli_runs, json_mode):
@@ -2757,6 +2763,7 @@ async def test_send_gives_up_after_reconnect_grace_and_exits_1(pair_dirs, transf
 # --- (vii) hai máy gửi có lượt dở ------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 async def test_rerun_receive_restores_one_transfer_per_sender(
@@ -2844,6 +2851,7 @@ async def suspended_by_ctrl_c(net, cli_runs) -> tuple[object, str]:
     return send, tid
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 async def test_ctrl_c_before_receive_header_still_reports_suspended(
@@ -2889,6 +2897,7 @@ async def test_ctrl_c_before_receive_header_still_reports_suspended(
     assert not (net.recv / "lon.bin").exists()
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 async def test_ctrl_c_while_rerun_receive_is_starting_prints_nothing_for_restored_transfer(
@@ -3024,6 +3033,7 @@ def statuses_of(run, tid: str) -> list[str]:
 # --- V12a: Ctrl+C `send` (bản text) lúc đang “Đang nối lại…” ------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_text_ctrl_c_send_while_reconnecting_prints_stopping_line_then_cancelled_and_exits_1(
     pair_dirs, resume_env, cli_runs
@@ -3056,6 +3066,7 @@ async def test_text_ctrl_c_send_while_reconnecting_prints_stopping_line_then_can
 # --- V12b: `restored.done_bytes` chính xác ------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 @pytest.mark.parametrize("phase", ["giua-file-1", "doc-lai-file-1"])
 async def test_restored_done_bytes_is_verified_files_plus_marked_block_lengths(
@@ -3144,6 +3155,7 @@ async def test_restored_done_bytes_is_verified_files_plus_marked_block_lengths(
 # --- V12d: câu (e) mỗi đợt mất kết nối một lần --------------------------------------------------------
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_not_reconnected_sentence_is_printed_once_per_outage(
     pair_dirs, resume_env, cli_runs, tcp_proxy
@@ -3247,6 +3259,7 @@ def assert_clean_exit(proc) -> None:
     assert "Traceback" not in err and "Fatal Python error" not in err, err
 
 
+@pytest.mark.slow
 @integration
 def test_p1_subprocess_send_by_address(pair_dirs, procs):
     net = pair_dirs
@@ -3288,6 +3301,7 @@ async def test_p2_send_finds_receiver_through_discovery(pair_dirs, transfer_env,
     assert sha256_of(net.recv / "a.bin") == sha256_of(f)
 
 
+@pytest.mark.slow
 @integration
 def test_p3_interrupting_send_cancels_receiver_quickly(pair_dirs, procs):
     """P3: Ctrl+C (Windows: CTRL_BREAK; POSIX: SIGINT) ở `send` đang gửi → bên nhận có `result`
@@ -3312,6 +3326,7 @@ def test_p3_interrupting_send_cancels_receiver_quickly(pair_dirs, procs):
     assert_clean_exit(send)
 
 
+@pytest.mark.slow
 @integration
 def test_p4_interrupting_idle_receive_exits_0(pair_dirs, procs):
     net = pair_dirs
@@ -3328,6 +3343,7 @@ def test_p4_interrupting_idle_receive_exits_0(pair_dirs, procs):
     assert_clean_exit(recv)
 
 
+@pytest.mark.slow
 @integration
 def test_p5_send_while_receive_holds_lock(pair_dirs, procs):
     net = pair_dirs
@@ -3356,6 +3372,7 @@ def add_sender(net, label: str, name: str) -> Path:
     return d
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_e1_open_prompt_is_reprinted_after_other_lines_and_blocks_progress(
     pair_dirs, transfer_env, cli_runs, node_spy
@@ -3417,6 +3434,7 @@ async def test_e3_ctrl_c_with_pending_offers_opens_no_new_prompt(pair_dirs, tran
         assert await run.code(15) == 1
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_e4_stdin_eof_with_pending_offers_prints_b13_once_and_no_c6(
     pair_dirs, transfer_env, cli_runs, node_spy
@@ -3492,6 +3510,7 @@ async def test_m14_offers_arriving_after_stdin_eof_print_m14_each_and_b13_once(
     assert not recv.task.done(), "receive phải chạy tiếp sau EOF"
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_m14_offer_queued_at_eof_gets_m14_and_open_prompt_gets_b13(
     pair_dirs, transfer_env, cli_runs, node_spy

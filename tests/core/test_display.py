@@ -250,6 +250,7 @@ def _check(name: str, out: str, width: int) -> None:
         assert max(columns(kept), columns(original_kept)) + 1 >= width - 1, (name, out)
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
 @given(name=st.text(alphabet=_CHARS, min_size=1, max_size=64))
 def test_h1_any_valid_device_name_fits_32_columns_without_blank_chars(display, name):

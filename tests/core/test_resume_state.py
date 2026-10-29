@@ -1472,6 +1472,7 @@ def _stamp(k: int) -> str:
     return f"2026-{month:02d}-{day:02d}T{k // 3600 % 24:02d}:{k // 60 % 60:02d}:{k % 60:02d}Z"
 
 
+@pytest.mark.slow
 def test_encode_tombstones_over_limit_drops_oldest():
     """Ghi: vượt trần thì bỏ mục cũ nhất (spec 2.2). Mục xếp theo `at` tăng dần."""
     per_file = 20_000

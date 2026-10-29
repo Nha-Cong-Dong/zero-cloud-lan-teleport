@@ -34,6 +34,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support import wait_until
 
 from teleport.app import storage
 from teleport.core import transfer as core_transfer
@@ -55,14 +56,6 @@ REAL_GRACE = core_transfer.RECONNECT_GRACE  # đọc lúc import, trước khi `
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------
-
-
-async def wait_until(predicate, timeout: float = 5.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def make_file(directory: Path, name: str, size: int) -> Path:
@@ -266,6 +259,7 @@ def test_wall_time_seam_defaults_to_time_time(T):
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 @pytest.mark.parametrize("rate", [None, 16 * MiB], ids=["khong-gioi-han", "gioi-han"])
@@ -284,6 +278,7 @@ async def test_payload_sent_of_clean_transfer_is_size_within_one_chunk_receiver_
     assert fin_a.payload_sent == 0
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 async def test_payload_sent_after_sender_cancel_counts_at_least_what_receiver_wrote(
@@ -329,6 +324,7 @@ async def test_done_transfer_removes_temp_with_keep_record_and_keeps_only_transf
     assert (rec.receiver, rec.sender) == (A.id, B.id)
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 async def test_cancelled_transfer_removes_temp_without_keep_record(T, transfer_nodes, temp_spy, write_spy):
@@ -342,6 +338,7 @@ async def test_cancelled_transfer_removes_temp_without_keep_record(T, transfer_n
     assert [c for c in temp_spy if c[1] == tid] == [("remove_temp", tid, False)]
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 async def test_suspend_runs_queued_writes_and_sync_then_only_closes_handles(
@@ -396,6 +393,7 @@ async def test_suspend_runs_queued_writes_and_sync_then_only_closes_handles(
     assert mine == [("close_temp", tid, None)], mine
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 async def test_begin_close_suspends_receiving_before_cancelling_sends_and_pending_offers(
@@ -488,6 +486,7 @@ class RawSender:
             conn.abort()
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 async def test_s1_complete_offer_and_data_open_during_close_do_not_cancel_suspended_transfer(
@@ -557,6 +556,7 @@ async def test_s1_complete_offer_and_data_open_during_close_do_not_cancel_suspen
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 @pytest.mark.parametrize("client", ["sender", "receiver"])
@@ -607,6 +607,7 @@ async def test_orderly_close_mid_transfer_then_reopen_finishes(
     assert fin_a.payload_sent == 0
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 async def test_suspend_drops_queued_finalize_of_last_file_then_reopen_finishes(
@@ -833,6 +834,7 @@ def errors_logged(caplog) -> list[logging.LogRecord]:
     return [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 async def test_close_past_close_disk_wait_closes_handles_after_slow_sync_and_reopen_finishes(
@@ -889,6 +891,7 @@ async def test_close_past_close_disk_wait_closes_handles_after_slow_sync_and_reo
     assert sha256_of(net.receive_dir / "lon.bin") == sha256_of(src)
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 async def test_node_close_cancelled_while_sync_runs_closes_handles_after_commit_and_keeps_mark(
@@ -1069,6 +1072,7 @@ async def reopen_and_connect(restart, s):
     return A2
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 @pytest.mark.parametrize("client", ["sender", "receiver"])
@@ -1114,6 +1118,7 @@ def pick_flip(case: str, marked: set[int], size: int) -> tuple[int, int]:
     return k, k * BLOCK_SIZE + rnd.randrange(block_len(size, k))
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 @pytest.mark.parametrize("case", ["byte-dau-khoi", "byte-cuoi-khoi", "seed-7", "seed-1234"])
@@ -1198,6 +1203,7 @@ async def test_flipped_byte_in_short_last_block_while_suspended_in_reread_resend
 # --- V7: lật một byte `.state` khi tạm dừng (mvp N5; spec-p3-5 mục 9.2 C4) ---------------------------
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 @pytest.mark.parametrize("where", ["mark-dau", "mark-cuoi", "header"])
@@ -1262,6 +1268,7 @@ def change_source(path: Path, how: str) -> None:
         assert after.st_size == st.st_size and after.st_mtime_ns != st.st_mtime_ns
 
 
+@pytest.mark.slow
 @integration
 @leakcheck
 @pytest.mark.parametrize("how", ["them-byte", "chi-mtime"])

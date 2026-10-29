@@ -112,6 +112,7 @@ def control_pair(net):
 # --- (a) clipboard hợp lệ bị bỏ qua --------------------------------------------------------------
 
 
+@pytest.mark.slow
 @integration
 async def test_valid_clipboard_on_control_is_ignored_and_same_connection_carries_transfer(
     transfer_nodes, app_helpers, caplog
@@ -206,6 +207,7 @@ async def test_malformed_clipboard_closes_control_with_protocol_error_then_recon
 # --- (c) node cũ chưa biết `clipboard` ----------------------------------------------------------
 
 
+@pytest.mark.slow
 @integration
 async def test_old_node_ignores_clipboard_as_unknown_type(transfer_nodes, monkeypatch, caplog):
     caplog.set_level(logging.DEBUG, logger="teleport")

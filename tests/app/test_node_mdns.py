@@ -11,6 +11,7 @@ import os
 import time
 
 import pytest
+from support import wait_until
 
 from teleport.app.node import (
     DeviceConnected,
@@ -43,14 +44,7 @@ def opts(n: int) -> MdnsOptions:
     )
 
 
-async def wait_until(predicate, timeout: float, what: str) -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.02)
-
-
+@pytest.mark.slow
 async def test_m1_two_unpaired_nodes_see_each_other(node_factory):
     A = await node_factory("A", mdns=opts(11))
     B = await node_factory("B", mdns=opts(12))
@@ -66,6 +60,7 @@ async def test_m1_two_unpaired_nodes_see_each_other(node_factory):
     assert A.connected_devices() == frozenset()
 
 
+@pytest.mark.slow
 async def test_m2_trusted_nodes_connect_and_goodbye(node_factory, trust_each_other, count_open_control):
     counter = count_open_control(rewrite_to=LOCAL)
     trust_each_other("A", "B")
@@ -97,6 +92,7 @@ async def test_m2_trusted_nodes_connect_and_goodbye(node_factory, trust_each_oth
 M3_SCAN_TIMEOUT = 6.0
 
 
+@pytest.mark.slow
 async def test_m3_scan_sees_node_without_advertising_or_locking(node_factory, tmp_path):
     B = await node_factory("B", mdns=opts(31))
     dir_x = tmp_path / "X"

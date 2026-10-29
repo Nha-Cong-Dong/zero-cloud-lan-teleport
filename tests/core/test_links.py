@@ -1480,6 +1480,7 @@ LK22_PARAMS = st.fixed_dictionaries(
 )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("first_is_lower", [True, False], ids=["X<Y", "X>Y"])
 @settings(max_examples=1000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(p=LK22_PARAMS)
@@ -1537,6 +1538,7 @@ def test_lk22_simulation_simple_case_converges():
 GAPS = [0.1, 0.1, 0.1, 0.2, 0.5, 1.0, 3.0, 10.0, 40.0]
 
 
+@pytest.mark.slow
 @HYPO
 @given(
     pattern=st.lists(
@@ -1565,6 +1567,7 @@ def test_lk23_spoofed_mdns_identity_mismatch_is_rate_limited(pattern, lat, addr_
     assert sim.failed() == expected
 
 
+@pytest.mark.slow
 @HYPO
 @given(
     pattern=st.lists(
