@@ -1,9 +1,9 @@
-"""Khung GUI chạy bằng `teleport.ui.app.main` trong tiến trình: khay, cửa sổ, M2/M3, thoát
+"""Khung GUI chạy bằng `teleport.ui.app.main` trong tiến trình: khay, cửa sổ, M2, màn “Bắt đầu”, thoát
 (spec-p4-3 mục 4, D6, D8, D9, mục 6.5, 6.6 và mục 10).
 
 Mỗi test chạy `main([...])` qua fixture `gui` (tests/ui/conftest.py): kịch bản chạy trong event loop Qt,
 node bị ép nghe 127.0.0.1 cổng 0, không mDNS. Test có node chạy thật mở socket nên gắn `integration`;
-test chỉ có trạng thái M3 (không node) thì không.
+test chỉ có màn “Bắt đầu” (không node) thì không.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def exit_budget() -> float:
 
 
 def test_tray_has_four_items_in_order_with_enabled_state(gui, gui_wait, config_dir, ui_helpers):
-    d = config_dir("A", identity=False)  # M3: không node, không mạng
+    d = config_dir("A", identity=False)  # màn “Bắt đầu”: không node, không mạng
     seen: dict = {}
 
     def script(run):
@@ -224,77 +224,6 @@ def test_running_window_shows_device_name_and_receive_dir(gui, gui_wait, config_
     assert run.code == 0
 
 
-def test_missing_identity_shows_m3_and_does_not_start_node(gui, gui_wait, config_dir, ui_helpers):
-    """D6: chưa có `device.crt` → M3, không start node, không lấy `node.lock`, không tạo danh tính."""
-    d = config_dir("A", identity=False)
-    seen: dict = {}
-
-    def script(run):
-        yield gui_wait(lambda: run.windows and run.window.isVisible(), 10, "cửa sổ hiện")
-        yield gui_wait(lambda: ui_helpers.M3_HEAD in ui_helpers.all_text(run.window), 5, "câu M3")
-        for _ in range(10):
-            yield
-        seen["text"] = ui_helpers.all_text(run.window)
-        seen["node_lock_free"] = ui_helpers.lock_is_free(d, "node.lock")
-        seen["retry"] = len(ui_helpers.buttons_with_text(run.window, ui_helpers.RETRY))
-        quit_via_tray(run, ui_helpers.plain)
-
-    run = gui(["--config-dir", str(d)], script)
-    assert ui_helpers.M3_HINT in seen["text"]
-    assert "`" not in seen["text"], "câu GUI không dùng backtick quanh tên lệnh"
-    assert run.start_calls == 0, "không có device.crt thì không start node"
-    assert seen["node_lock_free"]
-    assert seen["retry"] == 1, "M3 có nút Thử lại (mục 10)"
-    assert not (d / "device.crt").exists(), "GUI không tự tạo danh tính (F1: chờ người dùng xác nhận)"
-    assert run.code == 0
-
-
-@integration
-def test_m3_retry_after_identity_created_starts_node(gui, gui_wait, config_dir, ui_helpers):
-    from teleport.trust.identity import load_or_create_identity
-
-    d = config_dir("A", identity=False)
-
-    def script(run):
-        yield gui_wait(
-            lambda: run.windows and ui_helpers.M3_HEAD in ui_helpers.all_text(run.window), 10, "M3"
-        )
-        load_or_create_identity(d)  # người dùng chạy `teleport identity`
-        [retry] = ui_helpers.buttons_with_text(run.window, ui_helpers.RETRY)
-        retry.click()
-        yield gui_wait(lambda: host_started(run), 15, "node chạy sau Thử lại")
-        quit_via_tray(run, ui_helpers.plain)
-
-    run = gui(["--config-dir", str(d)], script)
-    assert run.start_calls == 1
-    assert run.code == 0
-
-
-@integration
-def test_m3_recovers_on_show_requested(gui, gui_wait, config_dir, ui_helpers):
-    """Mục 10: đang M3 mà nhận `show_requested` (mở Teleport lần nữa) → kiểm lại `device.crt`, có thì
-    dựng `NodeHost` mới."""
-    from teleport.trust.identity import load_or_create_identity
-    from teleport.ui.app import SingleInstance
-
-    d = config_dir("A", identity=False)
-    seen: dict = {}
-
-    def script(run):
-        yield gui_wait(
-            lambda: run.windows and ui_helpers.M3_HEAD in ui_helpers.all_text(run.window), 10, "M3"
-        )
-        load_or_create_identity(d)
-        seen["second"] = SingleInstance.acquire(d, wait=2.0)  # bản thứ hai: gửi `show`
-        yield gui_wait(lambda: host_started(run), 15, "node chạy sau show_requested")
-        quit_via_tray(run, ui_helpers.plain)
-
-    run = gui(["--config-dir", str(d)], script)
-    assert seen["second"] is None
-    assert run.start_calls == 1
-    assert run.code == 0
-
-
 @integration
 def test_locked_shows_m2_even_in_background_then_retry_runs(gui, gui_wait, config_dir, ui_helpers, fast_lock):
     """Mục 4: CLI giữ `node.lock` → `start_failed("locked")` → M2 + Thử lại, hiện cửa sổ kể cả
@@ -330,8 +259,9 @@ def test_locked_shows_m2_even_in_background_then_retry_runs(gui, gui_wait, confi
     assert run.code == 0
 
 
-def test_error_state_buttons_are_keyboard_reachable(gui, gui_wait, config_dir, ui_helpers):
-    """N12 (một phần): nút trên cửa sổ có tên cho trình đọc màn hình và đi tới được bằng Tab."""
+def test_start_button_is_keyboard_reachable_and_named(gui, gui_wait, config_dir, ui_helpers):
+    """N12 (một phần): nút “Bắt đầu” có tên cho trình đọc màn hình và đi tới được bằng Tab. Màn “Bắt đầu”
+    (đủ câu chữ, bấm thì chạy node, `show_requested`): tests/ui/test_start_screen.py."""
     from PySide6.QtCore import Qt
 
     d = config_dir("A", identity=False)
@@ -339,11 +269,11 @@ def test_error_state_buttons_are_keyboard_reachable(gui, gui_wait, config_dir, u
 
     def script(run):
         yield gui_wait(
-            lambda: run.windows and ui_helpers.buttons_with_text(run.window, ui_helpers.RETRY), 10, "nút"
+            lambda: run.windows and ui_helpers.buttons_with_text(run.window, ui_helpers.START), 10, "nút"
         )
-        [retry] = ui_helpers.buttons_with_text(run.window, ui_helpers.RETRY)
-        seen["name"] = retry.accessibleName() or ui_helpers.plain(retry.text())
-        seen["tab"] = bool(retry.focusPolicy() & Qt.FocusPolicy.TabFocus)
+        [start] = ui_helpers.buttons_with_text(run.window, ui_helpers.START)
+        seen["name"] = start.accessibleName() or ui_helpers.plain(start.text())
+        seen["tab"] = bool(start.focusPolicy() & Qt.FocusPolicy.TabFocus)
         seen["win_name"] = run.window.accessibleName() or run.window.windowTitle()
         quit_via_tray(run, ui_helpers.plain)
 

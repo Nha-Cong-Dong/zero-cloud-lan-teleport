@@ -3,9 +3,21 @@
 Luồng khởi động (spec P4-3 mục 4): phân tích tham số (`--config-dir D`, `--background`,
 `--selftest`); thư mục cấu hình = `--config-dir` › `TELEPORT_HOME` › `paths.config_dir()`, tuyệt
 đối; dựng `QApplication` (`setQuitOnLastWindowClosed(False)`); i18n, theme; `SingleInstance.acquire`;
-`GuiApp` dựng cửa sổ, khay, rồi chạy node trong `bridge.NodeHost` nếu máy đã có `device.crt`
-(chưa có thì cửa sổ báo M3 và không lấy `node.lock`, không quảng bá gì); hiện cửa sổ trừ khi
+log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node trong `bridge.NodeHost` nếu máy
+đã có `device.crt`. Chưa có thì cửa sổ hiện màn “Bắt đầu” (spec hackathon mục 10 A1): chưa bấm
+“Bắt đầu” thì không chạy node, không lấy `node.lock`, không quảng bá gì; bấm thì chạy node và
+`Node.start` tự tạo danh tính (tên mặc định `app.node.default_device_name`). Hiện cửa sổ trừ khi
 `--background` và có khay; `app.exec()`.
+
+**Radar**: `NodeHost.node_event` → `RadarView.model.apply`; lúc `started` lấy ảnh chụp
+`Node.devices()` qua `NodeHost.call` rồi `model.reset`. Sự kiện và kết quả của host cũ bị bỏ; dựng
+host mới (“Thử lại”) thì `model.clear()` trước.
+
+**Log ra file** (spec hackathon Q7, mục 9.10): `<config_dir>/logs/teleport.log`, xoay khi đầy
+`LOG_MAX_BYTES`, giữ thêm `LOG_BACKUPS` bản cũ; mức WARNING như log ra stderr. Chỉ gắn **sau**
+`SingleInstance.acquire` thành công (chỉ một tiến trình ghi và xoay file), gỡ và đóng khi `main` trả
+về. Theo mvp N9: chỉ ghi loại lỗi và mã kết quả, không ghi nội dung file hay clipboard. Không tạo
+được thư mục hay file log thì chỉ ghi WARNING ra stderr (nếu có), app vẫn chạy.
 
 **Một bản mỗi thư mục cấu hình** (`SingleInstance`): bản GUI giữ `<config_dir>/gui.lock` suốt đời
 tiến trình (không giữ trước `node.lock` được: trên Windows hai fd cùng tiến trình chặn nhau), rồi
@@ -41,6 +53,7 @@ import functools
 import getpass
 import hashlib
 import logging
+import logging.handlers
 import os
 import signal
 import sys
@@ -57,10 +70,12 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from teleport import paths
 from teleport.app import node as app_node
+from teleport.app.devices import DeviceView
+from teleport.app.node import NodeEvent
 from teleport.app.transfers import OfferReceived, TransferUpdate
 from teleport.core.transfer import TransferKey
 from teleport.lock import NodeLock, NodeLockedError
-from teleport.trust.identity import CERT_FILE
+from teleport.trust.identity import CERT_FILE, Identity
 from teleport.ui import i18n, texts, theme
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError
 from teleport.ui.main_window import MainWindow, ViewState
@@ -78,6 +93,10 @@ IPC_READ_TIMEOUT_MS = 1000
 IPC_MAX_CONNECTIONS = 4
 JOIN_TIMEOUT = 5.0  # giây chờ thread node sau `exec()`
 QUIT_GRACE = 5.0  # giây cộng thêm `close_time_limit()` cho QTimer dự phòng lúc thoát
+LOG_DIR = "logs"
+LOG_FILE = "teleport.log"
+LOG_MAX_BYTES = 1024 * 1024  # một file log tối đa 1 MiB
+LOG_BACKUPS = 1  # giữ thêm một bản cũ: tối đa 2 file
 
 _CONNECT_TIMEOUT_MS = 200
 _ACK_TIMEOUT_MS = 1500  # client chờ server đọc lệnh rồi đóng kết nối
@@ -288,6 +307,7 @@ class GuiApp(QObject):
         self._make_options = make_options or _default_options
         self._quitting = False
         self._told_tray = False
+        self._start_confirmed = False  # người dùng đã bấm “Bắt đầu” trong phiên này
         self.host: NodeHost | None = None
         self._old_hosts: list[NodeHost] = []
         self.window = MainWindow()
@@ -298,6 +318,7 @@ class GuiApp(QObject):
         self._quit_timer.timeout.connect(self._app.quit)
 
         self.window.retry_requested.connect(self._on_retry)
+        self.window.start_requested.connect(self._on_start_requested)
         self.window.quit_requested.connect(self.request_quit)
         self.window.hidden_to_tray.connect(self._on_hidden_to_tray)
         self.tray.open_requested.connect(self.window.bring_to_front)
@@ -311,7 +332,7 @@ class GuiApp(QObject):
         return self._quitting
 
     def start(self) -> None:
-        """Hiện khay, chạy node (hoặc báo M3), hiện cửa sổ trừ khi `--background` và có khay."""
+        """Hiện khay, chạy node (hoặc hiện màn “Bắt đầu”), hiện cửa sổ trừ khi `--background` và có khay."""
         self.tray.show()
         self.start_node()
         if (
@@ -322,7 +343,10 @@ class GuiApp(QObject):
             self.window.bring_to_front()
 
     def start_node(self) -> None:
-        """Dựng một `NodeHost` mới (lần đầu và “Thử lại”); chưa có `device.crt` → M3, không chạy node."""
+        """Dựng một `NodeHost` mới (lần đầu, “Bắt đầu” và “Thử lại”).
+
+        Chưa có `device.crt` và người dùng chưa bấm “Bắt đầu” → màn “Bắt đầu”, không chạy node.
+        """
         if self._quitting:
             return
         if self.host is not None:
@@ -330,14 +354,16 @@ class GuiApp(QObject):
                 return  # node đang chạy hay đang khởi động
             self._old_hosts.append(self.host)  # đã lỗi; thread có thể chưa xong, `shutdown` chờ
             self.host = None
-        if not self._setup_done():
-            self.window.show_setup_needed()
+        if not self._start_confirmed and not self._setup_done():
+            self.window.show_welcome(planned_device_name())
             return
+        self.window.radar.model.clear()
         options = self._make_options(self._config_dir)
         host = NodeHost(options, self)
         host.started.connect(functools.partial(self._on_started, host))
         host.start_failed.connect(functools.partial(self._on_start_failed, host))
         host.transfer_event.connect(functools.partial(self._on_transfer, host))
+        host.node_event.connect(functools.partial(self._on_node_event, host))
         self.host = host
         self.offers.set_receive_dir(options.receive_dir)
         self.window.show_starting()
@@ -399,8 +425,23 @@ class GuiApp(QObject):
             self._app.quit()
 
     def _on_started(self, host: NodeHost) -> None:
-        if host is self.host:
-            self.window.show_running(host.node_name, host.options.receive_dir)
+        if host is not self.host:
+            return
+        self.window.show_running(host.node_name, host.options.receive_dir)
+        host.call(lambda node: node.devices(), functools.partial(self._on_devices, host))
+
+    def _on_devices(self, host: NodeHost, result: tuple[DeviceView, ...] | BaseException) -> None:
+        """Ảnh chụp `Node.devices()` lúc `started` (sự kiện tới trước đó đã nằm trong ảnh chụp)."""
+        if host is not self.host or self._quitting:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không đọc được danh sách thiết bị: %s", type(result).__name__)
+            return
+        self.window.radar.model.reset(result)
+
+    def _on_node_event(self, host: NodeHost, event: NodeEvent) -> None:
+        if host is self.host and not self._quitting:
+            self.window.radar.model.apply(event)
 
     def _on_start_failed(self, host: NodeHost, code: str, detail: str) -> None:
         if host is not self.host:
@@ -430,14 +471,21 @@ class GuiApp(QObject):
         host.call(lambda node: node.transfers.decide(key, accept), done)
 
     def _on_retry(self) -> None:
-        if self.window.view_state in (ViewState.ERROR, ViewState.SETUP):
+        if self.window.view_state is ViewState.ERROR:
+            self.start_node()
+
+    def _on_start_requested(self) -> None:
+        """Nút “Bắt đầu”: người dùng đồng ý chạy Teleport; `Node.start` tự tạo danh tính."""
+        if self.window.view_state is ViewState.WELCOME:
+            self._start_confirmed = True
             self.start_node()
 
     def _on_show_requested(self) -> None:
+        """Mở Teleport lần nữa: hiện cửa sổ; đang lỗi thì thử chạy lại (màn “Bắt đầu” vẫn chờ bấm)."""
         if self._quitting:
             return
         self.window.bring_to_front()
-        if self.window.view_state in (ViewState.ERROR, ViewState.SETUP):
+        if self.window.view_state is ViewState.ERROR:
             self.start_node()
 
     def _on_hidden_to_tray(self) -> None:
@@ -448,6 +496,24 @@ class GuiApp(QObject):
 
 def _default_options(config_dir: Path) -> NodeOptions:
     return NodeOptions(config_dir=config_dir, receive_dir=paths.default_receive_dir())
+
+
+class _NoIdentityYet:
+    """Đứng thay `Identity` khi chưa có danh tính: mã máy chưa biết."""
+
+    device_id = "????"
+
+
+def planned_device_name() -> str:
+    """Tên node sẽ dùng khi `Node.start` tạo danh tính: `app.node.default_device_name`.
+
+    Hostname dùng được (gần như luôn vậy) thì đúng là tên đó; không thì app dùng `Teleport-<4 ký tự
+    đầu mã máy>`, mà mã máy chưa có nên hiện `Teleport-????`. Không I/O đĩa hay mạng.
+
+    Chạy trên thread Qt: `platform.node()` lần đầu có thể mất vài trăm ms (đo được 50–265 ms trên
+    Windows), chỉ một lần lúc mở màn “Bắt đầu”; chấp nhận được.
+    """
+    return app_node.default_device_name(cast(Identity, _NoIdentityYet()))
 
 
 # ---- main ----------------------------------------------------------------------------------
@@ -469,9 +535,43 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
 def _setup_logging() -> None:
     if sys.stderr is not None and not logging.getLogger().handlers:
-        logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        logging.basicConfig(level=logging.WARNING, format=_LOG_FORMAT)
+
+
+def _attach_file_log(config_dir: Path) -> logging.Handler | None:
+    """Gắn log ra `<config_dir>/logs/teleport.log` (xoay 2 file) vào logger gốc; lỗi → None.
+
+    Chỉ gọi khi đã là bản duy nhất của `config_dir` (giữ `gui.lock`). Mở file lúc ghi dòng đầu tiên
+    (`delay=True`), nên chạy bình thường không có lỗi thì không tạo file.
+    """
+    try:
+        directory = config_dir / LOG_DIR
+        directory.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            directory / LOG_FILE,
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUPS,
+            encoding="utf-8",
+            delay=True,
+        )
+    except OSError as e:
+        log.warning("không mở được file log (%s)", type(e).__name__)
+        return None
+    handler.setLevel(logging.WARNING)
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logging.getLogger().addHandler(handler)
+    return handler
+
+
+def _detach_file_log(handler: logging.Handler | None) -> None:
+    if handler is not None:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
 
 
 def _application() -> QApplication:
@@ -488,11 +588,12 @@ def _selftest(app: QApplication) -> int:
         theme.apply(app)
         window = MainWindow()
         tray = Tray()
+        window.show_welcome(planned_device_name())
         window.show_starting()
         window.show_running("Teleport", Path("Teleport"))
+        window.radar.model.reset(())
         for code in StartError:
             window.show_error(code.value, "")
-        window.show_setup_needed()
         offers = OfferPrompts()
         if len(tray.actions()) != 4 or offers.keys():
             return EXIT_ERROR
@@ -569,12 +670,16 @@ def main(argv: list[str] | None = None) -> int:
     if instance is None:
         return EXIT_OK  # bản đang chạy đã hiện cửa sổ
 
-    controller = GuiApp(app, config_dir, instance, background=args.background)
-    restore_sigint = _install_sigint(controller)
+    file_log = _attach_file_log(config_dir)  # sau `acquire`: chỉ bản duy nhất ghi và xoay file
     try:
-        controller.start()
-        app.exec()
+        controller = GuiApp(app, config_dir, instance, background=args.background)
+        restore_sigint = _install_sigint(controller)
+        try:
+            controller.start()
+            app.exec()
+        finally:
+            restore_sigint()
+            controller.shutdown()
     finally:
-        restore_sigint()
-        controller.shutdown()
+        _detach_file_log(file_log)
     return EXIT_OK
