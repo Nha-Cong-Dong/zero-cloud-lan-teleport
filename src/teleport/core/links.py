@@ -23,6 +23,11 @@ Luật chính:
 - Nối lại theo lịch 1, 2, 4… ≤ 30 s. Máy kia từ chối, danh tính không khớp hay khác
   phiên bản giao thức thì “chặn”: không thử lại theo lịch, chỉ khi có sự kiện mDNS
   hoặc mạng đổi (vẫn theo lịch tính từ lần thử trước), hoặc người dùng thao tác.
+  Ngoại lệ, chỉ cho bị từ chối: thiết bị đang `hold` (còn lượt truyền dở) thì vẫn thử lại
+  theo lịch, mỗi lần cách lần thất bại ≥ `max(EVENT_RETRY_GAP, lịch)`, và chỉ báo một lần,
+  vì lỗi tạm (máy kia khởi động lại, mạng chập) trông giống bị từ chối. `hold(False)` để lại
+  tối đa một lần thử đã hẹn (không còn nếu địa chỉ mDNS đã cũ); lần đó bị từ chối thì chặn
+  hẳn như trên.
 - Mọi lần thử do sự kiện cách lần trước ≥ `EVENT_RETRY_GAP` (kể cả khi bị chặn: không
   sớm hơn `max(EVENT_RETRY_GAP, lịch)`), nên kẻ giả mạo mDNS chỉ làm node thử với tốc
   độ có trần. Lịch 1, 2, 4… là lịch theo thời gian, không bị giới hạn này.
@@ -637,7 +642,12 @@ class LinkTracker:
             return actions
         assert result in _BLOCKING
         dev.blocked = True
-        dev.next_at = None
+        if result is ConnectResult.REJECTED and dev.held and dev.trusted and dev.scheduled():
+            # Còn lượt truyền dở: lỗi tạm (máy kia đang khởi động lại, mạng chập) trông giống bị
+            # từ chối, nên vẫn thử lại theo lịch, không sớm hơn EVENT_RETRY_GAP (trần RETRY_MAX).
+            dev.next_at = now + max(EVENT_RETRY_GAP, _delay(dev.failures))
+        else:
+            dev.next_at = None
         if result not in dev.reported:
             dev.reported.add(result)
             actions.append(Notify(LinkFailed(device_id, result)))

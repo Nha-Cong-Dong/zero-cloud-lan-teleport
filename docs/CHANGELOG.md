@@ -88,6 +88,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lịch sử 100 lượt truyền gần nhất (cả gửi lẫn nhận), lưu trong `history.json` ở thư mục cấu hình và xóa được; giao diện sẽ hiện ở bản sau. File chỉ chứa metadata: tối đa 10 tên file đầu, kích thước, kết quả, giờ kết thúc, tên máy kia và đường dẫn đã lưu ở máy nhận, không bao giờ có nội dung file. File hỏng thì lịch sử bắt đầu lại từ rỗng.
 
 ### Changed
+- Bản build thử (CLI và GUI) ghim đúng bản dependency runtime qua `packaging/pyinstaller/constraints.txt` (cryptography, cffi, pycparser, ifaddr, zeroconf); workflow CI chỉ có quyền đọc, checkout không giữ thông tin đăng nhập, job test giới hạn 60 phút.
 - README có mục “Hướng dẫn sử dụng”: lấy bản zip giao diện, ghép đôi, gửi/nhận trên giao diện và bằng dòng lệnh; bảng Lộ trình và khung trạng thái khớp `docs/ke_hoach.md` mục 5.1.
 - CLI: câu báo khi thư mục tạm của lượt đã có sẵn mà Teleport không dùng tiếp được không còn đổ cho việc Teleport bị tắt đột ngột (lượt như vậy nay được khôi phục); tên máy do máy kia tự đặt được làm sạch giống nhau ở mọi câu (ký tự định dạng ẩn không còn in thẳng).
 - `docs/mvp.md` (F6, F12, mục 7.3, 8), README và `docs/architecture.md` mục 2 tả hành vi mới: Ctrl+C `receive` tạm dừng chứ không hủy, chạy lại thì nhận tiếp; lượt dở quá hạn bị xóa ở lần chạy `receive` kế tiếp; giới hạn của CLI (`--dir` khác thì không thấy lượt dở, chưa có lệnh hủy lượt nhận dở).
@@ -145,6 +146,9 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lời hỏi `[c/k]` của `listen`, `pair` và `receive` được in lại khi có dòng khác in chen giữa lúc đang chờ trả lời.
 
 ### Fixed
+- Còn lượt truyền dở mà máy kia báo “từ chối kết nối” (thường là lỗi tạm: máy kia đang khởi động lại, mạng chập) thì vẫn tự nối lại theo lịch, tối đa một lần mỗi 30 giây, và chỉ báo một lần; trước đây lượt kẹt ở “Đang nối lại…” tới khi có sự kiện mDNS, mạng đổi hay người dùng thao tác. Chỉ áp cho bị từ chối: danh tính khác hay khác phiên bản giao thức vẫn chặn hẳn; máy đã hủy ghép đôi chỉ bị gọi tối đa một lần mỗi 30 giây tới khi lượt hết hạn ([protocol.md](protocol.md) mục 6.2). Không đổi định dạng trên dây.
+- Giao diện: bấm “Ghép đôi lại” khi máy kia không có trong mạng (ví dụ đã ghép bằng IP vì mạng chặn mDNS) giờ hiện câu hướng dẫn và mở khung “Nhập IP thủ công”; trước đây bấm không có gì xảy ra. “Ghép đôi lại” hay ghép rồi gửi tới máy không có trong mạng trong lúc đang có lượt ghép khác thì báo “đang bận” thay vì im lặng.
+- Thư mục tạm của lượt nhận dở thừa (cùng máy gửi, cũ hơn lượt được khôi phục) đôi khi không bị xóa ngay khi khởi động vì đụng lần dọn tạm đầu tiên; nay dọn tạm bỏ qua các lượt đang chờ xóa.
 - Hai máy gọi nhau cùng lúc mà một lần mở kết nối điều khiển chậm (vài giây) có thể đóng rồi mở lại kết nối mãi. Ngưỡng chống trùng của protocol mục 6.1 lớn hơn hạn mở kết nối, nên hai bên luôn giữ cùng một kết nối.
 - Thân message điều khiển phải là UTF-8 không BOM (protocol mục 3.1); UTF-16, UTF-32 và BOM UTF-8 là lỗi.
 - `teleport --config-dir <file> identity` báo “Không dùng được thư mục cấu hình” và thoát mã 1 (không in traceback).

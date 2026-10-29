@@ -24,7 +24,10 @@ gọi `set_host` (đóng mọi hộp của host cũ); Thoát gọi `close_all`.
 
 **Ghép rồi gửi**: `TransfersController.pair_needed` → `pair_device`; `PairingController.job_done`
 (việc ghép chủ động kết thúc mà không PAIRED, hay `pair_device` không bắt đầu được) và `paired`
-→ `TransfersController.on_pairing_finished`. Nút “Ghép đôi lại” (`repair_requested`) → `pair_device`.
+→ `TransfersController.on_pairing_finished`. Nút “Ghép đôi lại” (`repair_requested`) →
+`pair_device`; không bắt đầu được vì radar không thấy máy kia (không bận, có host) thì dải thông
+báo hiện `repair_offline_text` và mở khung “Nhập IP thủ công” (`open_address_entry`), không điền
+sẵn IP.
 
 **Log ra file** (spec hackathon Q7, mục 9.10): `<config_dir>/logs/teleport.log`, xoay khi đầy
 `LOG_MAX_BYTES`, giữ thêm `LOG_BACKUPS` bản cũ; mức WARNING như log ra stderr. Chỉ gắn **sau**
@@ -92,7 +95,7 @@ from teleport.trust.identity import CERT_FILE, Identity
 from teleport.ui import i18n, send, texts, theme
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError
 from teleport.ui.main_window import MainWindow, ViewState
-from teleport.ui.pairing import PairingController
+from teleport.ui.pairing import PairingController, repair_offline_text
 from teleport.ui.transfers import TransfersController
 from teleport.ui.tray import Tray, make_icon
 
@@ -349,7 +352,7 @@ class GuiApp(QObject):
         radar.unpair_requested.connect(self._on_unpair_requested)
         self.pairing.devices_changed.connect(self._on_devices_changed)
         self.transfers.pair_needed.connect(self._on_pair_needed)
-        self.transfers.repair_requested.connect(self.pairing.pair_device)
+        self.transfers.repair_requested.connect(self._on_repair_requested)
         self.pairing.job_done.connect(self._on_pair_job_done)
         self.pairing.paired.connect(self._on_paired)
         if instance is not None:
@@ -485,6 +488,18 @@ class GuiApp(QObject):
                 self.transfers.view.show_notice(
                     send.not_paired_message(texts.peer_label(view.name, view.device_id))
                 )
+
+    def _on_repair_requested(self, view: DeviceView) -> None:
+        """Nút “Ghép đôi lại”: radar không thấy máy kia (mDNS bị chặn) thì mời nhập IP.
+
+        Bận thì `pair_device` tự báo câu “đang bận”; chưa có host thì không làm gì. Không điền sẵn
+        IP (địa chỉ cũ có thể đã thuộc máy khác).
+        """
+        busy = self.pairing.busy
+        if self.pairing.pair_device(view) or busy or self.host is None or self._quitting:
+            return
+        self.transfers.view.show_notice(repair_offline_text(texts.peer_label(view.name, view.device_id)))
+        self.window.radar.open_address_entry()
 
     def _on_pair_job_done(self, device_id: str | None, paired: bool) -> None:
         """Việc ghép chủ động kết thúc; PAIRED thì chờ `paired` (sau khi đã đọc lại `devices()`)."""

@@ -2779,3 +2779,190 @@ def test_e2_hint_merged_with_fresh_mdns_same_port_reports_once():
     assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.3)) == [
         LinkFailed(PEER, UNREACHABLE)
     ]
+
+
+# =========================================================================================================
+# spec-fix-relink (Lỗi 1, D1–D7): còn lượt truyền dở (`hold(True)`) mà lần nối lại bị REJECTED → vẫn
+# báo `LinkFailed(REJECTED)` đúng một lần, nhưng **vẫn hẹn lịch**: lần thử kế ở
+# `now + max(EVENT_RETRY_GAP, delay(failures))` (trần `RETRY_MAX`), không kẹt “Đang nối lại…” chờ sự kiện.
+# Chỉ REJECTED (D2); IDENTITY_MISMATCH / VERSION_MISMATCH vẫn chặn hẳn. `hold(True)` lúc đang bị chặn
+# giữ luật C4 (D3). `hold(False)` → thử thêm tối đa một lần (D4).
+# Kịch bản chung: tin cậy → thấy → OK → `hold(True)` → `connection_lost` → tick → kết quả.
+# =========================================================================================================
+
+REJECTED = ConnectResult.REJECTED
+HARD_BLOCKING = [ConnectResult.IDENTITY_MISMATCH, ConnectResult.VERSION_MISMATCH]
+RELINK_FINISH = 2.1  # lần nối lại bắt đầu ở 1.0 + RETRY_BASE = 2.0, kết thúc ở 2.1
+
+
+def _held_retry_after_loss(t: LinkTracker, *, hint_only: bool = False) -> Connect:
+    """Kết nối (qua mDNS, hay chỉ qua `hint` khi mDNS bị chặn), `hold(True)`, mất kết nối ở 1.0 →
+    trả `Connect` của lần nối lại theo lịch (ở 1.0 + RETRY_BASE)."""
+    if hint_only:
+        c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
+        assert notifies(t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)) == [LinkUp(PEER, 1, True)]
+    else:
+        _connected_out(t)
+    assert t.hold(PEER, True, 0.2) == []
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    assert t.next_wakeup() == pytest.approx(1.0 + links.RETRY_BASE)
+    return the_connect(t.tick(1.0 + links.RETRY_BASE))
+
+
+def _held_rejected(t: LinkTracker, *, hint_only: bool = False) -> float:
+    """Như `_held_retry_after_loss`, rồi lần nối lại đó bị REJECTED ở `RELINK_FINISH`.
+
+    Kiểm đúng một `LinkFailed(REJECTED)`; trả mốc hẹn mong đợi `RELINK_FINISH + max(GAP, delay(1))`."""
+    c = _held_retry_after_loss(t, hint_only=hint_only)
+    acts = t.connect_finished(PEER, c.attempt_id, REJECTED, None, RELINK_FINISH)
+    assert notifies(acts) == [LinkFailed(PEER, REJECTED)]
+    assert only(acts, Connect) == []
+    return RELINK_FINISH + max(links.EVENT_RETRY_GAP, delay(1))
+
+
+def test_t1_held_rejected_reports_once_and_still_schedules_retry():
+    """T1: held + REJECTED → đúng một `LinkFailed(REJECTED)`; `next_wakeup()` là
+    `now + max(EVENT_RETRY_GAP, delay(failures))`; tick tới mốc trả `Connect` (cùng địa chỉ mDNS)."""
+    t = tracker(PEER)
+    expected = _held_rejected(t)
+    assert t.next_wakeup() == pytest.approx(expected), "held + REJECTED phải hẹn lịch, không chờ sự kiện"
+    assert t.tick(expected - 0.01) == []
+    c = the_connect(t.tick(expected))
+    assert (c.addresses, c.port) == (ADDR, PORT)
+    assert t.attempting() == {PEER: c.attempt_id}
+    # Lần sau cũng bị từ chối: không báo lại, vẫn còn lịch.
+    acts = t.connect_finished(PEER, c.attempt_id, REJECTED, None, expected + 0.1)
+    assert notifies(acts) == []
+    assert t.next_wakeup() is not None
+
+
+def test_t2_repeated_rejections_while_held_back_off_to_retry_max_and_report_once():
+    """T2: REJECTED lặp khi held, mô phỏng 3600 s: không có `LinkFailed` thứ hai; khoảng cách giữa hai lần
+    thử không giảm, ≤ RETRY_MAX, ổn định đúng RETRY_MAX; tổng lần thử ≤ 3600 / RETRY_MAX + 6 (D6)."""
+    first: dict[str, int] = {}
+
+    def result_for(dev: str, aid: int) -> ConnectResult:
+        first.setdefault(dev, aid)
+        return OK if aid == first[dev] else REJECTED
+
+    sim = Sim(tracker(PEER), result_for)
+    sim.call("device_seen", PEER, ADDR, PORT, at=0.0)
+    sim.call("hold", PEER, True, at=0.5)
+    assert sim.t.connected() == {PEER: 10_000}
+    sim.call("connection_lost", PEER, 10_000, at=1.0)
+    sim.advance(1.0 + 3600.0)
+    times = sim.connect_times()[1:]  # bỏ lần nối đầu (OK)
+    assert sim.failed() == [LinkFailed(PEER, REJECTED)], "REJECTED chỉ báo một lần"
+    assert len(times) >= 10, f"held + REJECTED phải tiếp tục thử theo lịch, chỉ có {times}"
+    assert len(times) <= 3600 / links.RETRY_MAX + 6, len(times)
+    gaps = [b - a for a, b in itertools.pairwise(times)]
+    assert all(g >= links.EVENT_RETRY_GAP - 1e-6 for g in gaps), gaps
+    assert all(b >= a - 1e-6 for a, b in itertools.pairwise(gaps)), f"khoảng cách giảm: {gaps}"
+    assert all(g <= links.RETRY_MAX + 1e-6 for g in gaps), gaps
+    assert gaps[-5:] == pytest.approx([links.RETRY_MAX] * 5), gaps
+
+
+def test_t3_ok_after_held_rejection_resets_counter_and_new_rejection_reports_again():
+    """T3: sau T1, nối được → `LinkUp`, bộ đếm về 0; đợt REJECTED mới báo lại `LinkFailed` một lần và
+    hẹn với `delay(1)` (không nối tiếp lịch cũ)."""
+    t = tracker(PEER)
+    at = _held_rejected(t)
+    c = the_connect(t.tick(at))
+    assert notifies(t.connect_finished(PEER, c.attempt_id, OK, 2, at + 0.1)) == [LinkUp(PEER, 2, True)]
+    assert t.next_wakeup() is None
+    lost = at + 10.0
+    assert t.connection_lost(PEER, 2, lost) == [Notify(LinkDown(PEER, 2))]
+    assert t.next_wakeup() == pytest.approx(lost + delay(1)), "bộ đếm phải về 0 sau khi nối được"
+    c = the_connect(t.tick(lost + delay(1)))
+    finish = lost + delay(1) + 0.1
+    acts = t.connect_finished(PEER, c.attempt_id, REJECTED, None, finish)
+    assert notifies(acts) == [LinkFailed(PEER, REJECTED)]
+    assert t.next_wakeup() == pytest.approx(finish + max(links.EVENT_RETRY_GAP, delay(1)))
+
+
+def test_t4_unheld_rejection_still_waits_for_event():
+    """T4: không held + REJECTED: như cũ, không hẹn lịch."""
+    t = tracker(PEER)
+    _connected_out(t)
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    c = the_connect(t.tick(1.0 + links.RETRY_BASE))
+    acts = t.connect_finished(PEER, c.attempt_id, REJECTED, None, RELINK_FINISH)
+    assert notifies(acts) == [LinkFailed(PEER, REJECTED)]
+    assert t.next_wakeup() is None
+    assert t.tick(3600.0) == []
+
+
+@pytest.mark.parametrize("result", HARD_BLOCKING)
+def test_t5_held_identity_or_version_mismatch_still_blocks_without_schedule(result):
+    """T5 (D2): held + IDENTITY_MISMATCH / VERSION_MISMATCH: như cũ, báo một lần, không hẹn lịch."""
+    t = tracker(PEER)
+    c = _held_retry_after_loss(t)
+    acts = t.connect_finished(PEER, c.attempt_id, result, None, RELINK_FINISH)
+    assert notifies(acts) == [LinkFailed(PEER, result)]
+    assert only(acts, Connect) == []
+    assert t.next_wakeup() is None
+    assert t.tick(3600.0) == []
+    assert t.attempting() == {}
+
+
+def _run_schedule_rejecting(t: LinkTracker, start: float, limit: int = 20) -> int:
+    """Chạy theo `next_wakeup()` (mọi lần thử đều REJECTED) tới khi hết lịch; trả số lần thử."""
+    attempts = 0
+    now = start
+    for _ in range(limit):
+        nw = t.next_wakeup()
+        if nw is None:
+            break
+        now = max(now, nw)
+        for c in only(t.tick(now), Connect):
+            attempts += 1
+            now += 0.1
+            t.connect_finished(PEER, c.attempt_id, REJECTED, None, now)
+    return attempts
+
+
+@pytest.mark.parametrize("order", ["gone_then_release", "release_then_gone", "release_only"])
+def test_t6_release_while_scheduled_allows_at_most_one_more_attempt(order):
+    """T6 (D4, bổ sung sau hoi-lai): đang hẹn lịch sau held + REJECTED, rồi `hold(False)` và thiết bị biến
+    mất khỏi mDNS (cả hai thứ tự; và chỉ `hold(False)` khi mDNS còn tươi): thử thêm tối đa một lần; lần
+    đó REJECTED → không hẹn nữa."""
+    t = tracker(PEER)
+    at = _held_rejected(t)
+    now = RELINK_FINISH
+    if order == "gone_then_release":
+        assert only(t.device_gone(PEER, now + 0.1), Connect) == []
+        assert only(t.hold(PEER, False, now + 0.2), Connect) == []
+    elif order == "release_then_gone":
+        assert only(t.hold(PEER, False, now + 0.1), Connect) == []
+        assert only(t.device_gone(PEER, now + 0.2), Connect) == []
+    else:
+        assert only(t.hold(PEER, False, now + 0.1), Connect) == []
+    extra = _run_schedule_rejecting(t, at)
+    assert extra <= 1, f"sau hold(False) chỉ được thử thêm tối đa một lần, thấy {extra}"
+    assert t.next_wakeup() is None
+    assert t.tick(7200.0) == []
+    assert t.attempting() == {}
+
+
+def test_t7_hint_only_held_rejection_still_schedules_retry_to_hint():
+    """T7: thiết bị chỉ có `hint` (mDNS bị chặn) + held + REJECTED: vẫn hẹn lịch, lần thử tới địa chỉ hint."""
+    t = tracker(PEER)
+    c = _held_retry_after_loss(t, hint_only=True)
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+    acts = t.connect_finished(PEER, c.attempt_id, REJECTED, None, RELINK_FINISH)
+    assert notifies(acts) == [LinkFailed(PEER, REJECTED)]
+    expected = RELINK_FINISH + max(links.EVENT_RETRY_GAP, delay(1))
+    assert t.next_wakeup() == pytest.approx(expected), "held + REJECTED (chỉ hint) phải hẹn lịch"
+    c = the_connect(t.tick(expected))
+    assert (c.addresses, c.port) == (ADDR2, PORT2)
+
+
+def test_t8_untrust_while_scheduled_cancels_retry():
+    """T8: đang hẹn lịch sau held + REJECTED thì thôi tin cậy → tick không trả `Connect`."""
+    t = tracker(PEER)
+    at = _held_rejected(t)
+    acts = t.trusted_changed([], RELINK_FINISH + 0.1)
+    assert only(acts, Connect) == []
+    assert only(t.tick(at), Connect) == []
+    assert only(t.tick(3600.0), Connect) == []
+    assert t.attempting() == {}
