@@ -1397,41 +1397,25 @@ class ReceiveDir:
         lắm sót một file giữ chỗ 0 byte trong thư mục cũ.
         """
         with self._root_lock:
-            held: os.stat_result | None = None  # POSIX: thư mục nhận mà fd đang giữ
             if sys.platform == "win32":
-                if os.path.isdir(self._root_str):
-                    return
-            else:
-                held = os.fstat(self._root_fd_or_raise())
-                try:
-                    st = os.stat(self._root_str)  # theo liên kết: thư mục nhận được phép là symlink
-                except (FileNotFoundError, NotADirectoryError):
-                    pass
-                else:
-                    if stat.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) == (held.st_dev, held.st_ino):
-                        return
-            created = False
+                self._restore_root_windows()
+                return
+            parent, name = os.path.split(self._root_str)
+            if not name:
+                return  # gốc ổ (`/`): không xóa được, không có gì để tạo lại
+            held = os.fstat(self._root_fd_or_raise())
+            # Mọi thao tác lên thư mục nhận đi qua fd của thư mục cha (luật `dir_fd` của nhánh
+            # POSIX): kiểm, tạo và mở cùng một thư mục cha, không đua với việc đổi tên cha.
             try:
-                os.mkdir(self._root_str)
-                created = True
-            except FileExistsError:
-                pass  # người dùng hay tiến trình khác vừa tạo lại: kiểm dưới đây
+                parent_fd = os.open(parent, _DIR_FLAGS)
             except (FileNotFoundError, NotADirectoryError) as e:
                 raise ReceiveDirMissingError("thư mục cha của thư mục nhận không còn") from e
-            if not os.path.isdir(self._root_str):
-                raise ReceiveDirMissingError("tên thư mục nhận đã bị một mục không phải thư mục chiếm")
-            if sys.platform == "win32":
-                if created:
-                    log.info("thư mục nhận đã bị xóa khi đang chạy, đã tạo lại")
+            try:
+                new_fd = self._reopen_root_posix(parent_fd, name, held)
+            finally:
+                os.close(parent_fd)
+            if new_fd is None:
                 return
-            new_fd = os.open(self._root_str, _DIR_FLAGS)
-            if created and held is not None and os.fstat(new_fd).st_dev != held.st_dev:
-                _close_quietly(new_fd)
-                with contextlib.suppress(OSError):
-                    os.rmdir(self._root_str)
-                raise ReceiveDirMissingError("thư mục nhận tạo lại nằm khác ổ với thư mục cũ")
-            if created:
-                log.info("thư mục nhận đã bị xóa khi đang chạy, đã tạo lại")
             with self._lock:
                 closed = self._closed
                 if not closed:
@@ -1441,6 +1425,57 @@ class ReceiveDir:
             if closed:
                 _close_quietly(new_fd)
                 raise ValueError("ReceiveDir đã đóng")
+
+    def _restore_root_windows(self) -> None:
+        if os.path.isdir(self._root_str):
+            return
+        try:
+            os.mkdir(self._root_str)
+        except FileExistsError:
+            pass  # người dùng hay tiến trình khác vừa tạo lại: kiểm dưới đây
+        except (FileNotFoundError, NotADirectoryError) as e:
+            raise ReceiveDirMissingError("thư mục cha của thư mục nhận không còn") from e
+        else:
+            log.info("thư mục nhận đã bị xóa khi đang chạy, đã tạo lại")
+        if not os.path.isdir(self._root_str):
+            raise ReceiveDirMissingError("tên thư mục nhận đã bị một mục không phải thư mục chiếm")
+
+    def _reopen_root_posix(self, parent_fd: int, name: str, held: os.stat_result) -> int | None:
+        """POSIX: tên `name` trong `parent_fd` vẫn là thư mục fd đang giữ → None; không thì tạo lại
+        (nếu mất) và trả fd mới của nó. Thư mục vừa tạo nằm khác ổ với thư mục cũ → xóa, lỗi."""
+
+        def lookup() -> os.stat_result | None:
+            try:
+                return os.stat(name, dir_fd=parent_fd)  # theo liên kết: thư mục nhận được là symlink
+            except (FileNotFoundError, NotADirectoryError):
+                return None
+
+        st = lookup()
+        if (
+            st is not None
+            and stat.S_ISDIR(st.st_mode)
+            and (st.st_dev, st.st_ino) == (held.st_dev, held.st_ino)
+        ):
+            return None
+        created = False
+        if st is None:
+            try:
+                os.mkdir(name, dir_fd=parent_fd)
+                created = True
+            except FileExistsError:
+                pass  # người dùng hay tiến trình khác vừa tạo lại, hay symlink treo: kiểm dưới đây
+            st = lookup()
+        if st is None or not stat.S_ISDIR(st.st_mode):
+            raise ReceiveDirMissingError("tên thư mục nhận đã bị một mục không phải thư mục chiếm")
+        new_fd = os.open(name, _DIR_FLAGS, dir_fd=parent_fd)
+        if created and os.fstat(new_fd).st_dev != held.st_dev:
+            os.close(new_fd)
+            with contextlib.suppress(OSError):
+                os.rmdir(name, dir_fd=parent_fd)
+            raise ReceiveDirMissingError("thư mục nhận tạo lại nằm khác ổ với thư mục cũ")
+        if created:
+            log.info("thư mục nhận đã bị xóa khi đang chạy, đã tạo lại")
+        return new_fd
 
     def _owner_ok(self, st: os.stat_result) -> bool:
         """POSIX: chủ hợp lệ là euid hoặc chủ của thư mục nhận (USB mount theo uid cố định)."""
