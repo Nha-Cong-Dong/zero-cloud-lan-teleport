@@ -1,10 +1,13 @@
-"""Câu chữ dùng chung của giao diện: lỗi khởi động (E1–E6, M2), M3–M6 trong spec P4-3.
+"""Câu chữ dùng chung của giao diện: lỗi khởi động (E1–E6, M2), M4–M6 trong spec P4-3.
+
+M3 (máy chưa có danh tính) đã bỏ: thay bằng màn “Bắt đầu” của `ui.main_window` (spec hackathon
+mục 10 A1). Câu chữ riêng của một màn hình nằm ở module của màn hình đó (ví dụ `ui.radar`).
 
 Chuỗi nguồn tiếng Việt, mọi chuỗi qua `QCoreApplication.translate` với ngữ cảnh `Texts`, gọi lúc
 dùng (không lúc import) để đổi ngôn ngữ có hiệu lực ngay. Viết nguyên lời gọi `translate(...)` ở
 từng chỗ để `pyside6-lupdate` trích được chuỗi.
 
-Chèn giá trị bằng `_fill` (một lượt, chỉ thay `{tên}` có trong bản dịch): bản dịch có ngoặc nhọn
+Chèn giá trị bằng `fill` (một lượt, chỉ thay `{tên}` có trong bản dịch): bản dịch có ngoặc nhọn
 lạ không làm hỏng câu, và chữ do máy kia đặt chứa `{size}` không bị thay tiếp. Chữ từ máy khác
 đi qua `peer_label` / `file_label` (`core.display`) trước khi chèn.
 
@@ -25,7 +28,7 @@ _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 _REPLACEMENT = "�"  # U+FFFD thay ký tự điều khiển, như `cli._printable`
 
 
-def _fill(template: str, **values: str) -> str:
+def fill(template: str, **values: str) -> str:
     """Thay `{tên}` trong `template` bằng `values[tên]` trong một lượt; tên lạ giữ nguyên."""
     return _PLACEHOLDER.sub(lambda m: values.get(m.group(1), m.group(0)), template)
 
@@ -66,11 +69,11 @@ def start_error(code: str, detail: str = "") -> tuple[str, list[str]]:
     if code == "config_dir":  # E1
         path, _, error = detail.partition("\n")
         if error:
-            head = _fill(
+            head = fill(
                 t("Texts", "Không dùng được thư mục cấu hình {path} ({error})."), path=path, error=error
             )
         else:
-            head = _fill(t("Texts", "Không dùng được thư mục cấu hình {path}."), path=path)
+            head = fill(t("Texts", "Không dùng được thư mục cấu hình {path}."), path=path)
         return head, [t("Texts", "Hãy kiểm tra quyền ghi vào thư mục đó rồi bấm Thử lại.")]
     if code == "identity":  # E2: câu mvp mục 8 cho danh tính hỏng
         return (
@@ -92,12 +95,12 @@ def start_error(code: str, detail: str = "") -> tuple[str, list[str]]:
         )
     if code == "receive_dir":  # E4
         return (
-            _fill(t("Texts", "Không dùng được thư mục nhận {path}."), path=detail),
+            fill(t("Texts", "Không dùng được thư mục nhận {path}."), path=detail),
             [t("Texts", "Hãy kiểm tra ổ đĩa và quyền ghi rồi bấm Thử lại.")],
         )
     if code == "port":  # E5
         return (
-            _fill(t("Texts", "Không mở được cổng để nhận kết nối ({error})."), error=detail),
+            fill(t("Texts", "Không mở được cổng để nhận kết nối ({error})."), error=detail),
             [t("Texts", "Hãy đóng ứng dụng đang dùng cổng đó rồi bấm Thử lại.")],
         )
     return (  # E6
@@ -129,20 +132,6 @@ def not_responding() -> tuple[str, list[str]]:
 
 
 # ---- Cửa sổ, khay --------------------------------------------------------------------------
-
-
-def setup_needed() -> tuple[str, list[str]]:
-    """M3 (tạm tới P4-7): máy chưa có danh tính."""
-    t = QCoreApplication.translate
-    return (
-        t("Texts", "Máy này chưa được thiết lập Teleport."),
-        [
-            t(
-                "Texts",
-                "Tạm thời hãy chạy “teleport identity” trong cửa sổ dòng lệnh một lần, rồi mở lại Teleport.",
-            )
-        ],
-    )
 
 
 def still_running() -> str:
@@ -182,7 +171,7 @@ def offer_question(peer: str, count: int, total_bytes: int) -> str:
     template = QCoreApplication.translate(
         "Texts", "“{name}” muốn gửi %n file ({size}) tới máy này.", None, count
     )
-    return _fill(template, name=peer, size=format_size(total_bytes))
+    return fill(template, name=peer, size=format_size(total_bytes))
 
 
 def offer_more(count: int) -> str:
@@ -191,7 +180,7 @@ def offer_more(count: int) -> str:
 
 
 def offer_save_to(path: str) -> str:
-    return _fill(QCoreApplication.translate("Texts", "Lưu vào: {path}"), path=path)
+    return fill(QCoreApplication.translate("Texts", "Lưu vào: {path}"), path=path)
 
 
 def offer_title() -> str:

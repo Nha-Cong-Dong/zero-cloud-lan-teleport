@@ -45,13 +45,13 @@ def untranslated(texts: list[str]) -> list[str]:
 
 
 def test_fake_translator_retranslates_window_and_tray(gui, gui_wait, config_dir, ui_helpers):
-    d = config_dir("A", identity=False)  # M3: không node, không mạng
+    d = config_dir("A", identity=False)  # màn “Bắt đầu”: không node, không mạng
     seen: dict = {}
     translator = PrefixTranslator()
 
     def script(run):
         yield gui_wait(lambda: run.windows and run.trays, 10, "có cửa sổ và khay")
-        yield gui_wait(lambda: ui_helpers.M3_HEAD in ui_helpers.all_text(run.window), 5, "M3")
+        yield gui_wait(lambda: ui_helpers.WELCOME_HEAD in ui_helpers.all_text(run.window), 5, "màn Bắt đầu")
         seen["before"] = ui_helpers.widget_texts(run.window)
         QCoreApplication.installTranslator(translator)
         seen["direct"] = QCoreApplication.translate("test", "Thử lại")  # translator giả có hiệu lực
@@ -99,7 +99,7 @@ def test_missing_qm_falls_back_to_source_strings(qapp, gui, gui_wait, config_dir
 
     gui(["--config-dir", str(d)], script)
     assert seen["tray"] == list(ui_helpers.M5)
-    assert ui_helpers.M3_HEAD in seen["text"]
+    assert ui_helpers.WELCOME_HEAD in seen["text"]
 
 
 def test_install_without_language_does_not_raise(qapp):

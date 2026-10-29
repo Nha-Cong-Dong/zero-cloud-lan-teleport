@@ -51,8 +51,12 @@ M2_HEAD = (
     "dòng lệnh)."
 )
 M2_HINT = "Hãy dừng nó rồi bấm Thử lại."
-M3_HEAD = "Máy này chưa được thiết lập Teleport."
-M3_HINT = "Tạm thời hãy chạy “teleport identity” trong cửa sổ dòng lệnh một lần, rồi mở lại Teleport."
+# Màn “Bắt đầu” thay M3 (spec hackathon mục 10 A1): chưa có danh tính → chờ người dùng bấm “Bắt đầu”.
+WELCOME_HEAD = "Bắt đầu dùng Teleport"
+WELCOME_F1 = "Tên này hiện với mọi máy trong cùng mạng, kể cả máy lạ chưa ghép đôi."  # mvp F1
+WELCOME_NAME = "Tên của máy này trong mạng: {name}"
+START = "Bắt đầu"
+M3_HEAD = "Máy này chưa được thiết lập Teleport."  # câu M3 cũ: không còn được hiện
 QUITTING = "Teleport đang tắt hoặc chưa phản hồi."  # `acquire` hết hạn (soat-code vòng 1, (c))
 M4 = "Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn."
 M5 = ("Mở Teleport", "Gửi file…", "Tạm dừng nhận", "Thoát")
@@ -166,8 +170,11 @@ def ui_helpers():
         LOCAL=LOCAL,
         M2_HEAD=M2_HEAD,
         M2_HINT=M2_HINT,
+        WELCOME_HEAD=WELCOME_HEAD,
+        WELCOME_F1=WELCOME_F1,
+        WELCOME_NAME=WELCOME_NAME,
+        START=START,
         M3_HEAD=M3_HEAD,
-        M3_HINT=M3_HINT,
         QUITTING=QUITTING,
         M4=M4,
         M5=M5,
