@@ -274,6 +274,24 @@ def test_temp_exists_failure_cancels_with_error_and_keeps_foreign_temp(tx):
     assert tx.sent(r.send_offer()) == [Cancel(transfer_id=r.T, reason="error")]
 
 
+def test_receive_dir_missing_failure_cancels_with_error_and_removes_nothing(tx):
+    """Thư mục nhận mất, không tạo lại được: `cancel{error}` như mọi lỗi đĩa, nguyên nhân riêng."""
+    assert FailureDetail.RECEIVE_DIR_MISSING.value == "receive_dir_missing"
+    r = tx.Recv(tx.entries(2))
+    r.accept()
+    acts = _storage_failed(tx, r, DiskOp.CREATE_TEMP, detail=FailureDetail.RECEIVE_DIR_MISSING)
+    assert tx.sent(acts) == [Cancel(transfer_id=r.T, reason="error")]
+    end = tx.one(tx.ended(acts), object)
+    assert (end.outcome, end.reason, end.by_peer, end.detail) == (
+        Outcome.CANCELLED,
+        "error",
+        False,
+        FailureDetail.RECEIVE_DIR_MISSING,
+    )
+    assert tx.of(acts, RemoveTemp) == []  # không tạo được thư mục tạm nào
+    assert r.e.info(r.key) is None
+
+
 @pytest.mark.parametrize("how", ["omitted", "none", "disk"])
 @pytest.mark.parametrize("op", list(DiskOp))
 def test_storage_failed_detail_defaults_to_disk(tx, op, how):
@@ -297,16 +315,19 @@ _BAD_DETAILS = [
     pytest.param(True, DiskOp.WRITE, id="bool"),
     pytest.param(DiskOp.CREATE_TEMP, DiskOp.CREATE_TEMP, id="diskop"),
     *[
-        pytest.param(FailureDetail.TEMP_EXISTS, op, id=f"temp_exists-voi-{op.value}")
+        pytest.param(detail, op, id=f"{detail.value}-voi-{op.value}")
+        for detail in (FailureDetail.TEMP_EXISTS, FailureDetail.RECEIVE_DIR_MISSING)
         for op in DiskOp
         if op is not DiskOp.CREATE_TEMP
     ],
+    pytest.param("receive_dir_missing", DiskOp.CREATE_TEMP, id="chuoi-receive_dir_missing"),
 ]
 
 
 @pytest.mark.parametrize(("detail", "op"), _BAD_DETAILS)
 def test_storage_failed_bad_detail_raises_and_keeps_state(tx, detail, op):
-    """A4: chỉ nhận `None`, `DISK`, `TEMP_EXISTS` (và `TEMP_EXISTS` chỉ đi với `CREATE_TEMP`).
+    """A4: chỉ nhận `None`, `DISK`, `TEMP_EXISTS`, `RECEIVE_DIR_MISSING` (hai cái sau chỉ đi với
+    `CREATE_TEMP`).
 
     Mọi tham số khác đều hợp lệ (đúng thiết bị, đúng lượt đang chạy, `op` hợp lệ), nên lỗi chỉ có
     thể đến từ `detail`; sau đó lượt vẫn sống và lời gọi hợp lệ vẫn kết thúc được nó.

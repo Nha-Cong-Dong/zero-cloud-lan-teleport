@@ -1521,6 +1521,13 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
             f"(ổ có thể đã đầy, bị rút ra hoặc bị hỏng). Đã dừng nhận từ {s}; "
             "các file đã nhận xong vẫn giữ nguyên."
         ]
+    if result is TransferResult.RECEIVE_DIR_MISSING:
+        return [
+            f"Không nhận được lượt gửi từ {s} vì thư mục nhận {_dir_label(receive_dir)} không còn "
+            "hoặc không dùng được, và Teleport không tạo lại được (có thể thư mục chứa nó đã bị xóa, "
+            "hoặc ổ đã bị rút ra). "
+            "Hãy kiểm tra lại rồi nhờ gửi lại."
+        ]
     if result is TransferResult.TEMP_EXISTS:
         return [
             f"Không nhận được lượt gửi từ {s} vì thư mục tạm của lượt này đã có sẵn mà Teleport "

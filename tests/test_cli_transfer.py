@@ -105,6 +105,11 @@ R_DISK_FAILED = (  # 6b
     "Không lưu được {file} vào {dir} vì ổ đĩa báo lỗi khi ghi (ổ có thể đã đầy, bị rút ra hoặc bị hỏng). "
     "Đã dừng nhận từ {s}; các file đã nhận xong vẫn giữ nguyên."
 )
+R_RECEIVE_DIR_MISSING = (
+    "Không nhận được lượt gửi từ {s} vì thư mục nhận {dir} không còn hoặc không dùng được, và Teleport "
+    "không tạo lại được (có thể thư mục chứa nó đã bị xóa, hoặc ổ đã bị rút ra). "
+    "Hãy kiểm tra lại rồi nhờ gửi lại."
+)
 R_TEMP_EXISTS = (  # M11, sửa ở P3-4 (spec-p3-4 mục 3.1(d), 9.1 Q1)
     "Không nhận được lượt gửi từ {s} vì thư mục tạm của lượt này đã có sẵn mà Teleport không dùng tiếp "
     "được. Hãy nhờ gửi lại."
@@ -610,6 +615,14 @@ RECV_CASES = [
         R_DISK_FAILED.format(file="thumbnail.png", dir=RECV_DIR, s=SENDER),
     ),
     ("temp_exists", False, None, None, "transferring", R_TEMP_EXISTS.format(s=SENDER)),
+    (
+        "receive_dir_missing",
+        False,
+        None,
+        None,
+        "transferring",
+        R_RECEIVE_DIR_MISSING.format(s=SENDER, dir=RECV_DIR),
+    ),
     ("corrupt", False, 2, None, "verifying", R_CORRUPT.format(s=SENDER, file="script.docx")),
     ("peer_error", True, 0, None, "transferring", R_PEER_ERROR.format(s=SENDER, file="video.mp4")),
     ("unknown_transfer", True, 1, None, "reconnecting", R_UNKNOWN.format(s=SENDER, file="thumbnail.png")),
@@ -883,6 +896,7 @@ _RESULTS = [
     "expired",
     "disk_failed",
     "temp_exists",
+    "receive_dir_missing",
     "corrupt",
     "protocol_error",
     "source_read_failed",

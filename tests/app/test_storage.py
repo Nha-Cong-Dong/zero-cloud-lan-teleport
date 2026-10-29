@@ -38,6 +38,7 @@ import io
 import os
 import random
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -777,6 +778,64 @@ def test_existing_transfer_entry_of_other_kind_raises_temp_exists(storage, tmp_p
     with storage.ReceiveDir.open(root) as rd, pytest.raises(storage.TempExistsError):
         rd.create_temp(ID, record_for(ID, [0]))
     assert snapshot(tmp_path) == before
+
+
+# ---------------------------------------------------------------------------------------------
+# Thư mục nhận bị xóa sau `open` (người dùng xóa khi app đang chạy)
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("recreated_by_user", [False, True], ids=["mat-han", "nguoi-dung-tao-lai"])
+def test_create_temp_recreates_deleted_receive_dir_and_finalize_lands_there(
+    storage, root, record_for, recreated_by_user
+):
+    """Lỗi demo 2026-10-29: xóa `Downloads\\Teleport` khi app chạy → mọi lượt sau báo lỗi ghi đĩa.
+
+    Giờ `create_temp` tạo lại thư mục nhận, và file nhận xong nằm đúng trong thư mục mới (POSIX:
+    fd cũ trỏ vào thư mục đã xóa, phải mở lại; kể cả khi người dùng đã tự tạo lại thư mục).
+    """
+    with storage.ReceiveDir.open(root) as rd:
+        first = rd.create_temp(ID, record_for(ID, [0]))
+        assert rd.remove_temp(first) is True
+        shutil.rmtree(root)
+        if recreated_by_user:
+            root.mkdir()
+        temp = rd.create_temp(ID2, record_for(ID2, [10]))
+        assert (root / ".teleport" / ID2 / "transfer.json").is_file()
+        part = temp.create_part(0, 10)
+        part.write_at(0, b"0123456789")
+        final = rd.finalize(part, "a.txt")
+        assert rd.remove_temp(temp) is True
+    assert final == root / "a.txt"
+    assert final.read_bytes() == b"0123456789"
+
+
+def test_create_temp_does_not_recreate_parent_of_receive_dir(storage, tmp_path, record_for):
+    """Cha cũng mất (ổ đã rút, hay cả `Downloads` bị xóa): không tạo cả cây, báo lỗi riêng."""
+    root = tmp_path / "o-usb" / "Teleport"
+    with storage.ReceiveDir.open(root) as rd:
+        shutil.rmtree(tmp_path / "o-usb")
+        with pytest.raises(storage.ReceiveDirMissingError):
+            rd.create_temp(ID, record_for(ID, [0]))
+        assert not (tmp_path / "o-usb").exists()
+        # Lỗi không giữ `transfer_id`: cắm lại ổ thì lượt đó tạo được.
+        root.mkdir(parents=True)
+        temp = rd.create_temp(ID, record_for(ID, [0]))
+        assert rd.remove_temp(temp) is True
+
+
+def test_create_temp_when_receive_dir_name_is_taken_by_a_file(storage, root, record_for):
+    with storage.ReceiveDir.open(root) as rd:
+        shutil.rmtree(root)
+        root.write_bytes(b"khong phai thu muc")
+        with pytest.raises(storage.ReceiveDirMissingError):
+            rd.create_temp(ID, record_for(ID, [0]))
+    assert root.read_bytes() == b"khong phai thu muc"
+
+
+def test_receive_dir_missing_error_is_a_storage_error_not_oserror(storage):
+    assert issubclass(storage.ReceiveDirMissingError, storage.StorageError)
+    assert not issubclass(storage.ReceiveDirMissingError, OSError)
 
 
 # ---------------------------------------------------------------------------------------------
