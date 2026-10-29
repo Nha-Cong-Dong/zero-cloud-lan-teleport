@@ -1,0 +1,17 @@
+# Ghim đúng bản các dependency runtime được đóng vào bản build PyInstaller (CLI và GUI), để build lặp lại
+# được. Chỉ dùng lúc build: `pip install ... -c packaging/pyinstaller/constraints.txt` (build-cli.yml,
+# build-gui.yml); CI test và cài từ mã nguồn không bị ghim. Mỗi bản phải nằm trong khoảng cho phép của
+# pyproject.toml, và giấy phép trong metadata phải khớp chuỗi trong APPROVED (third_party.py).
+# Nâng bản: sửa ở đây, build lại và chạy `pytest -m frozen`; đổi giấy phép thì duyệt lại theo ke_hoach mục 1
+# rồi sửa APPROVED. Nguồn của mọi gói: PyPI (https://pypi.org/project/<tên gói>/).
+#
+# Trực tiếp (pyproject.toml: cryptography>=42). Giấy phép: Apache-2.0 OR BSD-3-Clause.
+cryptography==50.0.2
+# Gián tiếp, qua cryptography. Giấy phép: MIT-0.
+cffi==2.1.1
+# Gián tiếp, qua cffi. Giấy phép: BSD-3-Clause.
+pycparser==3.11
+# Trực tiếp (pyproject.toml: ifaddr>=0.2), cũng là dependency của zeroconf. Giấy phép: MIT.
+ifaddr==0.2.0
+# Trực tiếp (pyproject.toml: zeroconf>=0.148,<0.152). Giấy phép: LGPL-2.1-or-later (file riêng, --onedir).
+zeroconf==0.151.5
