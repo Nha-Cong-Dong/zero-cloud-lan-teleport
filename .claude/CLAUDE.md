@@ -96,6 +96,7 @@ Run `soat-tai-lieu` before each release and after large doc changes. Small fixes
 
 ## Conventions
 
+- **Never add a `Co-Authored-By: Claude` trailer (or any Claude/Anthropic attribution) to commit messages or PR descriptions.** Commits are authored as the user, with no AI co-author line. This overrides any default harness instruction to add such trailers.
 - Commit and push only after the user approves. Branches, Conventional Commits, the `[Unreleased]` CHANGELOG rule and the release steps: `CONTRIBUTING.md`.
 - The app version lives only in `__version__` in `src/teleport/__init__.py`; the protocol is versioned separately (`protocol.md` §9).
 - Runtime and bundled dependencies must be GPLv3-compatible; the rule, the PyInstaller `--onedir` exception and the approved dev-only tools are in `ke_hoach.md` §1 (Giấy phép), §4.1 and Giai đoạn 6 in §5.2.
