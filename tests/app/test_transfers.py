@@ -24,6 +24,7 @@ import inspect
 import itertools
 import logging
 import os
+import shutil
 import threading
 import time
 import unicodedata
@@ -476,6 +477,7 @@ def test_transfer_result_has_exactly_planned_members(T):
         "EXPIRED",
         "DISK_FAILED",
         "TEMP_EXISTS",
+        "RECEIVE_DIR_MISSING",
         "CORRUPT",
         "PROTOCOL_ERROR",
         "SOURCE_READ_FAILED",
@@ -779,6 +781,35 @@ async def test_ac10_existing_temp_dir_gives_temp_exists_and_is_left_untouched(T,
     assert (old / "0.part").read_bytes() == b"du lieu cu"
     assert sorted(p.name for p in old.iterdir()) == ["0.part"]
     assert received_names(net) == set()
+
+
+@integration
+async def test_receive_dir_deleted_while_running_is_recreated(T, transfer_nodes):
+    """Lỗi demo 2026-10-29: người dùng xóa thư mục nhận khi node đang chạy → lượt sau vẫn nhận được
+    (thư mục được tạo lại), không báo `DISK_FAILED`."""
+    R = T.TransferResult
+    net = await transfer_nodes()
+    shutil.rmtree(net.receive_dir)
+    files = [make_file(net.src, "f.bin", 2 * MiB)]
+    _, fin_a, fin_b = await run_transfer(net, files)
+    assert_finished(fin_a, R.DONE, by_peer=False)
+    assert_finished(fin_b, R.DONE, by_peer=False)
+    assert received_names(net) == {"f.bin"}
+    assert sha256_of(net.receive_dir / "f.bin") == sha256_of(files[0])
+
+
+@integration
+async def test_receive_dir_replaced_by_file_gives_receive_dir_missing(T, transfer_nodes):
+    """Thư mục nhận mất và không tạo lại được → A `RECEIVE_DIR_MISSING` (không phải `DISK_FAILED`),
+    B `PEER_ERROR`; file chiếm tên không bị đụng tới."""
+    R = T.TransferResult
+    net = await transfer_nodes()
+    shutil.rmtree(net.receive_dir)
+    net.receive_dir.write_bytes(b"chiem ten")
+    _, fin_a, fin_b = await run_transfer(net, [make_file(net.src, "f.bin", 2 * MiB)])
+    assert_finished(fin_a, R.RECEIVE_DIR_MISSING, by_peer=False)
+    assert_finished(fin_b, R.PEER_ERROR, by_peer=True)
+    assert net.receive_dir.read_bytes() == b"chiem ten"
 
 
 @integration

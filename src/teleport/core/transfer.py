@@ -32,7 +32,8 @@ Hợp đồng thực thi (bên gọi, kể cả bộ mô phỏng của test, ph�
    `CreateTemp` thành công → `temp_created`, báo trước kết quả của mọi thao tác đứng sau nó trong
    hàng; `CreateTemp` quá hạn rồi xong muộn thì không báo. Thao tác lỗi →
    `storage_failed(op)` (`CreateTemp` gặp thư mục tạm đã có → `storage_failed(CREATE_TEMP,
-   detail=TEMP_EXISTS)`) rồi bỏ các thao tác còn lại của lượt, trừ `SuspendTemp` và `RemoveTemp`.
+   detail=TEMP_EXISTS)`; thư mục nhận đã mất, không tạo lại được → `detail=RECEIVE_DIR_MISSING`)
+   rồi bỏ các thao tác còn lại của lượt, trừ `SuspendTemp` và `RemoveTemp`.
    Gặp `RemoveTemp`: bỏ mọi thao tác chưa bắt đầu (kể cả `CreateTemp`, `Finalize`), đặt `stop`
    cho `Reread` đang chạy, chờ thao tác đang chạy xong rồi mới xóa thư mục tạm mà **chính lượt
    đó** đã tạo (đối tượng `CreateTemp` trả về, không suy lại đường dẫn từ `transfer_id`: thiết bị
@@ -222,10 +223,15 @@ class FailureDetail(StrEnum):
 
     DISK = "disk"
     TEMP_EXISTS = "temp_exists"  # thư mục tạm của lượt đã có sẵn mà không dùng tiếp được
+    RECEIVE_DIR_MISSING = "receive_dir_missing"  # thư mục nhận đã mất và không tạo lại được
     CORRUPT_BLOCKS = "corrupt_blocks"
     VERIFY_FAILED = "verify_failed"
     PROTOCOL = "protocol"
     SOURCE_READ = "source_read"
+
+
+# Nguyên nhân chỉ `storage_failed` với `CREATE_TEMP` mới mang.
+_CREATE_TEMP_DETAILS = frozenset({FailureDetail.TEMP_EXISTS, FailureDetail.RECEIVE_DIR_MISSING})
 
 
 class DiskOp(StrEnum):
@@ -1797,8 +1803,9 @@ class TransferEngine:
         """Thao tác đĩa `op` của lượt nhận bị lỗi: dừng lượt (`cancel{error}`).
 
         `detail` là nguyên nhân ghi vào `TransferEnded.detail`: None (= `DISK`), `DISK`, hoặc
-        `TEMP_EXISTS` (chỉ với `op` là `CREATE_TEMP`: thư mục tạm của lượt đã có sẵn). Giá trị
-        khác → ValueError. Trên dây vẫn là `cancel{error}`.
+        (chỉ với `op` là `CREATE_TEMP`) `TEMP_EXISTS` (thư mục tạm của lượt đã có sẵn) hay
+        `RECEIVE_DIR_MISSING` (thư mục nhận đã mất, không tạo lại được). Giá trị khác →
+        ValueError. Trên dây vẫn là `cancel{error}`.
         """
         validate_device_id(device_id)
         validate_transfer_id(transfer_id)
@@ -1806,11 +1813,11 @@ class TransferEngine:
             raise ValueError("op phải là DiskOp")
         if detail is None:
             detail = FailureDetail.DISK
-        elif detail is FailureDetail.TEMP_EXISTS:
+        elif isinstance(detail, FailureDetail) and detail in _CREATE_TEMP_DETAILS:  # chuỗi thường không lọt
             if op is not DiskOp.CREATE_TEMP:
-                raise ValueError("detail TEMP_EXISTS chỉ đi với op CREATE_TEMP")
+                raise ValueError(f"detail {detail.name} chỉ đi với op CREATE_TEMP")
         elif detail is not FailureDetail.DISK:
-            raise ValueError("detail phải là None, FailureDetail.DISK hoặc FailureDetail.TEMP_EXISTS")
+            raise ValueError("detail phải là None, FailureDetail.DISK, TEMP_EXISTS hoặc RECEIVE_DIR_MISSING")
         now = self._check_now(now)
         self._accept_now(now)
         found = self._running_recv(device_id, transfer_id)

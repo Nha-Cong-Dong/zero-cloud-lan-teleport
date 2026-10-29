@@ -108,6 +108,7 @@ from teleport.app.storage import (
     NotResumableError,
     PartFile,
     ReceiveDir,
+    ReceiveDirMissingError,
     RereadStopped,
     ResumeHandle,
     ResumeMode,
@@ -281,6 +282,7 @@ class TransferResult(StrEnum):
     EXPIRED = "expired"  # mất kết nối điều khiển quá `RECONNECT_GRACE` (24 h, protocol §6.2)
     DISK_FAILED = "disk_failed"
     TEMP_EXISTS = "temp_exists"  # thư mục tạm của lượt đã có sẵn mà không dùng tiếp được
+    RECEIVE_DIR_MISSING = "receive_dir_missing"  # thư mục nhận đã mất và không tạo lại được
     CORRUPT = "corrupt"  # khối sai quá trần, hoặc đọc lại / Merkle sai quá trần
     PROTOCOL_ERROR = "protocol_error"
     SOURCE_READ_FAILED = "source_read_failed"
@@ -372,6 +374,7 @@ _REJECT_RESULTS: dict[str, TransferResult] = {
 _ERROR_RESULTS: dict[FailureDetail | None, TransferResult] = {
     FailureDetail.DISK: TransferResult.DISK_FAILED,
     FailureDetail.TEMP_EXISTS: TransferResult.TEMP_EXISTS,
+    FailureDetail.RECEIVE_DIR_MISSING: TransferResult.RECEIVE_DIR_MISSING,
     FailureDetail.CORRUPT_BLOCKS: TransferResult.CORRUPT,
     FailureDetail.VERIFY_FAILED: TransferResult.CORRUPT,
     FailureDetail.PROTOCOL: TransferResult.PROTOCOL_ERROR,
@@ -1995,6 +1998,9 @@ class TransferManager:
         except TempExistsError:
             log.info("thư mục tạm của lượt %s đã có sẵn mà không dùng tiếp được", transfer_id[:8])
             self._fail_lane(lane, DiskOp.CREATE_TEMP, FailureDetail.TEMP_EXISTS)
+        except ReceiveDirMissingError:
+            log.warning("thư mục nhận đã mất và không tạo lại được (lượt %s)", transfer_id[:8])
+            self._fail_lane(lane, DiskOp.CREATE_TEMP, FailureDetail.RECEIVE_DIR_MISSING)
         except Exception as e:
             op = _DISK_OPS[type(action)]
             index = getattr(action, "file_index", None)

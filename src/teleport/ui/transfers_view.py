@@ -452,6 +452,18 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
             dir=_dir_label(receive_dir),
             name=s,
         )
+    if result is TransferResult.RECEIVE_DIR_MISSING:
+        return _fill(
+            t(
+                "Transfers",
+                "Không nhận được lượt gửi từ {name} vì thư mục nhận {dir} không còn hoặc không dùng "
+                "được, và Teleport không tạo lại được (có thể thư mục chứa nó đã bị xóa, hoặc ổ đã bị "
+                "rút ra). "
+                "Hãy kiểm tra lại rồi nhờ gửi lại.",
+            ),
+            name=s,
+            dir=_dir_label(receive_dir),
+        )
     if result is TransferResult.TEMP_EXISTS:
         return _fill(
             t(

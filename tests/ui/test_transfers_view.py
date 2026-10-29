@@ -602,6 +602,17 @@ def test_result_sentences_match_section_8(view, direction, result, by_peer, stat
     assert view.row(k).detail_label.text() == fill(template, p=PEER, f="video.mp4")
 
 
+def test_receive_dir_missing_names_the_folder_not_a_disk_error():
+    """Thư mục nhận mất mà không tạo lại được: câu nói đúng nguyên nhân, không đổ cho ổ đĩa lỗi."""
+    from teleport.ui.transfers_view import result_message
+
+    fin = finished(key("receive"), "receive_dir_missing")
+    text = result_message(fin, PEER, Path(r"C:\Users\A\Downloads\Teleport"))
+    assert "thư mục nhận" in text and r"C:\Users\A\Downloads\Teleport" in text
+    assert PEER in text
+    assert "ổ đĩa báo lỗi" not in text
+
+
 def test_finished_row_hides_or_disables_cancel(view):
     k = key("send")
     view.handle(status_changed(k, "transferring"))

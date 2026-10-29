@@ -16,7 +16,8 @@ liên kết.
   Linux/macOS; Windows: ẩn khi vừa tạo, ACL kế thừa từ thư mục nhận) được tạo ở lần
   `create_temp` đầu tiên và không bao giờ bị xóa ở đây.
 - `create_temp(transfer_id, record)` tạo `<transfer_id>` và ghi `transfer.json` bền trước khi trả
-  về. Thư mục có sẵn mà rỗng (hay chỉ có `.tmp` của bố cục) được dùng lại; còn lại →
+  về. Thư mục nhận bị xóa sau `open` thì tạo lại trước (chỉ thư mục đó, không tạo thư mục cha:
+  `ReceiveDirMissingError`). Thư mục có sẵn mà rỗng (hay chỉ có `.tmp` của bố cục) được dùng lại; còn lại →
   `TempExistsError`, không đụng nội dung cũ. `TransferTemp.create_part` tạo `<i>.part` bằng
   `O_EXCL` và header `<i>.state`.
 - `PartFile.write_at` ghi một khối đúng vị trí và không bao giờ tạo lỗ sau cuối phần đã ghi
@@ -270,6 +271,10 @@ class PathTooLongError(StorageError):
 
 class TempExistsError(StorageError):
     """`.teleport/<transfer_id>` đã có mà không dùng lại được, hay đang được dùng; nội dung cũ không đổi."""
+
+
+class ReceiveDirMissingError(StorageError):
+    """Thư mục nhận đã mất sau `open` và không tạo lại được (thư mục cha cũng không còn, hay tên bị chiếm)."""
 
 
 class NameUnavailableError(StorageError):
@@ -940,6 +945,10 @@ class ReceiveDir:
         self._root_str = str(self._root)
         self._limits = limits
         self._root_fd = root_fd  # POSIX: fd của thư mục nhận, giữ tới close()
+        # POSIX: fd của thư mục nhận cũ (đã bị xóa) sau `_restore_root`; thread khác có thể còn dùng
+        # nên chỉ đóng ở close().
+        self._retired_root_fds: list[int] = []
+        self._root_lock = threading.Lock()  # một `_restore_root` tại một thời điểm
         self._lock = threading.Lock()  # chỉ khóa sổ sách; I/O nằm ngoài khóa
         self._closed = False
         self._temps: set[TransferTemp] = set()  # temp còn mở, để close() đóng fd
@@ -1007,6 +1016,9 @@ class ReceiveDir:
         `done_at` (sai → ValueError). Lượt đang được tạo, mở lại hay dọn trong `ReceiveDir` này,
         hay đã có temp mở cùng `transfer_id` → `TempExistsError`.
 
+        Thư mục nhận đã mất sau `open` (người dùng xóa) → tạo lại trước (`_restore_root`); không
+        tạo lại được → `ReceiveDirMissingError`.
+
         Thư mục đã có (H2): là thư mục thật, đúng chủ, rỗng hay chỉ có file thường khớp dạng
         `.tmp` của bố cục → xóa chúng rồi tạo lại; còn lại (có `.part`, `transfer.json`, file lạ,
         liên kết, `<transfer_id>` là file) → `TempExistsError`, không đụng gì. POSIX: `fsync`
@@ -1026,6 +1038,7 @@ class ReceiveDir:
         data = encode_transfer_record(record)  # StateError (ValueError) trước mọi I/O
         self._claim(transfer_id, TempExistsError(f"thư mục tạm của lượt {transfer_id} đang được dùng"))
         try:
+            self._restore_root()
             if sys.platform == "win32":
                 temp = self._create_temp_windows(transfer_id, record, data)
                 parent_fd = None
@@ -1328,6 +1341,9 @@ class ReceiveDir:
         fd, self._root_fd = self._root_fd, None
         if fd is not None:
             _close_quietly(fd)
+        retired, self._retired_root_fds = self._retired_root_fds, []
+        for fd in retired:
+            _close_quietly(fd)
 
     def __enter__(self) -> ReceiveDir:
         return self
@@ -1365,6 +1381,66 @@ class ReceiveDir:
         if fd is None:
             raise ValueError("ReceiveDir đã đóng")
         return fd
+
+    def _restore_root(self) -> None:
+        """Thư mục nhận đã mất sau `open` (người dùng xóa khi app đang chạy) → tạo lại nó.
+
+        Chỉ tạo đúng thư mục nhận (`os.mkdir`, quyền theo umask như `open`), không tạo thư mục
+        cha: cha không còn thường là ổ đã rút. POSIX: thư mục vừa tạo nằm khác ổ với thư mục
+        cũ (điểm gắn USB cố định còn lại sau khi ổ bị tháo) → xóa nó đi, không nhận vào ổ hệ
+        thống. Cha không còn hay không phải thư mục, tên bị một thứ không phải thư mục chiếm (kể
+        cả symlink/junction có đích đã mất: đích không được tạo lại) → `ReceiveDirMissingError`.
+        POSIX: fd cũ trỏ vào thư mục đã xóa, nên mở fd mới khi tên trỏ tới thư mục khác fd đang
+        giữ (kể cả khi người dùng tự tạo lại); fd cũ đóng ở close(), vì thread khác có thể còn
+        dùng. Giới hạn đã biết: một `finalize` đang chạy ở thread khác có thể đọc fd cũ ở bước
+        đầu và fd mới ở bước sau; `O_EXCL` và so danh tính vẫn chặn ghi đè hay xóa nhầm, cùng
+        lắm sót một file giữ chỗ 0 byte trong thư mục cũ.
+        """
+        with self._root_lock:
+            held: os.stat_result | None = None  # POSIX: thư mục nhận mà fd đang giữ
+            if sys.platform == "win32":
+                if os.path.isdir(self._root_str):
+                    return
+            else:
+                held = os.fstat(self._root_fd_or_raise())
+                try:
+                    st = os.stat(self._root_str)  # theo liên kết: thư mục nhận được phép là symlink
+                except (FileNotFoundError, NotADirectoryError):
+                    pass
+                else:
+                    if stat.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) == (held.st_dev, held.st_ino):
+                        return
+            created = False
+            try:
+                os.mkdir(self._root_str)
+                created = True
+            except FileExistsError:
+                pass  # người dùng hay tiến trình khác vừa tạo lại: kiểm dưới đây
+            except (FileNotFoundError, NotADirectoryError) as e:
+                raise ReceiveDirMissingError("thư mục cha của thư mục nhận không còn") from e
+            if not os.path.isdir(self._root_str):
+                raise ReceiveDirMissingError("tên thư mục nhận đã bị một mục không phải thư mục chiếm")
+            if sys.platform == "win32":
+                if created:
+                    log.info("thư mục nhận đã bị xóa khi đang chạy, đã tạo lại")
+                return
+            new_fd = os.open(self._root_str, _DIR_FLAGS)
+            if created and held is not None and os.fstat(new_fd).st_dev != held.st_dev:
+                _close_quietly(new_fd)
+                with contextlib.suppress(OSError):
+                    os.rmdir(self._root_str)
+                raise ReceiveDirMissingError("thư mục nhận tạo lại nằm khác ổ với thư mục cũ")
+            if created:
+                log.info("thư mục nhận đã bị xóa khi đang chạy, đã tạo lại")
+            with self._lock:
+                closed = self._closed
+                if not closed:
+                    old_fd, self._root_fd = self._root_fd, new_fd
+                    if old_fd is not None:
+                        self._retired_root_fds.append(old_fd)
+            if closed:
+                _close_quietly(new_fd)
+                raise ValueError("ReceiveDir đã đóng")
 
     def _owner_ok(self, st: os.stat_result) -> bool:
         """POSIX: chủ hợp lệ là euid hoặc chủ của thư mục nhận (USB mount theo uid cố định)."""

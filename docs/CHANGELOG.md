@@ -145,6 +145,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lời hỏi `[c/k]` của `listen`, `pair` và `receive` được in lại khi có dòng khác in chen giữa lúc đang chờ trả lời.
 
 ### Fixed
+- Xóa thư mục nhận (mặc định `Teleport` trong thư mục Tải về) khi Teleport đang chạy làm mọi lượt nhận sau đó lỗi, kèm câu báo sai là ổ đĩa lỗi khi ghi. Giờ lượt nhận kế tiếp tự tạo lại thư mục đó. Nếu không tạo lại được (thư mục chứa nó cũng đã mất, hoặc ổ đã bị rút ra), câu báo nói đúng là thư mục nhận không còn.
 - Hai máy gọi nhau cùng lúc mà một lần mở kết nối điều khiển chậm (vài giây) có thể đóng rồi mở lại kết nối mãi. Ngưỡng chống trùng của protocol mục 6.1 lớn hơn hạn mở kết nối, nên hai bên luôn giữ cùng một kết nối.
 - Thân message điều khiển phải là UTF-8 không BOM (protocol mục 3.1); UTF-16, UTF-32 và BOM UTF-8 là lỗi.
 - `teleport --config-dir <file> identity` báo “Không dùng được thư mục cấu hình” và thoát mã 1 (không in traceback).
