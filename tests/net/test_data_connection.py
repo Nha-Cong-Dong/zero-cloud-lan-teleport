@@ -28,6 +28,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
+from support import wait_until
 
 from teleport.core.blocks import BLOCK_SIZE, BlockError, BlockHeader
 from teleport.core.framing import HEADER, decode_body, encode_message
@@ -145,14 +146,6 @@ async def read_all_blocks(conn, size: int, *, idle: float = 10.0) -> list[tuple[
         assert hdr.length == len(payload)
         got.append((hdr.index, hdr.sha256, bytes(payload)))
     return got
-
-
-async def wait_until(predicate, timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 async def cancel_wait(*tasks) -> None:
@@ -390,6 +383,7 @@ def free_port() -> int:
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 async def test_listener_delivers_trusted_data_open(slow_opening, listener_factory, raw_client, ids):
     h = await listener_factory(ids.server, trusted=[ids.b])
@@ -814,6 +808,7 @@ def _close_now(how: str):
     return script
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("case", ["closed-port", "no-handshake", "close-after-handshake", "wrong-identity"])
 async def test_open_data_makes_exactly_one_attempt(slow_opening, monkeypatch, fake_server, ids, case):
@@ -1358,6 +1353,7 @@ async def test_abort_is_idempotent_wakes_pending_read_and_peer_sees_close(
     assert time.monotonic() - start < 1.0
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("sender", ["client", "server"])
 async def test_graceful_close_waits_for_slow_reader_without_cutting_the_tail(
@@ -1419,6 +1415,7 @@ async def test_graceful_close_waits_for_slow_reader_without_cutting_the_tail(
     assert info["close_end"] >= info["last_block_at"] - 0.2, "close() trả về trước khi bên đọc đọc hết"
 
 
+@pytest.mark.slow
 @integration
 async def test_data_close_takes_drain_timeout_when_peer_never_answers(
     fast, monkeypatch, listener_factory, ids
@@ -1644,6 +1641,7 @@ async def read_slowly(conn, n: int, pause_at: int, prog: Progress, pause: dict) 
     return total.hexdigest(), indices
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize(
     ("client_sends", "n_blocks", "pause_at"),
@@ -1822,6 +1820,7 @@ async def test_peer_abort_at_frame_boundary_reads_as_none_or_connection_lost(
     assert outcome in (None, ConnectionLostError), outcome
 
 
+@pytest.mark.slow
 @integration
 async def test_bytes_sent_back_by_receiver_do_not_bloat_sender(
     slow_opening, monkeypatch, listener_factory, raw_client, ids

@@ -350,18 +350,21 @@ NAMES = st.one_of(
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None)
 @given(NAMES, st.integers(min_value=4, max_value=255))
 def test_property_fit_filename_guarantees(fn, raw, max_bytes):
     assert_fitted(fn, fn.fit_filename(raw, max_bytes), max_bytes)
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(NAMES)
 def test_property_fit_filename_at_255_is_sanitize(fn, raw):
     assert fn.fit_filename(raw, 255) == fn.sanitize_filename(raw)
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None)
 @given(NAMES, st.integers(min_value=4, max_value=255))
 def test_property_fallback_filename_is_ascii_short_and_stable(fn, raw, max_bytes):
@@ -370,6 +373,7 @@ def test_property_fallback_filename_is_ascii_short_and_stable(fn, raw, max_bytes
     assert_fitted(fn, out, min(max_bytes, FALLBACK_BYTES))
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(NAMES)
 def test_property_fallback_default_budget_is_64(fn, raw):

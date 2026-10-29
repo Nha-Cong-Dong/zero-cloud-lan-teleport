@@ -819,6 +819,7 @@ def _blocks():
 # ---- AC-19: hai engine, mạng chập chờn, không chèn lỗi --------------------------------------------
 
 
+@pytest.mark.slow
 @SIM
 @given(rng=st.randoms(use_true_random=False), nblocks=_blocks(), faults=st.booleans())
 def test_two_engines_always_finish_with_identical_content(rng, nblocks, faults):
@@ -2005,6 +2006,7 @@ CRASH = settings(
 )
 
 
+@pytest.mark.slow
 @CRASH
 @given(
     rng=st.randoms(use_true_random=False),

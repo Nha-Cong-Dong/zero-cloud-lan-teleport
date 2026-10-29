@@ -54,6 +54,7 @@ def test_rate_and_burst_properties_echo_arguments():
     assert b.burst == 2_000
 
 
+@pytest.mark.slow
 @HYPO
 @given(
     rate=st.floats(CHUNK_SIZE, 2**30, allow_nan=False, allow_infinity=False),

@@ -31,6 +31,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support import wait_until
 
 from teleport.app import storage
 from teleport.core import resume_state as rs
@@ -55,14 +56,6 @@ RECEIVE = core_transfer.Direction.RECEIVE
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------
-
-
-async def wait_until(predicate, timeout: float = 5.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def make_file(directory: Path, name: str, size: int) -> Path:
@@ -384,6 +377,7 @@ async def test_tombstones_of_node_without_receive_dir_survive_restart(
 # =================================================================================================
 
 
+@pytest.mark.slow
 @leakcheck
 @pytest.mark.parametrize("tie", [False, True], ids=["moi-nhat", "bang-nhau"])
 async def test_several_running_from_one_sender_keep_latest_discard_others_and_cancel_expired(
@@ -466,6 +460,7 @@ async def test_several_running_from_one_sender_keep_latest_discard_others_and_ca
 # =================================================================================================
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_hanging_open_for_resume_skips_only_that_transfer_and_start_stays_bounded(
     T, world, restart, record_for, resume_helpers, tmp_path, monkeypatch, grace_real
@@ -500,6 +495,7 @@ async def test_hanging_open_for_resume_skips_only_that_transfer_and_start_stays_
     assert resume_helpers.snapshot(hung_dir) == before, "lượt quá hạn phải để nguyên trên đĩa"
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_more_hanging_restores_than_disk_threads_still_bound_start_by_total_deadline(
     T, world, restart, record_for, resume_helpers, tmp_path, monkeypatch, grace_real
@@ -619,6 +615,7 @@ async def test_engine_restore_error_retries_once_without_receives_and_keeps_temp
     assert content_of(d) == before
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_sender_unpaired_while_receiver_was_off_is_not_restored_and_dir_untouched(
     T, transfer_nodes, restart, write_spy, cleanup_spy, resume_helpers, grace_real
@@ -643,6 +640,7 @@ async def test_sender_unpaired_while_receiver_was_off_is_not_restored_and_dir_un
 # =================================================================================================
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_restored_verify_target_with_wrong_target_is_received_again_under_new_name(
     T, transfer_nodes, restart, tcp_proxy, resume_helpers, monkeypatch, tmp_path, grace_real
@@ -700,6 +698,7 @@ async def test_restored_verify_target_with_wrong_target_is_received_again_under_
 # =================================================================================================
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_sender_that_lost_its_state_answers_unknown_transfer_and_receiver_cleans_up(
     T, transfer_nodes, restart, write_spy, grace_real
@@ -723,6 +722,7 @@ async def test_sender_that_lost_its_state_answers_unknown_transfer_and_receiver_
     await wait_until(lambda: not temp_dir(net.receive_dir, tid).exists(), 10, "thư mục tạm chưa bị dọn")
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_receiver_tombstone_survives_restart_sender_gets_cancel_user_and_no_new_offer_prompt(
     T, transfer_nodes, restart, tcp_proxy, write_spy, grace_real
@@ -761,6 +761,7 @@ async def test_receiver_tombstone_survives_restart_sender_gets_cancel_user_and_n
     assert not temp_dir(net.receive_dir, tid).exists()
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_sender_closed_while_disconnected_sends_unsent_cancel_after_restart_and_new_send_works(
     T, transfer_nodes, restart, tcp_proxy, write_spy, grace_real
@@ -835,6 +836,7 @@ async def test_done_transfer_answers_verified_after_restart_and_record_is_cleane
     assert (net.receive_dir / ".teleport").is_dir()
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_two_configs_sharing_receive_dir_do_not_touch_each_other(
     T, transfer_nodes, restart, write_spy, cleanup_spy, resume_helpers, app_helpers, tmp_path, grace_real
@@ -868,6 +870,7 @@ async def test_two_configs_sharing_receive_dir_do_not_touch_each_other(
     assert sha256_of(net.receive_dir / "f.bin") == sha256_of(src)
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_cleanup_timer_never_removes_running_transfer(
     T, transfer_nodes, write_spy, cleanup_spy, monkeypatch, grace_real
@@ -1204,6 +1207,7 @@ async def cancel_start_during_restore(node_factory, root: Path, tid: str, fake: 
     return stop
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_start_cancelled_during_restore_sets_stop_and_leaves_disk_untouched(
     world,

@@ -27,6 +27,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support import wait_until
 
 from teleport.app.node import DeviceDisconnected
 from teleport.core import transfer as core_transfer
@@ -49,14 +50,6 @@ REAL_GRACE = core_transfer.RECONNECT_GRACE
 CUT_AT = 0.85  # vị trí gián đoạn (mvp N4: “ở 85 %”)
 # Cỡ file đủ lớn để gửi lại từ đầu ở 85 % vượt ngưỡng N4 (tiền đề kiểm ở từng test, không chép số).
 SIZE = 96 * MiB
-
-
-async def wait_until(predicate, timeout: float = 5.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def make_file(directory: Path, name: str, size: int) -> Path:
@@ -175,6 +168,7 @@ def assert_within_n4(fin_b, meter, size: int, n4_extra: int, *, cuts: int = 1, n
 # =================================================================================================
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("end", ["rst", "resume"])
 @pytest.mark.parametrize("client", ["sender", "receiver"])
 async def test_outage_longer_than_keepalive_then_network_back_finishes_within_n4(
@@ -266,6 +260,7 @@ V4_CASES = {
 }
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("case", list(V4_CASES))
 async def test_cut_at_85_percent_sender_as_client_finishes_within_n4(
     T, via_proxy, payload_meter, short_keepalive, grace_real, n4_extra, monkeypatch, case
@@ -365,6 +360,7 @@ def cut_offsets(seed: int, n4_extra: int) -> list[int]:
             return offsets
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("seed", [3, 11, 2024])
 async def test_rst_at_random_offsets_several_times_finishes_within_k_times_n4(
     T, via_proxy, payload_meter, grace_real, n4_extra, seed
@@ -446,6 +442,7 @@ async def wait_meter_still(meter, quiet: float = 0.5, timeout: float = 10.0) -> 
     return last
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("how", ["them-byte", "chi-mtime"])
 async def test_source_changed_while_network_blocked_cancels_both_sides_and_cleans_temp(
     T, via_proxy, payload_meter, grace_real, how

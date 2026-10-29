@@ -20,6 +20,7 @@ import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+from support import wait_until
 
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt, PairingService
 from teleport.core.framing import HEADER, encode_message
@@ -72,14 +73,6 @@ async def pair(a, b, timeout: float = 15.0) -> PairingFinished:
 
 def outcomes(rec) -> list[str]:
     return [str(f.outcome) for f in rec.finished]
-
-
-async def wait_until(predicate, timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def gates_idle(*nodes) -> bool:
@@ -433,6 +426,7 @@ async def test_p4_initiator_rejects(node_factory):
     assert gates_idle(A, B)
 
 
+@pytest.mark.slow
 @integration
 async def test_p5_nobody_answers_times_out(node_factory, fast):
     B = await node_factory("B", accept_pairing=True)
@@ -450,6 +444,7 @@ async def test_p5_nobody_answers_times_out(node_factory, fast):
     assert gates_idle(A, B)
 
 
+@pytest.mark.slow
 @integration
 async def test_p6_initiator_accepts_responder_silent(node_factory):
     B = await node_factory("B", accept_pairing=True)
@@ -476,6 +471,7 @@ async def test_p7_responder_not_accepting_is_busy(node_factory):
     assert gates_idle(A, B)
 
 
+@pytest.mark.slow
 @integration
 async def test_p8_backoff_after_failure_then_admitted_again(node_factory, fast):
     B = await node_factory("B", accept_pairing=True, answer=False)
@@ -520,6 +516,7 @@ async def test_p9_one_session_at_a_time(node_factory):
     assert B.store.get(C.id) is None
 
 
+@pytest.mark.slow
 @integration
 async def test_p10_closed_port_is_unreachable(node_factory, app_helpers):
     A = await node_factory("A")
@@ -798,6 +795,7 @@ async def test_responder_prompt_happens_before_pair_reveal_reaches_the_wire(node
     await wait_until(lambda: B.pairing.gate.active is None, 1.0)
 
 
+@pytest.mark.slow
 @integration
 async def test_p17_save_only_after_both_confirm(node_factory, raw_pairing_client, tmp_path, fast, caplog):
     """P17: client thô (vai A) nhận mã nhưng không gửi pair_confirm; B đồng ý → B không lưu."""
@@ -837,6 +835,7 @@ async def test_p17_save_only_after_both_confirm(node_factory, raw_pairing_client
 P18_ROUNDS = 10
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("accept_pairing", [True, False], ids=["listen", "pair"])
 async def test_p18_yield_rule_always_gives_one_paired_result_per_side(node_factory, accept_pairing):
@@ -1245,6 +1244,7 @@ async def _drip(c, data: bytes, sent: list[int]) -> None:
         await asyncio.sleep(NONCE_DRIP_INTERVAL)
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("case", ["im_lang", "nho_giot_nonce"])
 async def test_stranger_after_commit_holds_gate_only_until_nonce_timeout(
@@ -1332,6 +1332,7 @@ async def test_real_pairing_succeeds_with_short_nonce_timeout(node_factory, fast
 GATE_FREE_AFTER_FAILURE = 1.5  # sửa F4: gửi pair_abort + đóng tổng 1 s, cộng 0,5 s cho máy chậm
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("case", ["confirm_truoc_nonce", "rac"])
 async def test_failed_session_frees_gate_quickly_when_peer_never_closes(
@@ -1501,6 +1502,7 @@ async def test_responder_prompt_raises_raw_client_never_gets_reveal(
     assert B.pairing.gate.failures(LOCAL) == 0
 
 
+@pytest.mark.slow
 @integration
 async def test_responder_prompt_raises_frees_gate_quickly_when_peer_never_reads(
     node_factory, raw_pairing_client, tmp_path, monkeypatch
@@ -1660,6 +1662,7 @@ async def test_sixth_code_in_window_is_busy_without_prompt(node_factory, raw_pai
     assert B.pairing.gate.active is None
 
 
+@pytest.mark.slow
 @integration
 async def test_code_limit_frees_after_window_on_loop_clock(node_factory, monkeypatch):
     """L4: cửa sổ tính theo `loop.time()` của node; hết cửa sổ thì lại được nhận (hằng số rút ngắn)."""
@@ -1915,6 +1918,7 @@ PA1_ROUNDS = 5
 TEST_NET = "192.0.2.1"  # TEST-NET-1: không có máy nào; kết nối treo hoặc lỗi ngay tùy mạng
 
 
+@pytest.mark.slow
 @integration
 async def test_pa1_yield_rule_with_several_addresses(node_factory, fast):
     """Backlog d: bên lớn hơn thử `[192.0.2.1, 127.0.0.1]`, yêu cầu của bên nhỏ tới từ 127.0.0.1
@@ -2257,6 +2261,7 @@ async def test_m4_cancel_while_closing_after_save_failed_returns_save_failed(
     assert A.pairing.gate.active is None
 
 
+@pytest.mark.slow
 @integration
 async def test_m4_cancel_while_waiting_for_confirmed_replacement_returns_its_result(
     node_factory, fake_server, raw_pairing_client, app_helpers, tmp_path, monkeypatch, fast
@@ -2868,6 +2873,7 @@ async def test_l4_code_shown_false_for_identity_conflict(node_factory, app_helpe
         assert result.outcome == PairingOutcome.PEER_INVALID
 
 
+@pytest.mark.slow
 @integration
 async def test_l4_code_shown_false_when_unreachable(node_factory, app_helpers):
     A = await node_factory("A")

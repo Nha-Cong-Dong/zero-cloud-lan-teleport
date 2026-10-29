@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import pytest
+from support import wait_until
 
 import teleport
 from teleport import atomic
@@ -35,14 +36,6 @@ integration = pytest.mark.integration
 
 LOCAL = "127.0.0.1"
 OS_NAMES = {"windows", "macos", "linux"}
-
-
-async def wait_until(predicate, timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def lock_is_free(directory) -> bool:
@@ -379,6 +372,7 @@ async def test_n7_untrusted_device_is_rejected(node_factory):
     assert A.connected_devices() == frozenset()
 
 
+@pytest.mark.slow
 @integration
 async def test_n11_second_connection_replaces_first(node_factory, trust_each_other, control_client):
     trust_each_other("A", "B")
@@ -429,6 +423,7 @@ async def _expect_data_closed(conn, within: float) -> None:
     assert elapsed < within, f"A đóng kết nối dữ liệu sau {elapsed:.2f} s"
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("opener", ["B", "A"], ids=["B-mo-control", "A-mo-control"])
 async def test_ac20_data_open_for_unknown_transfer_is_closed_and_control_kept(
@@ -821,6 +816,7 @@ async def _assert_port_not_accepting(port: int) -> None:
         writer.transport.abort()
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("cancel_after", [0.0, 0.05, 0.2])
 async def test_close_cancelled_midway_still_stops_port_and_releases_lock(
@@ -1216,6 +1212,7 @@ def test_p27_close_time_limit_reads_constants_at_call_time(monkeypatch, owner, n
     assert after - before >= 10.0 * weight - 1e-9, f"{name}: {before} → {after}"
 
 
+@pytest.mark.slow
 @integration
 async def test_p27_node_close_bounds_mdns_close_by_allowance(node_factory, fake_mdns, monkeypatch):
     """spec-p2-7 A2: `Node.close` bọc việc đóng mDNS bằng `MDNS_CLOSE_ALLOWANCE` (mDNS treo không giữ

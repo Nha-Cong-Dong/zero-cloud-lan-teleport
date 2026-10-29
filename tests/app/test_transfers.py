@@ -32,6 +32,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from support import wait_until
 
 from teleport.app import node as node_mod
 from teleport.app import sources, storage
@@ -58,14 +59,6 @@ TRANSFER_TYPES = frozenset({"offer", "accept", "reject", "resume", "complete", "
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------
-
-
-async def wait_until(predicate, timeout: float = 5.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def make_file(directory: Path, name: str, size: int, *, mtime_ns: int | None = None) -> Path:
@@ -708,6 +701,7 @@ async def test_ac7_fat32_rejects_file_too_large(T, transfer_nodes, monkeypatch):
     assert received_names(net) == set()
 
 
+@pytest.mark.slow
 @integration
 async def test_ac8_node_without_receive_dir_rejects_not_receiving(T, transfer_nodes):
     """AC-8: A không có thư mục nhận → không nhận file (`receiving` False) → `reject{not_receiving}`."""
@@ -1049,6 +1043,7 @@ async def test_ac15_block_always_corrupt_cancels_with_corrupt_at_fourth(
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 async def test_ac16_control_replaced_mid_transfer_still_done(T, transfer_nodes, relay_factory, write_spy):
     """AC-16 (spec B12): B nối tới A qua relay TCP; relay cắt phía B nhưng giữ phía A; B nối lại qua
@@ -1080,6 +1075,7 @@ async def test_ac16_control_replaced_mid_transfer_still_done(T, transfer_nodes, 
     assert len(A.rec.events_of(DeviceConnected, B.id)) == 1
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("client", ["sender", "receiver"])
 async def test_ac17_control_lost_mid_transfer_reconnects_and_finishes(T, transfer_nodes, write_spy, client):
@@ -1105,6 +1101,7 @@ async def test_ac17_control_lost_mid_transfer_reconnects_and_finishes(T, transfe
     assert "reconnecting" in A.trec.statuses(tid)
 
 
+@pytest.mark.slow
 @integration
 async def test_ac17_mdns_gone_mid_transfer_still_reconnects_thanks_to_hold(
     T, transfer_nodes, write_spy, fake_mdns, app_helpers, count_open_control, fast
@@ -1143,6 +1140,7 @@ async def test_ac17_mdns_gone_mid_transfer_still_reconnects_thanks_to_hold(
     assert A.id not in B.connected_devices()
 
 
+@pytest.mark.slow
 @integration
 async def test_ac18_reconnect_grace_expires_and_hold_is_released(
     T, transfer_nodes, write_spy, monkeypatch, fast
@@ -1229,6 +1227,7 @@ async def _read_until_closed(conn, within: float) -> tuple[float, object]:
     return time.monotonic() - start, got
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("variant", ["c-mo-control", "khong-control", "a-mo-control"])
 async def test_ac19_foreign_data_open_is_closed_and_transfer_unaffected(
@@ -1293,6 +1292,7 @@ async def test_ac19_foreign_data_open_is_closed_and_transfer_unaffected(
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 async def test_ac22_sender_close_mid_transfer_cancels_receiver_quickly(
     T, transfer_nodes, write_spy, app_helpers
@@ -1329,6 +1329,7 @@ async def test_ac22_sender_close_mid_transfer_cancels_receiver_quickly(
     assert received_names(net) == set()
 
 
+@pytest.mark.slow
 @integration
 async def test_ac21_receiver_close_mid_transfer_suspends(T, transfer_nodes, write_spy, send_spy, app_helpers):
     """AC-21 sửa ở P3-3b (spec-p3-3b mục 2.4, 5.2; protocol §6.2 “Tắt app nhận”): A nhận `close()` giữa
@@ -1366,6 +1367,7 @@ async def test_ac21_receiver_close_mid_transfer_suspends(T, transfer_nodes, writ
     assert received_names(net) == set()
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize(
     ("unpairer", "phase"),
@@ -1589,6 +1591,7 @@ async def test_after_close_public_calls_are_noops_and_send_raises(T, transfer_no
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 async def test_ac27_progress_events_are_periodic_monotonic_with_speed_and_eta(T, transfer_nodes, monkeypatch):
     """AC-27: `TransferProgress` theo chu kỳ `PROGRESS_INTERVAL` (vá 0,25 s), chỉ khi `done_bytes` đổi,
@@ -1627,6 +1630,7 @@ async def test_ac27_progress_events_are_periodic_monotonic_with_speed_and_eta(T,
             assert p.eta is None
 
 
+@pytest.mark.slow
 @integration
 async def test_ac28_rate_limit_8_mib_at_4_mib_per_second(T, transfer_nodes, frame_spy):
     """AC-28 (spec B12): 8 MiB @ 4 MiB/s: đo từ lúc bắt đầu khung khối đầu tới lúc ghi xong khung cuối;
@@ -1678,6 +1682,7 @@ async def test_rate_limit_and_auto_accept_properties(T, transfer_nodes):
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 async def test_ac30_two_sends_back_to_back_queue_then_both_done(T, transfer_nodes):
     """AC-30: hai `send` liền nhau tới cùng máy → lượt hai `QUEUED` (hai phía) rồi cả hai DONE; bên nhận
@@ -1706,6 +1711,7 @@ async def test_ac30_two_sends_back_to_back_queue_then_both_done(T, transfer_node
     assert sha256_of(net.receive_dir / "hai.bin") == sha256_of(f2)
 
 
+@pytest.mark.slow
 @integration
 async def test_ac31_write_queue_is_bounded_when_disk_is_slow(T, transfer_nodes, write_spy, monkeypatch):
     """AC-31 (spec B12): ghi đĩa chậm (khối đầu chờ một Event) → (số khối `read_block` đã trả − số
@@ -1758,6 +1764,7 @@ async def test_ac31_write_queue_is_bounded_when_disk_is_slow(T, transfer_nodes, 
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("client", ["sender", "receiver"])
 async def test_ac33_firewall_reports_data_unreachable_once_then_recovers(
@@ -1966,6 +1973,7 @@ def _state_of(part) -> Path:
     return part.path.with_name(f"{part.file_index}.state")
 
 
+@pytest.mark.slow
 @integration
 async def test_p33a_transfer_json_durable_before_sender_sees_transferring_and_marks_grow(
     T, transfer_nodes, monkeypatch, resume_helpers
@@ -2029,6 +2037,7 @@ async def test_p33a_transfer_json_durable_before_sender_sees_transferring_and_ma
     await wait_done_record(net, tid)
 
 
+@pytest.mark.slow
 @integration
 async def test_p33a_part_byte_flipped_before_reread_appends_clear(
     T, transfer_nodes, monkeypatch, resume_helpers

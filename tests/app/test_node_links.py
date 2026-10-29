@@ -17,6 +17,7 @@ import math
 import time
 
 import pytest
+from support import wait_until
 
 from teleport.app import node as node_mod
 from teleport.app.devices import DeviceView
@@ -52,14 +53,6 @@ integration = pytest.mark.integration
 
 LOCAL = "127.0.0.1"
 NODE_TASKS = ("teleport.node", "teleport.pairing", "teleport.connection")
-
-
-async def wait_until(predicate, timeout: float = 2.0, what: str = "điều kiện") -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() > deadline:
-            raise AssertionError(f"hết {timeout} s mà {what} vẫn chưa đúng")
-        await asyncio.sleep(0.01)
 
 
 def task_names(prefix: str) -> list[str]:
@@ -250,6 +243,7 @@ def _describe(records) -> list[str]:
     return [f"{r.levelname} {r.name}: {r.getMessage()}" for r in records]
 
 
+@pytest.mark.slow
 @integration
 async def test_nf3_repeated_mdns_start_error_warns_once(node_factory, fake_mdns, caplog):
     """Sửa F3: mDNS không bật được → netwatch thử lại mỗi vòng nhưng chỉ WARNING lần đầu (các lần sau
@@ -285,6 +279,7 @@ async def test_nf3_unexpected_mdns_error_logs_traceback_once(node_factory, fake_
     assert len(tracebacks) <= 1, _describe(tracebacks)
 
 
+@pytest.mark.slow
 @integration
 async def test_nf3_mdns_recovery_logs_info_once_then_warns_again(node_factory, fake_mdns, caplog):
     """Sửa F3: bật lại được → INFO đúng một lần và đặt lại; lỗi lần sau lại được WARNING."""
@@ -413,6 +408,7 @@ async def test_nf6_fixed_advertise_addresses_only_readvertises(node_factory, fak
     assert m.advertised[-1] == m.advertised[0]
 
 
+@pytest.mark.slow
 @integration
 async def test_nf6_address_read_error_skips_round(node_factory, fake_mdns):
     fake_mdns.local_addresses = ("192.0.2.5",)
@@ -426,6 +422,7 @@ async def test_nf6_address_read_error_skips_round(node_factory, fake_mdns):
     assert len(fake_mdns.instances) == 1
 
 
+@pytest.mark.slow
 @integration
 async def test_nf7_wake_readvertises_and_retries_now(
     node_factory, fake_mdns, count_open_control, monkeypatch, tmp_path
@@ -486,6 +483,7 @@ async def test_nf8_close_closes_mdns_and_stops_background(node_factory, fake_mdn
     assert len(A.rec.events) == n
 
 
+@pytest.mark.slow
 @integration
 async def test_nf9_cancelled_close_still_closes_mdns(node_factory, fake_mdns, app_helpers):
     A = await node_factory("A", mdns=MdnsOptions())
@@ -545,6 +543,7 @@ async def _assert_port_not_accepting(port: int) -> None:
         writer.transport.abort()
 
 
+@pytest.mark.slow
 @integration
 async def test_start_cancelled_twice_closes_port_before_releasing_lock(
     tmp_path, fast, fake_mdns, app_helpers
@@ -707,6 +706,7 @@ async def test_nl1_one_side_sees_other_and_both_connect(
     assert v.connected and v.online and v.paired
 
 
+@pytest.mark.slow
 @integration
 async def test_nl2_simultaneous_connects_converge_to_one(
     node_factory, trust_each_other, fake_mdns, app_helpers, count_open_control, fast
@@ -732,6 +732,7 @@ async def test_nl2_simultaneous_connects_converge_to_one(
     assert lo.control_connection(hi.id).peer.cert.device_id == hi.id
 
 
+@pytest.mark.slow
 @integration
 async def test_nl3_peer_closes_then_retry_schedule_and_one_unreachable(
     node_factory, trust_each_other, fake_mdns, app_helpers, count_open_control, fast
@@ -784,6 +785,7 @@ async def test_nl4_restarted_peer_with_new_port_connects_fast(
     await wait_until(lambda: A.id in B2.connected_devices(), 1.0)
 
 
+@pytest.mark.slow
 @integration
 async def test_nl5_rejected_after_peer_unpairs(
     node_factory, trust_each_other, fake_mdns, app_helpers, count_open_control
@@ -808,6 +810,7 @@ async def test_nl5_rejected_after_peer_unpairs(
     assert B.id not in A.connected_devices()
 
 
+@pytest.mark.slow
 @integration
 async def test_nl6_spoofed_mdns_identity_mismatch(node_factory, fake_mdns, count_open_control, tmp_path):
     counter = count_open_control()
@@ -918,6 +921,7 @@ async def test_nl8_unpair_cancels_running_attempt(node_factory, fake_mdns, fake_
     assert task_names("teleport.node.link-out") == [], "đã hủy ghép đôi mà vẫn có lần thử mới tới B"
 
 
+@pytest.mark.slow
 @integration
 async def test_nl9_pairing_then_auto_connect(node_factory, fake_mdns, app_helpers, count_open_control):
     count_open_control()
@@ -1208,6 +1212,7 @@ class _AsyncioSpy:
         return await asyncio.sleep(delay, *args, **kwargs)
 
 
+@pytest.mark.slow
 async def test_sc5_scan_duration(scan_dir, fake_mdns, monkeypatch):
     """Quét đúng `timeout` giây: chờ đúng một lần, đúng `timeout`, giữa `start_browsing` và `close`.
 
@@ -1261,6 +1266,7 @@ async def test_l5_same_side_switch_emits_no_device_events_and_no_error(
     assert errors == [], _describe(errors)
 
 
+@pytest.mark.slow
 @integration
 async def test_l5_old_outgoing_replaced_after_replace_after_emits_no_device_events(
     node_factory, trust_each_other, control_client, fast, caplog
@@ -1323,6 +1329,7 @@ async def test_l5_connect_hint_works_with_auto_connect_false(
     assert counter.count(caller=A) == 1
 
 
+@pytest.mark.slow
 @integration
 async def test_l5_connect_hint_only_peer_drop_waits_for_user_action(
     node_factory, trust_each_other, count_open_control, fast
@@ -1413,6 +1420,7 @@ async def test_l5_connect_hint_to_own_device_is_value_error(node_factory, count_
     assert counter.count() == 0
 
 
+@pytest.mark.slow
 @integration
 async def test_l5_auto_connect_to_only_opens_control_to_that_device(
     node_factory, trust_each_other, fake_mdns, app_helpers, count_open_control

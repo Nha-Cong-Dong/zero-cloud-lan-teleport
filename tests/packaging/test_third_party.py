@@ -225,6 +225,7 @@ def _expect_unknown(
         assert good not in message
 
 
+@pytest.mark.slow
 def test_check_rejects_unknown_dll_at_base_prefix_root(base: Path, repo: Path) -> None:
     good = _touch(base / "Lib" / "json" / "__init__.py")
     evil = _touch(base / "evil_root.dll")

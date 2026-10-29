@@ -147,6 +147,7 @@ json_like = st.recursive(
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None)
 @given(
     st.binary(max_size=400)
@@ -161,6 +162,7 @@ def test_fuzz_decode_body_returns_dict_or_framing_error(body):
     assert isinstance(msg, dict)
 
 
+@pytest.mark.slow
 @settings(max_examples=200, deadline=None)
 @given(st.dictionaries(st.text(max_size=10), json_like, max_size=5))
 def test_fuzz_encode_decode_roundtrip_of_objects(obj):
@@ -440,6 +442,7 @@ def _deep_documents(draw) -> dict:
     return {"v": [*siblings, value]} if draw(st.booleans()) else {"v": value, "s": siblings}
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None)
 @given(_deep_documents() | st.dictionaries(st.text(max_size=4), _trees, max_size=4))
 def test_fuzz_depth_check_agrees_with_reference_counter(doc):

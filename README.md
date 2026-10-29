@@ -181,6 +181,7 @@ Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope Curre
 |---|---|
 | `pytest` | Chạy toàn bộ test |
 | `pytest -m "not integration"` | Bỏ qua test mở socket thật (nhanh hơn) |
+| `pytest -m "not slow"` | Bỏ qua test chạy quá 1 giây, dùng khi đang lặp sửa (trước khi mở PR vẫn chạy đủ `pytest`) |
 | `pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal` | Chạy một test |
 | `ruff check .` · `ruff format .` | Kiểm tra và định dạng code (CI chạy `ruff check`, `ruff format --check`, `mypy src`, `pytest`) |
 | `mypy src` | Kiểm tra kiểu |

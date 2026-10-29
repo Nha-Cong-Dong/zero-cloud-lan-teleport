@@ -238,6 +238,7 @@ intervals = st.integers(min_value=1, max_value=20).flatmap(
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None)
 @given(t0=st.integers(min_value=-1000, max_value=1000).map(float), params=intervals, steps=ops)
 def test_property_keepalive_matches_reference_model(t0, params, steps):
