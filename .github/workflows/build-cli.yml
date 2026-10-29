@@ -28,8 +28,10 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             packaging/pyinstaller/requirements.txt
+            packaging/pyinstaller/constraints.txt
       - name: Cài dependency và công cụ build
-        run: python -m pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt
+        # constraints.txt ghim bản dependency runtime được đóng vào exe (cryptography, zeroconf, ...).
+        run: python -m pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt -c packaging/pyinstaller/constraints.txt
       - name: Build bằng PyInstaller
         env:
           PYTHONUTF8: "1"

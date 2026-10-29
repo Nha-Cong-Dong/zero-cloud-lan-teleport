@@ -354,6 +354,18 @@ def device_gone_text(name: str) -> str:
     )
 
 
+def repair_offline_text(name: str) -> str:
+    """“Ghép đôi lại” khi radar không thấy thiết bị (mDNS bị chặn): mời nhập IP; `name` qua `peer_label`."""
+    return texts.fill(
+        QCoreApplication.translate(
+            "Pairing",
+            "Không thấy {name} trong mạng. Nếu mạng chặn việc tìm thiết bị, "
+            "hãy nhập địa chỉ IP của máy đó để ghép đôi lại.",
+        ),
+        name=_quoted(name),
+    )
+
+
 def reject_button_text() -> str:
     return QCoreApplication.translate("Pairing", "Không trùng")
 
@@ -746,11 +758,16 @@ class PairingController(QObject):
     # ---- Ghép đôi chủ động -------------------------------------------------------------------
 
     def pair_device(self, view: DeviceView) -> bool:
-        """Ghép đôi với thiết bị trên radar; False nếu không ghép (offline, đang bận, không có host)."""
-        if self._host is None or not view.online or not view.addresses or view.port is None:
+        """Ghép đôi với thiết bị trên radar; False nếu không ghép (offline, đang bận, không có host).
+
+        Đang bận thì luôn báo câu “đang bận”, kể cả khi thiết bị offline: `ui.app` dựa vào điều đó.
+        """
+        if self._host is None:
             return False
         if self._pairing is not None:
             self._show_result(busy_text())
+            return False
+        if not view.online or not view.addresses or view.port is None:
             return False
         label = texts.peer_label(view.name, view.device_id)
         pairing = _Pairing(self._generation, label, view.device_id, tuple(view.addresses))

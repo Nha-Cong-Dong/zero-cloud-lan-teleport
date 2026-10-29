@@ -1,9 +1,9 @@
 # Benchmark
 
-> **Vai trò:** số đo thực tế của các yêu cầu phi chức năng.
+> **Vai trò:** số đo thực tế của các yêu cầu phi chức năng và kết quả kiểm tiêu chí MVP hackathon.
 > **Nguồn duy nhất cho:** định nghĩa từng phép đo, môi trường, kết quả từng lần đo và kết luận so với ngưỡng.
 > **Không chứa:** ngưỡng yêu cầu → [mvp.md](mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](ke_hoach.md) mục 5.1.
-> **Cập nhật:** 2026-10-28
+> **Cập nhật:** 2026-10-30
 
 ## 1. Quy ước
 
@@ -19,7 +19,7 @@
 | Mã | Lần đo gần nhất | Kết luận |
 |---|---|---|
 | mvp N1 | 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged trên cùng máy (mục 3.3) | **ĐẠT trên máy ảo bridged**; chưa đo trên hai máy thật (mục 3.4) |
-| mvp N2 | — | chưa đo; định nghĩa và tiêu chí đã viết trước khi đo (mục 5.1) |
+| mvp N2 | 2026-10-29/30: đo tay qua giao diện, hai máy Windows thật qua Wi-Fi 2,4 GHz, một file 1,89 GiB (mục 5.4) | **CHƯA ĐỦ DỮ LIỆU**: lần đo tay cho tỉ số khoảng 0,96 nhưng không theo phương pháp mục 5.1 (1 lần Teleport, 2 lần SMB, một cỡ file, bấm giờ tay); lượt đo theo mục 5.1 và mạng dây chưa đo (mục 5.3) |
 | mvp N3 | 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8). 2026-10-28: trước/sau thay đổi ghi trạng thái nối lại bền, 1 GiB và 1000 file nhỏ (mục 4.9) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), 10 GiB qua card mạng giữa hai máy, lúc rảnh của app có giao diện chưa đo (mục 4.4). Sau thay đổi ghi trạng thái nối lại bền (mục 4.9), tiêu chí 1 và 2a vẫn ĐẠT với 1 GiB và 1000 file nhỏ |
 | mvp N4 | — | chưa đo |
 | mvp N5 | — | chưa đo |
@@ -30,6 +30,7 @@
 | mvp N10 | — | chưa đo |
 | mvp N11 | — | chưa đo |
 | mvp N12 | — | chưa đo |
+| mvp mục 4.1 (H1–H5) | — | chưa đo (mục 6) |
 
 ## 3. mvp N1: Khám phá
 
@@ -588,5 +589,58 @@ Script `n3_net_host.py` (host), `may2_nhan.py` và `may2_chuanbi.ps1` (máy th�
 
 ### 5.3. Việc còn lại
 
-- Lượt đầu (host Windows 11 → máy thứ hai Windows 10/11, **cả hai qua Wi-Fi**): **chưa đo**; chờ người dùng chuẩn bị máy thứ hai theo hướng dẫn. Giới hạn đã biết trước: qua Wi-Fi, mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách, nên tỉ số đo được không cho biết Teleport có theo kịp SMB trên mạng dây gigabit (khi CPU và Python mới là giới hạn). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2, D3).
+- Lượt đầu (host Windows 11 → máy thứ hai Windows 10/11, **cả hai qua Wi-Fi**) theo phương pháp mục 5.1: **chưa đo**; đã có một lần đo tay chỉ để tham khảo (mục 5.4). Giới hạn đã biết trước: qua Wi-Fi, mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách, nên tỉ số đo được không cho biết Teleport có theo kịp SMB trên mạng dây gigabit (khi CPU và Python mới là giới hạn). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2, D3).
 - Mạng dây gigabit giữa hai máy thật: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2).
+
+### 5.4. Lần đo 2026-10-29/30: đo tay qua giao diện, Wi-Fi 2,4 GHz (chỉ tham khảo)
+
+Lần đo tay của người dùng trên hai máy thật trước buổi demo hackathon, **không theo phương pháp mục 5.1**: không script, bấm giờ tay, Teleport chạy qua giao diện, mỗi cách chỉ một hoặc hai lần, một cỡ file. Ghi lại để có số đầu tiên giữa hai máy thật; không dùng để kết luận mvp N2.
+
+**Môi trường**
+
+| | Máy gửi (host) | Máy nhận |
+|---|---|---|
+| Hệ điều hành | Windows 11 Pro, bản 10.0.26300 | Windows 10 (bản cụ thể không ghi) |
+| Mạng | Wi-Fi Intel Wi-Fi 6 AX201, băng 2,4 GHz, kênh 9, 802.11ax, tốc độ liên kết nhận / gửi 155 / 163 Mbit/s, tín hiệu 91% (ghi một lần, trước lượt đo SMB) | Cùng mạng Wi-Fi, cùng điểm truy cập; Intel Wi-Fi 6 AX201, băng 2,4 GHz, kênh 9, 802.11ax, tốc độ liên kết nhận / gửi 103 / 122 Mbit/s, tín hiệu 93% (ghi một lần, sau lượt đo) |
+| Ổ nguồn / đích | NVMe SSD 512 GB | Thư mục nhận của Teleport và thư mục share SMB cùng ổ C: (theo người dùng); loại ổ không ghi |
+| Teleport | Bản GUI build thử `teleport-gui-0.1.0a0-5425f64-windows` (workflow “Build GUI (thử)”, commit `5425f648b861734d4ac30df795cc37aff8e5e42b`, Python 3.12.10) | Cùng bản |
+
+**File:** một video có sẵn, 2 024 701 407 byte (1,89 GiB), không phải file ngẫu nhiên.
+
+**Cách đo**
+
+- **SMB:** `Measure-Command { robocopy <thư mục nguồn> \\<IP máy nhận>\SmbTest <tên file> /J /NP }` trên máy gửi; phiên SMB mở bằng File Explorer với một tài khoản cục bộ tạm trên máy nhận. Khác mục 5.1: có `/J` (chép không qua bộ đệm), thời gian lấy từ `Measure-Command`, không kiểm mã thoát và cỡ file đích bằng script. File đích được xóa giữa hai lần.
+- **Teleport:** gửi qua giao diện, bấm giờ tay từ lúc bên nhận bấm “Nhận” tới lúc danh sách lượt truyền hiện “Xong ✓”. Khác mục 5.1: không tính khởi động tiến trình, bắt tay và `offer`; mốc do người bấm, không phải `time.perf_counter()`.
+- Các lần không xen thứ tự: hai lần SMB liền nhau, lần Teleport sau đó.
+
+**Kết quả** (MB/s = 10⁶ byte/s)
+
+| Cách | Lần | Thời gian (s) | MB/s |
+|---|---|---|---|
+| SMB | 1 | 373 | 5,43 |
+| SMB | 2 | 371 | 5,46 |
+| Teleport | 1 | 387 | 5,23 |
+
+Tỉ số trung vị SMB / Teleport = 372 / 387 ≈ 0,96; theo từng cặp với lần SMB 1 và 2: 0,96 và 0,96.
+
+**Lần không hợp lệ:** một lần Teleport trước đó, cùng file, cùng mạng, mất 529 s (3,83 MB/s). Không tính vì mốc bấm giờ không rõ (có thể gồm thời gian chờ bấm “Nhận”) và lần đo cách lượt SMB nhiều giờ; không tìm hiểu thêm nguyên nhân.
+
+**Giới hạn**
+
+- Cả hai máy qua Wi-Fi 2,4 GHz: mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách (mục 5.3), nên tỉ số không cho biết Teleport có theo kịp SMB trên mạng dây.
+- Một lần Teleport, hai lần SMB, một cỡ file; bấm giờ tay sai số cỡ vài giây.
+- Mốc của Teleport không gồm khởi động và bắt tay, còn SMB có `/J`: hai thiên lệch ngược chiều, không bù.
+
+## 6. MVP hackathon (mvp mục 4.1)
+
+Tiêu chí H1–H5, cách kiểm và điều kiện đạt (máy, mạng, bản chạy): [mvp.md](mvp.md) mục 4.1. Lịch kiểm: [ke_hoach.md](ke_hoach.md) mục 5.5. Mỗi lần kiểm là một mục con riêng theo quy ước mục 1: ngày, commit của bản zip, hai máy (hệ điều hành, card mạng), mạng Wi-Fi, kết quả từng bước và hash hai phía.
+
+| Mã | Lần kiểm gần nhất | Kết luận |
+|---|---|---|
+| H1 | — | chưa đo |
+| H2 | — | chưa đo |
+| H3 | — | chưa đo |
+| H4 | — | chưa đo |
+| H5 | — | chưa đo |
+
+Lần đo tay N2 ở mục 5.4 không tính cho H2: không so SHA-256 của file ở hai máy.

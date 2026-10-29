@@ -14,7 +14,7 @@ docs: cập nhật hướng dẫn tường lửa
 test: thêm test nối lại khi rớt mạng
 ```
 
-Thay đổi nào người dùng nhận thấy được thì ghi thêm vào mục `[Unreleased]` của [CHANGELOG.md](CHANGELOG.md), chia `### Added` / `### Changed` / `### Fixed` / `### Security`, mỗi dòng viết cho người dùng hiểu. Mục `[Unreleased]` chưa phát hành, nên dòng cũ nói ngược hành vi mới thì sửa dòng cũ, không thêm dòng mâu thuẫn. Đổi định dạng trên dây mà không tăng phiên bản giao thức ([protocol.md](protocol.md) mục 9) thì ghi rõ bản cũ và bản mới không làm việc được với nhau.
+Thay đổi nào người dùng nhận thấy được thì ghi thêm vào mục `[Unreleased]` của [CHANGELOG.md](CHANGELOG.md), chia `### Added` / `### Changed` / `### Fixed` / `### Security`, mỗi dòng viết cho người dùng hiểu. Mục `[Unreleased]` chưa phát hành, nên dòng cũ nói ngược hành vi mới thì sửa dòng cũ, không thêm dòng mâu thuẫn. Thay đổi giao thức: mục “Thay đổi giao thức” bên dưới.
 
 ## Cài môi trường
 
@@ -41,12 +41,12 @@ Mức kiểm tra kiểu của từng gói nằm ở `[tool.mypy]` trong `pyproje
 Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (`tests/net/test_discovery.py`, `tests/app/test_node_mdns.py`, `tests/test_cli.py`).
 
 ## Build thử bản CLI (Windows)
-Bản CLI được đóng gói thử bằng PyInstaller để sớm phát hiện lỗi đóng gói và antivirus. Đây chưa phải bản phát hành: không gắn tag, không tạo GitHub Release. File build nằm trong `packaging/pyinstaller/`: `teleport-cli.spec` (cấu hình build), `third_party.py` (kiểm giấy phép, sinh file giấy phép) và `requirements.txt` (công cụ build, ghim phiên bản).
+Bản CLI được đóng gói thử bằng PyInstaller để sớm phát hiện lỗi đóng gói và antivirus. Đây chưa phải bản phát hành: không gắn tag, không tạo GitHub Release. File build nằm trong `packaging/pyinstaller/`: `teleport-cli.spec` (cấu hình build), `third_party.py` (kiểm giấy phép, sinh file giấy phép), `requirements.txt` (công cụ build, ghim phiên bản) và `constraints.txt` (ghim bản dependency runtime được đóng vào exe).
 
 Chạy từ gốc repo, trên cây làm việc đã commit hết:
 
 ```powershell
-pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt
+pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt -c packaging/pyinstaller/constraints.txt
 $env:PYTHONUTF8 = "1"   # như workflow
 pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/pyinstaller/teleport-cli.spec
 ```
@@ -55,7 +55,7 @@ Bản build theo chế độ `--onedir`, không `--onefile` (lý do: [ke_hoach.m
 
 `third_party.py` kiểm giấy phép mọi gói thật sự đóng vào và **làm build thất bại** (`LicenseAuditError`) khi gặp gói hay giấy phép chưa duyệt, file không rõ thuộc gói nào, hoặc thành phần trong SBOM của gói có giấy phép chưa duyệt. Khi đó đừng lách: đối chiếu luật giấy phép ở [ke_hoach.md](ke_hoach.md) mục 1 (Giấy phép) và mục 4.1, hợp lệ thì mới sửa `APPROVED` trong `third_party.py` (cách làm: docstring của file). Riêng Universal CRT mà PyInstaller tìm thấy trên `PATH` (ví dụ trong thư mục `bin` của JDK) bị spec bỏ khỏi bản build trước bước kiểm, log build ghi số file đã bỏ (lý do: [ke_hoach.md](ke_hoach.md) mục 1, Giấy phép).
 
-Chạy test khói trên exe vừa build (marker `frozen`, [architecture.md](architecture.md) mục 6). Nâng bản công cụ build trong `requirements.txt` thì build lại rồi chạy lại bước này.
+Chạy test khói trên exe vừa build (marker `frozen`, [architecture.md](architecture.md) mục 6). Nâng bản công cụ build trong `requirements.txt` hay dependency runtime trong `constraints.txt` thì build lại rồi chạy lại bước này; nâng mà đổi giấy phép thì duyệt lại theo [ke_hoach.md](ke_hoach.md) mục 1 rồi sửa `APPROVED`.
 
 ```powershell
 $env:TELEPORT_FROZEN_EXE = "$PWD\dist\teleport\teleport.exe"
@@ -65,10 +65,10 @@ pytest -m frozen
 Build trên GitHub: workflow `build-cli` ([.github/workflows/build-cli.yml](../.github/workflows/build-cli.yml)) chỉ chạy tay (`workflow_dispatch`). Vào tab Actions → “Build CLI (thử)” → Run workflow, chọn nhánh `main` hoặc tag `vX.Y.Z` (hoặc `gh workflow run build-cli.yml --ref main`, `--ref vX.Y.Z`); nút chạy tay chỉ hiện khi file workflow đã có trên nhánh mặc định. Workflow build bằng đúng lệnh trên, chạy `pytest -m frozen` trên exe, rồi tải lên artifact `teleport-cli-<phiên bản>-<sha7>-windows`. Artifact là bản tạm, tự xóa sau thời hạn `retention-days` của workflow. File zip tải về chứa thẳng `teleport.exe`, `_internal\` và ba file giấy phép, không có thư mục bọc ngoài, nên hãy giải nén vào một thư mục riêng (ví dụ `C:\tp\teleport\`).
 
 ## Build thử bản GUI (Windows)
-Bản GUI (`Teleport.exe`, cửa sổ, không mở cửa sổ dòng lệnh) đóng gói như bản CLI ở mục trên, cùng `third_party.py` và `requirements.txt`, nhưng dùng spec `teleport-gui.spec` và điểm vào `launcher_gui.py` (gọi `teleport.ui.app:main`). Đây là bản zip giải nén là chạy, chưa phải bộ cài: không gắn tag, không tạo GitHub Release. Môi trường build cần extra `gui` (đã nằm trong `.[dev]`).
+Bản GUI (`Teleport.exe`, cửa sổ, không mở cửa sổ dòng lệnh) đóng gói như bản CLI ở mục trên, cùng `third_party.py`, `requirements.txt` và `constraints.txt`, nhưng dùng spec `teleport-gui.spec` và điểm vào `launcher_gui.py` (gọi `teleport.ui.app:main`). Đây là bản zip giải nén là chạy, chưa phải bộ cài: không gắn tag, không tạo GitHub Release. Môi trường build cần extra `gui` (đã nằm trong `.[dev]`).
 
 ```powershell
-pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt
+pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt -c packaging/pyinstaller/constraints.txt
 $env:PYTHONUTF8 = "1"
 pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/pyinstaller/teleport-gui.spec
 ```
@@ -102,7 +102,7 @@ Bản thử nghiệm (alpha, beta) ghi số ở hai dạng, và đây là nơi d
 Bản thử nghiệm trước `v1.0.0` chỉ gắn tag, không tạo GitHub Release. Bản build thử là artifact của workflow `build-cli` hay `build-gui` chạy tay trên tag hay `main` (mục “Build thử bản CLI”, “Build thử bản GUI”), và tự xóa sau thời hạn của workflow. Bộ cài build tự động khi gắn tag và GitHub Release có từ Giai đoạn 6 ([ke_hoach.md](ke_hoach.md) mục 5.2).
 
 ## Thay đổi giao thức
-Mọi thay đổi định dạng trên dây phải cập nhật [protocol.md](protocol.md) trong cùng Pull Request. Thay đổi không tương thích thì tăng số phiên bản giao thức.
+Mọi thay đổi định dạng trên dây phải cập nhật [protocol.md](protocol.md) trong cùng Pull Request. Thay đổi không tương thích thì tăng số phiên bản giao thức ([protocol.md](protocol.md) mục 9).
 
 ## Giấy phép
 Dự án theo giấy phép [GPL-3.0-or-later](../LICENSE). Gửi Pull Request nghĩa là bạn đồng ý đóng góp của mình được phát hành theo cùng giấy phép đó. Chỉ thêm thư viện có giấy phép tương thích GPLv3 (danh sách giấy phép được chấp nhận: [ke_hoach.md](ke_hoach.md) mục 1 (Giấy phép) và mục 4.1).

@@ -486,6 +486,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: gửi tới thiết bị chưa ghép đôi | Mở luồng ghép đôi (mục 7.2); ghép xong thì tự gửi | — |
 | Giao diện: gửi tiếp khi đang chờ ghép đôi để gửi một lượt khác | “Đang chờ ghép đôi với *PC-Nha* để gửi file. Hãy chờ xong rồi gửi tiếp.” (*PC-Nha* là máy đang chờ ghép đôi, không phải máy vừa được chọn gửi) | Chờ lần ghép đôi đang chạy xong rồi gửi lại |
 | Giao diện: gửi tới thiết bị mà lần kết nối gần nhất bị chặn | Câu của dòng “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức” | Lượt gửi không bắt đầu. Kèm nút trên dải thông báo: bị từ chối → “Ghép đôi lại”; danh tính thay đổi → “Hủy ghép đôi” (hỏi xác nhận kèm cảnh báo); khác phiên bản → không có nút |
+| Giao diện: bấm “Ghép đôi lại” khi máy kia không có trong mạng (ví dụ đã ghép bằng IP vì mạng chặn mDNS) | “Không thấy “*PC-Nha*” trong mạng. Nếu mạng chặn việc tìm thiết bị, hãy nhập địa chỉ IP của máy đó để ghép đôi lại.” | Không bắt đầu ghép đôi; mở khung “Nhập IP thủ công” và đặt tiêu điểm vào ô nhập |
 | Giao diện: gửi tới thiết bị đã ghép đôi nhưng chưa kết nối | Trạng thái “Đang chờ kết nối tới *PC-Nha*…” (không phải lỗi) | Tự xử lý |
 | Giao diện: gửi tới thiết bị không (còn) ghép đôi | “Chưa ghép đôi với *PC-Nha* nên chưa gửi được. Hãy ghép đôi rồi gửi lại.” | Lượt gửi không bắt đầu |
 | Giao diện: không gửi được vì lỗi khác lúc bắt đầu lượt | “Không gửi được file tới *PC-Nha*. Hãy thử lại.” | Lượt gửi không bắt đầu |

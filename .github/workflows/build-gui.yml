@@ -27,10 +27,13 @@ jobs:
           cache-dependency-path: |
             pyproject.toml
             packaging/pyinstaller/requirements.txt
+            packaging/pyinstaller/constraints.txt
       - name: Cài dependency và công cụ build
         # Extra gui kéo PySide6-Essentials; nâng PySide6 thì third_party.py dừng build cho tới khi rà
-        # lại thành phần lồng trong Qt (QT_LICENSE_VERSION).
-        run: python -m pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt
+        # lại thành phần lồng trong Qt (QT_LICENSE_VERSION). constraints.txt ghim bản dependency runtime
+        # được đóng vào exe (cryptography, zeroconf, PySide6-Essentials, ...), nên PyPI ra bản PySide6 mới
+        # không làm hỏng build.
+        run: python -m pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt -c packaging/pyinstaller/constraints.txt
       - name: Build bằng PyInstaller
         env:
           PYTHONUTF8: "1"

@@ -20,7 +20,7 @@ Mọi tài liệu của dự án nằm trong thư mục này (trừ `.claude/CLA
 |---|---|---|---|
 | [architecture.md](architecture.md) | Code chia thế nào, module nào đã có? | Phân tầng, mô hình tiến trình, **trạng thái từng module**, dữ liệu trên đĩa, quy ước viết test (marker, fixture, chỗ test thay được) | Thêm hoặc xong một module |
 | [protocol.md](protocol.md) | Byte nào đi trên dây? | Đặc tả giao thức (phiên bản 1) | Mọi thay đổi định dạng trên dây, trong cùng Pull Request |
-| [benchmark.md](benchmark.md) | Đo thực tế thì có đạt không? | Số đo thực tế của mvp N1–N12: định nghĩa phép đo, môi trường, kết quả, kết luận | Mỗi lần đo |
+| [benchmark.md](benchmark.md) | Đo thực tế thì có đạt không? | Số đo thực tế của mvp N1–N12 và kết quả kiểm H1–H5 (mvp mục 4.1): định nghĩa phép đo, môi trường, kết quả, kết luận | Mỗi lần đo |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Làm việc với repo thế nào? | Nhánh, commit, kiểm tra trước Pull Request, phát hành | Đổi quy trình |
 | [SECURITY.md](SECURITY.md) | Báo lỗ hổng ở đâu? | Cách báo lỗ hổng, phạm vi | Đổi chính sách |
 | [CHANGELOG.md](CHANGELOG.md) | Đã thay đổi gì? | Lịch sử thay đổi theo phiên bản | Mỗi thay đổi người dùng nhận thấy |
