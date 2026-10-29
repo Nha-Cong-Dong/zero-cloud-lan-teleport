@@ -24,6 +24,7 @@ Mọi tài liệu của dự án nằm trong thư mục này (trừ `.claude/CLA
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Làm việc với repo thế nào? | Nhánh, commit, kiểm tra trước Pull Request, phát hành | Đổi quy trình |
 | [SECURITY.md](SECURITY.md) | Báo lỗ hổng ở đâu? | Cách báo lỗ hổng, phạm vi | Đổi chính sách |
 | [CHANGELOG.md](CHANGELOG.md) | Đã thay đổi gì? | Lịch sử thay đổi theo phiên bản | Mỗi thay đổi người dùng nhận thấy |
+| [hieu_du_an.md](hieu_du_an.md) | Dự án chạy thế nào, nói bằng lời đơn giản? | Không là nguồn của thông tin nào: ghi chú dễ hiểu về ghép đôi và gửi file qua một ví dụ; khi lệch thì `protocol.md` và `architecture.md` đúng | Đổi luồng ghép đôi hay gửi file |
 | [.claude/CLAUDE.md](../.claude/CLAUDE.md) | Claude Code làm việc với repo thế nào? | Luật, lệnh và bẫy dành cho Claude Code; đội subagent và quy trình chạy chúng (luật nền chỉ nhắc lại một câu kèm tham chiếu; không chép con số hay chi tiết thiết kế) | Đổi quy trình, thêm một bẫy |
 
 ## 2. Quy tắc đồng bộ
