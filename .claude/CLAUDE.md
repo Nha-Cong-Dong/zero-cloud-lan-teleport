@@ -50,8 +50,8 @@ CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the a
 ## Architecture rules
 
 - Layers are `core ← trust ← net ← app ← ui / cli`, plus the shared utilities `paths`, `lock`, `atomic`. The rules (imports only go down, `core` is sans-IO, every top-level package is registered) are in `architecture.md` §1 and enforced by `tests/test_architecture.py`.
-- Hard logic is a sans-IO state machine in `core`: events plus a monotonic `now` in, actions out (pairing, links, admission, discovery, transfer, and the coming resume state). `net` and `app` only execute the actions. Transfer logic never goes in `net`.
-- `app` is the only orchestration layer. It returns outcome codes; user-facing wording lives in `cli.py` and `ui/texts.py`.
+- Hard logic is a sans-IO state machine in `core`: events plus a monotonic `now` in, actions out (pairing, links, admission, discovery, transfer, resume state). `net` and `app` only execute the actions. Transfer logic never goes in `net`.
+- `app` is the only orchestration layer. It returns outcome codes; user-facing wording lives in `cli.py` and the `ui` layer (shared strings in `ui/texts.py`, screen-specific ones in that screen's module).
 - Create a module only when there is real code for it; no empty placeholder files.
 - All peer input is untrusted. `core/messages.py` is the single place for checks that one message alone can show; checks against the `offer` or the transfer state belong to the transfer state machine (`protocol.md` §3.3). Received file names always go through `core/filenames.py`, and a received file never overwrites an existing one (`protocol.md` §4.4).
 

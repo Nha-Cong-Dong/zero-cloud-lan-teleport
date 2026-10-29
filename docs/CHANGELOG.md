@@ -88,6 +88,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lịch sử 100 lượt truyền gần nhất (cả gửi lẫn nhận), lưu trong `history.json` ở thư mục cấu hình và xóa được; giao diện sẽ hiện ở bản sau. File chỉ chứa metadata: tối đa 10 tên file đầu, kích thước, kết quả, giờ kết thúc, tên máy kia và đường dẫn đã lưu ở máy nhận, không bao giờ có nội dung file. File hỏng thì lịch sử bắt đầu lại từ rỗng.
 
 ### Changed
+- README có mục “Hướng dẫn sử dụng”: lấy bản zip giao diện, ghép đôi, gửi/nhận trên giao diện và bằng dòng lệnh; bảng Lộ trình và khung trạng thái khớp `docs/ke_hoach.md` mục 5.1.
 - CLI: câu báo khi thư mục tạm của lượt đã có sẵn mà Teleport không dùng tiếp được không còn đổ cho việc Teleport bị tắt đột ngột (lượt như vậy nay được khôi phục); tên máy do máy kia tự đặt được làm sạch giống nhau ở mọi câu (ký tự định dạng ẩn không còn in thẳng).
 - `docs/mvp.md` (F6, F12, mục 7.3, 8), README và `docs/architecture.md` mục 2 tả hành vi mới: Ctrl+C `receive` tạm dừng chứ không hủy, chạy lại thì nhận tiếp; lượt dở quá hạn bị xóa ở lần chạy `receive` kế tiếp; giới hạn của CLI (`--dir` khác thì không thấy lượt dở, chưa có lệnh hủy lượt nhận dở).
 - Thư mục tạm của một lượt (`.teleport/<transfer_id>/`) còn sót mà rỗng, hoặc chỉ có file `.tmp` sót lại từ một lần ghi dở của Teleport, được dùng lại thay vì báo lỗi.

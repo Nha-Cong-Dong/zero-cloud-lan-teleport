@@ -213,7 +213,7 @@ teleport/                      # ← gốc repo
   .github/workflows/           # ci.yml; build-cli.yml, build-gui.yml (build thử bản CLI, bản GUI, chạy tay)
   docs/                        # mọi tài liệu .md: README (mục lục, thuật ngữ), y_tuong, mvp, ke_hoach,
                                #   architecture, protocol, CONTRIBUTING, SECURITY, CHANGELOG,
-                               #   benchmark, (sau này) hướng dẫn người dùng
+                               #   benchmark, hieu_du_an, (sau này) hướng dẫn người dùng
   src/teleport/                # core/ trust/ net/ app/ ui/ + tiện ích dùng chung và cli.py
   tests/                       # core/, trust/, net/, app/, … theo tầng
   packaging/pyinstaller/       # cấu hình build PyInstaller (cách build: docs/CONTRIBUTING.md)
@@ -373,7 +373,7 @@ Bản chính thức: [CONTRIBUTING.md](CONTRIBUTING.md). Tóm tắt:
 - **Commit:** theo [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `chore:`), giúp viết `CHANGELOG.md` dễ dàng.
 - **CI** (`.github/workflows/ci.yml`): các bước kiểm tra và ma trận hệ điều hành × Python ở [CONTRIBUTING.md](CONTRIBUTING.md). `mypy` có từ đầu Giai đoạn 2 (cấu hình trong `pyproject.toml`).
 - **Đội subagent** trong `.claude/agents/`: vai trò và quy trình ở `.claude/CLAUDE.md`. Chỉ commit và push khi người dùng đồng ý.
-- **Phát hành:** các bước, cách đánh số và cách phát hành bản thử nghiệm ở [CONTRIBUTING.md](CONTRIBUTING.md). Build bộ cài tự động khi gắn tag và GitHub Release là việc của Giai đoạn 6; hiện chỉ có build thử bản CLI, chạy tay (`workflow_dispatch`).
+- **Phát hành:** các bước, cách đánh số và cách phát hành bản thử nghiệm ở [CONTRIBUTING.md](CONTRIBUTING.md). Build bộ cài tự động khi gắn tag và GitHub Release là việc của Giai đoạn 6; hiện chỉ có build thử bản CLI và bản GUI (zip), chạy tay (`workflow_dispatch`).
 - **Theo dõi công việc:** GitHub Issues + Milestones tương ứng từng bản phát hành ở mục 5.1.
 
 ---
