@@ -2,7 +2,7 @@
 
 ## Phiên bản được hỗ trợ
 
-Trước `v1.0.0`, các bản thử nghiệm (bản đầu tiên là `v0.1.0-alpha`) chỉ để dùng thử và không được vá riêng: lỗ hổng được sửa trong bản phát hành kế tiếp, nên hãy luôn dùng bản mới nhất. Từ `v1.0.0`, bản vá bảo mật được áp dụng cho phiên bản phụ (minor) mới nhất.
+Trước `v1.0.0`, các bản thử nghiệm chỉ để dùng thử và không được vá riêng: lỗ hổng được sửa trong bản phát hành kế tiếp, nên hãy luôn dùng bản mới nhất. Từ `v1.0.0`, bản vá bảo mật được áp dụng cho phiên bản phụ (minor) mới nhất.
 
 ## Báo cáo lỗ hổng
 

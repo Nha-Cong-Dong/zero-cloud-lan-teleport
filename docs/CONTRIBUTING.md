@@ -99,7 +99,7 @@ Bản thử nghiệm (alpha, beta) ghi số ở hai dạng, và đây là nơi d
 - `__version__` theo PEP 440, dạng mà công cụ đóng gói Python tự chuẩn hóa về: `0.1.0a0` (beta: `0.3.0b0`). `teleport --version` và tên artifact build thử hiện dạng này.
 - `__version__` có thể đã mang số của bản sắp gắn tag; bản build thử từ `main` khi chưa có tag cũng hiện số đó, phân biệt bằng `<sha7>`.
 
-Bản thử nghiệm trước `v1.0.0` chỉ gắn tag, không tạo GitHub Release. Bản build thử là artifact của workflow `build-cli` chạy tay trên tag hay `main` (mục “Build thử bản CLI”), và tự xóa sau thời hạn của workflow. Bộ cài build tự động khi gắn tag và GitHub Release có từ Giai đoạn 6 ([ke_hoach.md](ke_hoach.md) mục 5.2).
+Bản thử nghiệm trước `v1.0.0` chỉ gắn tag, không tạo GitHub Release. Bản build thử là artifact của workflow `build-cli` hay `build-gui` chạy tay trên tag hay `main` (mục “Build thử bản CLI”, “Build thử bản GUI”), và tự xóa sau thời hạn của workflow. Bộ cài build tự động khi gắn tag và GitHub Release có từ Giai đoạn 6 ([ke_hoach.md](ke_hoach.md) mục 5.2).
 
 ## Thay đổi giao thức
 Mọi thay đổi định dạng trên dây phải cập nhật [protocol.md](protocol.md) trong cùng Pull Request. Thay đổi không tương thích thì tăng số phiên bản giao thức.

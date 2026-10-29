@@ -303,7 +303,8 @@ Tên máy kia do chính máy đó tự đặt và chưa được xác thực ([p
 - Cảnh báo nhiều mã (mục 8), nếu có, nằm ngay dưới mã.
 - Tên máy kia nằm sau mã, luôn trong ngoặc “…”, kèm mã máy (8 ký tự đầu của `device_id`) và địa chỉ:
   - dài quá **32 cột** thì bị cắt và thêm `…`, tổng vẫn ≤ 32 cột; chữ rộng (CJK, phần lớn emoji) tính 2 cột, dấu kết hợp và ZWJ (U+200D) tính 0 cột, ký tự khác 1 cột;
-  - ký tự trông như khoảng trắng mà không phải dấu cách thường U+0020 được hiện thành `·`: các khoảng trắng Unicode khác (U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000) và các ký tự trống U+2800, U+3164, U+115F, U+1160, U+FFA0.
+  - ký tự trông như khoảng trắng mà không phải dấu cách thường U+0020 được hiện thành `·`: các khoảng trắng Unicode khác (U+00A0, U+1680, U+2000–U+200A, U+202F, U+205F, U+3000) và các ký tự trống U+2800, U+3164, U+115F, U+1160, U+FFA0;
+  - ký tự vô hình và ký tự đổi hướng chữ cũng hiện thành `·`: mọi ký tự định dạng (loại Cf, ví dụ RLO U+202E, LRI U+2066, PDI U+2069, LRM U+200E, RLM U+200F, U+200B), trừ ZWJ (U+200D) và ZWNJ (U+200C) mà emoji ghép và chữ Ba Tư cần, cùng U+2028, U+2029. Nhờ vậy câu đứng sau tên không bị đảo hướng hiển thị.
 - Máy kia đã ghép đôi với máy này (F3, ghép đôi lại) thì hiện thêm tên đã lưu, theo cùng cách hiện tên ở trên; tên đã lưu khác tên máy kia tự xưng thì hiện thêm tên mới mà máy này sẽ lưu khi ghép đôi xong.
 
 Bản CLI, ví dụ ở `teleport listen` với đủ các dòng tùy chọn:
@@ -328,7 +329,7 @@ Trùng khớp? [c/k]:
 | 6 | Máy kia đã ghép đôi và tên đã lưu khác tên máy kia tự xưng | `Ghép đôi xong, tên sẽ đổi thành “<tên>”.` |
 | 7 | Luôn có | `Trùng khớp? [c/k]: ` |
 
-- `<tên>` và `<tên đã lưu>` hiện theo cách ở trên (≤ 32 cột, ký tự trống thành `·`); `<mã máy>` là 8 ký tự đầu của `device_id`.
+- `<tên>` và `<tên đã lưu>` hiện theo cách ở trên; `<mã máy>` là 8 ký tự đầu của `device_id`.
 - Máy gửi yêu cầu là bên khởi xướng, máy nhận yêu cầu là bên trả lời ([protocol.md](protocol.md) mục 5.1). Thường `teleport pair` là bên khởi xướng; khi hai máy cùng ghép đôi với nhau thì một bên `teleport pair` chuyển sang vai trả lời ([protocol.md](protocol.md) mục 5.3). Vì vậy dòng 1 xét theo lệnh, còn dòng 3 xét theo vai.
 
 Bản giao diện dùng cùng các dòng, khác ở chỗ:
@@ -353,6 +354,13 @@ Bản giao diện dùng cùng các dòng, khác ở chỗ:
 ```
 
 Tên file do máy gửi đặt (đã làm sạch, [ke_hoach.md](ke_hoach.md) mục 3.3) hiện như tên máy ở mục 7.2 (ký tự trông như khoảng trắng, ký tự vô hình và ký tự đổi hướng chữ thành `·`, chữ rộng 2 cột, dấu kết hợp và ZWJ 0 cột) nhưng tối đa **48 cột**, và dài hơn thì **cắt ở giữa, giữ đuôi** (`ten-rat-dai…cuoi.mp4`), để phần mở rộng vẫn còn thấy. Tên máy gửi theo mục 7.2. Máy gửi không có tên (không còn trong thiết bị tin cậy) thì hiện 8 ký tự đầu của mã máy.
+
+Bản giao diện của MVP hackathon (mục 4.1): dòng đầu là ““*Laptop-Minh*” muốn gửi *3* file (*8,4 GB*) tới máy này.” (chữ lớn, đậm), rồi các dòng file như bản CLI dưới đây, “Lưu vào: …” và hai nút. Nút “Đổi…” và ô “Luôn nhận từ thiết bị này” (F4) để sau hackathon. Mỗi lượt một hộp, không chặn cửa sổ chính; Enter, Esc và nút đóng hộp đều là **Từ chối**; máy gửi hủy khi hộp còn mở thì hộp tự đóng.
+
+Danh sách lượt truyền của giao diện (khung bên phải ở mục 7.1) có một thẻ cho mỗi lượt trong lần mở app này:
+- Dòng 1: “*video.mp4* (*8,0 GB*) · tới *PC-Nha*” (bên nhận “· từ *Laptop-Minh*”; nhiều file: “*3* file (*8,4 GB*)”) và nút “Hủy”; bên nhận xong thì nút “Mở thư mục”.
+- Dòng 2: thanh tiến độ.
+- Dòng 3: nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang kiểm tra”, “Đang nối lại…”, “Xong ✓”, “Đã từ chối”, “Đã hủy”, “Lỗi”) và một dòng phụ: khi đang truyền “*45,0*% · *120 MB/s* · còn *2 phút*” (chưa đo được tốc độ thì thay “còn …” bằng “đang tính thời gian còn lại”); khi chờ thì câu chờ như bản CLI ở bảng dưới (máy nhận: “Đang chờ bạn trả lời” hoặc “Đang xếp hàng”); khi xong “Đã kiểm tra toàn vẹn”; khi dừng vì lỗi thì câu của mục 8.
 
 Bản CLI (`teleport receive`), mỗi lần một lời hỏi; lượt tới sau xếp hàng tới khi lời hỏi trước được trả lời. Tối đa 10 dòng file, còn lại gộp thành một dòng; cột dung lượng thẳng hàng:
 ```
@@ -471,7 +479,17 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Ổ đĩa báo lỗi khi kiểm file chọn gửi | “Không đọc được *video.mp4*: ổ đĩa báo lỗi.” | Lượt gửi không bắt đầu |
 | Chọn quá số file một lượt | “Mỗi lần gửi được tối đa *1000* file.” | Lượt gửi không bắt đầu |
 | Giao diện: đóng cửa sổ khi app chạy được ở khay hệ thống (lần đầu trong mỗi lần mở app) | Bóng thoại ở khay: “Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn.” | — |
-| Giao diện (tạm, tới khi có hộp thoại ở mục 7.3): có file gửi tới | ““*Laptop-Minh*” muốn gửi *3* file (*8,4 GB*) tới máy này.”, rồi tên tối đa 5 file (mục 7.3), còn lại gộp thành “và *k* file khác” | Nút “Nhận”, “Từ chối” |
+| Giao diện: có file gửi tới | Hộp hỏi ở mục 7.3; bóng thoại ở khay: “Có file đang chờ bạn nhận.” | Nút “Nhận”, “Từ chối” trong hộp hỏi |
+| Giao diện: nhận xong một lượt | Bóng thoại ở khay: “Đã nhận *3* file từ *Laptop-Minh*.” (một file: “Đã nhận *video.mp4* từ *Laptop-Minh*.”, với tên file đã lưu trên máy này, ví dụ *video (1).mp4* khi thư mục nhận đã có file cùng tên) | Nút “Mở thư mục” trên thẻ của lượt |
+| Giao diện: chưa có lượt truyền nào trong lần mở app này | “Kéo file vào một thiết bị để gửi” (ở khung lượt truyền) | — |
+| Giao diện: thả file vào chỗ không có thiết bị trên radar | “Thả file lên một thiết bị để gửi.” | — |
+| Giao diện: gửi tới thiết bị chưa ghép đôi | Mở luồng ghép đôi (mục 7.2); ghép xong thì tự gửi | — |
+| Giao diện: gửi tiếp khi đang chờ ghép đôi để gửi một lượt khác | “Đang chờ ghép đôi với *PC-Nha* để gửi file. Hãy chờ xong rồi gửi tiếp.” (*PC-Nha* là máy đang chờ ghép đôi, không phải máy vừa được chọn gửi) | Chờ lần ghép đôi đang chạy xong rồi gửi lại |
+| Giao diện: gửi tới thiết bị mà lần kết nối gần nhất bị chặn | Câu của dòng “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức” | Lượt gửi không bắt đầu. Kèm nút trên dải thông báo: bị từ chối → “Ghép đôi lại”; danh tính thay đổi → “Hủy ghép đôi” (hỏi xác nhận kèm cảnh báo); khác phiên bản → không có nút |
+| Giao diện: gửi tới thiết bị đã ghép đôi nhưng chưa kết nối | Trạng thái “Đang chờ kết nối tới *PC-Nha*…” (không phải lỗi) | Tự xử lý |
+| Giao diện: gửi tới thiết bị không (còn) ghép đôi | “Chưa ghép đôi với *PC-Nha* nên chưa gửi được. Hãy ghép đôi rồi gửi lại.” | Lượt gửi không bắt đầu |
+| Giao diện: không gửi được vì lỗi khác lúc bắt đầu lượt | “Không gửi được file tới *PC-Nha*. Hãy thử lại.” | Lượt gửi không bắt đầu |
+| Giao diện: lượt nhận dở được khôi phục khi mở lại app | Trạng thái “Đang chờ *Laptop-Minh* nối lại…” | Tự xử lý |
 | Giao diện: khởi động khi một lệnh CLI đang chạy cùng thư mục cấu hình | “Teleport đang chạy ở nơi khác với thư mục cấu hình này (ví dụ lệnh “teleport receive” trong cửa sổ dòng lệnh).” kèm dòng “Hãy dừng nó rồi bấm Thử lại.” | Nút “Thử lại” |
 | Giao diện: mở app khi một bản Teleport khác cùng thư mục cấu hình đang tắt hoặc không phản hồi | “Teleport đang tắt hoặc chưa phản hồi.” kèm dòng “Hãy thử lại sau giây lát.” | Nút “OK” |
 | Giao diện: không dùng được thư mục cấu hình khi khởi động | “Không dùng được thư mục cấu hình *D:\X* (*lỗi*).” kèm dòng “Hãy kiểm tra quyền ghi vào thư mục đó rồi bấm Thử lại.” | Nút “Thử lại” |

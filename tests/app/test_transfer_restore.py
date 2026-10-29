@@ -445,13 +445,18 @@ async def test_several_running_from_one_sender_keep_latest_discard_others_and_ca
         except (FileNotFoundError, PermissionError, rs.StateError):
             return {}
 
-    await wait_until(
-        lambda: all(t in saved() and not saved()[t].unsent for t in others),
-        5,
-        "tombstones.json chưa ghi bia mộ expired đã gửi",
-    )
+    # Đọc file một lần mỗi lượt: trên Windows lần đọc thứ hai có thể rơi đúng lúc file đang được thay
+    # (PermissionError → {}), nên giữ lại bản đọc đạt điều kiện để kiểm tiếp.
+    snap: dict[str, rs.TombstoneRecord] = {}
+
+    def all_sent() -> bool:
+        nonlocal snap
+        snap = saved()
+        return all(t in snap and not snap[t].unsent for t in others)
+
+    await wait_until(all_sent, 5, "tombstones.json chưa ghi bia mộ expired đã gửi")
     for t in others:
-        e = saved()[t]
+        e = snap[t]
         assert (e.device_id, e.direction, e.reason) == (c_id, "receive", "expired")
 
 

@@ -16,10 +16,10 @@
 </div>
 
 > [!NOTE]
-> **Teleport đang được phát triển. Bản thử nghiệm đầu tiên sẽ là `v0.1.0-alpha` (chưa phát hành): chỉ có dòng lệnh, chưa có bộ cài.**
+> **Teleport đang được phát triển. Chưa có bản phát hành: bản thử nghiệm đầu tiên được gắn tag sau đợt đo trên thiết bị thật ([docs/ke_hoach.md](docs/ke_hoach.md) mục 5.4), chưa có bộ cài.**
 > - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khám phá thiết bị qua mDNS, ghép đôi qua mạng bằng mã 6 số có nonce cam kết, tự giữ kết nối tới thiết bị đã ghép đôi, các lệnh `teleport identity` / `list` / `listen` / `pair` / `unpair`. Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi (`teleport send` / `receive`): hỏi trước khi nhận, kiểm tra toàn vẹn từng khối và cả file, không bao giờ ghi đè file sẵn có, mất kết nối thì tự nối lại (chờ tới 24 giờ), kể cả sau khi dừng hay tắt `teleport receive` rồi chạy lại, chỉ gửi phần còn thiếu. Số đo thực tế: [docs/benchmark.md](docs/benchmark.md).
-> - **Tiếp theo:** kiểm thử và đo phần nối lại trước bản `v0.2.0-alpha`; sau đó giao diện (`v0.3.0-beta`).
-> - **Chưa có:** clipboard, giao diện.
+> - **Đang làm:** giao diện tối thiểu cho Windows (radar, ghép đôi, kéo thả gửi file, hộp hỏi nhận, danh sách lượt truyền) và bản zip chạy không cần cài Python, cho buổi demo hackathon ([docs/mvp.md](docs/mvp.md) mục 4.1). Cách dùng: [Hướng dẫn sử dụng](#hướng-dẫn-sử-dụng).
+> - **Chưa có:** clipboard, màn hình cài đặt, English, bộ cài; giao diện trên macOS và Linux.
 > - **Chưa đo trên thiết bị thật:** số đo hiện có là trên một máy (loopback) và máy ảo; đo qua mạng thật giữa hai máy, với ổ đích chậm và trên các hệ điều hành khác sẽ làm một đợt sau, và các bản thử nghiệm được phát hành sau đợt đo đó ([docs/ke_hoach.md](docs/ke_hoach.md) mục 5.4).
 >
 > Các tính năng bên dưới là **mục tiêu của v1.0**. Tiến độ xem ở [Lộ trình](#lộ-trình); lịch sử thay đổi ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
@@ -30,6 +30,7 @@
 - [Nguyên tắc sản phẩm](#nguyên-tắc-sản-phẩm)
 - [Tính năng](#tính-năng)
 - [Trải nghiệm sử dụng](#trải-nghiệm-sử-dụng)
+- [Hướng dẫn sử dụng](#hướng-dẫn-sử-dụng)
 - [Cách hoạt động](#cách-hoạt-động)
 - [Bảo mật & quyền riêng tư](#bảo-mật--quyền-riêng-tư)
 - [Yêu cầu hệ thống & mạng](#yêu-cầu-hệ-thống--mạng)
@@ -95,6 +96,50 @@ Mọi quyết định đều dựa trên sáu nguyên tắc: **riêng tư tuyệ
 6. “Đã nhận video.mp4 ✔ đã kiểm tra toàn vẹn”  ──►  bấm để mở thư mục
 ```
 
+## Hướng dẫn sử dụng
+
+Hướng dẫn cho bản hiện tại: giao diện tối thiểu trên Windows và lệnh `teleport`. Cài cả hai máy, cho hai máy vào **cùng một mạng Wi-Fi/LAN**.
+
+### 1. Lấy Teleport
+
+Chưa có bộ cài và chưa có bản phát hành. Chọn một trong hai cách:
+
+- **Bản zip dùng thử (Windows, không cần Python):** vào tab [Actions → Build GUI (thử)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/build-gui.yml), mở lần chạy mới nhất, tải artifact `teleport-gui-…-windows` (cần đăng nhập GitHub), giải nén rồi chạy `Teleport.exe`. Bản này chưa ký mã nên Windows SmartScreen có thể chặn: bấm **More info → Run anyway**.
+- **Từ mã nguồn:** cài như [Dành cho nhà phát triển](#cài-đặt), rồi chạy `teleport-gui` (giao diện, hiện mới thử trên Windows) hoặc `teleport` (dòng lệnh, Windows / macOS / Linux).
+
+Lần đầu Teleport mở cổng mạng, tường lửa Windows hỏi quyền: cho phép trên mạng **Private**.
+
+### 2. Dùng giao diện
+
+1. **Mở lần đầu:** cửa sổ hiện tên máy này trong mạng. Bấm **Bắt đầu**. Tên này hiện với mọi máy trong cùng mạng.
+2. **Radar:** cột trái liệt kê các máy đang mở Teleport trong mạng, mỗi máy ghi *(đã ghép)* hoặc *(chưa ghép)*. Không thấy máy kia thì bấm **Nhập IP thủ công**, gõ IP của máy đó rồi bấm **Ghép đôi** (ví dụ `192.168.1.5`; xem IP bằng lệnh `ipconfig`).
+3. **Ghép đôi (một lần cho mỗi cặp máy):** nhấp đúp vào máy chưa ghép (hoặc chuột phải → **Ghép đôi…**). Hai máy cùng hiện một mã 6 số: so mã trên hai màn hình, trùng thì bấm **Trùng khớp** ở **cả hai** máy, khác thì bấm **Không trùng**. Kéo file thả vào máy chưa ghép cũng được: Teleport ghép đôi trước rồi mới gửi.
+4. **Gửi file:** kéo một hoặc nhiều file thả vào máy kia trên radar, hoặc chuột phải vào máy đó → **Gửi file…**. Chưa gửi được thư mục; hãy chọn từng file.
+5. **Nhận file:** máy nhận hiện hộp hỏi ai gửi, file gì, nặng bao nhiêu và lưu vào đâu. Bấm **Nhận** hoặc **Từ chối**. File nhận được lưu vào thư mục `Teleport` trong thư mục Tải về (Downloads), và không bao giờ ghi đè file có sẵn: trùng tên thì thành `ten (1).ext`.
+6. **Theo dõi:** cột phải là danh sách lượt truyền với tiến độ, tốc độ, thời gian còn lại và nút **Hủy**. Rớt Wi-Fi hay tắt app nhận giữa chừng thì lượt truyền hiện **Đang nối lại…** và tự chạy tiếp phần còn thiếu khi hai máy thấy lại nhau (mở lại Teleport trên máy nhận). Xong thì hiện **Đã kiểm tra toàn vẹn**; ở máy nhận có thêm nút **Mở thư mục**.
+7. **Chạy nền và thoát:** đóng cửa sổ thì Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Muốn tắt hẳn: chuột phải biểu tượng ở khay → **Thoát**. Nếu tắt hẳn máy **gửi** giữa chừng, lượt đó bị hủy và cần gửi lại.
+8. **Hủy ghép đôi:** chuột phải vào máy trên radar → **Hủy ghép đôi…**. Sau đó hai máy không gửi file cho nhau được nữa cho tới khi ghép đôi lại.
+
+Hai máy cùng Wi-Fi mà không thấy nhau hay không kết nối được: xem [Câu hỏi thường gặp](#câu-hỏi-thường-gặp).
+
+### 3. Dùng dòng lệnh
+
+Giao diện và dòng lệnh không chạy cùng lúc trên cùng một thư mục cấu hình: thoát Teleport ở khay trước khi dùng `teleport`.
+
+```powershell
+# Máy B: chờ ghép đôi (hiện mã 6 số, hỏi [c/k])
+teleport listen
+# Máy A: tìm máy B rồi ghép đôi (theo tên, tiền tố mã máy, hoặc IP)
+teleport list
+teleport pair PC-Nha
+# Máy B: chờ nhận file, hỏi [c/k] mỗi lượt
+teleport receive
+# Máy A: gửi file
+teleport send video.mp4 --to PC-Nha
+```
+
+Mọi lệnh và tùy chọn: bảng [Lệnh thường dùng](#lệnh-thường-dùng), hoặc `teleport --help`.
+
 ## Cách hoạt động
 
 ```
@@ -149,9 +194,9 @@ Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 |---|---|
 | — | ✅ Nền tảng: khung dự án, CI 3 hệ điều hành, danh tính thiết bị, TLS 1.3 + mTLS |
 | — | ✅ Khám phá thiết bị & ghép đôi: mDNS, ghép đôi qua mạng, tự giữ kết nối, lệnh `teleport list` / `listen` / `pair` / `unpair`; đạt mvp N1 (đo trên máy ảo bridged) |
-| `v0.1.0-alpha` | ⏳ Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi: lệnh `teleport send` / `receive` (code xong; phát hành sau đợt đo trên thiết bị thật) |
-| `v0.2.0-alpha` | Tự nối lại cả sau khi rớt mạng lâu, tắt app nhận hay khởi động lại máy nhận; chỉ gửi phần còn thiếu |
-| `v0.3.0-beta` | Giao diện radar, khay hệ thống, Tiếng Việt / English |
+| `v0.1.0-alpha` | ⏸ Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi: lệnh `teleport send` / `receive` (code xong; phát hành sau đợt đo trên thiết bị thật) |
+| `v0.2.0-alpha` | ⏳ Tự nối lại cả sau khi rớt mạng lâu, tắt app nhận hay khởi động lại máy nhận; chỉ gửi phần còn thiếu |
+| `v0.3.0-beta` | ⏳ Giao diện radar, khay hệ thống, Tiếng Việt / English (đang làm phần tối thiểu cho buổi demo hackathon) |
 | `v0.4.0-beta` | Đồng bộ clipboard |
 | `v1.0.0` | Bộ cài cho Windows, macOS, Linux; tài liệu người dùng |
 
@@ -193,6 +238,7 @@ Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope Curre
 | `teleport receive [--dir <thư mục>] [--yes]` | Chờ nhận file từ các máy đã ghép đôi, hỏi `[c/k]` mỗi lượt (`--yes`: tự nhận); mặc định lưu vào `Teleport` trong thư mục Tải về; Ctrl+C tạm dừng lượt đang nhận, chạy lại để nhận tiếp |
 | `teleport send <file...> --to <thiết bị> [--address ip[:cổng]] [--limit-rate 20M]` | Gửi file tới một máy đã ghép đôi (máy đó chạy `teleport receive`); Ctrl+C để hủy; mất kết nối thì tự nối lại, chờ tới 24 giờ |
 | `teleport --version` | Xem phiên bản |
+| `teleport-gui [--config-dir <thư mục>] [--background]` | Mở giao diện (hoặc `python -m teleport.ui`); mỗi thư mục cấu hình một bản, `--background` mở thẳng xuống khay |
 
 ### Chạy nhiều node trên một máy
 
@@ -228,10 +274,10 @@ Thư mục cấu hình mặc định: Windows `%APPDATA%\Teleport`, macOS `~/Lib
 ```
 src/teleport/
   core/  trust/  net/  app/  # các tầng đã có code
-  ui/                        # sẽ được thêm khi có code thật
+  ui/                        # giao diện PySide6 (lệnh `teleport-gui`)
   cli.py  __main__.py        # lệnh `teleport`
   paths.py  lock.py  atomic.py  # thư mục cấu hình, khóa file, ghi file nguyên tử
-tests/                       # chia theo tầng: core/, trust/, net/, app/ + test phân tầng;
+tests/                       # chia theo tầng: core/, trust/, net/, app/, ui/ + test phân tầng;
                              #   packaging/: test đóng gói (giấy phép, test khói bản build)
 docs/                      # toàn bộ tài liệu
 ```
@@ -250,6 +296,7 @@ Mục lục, thuật ngữ và quy tắc đồng bộ tài liệu: [docs/README.
 | [docs/architecture.md](docs/architecture.md) | Phân tầng, mô hình tiến trình, bản đồ module và trạng thái, dữ liệu trên đĩa |
 | [docs/protocol.md](docs/protocol.md) | Đặc tả giao thức trên dây (phiên bản 1) |
 | [docs/benchmark.md](docs/benchmark.md) | Số đo thực tế của các yêu cầu chất lượng |
+| [docs/hieu_du_an.md](docs/hieu_du_an.md) | Ghi chú dễ hiểu về ghép đôi và gửi file (không phải đặc tả) |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Nhánh, commit, kiểm tra trước Pull Request, phát hành |
 | [docs/SECURITY.md](docs/SECURITY.md) | Cách báo lỗ hổng bảo mật |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | Lịch sử thay đổi |

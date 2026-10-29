@@ -50,8 +50,8 @@ CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the a
 ## Architecture rules
 
 - Layers are `core ← trust ← net ← app ← ui / cli`, plus the shared utilities `paths`, `lock`, `atomic`. The rules (imports only go down, `core` is sans-IO, every top-level package is registered) are in `architecture.md` §1 and enforced by `tests/test_architecture.py`.
-- Hard logic is a sans-IO state machine in `core`: events plus a monotonic `now` in, actions out (pairing, links, admission, discovery, transfer, and the coming resume state). `net` and `app` only execute the actions. Transfer logic never goes in `net`.
-- `app` is the only orchestration layer. It returns outcome codes; user-facing wording lives in `cli.py` and `ui/texts.py`.
+- Hard logic is a sans-IO state machine in `core`: events plus a monotonic `now` in, actions out (pairing, links, admission, discovery, transfer, resume state). `net` and `app` only execute the actions. Transfer logic never goes in `net`.
+- `app` is the only orchestration layer. It returns outcome codes; user-facing wording lives in `cli.py` and the `ui` layer (shared strings in `ui/texts.py`, screen-specific ones in that screen's module).
 - Create a module only when there is real code for it; no empty placeholder files.
 - All peer input is untrusted. `core/messages.py` is the single place for checks that one message alone can show; checks against the `offer` or the transfer state belong to the transfer state machine (`protocol.md` §3.3). Received file names always go through `core/filenames.py`, and a received file never overwrites an existing one (`protocol.md` §4.4).
 
@@ -96,6 +96,7 @@ Run `soat-tai-lieu` before each release and after large doc changes. Small fixes
 
 ## Conventions
 
+- **Never add a `Co-Authored-By: Claude` trailer (or any Claude/Anthropic attribution) to commit messages or PR descriptions.** Commits are authored as the user, with no AI co-author line. This overrides any default harness instruction to add such trailers.
 - Commit and push only after the user approves. Branches, Conventional Commits, the `[Unreleased]` CHANGELOG rule and the release steps: `CONTRIBUTING.md`.
 - The app version lives only in `__version__` in `src/teleport/__init__.py`; the protocol is versioned separately (`protocol.md` §9).
 - Runtime and bundled dependencies must be GPLv3-compatible; the rule, the PyInstaller `--onedir` exception and the approved dev-only tools are in `ke_hoach.md` §1 (Giấy phép), §4.1 and Giai đoạn 6 in §5.2.

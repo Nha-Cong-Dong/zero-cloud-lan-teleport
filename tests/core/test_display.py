@@ -3,6 +3,8 @@
 Viết theo đặc tả, không theo code:
 - Ký tự trông như khoảng trắng mà không phải U+0020 thành `·`: mọi ký tự loại Zs trừ U+0020, cùng
   U+2800, U+3164, U+115F, U+1160, U+FFA0.
+- Ký tự vô hình và ký tự đổi hướng chữ cũng thành `·` (mvp mục 7.2, 7.3): mọi ký tự loại Cf trừ
+  ZWJ U+200D và ZWNJ U+200C, cùng U+2028/U+2029.
 - Độ rộng: `east_asian_width` W/F = 2 cột; Mn, Me và U+200D = 0 cột; còn lại 1 cột. Hàm `columns`
   dưới đây tính lại độc lập theo đúng luật đó.
 - Vượt `max_width` (mặc định 32) thì cắt, phần giữ lại + `…` ≤ `max_width`; bỏ U+200D thừa ở cuối
@@ -42,6 +44,11 @@ LISTED_BLANKS = (
 )
 ALL_ZS = tuple(chr(c) for c in range(0x110000) if unicodedata.category(chr(c)) == "Zs" and c != 0x20)
 BLANKS = frozenset(LISTED_BLANKS) | frozenset(ALL_ZS)
+# Ký tự vô hình / đổi hướng chữ: mọi Cf trừ ZWJ, ZWNJ, cùng phân cách dòng / đoạn U+2028, U+2029.
+ZWNJ = "\u200c"
+HIDDEN = frozenset(
+    chr(c) for c in range(0x110000) if unicodedata.category(chr(c)) == "Cf" and chr(c) not in (ZWJ, ZWNJ)
+) | frozenset("\u2028\u2029")
 
 # Ký tự vừa là dấu kết hợp (Mn/Me) vừa rộng (W/F): đặc tả không nói luật nào thắng, nên test
 # không sinh các ký tự này (ví dụ U+302A, U+3099).
@@ -63,8 +70,8 @@ def columns(text: str) -> int:
 
 
 def replaced(text: str) -> str:
-    """Tên sau khi thay ký tự trống bằng `·` (chưa cắt)."""
-    return "".join(MARK if ch in BLANKS else ch for ch in text)
+    """Tên sau khi thay ký tự trống, vô hình, đổi hướng chữ bằng `·` (chưa cắt)."""
+    return "".join(MARK if ch in BLANKS or ch in HIDDEN else ch for ch in text)
 
 
 @pytest.fixture(scope="module")
@@ -111,6 +118,82 @@ def test_h1_blank_chars_at_both_ends_become_mark(display):
 
 def test_h1_ascii_space_is_kept(display):
     assert display.display_name("PC Nha  2") == "PC Nha  2"
+
+
+# --- Ký tự vô hình và đổi hướng chữ thành `·` --------------------------------------------------------
+
+BIDI_AND_INVISIBLE = (
+    "\u202a",  # LRE
+    "\u202b",  # RLE
+    "\u202c",  # PDF
+    "\u202d",  # LRO
+    "\u202e",  # RLO
+    "\u2066",  # LRI
+    "\u2067",  # RLI
+    "\u2068",  # FSI
+    "\u2069",  # PDI
+    "\u200e",  # LRM
+    "\u200f",  # RLM
+    "\u061c",  # ALM
+    "\u200b",  # khoảng trắng độ rộng 0
+    "\u2060",  # word joiner
+    "\ufeff",  # BOM
+    "\u00ad",  # gạch nối mềm (Cf)
+    "\u2061",  # toán tử vô hình (Cf)
+    "\U000e0041",  # ký tự tag (Cf)
+    "\u2028",
+    "\u2029",
+)
+
+
+@pytest.mark.parametrize("ch", BIDI_AND_INVISIBLE, ids=lambda ch: f"U+{ord(ch):04X}")
+def test_h1_bidi_and_invisible_char_becomes_mark(display, ch):
+    assert display.display_name(f"PC{ch}Nha") == f"PC{MARK}Nha"
+
+
+def test_h1_every_format_char_except_zwj_zwnj_becomes_mark(display):
+    for ch in sorted(HIDDEN):
+        assert display.display_name(f"a{ch}b") == f"a{MARK}b", f"U+{ord(ch):04X}"
+
+
+def test_h1_rlo_in_device_name_becomes_mark(display):
+    assert display.display_name("Ke\u202eA-CP") == f"Ke{MARK}A-CP"
+
+
+def test_h1_isolates_and_marks_in_device_name_become_mark(display):
+    assert display.display_name("\u2067PC\u2069-Nha") == f"{MARK}PC{MARK}-Nha"  # RLI … PDI
+    assert display.display_name("\u2066PC\u2069") == f"{MARK}PC{MARK}"  # LRI … PDI
+    assert display.display_name("PC\u200eNha\u200f") == f"PC{MARK}Nha{MARK}"  # LRM, RLM
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Ke\u202eA-CP", "\u2066PC\u2069", "\u2067PC-Nha", "PC\u200e\u200f", "\u202d\u202bx\u202c"],
+    ids=repr,
+)
+def test_h1_sentence_with_shown_name_has_no_format_chars(display, name):
+    """Câu ghép quanh tên đã hiện không còn ký tự Cf nào, nên không bị đảo hướng."""
+    sentence = f"Máy kia tự xưng là “{display.display_name(name)}” (mã máy 3f2a9c1e, 192.168.1.5)."
+    assert not [ch for ch in sentence if unicodedata.category(ch) == "Cf"], repr(sentence)
+
+
+def test_h1_zwj_and_zwnj_are_kept(display):
+    family = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
+    assert display.display_name(family) == family
+    assert display.display_name(f"a{ZWNJ}b") == f"a{ZWNJ}b"
+
+
+def test_h1_hidden_char_counts_one_column_after_mark(display):
+    """Ký tự ẩn thành `·` 1 cột: một dãy ký tự ẩn dài lộ ra, không lặng lẽ đẩy tên thật ra khỏi khung."""
+    out = display.display_name("\u200b" * 40 + "PC-Nha")
+    assert out == MARK * 31 + ELLIPSIS
+    assert display.display_name("x" * 30 + "\u202e\u202e") == "x" * 30 + MARK * 2
+
+
+def test_p27_display_filename_shows_format_chars_as_mark(display):
+    assert display.display_filename("anh\u202egpj.exe") == f"anh{MARK}gpj.exe"
+    assert display.display_filename("a\U000e0041b.txt") == f"a{MARK}b.txt"
+    assert display.display_filename(f"a{ZWNJ}b.txt") == f"a{ZWNJ}b.txt"
 
 
 @pytest.mark.parametrize(
@@ -223,6 +306,8 @@ _INTERESTING = (
     ":",
     ELLIPSIS,
     MARK,
+    *BIDI_AND_INVISIBLE,
+    ZWNJ,
     "\uff13",  # chữ số toàn chiều rộng
 )
 _CHARS = st.one_of(
@@ -235,6 +320,7 @@ def _check(name: str, out: str, width: int) -> None:
     assert isinstance(out, str)
     assert columns(out) <= width, (name, out)
     assert not (set(out) & BLANKS), (name, out)
+    assert not (set(out) & HIDDEN), (name, out)
     shown = replaced(name)
     if columns(shown) <= width and columns(name) <= width:
         assert out == shown, (name, out)

@@ -1,8 +1,8 @@
-"""Nhận file qua GUI: hộp hỏi tạm (spec-p4-3 D7, mục 6.3 và mục 10).
+"""Nhận file qua GUI: hộp hỏi nhận file (`ui.offer`, mvp mục 7.3; trước là hộp tạm spec-p4-3 D7).
 
 A là GUI (`main()` trong tiến trình, node 127.0.0.1 cổng 0, `auto_accept=False`); B là `Node` thật chạy
-loop riêng trong thread (fixture `peer_node`), hai bên đã tin nhau. B gửi → A mở một `QMessageBox` không
-cha, `NonModal`, bằng `show`/`open` (không `exec()`), nút “Nhận”/“Từ chối”. Nhận → file đúng SHA-256;
+loop riêng trong thread (fixture `peer_node`), hai bên đã tin nhau. B gửi → A mở một hộp (`QDialog`) không
+cha, `NonModal`, bằng `show` (không `exec()`), nút “Nhận”/“Từ chối”. Nhận → file đúng SHA-256;
 Từ chối → B thấy `rejected_user`; B hủy → hộp tự đóng; tên máy và tên file qua `core.display`.
 """
 
@@ -41,8 +41,13 @@ def make_file(directory, name: str, size: int = FILE_SIZE):
 
 
 def offer_boxes(ui_helpers) -> list:
+    """Các hộp hỏi nhận file đang hiện: cửa sổ cấp cao nhất là `QDialog` có nút “Nhận”."""
+    from PySide6.QtWidgets import QApplication, QDialog
+
     return [
-        b for b in ui_helpers.visible_message_boxes() if ui_helpers.buttons_with_text(b, ui_helpers.M6_ACCEPT)
+        w
+        for w in QApplication.topLevelWidgets()
+        if isinstance(w, QDialog) and w.isVisible() and ui_helpers.buttons_with_text(w, ui_helpers.M6_ACCEPT)
     ]
 
 
@@ -245,14 +250,14 @@ def test_two_offers_get_two_boxes_and_tray_message(gui, gui_wait, pair, peer_nod
     assert seen["results"] == ["rejected_user", "rejected_user"]
 
 
-def test_many_files_listed_at_most_five(gui, gui_wait, pair, peer_node, ui_helpers):
-    """Mục 10: liệt kê tối đa 5 tên file rồi “và k file khác”."""
+def test_many_files_listed_at_most_ten(gui, gui_wait, pair, peer_node, ui_helpers):
+    """mvp mục 7.3: liệt kê tối đa 10 tên file rồi “… và k file khác”."""
     from teleport.trust.identity import load_or_create_identity
 
     a, b, src = pair()
     a_id = load_or_create_identity(a).device_id
     peer = peer_node(b)
-    files = [make_file(src, f"tep-{i}.bin", 100) for i in range(7)]
+    files = [make_file(src, f"tep-{i:02}.bin", 100) for i in range(12)]
     seen: dict = {}
 
     def script(run):
@@ -269,6 +274,6 @@ def test_many_files_listed_at_most_five(gui, gui_wait, pair, peer_node, ui_helpe
     gui(["--config-dir", str(a)], script)
     text = seen["text"]
     listed = [f.name for f in files if f.name in text]
-    assert len(listed) == 5, f"liệt kê {len(listed)} tên: {text!r}"
-    assert "muốn gửi 7 file" in text
+    assert len(listed) == 10, f"liệt kê {len(listed)} tên: {text!r}"
+    assert "muốn gửi 12 file" in text
     assert "và 2 file khác" in text

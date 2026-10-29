@@ -18,10 +18,10 @@ Ghi chú tôi viết để tự hiểu dự án bằng lời đơn giản. Bạn
   - **Bước 1:** máy A gọi máy B.
     - `Máy B: teleport listen` → máy B sẵn sàng nhận làm quen với 1 máy lạ.
     - `Máy A: teleport pair 192.168.1.5` → máy A gọi tới đúng địa chỉ của máy B.
-    - Cuộc gọi được mã hóa, nghĩa là máy C nào đó không nghe lén được.
+    - Cuộc gọi được mã hóa, nghĩa là máy C chỉ nghe trộm thì không đọc được; máy C chen vào giữa thì bị lộ ở bước so mã (bước 4).
     - Sau đó 2 máy giới thiệu bản thân, **tự xưng tên và mã máy**, nhưng **chưa chứng minh được**.
     - Máy **A đưa ra yêu cầu ghép đôi kèm căn cước (chứng chỉ)** của mình. Máy **B kiểm tra** căn cước có đúng mẫu không, có khớp với mã máy A vừa tự xưng không.
-  - **Bước 2:** mỗi máy tự tạo 1 số ngẫu nhiên và gửi cho máy kia theo kiểu "phong bì niêm phong".
+  - **Bước 2:** mỗi máy góp 1 số ngẫu nhiên; máy B gửi số của mình theo kiểu "phong bì niêm phong".
     - **Mã 6 số được tính từ chứng chỉ của 2 máy + 2 số ngẫu nhiên này.**
     - Mỗi máy góp một số ngẫu nhiên để tạo mã 6 số, và không máy nào được chọn số sau khi đã thấy số của máy kia. Nhờ số ngẫu nhiên mới mỗi lần, kẻ thứ 3 không thể tính trước trong 1 triệu khả năng để tìm ra mã trùng.
     - Cách làm:
