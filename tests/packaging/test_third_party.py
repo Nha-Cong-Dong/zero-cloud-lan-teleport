@@ -881,6 +881,15 @@ def test_cli_notices_have_no_qt_section() -> None:
     assert tp.MSVC_RUNTIME_NOTE not in notices
 
 
+@pytest.fixture
+def build_tools_versions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`build_source` ghi phiên bản PyInstaller; CI chạy pytest không cài PyInstaller nên giả phiên bản."""
+    real = tp.md.version
+    fake = {"pyinstaller": "0.0.0-test", "pyinstaller-hooks-contrib": "0.0.0-test"}
+    monkeypatch.setattr(tp.md, "version", lambda name: fake.get(name) or real(name))
+
+
+@pytest.mark.usefixtures("build_tools_versions")
 def test_gui_source_has_qt_replacement_and_tarballs() -> None:
     pytest.importorskip("PySide6")
     text = tp.build_source(_gui_components(), repo_dir=_REPO, app_version="9.9.9", edition=tp.GUI_EDITION)
@@ -891,6 +900,7 @@ def test_gui_source_has_qt_replacement_and_tarballs() -> None:
     assert tp.PYSIDE_SOURCE_URL in text
 
 
+@pytest.mark.usefixtures("build_tools_versions")
 def test_cli_source_has_no_qt_paragraph() -> None:
     comps = {"ifaddr": _real("ifaddr", "ifaddr/__init__.py")}
     text = tp.build_source(comps, repo_dir=_REPO, app_version="9.9.9")
