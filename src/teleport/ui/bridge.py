@@ -7,12 +7,21 @@ Mô hình (docs/architecture.md mục 2): Qt ở thread chính; node chạy tron
 không bao giờ chạy lồng trong một lượt xử lý action list của `TransferEngine` (bẫy `_deferred`).
 Mọi phương thức công khai của `NodeHost` `assert` đang ở thread đã dựng nó (thread Qt).
 
-Chiều ngược lại: callback của node (`on_event`, `on_transfer_event`) chạy trên loop và chỉ
-chuyển sự kiện về thread Qt. Mọi thứ về thread Qt đi qua một signal nội bộ nối kiểu
-`QueuedConnection` tới slot của chính `NodeHost` (sống ở thread Qt), rồi slot đó mới phát các
-signal công khai. Nhờ vậy mọi slot, kể cả hàm thường hay lambda, chạy trên thread Qt.
+Chiều ngược lại: callback của node (`on_event`, `on_transfer_event`, `on_pairing_prompt`,
+`on_pairing_finished`) chạy trên loop, chỉ chuyển sự kiện về thread Qt và không bao giờ raise:
+`on_pairing_prompt` raise thì lõi hủy phiên (`PROMPT_FAILED`), nên hộp hiện mã được mở sau đó trên
+thread Qt và lỗi hiển thị (nếu có) nằm lại ở `ui`, không bay về phiên. Mọi thứ về thread Qt
+đi qua một signal nội bộ nối kiểu `QueuedConnection` tới slot của chính `NodeHost` (sống ở
+thread Qt), rồi slot đó mới phát các signal công khai. Nhờ vậy mọi slot, kể cả hàm thường hay
+lambda, chạy trên thread Qt.
 
-Vòng đời trong thread node: dựng `Node` (không ghép đôi, hỏi người dùng từng `offer`), `start()`,
+`submit` trả về một `SubmitJob`: `cancel()` (thread Qt) hủy task trên loop qua
+`call_soon_threadsafe`; gọi khi task chưa kịp tạo thì `fn` không chạy, gọi sau khi xong hay khi node
+đã dừng thì không làm gì. Bị hủy → `on_done(CancelledError())`. `done` (đọc trên thread Qt) thành
+True khi `on_done` đã chạy, kể cả khi `submit` báo lỗi ngay vì node chưa chạy.
+
+Vòng đời trong thread node: dựng `Node` (nhận yêu cầu ghép đôi: `accept_pairing=True`, mvp F3;
+hỏi người dùng từng `offer`), `start()`,
 phát `started` hoặc `start_failed(mã, chi tiết)`, chờ lệnh dừng, rồi đóng như `cli._close_node`:
 `close()` chạy trong task riêng, không bị hủy trước hạn `app.node.close_time_limit()` (zeroconf
 dừng giữa chừng nếu task bị hủy sớm), quá hạn mới hủy. Hạn được đọc qua thuộc tính module
@@ -45,6 +54,7 @@ from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from teleport.app import node as app_node
 from teleport.app.node import ConfigDirError, MdnsOptions, Node, NodeEvent, ReceiveDirUnavailable
+from teleport.app.pairing import PairingFinished, PairingPrompt
 from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLockedError
 from teleport.trust.identity import IdentityError
@@ -127,12 +137,78 @@ class _State(enum.Enum):
     STOPPED = enum.auto()
 
 
+class SubmitJob:
+    """Một việc của `NodeHost.submit`: hủy được từ thread Qt, biết `on_done` đã chạy chưa.
+
+    `_cancel_requested` và `_task` dùng chung giữa hai thread, đọc/ghi khi giữ `_guard`;
+    `_done` chỉ thread Qt.
+    """
+
+    def __init__(self, host: NodeHost) -> None:
+        self._host = host
+        self._done = False
+        self._guard = threading.Lock()
+        self._cancel_requested = False
+        self._task: asyncio.Future[Any] | None = None
+
+    @property
+    def done(self) -> bool:
+        """`on_done` đã được gọi (đọc trên thread Qt)."""
+        self._host._check_thread()
+        return self._done
+
+    def cancel(self) -> None:
+        """Hủy việc (thread Qt). Đã xong, node đã dừng hay gọi lần nữa: không làm gì, không lỗi."""
+        self._host._check_thread()
+        if self._done:
+            return
+        with self._guard:
+            if self._cancel_requested:
+                return
+            self._cancel_requested = True
+        loop = self._host._current_loop()
+        if loop is None:
+            return  # node đã dừng hay đang dừng: task (nếu có) bị hủy cùng node
+        with contextlib.suppress(RuntimeError):  # loop vừa đóng
+            loop.call_soon_threadsafe(self._cancel_on_loop)
+
+    # ---- Nội bộ --------------------------------------------------------------------------
+
+    def _cancel_on_loop(self) -> None:
+        """Thread node: hủy task nếu còn chạy."""
+        with self._guard:
+            task = self._task
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _cancel_pending(self) -> bool:
+        with self._guard:
+            return self._cancel_requested
+
+    def _attach(self, task: asyncio.Future[Any]) -> bool:
+        """Thread node: gắn task; False nếu lệnh hủy đã tới trước (bên gọi tự hủy task)."""
+        with self._guard:
+            if self._cancel_requested:
+                return False
+            self._task = task
+            return True
+
+    def _deliver(self, on_done: Callable[[Any], None] | None, result: Any) -> None:
+        """Thread Qt: đánh dấu xong rồi gọi `on_done`."""
+        self._done = True
+        with self._guard:
+            self._task = None
+        if on_done is not None:
+            on_done(result)
+
+
 class NodeHost(QObject):
     """Giữ một `Node` trong thread riêng; dùng một lần: `start()`, rồi `stop()`.
 
     Signal (luôn phát trên thread Qt): `started`; `start_failed(mã StartError, chi tiết)`;
-    `node_event(NodeEvent)`; `transfer_event(TransferUpdate)`; `stopped` (thread node đã xong
-    việc, `join` sẽ trả True ngay). `call` / `submit` khi node chưa chạy hoặc đang đóng thì báo
+    `node_event(NodeEvent)`; `transfer_event(TransferUpdate)`; `pairing_prompt(PairingPrompt)`;
+    `pairing_finished(PairingFinished)`; `stopped` (thread node đã xong việc, `join` sẽ trả True
+    ngay). `call` / `submit` khi node chưa chạy hoặc đang đóng thì báo
     `on_done(RuntimeError)`. `on_done` luôn được gọi trên thread Qt, sau khi hàm gọi đã trả về.
     """
 
@@ -140,6 +216,8 @@ class NodeHost(QObject):
     start_failed = Signal(str, str)
     node_event = Signal(object)
     transfer_event = Signal(object)
+    pairing_prompt = Signal(object)  # PairingPrompt
+    pairing_finished = Signal(object)  # PairingFinished
     stopped = Signal()
 
     _relay = Signal(object)  # hàm không tham số, chạy trên thread Qt
@@ -209,10 +287,16 @@ class NodeHost(QObject):
         self,
         fn: Callable[[Node], Awaitable[R]],
         on_done: Callable[[R | BaseException], None] | None = None,
-    ) -> None:
-        """Chạy coroutine `fn(node)` thành task trên loop của node; bị hủy khi node dừng."""
+    ) -> SubmitJob:
+        """Chạy coroutine `fn(node)` thành task trên loop của node; bị hủy khi node dừng.
+
+        Trả `SubmitJob` để hủy việc (`cancel()`) hay hỏi `on_done` đã chạy chưa (`done`).
+        """
         self._check_thread()
-        self._dispatch(self._run_submit, fn, on_done)
+        job = SubmitJob(self)
+        deliver = functools.partial(job._deliver, on_done)
+        self._dispatch(functools.partial(self._run_submit, job=job), fn, deliver)
+        return job
 
     def stop(self) -> None:
         """Yêu cầu dừng, không chặn; gọi nhiều lần không sao. Trước `start()` → phát `stopped` ngay."""
@@ -259,6 +343,13 @@ class NodeHost(QObject):
             loop.call_soon_threadsafe(runner, fn, on_done)
         except RuntimeError as e:  # loop vừa đóng
             self._report(on_done, e)
+
+    def _current_loop(self) -> asyncio.AbstractEventLoop | None:
+        """Thread Qt: loop của node khi node đang chạy (chưa có lệnh dừng), không thì None."""
+        if self._state is not _State.RUNNING:
+            return None
+        with self._guard:
+            return self._loop
 
     def _report(self, on_done: Callable[[Any], None] | None, result: Any) -> None:
         if on_done is not None:
@@ -322,7 +413,9 @@ class NodeHost(QObject):
                 host=opts.host,
                 port=opts.port,
                 mdns=opts.mdns,
-                accept_pairing=False,
+                accept_pairing=True,
+                on_pairing_prompt=self._pairing_prompt_callback,
+                on_pairing_finished=self._pairing_finished_callback,
                 auto_connect=True,
                 on_event=self._node_callback,
                 receive_dir=opts.receive_dir,
@@ -400,28 +493,52 @@ class NodeHost(QObject):
         self._report(on_done, result)
 
     def _run_submit(
-        self, fn: Callable[[Node], Awaitable[Any]], on_done: Callable[[Any], None] | None
+        self,
+        fn: Callable[[Node], Awaitable[Any]],
+        on_done: Callable[[Any], None] | None,
+        *,
+        job: SubmitJob,
     ) -> None:
         node = self._node
         if not self._serving or node is None:
             self._report(on_done, RuntimeError("node chưa chạy hoặc đang đóng"))
             return
+        if job._cancel_pending():  # bị hủy trước khi task kịp tạo: không chạy `fn`
+            self._report(on_done, asyncio.CancelledError())
+            return
         try:
-            job = asyncio.ensure_future(fn(node))
+            task = asyncio.ensure_future(fn(node))
         except Exception as e:
             self._report(on_done, e)
             return
-        self._jobs.add(job)
+        if not job._attach(task):  # lệnh hủy tới giữa hai bước trên
+            task.cancel()
+        self._jobs.add(task)
 
-        def finished(job: asyncio.Future[Any]) -> None:
-            self._jobs.discard(job)
-            result: Any = asyncio.CancelledError() if job.cancelled() else (job.exception() or job.result())
+        def finished(task: asyncio.Future[Any]) -> None:
+            self._jobs.discard(task)
+            result: Any = (
+                asyncio.CancelledError() if task.cancelled() else (task.exception() or task.result())
+            )
             self._report(on_done, result)
 
-        job.add_done_callback(finished)
+        task.add_done_callback(finished)
 
     def _node_callback(self, event: NodeEvent) -> None:
         self._post(functools.partial(self.node_event.emit, event))
 
     def _transfer_callback(self, update: TransferUpdate) -> None:
         self._post(functools.partial(self.transfer_event.emit, update))
+
+    def _pairing_prompt_callback(self, prompt: PairingPrompt) -> None:
+        """`on_prompt` của lõi: chỉ chuyển về thread Qt, không raise (raise → PROMPT_FAILED)."""
+        try:
+            self._post(functools.partial(self.pairing_prompt.emit, prompt))
+        except Exception:
+            log.exception("không chuyển được lời hỏi ghép đôi về thread Qt")
+
+    def _pairing_finished_callback(self, result: PairingFinished) -> None:
+        try:
+            self._post(functools.partial(self.pairing_finished.emit, result))
+        except Exception:
+            log.exception("không chuyển được kết quả ghép đôi về thread Qt")

@@ -13,6 +13,11 @@ log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node 
 `Node.devices()` qua `NodeHost.call` rồi `model.reset`. Sự kiện và kết quả của host cũ bị bỏ; dựng
 host mới (“Thử lại”) thì `model.clear()` trước.
 
+**Ghép đôi** (`ui.pairing.PairingController`): radar `pair_requested` → `pair_device`,
+`manual_address_entered` → `pair_address`, `unpair_requested` → hộp xác nhận hủy ghép đôi;
+`devices_changed` (đọc lại `devices()` sau ghép đôi / hủy ghép đôi) → `model.reset`. Mỗi host mới
+gọi `set_host` (đóng mọi hộp của host cũ); Thoát gọi `close_all`.
+
 **Log ra file** (spec hackathon Q7, mục 9.10): `<config_dir>/logs/teleport.log`, xoay khi đầy
 `LOG_MAX_BYTES`, giữ thêm `LOG_BACKUPS` bản cũ; mức WARNING như log ra stderr. Chỉ gắn **sau**
 `SingleInstance.acquire` thành công (chỉ một tiến trình ghi và xoay file), gỡ và đóng khi `main` trả
@@ -80,6 +85,7 @@ from teleport.ui import i18n, texts, theme
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError
 from teleport.ui.main_window import MainWindow, ViewState
 from teleport.ui.offer_prompt import OfferPrompts
+from teleport.ui.pairing import PairingController
 from teleport.ui.tray import Tray, make_icon
 
 EXIT_OK = 0
@@ -313,6 +319,12 @@ class GuiApp(QObject):
         self.window = MainWindow()
         self.tray = Tray(self)
         self.offers = OfferPrompts(parent=self)
+        self.pairing = PairingController(
+            self,
+            notify=lambda _title, text: self.tray.show_message(text),
+            window_visible=self.window.isVisible,
+            message_parent=lambda: self.window,
+        )
         self._quit_timer = QTimer(self)  # dự phòng: `quit()` dù node chưa báo `stopped`
         self._quit_timer.setSingleShot(True)
         self._quit_timer.timeout.connect(self._app.quit)
@@ -324,6 +336,11 @@ class GuiApp(QObject):
         self.tray.open_requested.connect(self.window.bring_to_front)
         self.tray.quit_requested.connect(self.request_quit)
         self.offers.decided.connect(self._decide)
+        radar = self.window.radar
+        radar.pair_requested.connect(self.pairing.pair_device)
+        radar.manual_address_entered.connect(self.pairing.pair_address)
+        radar.unpair_requested.connect(self._on_unpair_requested)
+        self.pairing.devices_changed.connect(self._on_devices_changed)
         if instance is not None:
             instance.show_requested.connect(self._on_show_requested)
 
@@ -365,6 +382,7 @@ class GuiApp(QObject):
         host.transfer_event.connect(functools.partial(self._on_transfer, host))
         host.node_event.connect(functools.partial(self._on_node_event, host))
         self.host = host
+        self.pairing.set_host(host)
         self.offers.set_receive_dir(options.receive_dir)
         self.window.show_starting()
         host.start()
@@ -377,6 +395,7 @@ class GuiApp(QObject):
         if self._instance is not None:
             self._instance.stop_listening()  # bản mở sau không “show” vào app đang tắt
         self.offers.close_all()
+        self.pairing.close_all()
         self.window.hide()
         self.tray.hide()
         self._quit_timer.start(int((app_node.close_time_limit() + QUIT_GRACE) * 1000))
@@ -395,6 +414,7 @@ class GuiApp(QObject):
         for host in hosts:
             host.stop()
         self.offers.close_all()
+        self.pairing.close_all()
         if self._instance is not None:
             self._instance.stop_listening()
         deadline = time.monotonic() + JOIN_TIMEOUT
@@ -438,6 +458,15 @@ class GuiApp(QObject):
             log.warning("không đọc được danh sách thiết bị: %s", type(result).__name__)
             return
         self.window.radar.model.reset(result)
+
+    def _on_devices_changed(self, views: tuple[DeviceView, ...]) -> None:
+        """Danh sách đọc lại sau ghép đôi / hủy ghép đôi (kho tin cậy đổi không phát NodeEvent)."""
+        if not self._quitting:
+            self.window.radar.model.reset(views)
+
+    def _on_unpair_requested(self, device_id: str) -> None:
+        view = self.window.radar.model.device(device_id)
+        self.pairing.request_unpair(device_id, None if view is None else view.name)
 
     def _on_node_event(self, host: NodeHost, event: NodeEvent) -> None:
         if host is self.host and not self._quitting:
