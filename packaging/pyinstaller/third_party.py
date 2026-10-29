@@ -1,7 +1,8 @@
 """Kiểm giấy phép và sinh `THIRD-PARTY-NOTICES.txt`, `SOURCE.txt` cho bản build PyInstaller.
 
-`teleport-cli.spec` gọi `check` ngay sau Analysis/PYZ (trước EXE/COLLECT) và `write_outputs` sau
-COLLECT, chạy trong chính môi trường Python dùng để build.
+`teleport-cli.spec` và `teleport-gui.spec` gọi `check` ngay sau Analysis/PYZ (trước EXE/COLLECT) và
+`write_outputs` sau COLLECT, chạy trong chính môi trường Python dùng để build (`edition` chọn tên bản
+và tên exe trong các file sinh ra).
 Danh sách thành phần lấy từ các file PyInstaller thật sự đóng vào (TOC của `Analysis` và module khởi
 động `PYZ.dependencies`), rồi tra
 ngược file đó thuộc bản phân phối nào qua `RECORD` của gói đã cài (`importlib.metadata`), nên gồm
@@ -10,7 +11,9 @@ của trình thông dịch dùng để build, cộng văn bản chép sẵn tron
 trong CPython và thư viện C của bản Windows mà `LICENSE.txt` không có (`CPYTHON_LICENSE_TEXTS`,
 `PYTHON_EMBEDDED`, theo đúng phiên bản Python). Gói có SBOM CycloneDX trong `.dist-info/sboms/`
 (PEP 770, ví dụ `cryptography` liên kết tĩnh OpenSSL và các crate Rust) thì liệt kê và kiểm cả thành
-phần trong SBOM.
+phần trong SBOM. Qt/PySide6 (bản GUI) không có SBOM trong wheel: thành phần lồng trong DLL Qt lấy
+từ bảng `QT_EMBEDDED` (rà theo qt_attribution.json đúng phiên bản Qt), văn bản chép sẵn trong
+`licenses/qt-<phiên bản>/`.
 
 Luật (ke_hoach mục 1, Giấy phép): mọi thứ đóng vào phải tương thích GPLv3. Gói nằm ngoài
 `APPROVED`, gói có giấy phép trong metadata khác chuỗi đã duyệt, file không biết thuộc gói nào,
@@ -48,7 +51,7 @@ APPROVED: dict[str, str] = {
     "pycparser": "BSD-3-Clause",
     "zeroconf": "LGPL-2.1-or-later",
     "ifaddr": "MIT",
-    # Chỉ bootloader (nhúng trong teleport.exe), module loader và runtime hook được đóng vào:
+    # Chỉ bootloader (nhúng trong teleport.exe / Teleport.exe), module loader và runtime hook được đóng vào:
     # bootloader theo GPL-2.0-or-later kèm Bootloader Exception, runtime hook theo Apache-2.0.
     "pyinstaller": (
         "GPLv2-or-later with a special exception which allows to use PyInstaller to build "
@@ -59,6 +62,11 @@ APPROVED: dict[str, str] = {
         "License :: OSI Approved :: Apache Software License; "
         "License :: OSI Approved :: GNU General Public License v2 (GPLv2)"
     ),
+    # Bản GUI: Qt và PySide6 (gói PySide6-Essentials, kèm shiboken6). Dùng theo nhánh LGPL-3.0-only:
+    # DLL Qt và module PySide6 là file riêng trong _internal\PySide6\ (--onedir), người dùng thay được.
+    # Văn bản giấy phép lấy từ PACKAGE_LICENSE_TEXTS (dist-info của hai gói chỉ có giấy phép thương mại).
+    "pyside6-essentials": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+    "shiboken6": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
 }
 
 # Giấy phép được chấp nhận cho thành phần LỒNG BÊN TRONG một gói hay một runtime đã duyệt (thành phần
@@ -222,6 +230,383 @@ VCRUNTIME_NOTE = (
     'Windows binary build" trong LICENSE.txt của Python.'
 )
 
+# ---- Bản GUI: Qt/PySide6 -------------------------------------------------------------------------
+# Bản phân phối mang DLL Qt (PySide6-Essentials) và phiên bản Qt mà QT_EMBEDDED đã rà. Nâng PySide6
+# thì build dừng (`qt_embedded_files`): rà lại qt_attribution.json của qtbase và pyside-setup đúng tag
+# mới, chép văn bản vào licenses/qt-<phiên bản>/ rồi sửa các hằng dưới đây.
+QT_OWNER = "pyside6-essentials"
+QT_LICENSE_VERSION = "6.12.0"
+QT_LICENSES_DIR = f"qt-{QT_LICENSE_VERSION}"
+QT_SOURCE_URL = (
+    f"https://download.qt.io/official_releases/qt/6.12/{QT_LICENSE_VERSION}/submodules/"
+    f"qtbase-everywhere-src-{QT_LICENSE_VERSION}.tar.xz"
+)
+# PyPI không có sdist của PySide6-Essentials/shiboken6, nên chỉ tới gói mã nguồn chính thức của Qt.
+PYSIDE_SOURCE_URL = (
+    f"https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-{QT_LICENSE_VERSION}-src/"
+    f"pyside-setup-everywhere-src-{QT_LICENSE_VERSION}.tar.xz"
+)
+_QTBASE = f"https://github.com/qt/qtbase/blob/v{QT_LICENSE_VERSION}/{{}}"
+_PYSIDE = f"https://github.com/pyside/pyside-setup/blob/v{QT_LICENSE_VERSION}/{{}}"
+
+# Giấy phép được chấp nhận cho thành phần lồng trong Qt/PySide6 (QT_EMBEDDED): SPDX_COMPATIBLE cộng các
+# định danh dưới đây, mỗi cái đã có trong dòng Giấy phép của ke_hoach mục 1 (câu về Qt). Chỉ dùng cho
+# Qt, không mở rộng cho SBOM hay thư viện C của Python.
+QT_SPDX_COMPATIBLE: frozenset[str] = SPDX_COMPATIBLE | frozenset(
+    {
+        "CC0-1.0",
+        "FTL",
+        "HPND",
+        "HPND-sell-variant",
+        "Imlib2",
+        "Libpng",
+        "libpng-2.0",
+        "MIT-open-group",
+        "MPL-2.0",  # chỉ dữ liệu Public Suffix List trong Qt6Network.dll
+        "Python-2.0",
+        "X11",
+        "LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception",
+        "LicenseRef-ICC-License",
+        "LicenseRef-Lcs-Telegraphics",
+        "LicenseRef-SHA1-Public-Domain",
+    }
+)
+
+# File mã máy của Qt/PySide6/shiboken6 đã rà thành phần lồng bên trong (đường dẫn đích, chữ thường,
+# dấu "/"). File mã máy nào khác của hai gói (thêm module hay plugin Qt) làm build dừng cho tới khi
+# được rà và thêm vào đây. DLL runtime MSVC đi kèm hai gói: xem MSVC_RUNTIME_NOTE.
+QT_REVIEWED_FILES: frozenset[str] = frozenset(
+    {
+        "pyside6/qt6core.dll",
+        "pyside6/qt6gui.dll",
+        "pyside6/qt6widgets.dll",
+        "pyside6/qt6network.dll",
+        "pyside6/plugins/platforms/qwindows.dll",
+        "pyside6/plugins/styles/qmodernwindowsstyle.dll",
+        "pyside6/qtcore.pyd",
+        "pyside6/qtgui.pyd",
+        "pyside6/qtwidgets.pyd",
+        "pyside6/qtnetwork.pyd",
+        "pyside6/pyside6.abi3.dll",
+        "shiboken6/shiboken6.abi3.dll",
+        "shiboken6/shiboken.pyd",
+    }
+)
+MSVC_RUNTIME_FILES: tuple[str, ...] = ("msvcp140*.dll", "vcruntime140*.dll")
+MSVC_RUNTIME_OWNERS: frozenset[str] = frozenset({QT_OWNER, "shiboken6"})
+MSVC_RUNTIME_NOTE = (
+    "msvcp140*.dll và vcruntime140*.dll trong _internal\\PySide6\\ và _internal\\shiboken6\\ là thư viện\n"
+    "runtime của trình biên dịch Microsoft Visual C++ mà bản Qt/PySide6 chính thức đi kèm. Chúng được\n"
+    "phân phối theo ngoại lệ System Library của GPLv3 (mục 1 của GPLv3), như DLL runtime đi kèm Python."
+)
+
+# Một thành phần lồng trong Qt/PySide6: (mẫu đường dẫn đích của file chứa nó, tên kèm phiên bản, giấy
+# phép SPDX theo qt_attribution.json, các (file trong licenses/qt-<ver>/, nguồn đã chép), ghi công bắt
+# buộc). Nguồn dữ kiện: qt_attribution.json trong qtbase và pyside-setup đúng tag QT_LICENSE_VERSION,
+# đối chiếu chuỗi trong DLL thật. Không ghi thành phần chỉ có trên hệ khác (forkfd, pixman ARM NEON,
+# macOS, X11/Wayland) hay nằm trong file không đóng vào (libjpeg của plugin qjpeg, SQLite của QtSql,
+# libdbus của QtDBus).
+type QtEmbedded = tuple[str, str, str, tuple[tuple[str, str], ...], str]
+
+
+def _qt(path: str, name: str) -> tuple[str, str]:
+    return (name, _QTBASE.format(path))
+
+
+_CC0 = _qt("LICENSES/CC0-1.0.txt", "CC0-1.0.txt")
+_APACHE = _qt("LICENSES/Apache-2.0.txt", "Apache-2.0.txt")
+_UNICODE = _qt("LICENSES/Unicode-3.0.txt", "Unicode-3.0.txt")
+_FREETYPE = _qt("src/3rdparty/freetype/LICENSE.txt", "freetype-LICENSE.txt")
+_FREETYPE_CREDIT = (
+    "Portions of this software are copyright © 2025 The FreeType Project (www.freetype.org). "
+    "All rights reserved."
+)
+_CORE, _GUI, _NETWORK = "pyside6/qt6core.dll", "pyside6/qt6gui.dll", "pyside6/qt6network.dll"
+QT_EMBEDDED: tuple[QtEmbedded, ...] = (
+    (_CORE, "zlib 1.3.2", "Zlib", (_qt("src/3rdparty/zlib/LICENSE", "zlib-LICENSE.txt"),), ""),
+    (
+        _CORE,
+        "PCRE2 10.48",
+        "LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception",
+        (_qt("src/3rdparty/pcre2/LICENCE.md", "pcre2-LICENCE.md"),),
+        "",
+    ),
+    (
+        _CORE,
+        "PCRE2 - Stack-less Just-In-Time Compiler 10.48",
+        "BSD-2-Clause",
+        (_qt("src/3rdparty/pcre2/LICENSE-SLJIT", "pcre2-LICENSE-SLJIT.txt"),),
+        "",
+    ),
+    (
+        _CORE,
+        "double-conversion 3.4.0",
+        "BSD-3-Clause",
+        (_qt("src/3rdparty/double-conversion/LICENSE", "double-conversion-LICENSE.txt"),),
+        "",
+    ),
+    (
+        _CORE,
+        "Easing Equations by Robert Penner",
+        "BSD-3-Clause",
+        (_qt("src/3rdparty/easing/LICENSE", "easing-LICENSE.txt"),),
+        "",
+    ),
+    (_CORE, "TinyCBOR 7.0", "MIT", (_qt("src/3rdparty/tinycbor/LICENSE", "tinycbor-LICENSE.txt"),), ""),
+    (
+        _CORE,
+        "BLAKE2 (reference implementation)",
+        "CC0-1.0 OR Apache-2.0",
+        (_qt("src/3rdparty/blake2/COPYING", "blake2-COPYING.txt"),),
+        "",
+    ),
+    (_CORE, "MD4", "CC0-1.0", (_CC0,), ""),
+    (_CORE, "MD5", "CC0-1.0", (_CC0,), ""),
+    (
+        _CORE,
+        "Secure Hash Algorithm SHA-1",
+        "LicenseRef-SHA1-Public-Domain",
+        (_qt("LICENSES/LicenseRef-SHA1-Public-Domain.txt", "LicenseRef-SHA1-Public-Domain.txt"),),
+        "",
+    ),
+    (
+        _CORE,
+        "SHA-3 - brg_endian 1.0.0",
+        "BSD-2-Clause",
+        (_qt("src/3rdparty/sha3/BRG_ENDIAN_LICENSE", "sha3-BRG_ENDIAN_LICENSE.txt"),),
+        "",
+    ),
+    (
+        _CORE,
+        "SHA-3 - Keccak 3.2",
+        "CC0-1.0",
+        (_qt("src/3rdparty/sha3/CC0_LICENSE", "sha3-CC0_LICENSE.txt"),),
+        "",
+    ),
+    (
+        _CORE,
+        "Secure Hash Algorithms SHA-384 and SHA-512 (RFC 6234)",
+        "BSD-3-Clause",
+        (_qt("src/3rdparty/rfc6234/LICENSE", "rfc6234-LICENSE.txt"),),
+        "",
+    ),
+    (_CORE, "SipHash", "CC0-1.0", (_CC0,), ""),
+    (_CORE, "tl::expected", "CC0-1.0", (_CC0,), ""),
+    (_CORE, "Apache Tika MimeType Definitions", "Apache-2.0", (_APACHE,), ""),
+    (_CORE, "Unicode Character Database (UCD)", "Unicode-3.0", (_UNICODE,), ""),
+    (_CORE, "Unicode CLDR v48.2", "Unicode-3.0", (_UNICODE,), ""),
+    (_GUI, "FreeType 2.14.3", "FTL OR GPL-2.0-only", (_FREETYPE,), _FREETYPE_CREDIT),
+    (
+        _GUI,
+        "FreeType 2 - zlib",
+        "Zlib",
+        (_qt("src/3rdparty/freetype/ZLIB-LICENSE.txt", "freetype-ZLIB-LICENSE.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "FreeType 2 - BDF",
+        "MIT",
+        (_qt("src/3rdparty/freetype/BDF-LICENSE.txt", "freetype-BDF-LICENSE.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "FreeType 2 - PCF",
+        "MIT AND MIT-open-group",
+        (_qt("src/3rdparty/freetype/PCF-LICENSE.txt", "freetype-PCF-LICENSE.txt"),),
+        "",
+    ),
+    (_GUI, "Anti-aliasing rasterizer from FreeType 2", "FTL OR GPL-2.0-only", (_FREETYPE,), _FREETYPE_CREDIT),
+    (
+        _GUI,
+        "HarfBuzz-NG 14.5.0",
+        "MIT",
+        (_qt("src/3rdparty/harfbuzz-ng/COPYING", "harfbuzz-ng-COPYING.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "libpng 1.6.58",
+        "Libpng AND libpng-2.0",
+        (_qt("src/3rdparty/libpng/LICENSE", "libpng-LICENSE.txt"),),
+        "",
+    ),
+    (_GUI, "MD4C 0.5.3", "MIT", (_qt("src/3rdparty/md4c/LICENSE.md", "md4c-LICENSE.md"),), ""),
+    (_GUI, "Emoji Segmenter 0.4.0", "Apache-2.0", (_APACHE,), ""),
+    (
+        _GUI,
+        "D3D12 Memory Allocator 3.1.0",
+        "MIT",
+        (_qt("src/3rdparty/D3D12MemoryAllocator/LICENSE.txt", "D3D12MemoryAllocator-LICENSE.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "Vulkan Memory Allocator 3.3.0",
+        "MIT",
+        (_qt("src/3rdparty/VulkanMemoryAllocator/LICENSE.txt", "VulkanMemoryAllocator-LICENSE.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "sRGB color profile icc file",
+        "LicenseRef-ICC-License",
+        (_qt("src/3rdparty/icc/LICENSE.txt", "icc-LICENSE.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "OpenGL Headers, OpenGL ES 2 Headers",
+        "MIT",
+        (_qt("src/gui/opengl/LICENSE.KHRONOS.txt", "LICENSE.KHRONOS.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "Smooth Scaling Algorithm (QImage)",
+        "BSD-2-Clause AND Imlib2",
+        (_qt("src/gui/painting/LICENSE.QIMAGETRANSFORM.txt", "LICENSE.QIMAGETRANSFORM.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "X Server helper (QRegion)",
+        "X11 AND HPND",
+        (_qt("src/gui/painting/LICENSE.XCONSORTIUM.txt", "LICENSE.XCONSORTIUM.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "Mipmap generator for D3D12 (MiniEngine)",
+        "MIT",
+        (_qt("src/gui/rhi/LICENSE.MiniEngine.txt", "LICENSE.MiniEngine.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "Adobe Glyph List For New Fonts 1.7",
+        "BSD-3-Clause",
+        (_qt("src/gui/text/LICENSE.AGLFN.txt", "LICENSE.AGLFN.txt"),),
+        "",
+    ),
+    (
+        _GUI,
+        "Vulkan API Registry 1.4.308",
+        "Apache-2.0 OR MIT",
+        (_qt("src/gui/vulkan/LICENSE.txt", "vulkan-LICENSE.txt"),),
+        "",
+    ),
+    (_GUI, "XSVG", "HPND-sell-variant", (_qt("src/gui/util/LICENSE.XSVG.txt", "LICENSE.XSVG.txt"),), ""),
+    (
+        _GUI,
+        "WebGradients",
+        "MIT",
+        (_qt("util/gradientgen/LICENSE.WEBGRADIENTS.txt", "LICENSE.WEBGRADIENTS.txt"),),
+        "",
+    ),
+    (
+        _NETWORK,
+        "The Public Suffix List (dữ liệu)",
+        "MPL-2.0",
+        (_qt("src/3rdparty/libpsl/PSL-LICENSE.txt", "libpsl-PSL-LICENSE.txt"),),
+        "",
+    ),
+    (
+        _NETWORK,
+        "libpsl (tra cứu Public Suffix List)",
+        "BSD-3-Clause",
+        (_qt("src/3rdparty/libpsl/src/LICENSE.chromium", "libpsl-LICENSE.chromium.txt"),),
+        "",
+    ),
+    (
+        "pyside6/plugins/platforms/qwindows.dll",
+        "Wintab API (header)",
+        "LicenseRef-Lcs-Telegraphics",
+        (_qt("LICENSES/LicenseRef-Lcs-Telegraphics.txt", "LicenseRef-Lcs-Telegraphics.txt"),),
+        "",
+    ),
+    (
+        "shiboken6/shiboken6.abi3.dll",
+        "Mã lấy từ Python 3.7.0 (bufferprocs_py37, shibokensupport/signature)",
+        "Python-2.0",
+        (
+            (
+                "shiboken6-PSF-3.7.0.txt",
+                _PYSIDE.format(
+                    "sources/shiboken6/shibokenmodule/files.dir/shibokensupport/signature/PSF-3.7.0.txt"
+                ),
+            ),
+        ),
+        "",
+    ),
+)
+
+# Văn bản giấy phép thay cho file trong dist-info: (ghi chú, các (file trong licenses/, tiêu đề, nguồn)).
+# Dist-info của PySide6-Essentials và shiboken6 chỉ có LicenseRef-Qt-Commercial.txt; bản build dùng nhánh
+# LGPL-3.0-only, nên kèm văn bản LGPL-3.0 (văn bản GPL-3.0 mà LGPL-3.0 dẫn tới là file LICENSE).
+_LGPL3 = (
+    (
+        f"{QT_LICENSES_DIR}/LGPL-3.0-only.txt",
+        "GNU Lesser General Public License v3.0 (LGPL-3.0-only)",
+        _QTBASE.format("LICENSES/LGPL-3.0-only.txt"),
+    ),
+)
+_LGPL3_NOTE = (
+    "Dùng theo nhánh LGPL-3.0-only của biểu thức trên. LGPL-3.0 bổ sung cho GPL-3.0: văn bản GPL-3.0 là\n"
+    "file LICENSE cùng thư mục. Cách thay thư viện và nơi lấy mã nguồn: SOURCE.txt."
+)
+PACKAGE_LICENSE_TEXTS: dict[str, tuple[str, tuple[tuple[str, str, str], ...]]] = {
+    QT_OWNER: (_LGPL3_NOTE + "\nMã nguồn Qt: " + QT_SOURCE_URL, _LGPL3),
+    "shiboken6": (_LGPL3_NOTE, _LGPL3),
+}
+# Dòng "Mã nguồn:" của gói không có sdist trên PyPI: trỏ tới gói mã nguồn chính thức thay link PyPI.
+PACKAGE_SOURCE_URLS: dict[str, str] = {QT_OWNER: PYSIDE_SOURCE_URL, "shiboken6": PYSIDE_SOURCE_URL}
+
+
+def qt_embedded_files(components: dict[str, Component]) -> list[tuple[QtEmbedded, list[str]]]:
+    """Thành phần lồng trong Qt/PySide6 có mặt trong bản build, kèm file chứa nó (đường dẫn đích).
+
+    Không có PySide6 thì trả rỗng. Dừng với `LicenseAuditError` khi: phiên bản PySide6 khác
+    `QT_LICENSE_VERSION`; có file mã máy (.dll/.pyd) của PySide6/shiboken6 chưa rà
+    (`QT_REVIEWED_FILES`, trừ DLL runtime MSVC); giấy phép một thành phần ngoài `QT_SPDX_COMPATIBLE`;
+    thiếu file văn bản trong licenses/.
+    """
+    owned = [comp for key, comp in components.items() if key in MSVC_RUNTIME_OWNERS]
+    if not owned:
+        return []
+    errors: list[str] = []
+    for comp in owned:
+        if comp.version != QT_LICENSE_VERSION:
+            errors.append(
+                f"{comp.name} {comp.version}: thành phần lồng trong Qt mới rà cho {QT_LICENSE_VERSION}"
+                " (QT_EMBEDDED); rà lại qt_attribution.json của bản mới"
+            )
+    dests = sorted({f.replace("\\", "/").lower() for comp in owned for f in comp.files})
+    for dest in dests:
+        base = dest.rsplit("/", 1)[-1]
+        if not dest.endswith((".dll", ".pyd")) or dest in QT_REVIEWED_FILES:
+            continue
+        if any(fnmatch.fnmatchcase(base, pattern) for pattern in MSVC_RUNTIME_FILES):
+            continue
+        errors.append(f"{dest}: file mã máy của Qt/PySide6 chưa rà thành phần lồng (QT_REVIEWED_FILES)")
+    found: list[tuple[QtEmbedded, list[str]]] = []
+    for entry in QT_EMBEDDED:
+        pattern, name, lic, texts, _credit = entry
+        files = [d for d in dests if fnmatch.fnmatchcase(d, pattern)]
+        if not files:
+            continue
+        if not _spdx_in(lic, QT_SPDX_COMPATIBLE):
+            errors.append(f"Qt: {name} giấy phép {lic!r} chưa duyệt")
+        for file_name, _source in texts:
+            if not (LICENSES_DIR / QT_LICENSES_DIR / file_name).is_file():
+                errors.append(f"Qt: thiếu văn bản giấy phép {QT_LICENSES_DIR}/{file_name} cho {name}")
+        found.append((entry, files))
+    if errors:
+        raise LicenseAuditError("thành phần Qt/PySide6 chưa duyệt:\n  " + "\n  ".join(errors))
+    return found
+
+
 _LICENSE_FILE = re.compile(r"^(LICEN[CS]E|COPYING|NOTICE|AUTHORS)", re.IGNORECASE)
 _SEPARATOR = "=" * 78
 _BASE_LIBRARY = "base_library.zip"
@@ -229,6 +614,18 @@ _BASE_LIBRARY = "base_library.zip"
 
 class LicenseAuditError(Exception):
     """Bản build chứa thứ chưa duyệt được giấy phép; build phải dừng."""
+
+
+@dataclass(frozen=True)
+class Edition:
+    """Bản build: tên hiện trong THIRD-PARTY-NOTICES.txt/SOURCE.txt và tên file exe (chứa bootloader)."""
+
+    label: str
+    exe_name: str
+
+
+CLI_EDITION = Edition("bản CLI", "teleport.exe")
+GUI_EDITION = Edition("bản GUI", "Teleport.exe")
 
 
 @dataclass
@@ -263,6 +660,11 @@ def declared_license(dist: md.Distribution) -> str:
 
 def spdx_compatible(expression: str) -> bool:
     """Biểu thức SPDX có tương thích GPLv3 không, theo `SPDX_COMPATIBLE` (OR: một nhánh; AND: mọi vế)."""
+    return _spdx_in(expression, SPDX_COMPATIBLE)
+
+
+def _spdx_in(expression: str, allowed: frozenset[str]) -> bool:
+    """Như `spdx_compatible` nhưng theo tập định danh `allowed` (Qt dùng `QT_SPDX_COMPATIBLE`)."""
     tokens = re.findall(r"\(|\)|[^\s()]+", expression)
     merged: list[str] = []
     i = 0
@@ -305,7 +707,7 @@ def spdx_compatible(expression: str) -> bool:
                 raise LicenseAuditError(f"biểu thức SPDX không hợp lệ: {expression!r}")
             pos += 1
             return result
-        return token in SPDX_COMPATIBLE
+        return token in allowed
 
     result = parse_or()
     if pos != len(merged):
@@ -444,6 +846,26 @@ def drop_ucrt(
     return kept, dropped
 
 
+def drop_files(
+    toc: Iterable[tuple[str, str, str]], patterns: Iterable[str]
+) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Bỏ khỏi TOC các file có đường dẫn đích khớp một mẫu trong `patterns`.
+
+    So bằng `fnmatch` trên đường dẫn đích chữ thường, dấu `/` (ví dụ `pyside6/plugins/tls/*`). Trả
+    (TOC còn lại, giữ nguyên thứ tự; tên đích đã bỏ). Dùng cho phần Qt không dùng (`teleport-gui.spec`).
+    """
+    pats = tuple(p.lower() for p in patterns)
+    kept: list[tuple[str, str, str]] = []
+    dropped: list[str] = []
+    for entry in toc:
+        dest = entry[0].replace("\\", "/").lower()
+        if any(fnmatch.fnmatchcase(dest, pattern) for pattern in pats):
+            dropped.append(entry[0])
+        else:
+            kept.append(entry)
+    return kept, dropped
+
+
 def _is_python_file(path: str, python_dirs: tuple[str, list[str], list[str]]) -> bool:
     """File thuộc chính bản Python (PSF-2.0 và thành phần ở PYTHON_EMBEDDED) hay không.
 
@@ -483,7 +905,11 @@ def _localpyc_source(name: str, path: str, base_prefix: str | None = None) -> st
 
 
 def collect_components(
-    toc: Iterable[tuple[str, str, str]], *, repo_dir: Path, base_prefix: str | None = None
+    toc: Iterable[tuple[str, str, str]],
+    *,
+    repo_dir: Path,
+    base_prefix: str | None = None,
+    edition: Edition = CLI_EDITION,
 ) -> tuple[dict[str, Component], dict[str, list[str]]]:
     """Phân loại mọi file trong TOC theo thành phần.
 
@@ -537,9 +963,9 @@ def collect_components(
         raise LicenseAuditError(
             "không xác định được file sau thuộc gói nào:\n  " + "\n  ".join(sorted(unknown))
         )
-    # Bootloader nhúng trong teleport.exe không nằm trong TOC.
+    # Bootloader nhúng trong exe không nằm trong TOC.
     if "pyinstaller" not in components:
-        add(md.distribution("pyinstaller"), "teleport.exe (bootloader)")
+        add(md.distribution("pyinstaller"), f"{edition.exe_name} (bootloader)")
     return components, {prefix: sorted(set(files)) for prefix, files in python_files.items()}
 
 
@@ -635,8 +1061,14 @@ def build_notices(
     *,
     app_version: str,
     base_prefix: str | None = None,
+    edition: Edition = CLI_EDITION,
+    qt_files: list[tuple[QtEmbedded, list[str]]] | None = None,
 ) -> str:
-    """Nội dung THIRD-PARTY-NOTICES.txt. Thiếu văn bản giấy phép nào thì `LicenseAuditError`."""
+    """Nội dung THIRD-PARTY-NOTICES.txt. Thiếu văn bản giấy phép nào thì `LicenseAuditError`.
+
+    `qt_files` là kết quả của `qt_embedded_files` (thành phần lồng trong Qt và file chứa nó).
+    """
+    qt_files = qt_files or []
     python_license = ""
     extra_texts: list[tuple[str, str, str]] = []
     if "python" in components:
@@ -653,7 +1085,8 @@ def build_notices(
             )
     versions = _python_library_versions()
     lines = [
-        f"Teleport {app_version} (bản CLI cho Windows) - thông báo giấy phép của thành phần bên thứ ba",
+        f"Teleport {app_version} ({edition.label} cho Windows) - "
+        "thông báo giấy phép của thành phần bên thứ ba",
         "",
         "Teleport phát hành theo GPL-3.0-or-later (file LICENSE cùng thư mục). Bản build này đóng gói",
         "kèm các thành phần dưới đây; mỗi thành phần giữ giấy phép riêng, văn bản đầy đủ ở phần sau.",
@@ -676,8 +1109,17 @@ def build_notices(
             " (SBOM liệt kê cả crate chỉ dùng lúc biên dịch):"
         )
         lines.extend(f"      {name} {version}: {expression}" for name, version, expression, _ in entries)
+    if qt_files:
+        lines.append(
+            f"  - Thành phần bên thứ ba nằm trong Qt {QT_LICENSE_VERSION} (theo qt_attribution.json của"
+            " qtbase), văn bản ở mục pyside6-essentials:"
+        )
+        for (_pattern, name, lic, _texts, _credit), files in qt_files:
+            lines.append(f"      {name} ({', '.join(files)}): {lic}.")
     if "vcruntime140" in python_files:
         lines += ["", VCRUNTIME_NOTE]
+    if any(comp.key in MSVC_RUNTIME_OWNERS for comp in others):
+        lines += ["", MSVC_RUNTIME_NOTE]
     for comp in others:
         lines += ["", _SEPARATOR, f"{comp.name} {comp.version}", f"Giấy phép: {comp.license}"]
         if comp.key == "python":
@@ -691,26 +1133,64 @@ def build_notices(
                 lines += [_SEPARATOR, f"[Python] {title}", f"Nguồn: {source}", "", text.rstrip()]
             continue
         dist = md.distribution(comp.name)
-        lines.append("Mã nguồn: " + " ; ".join(_project_urls(dist)))
+        urls = _project_urls(dist)
+        if comp.key in PACKAGE_SOURCE_URLS:
+            urls = [PACKAGE_SOURCE_URLS[comp.key], *urls[1:]]  # bỏ link PyPI (không có sdist)
+        lines.append("Mã nguồn: " + " ; ".join(urls))
         for name, version, expression, source in sboms.get(comp.key, []):
             if "theo http" in source:
                 lines.append(f"Ghi chú: {name} {version} liên kết tĩnh, giấy phép {expression} ({source}).")
+        override = PACKAGE_LICENSE_TEXTS.get(comp.key)
+        if override is not None:
+            note, texts = override
+            lines.append(note)
+            for name, title, source in texts:
+                text = (LICENSES_DIR / name).read_text(encoding="utf-8")
+                lines += [_SEPARATOR, f"[{comp.name}] {title}", f"Nguồn: {source}", "", text.rstrip()]
+            continue
         license_files = _license_files(dist)
         if not license_files:
             raise LicenseAuditError(f"{comp.name}: không có file giấy phép trong dist-info")
         for lic in license_files:
             lines += [_SEPARATOR, f"[{comp.name}] {lic.name}", "", lic.read_text(encoding="utf-8").rstrip()]
+    if qt_files:
+        lines += [
+            "",
+            _SEPARATOR,
+            f"Thành phần bên thứ ba lồng trong Qt {QT_LICENSE_VERSION} và PySide6/shiboken6",
+            "Theo qt_attribution.json của qtbase và pyside-setup đúng phiên bản. Thành phần có hai giấy phép",
+            "(OR) được dùng theo nhánh tương thích GPLv3 (ví dụ FreeType theo FTL).",
+        ]
+        credits = sorted({credit for (_p, _n, _l, _t, credit), _files in qt_files if credit})
+        lines += [f"Ghi công: {credit}" for credit in credits]
+        printed: set[str] = set()
+        for (_pattern, name, lic, texts_qt, _credit), files in qt_files:
+            lines += ["", f"{name} (trong {', '.join(files)}): {lic}"]
+            for file_name, source in texts_qt:
+                if file_name in printed:
+                    lines.append(f"  Văn bản: {file_name} (đã in ở trên)")
+                    continue
+                printed.add(file_name)
+                text = (LICENSES_DIR / QT_LICENSES_DIR / file_name).read_text(encoding="utf-8")
+                lines += [_SEPARATOR, f"[Qt {QT_LICENSE_VERSION}] {file_name}", f"Nguồn: {source}", ""]
+                lines.append(text.rstrip())
     return "\n".join(lines) + "\n"
 
 
-def build_source(components: dict[str, Component], *, repo_dir: Path, app_version: str) -> str:
+def build_source(
+    components: dict[str, Component],
+    *,
+    repo_dir: Path,
+    app_version: str,
+    edition: Edition = CLI_EDITION,
+) -> str:
     """Nội dung SOURCE.txt (URL repo, SHA commit, cách thay thư viện LGPL, nơi lấy mã nguồn)."""
     pyproject = tomllib.loads((repo_dir / "pyproject.toml").read_text(encoding="utf-8"))
     repo_url = pyproject["project"]["urls"]["Repository"].rstrip("/")
     sha = os.environ.get("GITHUB_SHA") or _git(repo_dir, "rev-parse", "HEAD")
     dirty = bool(_git(repo_dir, "status", "--porcelain"))
     lines = [
-        f"Teleport {app_version} (bản CLI cho Windows) - mã nguồn",
+        f"Teleport {app_version} ({edition.label} cho Windows) - mã nguồn",
         "",
         "Teleport là phần mềm tự do theo GPL-3.0-or-later (file LICENSE).",
         f"Kho mã nguồn: {repo_url}",
@@ -727,11 +1207,27 @@ def build_source(components: dict[str, Component], *, repo_dir: Path, app_versio
         lines += [
             "",
             f"Thư viện LGPL: zeroconf {zeroconf.version} ({zeroconf.license}) nằm ở _internal\\zeroconf\\",
-            "dưới dạng file riêng (.py và .pyd), không gộp vào teleport.exe. Bạn có thể thay cả thư mục",
-            "đó bằng bản zeroconf đã sửa đổi có cùng API để chạy với Teleport. Các module .pyd (Cython) phụ",
-            "thuộc lẫn nhau nên thay cả bộ: hoặc .pyd build cho đúng phiên bản Python ghi ở cuối file này,",
-            "hoặc xóa mọi .pyd và đặt file .py tương ứng (zeroconf chạy được ở dạng Python thuần).",
+            f"dưới dạng file riêng (.py và .pyd), không gộp vào {edition.exe_name}. Bạn có thể thay cả thư",
+            "mục đó bằng bản zeroconf đã sửa đổi có cùng API để chạy với Teleport. Các module .pyd (Cython)",
+            "phụ thuộc lẫn nhau nên thay cả bộ: hoặc .pyd build cho đúng phiên bản Python ghi ở cuối file",
+            "này, hoặc xóa mọi .pyd và đặt file .py tương ứng (zeroconf chạy được ở dạng Python thuần).",
             "Mã nguồn zeroconf: " + " ; ".join(_project_urls(md.distribution("zeroconf"))),
+        ]
+    qt = components.get(QT_OWNER)
+    if qt is not None:
+        shiboken = components.get("shiboken6")
+        shiboken_text = f", shiboken6 {shiboken.version}" if shiboken is not None else ""
+        lines += [
+            "",
+            f"Thư viện LGPL: Qt {QT_LICENSE_VERSION} và PySide6 {qt.version}{shiboken_text} (dùng theo",
+            "LGPL-3.0-only) nằm ở _internal\\PySide6\\ và _internal\\shiboken6\\ dưới dạng file riêng (DLL",
+            f"Qt6*.dll, plugin của Qt, module .pyd của PySide6), không gộp vào {edition.exe_name}. Mã Qt và",
+            "PySide6 không bị sửa. Bạn có thể thay các file đó bằng bản Qt/PySide6 đã sửa đổi, build từ mã",
+            "nguồn dưới đây với cùng phiên bản và cùng trình biên dịch (MSVC, 64-bit) để giữ tương thích nhị",
+            "phân; thay DLL Qt thì thay cả bộ Qt6*.dll và plugin cùng lúc.",
+            f"Mã nguồn Qt {QT_LICENSE_VERSION}: {QT_SOURCE_URL}",
+            f"Mã nguồn PySide6/shiboken6 {QT_LICENSE_VERSION}: {PYSIDE_SOURCE_URL}",
+            "Kho mã PySide6: " + " ; ".join(_project_urls(md.distribution(qt.name))[1:]),
         ]
     lines += [
         "",
@@ -761,18 +1257,30 @@ def check(
     repo_dir: Path,
     app_version: str,
     base_prefix: str | None = None,
+    edition: Edition = CLI_EDITION,
 ) -> AuditResult:
     """Kiểm giấy phép mọi file trong TOC và dựng sẵn nội dung file giấy phép. Gọi trước EXE/COLLECT.
 
     Mọi phép kiểm (gói lạ, giấy phép chưa duyệt, SBOM, file Python lạ, LICENSE.txt của Python, văn
-    bản CPython đúng phiên bản, đoạn chữ bắt buộc, file giấy phép trong dist-info, SHA commit) đều
-    chạy ở đây; lỗi thì `LicenseAuditError` (hoặc lỗi của git) trước khi có teleport.exe.
-    `base_prefix` mặc định là `sys.base_prefix`.
+    bản CPython đúng phiên bản, thành phần lồng trong Qt, đoạn chữ bắt buộc, file giấy phép trong
+    dist-info, SHA commit) đều chạy ở đây; lỗi thì `LicenseAuditError` (hoặc lỗi của git) trước khi
+    có exe. `base_prefix` mặc định là `sys.base_prefix`.
     """
-    components, python_files = collect_components(toc, repo_dir=repo_dir, base_prefix=base_prefix)
+    components, python_files = collect_components(
+        toc, repo_dir=repo_dir, base_prefix=base_prefix, edition=edition
+    )
     sboms = audit(components, python_files)
-    notices = build_notices(components, python_files, sboms, app_version=app_version, base_prefix=base_prefix)
-    source = build_source(components, repo_dir=repo_dir, app_version=app_version)
+    qt_files = qt_embedded_files(components)
+    notices = build_notices(
+        components,
+        python_files,
+        sboms,
+        app_version=app_version,
+        base_prefix=base_prefix,
+        edition=edition,
+        qt_files=qt_files,
+    )
+    source = build_source(components, repo_dir=repo_dir, app_version=app_version, edition=edition)
     report = ["Thành phần đóng vào bản build (giấy phép theo metadata):"]
     for _key, comp in sorted(components.items()):
         report.append(f"  {comp.name} {comp.version}: {comp.license} ({len(comp.files)} file)")
@@ -781,6 +1289,8 @@ def check(
             report.append(f"  {name} ({', '.join(python_files[prefix])}, trong Python): {lic}")
     for key, entries in sorted(sboms.items()):
         report.append(f"  SBOM {components[key].name}: {len(entries)} thành phần, đều tương thích GPLv3")
+    for (_pattern, name, lic, _texts, _credit), files in qt_files:
+        report.append(f"  {name} (trong {', '.join(files)}, Qt): {lic}")
     log("\n".join(report))
     return AuditResult(components, python_files, sboms, notices, source)
 
@@ -792,20 +1302,23 @@ def write_outputs(result: AuditResult, *, dist_dir: Path, repo_dir: Path) -> Non
     (dist_dir / "SOURCE.txt").write_text(result.source, encoding="utf-8")
 
 
-# Tên thư mục onedir trong distpath (COLLECT name trong teleport-cli.spec).
+# Tên thư mục onedir trong distpath (COLLECT name trong teleport-cli.spec và teleport-gui.spec). Hai tên
+# phải khác nhau kể cả khi không phân biệt hoa thường (Windows), nên bản GUI không lấy tên "Teleport".
 DIST_NAME = "teleport"
+GUI_DIST_NAME = "teleport-gui"
+DIST_NAMES: frozenset[str] = frozenset({DIST_NAME, GUI_DIST_NAME})
 
 
 def remove_stale_dist(distpath: Path, name: str) -> bool:
-    """Xóa bản build cũ `distpath/DIST_NAME` khi `check` hỏng; trả True nếu đã xóa.
+    """Xóa bản build cũ `distpath/<name>` khi `check` hỏng; trả True nếu đã xóa.
 
     `--clean` của PyInstaller không dọn distpath (chỉ COLLECT mới thay thư mục), nên nếu không xóa thì
-    dist/ vẫn còn teleport.exe của lần build trước dù lần này kiểm giấy phép hỏng. Chỉ xóa đúng thư
-    mục tên `DIST_NAME` nằm thẳng trong `distpath`: tên khác, link/junction, hay không phải thư mục
-    thì `ValueError` và không xóa gì.
+    dist/ vẫn còn exe của lần build trước dù lần này kiểm giấy phép hỏng. Chỉ xóa đúng thư mục có tên
+    trong `DIST_NAMES` (so đúng chữ) nằm thẳng trong `distpath`: tên khác, link/junction, hay không
+    phải thư mục thì `ValueError` và không xóa gì.
     """
-    if name != DIST_NAME:
-        raise ValueError(f"chỉ xóa thư mục {DIST_NAME!r} trong distpath, không xóa {name!r}")
+    if name not in DIST_NAMES:
+        raise ValueError(f"chỉ xóa thư mục {sorted(DIST_NAMES)!r} trong distpath, không xóa {name!r}")
     root = Path(os.path.abspath(distpath))
     target = root / name
     if not os.path.lexists(target):
