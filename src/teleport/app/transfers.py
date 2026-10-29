@@ -38,8 +38,10 @@
   `tombstones.json` (`app.tombstones`, hạn `DISK_OP_TIMEOUT`) và quét thư mục nhận
   (`scan_temps`, hạn `DISK_SYNC_TIMEOUT`); mỗi máy gửi chỉ giữ lượt RUNNING có hoạt động cuối
   gần nhất (bằng nhau: `transfer_id` lớn hơn), lượt RUNNING còn lại bị xóa (`discard_temp`,
-  chạy nền sau các lần mở lại, chỉ khi `engine.restore` đã nạp bia mộ `expired` của chúng) kèm
-  bia mộ `expired` chưa gửi; lượt DONE thành `RestoredDone`.
+  chạy nền sau các lần mở lại, chỉ khi `engine.restore` đã nạp bia mộ `expired` của chúng;
+  `cleanup_temps` bỏ qua chúng tới khi xóa xong, vì dọn tạm đang giữ một thư mục thì
+  `discard_temp` bỏ qua thư mục đó và không thử lại) kèm bia mộ `expired` chưa gửi; lượt DONE
+  thành `RestoredDone`.
   Mở lại song song (`open_for_resume`), mỗi lượt có `stop` và hạn riêng, cả bước có hạn tổng;
   lượt quá hạn hay lỗi bị bỏ, để nguyên trên đĩa. Rồi trong **một khối đồng bộ**: dựng hàng đĩa
   cho lượt mở được (trước khi thực thi hành động), `engine.restore` (lời gọi engine đầu tiên, kể
@@ -732,6 +734,7 @@ class TransferManager:
         self._tomb_last_write: float | None = None  # `loop.time()` lúc lần ghi trước xong
         self._tomb_stopped = False  # đang xả lúc đóng hay đã hủy: không hẹn ghi nữa
         self._cleanup_job: DiskJob[int] | None = None  # lần dọn tạm gần nhất
+        self._discarding: set[str] = set()  # `transfer_id` có `_discard_temp` chưa xong
         self._history = HistoryStore(executor=executor, config_dir=self._config_dir)
         # Đuôi đĩa (`_shutdown_disk`): executor đã dừng; task đóng thư mục nhận khi thread đĩa xong.
         self._disk_shut = False
@@ -921,14 +924,16 @@ class TransferManager:
         # nhớ bia mộ `expired` của chúng (không thì máy gửi không bao giờ biết lý do).
         if rd is not None and restored and not self._closing:
             for scan in extra:
+                self._discarding.add(scan.transfer_id)  # trước khi `Node` hẹn dọn tạm
                 self._spawn(self._discard_temp(rd, scan.transfer_id), "transfer-discard", disk=True)
 
     async def cleanup_temps(self) -> int | None:
         """Dọn tạm một lần (`ReceiveDir.cleanup`, `Node` hẹn giờ); trả số thư mục lượt đã xóa.
 
         Bỏ qua (chụp đồng bộ ngay trước khi giao việc) `transfer_id` của mọi lượt nhận engine còn
-        giữ và mọi hàng đĩa còn sống. None khi: không có thư mục nhận, node đang đóng, lần dọn
-        trước chưa xong, hay lần này lỗi / quá hạn `DISK_SYNC_TIMEOUT` (log, không ném).
+        giữ, mọi hàng đĩa còn sống và mọi lượt thừa `restore` đang xóa (`_discarding`). None khi:
+        không có thư mục nhận, node đang đóng, lần dọn trước chưa xong, hay lần này lỗi / quá hạn
+        `DISK_SYNC_TIMEOUT` (log, không ném).
         """
         rd = self._receive_dir
         if rd is None or self._closing:
@@ -942,6 +947,7 @@ class TransferManager:
             if info.key.direction is Direction.RECEIVE
         }
         skip.update(lane.transfer_id for lane in self._live_lanes)
+        skip.update(self._discarding)
         cleanup = functools.partial(
             rd.cleanup,
             _wall_time(),
@@ -2285,6 +2291,12 @@ class TransferManager:
 
     async def _discard_temp(self, rd: ReceiveDir, transfer_id: str) -> None:
         """Lượt nhận dở thừa của một máy gửi (`restore`): `discard_temp`, chờ `settled()`; lỗi → INFO."""
+        try:
+            await self._discard_temp_job(rd, transfer_id)
+        finally:
+            self._discarding.discard(transfer_id)
+
+    async def _discard_temp_job(self, rd: ReceiveDir, transfer_id: str) -> None:
         discard = functools.partial(rd.discard_temp, transfer_id, own_device_id=self._identity.device_id)
         try:
             job = self._executor.submit(discard)
