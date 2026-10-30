@@ -104,7 +104,7 @@ Hướng dẫn cho bản hiện tại: giao diện tối thiểu trên Windows v
 
 Chưa có bộ cài và chưa có bản phát hành. Chọn một trong hai cách:
 
-- **Bản zip dùng thử (Windows, không cần Python):** vào tab [Actions → Build GUI (thử)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/build-gui.yml), mở lần chạy mới nhất, tải artifact `teleport-gui-…-windows` (cần đăng nhập GitHub), giải nén rồi chạy `Teleport.exe`. Bản này chưa ký mã nên Windows SmartScreen có thể chặn: bấm **More info → Run anyway**.
+- **Bản zip dùng thử (Windows, không cần Python):** vào tab [Actions → Build GUI (thử)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/build-gui.yml), mở lần chạy mới nhất, tải artifact `teleport-gui-…-windows` (cần đăng nhập GitHub), giải nén ra thư mục `teleport-gui\`, đọc `DOC-TRUOC.txt` trong đó (giải nén ở đâu, SmartScreen vì bản này chưa ký mã, tường lửa, hồ sơ mạng) rồi chạy `Teleport.exe`.
 - **Từ mã nguồn:** cài như [Dành cho nhà phát triển](#cài-đặt), rồi chạy `teleport-gui` (giao diện, hiện mới thử trên Windows) hoặc `teleport` (dòng lệnh, Windows / macOS / Linux).
 
 Lần đầu Teleport mở cổng mạng, tường lửa Windows hỏi quyền: cho phép trên mạng **Private**.
