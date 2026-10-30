@@ -322,6 +322,19 @@ async def send_and_cancel(net, files) -> list[str]:
     return [k.transfer_id for k in keys]
 
 
+def read_replaced(path: Path, budget: float = 1.0) -> bytes:
+    """Đọc file node có thể đang thay nguyên tử (`os.replace` trên thread đĩa): trên Windows mở đúng lúc
+    thay báo `PermissionError`, nên thử lại mỗi 20 ms trong `budget` giây rồi mới ném lại lỗi thật."""
+    deadline = time.monotonic() + budget
+    while True:
+        try:
+            return path.read_bytes()
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.02)
+
+
 def saved_ids(config: Path) -> list[str]:
     path = config / "tombstones.json"
     try:
@@ -345,7 +358,7 @@ async def test_burst_of_tombstones_is_written_at_most_twice_never_overlapping(lo
     await asyncio.sleep(0.3)
     assert 1 <= len(save_spy.calls) <= 2, [c.n for c in save_spy.calls]
     assert save_spy.max_running == 1
-    entries = rs.decode_tombstones((net.config / "tombstones.json").read_bytes())
+    entries = rs.decode_tombstones(read_replaced(net.config / "tombstones.json"))
     assert {(e.device_id, e.direction, e.reason, e.unsent) for e in entries} == {
         (net.a_id, "send", "user", True)
     }

@@ -55,6 +55,10 @@ chỉ ghi WARNING (vẫn chỉ một bản nhờ `gui.lock`).
 lần hẹn sau bỏ qua; kết quả của host cũ hay về lúc đang thoát bị bỏ; lỗi → WARNING (tên loại lỗi),
 giữ địa chỉ cũ. Timer dừng khi dựng host mới, `start_failed`, Thoát và `shutdown`.
 
+**GC chỉ trên thread Qt** (`ui.gcguard.GcGuard`): ngay sau khi có `QApplication` (trừ `--selftest`),
+`main` tắt GC tự động và thu gom định kỳ trên thread Qt, để đối tượng PySide trong vòng tham chiếu
+không bị hủy ở thread node hay thread đĩa; khôi phục sau `shutdown()`.
+
 **Thoát** (`GuiApp.request_quit(confirm=True)`, từ “Thoát” ở khay, Ctrl+Q, hay đóng cửa sổ khi
 không có khay): còn lượt **gửi** chưa kết thúc (`TransfersController.active_sends()`) thì đưa cửa
 sổ lên trước và mở hộp hỏi lại không chặn (`quit_box`, objectName `quitConfirmBox`, `open()`;
@@ -119,6 +123,7 @@ from teleport.trust.identity import CERT_FILE, Identity
 from teleport.ui import errorlog, i18n, send, texts, theme
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
+from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, ViewState
 from teleport.ui.pairing import PairingController, repair_offline_text
 from teleport.ui.transfers import TransfersController
@@ -924,6 +929,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.selftest:
         return _selftest(app)
 
+    # GC vòng tham chiếu chỉ chạy trên thread Qt (`ui.gcguard`): bật trước khi có node, `SingleInstance`
+    # và widget; tắt sau `controller.shutdown()` (đã `join` thread node).
+    gc_guard = GcGuard()
+    gc_guard.start()
+    try:
+        return _run(app, args, config_dir)
+    finally:
+        gc_guard.stop()
+
+
+def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
+    """Phần của `main` sau khi có `QApplication` (ngoài `--selftest`), chạy trong `GcGuard`."""
     i18n.install(app)
     theme.apply(app)
     try:

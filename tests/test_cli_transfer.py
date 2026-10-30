@@ -19,6 +19,7 @@ import asyncio
 import collections
 import datetime
 import errno
+import gc
 import hashlib
 import io
 import itertools
@@ -1491,13 +1492,19 @@ async def port_for(spy, directory: Path) -> int:
     return node.port
 
 
-def patch_close(monkeypatch, spy, directory: Path, *, before: float = 0.0, hang: bool = False) -> None:
+def patch_close(
+    monkeypatch, spy, directory: Path, *, before: float = 0.0, hang: bool = False
+) -> asyncio.Event:
     """Vá `Node.close` **chỉ cho node của `directory`** (spec-p2-7 mục B, I9/I10): chờ `before` giây rồi
-    đóng thật; `hang=True` → đóng thật xong thì treo mãi (tới khi bị hủy)."""
+    đóng thật; `hang=True` → đóng thật xong thì treo mãi (tới khi bị hủy).
+
+    Trả về một `asyncio.Event` được đặt đúng lúc phần đóng thật đã xong và bắt đầu treo, để test đo
+    “close treo” chứ không đo cả phần đóng thật còn dở trên máy chậm."""
     from teleport.app.node import Node
 
     real = Node.close
     directory = Path(directory)
+    hanging = asyncio.Event()
 
     async def close(self):
         mine = any(n is self for d, n in spy if d == directory)
@@ -1505,9 +1512,11 @@ def patch_close(monkeypatch, spy, directory: Path, *, before: float = 0.0, hang:
             await asyncio.sleep(before)
         await real(self)
         if mine and hang:
+            hanging.set()
             await asyncio.Event().wait()
 
     monkeypatch.setattr(Node, "close", close)
+    return hanging
 
 
 async def start_receiver(cli_runs, net, spy=None, **kw):
@@ -1880,15 +1889,24 @@ async def test_i9_second_ctrl_c_exits_within_one_second_when_close_hangs(
     pair_dirs, transfer_env, cli_runs, node_spy, monkeypatch
 ):
     net = pair_dirs
-    patch_close(monkeypatch, node_spy, net.S, hang=True)
+    hanging = patch_close(monkeypatch, node_spy, net.S, hang=True)
     recv = cli_runs("receive", receive_argv(net))
     port = (await recv.wait_event("receiving"))["port"]
     f = make_file(net.src, "lon.bin", 2 * MiB)
     send = cli_runs("send", send_argv(net, [f], port, extra=["--limit-rate", "64K"]))
     await transferring(recv)
     send.press()
-    await asyncio.sleep(0.3)
+    # Chờ phần đóng thật xong và `close()` bắt đầu treo: trên máy chậm, bấm lần hai sớm hơn sẽ đo cả
+    # phần đóng thật còn dở chứ không phải “close treo”.
+    try:
+        await asyncio.wait_for(hanging.wait(), 15)
+    except TimeoutError:
+        raise AssertionError("sau 15 s phần đóng thật của node gửi vẫn chưa xong") from None
     assert not send.task.done(), "close() bị vá treo: lệnh phải còn chờ"
+    # Ngân sách 1 s đo đường thoát cứng, vốn chỉ vài ms (cả khi bấm giữa lúc đóng thật). Một lần GC
+    # thế hệ già của tiến trình pytest lớn có thể đứng loop gần một giây trên runner chậm: thu gom
+    # trước khi bấm để lần đó không rơi vào cửa sổ đo.
+    gc.collect()
     t0 = time.monotonic()
     send.press()
     code = await send.code(5)
