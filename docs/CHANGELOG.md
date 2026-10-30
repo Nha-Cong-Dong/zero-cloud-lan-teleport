@@ -146,6 +146,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lời hỏi `[c/k]` của `listen`, `pair` và `receive` được in lại khi có dòng khác in chen giữa lúc đang chờ trả lời.
 
 ### Fixed
+- Giao diện: lỗi không bắt được (thread chính, slot Qt, thread khác, loop asyncio của node) nay được ghi vào `logs/teleport.log` ở mức ERROR thay vì mất khi chạy bản exe không có cửa sổ dòng lệnh. Log lỗi chỉ ghi tên loại lỗi và traceback, không ghi nội dung lỗi (có thể chứa đường dẫn hay tên file).
 - Còn lượt truyền dở mà máy kia báo “từ chối kết nối” (thường là lỗi tạm: máy kia đang khởi động lại, mạng chập) thì vẫn tự nối lại theo lịch, giãn dần tới một lần mỗi 30 giây, và chỉ báo một lần; trước đây lượt kẹt ở “Đang nối lại…” tới khi có sự kiện mDNS, mạng đổi hay người dùng thao tác. Chỉ áp cho bị từ chối: danh tính khác hay khác phiên bản giao thức vẫn chặn hẳn; máy đã hủy ghép đôi vẫn bị gọi theo lịch đó tới khi lượt hết hạn ([protocol.md](protocol.md) mục 6.2). Không đổi định dạng trên dây.
 - Giao diện: bấm “Ghép đôi lại” khi máy kia không có trong mạng (ví dụ đã ghép bằng IP vì mạng chặn mDNS) giờ hiện câu hướng dẫn và mở khung “Nhập IP thủ công”; trước đây bấm không có gì xảy ra. “Ghép đôi lại” hay ghép rồi gửi tới máy không có trong mạng trong lúc đang có lượt ghép khác thì báo “đang bận” thay vì im lặng.
 - Thư mục tạm của lượt nhận dở thừa (cùng máy gửi, cũ hơn lượt được khôi phục) đôi khi không bị xóa ngay khi khởi động vì đụng lần dọn tạm đầu tiên; nay dọn tạm bỏ qua các lượt đang chờ xóa.
