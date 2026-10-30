@@ -360,7 +360,7 @@ Bản giao diện của MVP hackathon (mục 4.1): dòng đầu là ““*Lapto
 Danh sách lượt truyền của giao diện (khung bên phải ở mục 7.1) có một thẻ cho mỗi lượt trong lần mở app này:
 - Dòng 1: “*video.mp4* (*8,0 GB*) · tới *PC-Nha*” (bên nhận “· từ *Laptop-Minh*”; nhiều file: “*3* file (*8,4 GB*)”) và nút “Hủy”; bên nhận xong thì nút “Mở thư mục”.
 - Dòng 2: thanh tiến độ.
-- Dòng 3: nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang kiểm tra”, “Đang nối lại…”, “Xong ✓”, “Đã từ chối”, “Đã hủy”, “Lỗi”) và một dòng phụ: khi đang truyền “*45,0*% · *120 MB/s* · còn *2 phút*” (chưa đo được tốc độ thì thay “còn …” bằng “đang tính thời gian còn lại”); khi chờ thì câu chờ như bản CLI ở bảng dưới (máy nhận: “Đang chờ bạn trả lời” hoặc “Đang xếp hàng”); khi xong “Đã kiểm tra toàn vẹn”; khi dừng vì lỗi thì câu của mục 8.
+- Dòng 3: nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang kiểm tra”, “Đang nối lại…”, “Xong ✓”, “Đã từ chối”, “Đã hủy”, “Lỗi”) và một dòng phụ: khi đang truyền “*45,0*% · *120 MB/s* · còn *2 phút*” (phần trăm làm tròn xuống, chưa xong thì không hiện 100%; chưa đo được tốc độ thì bỏ phần tốc độ và thay “còn …” bằng “đang tính thời gian còn lại”; đang nối lại hay chờ dữ liệu thì câu ở mục 8); khi chờ thì câu chờ như bản CLI ở bảng dưới (máy nhận: “Đang chờ bạn trả lời” hoặc “Đang xếp hàng”); khi xong “Đã kiểm tra toàn vẹn”; khi dừng vì lỗi thì câu của mục 8.
 
 Bản CLI (`teleport receive`), mỗi lần một lời hỏi; lượt tới sau xếp hàng tới khi lời hỏi trước được trả lời. Tối đa 10 dòng file, còn lại gộp thành một dòng; cột dung lượng thẳng hàng:
 ```
@@ -471,6 +471,9 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Lượt dừng vì lý do khác (lý do máy này không biết, máy kia không còn biết lượt này…) | Máy gửi: “*PC-Nha* đã dừng lượt gửi.” Máy nhận: “*Laptop-Minh* đã dừng lượt gửi.” | — |
 | Đã tắt app gửi khi lượt truyền đang gián đoạn | “*Laptop-Minh* đã hủy lượt gửi *video.mp4*. Hãy nhờ gửi lại.” | — |
 | Mất mạng | “Đang nối lại…” (không phải lỗi) | Tự xử lý |
+| Giao diện: mất mạng giữa lượt (thẻ ở trạng thái “Đang nối lại…”) | Dòng phụ: “*45,0*% · Đang chờ *PC-Nha* nối lại…” (không hiện tốc độ và thời gian còn lại) | Tự xử lý |
+| Giao diện, máy nhận: đang truyền mà từ 5 giây trở lên không có dữ liệu mới | Dòng phụ: “*45,0*% · Đang chờ dữ liệu…” (không hiện tốc độ và thời gian còn lại) | Tự xử lý |
+| Giao diện, máy gửi: đang truyền mà từ 5 giây trở lên không gửi thêm được dữ liệu (kể cả lúc máy nhận đang kiểm tra file lớn) | Dòng phụ: “*45,0*% · Đang chờ *PC-Nha* phản hồi…” (không hiện tốc độ và thời gian còn lại) | Tự xử lý |
 | Mất kết nối quá lâu (quá hạn nối lại; kể cả lượt nhận dở khi app nhận mở lại sau hạn nối lại) | Máy gửi: “Mất kết nối với *PC-Nha* quá lâu nên lượt gửi đã dừng. Hãy gửi lại.” Máy nhận: “Mất kết nối với *Laptop-Minh* quá lâu nên đã dừng nhận. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.” | Nút “Gửi lại” |
 | Chọn gửi file không có quyền đọc | “Không mở được *video.mp4*: máy này không có quyền đọc file đó.” | Lượt gửi không bắt đầu |
 | Chọn gửi một thư mục | “*ảnh* không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file.” | Lượt gửi không bắt đầu |
