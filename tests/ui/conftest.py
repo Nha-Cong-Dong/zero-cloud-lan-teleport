@@ -198,6 +198,23 @@ def ui_helpers():
 # =================================================================================================
 
 
+@pytest.fixture(autouse=True)
+def qt_thread_gc(qapp):
+    """Mọi test ui: GC vòng tham chiếu chỉ chạy trên thread Qt (`teleport.ui.gcguard`), như `main`.
+
+    Nhiều test tự dựng `NodeHost`, peer, proxy… không qua `main`; không có guard thì GC ở các thread
+    đó có thể hủy widget/QTimer ngoài thread Qt (segfault trên CI macOS). Teardown: `stop()` thu gom
+    một lần trên thread chính rồi khôi phục trạng thái GC. Fixture autouse dựng trước fixture thường
+    của test nên được dọn sau cùng (sau khi host, peer đã dừng).
+    """
+    from teleport.ui.gcguard import GcGuard
+
+    guard = GcGuard()
+    guard.start()
+    yield guard
+    guard.stop()
+
+
 @pytest.fixture
 def config_dir(tmp_path):
     """`config_dir(label="A", identity=True) -> Path`: thư mục cấu hình mới dưới `tmp_path`."""

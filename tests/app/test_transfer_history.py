@@ -88,9 +88,23 @@ def entries_of(node, tid: str) -> list:
     return [e for e in node.transfers.history() if e.transfer_id == tid]
 
 
+def read_replaced(path: Path, budget: float = 1.0) -> bytes:
+    """Đọc `path` mà node có thể đang thay nguyên tử (`os.replace` trên thread đĩa). Trên Windows, mở file
+    đúng lúc nó đang được thay báo `PermissionError`: thử lại mỗi 20 ms trong `budget` giây, hết hạn thì
+    ném lại lỗi thật (không nuốt vĩnh viễn)."""
+    deadline = time.monotonic() + budget
+    while True:
+        try:
+            return path.read_bytes()
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.02)
+
+
 def file_obj(config: Path) -> dict | None:
     try:
-        return json.loads((config / "history.json").read_bytes())
+        return json.loads(read_replaced(config / "history.json"))
     except FileNotFoundError:
         return None
 

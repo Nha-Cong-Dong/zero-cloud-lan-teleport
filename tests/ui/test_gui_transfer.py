@@ -734,6 +734,17 @@ def files_under(directory: Path) -> list[Path]:
     return [x for x in directory.rglob("*") if x.is_file()]
 
 
+def quit_confirm_boxes() -> list:
+    """Hộp hỏi lại khi Thoát (objectName `quitConfirmBox`) đang hiện."""
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    return [
+        w
+        for w in QApplication.topLevelWidgets()
+        if isinstance(w, QMessageBox) and w.isVisible() and w.objectName() == "quitConfirmBox"
+    ]
+
+
 def notice_buttons(ctl, text: str) -> list:
     """Nút đang hiện trên dải thông báo của danh sách lượt có chữ `text` (như test_transfers_controller)."""
     from PySide6.QtWidgets import QPushButton
@@ -898,7 +909,15 @@ def test_j2_gui_resend_after_peer_refused_shows_notice_repair_button_and_no_new_
         yield gui_wait(lambda: repaired, 5, "nút “Ghép đôi lại” phát repair_requested")
         seen["repaired"] = repaired
         seen["files_b"] = files_under(tmp_path / "nhan-B")
+        # Lượt gửi đầu còn đứng ở “Đang nối lại…” (lỗi đang khóa bằng xfail ở test_j) thì Thoát hỏi lại
+        # (`quitConfirmBox`): chọn “Thoát” như người dùng.
+        sending = bool(ctl.active_sends())
         run.tray.quit_requested.emit()
+        if sending:
+            yield gui_wait(lambda: quit_confirm_boxes(), 5, "hộp hỏi lại khi Thoát")
+            [box] = quit_confirm_boxes()
+            [yes] = [btn for btn in box.buttons() if ui_helpers.plain(btn.text()) == "Thoát"]
+            yes.click()
 
     gui(["--config-dir", str(a)], script)
     assert seen["notice"] == REFUSED.format(name="May-B"), seen["notice"]
