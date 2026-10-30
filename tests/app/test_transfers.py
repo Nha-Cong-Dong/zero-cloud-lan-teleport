@@ -593,6 +593,7 @@ async def test_ac2_three_files_with_empty_one_open_data_only_for_non_empty(
     await wait_done_record(net, tid)
 
 
+@pytest.mark.slow
 @integration
 @pytest.mark.parametrize("client", ["sender", "receiver"])
 async def test_ac3_64_mib_random_file_two_directions(T, transfer_nodes, client):
@@ -783,6 +784,7 @@ async def test_ac10_existing_temp_dir_gives_temp_exists_and_is_left_untouched(T,
     assert received_names(net) == set()
 
 
+@pytest.mark.slow
 @integration
 async def test_receive_dir_deleted_while_running_is_recreated(T, transfer_nodes):
     """Lỗi demo 2026-10-29: người dùng xóa thư mục nhận khi node đang chạy → lượt sau vẫn nhận được
@@ -882,7 +884,10 @@ def ac13_expected(R, phase: str, canceller: str):
 
 
 @integration
-@pytest.mark.parametrize("phase", AC13_PHASES)
+# "sau-done" chờ tới khi lượt xong rồi mới hủy: đo được 0,7–3 s (PR-9, T7), nên gắn slow riêng ca đó.
+@pytest.mark.parametrize(
+    "phase", [pytest.param(p, marks=pytest.mark.slow) if p == "sau-done" else p for p in AC13_PHASES]
+)
 @pytest.mark.parametrize("canceller", ["A", "B"])
 async def test_ac13_cancel_matrix(T, transfer_nodes, write_spy, monkeypatch, phase, canceller):
     R = T.TransferResult
@@ -1433,6 +1438,7 @@ async def test_ac23_unpair_during_transfer(T, transfer_nodes, write_spy, fast, u
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 async def test_ac24_control_send_queue_overflow_closes_that_connection(
     T, transfer_nodes, send_spy, monkeypatch, caplog
@@ -1686,6 +1692,7 @@ async def test_ac28_rate_limit_8_mib_at_4_mib_per_second(T, transfer_nodes, fram
     assert 1.9 <= elapsed <= 6.0, f"8 MiB @ 4 MiB/s mất {elapsed:.2f} s"
 
 
+@pytest.mark.slow
 @integration
 async def test_rate_limit_and_auto_accept_properties(T, transfer_nodes):
     """Kế hoạch mục 3: `rate_limit` đọc/ghi (None hoặc int ≥ `MIN_RATE_LIMIT`; sai → ValueError, giữ

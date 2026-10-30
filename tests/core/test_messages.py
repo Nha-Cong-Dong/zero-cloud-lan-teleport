@@ -1155,6 +1155,7 @@ MESSAGE_CLASSES = (
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(any_message_input)
 def test_fuzz_parse_message_only_returns_message_or_message_error(obj):
@@ -1170,6 +1171,7 @@ def test_fuzz_parse_message_only_returns_message_or_message_error(obj):
     encode_message(d)
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(
     st.binary(max_size=300)
@@ -1184,6 +1186,7 @@ def test_fuzz_decode_body_then_parse_only_raises_protocol_errors(body):
     assert isinstance(msg, MESSAGE_CLASSES)
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None)
 @given(tricky_text | st.text(max_size=80) | json_scalars)
 def test_property_name_validation_matches_reference_rules(value):

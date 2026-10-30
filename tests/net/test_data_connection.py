@@ -1223,6 +1223,7 @@ async def test_header_then_silence_is_idle_timeout_and_peer_sees_close(
 # =================================================================================================
 
 
+@pytest.mark.slow
 @integration
 async def test_write_gives_up_after_drain_timeout_when_peer_never_reads(
     fast, monkeypatch, listener_factory, ids

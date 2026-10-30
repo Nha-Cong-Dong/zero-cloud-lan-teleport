@@ -918,6 +918,7 @@ def _check_rate_windows(m: _Model) -> None:
                     assert net <= bound + 1e-9, f"{pool} {key or 'tổng'} [{t1}, {t2}]: {net} > {bound}"
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops=st.lists(op_strategy, max_size=60))
 def test_random_operation_sequences_keep_every_invariant(ops):
@@ -1013,6 +1014,7 @@ def test_random_operation_sequences_keep_every_invariant(ops):
         assert (gate.opening_count, gate.anonymous_count) == (0, 0)
 
 
+@pytest.mark.slow
 @settings(max_examples=200, deadline=None)
 @given(
     times=st.lists(st.sampled_from([0.0, 0.25, 0.5, 1.0, 3.0]), min_size=1, max_size=40),

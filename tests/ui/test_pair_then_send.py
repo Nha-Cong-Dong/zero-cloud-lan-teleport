@@ -721,6 +721,7 @@ def test_a_drop_on_unpaired_peer_pairs_then_sends_automatically(
     assert seen["elapsed"] < 20, seen["elapsed"]
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_b_code_mismatch_drops_pending_no_offer_and_next_drop_pairs_again(
     gui, gui_wait, config_dir, peer_b, fake_mdns_for_gui, tmp_path, monkeypatch

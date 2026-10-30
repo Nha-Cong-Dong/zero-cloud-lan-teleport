@@ -1124,6 +1124,7 @@ def _check_rate_windows(m: _Model) -> None:
                     assert net <= burst + rate * (t2 - t1) + 1e-9, f"{pool} {key or 'tổng'} [{t1}, {t2}]"
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops=st.lists(op_strategy, max_size=70))
 def test_random_sequences_never_give_priority_to_demoted_ip(ops):
@@ -1248,6 +1249,7 @@ CAP_IPS = tuple(STRANGERS[:6])
 CAP_TTL = 5.1  # không phải bội số của 0,25: hạn không bao giờ trùng đúng một mốc `now`
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     cap=st.integers(1, 3),

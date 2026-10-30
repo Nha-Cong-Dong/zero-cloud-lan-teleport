@@ -18,10 +18,29 @@ không hiện lỗi kết nối.
 chỉ hiện khi là một trong các giá trị đã biết (`windows`, `macos`, `linux`).
 
 **Signal** (`ui.app` / `ui.transfers` nối): `pair_requested(DeviceView)` (chỉ khi thiết bị chưa
-ghép đôi và đang trong mạng, spec mục 9.1); `manual_address_entered(ip, cổng)` (đã qua
-`app.devices.parse_manual_address`); `send_files_requested(device_id, list[Path])` (kéo thả);
-`pick_files_requested(device_id)` (menu “Gửi file…”); `drop_hint_requested(câu)` (thả vào chỗ
-không có thiết bị); `unpair_requested(device_id)`.
+ghép đôi và đang trong mạng, spec mục 9.1: bấm một lần, bấm đúp, Enter, nút hay menu “Ghép
+đôi…”); `manual_address_entered(ip, cổng)` (đã qua `app.devices.parse_manual_address`);
+`send_files_requested(device_id, list[Path])` (kéo thả); `pick_files_requested(device_id)` (menu
+hay nút “Gửi file…”, bấm đúp / Enter trên thiết bị đã ghép đôi); `drop_hint_requested(câu)` (thả
+vào chỗ không có thiết bị); `unpair_requested(device_id)`.
+
+**Bấm chuột và nút theo hàng**: bấm trái một lần vào thiết bị chưa ghép đôi đang trong mạng = chọn
+hàng + “Ghép đôi…”; vào thiết bị đã ghép đôi thì chỉ chọn hàng. Bấm đúp = “Ghép đôi…” (chưa ghép)
+hay “Gửi file…” (đã ghép). Chuột phải chỉ mở menu. `_DeviceList` tự phát `row_clicked` /
+`row_double_clicked` / `row_entered` từ sự kiện chuột, phím (không dùng `activated` của Qt: tùy
+style nó phát ngay khi bấm một lần). Một lần bấm đúp là press, release, press + dblclick, release,
+nên mỗi lần bấm mang số **chuỗi bấm** (`_DeviceList._start_or_extend_chain`), quyết định lúc nhấn:
+nhấn khác hàng hay cách sự kiện trước của chuỗi quá `doubleClickInterval()` theo
+`QMouseEvent.timestamp()` thì mở chuỗi mới, không thì gia hạn (cửa sổ trượt; không theo giờ xử lý,
+vì luồng Qt có thể vừa bị chặn). Dblclick trên hàng của chuỗi thuộc chuỗi đó, trên hàng khác thì mở
+chuỗi mới; release sau dblclick, nhả ngoài hàng đã nhấn, hay nhấn thêm nút chuột khác giữa chừng,
+không tính là bấm. Mỗi chuỗi phát `pair_requested` (hay `pick_files_requested` khi bấm đúp) nhiều
+nhất một lần, vì lần thứ hai làm `PairingController.pair_device` hiện câu “đang bận”. Enter tự lặp
+khi giữ phím bị bỏ. Nút
+`device_action_button` (trái nút “Nhập IP thủ công”) theo thiết bị **được chọn** (không chỉ hàng
+hiện hành): “Gửi file…” / “Ghép đôi…”, không có thì ẩn; lúc bấm đọc lại view mới nhất của model.
+Bỏ một hàng thì lựa chọn trở về đúng thiết bị đã chọn trước đó, hay không chọn gì (Qt tự chọn hàng
+kế tiếp); đổi tên làm đổi thứ tự thì model dời hàng (`beginMoveRows`), lựa chọn đi theo.
 
 **Kéo thả** (mvp F4): danh sách nhận kéo khi `mimeData().hasUrls()` có ít nhất một URL file cục bộ
 (`ui.send.local_paths`, không chạm đĩa), tô viền hàng dưới con trỏ (màu `Highlight` của palette)
@@ -33,8 +52,9 @@ vào câu “Chưa thấy thiết bị nào”) → `drop_hint_requested` với 
 bị để gửi.”. URL không phải file cục bộ bị bỏ. `drop_files` là hàm công khai (seam test).
 
 **Bàn phím và trình đọc màn hình** (mvp N12): Tab / Shift+Tab đi qua **từng** thiết bị rồi mới ra
-khỏi danh sách (vào bằng Tab thì tới thiết bị đầu, bằng Shift+Tab thì tới thiết bị cuối); Enter
-(hay nhấp đúp) trên thiết bị chưa ghép đôi đang trong mạng = “Ghép đôi…”; phím Menu (hay
+khỏi danh sách (vào bằng Tab thì tới thiết bị đầu, bằng Shift+Tab thì tới thiết bị cuối), rồi tới
+nút theo hàng (khi hiện) và “Nhập IP thủ công”; Enter trên thiết bị hiện hành = “Ghép đôi…” (chưa
+ghép đôi, đang trong mạng) hay “Gửi file…” (đã ghép đôi), mỗi lần nhấn một lần; phím Menu (hay
 Shift+F10, chuột phải) mở menu của thiết bị đang chọn bằng `popup()` (không `exec()`): “Gửi file…”
 (thiết bị đã ghép đôi, hay chưa ghép đôi mà đang trong mạng), “Ghép đôi…”, “Hủy ghép đôi…”. Mỗi hàng có
 `AccessibleTextRole` một dòng; trạng thái luôn nói bằng chữ, không chỉ bằng màu.
@@ -73,6 +93,7 @@ from PySide6.QtGui import (
     QFocusEvent,
     QFont,
     QKeyEvent,
+    QMouseEvent,
     QPainter,
     QPaintEvent,
     QPalette,
@@ -80,6 +101,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -325,36 +347,123 @@ class DeviceListModel(QAbstractListModel):
 
     def _upsert(self, view: DeviceView) -> None:
         row = self.row_of(view.device_id)
-        if row >= 0 and _sort_key(self._rows[row]) == _sort_key(view):
-            self._rows[row] = view
-            index = self.index(row, 0)
-            self.dataChanged.emit(index, index)
-            return
-        if row >= 0:
-            self._remove(view.device_id)
         key = _sort_key(view)
+        others = self._rows if row < 0 else self._rows[:row] + self._rows[row + 1 :]
         position = 0
-        while position < len(self._rows) and _sort_key(self._rows[position]) < key:
+        while position < len(others) and _sort_key(others[position]) < key:
             position += 1
-        self.beginInsertRows(QModelIndex(), position, position)
-        self._rows.insert(position, view)
-        self.endInsertRows()
+        if row < 0:
+            self.beginInsertRows(QModelIndex(), position, position)
+            self._rows.insert(position, view)
+            self.endInsertRows()
+            return
+        if position != row:
+            # Đổi tên làm đổi thứ tự: dời hàng (không bỏ rồi chèn) để view giữ lựa chọn, hàng hiện hành.
+            destination = position if position < row else position + 1
+            self.beginMoveRows(QModelIndex(), row, row, QModelIndex(), destination)
+            del self._rows[row]
+            self._rows.insert(position, view)
+            self.endMoveRows()
+        self._rows[position] = view
+        index = self.index(position, 0)
+        self.dataChanged.emit(index, index)
 
 
 # ---- View ----------------------------------------------------------------------------------------
 
 
 class _DeviceList(QListView):
-    """`QListView` mà Tab đi qua từng hàng; menu ngữ cảnh báo qua `menu_requested`."""
+    """`QListView` mà Tab đi qua từng hàng; menu ngữ cảnh báo qua `menu_requested`; bấm chuột trái
+    và Enter báo qua `row_clicked` / `row_double_clicked` / `row_entered` (không qua `activated`)."""
 
     menu_requested = Signal(QModelIndex, QPoint)  # hàng (có thể không hợp lệ), vị trí toàn màn hình
     files_dropped = Signal(QModelIndex, list)  # hàng (có thể không hợp lệ), list[QUrl]
+    # Hai signal chuột kèm số của chuỗi bấm (xem `_start_or_extend_chain`): cùng số = cùng một chuỗi bấm đúp.
+    row_clicked = Signal(QModelIndex, int)  # bấm trái một lần: nhấn và nhả trên cùng hàng
+    row_double_clicked = Signal(QModelIndex, int)  # bấm đúp chuột trái lên hàng
+    row_entered = Signal(QModelIndex)  # Enter / Return trên hàng hiện hành (không tính phím tự lặp)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         self._drop_index = QPersistentModelIndex()  # hàng đang được kéo file qua (tô viền)
+        self._pressed_index = QPersistentModelIndex()  # hàng dưới lần nhấn chuột trái gần nhất
+        self._in_double_click = False  # đã có dblclick: lần nhả kế tiếp không tính là bấm
+        self._chain = 0  # số của chuỗi bấm hiện tại
+        self._chain_index = QPersistentModelIndex()  # hàng của chuỗi bấm hiện tại
+        self._chain_time = 0  # `timestamp()` (ms) của sự kiện chuột gần nhất thuộc chuỗi
+        self._dispatching_double = False  # đang trong `mouseDoubleClickEvent` của lớp cha
+
+    # Bấm chuột: một lần bấm đúp của Qt là press, release, press + dblclick, release (QTest có thể
+    # gửi riêng dblclick, không press).
+
+    def _in_chain(self, index: QModelIndex) -> bool:
+        return self._chain_index.isValid() and QPersistentModelIndex(index) == self._chain_index
+
+    def _start_or_extend_chain(self, index: QModelIndex, timestamp: int) -> None:
+        """Chuỗi bấm quyết định lúc **nhấn** chuột trái.
+
+        Nhấn khác hàng, hay cách sự kiện trước của chuỗi quá `doubleClickInterval()` (tính theo
+        `timestamp()` của sự kiện, không theo giờ xử lý; hiệu âm do quay vòng cũng vậy) → chuỗi mới.
+        Nhấn trong khoảng đó trên cùng hàng → gia hạn mốc (cửa sổ trượt). Nhờ vậy dblclick, luôn đi
+        sau một lần nhấn, tính vào chuỗi đang có mà không cần xét thời gian từ lần nhả trước.
+        """
+        elapsed = timestamp - self._chain_time
+        if not index.isValid():
+            self._chain_index = QPersistentModelIndex()
+        elif not (self._in_chain(index) and 0 <= elapsed <= QApplication.doubleClickInterval()):
+            self._chain += 1
+            self._chain_index = QPersistentModelIndex(index)
+        self._chain_time = timestamp
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        self._in_double_click = False
+        if event.button() == Qt.MouseButton.LeftButton:
+            index = self.indexAt(event.position().toPoint())
+            self._pressed_index = QPersistentModelIndex(index)
+            if not self._dispatching_double:  # press do lớp cha tự dựng trong dblclick: không tính
+                self._start_or_extend_chain(index, event.timestamp())
+        else:  # nhấn nút khác giữa chừng: hủy lần bấm trái đang dở
+            self._pressed_index = QPersistentModelIndex()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        # Lớp cha có thể gọi lại `mousePressEvent` (dblclick không theo sau một press trên cùng hàng),
+        # nên `_dispatching_double` bật quanh lời gọi (press tự dựng đó không mở chuỗi mới), còn
+        # `_in_double_click` và `_pressed_index` chỉ đặt sau khi gọi.
+        self._dispatching_double = True
+        try:
+            super().mouseDoubleClickEvent(event)
+        finally:
+            self._dispatching_double = False
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._in_double_click = True
+        self._pressed_index = QPersistentModelIndex()
+        index = self.indexAt(event.position().toPoint())
+        if not index.isValid():
+            return
+        if not self._in_chain(index):  # dblclick trên hàng khác hàng của chuỗi: tính như bấm mới
+            self._chain += 1
+            self._chain_index = QPersistentModelIndex(index)
+        self._chain_time = event.timestamp()
+        self.row_double_clicked.emit(index, self._chain)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        pressed, self._pressed_index = self._pressed_index, QPersistentModelIndex()
+        in_double_click, self._in_double_click = self._in_double_click, False
+        super().mouseReleaseEvent(event)
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        index = self.indexAt(event.position().toPoint())
+        if index.isValid() and self._in_chain(index):
+            self._chain_time = event.timestamp()  # mọi sự kiện của chuỗi dời mốc
+        # Nhả sau dblclick, hay nhả ở chỗ khác hàng đã nhấn (kéo ra ngoài): không là một lần bấm.
+        if in_double_click or not pressed.isValid() or not index.isValid():
+            return
+        if QPersistentModelIndex(index) == pressed and self._in_chain(index):
+            self.row_clicked.emit(index, self._chain)
 
     # Kéo thả tự xử lý (model không hỗ trợ mime): chỉ nhận URL file cục bộ, không chạm đĩa.
 
@@ -452,7 +561,8 @@ class _DeviceList(QListView):
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key, modifiers = event.key(), event.modifiers()
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.currentIndex().isValid():
-            self.activated.emit(self.currentIndex())
+            if not event.isAutoRepeat():  # giữ phím: mỗi lần nhấn thật chỉ một lần
+                self.row_entered.emit(self.currentIndex())
             event.accept()
             return
         # Phím Menu / Shift+F10 xử lý ngay ở đây (nhận rồi thì Qt không sinh thêm QContextMenuEvent),
@@ -511,7 +621,7 @@ class RadarView(QWidget):
     pair_requested = Signal(object)  # DeviceView: chưa ghép đôi, đang trong mạng
     manual_address_entered = Signal(str, int)  # ip, cổng
     send_files_requested = Signal(str, list)  # device_id, list[Path] (kéo thả)
-    pick_files_requested = Signal(str)  # device_id (menu “Gửi file…”)
+    pick_files_requested = Signal(str)  # device_id (menu / nút “Gửi file…”, bấm đúp, Enter)
     drop_hint_requested = Signal(str)  # câu gợi ý (thả vào chỗ không có thiết bị)
     unpair_requested = Signal(str)  # device_id
 
@@ -521,6 +631,12 @@ class RadarView(QWidget):
         self.model = DeviceListModel(self)
         self._menu: QMenu | None = None
         self._restore_id: str | None = None
+        self._restore_selected = False
+        self._selected_before_remove: str | None = None  # device_id được chọn ngay trước khi bỏ hàng
+        # Số chuỗi bấm (`_DeviceList._start_or_extend_chain`) đã phát `pair_requested` /
+        # `pick_files_requested` do chuột: mỗi chuỗi bấm đúp chỉ phát một lần.
+        self._pair_chain = 0
+        self._pick_chain = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -536,6 +652,8 @@ class RadarView(QWidget):
 
         self.list_view = _DeviceList(self)
         self.list_view.setObjectName("deviceList")
+        # Nối trước `setModel`: phải thấy lựa chọn trước khi view dời nó sang hàng kế tiếp.
+        self.model.rowsAboutToBeRemoved.connect(self._remember_removed_selection)
         self.list_view.setModel(self.model)
         self.list_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -544,10 +662,17 @@ class RadarView(QWidget):
         self.list_view.setSpacing(4)
         self.list_view.setTabKeyNavigation(False)  # Tab do `_DeviceList.focusNextPrevChild` xử lý
         self.list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
-        self.list_view.activated.connect(self._on_activated)
+        self.list_view.row_clicked.connect(self._on_row_clicked)
+        self.list_view.row_double_clicked.connect(self._on_row_double_clicked)
+        self.list_view.row_entered.connect(self._on_row_entered)
         self.list_view.menu_requested.connect(self._on_menu_requested)
         self.list_view.files_dropped.connect(self._on_files_dropped)
         self.setAcceptDrops(True)  # thả vào câu “Chưa thấy thiết bị nào” hay chỗ trống khác → gợi ý
+
+        self.device_action_button = QPushButton(self)  # “Gửi file…” / “Ghép đôi…” theo thiết bị được chọn
+        self.device_action_button.setObjectName("deviceActionButton")
+        self.device_action_button.clicked.connect(self._on_device_action)
+        self.device_action_button.hide()
 
         self.address_button = QPushButton(self)
         self.address_button.setObjectName("addressButton")
@@ -591,13 +716,16 @@ class RadarView(QWidget):
         layout.addWidget(self.empty_label, 1, Qt.AlignmentFlag.AlignTop)  # chiếm chỗ của danh sách khi trống
         layout.addWidget(self.list_view, 1)
         address_row = QHBoxLayout()
+        address_row.addWidget(self.device_action_button)
         address_row.addWidget(self.address_button)
         address_row.addStretch(1)
         layout.addLayout(address_row)
         layout.addWidget(self.address_panel)
 
+        # Nút theo hàng đang ẩn thì Tab tự bỏ qua, đi thẳng tới “Nhập IP thủ công”.
         QWidget.setTabOrder(self.empty_label, self.list_view)
-        QWidget.setTabOrder(self.list_view, self.address_button)
+        QWidget.setTabOrder(self.list_view, self.device_action_button)
+        QWidget.setTabOrder(self.device_action_button, self.address_button)
         QWidget.setTabOrder(self.address_button, self.address_edit)
         QWidget.setTabOrder(self.address_edit, self.address_cancel)
         QWidget.setTabOrder(self.address_cancel, self.address_submit)
@@ -607,6 +735,14 @@ class RadarView(QWidget):
         self.model.modelReset.connect(self._update_empty)
         self.model.rowsInserted.connect(self._update_empty)
         self.model.rowsRemoved.connect(self._update_empty)
+        self.model.rowsRemoved.connect(self._keep_selection_after_remove)
+        self.model.modelReset.connect(self._update_device_action)
+        self.model.rowsInserted.connect(self._update_device_action)
+        self.model.rowsRemoved.connect(self._update_device_action)
+        self.model.dataChanged.connect(self._update_device_action)
+        selection = self.list_view.selectionModel()
+        if selection is not None:
+            selection.selectionChanged.connect(self._update_device_action)
 
         self.retranslate()
         self._update_empty()
@@ -746,7 +882,7 @@ class RadarView(QWidget):
         heading = t("Radar", "Thiết bị trong mạng")
         self.heading_label.setText(heading)
         self.heading_label.setAccessibleName(heading)
-        hint = t("Radar", "Kéo file thả vào một thiết bị")
+        hint = t("Radar", "Bấm vào một thiết bị để ghép đôi hoặc gửi file, hoặc kéo file thả vào.")
         self.hint_label.setText(hint)
         self.hint_label.setAccessibleName(hint)
         self.empty_label.setText(no_devices_text())
@@ -754,8 +890,13 @@ class RadarView(QWidget):
         self.empty_label.setAccessibleDescription(no_devices_text())
         self.list_view.setAccessibleName(heading)
         self.list_view.setAccessibleDescription(
-            t("Radar", "Tab hoặc phím mũi tên để chọn thiết bị, phím Menu để mở các thao tác.")
+            t(
+                "Radar",
+                "Tab hoặc phím mũi tên để chọn thiết bị, Enter để ghép đôi hoặc gửi file, "
+                "phím Menu để mở các thao tác.",
+            )
         )
+        self._update_device_action()
         manual = t("Radar", "Nhập IP thủ công")
         self.address_button.setText(manual)
         self.address_button.setAccessibleName(manual)
@@ -794,18 +935,115 @@ class RadarView(QWidget):
     def _remember_current(self) -> None:
         view = self.selected_device()
         self._restore_id = None if view is None else view.device_id
+        chosen = self._chosen_device()
+        self._restore_selected = (
+            view is not None and chosen is not None and chosen.device_id == view.device_id
+        )
 
     def _restore_current(self) -> None:
         device_id, self._restore_id = self._restore_id, None
-        if device_id is not None:
+        if device_id is None:
+            return
+        if self._restore_selected:
             self.select_device(device_id)
+            return
+        # Hàng hiện hành mà chưa được chọn: giữ như vậy (nút theo hàng vẫn ẩn).
+        row = self.model.row_of(device_id)
+        selection = self.list_view.selectionModel()
+        if row >= 0 and selection is not None:
+            selection.setCurrentIndex(self.model.index(row, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
 
-    def _on_activated(self, index: QModelIndex) -> None:
-        device_id = index.data(DEVICE_ID_ROLE)
-        if isinstance(device_id, str):
-            view = self.model.device(device_id)
-            if view is not None and not view.paired:
-                self._request_pair(device_id)
+    def _remember_removed_selection(self) -> None:
+        chosen = self._chosen_device()
+        self._selected_before_remove = None if chosen is None else chosen.device_id
+
+    def _keep_selection_after_remove(self) -> None:
+        # Bỏ hàng hiện hành thì Qt chọn luôn hàng kế tiếp, dù người dùng chưa chọn nó: đưa lựa chọn
+        # về đúng thiết bị đã chọn trước đó, hoặc không chọn gì (nút theo hàng không trỏ sang máy khác).
+        device_id, self._selected_before_remove = self._selected_before_remove, None
+        selection = self.list_view.selectionModel()
+        if selection is None:
+            return
+        chosen = self._chosen_device()
+        if device_id is not None and self.model.row_of(device_id) >= 0:
+            if chosen is None or chosen.device_id != device_id:
+                self.select_device(device_id)
+        elif chosen is not None:
+            selection.clearSelection()
+
+    def _chosen_device(self) -> DeviceView | None:
+        """View mới nhất của thiết bị **được chọn** (không chỉ là hàng hiện hành); không có → None."""
+        selection = self.list_view.selectionModel()
+        if selection is None:
+            return None
+        for index in selection.selectedIndexes():
+            device_id = index.data(DEVICE_ID_ROLE)
+            if isinstance(device_id, str):
+                view = self.model.device(device_id)
+                if view is not None:
+                    return view
+        return None
+
+    def _update_device_action(self) -> None:
+        """Chữ và trạng thái hiện/ẩn của nút theo hàng (xem docstring module)."""
+        t = QCoreApplication.translate
+        button = self.device_action_button
+        view = self._chosen_device()
+        if view is None or not (view.paired or view.online):
+            button.hide()
+            return
+        name = texts.peer_label(view.name, view.device_id)
+        if view.paired:
+            text = t("Radar", "Gửi file…")
+            description = texts.fill(t("Radar", "Gửi file tới {name}"), name=name)
+        else:
+            text = t("Radar", "Ghép đôi…")
+            description = texts.fill(t("Radar", "Ghép đôi với {name}"), name=name)
+        button.setText(text)
+        button.setAccessibleName(text)
+        button.setAccessibleDescription(description)
+        button.show()
+
+    def _on_device_action(self) -> None:
+        view = self._chosen_device()  # đọc lại lúc bấm: thiết bị có thể vừa ghép xong hay hủy ghép
+        if view is None:
+            return
+        if view.paired:
+            self._request_pick(view.device_id)
+        else:
+            self._request_pair(view.device_id)
+
+    def _device_at(self, index: QModelIndex) -> DeviceView | None:
+        device_id = index.data(DEVICE_ID_ROLE) if index.isValid() else None
+        return self.model.device(device_id) if isinstance(device_id, str) else None
+
+    def _on_row_clicked(self, index: QModelIndex, chain: int) -> None:
+        view = self._device_at(index)
+        if view is not None and not view.paired:
+            self._mouse_pair(view.device_id, chain)
+
+    def _on_row_double_clicked(self, index: QModelIndex, chain: int) -> None:
+        view = self._device_at(index)
+        if view is None:
+            return
+        if not view.paired:
+            self._mouse_pair(view.device_id, chain)
+        elif chain != self._pick_chain and self._request_pick(view.device_id):
+            self._pick_chain = chain
+
+    def _on_row_entered(self, index: QModelIndex) -> None:
+        view = self._device_at(index)
+        if view is None:
+            return
+        if view.paired:
+            self._request_pick(view.device_id)
+        else:
+            self._request_pair(view.device_id)
+
+    def _mouse_pair(self, device_id: str, chain: int) -> None:
+        """`_request_pair` do chuột, mỗi chuỗi bấm (`_DeviceList._start_or_extend_chain`) chỉ một lần."""
+        if chain != self._pair_chain and self._request_pair(device_id):
+            self._pair_chain = chain
 
     def _on_menu_requested(self, index: QModelIndex, global_pos: QPoint) -> None:
         device_id = index.data(DEVICE_ID_ROLE) if index.isValid() else None
@@ -820,21 +1058,25 @@ class RadarView(QWidget):
             old.deleteLater()
         menu.popup(global_pos)
 
-    def _request_pair(self, device_id: str) -> None:
+    def _request_pair(self, device_id: str) -> bool:
         """Phát `pair_requested` với view mới nhất, chỉ khi chưa ghép đôi và đang trong mạng."""
         view = self.model.device(device_id)
         if view is not None and not view.paired and view.online:
             self.pair_requested.emit(view)
+            return True
+        return False
 
     def _on_files_dropped(self, index: QModelIndex, urls: list[QUrl]) -> None:
         device_id = index.data(DEVICE_ID_ROLE) if index.isValid() else None
         self.drop_files(device_id if isinstance(device_id, str) else None, urls)
 
-    def _request_pick(self, device_id: str) -> None:
+    def _request_pick(self, device_id: str) -> bool:
         """Phát `pick_files_requested` nếu thiết bị vẫn còn trên radar và gửi tới được."""
         view = self.model.device(device_id)
         if view is not None and can_receive_files(view):
             self.pick_files_requested.emit(device_id)
+            return True
+        return False
 
     def _request_unpair(self, device_id: str) -> None:
         view = self.model.device(device_id)

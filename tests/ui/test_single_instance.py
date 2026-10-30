@@ -180,6 +180,7 @@ def test_close_releases_gui_lock_and_dir_can_be_acquired_again(qtbot, tmp_path, 
             again.close()
 
 
+@pytest.mark.slow
 def test_second_process_sends_show_and_exits_0(qtbot, instances, tmp_path):
     """Bản thứ hai là tiến trình thật (`python -m teleport.ui --config-dir D`): gửi `show`, trả 0, không
     mở cửa sổ thứ hai. Thư mục không có `device.crt`: lỡ bản hai không nhận ra bản một thì cũng không chạy
@@ -214,6 +215,7 @@ def test_second_process_sends_show_and_exits_0(qtbot, instances, tmp_path):
 # --- Server IPC: dữ liệu từ tiến trình khác không tin cậy --------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "payload",
     [b"hello\n", b"SHOW\n", b"show", b"show\r\n", b"x" * 17, b"x" * 4096, b"\x00\xff" * 8],
@@ -232,6 +234,7 @@ def test_server_ignores_garbage_and_closes(qtbot, instances, tmp_path, payload):
     sock.abort()
 
 
+@pytest.mark.slow
 def test_silent_client_is_dropped_after_about_1s(qtbot, instances, tmp_path):
     from teleport.ui.app import server_name
 
@@ -246,6 +249,7 @@ def test_silent_client_is_dropped_after_about_1s(qtbot, instances, tmp_path):
     sock.abort()
 
 
+@pytest.mark.slow
 def test_valid_show_still_works_while_silent_clients_are_open(qtbot, instances, tmp_path):
     """Tối đa 4 kết nối cùng lúc: kẻ mở nhiều kết nối im lặng không làm server treo; `show` thật vẫn tới
     (ngay, hoặc sau khi các kết nối im lặng hết hạn 1 s)."""
@@ -279,6 +283,7 @@ def test_valid_show_still_works_while_silent_clients_are_open(qtbot, instances, 
             s.abort()
 
 
+@pytest.mark.slow
 def test_show_via_raw_socket_emits_once(qtbot, instances, tmp_path):
     from teleport.ui.app import server_name
 
@@ -320,6 +325,7 @@ def test_lock_is_tried_before_socket_so_squatted_name_cannot_block(qtbot, instan
         squatter.close()
 
 
+@pytest.mark.slow
 def test_stop_listening_then_second_acquire_times_out_not_swallowed(qtbot, instances, tmp_path):
     """Bản một đang thoát (server đã đóng, `gui.lock` còn giữ): bản hai không được coi là đã gửi `show`
     (None) mà phải hết hạn (TimeoutError → `main` trả 1)."""

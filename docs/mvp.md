@@ -148,7 +148,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **US-06:** Tôi muốn kéo một hoặc nhiều file thả vào thiết bị trên radar để gửi.
 - **US-07:** Là người nhận, tôi muốn biết ai gửi gì và được quyền từ chối.
 - **AC:**
-  - Kéo thả, hoặc bấm chuột phải vào thiết bị → “Gửi file…”, đều được; hỗ trợ chọn nhiều file.
+  - Kéo thả, hoặc “Gửi file…” (chuột phải vào thiết bị, hay chọn thiết bị đã ghép đôi rồi bấm nút “Gửi file…” / bấm đúp / Enter), đều được; hỗ trợ chọn nhiều file.
   - Mỗi file tối đa 4 TB (2⁴² byte, [protocol.md](protocol.md) mục 3.3). File lớn hơn bị chặn ngay lúc chọn, trước khi gửi gì cho máy kia (mục 8).
   - Máy nhận hiện hộp thoại: tên người gửi, danh sách file, tổng dung lượng, nút **Nhận** / **Từ chối**. Có tùy chọn “Luôn nhận từ thiết bị này” (tương đương tắt “Hỏi trước khi nhận” của thiết bị đó trong cài đặt).
   - Không đủ dung lượng trống → máy nhận tự từ chối ngay, máy gửi được báo cần bao nhiêu và còn bao nhiêu.
@@ -275,8 +275,8 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 │ │       ·        Bạn   (chưa ghép) │ ├───────────────────────┤ │
 │ │            ·    ·    ·           │ │ Gần đây               │ │
 │ └──────────────────────────────────┘ │ ✔ report.pdf ← PC-Nha │ │
-│   Kéo file thả vào một thiết bị      │ ✔ build.zip → PC-Nha  │ │
-│   [ Nhập IP thủ công ]               └───────────────────────┘ │
+│   Bấm vào thiết bị hoặc kéo file vào │ ✔ build.zip → PC-Nha  │ │
+│   [ Gửi file… ] [ Nhập IP thủ công ] └───────────────────────┘ │
 │   [ Chờ ghép đôi ]                                             │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -485,6 +485,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: có file gửi tới | Hộp hỏi ở mục 7.3; bóng thoại ở khay: “Có file đang chờ bạn nhận.” | Nút “Nhận”, “Từ chối” trong hộp hỏi |
 | Giao diện: nhận xong một lượt | Bóng thoại ở khay: “Đã nhận *3* file từ *Laptop-Minh*.” (một file: “Đã nhận *video.mp4* từ *Laptop-Minh*.”, với tên file đã lưu trên máy này, ví dụ *video (1).mp4* khi thư mục nhận đã có file cùng tên) | Nút “Mở thư mục” trên thẻ của lượt |
 | Giao diện: chưa có lượt truyền nào trong lần mở app này | “Kéo file vào một thiết bị để gửi” (ở khung lượt truyền) | — |
+| Giao diện: câu gợi ý dưới tiêu đề radar | “Bấm vào một thiết bị để ghép đôi hoặc gửi file, hoặc kéo file thả vào.” | Bấm thiết bị chưa ghép đôi → ghép đôi; chọn thiết bị đã ghép đôi → nút “Gửi file…” |
 | Giao diện: thả file vào chỗ không có thiết bị trên radar | “Thả file lên một thiết bị để gửi.” | — |
 | Giao diện: gửi tới thiết bị chưa ghép đôi | Mở luồng ghép đôi (mục 7.2); ghép xong thì tự gửi | — |
 | Giao diện: gửi tiếp khi đang chờ ghép đôi để gửi một lượt khác | “Đang chờ ghép đôi với *PC-Nha* để gửi file. Hãy chờ xong rồi gửi tiếp.” (*PC-Nha* là máy đang chờ ghép đôi, không phải máy vừa được chọn gửi) | Chờ lần ghép đôi đang chạy xong rồi gửi lại |

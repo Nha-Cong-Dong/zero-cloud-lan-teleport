@@ -277,6 +277,7 @@ any_text = st.lists(
 ).map("".join)
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None)
 @given(t=any_text)
 def test_property_normalize_text_matches_reference(t):
@@ -737,6 +738,7 @@ def test_png_exactly_ten_mib_fits_and_reassembles():
 # --- 5.2: chia rồi ráp (hypothesis) ------------------------------------------------------------
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(t=any_text)
 def test_property_text_split_then_assemble(t):
@@ -1610,6 +1612,7 @@ def test_property_arbitrary_sequences_never_raise_and_stay_bounded(ops, data):
     assert a.buffered_bytes() == 0
 
 
+@pytest.mark.slow
 @settings(max_examples=200, deadline=None)
 @given(clips=st.lists(st.tuples(st.integers(0, 2), good_clip()), min_size=1, max_size=6), data=st.data())
 def test_property_interleaved_devices_each_clip_ready_or_dropped(clips, data):

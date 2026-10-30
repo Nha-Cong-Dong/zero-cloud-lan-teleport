@@ -1424,6 +1424,7 @@ def test_h1_round_trip_of_any_valid_frame_sequence_cut_anywhere(peer, seq, data)
     run_bounded(run())
 
 
+@pytest.mark.slow
 @PROPERTY
 @given(
     size=st.one_of(st.just(0), st.integers(1, 5 * BLOCK_SIZE), st.integers(0, MAX_FILE_SIZE)),
@@ -1538,6 +1539,7 @@ def _as_buffer(kind: str, data: bytes):
     return (buf if kind == "bytearray" else memoryview(buf)), buf
 
 
+@pytest.mark.slow
 @PROPERTY
 @given(
     chunk=st.integers(1, 64),

@@ -137,6 +137,7 @@ async def test_new_properties_before_start(tmp_path):
     await node.close()
 
 
+@pytest.mark.slow
 @integration
 async def test_nf1_start_order_and_advertise_arguments(node_factory, fake_mdns):
     fake_mdns.local_addresses = ("192.0.2.5",)

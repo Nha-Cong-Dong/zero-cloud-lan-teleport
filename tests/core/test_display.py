@@ -344,6 +344,7 @@ def test_h1_any_valid_device_name_fits_32_columns_without_blank_chars(display, n
     _check(name, display.display_name(name), WIDTH)
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(name=st.text(alphabet=_CHARS, max_size=200), width=st.integers(min_value=2, max_value=80))
 def test_h1_any_text_fits_any_width(display, name, width):
@@ -533,6 +534,7 @@ def test_p27_display_filename_custom_width(display):
     assert columns(out) <= 20 and out.endswith(".gz"), out
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None)
 @given(
     stem=st.text(alphabet=_CHARS, min_size=1, max_size=200),
