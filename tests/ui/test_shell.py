@@ -8,8 +8,12 @@ test chỉ có màn “Bắt đầu” (không node) thì không.
 
 from __future__ import annotations
 
+import dataclasses
 import os
+import re
+import socket
 import time
+from pathlib import Path
 
 import pytest
 
@@ -365,3 +369,147 @@ def test_main_returns_1_with_message_when_holder_does_not_answer(gui, config_dir
     assert run.code == 1
     assert run.windows == [] and run.hosts == []
     assert any(ui_helpers.QUITTING in t for t in run.exec_texts), run.exec_texts
+
+
+# --- Lỗi khởi động: cổng bận (E5) và câu của mọi mã StartError (mvp mục 8, các dòng “Giao diện: … khi
+# khởi động”) ---------------------------------------------------------------------------------------------
+
+E5_HEAD_RE = re.compile(r"Không mở được cổng để nhận kết nối \((.+)\)\.")  # mvp mục 8, “*lỗi*” là (.+)
+E5_HINT = "Hãy đóng ứng dụng đang dùng cổng đó rồi bấm Thử lại."  # mvp mục 8, cùng dòng
+
+
+def busy_port_socket() -> socket.socket:
+    """Socket TCP đang nghe trên 127.0.0.1 cổng ngẫu nhiên, giữ độc quyền (Windows: SO_EXCLUSIVEADDRUSE)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    if exclusive is not None:
+        s.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+    s.bind(("127.0.0.1", 0))
+    s.listen()
+    return s
+
+
+@integration
+def test_start_error_port_busy_shows_e5_with_retry(gui, gui_wait, config_dir, monkeypatch, ui_helpers):
+    """Cổng của node đang bị chương trình khác giữ → câu E5 + “Thử lại”; giải phóng cổng rồi bấm “Thử lại”
+    → node chạy trên đúng cổng đó, câu E5 biến mất."""
+    from teleport.ui import bridge
+
+    blocker = busy_port_socket()
+    port = blocker.getsockname()[1]
+    real_init = bridge.NodeHost.__init__
+
+    # Fixture `gui` ép cổng 0 rồi gọi `__init__` đang có lúc nó chạy (hàm này): đặt lại cổng bận.
+    def init_on_busy_port(self, options, *args, **kwargs):
+        real_init(self, dataclasses.replace(options, port=port), *args, **kwargs)
+
+    monkeypatch.setattr(bridge.NodeHost, "__init__", init_on_busy_port)
+    d = config_dir("A")
+    seen: dict = {}
+
+    def script(run):
+        yield gui_wait(
+            lambda: run.windows and E5_HINT in ui_helpers.all_text(run.window), 15, "câu E5 trên cửa sổ"
+        )
+        seen["text"] = ui_helpers.all_text(run.window)
+        seen["retry_buttons"] = len(ui_helpers.buttons_with_text(run.window, ui_helpers.RETRY))
+        seen["running_before"] = host_started(run)
+        blocker.close()
+        [retry] = ui_helpers.buttons_with_text(run.window, ui_helpers.RETRY)
+        retry.click()
+        yield gui_wait(lambda: len(run.hosts) >= 2 and host_started(run), 15, "node chạy sau Thử lại")
+        got: list = []
+        run.host.call(lambda node: node.port, got.append)
+        yield gui_wait(lambda: got, 5, "cổng của node")
+        seen["port"] = got[0]
+        seen["e5_gone"] = E5_HINT not in ui_helpers.all_text(run.window)
+        quit_via_tray(run, ui_helpers.plain)
+
+    try:
+        run = gui(["--config-dir", str(d)], script)
+    finally:
+        blocker.close()
+    text = seen["text"]
+    m = E5_HEAD_RE.search(text)
+    assert m is not None, f"thiếu câu chính E5: {text!r}"
+    assert m.group(1).strip(), "chỗ *lỗi* phải có chữ (lỗi của hệ điều hành)"
+    assert "{" not in text
+    assert seen["retry_buttons"] == 1
+    assert seen["running_before"] is False
+    assert seen["port"] == port, "Thử lại phải chạy node trên đúng cổng vừa được giải phóng"
+    assert seen["e5_gone"]
+    assert run.code == 0
+
+
+START_ERROR_DETAILS = {
+    "locked": "",
+    "config_dir": "D:\\X\nAccess is denied",
+    "identity": "",
+    "trust_store": "",
+    "receive_dir": r"D:\Downloads\Teleport",
+    "port": "Only one usage of each socket address is normally permitted",
+    "other": "ZeroDivisionError",
+}
+# Dòng gợi ý của từng mã, nguyên văn mvp mục 8 (các dòng “Giao diện: … khi khởi động”, M2).
+START_ERROR_HINTS = {
+    "locked": "Hãy dừng nó rồi bấm Thử lại.",
+    "config_dir": "Hãy kiểm tra quyền ghi vào thư mục đó rồi bấm Thử lại.",
+    "identity": "Hãy chạy “teleport identity” trong cửa sổ dòng lệnh để xem chi tiết.",
+    "trust_store": "Hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết.",
+    "receive_dir": "Hãy kiểm tra ổ đĩa và quyền ghi rồi bấm Thử lại.",
+    "port": E5_HINT,
+    "other": (
+        "Hãy bấm Thử lại; nếu vẫn lỗi, hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết."
+    ),
+}
+
+
+@pytest.mark.parametrize("code", list(START_ERROR_DETAILS))
+def test_start_error_text_for_every_code_is_filled(qapp, code):
+    """Mọi mã `StartError`: câu chính không rỗng, dòng gợi ý đúng mvp mục 8, mọi `{chỗ}` đã được điền; chi
+    tiết (đường dẫn / lỗi) có trong câu khi mã đó dùng chi tiết."""
+    from teleport.ui import texts
+
+    detail = START_ERROR_DETAILS[code]
+    head, hints = texts.start_error(code, detail)
+    assert head.strip()
+    assert hints == [START_ERROR_HINTS[code]]
+    for line in (head, *hints):
+        assert "{" not in line and "}" not in line, line
+        assert "`" not in line, line
+    if code == "config_dir":
+        assert head == r"Không dùng được thư mục cấu hình D:\X (Access is denied)."
+    elif code == "receive_dir":
+        assert head == f"Không dùng được thư mục nhận {detail}."
+    elif code == "port":
+        assert head == f"Không mở được cổng để nhận kết nối ({detail})."
+
+
+def test_start_error_hints_match_mvp_doc():
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "mvp.md").read_text(encoding="utf-8")
+    for hint in START_ERROR_HINTS.values():
+        assert f"“{hint}”" in doc, hint
+    assert "“Không mở được cổng để nhận kết nối (*lỗi*).”" in doc
+
+
+def test_start_error_every_code_has_a_case_in_this_table():
+    from teleport.ui.bridge import StartError
+
+    assert {c.value for c in StartError} == set(START_ERROR_DETAILS)
+
+
+def test_start_error_detail_with_braces_is_not_filled_again(qapp):
+    """Chi tiết lỗi chứa `{path}` / `{error}` (chữ của hệ điều hành, đường dẫn lạ) được chèn một lượt: giữ
+    nguyên, không bị thay tiếp."""
+    from teleport.ui import texts
+
+    head, _ = texts.start_error("port", "{error}")
+    assert head == "Không mở được cổng để nhận kết nối ({error})."
+    head, _ = texts.start_error("config_dir", "C:\\{error}\n{path}")
+    assert r"C:\{error}" in head and "({path})" in head
+
+
+def test_start_error_unknown_code_uses_other_sentence(qapp):
+    from teleport.ui import texts
+
+    assert texts.start_error("ma-la") == texts.start_error("other")
