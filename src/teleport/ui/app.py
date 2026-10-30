@@ -57,6 +57,10 @@ và khay, `NodeHost.stop()` (không chặn), `stopped` → `quit()`; kèm
 `stop()` lần nữa (không sao), đóng `SingleInstance`, `join(JOIN_TIMEOUT)`; thread node vẫn sống
 thì ghi log, `logging.shutdown()`, `os._exit(1)`.
 
+**GC chỉ trên thread Qt** (`ui.gcguard.GcGuard`): ngay sau khi có `QApplication` (trừ `--selftest`),
+`main` tắt GC tự động và thu gom định kỳ trên thread Qt, để đối tượng PySide trong vòng tham chiếu
+không bị hủy ở thread node hay thread đĩa; khôi phục sau `shutdown()`.
+
 Ctrl+C ở cửa sổ dòng lệnh (khi chạy `python -m teleport.ui`): handler SIGINT hẹn luồng Thoát bằng
 `QTimer.singleShot(0, …)` (không gọi thẳng giữa chừng một slot Qt); một
 `QTimer` rỗng 200 ms cho Python có dịp chạy handler trong lúc Qt giữ vòng lặp.
@@ -97,6 +101,7 @@ from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
 from teleport.ui import errorlog, i18n, send, texts, theme
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError
+from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, ViewState
 from teleport.ui.pairing import PairingController, repair_offline_text
 from teleport.ui.transfers import TransfersController
@@ -721,6 +726,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.selftest:
         return _selftest(app)
 
+    # GC vòng tham chiếu chỉ chạy trên thread Qt (`ui.gcguard`): bật trước khi có node, `SingleInstance`
+    # và widget; tắt sau `controller.shutdown()` (đã `join` thread node).
+    gc_guard = GcGuard()
+    gc_guard.start()
+    try:
+        return _run(app, args, config_dir)
+    finally:
+        gc_guard.stop()
+
+
+def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
+    """Phần của `main` sau khi có `QApplication` (ngoài `--selftest`), chạy trong `GcGuard`."""
     i18n.install(app)
     theme.apply(app)
     try:
