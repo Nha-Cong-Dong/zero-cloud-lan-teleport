@@ -1634,6 +1634,7 @@ async def test_code_is_counted_even_when_prompt_raises(node_factory):
     assert [p.recent_codes for p in B.rec.prompts] == [1, 2]
 
 
+@pytest.mark.slow
 @integration
 async def test_sixth_code_in_window_is_busy_without_prompt(node_factory, raw_pairing_client, tmp_path):
     """L4: B đã hiện 5 mã trong 60 s → yêu cầu kế tiếp nhận `pair_abort{busy}`, B không hỏi, không

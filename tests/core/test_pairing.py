@@ -1990,6 +1990,7 @@ def _deliver(actions, outbox, record):
             record.append(act)
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     data=st.data(),
@@ -2322,6 +2323,7 @@ def check_event_sequence(session, role: Role, expected_peer, expected_name, even
     hypothesis.event(f"outcome={session.outcome}")
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("role", [Role.INITIATOR, Role.RESPONDER])
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
@@ -2353,6 +2355,7 @@ def happy_path(role: Role, peer_first: bool) -> list:
     return [*first, *confirms]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("role", [Role.INITIATOR, Role.RESPONDER])
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
@@ -2490,6 +2493,7 @@ attack_messages = st.sampled_from(FUZZ_MESSAGES[2:]).map(MessageReceived)
 attack_events = st.one_of(attack_messages, attack_messages, attack_messages, other_events)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("role", [Role.INITIATOR, Role.RESPONDER])
 @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(steps=st.lists(st.tuples(attack_events, deltas), max_size=12))
@@ -2499,6 +2503,7 @@ def test_property_nonces_never_leak_before_their_gate(role, steps):
     check_secrecy(session, role, [(Start(), 0.0), *steps])
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("role", [Role.INITIATOR, Role.RESPONDER])
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
@@ -2635,6 +2640,7 @@ def _attack_event(move: str, guess: bytes, n_b_seen: str | None, commitment: str
     }[move]
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     sessions=st.lists(

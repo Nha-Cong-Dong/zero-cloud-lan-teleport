@@ -833,6 +833,7 @@ def test_cl13_subprocess_end_to_end(tmp_path, procs):
     assert listen.finish(30) == 0
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_cl14_interrupt_stops_listen_cleanly(tmp_path, procs):
     d = tmp_path / "B"
@@ -888,6 +889,7 @@ def test_cl14_interrupt_pair_while_waiting(tmp_path, procs):
     assert listen.wait_json("pair_result")["outcome"] == "peer_rejected"
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_cl15_unpair_while_listen_runs(tmp_path, procs, capsys, monkeypatch):
     from teleport.app import node as node_mod
@@ -1345,6 +1347,7 @@ async def test_list_runtime_errors_exit_1(tmp_path, cli_mdns, case):
     assert code == 1 and err.startswith("Lỗi: ") and "Traceback" not in err
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
 def test_list_interrupted_prints_cancelled(tmp_path, procs):
@@ -3411,6 +3414,7 @@ def test_m1_pair_with_server_sending_x400_san_cert_reports_invalid_identity(
     assert lock_is_free(d)
 
 
+@pytest.mark.slow
 @pytest.mark.integration
 def test_m1_pair_subprocess_with_x400_san_cert_has_no_traceback_on_stderr(tmp_path, procs):
     """Như trên nhưng với tiến trình thật: stderr thật không có “Traceback”."""
