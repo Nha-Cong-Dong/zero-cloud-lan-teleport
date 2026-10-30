@@ -339,7 +339,7 @@ Bản giao diện dùng cùng các dòng, khác ở chỗ:
 - Dòng 4–6 nhỏ hơn, màu dịu.
 - Dòng 7 thay bằng hai nút “Không trùng” và “Trùng khớp”. Nút mặc định (Enter) là “Không trùng”; Esc hay đóng hộp cũng là “Không trùng”.
 - Hết thời gian xác nhận thì hộp tự đóng. Phiên kết thúc vì bất kỳ lý do gì thì hộp cũng tự đóng.
-- Cửa sổ chính đang ẩn thì hiện thêm bóng thoại ở khay (mục 8).
+- Không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) thì hiện thêm bóng thoại ở khay (mục 8).
 
 ### 7.3. Có file gửi tới
 ```
@@ -478,9 +478,11 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Chọn gửi file không tồn tại | “Không tìm thấy file *D:\x\video.mp4*.” | Lượt gửi không bắt đầu |
 | Ổ đĩa báo lỗi khi kiểm file chọn gửi | “Không đọc được *video.mp4*: ổ đĩa báo lỗi.” | Lượt gửi không bắt đầu |
 | Chọn quá số file một lượt | “Mỗi lần gửi được tối đa *1000* file.” | Lượt gửi không bắt đầu |
+| Giao diện: Thoát (menu khay, Ctrl+Q, đóng cửa sổ khi không có khay hệ thống) khi còn lượt gửi chưa xong | Hộp “Thoát Teleport?”: “Đang gửi file tới *PC-Nha*. Thoát bây giờ sẽ hủy lượt gửi.” (nhiều máy: “Đang gửi file tới *2* máy. Thoát bây giờ sẽ hủy các lượt gửi.”). Chỉ còn lượt nhận dở thì thoát ngay, không hỏi (lượt nhận chạy tiếp khi mở lại app). Windows tắt máy hay đăng xuất thì không hỏi | Nút “Thoát”, “Không” (mặc định) |
 | Giao diện: đóng cửa sổ khi app chạy được ở khay hệ thống (lần đầu trong mỗi lần mở app) | Bóng thoại ở khay: “Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn.” | — |
-| Giao diện: có file gửi tới | Hộp hỏi ở mục 7.3; bóng thoại ở khay: “Có file đang chờ bạn nhận.” | Nút “Nhận”, “Từ chối” trong hộp hỏi |
-| Giao diện: nhận xong một lượt | Bóng thoại ở khay: “Đã nhận *3* file từ *Laptop-Minh*.” (một file: “Đã nhận *video.mp4* từ *Laptop-Minh*.”, với tên file đã lưu trên máy này, ví dụ *video (1).mp4* khi thư mục nhận đã có file cùng tên) | Nút “Mở thư mục” trên thẻ của lượt |
+| Giao diện: có file gửi tới | Hộp hỏi ở mục 7.3; khi không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) thì thêm bóng thoại ở khay: “Có file đang chờ bạn nhận.” | Nút “Nhận”, “Từ chối” trong hộp hỏi. Bấm vào bóng thoại: hiện cửa sổ chính và đưa hộp hỏi lên trước |
+| Giao diện: nhận xong một lượt | Bóng thoại ở khay: “Đã nhận *3* file từ *Laptop-Minh*.” (một file: “Đã nhận *video.mp4* từ *Laptop-Minh*.”, với tên file đã lưu trên máy này, ví dụ *video (1).mp4* khi thư mục nhận đã có file cùng tên) | Bấm vào bóng thoại: mở thư mục chứa file. Nút “Mở thư mục” trên thẻ của lượt |
+| Giao diện: địa chỉ của máy này (để nhập IP thủ công ở máy kia) | Khi Teleport đang chạy: dòng chọn được “Địa chỉ: *192.168.1.5*” (thêm “:*cổng*” khi không phải cổng mặc định, [protocol.md](protocol.md) mục 2.1); máy có nhiều địa chỉ thì hiện địa chỉ đầu, các địa chỉ còn lại ở chú thích khi trỏ chuột: “Các địa chỉ khác của máy này: …”. Cập nhật khi đổi mạng (đọc lại mỗi 10 giây). Không đọc được địa chỉ nào thì không hiện dòng này | — |
 | Giao diện: chưa có lượt truyền nào trong lần mở app này | “Kéo file vào một thiết bị để gửi” (ở khung lượt truyền) | — |
 | Giao diện: thả file vào chỗ không có thiết bị trên radar | “Thả file lên một thiết bị để gửi.” | — |
 | Giao diện: gửi tới thiết bị chưa ghép đôi | Mở luồng ghép đôi (mục 7.2); ghép xong thì tự gửi | — |
@@ -509,7 +511,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: đã xác nhận ghép đôi nhưng không lưu được | “Đã xác nhận ghép đôi với “*PC-Nha*” nhưng không lưu được danh sách thiết bị đã ghép đôi. Hãy kiểm tra quyền ghi thư mục cấu hình rồi ghép đôi lại.” | — |
 | Giao diện: danh tính thiết bị thay đổi khi máy này gửi yêu cầu ghép đôi | Câu của dòng “Danh tính thiết bị thay đổi”, kèm dòng “Muốn ghép đôi lại thì hãy hủy ghép đôi mục cũ trước (chuột phải vào thiết bị → Hủy ghép đôi…).” | — |
 | Giao diện: phiên ghép đôi do máy khác gửi tới dừng trước khi hiện mã | Không hiện gì (máy lạ không làm phiền được bằng cách mở rồi bỏ phiên). Ngoại lệ: máy này cũng vừa bấm ghép đôi với máy đó và phiên của máy này nhường cho phiên kia (hai máy cùng chủ động): hiện câu của máy gửi yêu cầu ở dòng “Phiên ghép đôi dừng trước khi hiện mã” | — |
-| Giao diện: có yêu cầu ghép đôi khi cửa sổ chính đang ẩn | Bóng thoại ở khay: “Có yêu cầu ghép đôi” | Hộp mã (mục 7.2) vẫn mở |
+| Giao diện: có yêu cầu ghép đôi khi không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) | Bóng thoại ở khay: “Có yêu cầu ghép đôi” | Hộp mã (mục 7.2) vẫn mở. Bấm vào bóng thoại: hiện cửa sổ chính và đưa hộp mã lên trước |
 | Giao diện: hủy ghép đôi (chuột phải vào thiết bị đã ghép → “Hủy ghép đôi…”) | Hộp “Hủy ghép đôi”: “Hủy ghép đôi với “*PC-Nha*”? Hai máy sẽ không gửi file cho nhau được nữa cho tới khi ghép đôi lại.” Xong: “Đã hủy ghép đôi với “*PC-Nha*”.” Lỗi: “Không hủy ghép đôi được với “*PC-Nha*”. Hãy thử lại.” | Nút “Hủy ghép đôi”, “Không” (mặc định) |
 | Giao diện: nhập IP thủ công sai | Câu của dòng “CLI: `--address` của `send` sai” (*x* là chữ đã nhập) | Sửa lại trong ô nhập |
 | CLI: `--limit-rate` sai | “Tốc độ không hợp lệ: “*x*”. Hãy nhập ví dụ 20M (20 MB/s) hoặc 512K; tối thiểu 64K.” | — |

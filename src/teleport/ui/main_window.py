@@ -7,10 +7,16 @@ Bốn trạng thái (`ViewState`):
   `start_requested`). Chưa bấm thì `ui.app` không chạy node, không quảng bá gì. F1 đầy đủ (đổi tên,
   thư mục nhận) để P4-7.
 - STARTING: “Đang khởi động…”.
-- RUNNING: sẵn sàng nhận file, tên máy này và thư mục nhận; bên dưới là radar (`ui.radar.RadarView`,
+- RUNNING: sẵn sàng nhận file, tên máy này và thư mục nhận; dòng “Địa chỉ: …” (`address_label`,
+  `set_addresses`) để nhập ở máy kia khi mDNS bị chặn; bên dưới là radar (`ui.radar.RadarView`,
   bên trái) và `transfers_area` (bên phải; `ui.transfers.TransfersController` đặt danh sách lượt
   truyền `TransfersView` vào đây).
 - ERROR: câu lỗi khởi động (`texts.start_error`) và gợi ý, nút “Thử lại”.
+
+Dòng địa chỉ chỉ hiện ở RUNNING khi có ít nhất một địa chỉ: địa chỉ đầu tiên, thêm `:cổng` khi cổng
+khác `DEFAULT_PORT`; các địa chỉ còn lại nằm ở tooltip (và accessibleDescription). Rời RUNNING
+(`show_welcome`, `show_starting`, `show_error`) thì quên địa chỉ đã nhớ. `ui.app` đọc địa chỉ qua
+`NodeHost.submit` và gọi `set_addresses`.
 
 Mọi chữ là chữ thuần (`Qt.PlainText`), đọc được bằng bàn phím (Tab đi qua từng dòng, từng thiết
 bị, có tên cho trình đọc màn hình). Trạng thái luôn nói bằng chữ, không chỉ bằng màu (mvp N12). Phím
@@ -23,6 +29,7 @@ không tự thoát app: `ui.app` quyết định.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 
@@ -31,6 +38,7 @@ from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget
 
 from teleport.core.display import display_name
+from teleport.net.connection import DEFAULT_PORT
 from teleport.ui import texts
 from teleport.ui.radar import RadarView
 from teleport.ui.tray import Tray
@@ -79,6 +87,8 @@ class MainWindow(QMainWindow):
         self._planned_name = ""
         self._error_code = ""
         self._error_detail = ""
+        self._addresses: tuple[str, ...] = ()
+        self._port: int | None = None
 
         central = QWidget(self)
         layout = QVBoxLayout(central)
@@ -90,6 +100,7 @@ class MainWindow(QMainWindow):
         self.title_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # chỉ là tên app; tiêu đề cửa sổ đã có
         self.status_label = _label("statusLabel", size_delta=2, bold=True)
         self.detail_label = _label("detailLabel")
+        self.address_label = _label("addressLabel")
         self.hint_label = _label("hintLabel")
 
         # Phần thân của trạng thái RUNNING: radar bên trái, danh sách lượt truyền bên phải (`ui.transfers`).
@@ -117,6 +128,7 @@ class MainWindow(QMainWindow):
         layout.addSpacing(6)
         layout.addWidget(self.status_label)
         layout.addWidget(self.detail_label)
+        layout.addWidget(self.address_label)
         layout.addWidget(self.hint_label)
         layout.addWidget(self.body, 1)
         self._stretch = QWidget(central)  # đẩy nút xuống đáy khi không có radar
@@ -129,7 +141,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         QWidget.setTabOrder(self.status_label, self.detail_label)
-        QWidget.setTabOrder(self.detail_label, self.hint_label)
+        QWidget.setTabOrder(self.detail_label, self.address_label)
+        QWidget.setTabOrder(self.address_label, self.hint_label)
         QWidget.setTabOrder(self.hint_label, self.radar.first_focus_widget())
         QWidget.setTabOrder(self.radar.last_focus_widget(), self.retry_button)
         QWidget.setTabOrder(self.retry_button, self.start_button)
@@ -159,11 +172,13 @@ class MainWindow(QMainWindow):
         """Màn “Bắt đầu”: `planned_name` là tên node sẽ dùng (chưa qua `display_name`)."""
         self._state = ViewState.WELCOME
         self._planned_name = planned_name
+        self._forget_addresses()
         self.retranslate()
         self._place_focus()
 
     def show_starting(self) -> None:
         self._state = ViewState.STARTING
+        self._forget_addresses()
         self.retranslate()
         self._place_focus()
 
@@ -177,8 +192,21 @@ class MainWindow(QMainWindow):
         """Lỗi khởi động node: `code` là `bridge.StartError`, `detail` đã làm sạch."""
         self._state = ViewState.ERROR
         self._error_code, self._error_detail = code, detail
+        self._forget_addresses()
         self.retranslate()
         self._place_focus()
+
+    def set_addresses(self, addresses: Sequence[str], port: int | None) -> None:
+        """Địa chỉ IPv4 của máy này và cổng đang lắng nghe (`Node.local_addresses`, `Node.port`).
+
+        Nhớ lại để `retranslate` dựng lại chữ; chỉ hiện ở RUNNING và khi `addresses` khác rỗng.
+        """
+        self._addresses = tuple(addresses)
+        self._port = port
+        self._update_address()
+
+    def _forget_addresses(self) -> None:
+        self._addresses, self._port = (), None
 
     def _place_focus(self) -> None:
         """Đặt tiêu điểm bàn phím: nút đang hiện (Bắt đầu / Thử lại), không thì dòng trạng thái."""
@@ -221,6 +249,7 @@ class MainWindow(QMainWindow):
         self.status_label.setAccessibleDescription(status)
         self._set_optional(self.detail_label, detail, self.tr("Chi tiết"))
         self._set_optional(self.hint_label, "\n".join(hints), self.tr("Gợi ý"))
+        self._update_address()
         running = self._state is ViewState.RUNNING
         self.body.setVisible(running)
         self._stretch.setVisible(not running)
@@ -260,6 +289,22 @@ class MainWindow(QMainWindow):
             )
         head, hints = texts.start_error(self._error_code, self._error_detail)
         return self.tr("Không khởi động được"), head, hints
+
+    def _update_address(self) -> None:
+        """Dựng dòng “Địa chỉ: …” và tooltip các địa chỉ khác từ giá trị đã nhớ."""
+        suffix = f":{self._port}" if self._port is not None and self._port != DEFAULT_PORT else ""
+        shown = [f"{address}{suffix}" for address in self._addresses]
+        text = ""
+        if self._state is ViewState.RUNNING and shown:
+            text = texts.fill(self.tr("Địa chỉ: {address}"), address=shown[0])
+        others = ""
+        if text and len(shown) > 1:
+            others = texts.fill(self.tr("Các địa chỉ khác của máy này: {list}"), list=", ".join(shown[1:]))
+        self.address_label.setText(text)
+        self.address_label.setAccessibleName(self.tr("Địa chỉ của máy này"))
+        self.address_label.setAccessibleDescription(others)
+        self.address_label.setToolTip(others)
+        self.address_label.setVisible(bool(text))
 
     @staticmethod
     def _set_optional(label: QLabel, text: str, accessible_name: str) -> None:
