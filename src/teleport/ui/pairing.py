@@ -10,13 +10,16 @@ Ba phần:
 - **`PairingDialog`**: hộp mvp mục 7.2, theo đúng bố cục chống giả mã: tiêu đề cửa sổ chỉ
   “Ghép đôi”; dòng đầu cố định theo vai; một nhãn chữ lớn CHỈ có mã; cảnh báo nhiều mã ngay dưới
   mã; rồi mới tới tên máy kia. Không cha, `NonModal`, `WA_DeleteOnClose`, mở bằng `show()` +
-  `raise_()` + `activateWindow()`, không bao giờ `exec()`. Nút mặc định (Enter) và Esc là
-  “Không trùng”; đóng bằng nút X cũng là “Không trùng”. Mỗi hộp phát `decided` tối đa một lần;
+  `raise_()` + `activateWindow()`, không bao giờ `exec()`. Rộng tối thiểu `theme.DIALOG_MIN_WIDTH`
+  như hộp nhận file; nút căn phải (“Không trùng”, rồi “Trùng khớp” là nút chính tô màu nhấn qua
+  `theme.PRIMARY_PROPERTY`). Nút mặc định (Enter) và Esc là “Không trùng” (nút được tô màu không phải
+  nút mặc định); đóng bằng nút X cũng là “Không trùng”. Mỗi hộp phát `decided` tối đa một lần;
   `dismiss()` đóng hộp mà không phát (hết hạn, đã có kết quả, thoát). Mã thật to, căn giữa;
   dòng hướng dẫn và tên máy kia màu dịu theo vai `PlaceholderText` của bảng màu (`ui.theme`, đủ
   tương phản mvp N12); cảnh báo nhiều mã có biểu tượng cảnh báo, chữ đậm và nền riêng (không chỉ
   dựa vào màu). Chữ chỉ cho trình đọc màn hình nằm ở accessibleName/Description.
-- **`PairingProgressDialog`**: hộp “Đang ghép đôi với …” có thanh bận và nút “Hủy”.
+- **`PairingProgressDialog`**: hộp “Đang ghép đôi với …” có thanh bận và nút “Hủy”, rộng tối thiểu
+  `theme.DIALOG_MIN_WIDTH`.
 - **`PairingController`**: điều phối trên thread Qt. Host là bất cứ gì có signal
   `pairing_prompt`, `pairing_finished` và `call` / `submit` như `bridge.NodeHost` (test dùng host
   giả). `Node` chỉ được chạm bên trong hàm đưa cho `call` / `submit`, chạy trên thread node.
@@ -34,8 +37,13 @@ Hành vi chính của `PairingController`:
   `session_id`: khi hai bên cùng chủ động, `pair_with` trả kết quả của phiên thay thế ở vai trả
   lời (`port` None). PAIRED thì MỘT `call` vừa `connect_hint(device_id, [ip], port)` vừa đọc lại
   `devices()` (không có NodeEvent khi kho tin cậy đổi).
-- Một hộp kết quả dùng lại: câu mới thay câu cũ (`setText`), không mở hộp thứ hai, nên máy lạ dội
-  yêu cầu không làm dội hộp. Phiên ở vai trả lời dừng trước khi hiện mã thì không báo gì.
+- Kết quả **thành công** (PAIRED ở cả hai vai, hủy ghép đôi xong) không mở hộp nào: phát
+  `notice(câu)` (`ui.app` nối vào dải thông báo của danh sách lượt truyền) và `message(câu)`;
+  cửa sổ chính đang ẩn thì thêm bóng thoại khay (`notify`). Máy vừa được ghép đôi rồi nhận file
+  ngay thì chỉ còn hộp nhận file. Hộp kết quả lỗi đang mở khi đó bị đóng (câu cũ không còn đúng).
+- Kết quả **lỗi**: một hộp kết quả dùng lại, câu mới thay câu cũ (`setText`), không mở hộp thứ hai,
+  nên máy lạ dội yêu cầu không làm dội hộp. Phiên ở vai trả lời dừng trước khi hiện mã thì không báo
+  gì.
 - `set_host` / `close_all`: đóng mọi hộp mà không quyết định; sự kiện và `on_done` của host cũ
   tới sau bị bỏ (mỗi lần đổi host tăng một số thế hệ, các callback mang theo số thế hệ cũ).
 
@@ -85,7 +93,7 @@ from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt
 from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc lúc dùng
 from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
-from teleport.ui import texts
+from teleport.ui import texts, theme
 
 log = logging.getLogger(__name__)
 
@@ -278,8 +286,7 @@ def outcome_text(result: PairingFinished, *, target: str | None = None) -> str |
         return texts.fill(
             tr(
                 "Pairing",
-                "{name} chưa sẵn sàng ghép đôi: máy đó đang ẩn, đang ghép đôi với máy khác, "
-                "chưa mở chế độ chờ ghép đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau.",
+                "{name} đang bận hoặc vừa có một lần ghép đôi không thành. Hãy chờ một lát rồi thử lại.",
             ),
             name=x,
         )
@@ -491,12 +498,15 @@ class PairingDialog(QDialog):
         self.reject_button.setDefault(True)
         self.accept_button.setAutoDefault(False)
         self.accept_button.setDefault(False)
+        self.accept_button.setProperty(theme.PRIMARY_PROPERTY, True)  # tô màu nhấn, không phải mặc định
         self.reject_button.clicked.connect(self.reject)
         self.accept_button.clicked.connect(self.accept)
+        self.setMinimumWidth(theme.DIALOG_MIN_WIDTH)
 
+        # Căn phải như hộp nhận file: “Không trùng” rồi “Trùng khớp”.
         buttons = QHBoxLayout()
-        buttons.addWidget(self.reject_button)
         buttons.addStretch(1)
+        buttons.addWidget(self.reject_button)
         buttons.addWidget(self.accept_button)
         layout = QVBoxLayout(self)
         layout.addWidget(self._header)
@@ -585,7 +595,7 @@ class PairingProgressDialog(QDialog):
         layout.addWidget(self.label)
         layout.addWidget(self.bar)
         layout.addLayout(row)
-        self.setMinimumWidth(320)
+        self.setMinimumWidth(theme.DIALOG_MIN_WIDTH)
         self.retranslate()
 
     def text(self) -> str:
@@ -666,7 +676,8 @@ class PairingController(QObject):
     """Ghép đôi / hủy ghép đôi trên thread Qt: hộp mã, hộp tiến độ, hộp kết quả, hộp xác nhận."""
 
     devices_changed = Signal(object)  # tuple[DeviceView, ...] đọc lại sau PAIRED / unpair
-    message = Signal(str)  # mọi câu kết quả vừa hiện
+    message = Signal(str)  # mọi câu kết quả vừa hiện (hộp hay dải thông báo)
+    notice = Signal(str)  # câu kết quả thành công (PAIRED, hủy ghép đôi xong): hiện ở dải thông báo
     paired = Signal(str)  # device_id, sau PAIRED (cả hai vai)
     finished = Signal(object)  # PairingFinished, mọi kết quả (cả hai vai)
     prompt_opened = Signal(int)  # session_id vừa mở hộp
@@ -1052,7 +1063,24 @@ class PairingController(QObject):
     # ---- Hộp kết quả và dọn dẹp --------------------------------------------------------------
 
     def _show_result(self, text: str, *, ok: bool = False) -> None:
-        """Hiện câu trong hộp kết quả dùng lại (câu mới thay câu cũ) và phát `message`."""
+        """Báo một câu kết quả và phát `message`.
+
+        `ok` (thành công): không mở hộp; đóng hộp lỗi đang mở (câu cũ không còn đúng) rồi phát
+        `notice`; cửa sổ chính đang ẩn thì báo thêm bằng bóng thoại khay (`notify`), vì dải thông
+        báo nằm trong cửa sổ. Lỗi: hiện trong hộp kết quả dùng lại (câu mới thay câu cũ).
+        """
+        if ok:
+            old, self._result_box = self._result_box, None
+            if old is not None:
+                old.close()
+            if self._notify is not None and not self._window_visible():
+                try:
+                    self._notify(title(), text)
+                except Exception:
+                    log.exception("không hiện được bóng thoại kết quả ghép đôi")
+            self.message.emit(text)
+            self.notice.emit(text)
+            return
         box = self._result_box
         fresh = box is None or not box.isVisible()
         if box is None:
@@ -1061,7 +1089,7 @@ class PairingController(QObject):
             box.setAccessibleName(title())
             box.setStandardButtons(QMessageBox.StandardButton.Ok)
             self._result_box = box
-        box.setIcon(QMessageBox.Icon.Information if ok else QMessageBox.Icon.Warning)
+        box.setIcon(QMessageBox.Icon.Warning)
         box.setText(text)
         if fresh:
             _show(box)  # hộp đang mở thì chỉ thay chữ, không giành focus lại (máy lạ dội kết quả)

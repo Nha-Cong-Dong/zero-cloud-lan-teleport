@@ -426,6 +426,7 @@ class GuiApp(QObject):
         self.transfers.repair_requested.connect(self._on_repair_requested)
         self.pairing.job_done.connect(self._on_pair_job_done)
         self.pairing.paired.connect(self._on_paired)
+        self.pairing.notice.connect(self.transfers.view.show_notice)
         if instance is not None:
             instance.show_requested.connect(self._on_show_requested)
 

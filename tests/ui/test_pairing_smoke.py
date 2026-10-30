@@ -161,7 +161,7 @@ def test_finished_closes_dialog_and_reuses_result_box(qtbot):
     host.pairing_finished.emit(_finished(PairingOutcome.PEER_BUSY, session_id=None, peer_name=None))
     assert controller.result_box is first
     assert first.textFormat() == Qt.TextFormat.PlainText
-    assert messages[-1].startswith("“192.168.1.5” chưa sẵn sàng ghép đôi")  # không có tên: địa chỉ
+    assert messages[-1].startswith("“192.168.1.5” đang bận")  # không có tên: địa chỉ
     controller.close_all()
 
 

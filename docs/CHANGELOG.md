@@ -90,6 +90,12 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lịch sử 100 lượt truyền gần nhất (cả gửi lẫn nhận), lưu trong `history.json` ở thư mục cấu hình và xóa được; giao diện sẽ hiện ở bản sau. File chỉ chứa metadata: tối đa 10 tên file đầu, kích thước, kết quả, giờ kết thúc, tên máy kia và đường dẫn đã lưu ở máy nhận, không bao giờ có nội dung file. File hỏng thì lịch sử bắt đầu lại từ rỗng.
 
 ### Changed
+- Giao diện: cửa sổ mở ở 980x660 (nhỏ hơn nếu màn hình nhỏ); khi đang chạy thì ẩn tiêu đề lớn, radar và danh sách lượt truyền rộng bằng nhau; Tab tới các dòng chữ không còn hiện con trỏ chữ nhấp nháy.
+- Giao diện: thẻ lượt truyền mới nằm trên cùng; bên nhận phải lưu tên khác vì đã có file trùng tên thì thẻ ghi “Đã lưu thành *video-demo (1).mp4* · Đã kiểm tra toàn vẹn”; lượt dừng mà không xong thì ẩn thanh tiến độ.
+- Giao diện: ghép đôi hay hủy ghép đôi xong báo ở dải thông báo thay vì hộp phải bấm OK (cửa sổ đang ẩn thì thêm bóng thoại ở khay), nên máy nhận vừa ghép đôi chỉ còn hộp hỏi nhận file; ghép đôi lỗi vẫn hiện hộp.
+- Giao diện: radar xếp máy đã kết nối lên đầu, rồi máy đã ghép đôi, rồi theo tên; mỗi máy có biểu tượng, tên máy đã ghép đôi đậm hơn; chưa thấy máy nào thì câu gợi ý nằm giữa kèm thanh “đang tìm” và nhắc kiểm tra tường lửa của Windows. Thấy máy mà không kết nối được thì gợi ý dùng điểm phát Wi-Fi từ điện thoại.
+- Giao diện: câu “chưa sẵn sàng ghép đôi” không còn nhắc chế độ ẩn hay chế độ chờ ghép đôi (chưa có trong bản này), chỉ bảo chờ một lát rồi thử lại.
+- Giao diện: nút chính (“Bắt đầu”, “Ghép đôi” khi nhập IP, “Nhận”, “Trùng khớp”) tô màu nhấn; Enter vẫn là nút an toàn (“Từ chối”, “Không trùng”). Hộp ghép đôi rộng bằng hộp nhận file, nút căn phải.
 - `teleport send` / `receive`: tốc độ và thời gian còn lại tính theo số byte đã nhận, kể cả khối chưa ghi bền xuống đĩa, nên bên nhận không còn dao động gấp đôi rồi giảm một nửa; `done_bytes` và `percent` của `--json`, phần trăm trên dòng tiến độ và lịch sử vẫn là byte đã ghi bền, không có dòng `progress` lặp.
 - Bản build thử (CLI và GUI) ghim đúng bản dependency runtime qua `packaging/pyinstaller/constraints.txt` (cryptography, cffi, pycparser, ifaddr, zeroconf; bản GUI thêm PySide6-Essentials, shiboken6); workflow CI chỉ có quyền đọc, checkout không giữ thông tin đăng nhập, job test giới hạn 60 phút.
 - README có mục “Hướng dẫn sử dụng”: lấy bản zip giao diện, ghép đôi, gửi/nhận trên giao diện và bằng dòng lệnh; bảng Lộ trình và khung trạng thái khớp `docs/ke_hoach.md` mục 5.1.

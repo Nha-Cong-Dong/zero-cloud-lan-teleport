@@ -753,7 +753,7 @@ def test_snapshot_after_resumed_does_not_duplicate(view):
     other = key("send", "d" * 32)
     view.load_snapshot([info(k, "reconnecting", done=4 * 2**30), info(other, "queued")])
     keys = [r.key for r in view.rows()]
-    assert keys == [k, other]
+    assert keys == [other, k]  # thứ tự hiển thị: thẻ thêm sau nằm trên (PR-7 B3), không nhân đôi
     assert view.row(k) is row
     assert fill(WAIT_RESUMED, p=PEER) in row.detail_label.text()
 
@@ -763,7 +763,7 @@ def test_snapshot_twice_and_resumed_after_snapshot_do_not_duplicate(view):
     view.load_snapshot([info(a, "reconnecting"), info(b, "transferring")])
     view.load_snapshot([info(a, "reconnecting"), info(b, "transferring")])
     view.handle(resumed(a))
-    assert [r.key for r in view.rows()] == [a, b]
+    assert [r.key for r in view.rows()] == [b, a]  # thẻ thêm sau nằm trên (PR-7 B3), không nhân đôi
 
 
 def test_snapshot_rows_show_status_text(view):

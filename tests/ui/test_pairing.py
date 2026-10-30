@@ -78,10 +78,7 @@ OUT_CONFLICT_I = (
 OUT_CONFLICT_HINT = (
     "Muốn ghép đôi lại thì hãy hủy ghép đôi mục cũ trước (chuột phải vào thiết bị → Hủy ghép đôi…)."
 )
-OUT_NOT_READY = (
-    "“{x}” chưa sẵn sàng ghép đôi: máy đó đang ẩn, đang ghép đôi với máy khác, chưa mở chế độ chờ ghép "
-    "đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau."
-)
+OUT_NOT_READY = "“{x}” đang bận hoặc vừa có một lần ghép đôi không thành. Hãy chờ một lát rồi thử lại."
 OUT_UNREACHABLE = (
     "Không kết nối được tới {t}. Hãy kiểm tra Teleport đang chạy trên máy đó, hai máy dùng chung một "
     "mạng, và tường lửa cho phép Teleport."
@@ -1032,6 +1029,10 @@ def test_finished_shows_outcome_text_in_result_box(qtbot, ctl, outcome, role, sh
         assert ns.rec.messages == []
         box = ns.c.result_box
         assert box is None or not box.isVisible()
+    elif outcome == "paired":
+        # PR-7 B4: thành công không mở hộp, chỉ phát `notice` (dải thông báo) và `message`.
+        assert ns.rec.messages == [text]
+        assert ns.c.result_box is None
     else:
         assert ns.rec.messages == [text]
         box = ns.c.result_box
