@@ -284,6 +284,7 @@ def temp_dir(receive_dir: Path, transfer_id: str) -> Path:
 # =================================================================================================
 
 
+@pytest.mark.slow
 def test_a_gui_receives_64_mib_after_accept_and_row_shows_done(
     gui, gui_wait, pair, peer, tmp_path, ui_helpers
 ):
@@ -409,6 +410,7 @@ def test_c_reject_makes_sender_see_rejected_user(gui, gui_wait, pair, peer, tmp_
 # =================================================================================================
 
 
+@pytest.mark.slow
 def test_d_gui_sends_to_peer_with_progress_on_row_then_done(
     gui, gui_wait, pair, peer, tmp_path, fast_progress, ui_helpers
 ):
@@ -549,6 +551,7 @@ def test_e_cancel_from_either_side_is_cancelled_user_and_temp_removed(
 # =================================================================================================
 
 
+@pytest.mark.slow
 def test_f_network_cut_shows_reconnecting_then_finishes_without_going_back(
     gui, gui_wait, pair, peer, tmp_path, tcp_proxy, fast_progress, ui_helpers
 ):
@@ -620,6 +623,7 @@ def test_f_network_cut_shows_reconnecting_then_finishes_without_going_back(
 # =================================================================================================
 
 
+@pytest.mark.slow
 def test_g_restart_gui_mid_transfer_resumes_row_and_finishes(
     gui, gui_wait, pair, peer, tmp_path, fast_progress, ui_helpers
 ):

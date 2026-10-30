@@ -258,6 +258,7 @@ def test_resync_resume_waiting_for_fsync_is_sent_even_when_file_becomes_full(tx,
     assert tx.one(r.complete(0), transfer.Reread).file_index == 0
 
 
+@pytest.mark.slow
 @HYPO
 @given(data=st.data())
 def test_bits_are_never_ahead_of_synced_batches(tx, data):

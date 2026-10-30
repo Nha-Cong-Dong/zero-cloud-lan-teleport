@@ -764,6 +764,7 @@ async def test_data_connection_from_priority_ip_keeps_priority_and_strikes(
 # --- Chỗ được trả trên mọi đường ra --------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_slots_are_released_on_timeout(fast, listener_factory, raw_client, ids):
     h = await listener_factory(ids.server)
     silent = await raw_client(h.port, use_tls=False)

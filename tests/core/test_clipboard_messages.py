@@ -398,6 +398,7 @@ fuzz_dicts = st.builds(
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None)
 @given(d=fuzz_dicts)
 def test_property_any_clipboard_dict_parses_or_raises_message_error(d):

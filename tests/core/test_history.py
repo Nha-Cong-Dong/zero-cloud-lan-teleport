@@ -526,6 +526,7 @@ def test_decode_entry_with_random_field_value_never_raises(field, value):
     assert len(got) in (1, 2)
 
 
+@pytest.mark.slow
 @SETTINGS
 @given(st.lists(json_values, max_size=6))
 def test_decode_entries_of_random_json_values_never_raises(values):

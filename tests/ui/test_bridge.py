@@ -394,6 +394,7 @@ def test_stop_with_hanging_close_still_emits_stopped_and_qt_keeps_running(
     assert wait_joined(qtbot, host, 15)
 
 
+@pytest.mark.slow
 @integration
 def test_stop_during_start_closes_without_cancelling_start(
     qtbot, config_dir, node_options, node_hosts, monkeypatch, ui_helpers

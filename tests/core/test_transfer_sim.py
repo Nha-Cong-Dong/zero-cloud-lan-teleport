@@ -1033,6 +1033,7 @@ def test_every_frame_of_a_file_corrupt_cancels_both_sides(rng, nblocks, data):
     assert sim.B.temps == set()
 
 
+@pytest.mark.slow
 @settings(
     max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large]
 )
@@ -1114,6 +1115,7 @@ def test_source_block_change_detected_on_resend_cancels_both_sides(rng, nblocks,
 # ---- AC-21: mô phỏng tự do ----------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @SIM
 @given(rng=st.randoms(use_true_random=False), nblocks=_blocks())
 def test_free_simulation_always_ends_consistently(rng, nblocks):
@@ -1513,6 +1515,7 @@ def test_each_outage_gets_a_full_grace_from_its_own_start(monkeypatch, grace):
     sim.assert_done()
 
 
+@pytest.mark.slow
 @GRACES
 @settings(SIM, max_examples=60)
 @given(
@@ -2037,6 +2040,7 @@ def test_receiver_crash_model_ends_with_source_content_and_bounded_resend(rng, n
     assert all(lost <= MAX_RESENT_PER_CRASH for lost in sim.lost_per_crash), sim.lost_per_crash
 
 
+@pytest.mark.slow
 @settings(
     max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large]
 )
@@ -2060,6 +2064,7 @@ def test_receiver_crash_with_damaged_state_tail_still_ends_with_source_content(r
     sim.assert_finished()
 
 
+@pytest.mark.slow
 @settings(
     max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large]
 )

@@ -276,6 +276,7 @@ device_ids = st.from_regex(r"[0-9a-f]{32}", fullmatch=True)
 os_names = st.from_regex(r"[a-z0-9_]{1,16}", fullmatch=True)
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
 @given(device_ids, valid_names, os_names)
 def test_property_build_then_parse_roundtrip(device_id, name, os):
@@ -416,6 +417,7 @@ txt_keys = st.sampled_from([b"id", b"name", b"os", b"proto", b"ID", b"Name", b"x
 txt_values = st.none() | st.binary(max_size=210) | st.sampled_from(list(txt_bytes(PEER).values()))
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None)
 @given(st.dictionaries(txt_keys, txt_values, max_size=8))
 def test_fuzz_parse_txt_only_raises_discovery_record_error(txt):
@@ -588,6 +590,7 @@ def test_filter_addresses_caps_at_16_smallest():
     assert result == tuple(f"10.0.0.{i}" for i in range(1, 17))
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(
     st.lists(
@@ -1894,6 +1897,7 @@ def _overflow_ids(t: DiscoveryTracker) -> list[str]:
     return [device_id_from_service_name(x) or x for x in overflow]
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops, st.integers(1, 4), st.frozensets(st.sampled_from([*POOL, SELF])))
 def test_property_tracker_invariants(steps, max_services, initial_priority):

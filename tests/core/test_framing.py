@@ -245,6 +245,7 @@ def test_decode_body_keeps_every_check_for_bytearray(body):
         decode_body(bytearray(body))
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None)
 @given(
     st.binary(max_size=300)

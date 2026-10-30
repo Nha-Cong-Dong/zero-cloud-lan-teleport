@@ -47,6 +47,7 @@ def run_without_stderr(args: list[str], home) -> subprocess.CompletedProcess:
     )
 
 
+@pytest.mark.slow
 def test_selftest_returns_0_without_locks_or_files(tmp_path):
     home = tmp_path / "home"
     p = run_module(["--selftest", "--config-dir", str(home)], tmp_path / "khong-dung")
@@ -57,6 +58,7 @@ def test_selftest_returns_0_without_locks_or_files(tmp_path):
         assert not (home / name).exists(), name
 
 
+@pytest.mark.slow
 def test_selftest_uses_teleport_home_without_creating_identity(tmp_path):
     home = tmp_path / "home"
     p = run_module(["--selftest"], home)
@@ -64,6 +66,7 @@ def test_selftest_uses_teleport_home_without_creating_identity(tmp_path):
     assert not (home / "device.crt").exists()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "args", [["--khong-co"], ["--config-dir"], ["thua"]], ids=["unknown", "missing", "extra"]
 )
@@ -74,16 +77,19 @@ def test_bad_arguments_exit_2(tmp_path, args):
     assert not (tmp_path / "home" / "gui.lock").exists()
 
 
+@pytest.mark.slow
 def test_bad_arguments_with_stderr_none_exit_2_without_crash(tmp_path):
     p = run_without_stderr(["--khong-co"], tmp_path / "home")
     assert p.returncode == 2, (p.returncode, p.stderr.decode("utf-8", "replace"))
 
 
+@pytest.mark.slow
 def test_selftest_with_stderr_none_returns_0(tmp_path):
     p = run_without_stderr(["--selftest"], tmp_path / "home")
     assert p.returncode == 0, (p.returncode, p.stderr.decode("utf-8", "replace"))
 
 
+@pytest.mark.slow
 def test_help_does_not_crash_with_stderr_none(tmp_path):
     p = run_without_stderr(["--help"], tmp_path / "home")
     assert p.returncode in (0, 2), (p.returncode, p.stderr.decode("utf-8", "replace"))
