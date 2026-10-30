@@ -1055,7 +1055,7 @@ def make_progress(
     from teleport.app.transfers import TransferProgress
 
     info = make_info(direction, names=names, sizes=P_SIZES, file_index=file_index, done_bytes=done)
-    return TransferProgress(info=info, bytes_per_second=speed, eta=eta)
+    return TransferProgress(info=info, bytes_per_second=speed, eta=eta, shown_bytes=done, idle_seconds=0.0)
 
 
 def test_progress_line_matches_c9(cli):
@@ -3699,3 +3699,149 @@ async def test_m15_ctrl_c_with_second_transfer_from_same_sender_still_queued_in_
     assert M15.format(n=1, s=SENDER) not in text, "lượt đang hỏi không in M15"
     assert R_REJECTED_SELF not in text_lines(recv), text
     assert B13 not in text, text
+
+
+# =================================================================================================
+# Spec hackathon PR-1 mục 1 “cli.py”, mục 3 ý 5: app phát `TransferProgress` cả khi lượt đứng yên;
+# CLI không in lặp: `--json` không có hai `progress` cùng `done_bytes` cho một lượt, dòng TTY như cũ
+# (không vẽ lại khi `done_bytes` không đổi). Lượt đứng yên tất định: chặn lần ghi khối thứ 3 của bên
+# nhận (seam `storage.PartFile.write_at`), nên `done_bytes` bên nhận đứng ở 0 suốt lúc chặn.
+# =================================================================================================
+
+STALL_INTERVAL = 0.2  # `teleport.app.transfers.PROGRESS_INTERVAL` vá trong các test dưới
+STALL_SECONDS = 2.0
+
+
+class _StallGate:
+    """Chặn lần ghi khối thứ `at` tới khi `release()` (≤ 60 s); `hit_at` = lúc chặn (`time.monotonic`)."""
+
+    def __init__(self, at: int) -> None:
+        self.at = at
+        self.count = 0
+        self.lock = threading.Lock()
+        self.hit = threading.Event()
+        self.hit_at: float | None = None
+        self.gate = threading.Event()
+
+    def before_write(self) -> None:
+        with self.lock:
+            self.count += 1
+            block = self.count == self.at
+        if block:
+            self.hit_at = time.monotonic()
+            self.hit.set()
+            if not self.gate.wait(60):
+                raise AssertionError("cổng chặn ghi của test không được mở")
+
+    def release(self) -> None:
+        self.gate.set()
+
+
+@pytest.fixture
+def stall_env(monkeypatch):
+    """Vá nhịp tiến độ của app (0,2 s, cửa sổ tốc độ 0,6 s), cài cổng chặn ghi ở khối thứ 3 và ghi lại
+    mọi `TransferProgress` app giao cho `cli` (qua `on_transfer_event` của `Node`): `made` là
+    `(lúc nhận, transfer_id, chiều, done_bytes)`. Fixture `node_spy` (nếu dùng) phải đứng trước."""
+    from teleport import cli
+    from teleport.app import storage
+    from teleport.app import transfers as app_transfers
+
+    monkeypatch.setattr(app_transfers, "PROGRESS_INTERVAL", STALL_INTERVAL)
+    monkeypatch.setattr(app_transfers, "SPEED_WINDOW", 0.6)
+    gate = _StallGate(3)
+    real_write = storage.PartFile.write_at
+
+    def write_at(self, index, data):
+        gate.before_write()
+        return real_write(self, index, data)
+
+    monkeypatch.setattr(storage.PartFile, "write_at", write_at)
+    made: list[tuple[float, str, str, int]] = []
+    real_node = cli.Node  # có thể đã là `SpyNode` của `node_spy` (fixture đó phải đứng trước)
+
+    class ProgressSpyNode(real_node):
+        """Bọc `on_transfer_event` mà `cli` đưa cho `Node` (API công khai) để đếm `TransferProgress`."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            inner = kwargs.get("on_transfer_event")
+            if inner is not None:
+
+                def on_transfer_event(update):
+                    if type(update).__name__ == "TransferProgress":
+                        info = update.info
+                        made.append(
+                            (time.monotonic(), info.key.transfer_id, str(info.key.direction), info.done_bytes)
+                        )
+                    return inner(update)
+
+                kwargs["on_transfer_event"] = on_transfer_event
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "Node", ProgressSpyNode)
+    env = SimpleNamespace(gate=gate, made=made)
+    yield env
+    gate.release()
+
+
+async def _run_stalled(net, cli_runs, stall_env, *, node_spy=None, recv_out=None):
+    """`receive` (JSON, hoặc text vào `recv_out`) + `send --json --limit-rate 4M` 8 MiB; chặn ghi ~2 s
+    rồi mở. Trả `(recv, send, lúc mở cổng)`."""
+    recv = cli_runs("receive", receive_argv(net, json_mode=recv_out is None), out=recv_out)
+    if recv_out is None:
+        port = (await recv.wait_event("receiving"))["port"]
+    else:
+        await recv.wait_text(C1_TAIL)
+        port = await port_for(node_spy, net.R)
+    f = make_file(net.src, "a.bin", 8 * MiB)
+    send = cli_runs("send", send_argv(net, [f], port, extra=["--limit-rate", "4M"]))
+    await wait_until(stall_env.gate.hit.is_set, 30, "bên nhận chưa ghi tới khối thứ 3")
+    await asyncio.sleep(STALL_SECONDS)
+    t_release = time.monotonic()
+    stall_env.gate.release()
+    assert await send.code(60) == 0, send.text()
+    return recv, send, t_release
+
+
+@pytest.mark.slow
+@with_marks(socket_test)
+async def test_json_progress_has_no_repeated_done_bytes_while_app_reports_stall(
+    pair_dirs, transfer_env, cli_runs, stall_env
+):
+    net = pair_dirs
+    recv, send, t_release = await _run_stalled(net, cli_runs, stall_env)
+    await recv.wait_event("result", timeout=15)
+    # Tiền đề: trong lúc chặn, app bên nhận đã phát nhiều `TransferProgress` cùng `done_bytes`.
+    hit = stall_env.gate.hit_at
+    stalled = [m for m in stall_env.made if m[2] == "receive" and hit + 0.5 <= m[0] <= t_release]
+    assert len(stalled) >= 3, f"app chỉ phát {len(stalled)} TransferProgress khi lượt đứng yên"
+    assert len({m[3] for m in stalled}) == 1, "done_bytes bên nhận đổi trong lúc chặn ghi"
+    for run in (recv, send):
+        events = run.events_of("progress")
+        assert events, run.text()
+        seen = collections.Counter((ev["transfer_id"], ev["done_bytes"]) for ev in events)
+        repeated = {k: n for k, n in seen.items() if n > 1}
+        assert not repeated, f"`progress` lặp cùng done_bytes: {repeated}"
+        for ev in events:
+            assert ev.keys() >= PROGRESS_FIELDS
+            exact = 100 * ev["done_bytes"] / ev["total_bytes"]
+            assert abs(ev["percent"] - exact) < 0.1, ev  # `percent` vẫn theo `done_bytes`
+        assert_json_clean(run)
+
+
+@pytest.mark.slow
+@with_marks(socket_test)
+async def test_tty_receive_line_is_not_redrawn_while_done_bytes_is_unchanged(
+    pair_dirs, transfer_env, cli_runs, node_spy, stall_env
+):
+    from teleport.core.display import format_size
+
+    net = pair_dirs
+    tty = TtyOut()
+    recv, _, t_release = await _run_stalled(net, cli_runs, stall_env, node_spy=node_spy, recv_out=tty)
+    await recv.wait_text(R_DONE.format(n=1, size=format_size(8 * MiB), s=SENDER), timeout=15)
+    hit = stall_env.gate.hit_at
+    stalled = [m for m in stall_env.made if m[2] == "receive" and hit + 0.5 <= m[0] <= t_release]
+    assert len(stalled) >= 3, f"app chỉ phát {len(stalled)} TransferProgress khi lượt đứng yên"
+    redraws = [t for t, s in tty.writes if "\r" in s and hit + 0.5 <= t <= t_release]
+    assert redraws == [], f"dòng TTY vẽ lại {len(redraws)} lần khi done_bytes không đổi"
+    assert "\r" in tty.getvalue(), "TTY phải vẽ dòng tiến độ bằng CR như cũ"
