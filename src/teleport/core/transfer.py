@@ -264,7 +264,14 @@ class TransferKey:
 
 @dataclass(frozen=True, slots=True)
 class TransferInfo:
-    """Bản chụp một lượt truyền cho giao diện / CLI."""
+    """Bản chụp một lượt truyền cho giao diện / CLI.
+
+    `done_bytes`: bên nhận là byte đã bền (file đã `verified` cộng các khối đã `synced` của file
+    hiện tại, nhảy bậc theo lô `SyncPart`); bên gửi là byte đã gửi. Lịch sử, resume và CLI dùng
+    trường này. `unsynced_bytes` chỉ để hiển thị: bên nhận là byte các khối của file hiện tại đã
+    phát `WriteBlock` mà chưa `synced`, bên gửi luôn 0. `done_bytes + unsynced_bytes` ≤
+    `total_bytes` nhưng có thể giảm (nối lại bỏ các khối chưa sync, đọc lại thấy khối sai).
+    """
 
     key: TransferKey
     status: TransferStatus  # trong `TransferEnded`: trạng thái ngay trước khi kết thúc
@@ -273,6 +280,7 @@ class TransferInfo:
     file_index: int  # bên nhận: file hiện tại (0…n); bên gửi: số file đã được `verified`
     done_bytes: int
     total_bytes: int
+    unsynced_bytes: int = 0
 
 
 # ---- Sự kiện báo giao diện -------------------------------------------------------------------
@@ -2155,13 +2163,15 @@ class TransferEngine:
         return TransferStatus.RECONNECTING if failing else TransferStatus.TRANSFERRING
 
     def _info(self, t: _Transfer, status: TransferStatus) -> TransferInfo:
+        unsynced = 0
         if isinstance(t, _Send):
             file_index = t.verified_count
             done = t.verified_bytes + sum(state.sent_bytes for state in t.states.values())
         else:
             file_index = t.file_index
             done = t.verified_bytes + t.have_bytes
-        return TransferInfo(t.key, status, t.offer.files, t.names, file_index, done, t.total_size)
+            unsynced = t.pending_bytes
+        return TransferInfo(t.key, status, t.offer.files, t.names, file_index, done, t.total_size, unsynced)
 
     def _default_file_index(self, t: _Transfer) -> int | None:
         n = len(t.offer.files)

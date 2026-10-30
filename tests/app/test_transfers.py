@@ -494,7 +494,7 @@ def test_transfer_result_has_exactly_planned_members(T):
     [
         ("OfferReceived", ["key", "device_name", "files", "names", "total_bytes", "auto_accepted"]),
         ("TransferStatusChanged", ["info"]),
-        ("TransferProgress", ["info", "bytes_per_second", "eta"]),
+        ("TransferProgress", ["info", "bytes_per_second", "eta", "shown_bytes", "idle_seconds"]),
         ("FileDone", ["key", "file_index", "name", "path"]),
         (
             "TransferFinished",
@@ -1625,9 +1625,11 @@ async def test_after_close_public_calls_are_noops_and_send_raises(T, transfer_no
 @pytest.mark.slow
 @integration
 async def test_ac27_progress_events_are_periodic_monotonic_with_speed_and_eta(T, transfer_nodes, monkeypatch):
-    """AC-27: `TransferProgress` theo chu kỳ `PROGRESS_INTERVAL` (vá 0,25 s), chỉ khi `done_bytes` đổi,
-    `done_bytes` tăng ngặt, tốc độ ≥ 0 (có lúc > 0), `eta = (total − done) / speed` khi speed > 0, không
-    có sau `TransferFinished`."""
+    """AC-27: `TransferProgress` theo chu kỳ `PROGRESS_INTERVAL` (vá 0,25 s), tốc độ ≥ 0 (có lúc > 0),
+    không có sau `TransferFinished`. Spec hackathon PR-1 mục 1: phát khi `shown_bytes` đổi, hoặc mỗi nhịp
+    khi lượt TRANSFERRING / RECONNECTING đứng yên (nên hai sự kiện liền nhau có thể cùng `shown_bytes`,
+    chỉ ở hai trạng thái đó); `shown_bytes` không giảm, `done_bytes` không giảm; `eta = (total − shown) /
+    speed` khi speed > 0."""
     R = T.TransferResult
     monkeypatch.setattr(T, "PROGRESS_INTERVAL", 0.25)
     monkeypatch.setattr(T, "SPEED_WINDOW", 1.0)
@@ -1643,7 +1645,15 @@ async def test_ac27_progress_events_are_periodic_monotonic_with_speed_and_eta(T,
     t_fin = B.trec.timed("TransferFinished", tid)[0][0]
     assert all(t <= t_fin for t, _ in prog), "còn tiến độ sau TransferFinished"
     done = [p.info.done_bytes for _, p in prog]
-    assert all(b > a for a, b in itertools.pairwise(done)), done
+    assert all(b >= a for a, b in itertools.pairwise(done)), done
+    shown = [p.shown_bytes for _, p in prog]
+    assert all(b >= a for a, b in itertools.pairwise(shown)), shown
+    assert shown[-1] > shown[0], shown
+    for (_, a), (_, b) in itertools.pairwise(prog):
+        if b.shown_bytes == a.shown_bytes:
+            assert str(b.info.status) in ("transferring", "reconnecting"), (
+                f"phát lại cùng shown_bytes ở trạng thái {b.info.status}"
+            )
     gaps = [b - a for (a, _), (b, _) in itertools.pairwise(prog)]
     assert min(gaps) >= 0.1, f"tiến độ không theo chu kỳ: khoảng cách {gaps}"
     speeds = [p.bytes_per_second for _, p in prog]
@@ -1654,9 +1664,7 @@ async def test_ac27_progress_events_are_periodic_monotonic_with_speed_and_eta(T,
         assert p.info.key == key
         assert p.info.total_bytes == 24 * MiB
         if p.bytes_per_second > 0:
-            assert p.eta == pytest.approx(
-                (p.info.total_bytes - p.info.done_bytes) / p.bytes_per_second, rel=1e-6
-            )
+            assert p.eta == pytest.approx((p.info.total_bytes - p.shown_bytes) / p.bytes_per_second, rel=1e-6)
         else:
             assert p.eta is None
 

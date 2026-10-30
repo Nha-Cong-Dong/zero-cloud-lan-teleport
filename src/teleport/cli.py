@@ -1900,6 +1900,9 @@ class _TransferPrinter:
         self._prefix = prefix
         self._file_counts: dict[TransferKey, int] = {}
         self._plain_at: dict[TransferKey, float] = {}  # không TTY: lúc in dòng tiến độ gần nhất
+        # `done_bytes` của lần in tiến độ gần nhất: app vẫn phát `TransferProgress` khi lượt đứng
+        # yên, CLI chỉ in (text và JSON) khi `done_bytes` đổi.
+        self._printed_done: dict[TransferKey, int] = {}
 
     def _peer(self, device_id: str) -> str:
         return _peer_label(self._name_of(device_id), device_id)
@@ -1963,6 +1966,9 @@ class _TransferPrinter:
         info = update.info
         key = info.key
         self.note_files(key, len(info.files))
+        if self._printed_done.get(key) == info.done_bytes:
+            return
+        self._printed_done[key] = info.done_bytes
         out = self._output
         speed = update.bytes_per_second
         eta = update.eta
@@ -2013,6 +2019,7 @@ class _TransferPrinter:
         key = info.key
         self._file_counts.pop(key, None)
         self._plain_at.pop(key, None)
+        self._printed_done.pop(key, None)
         name = self._name_of(key.device_id)
         message = transfer_result_message(finished, peer_name=name, receive_dir=self._receive_dir())
         out = self._output
