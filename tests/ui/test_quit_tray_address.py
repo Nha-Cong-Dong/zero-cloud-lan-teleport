@@ -360,7 +360,8 @@ def test_address_label_is_plain_selectable_tab_focusable_and_named(window):
     assert label.textFormat() == Qt.TextFormat.PlainText
     flags = label.textInteractionFlags()
     assert flags & Qt.TextInteractionFlag.TextSelectableByMouse
-    assert flags & Qt.TextInteractionFlag.TextSelectableByKeyboard
+    # PR-7: không con trỏ chữ khi Tab tới nhãn (chỉ chọn bằng chuột), Tab vẫn đi qua.
+    assert not flags & Qt.TextInteractionFlag.TextSelectableByKeyboard
     assert label.focusPolicy() & Qt.FocusPolicy.TabFocus
     assert label.accessibleName() == ADDRESS_A11Y
 
