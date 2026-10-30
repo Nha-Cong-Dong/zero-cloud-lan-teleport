@@ -49,7 +49,8 @@ SYNC_BATCH = core_transfer.SYNC_EVERY * MiB  # bậc `done_bytes` bên nhận (k
 INTERVAL = 0.2  # `PROGRESS_INTERVAL` vá trong test đứng yên
 WINDOW = 0.6  # `SPEED_WINDOW` vá trong test đứng yên
 STALL = 2.6  # giây đứng yên (dưới `IDLE_TIMEOUT` 5 s của `fast`, để lượt chưa sang RECONNECTING)
-SETTLE = 0.8  # sau khi chặn: chờ bộ đệm hai đầu cạn, rồi mới coi là đứng yên
+STALL_MAX = 4.0  # chờ đuôi đứng yên đủ dài tới tối đa chừng này giây sau khi chặn (< `IDLE_TIMEOUT`)
+DRAIN_MAX = 3 * MiB  # byte `shown_bytes` còn được tăng sau khi chặn (bộ đệm socket, khối đang ghi/đọc trước)
 
 
 def make_file(directory: Path, name: str, size: int) -> Path:
@@ -83,6 +84,22 @@ def assert_shown_invariants(prog) -> None:
         assert p.shown_bytes >= p.info.done_bytes, (p.shown_bytes, p.info.done_bytes)
         assert p.idle_seconds >= 0.0
         assert p.bytes_per_second >= 0.0
+
+
+def stalled_since(prog, t_block: float) -> float:
+    """Mốc bắt đầu đứng yên: lần cuối `shown_bytes` đổi, không sớm hơn lúc chặn.
+
+    Sau `block()` hai đầu vẫn còn chuyển nốt phần trong bộ đệm socket. Bên gửi đếm một khối (1 MiB)
+    lúc đọc xong, trước khi ghi; khối kế được đếm khi khối trước đã vào bộ đệm socket, nên vẫn còn
+    tăng tới khi bộ đệm đầy. Trên runner chậm việc đó có thể kéo dài quá 1 s sau khi chặn (CI
+    windows / Python 3.12), nên mốc lấy theo số liệu thật chứ không theo một khoảng cố định; lượng
+    byte còn tăng thì bị chặn bởi `DRAIN_MAX`.
+    """
+    t_move = t_block
+    for (_, a), (t, b) in itertools.pairwise(prog):
+        if b.shown_bytes != a.shown_bytes:
+            t_move = max(t_move, t)
+    return t_move
 
 
 def assert_stalled_tail(tail, *, status: str, label: str) -> None:
@@ -213,7 +230,20 @@ async def test_stalled_transferring_keeps_reporting_with_zero_speed(T, via_proxy
     )
     p.proxy.block()
     t_block = time.monotonic()
+    shown_at_block = max((u.shown_bytes for t, u in progress_of(node, tid) if t <= t_block), default=0)
+
+    def tail() -> list[tuple[float, object]]:
+        # Quá `SPEED_WINDOW` (thêm nửa nhịp cho độ trễ của nhịp) kể từ lần cuối `shown_bytes` đổi.
+        prog = progress_of(node, tid)
+        start = stalled_since(prog, t_block) + WINDOW + INTERVAL / 2
+        return [(t, u) for t, u in prog if t >= start]
+
     await asyncio.sleep(STALL)
+    await wait_until(
+        lambda: len(tail()) >= 4,
+        max(0.0, t_block + STALL_MAX - time.monotonic()),
+        f"{side}: tiến độ chưa đứng yên sau khi chặn",
+    )
     t_end = time.monotonic()
     assert node.trec.finished(tid) is None, describe(node.trec.finished(tid))
 
@@ -222,8 +252,9 @@ async def test_stalled_transferring_keeps_reporting_with_zero_speed(T, via_proxy
         f"{side}: chỉ {len(during)} TransferProgress trong {STALL} s đứng yên (nhịp {INTERVAL} s)"
     )
     assert_regular(during, label=side, max_gap=3 * INTERVAL)
-    tail = [(t, u) for t, u in during if t >= t_block + SETTLE + WINDOW]
-    assert_stalled_tail(tail, status="transferring", label=side)
+    assert_stalled_tail([(t, u) for t, u in tail() if t <= t_end], status="transferring", label=side)
+    drained = during[-1][1].shown_bytes - shown_at_block
+    assert drained <= DRAIN_MAX, f"{side}: mạng đã chặn mà shown_bytes còn tăng {drained} byte"
     assert_shown_invariants(progress_of(node, tid))
 
     p.proxy.resume()
