@@ -35,10 +35,16 @@ file người dùng (D7); việc kiểm file do `transfers.send` làm trên `Dis
 (không `exec()`), dựng qua seam cấp module `file_dialog_factory` (đọc lúc gọi).
 
 **Thông báo**: lỗi chọn gửi hiện ở dải thông báo của `TransfersView` (`show_notice`), không hộp
-chặn. Khay: có `offer` chờ trả lời → `texts.offer_waiting()`; nhận xong một lượt → câu mvp mục 8
-“Đã nhận *n* file từ *X*.” (một file: tên file thật đã lưu, lấy từ `FileDone.path.name` cuối,
-có thể là `ten (1).ext`; chưa có thì tên trong `offer`). Tên máy kia qua
-`texts.peer_label`, tên file qua `texts.file_label`; bóng thoại khay là chữ thuần.
+chặn. Khay: có `offer` chờ trả lời → `texts.offer_waiting()`, **chỉ khi app không được dùng**
+(`app_active()` False: không cửa sổ nào của app đang active; đọc trước `offers.handle`, vì hộp hỏi
+mới mở có thể giành active); nhận xong một lượt → câu mvp mục 8 “Đã nhận *n* file từ *X*.” (luôn
+hiện; một file: tên file thật đã lưu, lấy từ `FileDone.path.name` cuối, có thể là `ten (1).ext`;
+chưa có thì tên trong `offer`), kèm `folder` để bấm bóng thoại mở thư mục: thư mục cha của file đã
+lưu cuối, không có thì thư mục nhận của host. Tên máy kia qua `texts.peer_label`, tên file qua
+`texts.file_label`; bóng thoại khay là chữ thuần.
+
+**Lượt gửi dở** (`active_sends()`): tên hiển thị các máy đang có lượt gửi chưa kết thúc, theo các
+hàng của `TransfersView` (không gọi node); `ui.app` dùng để hỏi lại trước khi Thoát.
 
 Chuỗi qua `QCoreApplication.translate("Transfers", ...)` lúc dùng.
 """
@@ -52,7 +58,7 @@ from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import QCoreApplication, QMetaMethod, QObject, QTimer, Signal
-from PySide6.QtWidgets import QFileDialog, QWidget
+from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from teleport.app.devices import DeviceView
 from teleport.app.node import (
@@ -100,6 +106,11 @@ PENDING_PAIR_TIMEOUT = (
 )
 
 
+def default_app_active() -> bool:
+    """App đang được dùng: một cửa sổ của app (cửa sổ chính hay một hộp) đang active."""
+    return QApplication.activeWindow() is not None
+
+
 def pair_wait_text(peer: str) -> str:
     """mvp mục 8, “Giao diện: gửi tiếp khi đang chờ ghép đôi để gửi”. `peer`: máy **đang chờ ghép**."""
     return texts.fill(
@@ -144,14 +155,26 @@ class TransfersController(QObject):
     pair_needed = Signal(object)  # DeviceView: chưa ghép đôi, cần ghép trước khi gửi
     repair_requested = Signal(object)  # DeviceView: nút “Ghép đôi lại” (máy kia từ chối máy này)
 
-    def __init__(self, window: MainWindow, tray: Tray, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        window: MainWindow,
+        tray: Tray,
+        parent: QObject | None = None,
+        *,
+        app_active: Callable[[], bool] | None = None,
+    ) -> None:
+        """`app_active`: app đang được dùng không (bóng thoại offer chỉ hiện khi False).
+
+        Mặc định `default_app_active` của module (đọc lúc gọi, test vá được).
+        """
         super().__init__(parent)
         self._window = window
         self._tray = tray
+        self._app_active = app_active if app_active is not None else lambda: default_app_active()
         self._host: NodeHost | None = None
         self._names: dict[str, str | None] = {}
         self._offer_names: dict[TransferKey, str | None] = {}
-        self._saved_names: dict[TransferKey, str] = {}  # tên file thật cuối (`FileDone.path.name`)
+        self._saved_paths: dict[TransferKey, Path] = {}  # file thật đã lưu cuối (`FileDone.path`)
         self._pending: tuple[str, list[Path]] | None = None  # “ghép rồi gửi” đang chờ
         self._pending_timer = QTimer(self)
         self._pending_timer.setSingleShot(True)
@@ -190,7 +213,7 @@ class TransfersController(QObject):
         self._drop_pending()
         self._names = {}
         self._offer_names = {}
-        self._saved_names = {}
+        self._saved_paths = {}
         self.view.set_device_names(self._names)
         receive_dir = None if host is None else host.options.receive_dir
         self.offers.set_receive_dir(receive_dir)
@@ -230,24 +253,51 @@ class TransfersController(QObject):
             self._names[view.device_id] = view.name
             self.view.set_device_names(self._names)
 
+    def active_sends(self) -> list[str]:
+        """Tên hiển thị (`texts.peer_label`) các máy đang có lượt gửi chưa kết thúc, theo thứ tự hàng.
+
+        Mỗi máy một lần (theo `device_id`). Chỉ đọc các hàng của `TransfersView`, không gọi node.
+        """
+        model = self._window.radar.model
+        seen: set[str] = set()
+        names: list[str] = []
+        for row in self.view.rows():
+            key = row.key
+            if key.direction is not Direction.SEND or row.finished or key.device_id in seen:
+                continue
+            seen.add(key.device_id)
+            names.append(self._peer(key.device_id, model.device(key.device_id)))
+        return names
+
     def on_transfer(self, update: TransferUpdate) -> None:
+        # Đọc trước `offers.handle`: hộp hỏi mới mở có thể giành active.
+        active = isinstance(update, OfferReceived) and self._app_active()
         self.offers.handle(update)
         self.view.handle(update)
         if isinstance(update, OfferReceived):
             self._offer_names[update.key] = update.device_name
-            if not update.auto_accepted:
+            if not update.auto_accepted and not active:
                 self._tray.show_message(texts.offer_waiting())
         elif isinstance(update, FileDone):
             if update.key.direction is Direction.RECEIVE and update.path is not None and update.path.name:
-                self._saved_names[update.key] = update.path.name
+                self._saved_paths[update.key] = update.path
         elif isinstance(update, TransferFinished):
             key = update.info.key
             offer_name = self._offer_names.pop(key, None)
-            saved_name = self._saved_names.pop(key, None)
+            saved_path = self._saved_paths.pop(key, None)
             if update.result is TransferResult.DONE and key.direction is Direction.RECEIVE:
                 name = self._names.get(key.device_id) or offer_name
+                if saved_path is not None:
+                    folder: Path | None = saved_path.parent
+                else:
+                    folder = None if self._host is None else self._host.options.receive_dir
                 self._tray.show_message(
-                    received_text(update.info, texts.peer_label(name, key.device_id), saved_name)
+                    received_text(
+                        update.info,
+                        texts.peer_label(name, key.device_id),
+                        None if saved_path is None else saved_path.name,
+                    ),
+                    folder=folder,
                 )
 
     # ---- Gửi ---------------------------------------------------------------------------------

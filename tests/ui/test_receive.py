@@ -208,9 +208,16 @@ def test_sender_cancel_closes_box(gui, gui_wait, pair, peer_node, ui_helpers):
     assert run.code == 0
 
 
-def test_two_offers_get_two_boxes_and_tray_message(gui, gui_wait, pair, peer_node, ui_helpers):
-    """Mục 10: mỗi `key` một hộp; có khay thì kèm `showMessage` “có file đang chờ”."""
+def test_two_offers_get_two_boxes_and_tray_message(gui, gui_wait, pair, peer_node, ui_helpers, monkeypatch):
+    """Mục 10: mỗi `key` một hộp; có khay thì kèm `showMessage` “có file đang chờ”.
+
+    Từ PR-6 (B5) bóng thoại offer chỉ hiện khi app không được dùng: vá seam `GuiApp._app_active` trả
+    False (app đang bị che). Ca ngược (active → không bóng thoại): tests/ui/test_quit_tray_address.py.
+    """
     from teleport.trust.identity import load_or_create_identity
+    from teleport.ui.app import GuiApp
+
+    monkeypatch.setattr(GuiApp, "_app_active", lambda self: False)
 
     a, b, src = pair()
     a_id = load_or_create_identity(a).device_id

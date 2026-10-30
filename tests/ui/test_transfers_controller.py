@@ -230,7 +230,7 @@ def env(qtbot, monkeypatch, tmp_path):
     from teleport.ui.tray import Tray
 
     messages: list[str] = []
-    monkeypatch.setattr(Tray, "show_message", lambda self, text: messages.append(text))
+    monkeypatch.setattr(Tray, "show_message", lambda self, text, folder=None: messages.append(text))
     window = MainWindow()
     qtbot.addWidget(window)
     tray = Tray()
