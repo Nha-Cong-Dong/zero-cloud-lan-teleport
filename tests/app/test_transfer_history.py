@@ -444,6 +444,7 @@ async def test_rejected_by_user_has_an_entry_on_both_sides(transfer_nodes):
     assert eb.names == ("f0.bin", "f1.bin", "f2.bin")
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_cancelled_mid_transfer_records_partial_bytes(transfer_nodes, write_gate):
     """T25: B hủy giữa chừng → cả hai `cancelled_user`, `0 < done_bytes < total_bytes`. Giữa chừng =
@@ -472,6 +473,7 @@ async def test_cancelled_mid_transfer_records_partial_bytes(transfer_nodes, writ
     assert eb.done_bytes > 0
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_suspended_transfer_has_no_entry_and_resumed_one_has_exactly_one(
     T, transfer_nodes, restart, grace_real, write_gate, monkeypatch, caplog, tmp_path
@@ -519,6 +521,7 @@ async def test_suspended_transfer_has_no_entry_and_resumed_one_has_exactly_one(
     assert file_ids(tmp_path / "A") == [tid]
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_unpair_mid_transfer_records_unpaired_without_device_name(transfer_nodes, write_gate):
     """T27 (spec 11.5): chỉ khẳng định phía A. Giữa lượt = A bị chặn ở lần ghi khối thứ 3."""
@@ -546,6 +549,7 @@ async def test_unpair_mid_transfer_records_unpaired_without_device_name(transfer
 # =================================================================================================
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_restore_of_done_and_tombstoned_transfers_adds_no_entries(
     transfer_nodes, restart, write_gate, caplog, T, monkeypatch
@@ -639,6 +643,7 @@ async def test_start_cancelled_while_loading_history_leaves_no_task(node_factory
     assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
 
 
+@pytest.mark.slow
 @leakcheck
 async def test_close_cancelled_aborts_pending_history_write(
     transfer_nodes, T, HM, monkeypatch, caplog, tmp_path

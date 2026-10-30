@@ -239,6 +239,7 @@ def test_check_rejects_parent_dir_path_resolving_to_base_root(base: Path, repo: 
     _expect_unknown(repo, base, [("evil_dotdot.dll", src, "BINARY")], "evil_dotdot.dll")
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "rel", ["Lib/site-packages/evilpkg/core.pyd", "Lib/Site-Packages/evilpkg/__init__.py"]
 )
@@ -254,6 +255,7 @@ def test_check_rejects_file_outside_every_known_root(base: Path, repo: Path, tmp
     _expect_unknown(repo, base, [("evil_outside.dll", str(evil), "BINARY")], "evil_outside.dll")
 
 
+@pytest.mark.slow
 def test_check_rejects_unmappable_localpyc(
     base: Path, repo: Path, tmp_path: Path, make_dist: DistMaker
 ) -> None:

@@ -2031,6 +2031,7 @@ def _run_writer(n: int, steps: list[tuple[str, tuple, int]]) -> _Writer:
     return w
 
 
+@pytest.mark.slow
 @SETTINGS
 @given(_writer_steps())
 def test_writer_compacting_at_threshold_keeps_log_within_read_ceiling(case: tuple[int, list]):

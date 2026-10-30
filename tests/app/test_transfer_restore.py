@@ -1051,6 +1051,7 @@ def open_error(kind: str, tid: str, path: Path) -> BaseException:
     }[kind](text)
 
 
+@pytest.mark.slow
 @leakcheck
 @pytest.mark.parametrize(
     "kind", ["NotResumableError", "StorageError", "ValueError", "OSError", "RuntimeError"]

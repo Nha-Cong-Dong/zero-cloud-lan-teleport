@@ -321,6 +321,7 @@ def test_quit_with_hanging_close_returns_within_budget(gui, gui_wait, config_dir
 # --- Mở lần nữa trong lúc đang thoát (soat-code vòng 1, (b) và (c)) ----------------------------------------
 
 
+@pytest.mark.slow
 @integration
 def test_acquire_during_quit_is_not_swallowed(gui, gui_wait, config_dir):
     """Ngay sau “Thoát” (`request_quit`), server IPC đã đóng mà `gui.lock` còn giữ: bản mở sau không được
@@ -343,6 +344,7 @@ def test_acquire_during_quit_is_not_swallowed(gui, gui_wait, config_dir):
     assert run.code == 0
 
 
+@pytest.mark.slow
 def test_main_returns_1_with_message_when_holder_does_not_answer(gui, config_dir, ui_helpers):
     """`gui.lock` bị giữ mà không có server trả lời (bản kia đang tắt hay treo) → `main` báo “Teleport đang
     tắt hoặc chưa phản hồi.” và trả 1 (không phải 0 như khi đã gửi được `show`), không dựng cửa sổ."""

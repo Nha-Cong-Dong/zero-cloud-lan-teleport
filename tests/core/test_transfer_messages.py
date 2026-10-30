@@ -901,6 +901,7 @@ valid_wires = st.one_of(
 )
 
 
+@pytest.mark.slow
 @settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(valid_wires)
 def test_property_valid_wire_round_trips(w):
@@ -1017,6 +1018,7 @@ def test_fuzz_parse_message_only_raises_message_error(obj):
     _check_only_message_error(obj)
 
 
+@pytest.mark.slow
 @settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(near_valid.map(lambda d: json.dumps(d, ensure_ascii=True)))
 def test_fuzz_raw_json_with_escaped_surrogates_only_raises_message_error(body):

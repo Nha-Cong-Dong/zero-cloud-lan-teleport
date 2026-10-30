@@ -1727,6 +1727,7 @@ async def test_i4_line_typed_before_prompt_is_ignored(pair_dirs, transfer_env, c
     assert send.events_of("result")[0]["result"] == "rejected_user"
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_json_receive_without_yes_reads_answers_from_stdin(pair_dirs, transfer_env, cli_runs):
     """plan 2.3 bước 5: `--json` không `--yes` → `offer` có `auto_accepted:false`, đọc `c`/`k` từ stdin."""
@@ -3492,6 +3493,7 @@ def text_lines(run) -> list[str]:
     return found
 
 
+@pytest.mark.slow
 @with_marks(socket_test)
 async def test_m14_offers_arriving_after_stdin_eof_print_m14_each_and_b13_once(
     pair_dirs, transfer_env, cli_runs, node_spy

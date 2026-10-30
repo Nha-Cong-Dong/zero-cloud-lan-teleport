@@ -326,6 +326,7 @@ def devices_and_query(draw):
     return devices, q
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(devices_and_query())
 def test_resolve_matches_definition(case):
@@ -609,6 +610,7 @@ def views_and_query(draw):
     return out, q
 
 
+@pytest.mark.slow
 @settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(views_and_query())
 def test_rd3_resolve_device_matches_definition(case):
