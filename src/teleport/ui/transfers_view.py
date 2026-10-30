@@ -6,13 +6,33 @@
 thẻ đã có giữ nguyên, không nhân đôi.
 
 Thẻ (kiểu AirDrop / LocalSend): dòng 1 tên file (hay “n file”) kèm cỡ và máy kia (“· tới X” /
-“· từ X”), nút “Mở thư mục” / “Hủy”; dòng 2 thanh tiến độ thang 0–1000 (`done * 1000 // total`,
+“· từ X”), nút “Mở thư mục” / “Hủy”; dòng 2 thanh tiến độ thang 0–1000 (`shown * 1000 // total`,
 không tràn int32 với file tới 2⁴², spec-hackathon D8); dòng 3 biểu tượng của style (không tải gì)
 + nhãn trạng thái ngắn (`status_label`: “Đang gửi”, “Đang chờ”, “Xong ✓”, “Lỗi”…) + dòng phụ chữ
 nhỏ (`detail_label`): tiến độ “42,0% · 85,2 MB/s · còn 1 phút”, câu chờ cụ thể (“Đang chờ X trả
 lời…”), “Đã kiểm tra toàn vẹn” khi xong, hay câu mvp mục 8 (chuyện gì xảy ra + làm gì tiếp) khi
 lỗi. Thông tin không chỉ nằm ở màu hay biểu tượng: luôn có chữ (mvp N12); màu theo palette
 (`ui/theme.py`), không mã màu cứng.
+
+**Tiến độ nói đúng sự thật** (spec-hackathon PR-1): mỗi thẻ giữ `shown_bytes`, chỉ tăng, ≤ tổng:
+`TransferProgress.shown_bytes`, còn ảnh chụp / `TransferStatusChanged` / `TransferResumed` góp
+`done_bytes + unsynced_bytes`. Thanh và % đều theo nó, nên thẻ chưa kết thúc không bao giờ lùi (nối
+lại xóa khối chưa sync, sang file mới); xong (`DONE`) thì thanh đầy. % làm tròn xuống và chặn ở
+99,9% tới khi xong. Dòng phụ theo trạng thái: TRANSFERRING “x% · tốc độ · còn …” (tốc độ 0 thì bỏ
+phần “/s”, chỉ “đang tính thời gian còn lại”), nhưng `idle_seconds` ≥ `STALL_TEXT_AFTER` thì câu
+đứng yên: bên nhận “x% · Đang chờ dữ liệu…”, bên gửi “x% · Đang chờ X phản hồi…” (bên gửi không có
+VERIFYING, máy nhận đọc lại file lớn thì thẻ gửi đứng yên); app vẫn phát tiến độ khi đứng yên, nên
+câu tốc độ cũ không đọng lại. RECONNECTING “x% · Đang chờ X nối lại…”, không tốc độ, không thời gian
+còn lại; VERIFYING (bên nhận đọc lại / đổi tên) “Đang kiểm tra video.mp4…” như CLI (mvp mục 8), tiến
+độ tới muộn không ghi đè. Mỗi nhịp tiến độ chỉ `setText` dòng phụ; lúc đổi loại câu (đứng yên ↔ tốc
+độ) mới vẽ lại cả trạng thái và accessibleDescription.
+
+Câu tường lửa (`DataUnreachable`) và câu lượt nhận được khôi phục (`TransferResumed`) giữ tới khi dữ
+liệu thật sự chảy: `shown_bytes` của thẻ tăng hay lượt về TRANSFERRING. Tiến độ RECONNECTING đứng yên
+(app phát mỗi nhịp) không xóa chúng. `TransferStatusChanged` cũng vậy: engine phát `DataUnreachable`
+trước `StatusChanged(RECONNECTING)` của cùng lần thất bại, nên trạng thái mới RECONNECTING giữ câu
+tường lửa (trạng thái khác thì bỏ); câu lượt khôi phục giữ qua RECONNECTING / WAITING / QUEUED, chỉ
+bỏ khi trạng thái mới là TRANSFERRING / VERIFYING.
 
 Nút “Hủy” phát `cancel_requested(key)`; “Mở thư mục” (bên nhận, khi đã xong và có `FileDone.path`)
 mở thư mục cha bằng seam `open_url`, không `subprocess`. `TransferProgress` chỉ `setValue` /
@@ -28,7 +48,9 @@ màn hình). Tên máy lấy từ `set_device_names` (`devices()`), không có t
 
 **Thông báo** (`show_notice(text, action_text=None, on_action=None)`): một dải chữ thuần ở đầu
 danh sách (trên các thẻ) kèm nút “Đóng”, và khi có thì một nút hành động (“Ghép đôi lại”, “Hủy ghép
-đôi”; bấm thì ẩn dải rồi gọi `on_action`). Thứ tự Tab: câu → nút hành động → “Đóng”. Thông báo mới
+đôi”; bấm thì ẩn dải rồi gọi `on_action`). Bố cục hai hàng (cột lượt hẹp, câu không bị ép thành
+cột chữ): hàng trên biểu tượng thông tin 16 px của style + câu chiếm hết bề ngang, xuống dòng tự
+nhiên khi dài; hàng dưới các nút căn phải. Thứ tự Tab: câu → nút hành động → “Đóng”. Thông báo mới
 thay thông báo cũ (kể cả nút), không hộp thoại chặn. Dùng cho lỗi khi chọn gửi (mvp mục 8, các
 dòng “Chọn gửi…”, “Giao diện: gửi tới…”) và gợi ý kéo thả. Chữ có thể chứa tên máy kia (đã qua
 `peer_label`): chỉ vào nhãn PlainText và accessibleDescription, không vào tooltip. Seam test:
@@ -85,6 +107,7 @@ from teleport.ui.texts import fill as _fill
 open_url = QDesktopServices.openUrl
 
 BAR_MAX = 1000  # thang của thanh tiến độ
+STALL_TEXT_AFTER = 5.0  # giây không có byte mới (`idle_seconds`) thì dòng phụ nói “Đang chờ dữ liệu…”
 
 _REJECTED = frozenset(
     {
@@ -104,6 +127,8 @@ _RECEIVE_SILENT = frozenset(
     }
 )
 _WAITING_STATUSES = frozenset({TransferStatus.QUEUED, TransferStatus.WAITING})
+# Trạng thái mà `TransferStatusChanged` tới là dữ liệu đã chảy lại: bỏ câu lượt khôi phục.
+_FLOWING_STATUSES = frozenset({TransferStatus.TRANSFERRING, TransferStatus.VERIFYING})
 
 
 def bar_value(done: int, total: int) -> int:
@@ -111,6 +136,12 @@ def bar_value(done: int, total: int) -> int:
     if total <= 0:
         return 0
     return min(BAR_MAX, max(0, done) * BAR_MAX // total)
+
+
+def percent_text(shown: int, total: int) -> str:
+    """“42,0%”: một chữ số thập phân, làm tròn xuống, tối đa 99,9% (chỉ thẻ đã xong mới đầy)."""
+    tenths = min(bar_value(shown, total), BAR_MAX - 1)
+    return f"{tenths // 10},{tenths % 10}%"
 
 
 def _file_at(info: TransferInfo, index: int | None) -> str:
@@ -224,6 +255,34 @@ def result_status(result: TransferResult) -> str:
     if result in _CANCELLED_RESULTS:
         return t("Transfers", "Đã hủy")
     return t("Transfers", "Lỗi")
+
+
+def reconnecting_text(percent: str, peer: str) -> str:
+    """Dòng phụ khi RECONNECTING: “42,0% · Đang chờ X nối lại…”; không tốc độ, không thời gian còn lại."""
+    return _fill(
+        QCoreApplication.translate("Transfers", "{percent} · Đang chờ {name} nối lại…"),
+        percent=percent,
+        name=peer,
+    )
+
+
+def stalled_text(percent: str, direction: Direction, peer: str) -> str:
+    """Dòng phụ khi đang truyền mà đã `STALL_TEXT_AFTER` giây không có byte mới (mvp mục 8).
+
+    Bên nhận: “Đang chờ dữ liệu…”. Bên gửi không có VERIFYING, nên lúc máy nhận đọc lại file lớn
+    thẻ gửi đứng yên: nói đang chờ máy kia phản hồi. `peer` đã qua `peer_label`.
+    """
+    t = QCoreApplication.translate
+    if direction is Direction.SEND:
+        return _fill(t("Transfers", "{percent} · Đang chờ {name} phản hồi…"), percent=percent, name=peer)
+    return _fill(t("Transfers", "{percent} · Đang chờ dữ liệu…"), percent=percent)
+
+
+def verifying_text(info: TransferInfo | None) -> str:
+    """Dòng phụ khi VERIFYING (bên nhận đọc lại / đổi tên file): “Đang kiểm tra video.mp4…” (mvp mục 8)."""
+    if info is None or not info.names:
+        return ""
+    return _fill(QCoreApplication.translate("Transfers", "Đang kiểm tra {file}…"), file=_file_at(info, None))
 
 
 def resumed_text(peer: str) -> str:
@@ -497,22 +556,24 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
     return _stopped(s)  # CANCELLED_OTHER, UNPAIRED, REJECTED_* do máy gửi báo…
 
 
-def progress_text(update: TransferProgress) -> str:
+def progress_text(update: TransferProgress, shown: int | None = None) -> str:
     """Dòng phụ khi đang truyền: “42,0% · 85,2 MB/s · còn 1 phút 2 giây”.
 
-    % một chữ số thập phân, làm tròn xuống (không hiện 100,0% trước khi xong), như
-    `cli.progress_line`; chưa đo được tốc độ (`eta` None) thì “đang tính thời gian còn lại”.
+    % theo `shown` (None: `update.shown_bytes`) qua `percent_text`. Chưa đo được tốc độ (`eta`
+    None) thì “đang tính thời gian còn lại”; tốc độ 0 thì bỏ hẳn phần “/s” (không hiện “0 byte/s”).
     """
     info = update.info
-    tenths = bar_value(info.done_bytes, info.total_bytes)
+    percent = percent_text(update.shown_bytes if shown is None else shown, info.total_bytes)
     speed = update.bytes_per_second
     speed_bytes = int(speed) if math.isfinite(speed) and speed > 0 else 0
     eta = update.eta
-    if eta is None or not math.isfinite(eta):
+    if eta is None or not math.isfinite(eta) or speed_bytes == 0:
         remaining = QCoreApplication.translate("Transfers", "đang tính thời gian còn lại")
     else:
         remaining = _fill(QCoreApplication.translate("Transfers", "còn {time}"), time=format_duration(eta))
-    return " · ".join((f"{tenths // 10},{tenths % 10}%", f"{format_size(speed_bytes)}/s", remaining))
+    if speed_bytes == 0:
+        return " · ".join((percent, remaining))
+    return " · ".join((percent, f"{format_size(speed_bytes)}/s", remaining))
 
 
 _ICONS: dict[Kind, QStyle.StandardPixmap | None] = {
@@ -556,6 +617,8 @@ class TransferRow(QFrame):
         self.resumed = False
         self.unreachable = False
         self.progress: TransferProgress | None = None
+        self.shown_bytes = 0  # byte hiển thị (thanh, %), chỉ tăng
+        self.stalled_shown = False  # lần vẽ đầy đủ cuối là câu đứng yên (để biết lúc đổi loại câu)
         self.result: TransferFinished | None = None
         self.last_path: Path | None = None  # `FileDone.path` cuối (bên nhận)
 
@@ -617,6 +680,13 @@ class TransferRow(QFrame):
         self.total_bytes = info.total_bytes
         self.first_name = info.names[0] if info.names else None
 
+    def raise_shown(self, shown: int, total: int) -> None:
+        """Nâng `shown_bytes` lên `shown` (kẹp trong 0…`total`); không bao giờ hạ, thanh không lùi."""
+        self.shown_bytes = max(self.shown_bytes, min(max(0, shown), max(0, total)))
+        value = bar_value(self.shown_bytes, total)
+        if value > self.progress_bar.value():
+            self.progress_bar.setValue(value)
+
     def set_kind(self, kind: Kind) -> None:
         """Đổi biểu tượng theo loại trạng thái (chỉ khi đổi, để cập nhật tiến độ vẫn rẻ)."""
         if kind is self.kind and self.icon_label.property("teleport_icon_set"):
@@ -668,10 +738,23 @@ class TransfersView(QWidget):
         self.notice_close.setObjectName("transfersNoticeClose")
         self.notice_close.setAutoDefault(False)
         self.notice_close.clicked.connect(self.hide_notice)
-        notice_layout = QHBoxLayout(self.notice_frame)
-        notice_layout.addWidget(self.notice_label, 1)
-        notice_layout.addWidget(self.notice_action, 0, Qt.AlignmentFlag.AlignTop)
-        notice_layout.addWidget(self.notice_close, 0, Qt.AlignmentFlag.AlignTop)
+        # Biểu tượng thông tin của style (trang trí: câu đã đủ nghĩa, không nhận tiêu điểm).
+        self.notice_icon = QLabel()
+        self.notice_icon.setObjectName("transfersNoticeIcon")
+        self.notice_icon.setFixedSize(_ICON_SIZE, _ICON_SIZE)
+        self._set_notice_icon()
+        # Hàng trên: biểu tượng + câu chiếm hết bề ngang; hàng dưới: nút căn phải. Cột lượt hẹp,
+        # nút nằm cạnh câu thì câu bị ép thành cột chữ.
+        text_row = QHBoxLayout()
+        text_row.addWidget(self.notice_icon, 0, Qt.AlignmentFlag.AlignTop)
+        text_row.addWidget(self.notice_label, 1)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(self.notice_action)
+        button_row.addWidget(self.notice_close)
+        notice_layout = QVBoxLayout(self.notice_frame)
+        notice_layout.addLayout(text_row)
+        notice_layout.addLayout(button_row)
         self.notice_frame.setVisible(False)
         QWidget.setTabOrder(self.notice_label, self.notice_action)
         QWidget.setTabOrder(self.notice_action, self.notice_close)
@@ -776,7 +859,7 @@ class TransfersView(QWidget):
                 continue
             row = self._add_row(info.key)
             row.set_info(info)
-            row.progress_bar.setValue(bar_value(info.done_bytes, info.total_bytes))
+            row.raise_shown(info.done_bytes + info.unsynced_bytes, info.total_bytes)
             self._render_text(row)
 
     def clear(self) -> None:
@@ -800,8 +883,15 @@ class TransfersView(QWidget):
             if row.finished:
                 return
             row.set_info(update.info)
-            row.resumed = False
-            row.unreachable = False
+            row.raise_shown(update.info.done_bytes + update.info.unsynced_bytes, update.info.total_bytes)
+            # Engine báo `DataUnreachable` TRƯỚC `StatusChanged(RECONNECTING)` của cùng lần thất bại
+            # (`_finish`: hành động, rồi báo cáo, rồi trạng thái): RECONNECTING không xóa câu tường
+            # lửa. Câu lượt khôi phục giữ qua RECONNECTING / WAITING, chỉ mất khi dữ liệu chảy lại.
+            status = update.info.status
+            if status is not TransferStatus.RECONNECTING:
+                row.unreachable = False
+            if status in _FLOWING_STATUSES:
+                row.resumed = False
             self._render_text(row)
         elif isinstance(update, OfferReceived):
             row = self._ensure(update.key)
@@ -826,7 +916,7 @@ class TransfersView(QWidget):
                 return
             row.set_info(update.info)
             row.resumed = True
-            row.progress_bar.setValue(bar_value(update.info.done_bytes, update.info.total_bytes))
+            row.raise_shown(update.info.done_bytes + update.info.unsynced_bytes, update.info.total_bytes)
             self._render_text(row)
         elif isinstance(update, DataUnreachable):
             for row in self._rows.values():
@@ -875,15 +965,23 @@ class TransfersView(QWidget):
             return
         row.info = info
         row.progress = update
-        row.progress_bar.setValue(bar_value(info.done_bytes, info.total_bytes))
-        if info.status is not row.status or row.resumed or row.unreachable:
-            # Có tiến độ: dữ liệu đã chảy, bỏ câu chờ nối lại / tường lửa.
-            row.status = info.status
+        old_shown = row.shown_bytes
+        row.raise_shown(update.shown_bytes, info.total_bytes)
+        # App phát tiến độ mỗi nhịp cả khi RECONNECTING đứng yên: chỉ khi dữ liệu thật sự chảy (byte
+        # hiển thị tăng, hay đã về TRANSFERRING) mới bỏ câu tường lửa / câu lượt khôi phục.
+        flowing = row.shown_bytes > old_shown or info.status is TransferStatus.TRANSFERRING
+        cleared = flowing and (row.resumed or row.unreachable)
+        if cleared:
             row.resumed = False
             row.unreachable = False
+        if cleared or info.status is not row.status:
+            row.status = info.status
             self._render_status(row)
-        elif row.status not in _WAITING_STATUSES:
-            row.detail_label.setText(progress_text(update))
+        elif row.status not in _WAITING_STATUSES and not (row.resumed or row.unreachable):
+            if self._is_stalled(row) is not row.stalled_shown:
+                self._render_status(row)  # đổi loại câu (đứng yên ↔ tốc độ): cập nhật cả trình đọc màn hình
+            else:
+                row.detail_label.setText(self._active_detail(row))
 
     def _on_finished(self, update: TransferFinished) -> None:
         if update.result is TransferResult.SUSPENDED:
@@ -953,15 +1051,36 @@ class TransfersView(QWidget):
             return Kind.WAITING, short_status(direction, TransferStatus.WAITING), resumed_text(peer)
         connected = self._connected.get(row.key.device_id, True)
         waiting = waiting_detail(direction, row.status, peer, connected=connected)
-        if waiting is not None:
-            detail = waiting
-        elif row.progress is not None:
-            detail = progress_text(row.progress)
-        else:
-            detail = ""
+        detail = waiting if waiting is not None else self._active_detail(row, peer)
         return status_kind(row.status), short_status(direction, row.status), detail
 
+    def _active_detail(self, row: TransferRow, peer: str | None = None) -> str:
+        """Dòng phụ của thẻ TRANSFERRING / VERIFYING / RECONNECTING (xem docstring module)."""
+        status = row.status
+        if status is TransferStatus.VERIFYING:
+            return verifying_text(row.info)
+        percent = percent_text(row.shown_bytes, row.total_bytes)
+        if status is TransferStatus.RECONNECTING:
+            return reconnecting_text(percent, self._peer(row) if peer is None else peer)
+        progress = row.progress
+        if progress is None:
+            return ""
+        if self._is_stalled(row):
+            return stalled_text(percent, row.key.direction, self._peer(row) if peer is None else peer)
+        return progress_text(progress, row.shown_bytes)
+
+    @staticmethod
+    def _is_stalled(row: TransferRow) -> bool:
+        """Thẻ TRANSFERRING đã `STALL_TEXT_AFTER` giây không có byte mới (dòng phụ là câu đứng yên)."""
+        progress = row.progress
+        return (
+            row.status is TransferStatus.TRANSFERRING
+            and progress is not None
+            and progress.idle_seconds >= STALL_TEXT_AFTER
+        )
+
     def _render_status(self, row: TransferRow) -> None:
+        row.stalled_shown = self._is_stalled(row)
         kind, status, detail = self._status(row)
         row.set_kind(kind)
         row.status_label.setText(status)
@@ -1005,6 +1124,11 @@ class TransfersView(QWidget):
         if event.type() == QEvent.Type.LanguageChange:
             self.retranslate()
         elif event.type() in (QEvent.Type.StyleChange, QEvent.Type.PaletteChange):
+            self._set_notice_icon()
             for row in self._rows.values():  # biểu tượng của style mới (sáng/tối)
                 row.icon_label.setProperty("teleport_icon_set", False)
                 row.set_kind(row.kind)
+
+    def _set_notice_icon(self) -> None:
+        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation)
+        self.notice_icon.setPixmap(icon.pixmap(_ICON_SIZE, _ICON_SIZE))

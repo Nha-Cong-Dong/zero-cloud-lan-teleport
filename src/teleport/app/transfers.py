@@ -310,11 +310,29 @@ class TransferStatusChanged:
 
 @dataclass(frozen=True, slots=True)
 class TransferProgress:
-    """Tiến độ, mỗi `PROGRESS_INTERVAL` khi `done_bytes` đổi. `eta` (giây) None khi chưa đo được tốc độ."""
+    """Tiến độ một lượt, xét mỗi `PROGRESS_INTERVAL`.
+
+    Phát khi `shown_bytes` hoặc `info.done_bytes` đổi so với lần phát trước của lượt (lần đầu thấy
+    lượt luôn phát), hoặc mỗi nhịp khi lượt đã được phát ít nhất một lần và đang TRANSFERRING /
+    RECONNECTING, kể cả khi đứng yên (để giao diện biết dữ liệu ngừng chảy). QUEUED / WAITING /
+    VERIFYING không đổi thì không phát.
+
+    - `info.done_bytes` vẫn là byte đã bền (`TransferInfo`); CLI, lịch sử và resume dùng nó.
+    - `shown_bytes`: byte để hiển thị, `min(total, max(lần trước, done_bytes + unsynced_bytes))`;
+      không bao giờ giảm trong một lượt, 0 ≤ `shown_bytes` ≤ `total_bytes`.
+    - `idle_seconds`: số giây từ nhịp cuối mà `done_bytes + unsynced_bytes` (chưa kẹp) khác nhịp
+      trước, tăng hay giảm đều tính (lần đầu thấy lượt là mốc); 0.0 nếu vừa đổi ở nhịp này. Nên dữ
+      liệu chảy lại cho byte đã tính (gửi lại khối sau nối lại) không bị báo là đứng yên dù
+      `shown_bytes` chưa tăng.
+    - `bytes_per_second`: theo `shown_bytes` trên các mẫu trong `SPEED_WINDOW` (đứng yên quá cửa
+      sổ thì 0.0); `eta` (giây) = (total − shown) / tốc độ, None khi tốc độ bằng 0.
+    """
 
     info: TransferInfo
     bytes_per_second: float
     eta: float | None
+    shown_bytes: int
+    idle_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -554,6 +572,16 @@ class _DiskLane:
     waiters: set[asyncio.Event] = field(default_factory=set)  # bên đọc khung chờ chỗ trong hàng ghi
 
 
+@dataclass(eq=False)
+class _ProgressState:
+    """Trạng thái báo tiến độ của một lượt (`_progress`)."""
+
+    shown: int  # `shown_bytes` hiện tại: không bao giờ giảm
+    raw: int  # `done_bytes + unsynced_bytes` ở nhịp trước (chưa kẹp, có thể giảm)
+    active_at: float  # `loop.time()` lần cuối `raw` đổi (lần đầu thấy lượt là mốc)
+    reported: tuple[int, int] | None = None  # (`shown`, `done_bytes`) lần phát gần nhất; None: chưa phát
+
+
 # ---- Kết nối ---------------------------------------------------------------------------------
 
 
@@ -722,7 +750,7 @@ class TransferManager:
         self._progress_wake = asyncio.Event()
         self._progress_task: asyncio.Task[None] | None = None
         self._samples: dict[TransferKey, deque[tuple[float, int]]] = {}
-        self._reported_done: dict[TransferKey, int] = {}
+        self._progress_states: dict[TransferKey, _ProgressState] = {}
         self._closing = False  # begin_close() đã chạy: lời gọi công khai không làm gì
         self._closed = False  # close() xong: không phát sự kiện nữa
         # Khôi phục (`restore`): đã gọi chưa; `stop` của các lần mở lại (abort_now đặt).
@@ -1415,7 +1443,7 @@ class TransferManager:
         pair = (key.device_id, key.transfer_id)
         self._unpaired.discard(key)
         self._samples.pop(key, None)
-        self._reported_done.pop(key, None)
+        self._progress_states.pop(key, None)
         if key.direction is Direction.SEND:
             self._sources.pop(pair, None)
             return
@@ -1440,32 +1468,56 @@ class TransferManager:
             self._call(self._engine.decide, device_id, transfer_id, True)
 
     async def _progress(self) -> None:
-        """Mỗi `PROGRESS_INTERVAL`: `TransferProgress` cho lượt có `done_bytes` đổi."""
+        """Mỗi `PROGRESS_INTERVAL`: `TransferProgress` theo luật ở docstring của lớp đó."""
         while True:
             if not self._engine.transfers():
                 self._progress_wake.clear()
                 await self._progress_wake.wait()
             await asyncio.sleep(PROGRESS_INTERVAL)
-            now = self._loop.time()
-            live: set[TransferKey] = set()
-            for info in self._engine.transfers():
-                key = info.key
-                live.add(key)
-                samples = self._samples.setdefault(key, deque())
-                samples.append((now, info.done_bytes))
-                while samples[0][0] < now - SPEED_WINDOW:
-                    samples.popleft()
-                if self._reported_done.get(key) == info.done_bytes:
-                    continue
-                self._reported_done[key] = info.done_bytes
-                first_t, first_done = samples[0]
-                span = now - first_t
-                speed = max(0.0, (info.done_bytes - first_done) / span) if span > 0 else 0.0
-                eta = (info.total_bytes - info.done_bytes) / speed if speed > 0 else None
-                self._emit(TransferProgress(info, speed, eta))
-            for key in [k for k in self._samples if k not in live]:
-                del self._samples[key]
-                self._reported_done.pop(key, None)
+            self._progress_tick(self._loop.time())
+
+    def _progress_tick(self, now: float) -> None:
+        """Một nhịp của `_progress` (tách riêng, đồng bộ, để test được luật phát)."""
+        live: set[TransferKey] = set()
+        for info in self._engine.transfers():
+            key = info.key
+            live.add(key)
+            total = info.total_bytes
+            # Byte hiển thị gồm cả khối đã giao ghi mà chưa `fsync` (bên nhận), để thanh không
+            # nhảy bậc theo lô `SyncPart`; giữ không giảm (nối lại có thể bỏ khối chưa sync).
+            raw = info.done_bytes + info.unsynced_bytes
+            current = min(total, max(0, raw))
+            state = self._progress_states.get(key)
+            if state is None:
+                state = self._progress_states[key] = _ProgressState(current, raw, now)
+            else:
+                if raw != state.raw:
+                    # Có hoạt động kể cả khi `shown` không tăng (gửi lại khối sau nối lại, bỏ khối
+                    # chưa sync): mốc của `idle_seconds`.
+                    state.raw, state.active_at = raw, now
+                if current > state.shown:
+                    state.shown = current
+            shown = state.shown
+            samples = self._samples.setdefault(key, deque())
+            samples.append((now, shown))
+            while samples[0][0] < now - SPEED_WINDOW:
+                samples.popleft()
+            moving = info.status in (TransferStatus.TRANSFERRING, TransferStatus.RECONNECTING)
+            # Lô cuối `synced` rồi sang VERIFYING: `shown` đứng nguyên nhưng `done_bytes` tăng tới
+            # cuối file; vẫn phát để CLI thấy 100 %.
+            if state.reported == (shown, info.done_bytes) and not moving:
+                continue
+            state.reported = (shown, info.done_bytes)
+            first_t, first_shown = samples[0]
+            span = now - first_t
+            speed = max(0.0, (shown - first_shown) / span) if span > 0 else 0.0
+            eta = (total - shown) / speed if speed > 0 else None
+            idle = now - state.active_at
+            self._emit(TransferProgress(info, speed, eta, shown, idle))
+        for key in [k for k in self._samples if k not in live]:
+            del self._samples[key]
+        for key in [k for k in self._progress_states if k not in live]:
+            del self._progress_states[key]
 
     # ---- Kết nối dữ liệu --------------------------------------------------------------------
 

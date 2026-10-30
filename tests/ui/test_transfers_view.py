@@ -127,6 +127,7 @@ def info(
     done: int = 0,
     total: int | None = None,
     file_index: int = 0,
+    unsynced: int = 0,
 ):
     from teleport.core.transfer import TransferInfo, TransferStatus
 
@@ -139,6 +140,7 @@ def info(
         file_index=file_index,
         done_bytes=done,
         total_bytes=sum(s for _, s in files) if total is None else total,
+        unsynced_bytes=unsynced,
     )
 
 
@@ -148,10 +150,28 @@ def status_changed(k, status: str, **kw):
     return TransferStatusChanged(info(k, status, **kw))
 
 
-def progress(k, done: int, total: int, bps: float = 85.2 * 2**20, eta: float | None = 62.0, **kw):
+def progress(
+    k,
+    done: int,
+    total: int,
+    bps: float = 85.2 * 2**20,
+    eta: float | None = 62.0,
+    *,
+    shown: int | None = None,
+    idle: float = 0.0,
+    status: str = "transferring",
+    **kw,
+):
+    """`TransferProgress` giả; `shown` mặc định = `done` (spec PR-1: `shown_bytes`, `idle_seconds`)."""
     from teleport.app.transfers import TransferProgress
 
-    return TransferProgress(info(k, "transferring", done=done, total=total, **kw), bps, eta)
+    return TransferProgress(
+        info(k, status, done=done, total=total, **kw),
+        bps,
+        eta,
+        shown_bytes=done if shown is None else shown,
+        idle_seconds=idle,
+    )
 
 
 def finished(k, result: str, *, by_peer: bool = False, status: str = "transferring", **kw):
@@ -862,3 +882,403 @@ def test_section8_sentences_match_mvp_doc():
     ]
     for sample in samples:
         assert sample in doc, sample
+
+
+# =================================================================================================
+# Spec hackathon PR-1 (mục 1 “ui/transfers_view.py”, mục 2, mục 3 ý 6–7): thẻ nói đúng sự thật khi
+# dữ liệu ngừng chảy; thanh không lùi; dải thông báo hai hàng.
+# =================================================================================================
+
+MiB = 2**20
+RECONNECT_DETAIL = "{x}% · Đang chờ {p} nối lại…"  # mới (spec PR-1 mục 2)
+STALLED_DETAIL = "{x}% · Đang chờ dữ liệu…"  # mới (spec PR-1 mục 2), chiều nhận
+STALLED_DETAIL_SEND = "{x}% · Đang chờ {p} phản hồi…"  # chiều gửi (soát PR-1: bên gửi không có VERIFYING)
+P1_TOTAL = 1000 * MiB
+
+
+def assert_no_speed_or_eta(detail: str) -> None:
+    assert "/s" not in detail, detail
+    assert "còn" not in detail, detail
+    assert ETA_UNKNOWN not in detail, detail
+
+
+@pytest.mark.parametrize("direction", ALL_DIRECTIONS)
+def test_reconnecting_after_progress_shows_percent_and_waiting_sentence(view, direction):
+    k = key(direction)
+    view.set_connected(PEER_ID, True)
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 400 * MiB, P1_TOTAL, shown=420 * MiB))
+    view.handle(status_changed(k, "reconnecting", done=400 * MiB, total=P1_TOTAL))
+    detail = view.row(k).detail_label.text()
+    assert detail == fill(RECONNECT_DETAIL, x="42,0", p=PEER), detail
+    assert_no_speed_or_eta(detail)
+
+
+def test_reconnecting_without_progress_shows_zero_percent(view):
+    k = key("send")
+    view.handle(status_changed(k, "reconnecting", total=P1_TOTAL))
+    detail = view.row(k).detail_label.text()
+    assert detail == fill(RECONNECT_DETAIL, x="0,0", p=PEER), detail
+
+
+@pytest.mark.parametrize(("bps", "eta"), [(0.0, None), (3.5 * MiB, 120.0)])
+def test_progress_while_reconnecting_keeps_waiting_sentence(view, bps, eta):
+    """App phát `TransferProgress` mỗi nhịp khi RECONNECTING (tốc độ có thể còn > 0 trong cửa sổ đo):
+    dòng phụ vẫn là câu chờ nối lại, % theo `shown_bytes` mới, không tốc độ, không ETA."""
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, shown=100 * MiB))
+    view.handle(status_changed(k, "reconnecting", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, bps=bps, eta=eta, shown=250 * MiB, idle=3.0, status="reconnecting"))
+    detail = view.row(k).detail_label.text()
+    assert detail == fill(RECONNECT_DETAIL, x="25,0", p=PEER), detail
+    assert_no_speed_or_eta(detail)
+
+
+def test_stall_text_threshold_is_five_seconds():
+    from teleport.ui import transfers_view
+
+    assert transfers_view.STALL_TEXT_AFTER == 5.0
+
+
+@pytest.mark.parametrize("direction", ALL_DIRECTIONS)
+def test_transferring_idle_at_threshold_says_waiting_for_data(view, direction):
+    from teleport.ui.transfers_view import STALL_TEXT_AFTER
+
+    k = key(direction)
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=420 * MiB, idle=STALL_TEXT_AFTER))
+    expected = fill(STALLED_DETAIL_SEND if direction == "send" else STALLED_DETAIL, x="42,0", p=PEER)
+    detail = view.row(k).detail_label.text()
+    assert detail == expected, detail
+    assert_no_speed_or_eta(detail)
+    assert expected in view.row(k).accessibleDescription()
+    view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=420 * MiB, idle=STALL_TEXT_AFTER + 20))
+    assert view.row(k).detail_label.text() == expected
+
+
+def test_transferring_idle_below_threshold_keeps_progress_text(view):
+    from teleport.core.display import format_size
+    from teleport.ui.transfers_view import STALL_TEXT_AFTER
+
+    k = key("send")
+    bps = 85.2 * MiB
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, bps=bps, eta=62.0, shown=420 * MiB, idle=STALL_TEXT_AFTER - 0.1))
+    detail = view.row(k).detail_label.text()
+    assert "Đang chờ" not in detail
+    assert detail.startswith("42,0%"), detail
+    assert f"{format_size(int(bps))}/s" in detail
+
+
+def test_stalled_card_returns_to_progress_text_when_data_flows_again(view):
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=420 * MiB, idle=9.0))
+    assert "Đang chờ dữ liệu" in view.row(k).detail_label.text()
+    assert "Đang chờ dữ liệu" in view.row(k).accessibleDescription()
+    view.handle(progress(k, 0, P1_TOTAL, bps=5 * MiB, eta=100.0, shown=430 * MiB, idle=0.0))
+    detail = view.row(k).detail_label.text()
+    assert "Đang chờ dữ liệu" not in detail and "/s" in detail, detail
+    # Trình đọc màn hình theo kịp lúc đổi loại câu (đứng yên → tốc độ).
+    assert "Đang chờ dữ liệu" not in view.row(k).accessibleDescription()
+    assert "/s" in view.row(k).accessibleDescription()
+
+
+def test_send_stalled_while_receiver_verifies_says_waiting_for_peer(view):
+    """Bên gửi không có VERIFYING: lúc máy nhận đọc lại file lớn, thẻ gửi nói đang chờ máy kia phản
+    hồi, không “Đang chờ dữ liệu…” (máy gửi không chờ dữ liệu nào)."""
+    k = key("send")
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=P1_TOTAL - 1, idle=12.0))
+    detail = view.row(k).detail_label.text()
+    assert detail == fill(STALLED_DETAIL_SEND, x="99,9", p=PEER), detail
+    assert "Đang chờ dữ liệu" not in detail
+
+
+# ---- Câu tường lửa / lượt khôi phục không bị tiến độ đứng yên thay (soát PR-1) -----------------
+
+
+def test_data_unreachable_survives_idle_reconnecting_progress(view):
+    k = key("send")
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, shown=400 * MiB))
+    view.handle(status_changed(k, "reconnecting", done=400 * MiB, total=P1_TOTAL))
+    view.handle(data_unreachable())
+    sentence = fill(DATA_UNREACHABLE, p=PEER)
+    row = view.row(k)
+    assert sentence in row.detail_label.text()
+    for idle in (1.0, 2.0, 30.0):
+        view.handle(
+            progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=400 * MiB, idle=idle, status="reconnecting")
+        )
+        assert sentence in row.detail_label.text(), row.detail_label.text()
+        assert row.status_label.text() == SHORT_RECONNECTING
+
+
+def test_resumed_survives_idle_reconnecting_progress(view):
+    k = key("receive")
+    view.handle(resumed(k, done=300 * MiB, total=P1_TOTAL))
+    row = view.row(k)
+    before = (row.status_label.text(), row.detail_label.text())
+    assert fill(WAIT_RESUMED, p=PEER) in before[1]
+    view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=300 * MiB, idle=1.0, status="reconnecting"))
+    assert (row.status_label.text(), row.detail_label.text()) == before
+
+
+@pytest.mark.parametrize("status", ["reconnecting", "transferring"])
+def test_unreachable_cleared_when_data_flows(view, status):
+    k = key("send")
+    view.handle(status_changed(k, "reconnecting", done=400 * MiB, total=P1_TOTAL))
+    view.handle(data_unreachable())
+    view.handle(progress(k, 0, P1_TOTAL, shown=410 * MiB, status=status))
+    detail = view.row(k).detail_label.text()
+    assert "Không mở được kết nối truyền dữ liệu" not in detail, detail
+    assert detail.startswith("41,0%"), detail
+
+
+def test_resumed_cleared_when_shown_grows(view):
+    k = key("receive")
+    view.handle(resumed(k, done=300 * MiB, total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=310 * MiB, status="reconnecting"))
+    detail = view.row(k).detail_label.text()
+    assert detail == fill(RECONNECT_DETAIL, x="31,0", p=PEER), detail
+
+
+# ---- Thứ tự thật của engine: `DataUnreachable` trước `StatusChanged(RECONNECTING)` -----------
+# `_finish` trả hành động, rồi báo cáo, rồi trạng thái (tests/core/test_transfer_data.py).
+
+
+def _unreachable_in_real_order(view, k):
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, shown=400 * MiB))
+    view.handle(data_unreachable())
+    view.handle(status_changed(k, "reconnecting", done=400 * MiB, total=P1_TOTAL))
+
+
+def test_data_unreachable_survives_following_status_reconnecting(view):
+    k = key("send")
+    _unreachable_in_real_order(view, k)
+    sentence = fill(DATA_UNREACHABLE, p=PEER)
+    row = view.row(k)
+    assert sentence in row.detail_label.text(), row.detail_label.text()
+    assert row.status_label.text() == SHORT_RECONNECTING
+    view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=400 * MiB, idle=2.0, status="reconnecting"))
+    assert sentence in row.detail_label.text(), row.detail_label.text()
+
+
+def test_data_unreachable_cleared_by_status_transferring(view):
+    k = key("send")
+    _unreachable_in_real_order(view, k)
+    view.handle(status_changed(k, "transferring", done=400 * MiB, total=P1_TOTAL))
+    assert "Không mở được kết nối truyền dữ liệu" not in view.row(k).detail_label.text()
+
+
+def test_data_unreachable_cleared_by_growing_shown_after_real_order(view):
+    k = key("send")
+    _unreachable_in_real_order(view, k)
+    view.handle(progress(k, 0, P1_TOTAL, shown=410 * MiB, status="reconnecting"))
+    detail = view.row(k).detail_label.text()
+    assert "Không mở được kết nối truyền dữ liệu" not in detail, detail
+    assert detail.startswith("41,0%"), detail
+
+
+@pytest.mark.parametrize("status", ["reconnecting", "waiting"])
+def test_resumed_survives_status_reconnecting_or_waiting(view, status):
+    k = key("receive")
+    view.handle(resumed(k, done=300 * MiB, total=P1_TOTAL))
+    view.handle(status_changed(k, status, done=300 * MiB, total=P1_TOTAL))
+    assert fill(WAIT_RESUMED, p=PEER) in view.row(k).detail_label.text()
+
+
+@pytest.mark.parametrize("status", ["transferring", "verifying"])
+def test_resumed_cleared_by_status_transferring_or_verifying(view, status):
+    k = key("receive")
+    view.handle(resumed(k, done=300 * MiB, total=P1_TOTAL))
+    view.handle(status_changed(k, status, done=300 * MiB, total=P1_TOTAL))
+    assert fill(WAIT_RESUMED, p=PEER) not in view.row(k).detail_label.text()
+
+
+def test_percent_and_bar_follow_shown_bytes_not_done_bytes(view):
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, shown=420 * MiB))
+    row = view.row(k)
+    assert row.progress_bar.value() == 420
+    assert row.detail_label.text().startswith("42,0%"), row.detail_label.text()
+
+
+def test_percent_from_shown_is_rounded_down_and_never_100_before_done(view):
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", total=1_000_000))
+    view.handle(progress(k, 0, 1_000_000, shown=999_999))
+    row = view.row(k)
+    assert row.progress_bar.value() == 999
+    assert row.detail_label.text().startswith("99,9%"), row.detail_label.text()
+
+
+def test_bar_never_goes_back_on_smaller_progress_or_status(view):
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, shown=500 * MiB))
+    row = view.row(k)
+    assert row.progress_bar.value() == 500
+    view.handle(progress(k, 0, P1_TOTAL, shown=300 * MiB))
+    assert row.progress_bar.value() == 500, "thanh lùi khi progress mới có shown nhỏ hơn"
+    view.handle(status_changed(k, "transferring", done=100 * MiB, total=P1_TOTAL))
+    assert row.progress_bar.value() == 500, "thanh lùi khi status mang done nhỏ hơn"
+    view.handle(status_changed(k, "reconnecting", done=0, total=P1_TOTAL))
+    assert row.progress_bar.value() == 500, "thanh lùi khi sang RECONNECTING"
+    view.handle(status_changed(k, "verifying", done=200 * MiB, total=P1_TOTAL))
+    assert row.progress_bar.value() == 500, "thanh lùi khi sang VERIFYING"
+
+
+def test_status_uses_done_plus_unsynced_for_bar(view):
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", done=600 * MiB, unsynced=100 * MiB, total=P1_TOTAL))
+    assert view.row(k).progress_bar.value() == 700
+
+
+def test_snapshot_and_resumed_use_done_plus_unsynced(view):
+    a, b = key("receive"), key("receive", "d" * 32)
+    view.load_snapshot([info(a, "transferring", done=300 * MiB, unsynced=50 * MiB, total=P1_TOTAL)])
+    assert view.row(a).progress_bar.value() == 350
+    view.handle(resumed(b, done=200 * MiB, unsynced=10 * MiB, total=P1_TOTAL))
+    assert view.row(b).progress_bar.value() == 210
+
+
+def test_done_after_stalled_progress_fills_bar(view):
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=900 * MiB, idle=30.0))
+    view.handle(finished(k, "done", status="verifying", done=P1_TOTAL, total=P1_TOTAL))
+    row = view.row(k)
+    assert row.progress_bar.value() == 1000
+    assert DONE_DETAIL in row.detail_label.text()
+
+
+def test_verifying_card_is_not_overwritten_by_progress(view):
+    """VERIFYING giữ câu “Đang kiểm tra” dù có `TransferProgress` (trạng thái VERIFYING) tới sau: app
+    phát khi `shown_bytes` còn đổi lúc đang kiểm tra (lô sync cuối của file)."""
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", total=P1_TOTAL))
+    view.handle(progress(k, 0, P1_TOTAL, shown=990 * MiB))
+    view.handle(status_changed(k, "verifying", done=P1_TOTAL, total=P1_TOTAL))
+    row = view.row(k)
+    before = (row.status_label.text(), row.detail_label.text())
+    assert SHORT_VERIFYING.lower() in " ".join(before).lower(), before
+    view.handle(
+        progress(k, P1_TOTAL, P1_TOTAL, bps=7 * MiB, eta=1.0, shown=P1_TOTAL, idle=0.0, status="verifying")
+    )
+    after = (row.status_label.text(), row.detail_label.text())
+    assert after == before, f"progress ghi đè thẻ đang kiểm tra: {before} → {after}"
+    assert "/s" not in after[1]
+
+
+def test_new_sentences_are_in_mvp_doc():
+    doc = _MVP.read_text(encoding="utf-8")
+    # mvp viết chỗ thay bằng ví dụ in nghiêng: {x} → *45,0*, {p} → *PC-Nha*.
+    for sample in (RECONNECT_DETAIL, STALLED_DETAIL, STALLED_DETAIL_SEND):
+        written = sample.replace("{x}", "*45,0*").replace("{p}", "*PC-Nha*")
+        assert written in doc, f"mvp.md mục 8 thiếu câu {written!r}"
+
+
+# ---- Dải thông báo hai hàng (UI-02) ---------------------------------------------------------------
+
+
+def _layout_notice(qtbot, view, width: int, text: str, action: str | None):
+    from PySide6.QtWidgets import QApplication
+
+    view.resize(width, 600)
+    if action is None:
+        view.show_notice(text)
+    else:
+        view.show_notice(text, action, lambda: None)
+    qtbot.waitUntil(lambda: view.notice_frame.isVisible(), timeout=2000)
+    for _ in range(3):
+        QApplication.processEvents()
+    assert view.notice_text() == text
+    return view.notice_frame
+
+
+def _geom(widget, frame):
+    """Hình chữ nhật của `widget` trong hệ tọa độ của `frame`."""
+    from PySide6.QtCore import QPoint, QRect
+
+    return QRect(widget.mapTo(frame, QPoint(0, 0)), widget.size())
+
+
+def _label_lines(label) -> float:
+    return label.height() / label.fontMetrics().lineSpacing()
+
+
+def _blocked_rejected():
+    from teleport.core.links import ConnectResult
+    from teleport.ui.send import blocked_message
+    from teleport.ui.transfers import repair_action_text
+
+    return blocked_message(ConnectResult.REJECTED, PEER), repair_action_text()
+
+
+def _blocked_identity():
+    from teleport.core.links import ConnectResult
+    from teleport.ui.send import blocked_message
+    from teleport.ui.transfers import unpair_action_text
+
+    return blocked_message(ConnectResult.IDENTITY_MISMATCH, PEER), unpair_action_text()
+
+
+@pytest.mark.parametrize("combo", ["rejected", "identity"])
+def test_notice_buttons_sit_below_label_aligned_right(qtbot, view, combo):
+    text, action = _blocked_rejected() if combo == "rejected" else _blocked_identity()
+    assert PEER in text and action
+    frame = _layout_notice(qtbot, view, 360, text, action)
+    label = _geom(view.notice_label, frame)
+    act = _geom(view.notice_action, frame)
+    close = _geom(view.notice_close, frame)
+    assert view.notice_action.isVisible() and view.notice_close.isVisible()
+    assert act.top() > label.bottom(), f"nút hành động không ở hàng dưới nhãn: {act} / {label}"
+    assert close.top() > label.bottom(), f"nút Đóng không ở hàng dưới nhãn: {close} / {label}"
+    assert abs(act.center().y() - close.center().y()) <= 4, "hai nút không cùng một hàng"
+    assert act.right() < close.left(), "nút hành động phải đứng trước nút Đóng"
+    right_gap = frame.width() - 1 - close.right()
+    left_gap = act.left()
+    assert right_gap < left_gap, f"hai nút không căn phải (trái {left_gap}, phải {right_gap})"
+    assert right_gap <= 24, f"nút Đóng cách mép phải {right_gap} px"
+    assert label.width() >= 0.75 * frame.width(), f"nhãn hẹp: {label.width()}/{frame.width()}"
+
+
+def test_rejected_notice_wraps_to_at_most_three_lines_at_360px(qtbot, view):
+    text, action = _blocked_rejected()
+    frame = _layout_notice(qtbot, view, 360, text, action)
+    assert frame.width() <= 380
+    lines = _label_lines(view.notice_label)
+    assert lines <= 3.5, f"câu REJECTED chiếm {lines:.1f} dòng ở bề ngang {frame.width()} px"
+
+
+def test_short_notice_fits_one_line_when_wide(qtbot, view):
+    _layout_notice(qtbot, view, 700, "Câu ngắn.", "Làm gì đó")
+    assert _label_lines(view.notice_label) < 1.9
+
+
+def test_notice_without_action_keeps_close_below_label(qtbot, view):
+    text = "Kéo file vào một thiết bị đã ghép đôi để gửi."
+    frame = _layout_notice(qtbot, view, 360, text, None)
+    assert view.notice_action_text() is None
+    assert not view.notice_action.isVisible()
+    label = _geom(view.notice_label, frame)
+    close = _geom(view.notice_close, frame)
+    assert close.top() > label.bottom(), f"nút Đóng không ở hàng dưới nhãn: {close} / {label}"
+    assert frame.width() - 1 - close.right() <= 24
+
+
+def test_notice_keeps_object_names_and_tab_order(qtbot, view):
+    text, action = _blocked_rejected()
+    _layout_notice(qtbot, view, 360, text, action)
+    assert view.notice_frame.objectName() == "transfersNotice"
+    assert view.notice_label.objectName() == "transfersNoticeText"
+    assert view.notice_action.objectName() == "transfersNoticeAction"
+    assert view.notice_close.objectName() == "transfersNoticeClose"
+    assert view.notice_label.nextInFocusChain() is view.notice_action
+    assert view.notice_action.nextInFocusChain() is view.notice_close
+    assert view.notice_action_text() == action

@@ -81,17 +81,17 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 
 **Có:** giao diện tối thiểu trên Windows: radar (danh sách thiết bị, nút nhập IP), ghép đôi bằng mã 6 số, kéo thả hoặc “Gửi file…”, hộp thoại Nhận / Từ chối, danh sách lượt truyền có tiến độ, tốc độ, trạng thái “Đang nối lại…” và nút hủy; tự nối lại và kiểm tra toàn vẹn như F6, F7; bản zip chạy không cần cài Python. CLI giữ như F12.
 
-**Để sau hackathon:** chế độ ẩn và màn hình “Chờ ghép đôi” (F3, F10), màn hình cài đặt (F10), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện.
+**Để sau hackathon:** chế độ ẩn và màn hình “Chờ ghép đôi” (F3, F10), màn hình cài đặt (F10), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; biểu tượng hệ điều hành và trạng thái “đang bận” trên radar (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP, nút “Gửi lại” và “Đổi thư mục nhận” (mục 8).
 
 **Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](benchmark.md).
 
 | Mã | Tiêu chí | Cách kiểm |
 |---|---|---|
-| H1 | Máy kia hiện trên radar trong thời gian mvp N1 nêu; ghép đôi xong bằng mã 6 số xác nhận ở cả hai máy | Bấm giờ từ lúc mở app máy B tới lúc B hiện trên radar máy A |
+| H1 | Máy kia hiện trên radar trong thời gian mvp N1 nêu; ghép đôi xong bằng mã 6 số xác nhận ở cả hai máy | Trước khi đo, hủy ghép đôi ở **cả hai** máy. Bấm giờ từ lúc mở app máy B tới lúc B hiện trên radar máy A, rồi ghép đôi |
 | H2 | Kéo một file ≥ 1 GiB thả vào máy kia; máy nhận hiện hộp thoại, bấm Nhận; file nhận có SHA-256 trùng file gốc | `Get-FileHash` ở hai máy |
 | H3 | Đang gửi file ở H2, tắt Wi-Fi một máy khi tiến độ khoảng 50%, chờ 10 giây rồi bật lại: lượt truyền tự chạy tiếp, tiến độ không về 0, SHA-256 trùng | Quan sát tiến độ; `Get-FileHash` |
 | H4 | Đóng hẳn app nhận giữa lượt truyền rồi mở lại: lượt truyền tự chạy tiếp và hoàn tất, SHA-256 trùng (F6) | Như H3 |
-| H5 | Gửi lại đúng file ở H2: máy nhận lưu thành `ten (1).ext`, file cũ không đổi; máy thứ ba chưa ghép đôi (hoặc máy B sau khi hủy ghép đôi) không gửi được file tới máy A | Xem thư mục nhận; `Get-FileHash` file cũ |
+| H5 | Gửi lại đúng file ở H2: máy nhận lưu thành `ten (1).ext`, file cũ không đổi; máy thứ ba chưa ghép đôi (hoặc máy B sau khi máy A hủy ghép đôi với B) không gửi được file tới máy A: máy B thấy câu của dòng “Máy kia từ chối máy này” (mục 8), máy A không hiện hộp thoại nhận và không có file mới | Xem thư mục nhận; `Get-FileHash` file cũ. Với máy B: hủy ghép đôi ở máy A, giữ nguyên ở máy B, rồi B gửi file tới A; kiểm xong hủy nốt ở máy B để **cả hai** máy về chưa ghép đôi |
 
 Đạt đủ H1–H5 thì **dừng thêm tính năng** tới hết buổi demo, chỉ sửa lỗi. Không đạt kịp thì demo bằng CLI cho phần giao diện còn thiếu; H2–H5 vẫn phải đạt bằng CLI.
 
@@ -360,7 +360,7 @@ Bản giao diện của MVP hackathon (mục 4.1): dòng đầu là ““*Lapto
 Danh sách lượt truyền của giao diện (khung bên phải ở mục 7.1) có một thẻ cho mỗi lượt trong lần mở app này:
 - Dòng 1: “*video.mp4* (*8,0 GB*) · tới *PC-Nha*” (bên nhận “· từ *Laptop-Minh*”; nhiều file: “*3* file (*8,4 GB*)”) và nút “Hủy”; bên nhận xong thì nút “Mở thư mục”.
 - Dòng 2: thanh tiến độ.
-- Dòng 3: nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang kiểm tra”, “Đang nối lại…”, “Xong ✓”, “Đã từ chối”, “Đã hủy”, “Lỗi”) và một dòng phụ: khi đang truyền “*45,0*% · *120 MB/s* · còn *2 phút*” (chưa đo được tốc độ thì thay “còn …” bằng “đang tính thời gian còn lại”); khi chờ thì câu chờ như bản CLI ở bảng dưới (máy nhận: “Đang chờ bạn trả lời” hoặc “Đang xếp hàng”); khi xong “Đã kiểm tra toàn vẹn”; khi dừng vì lỗi thì câu của mục 8.
+- Dòng 3: nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang kiểm tra”, “Đang nối lại…”, “Xong ✓”, “Đã từ chối”, “Đã hủy”, “Lỗi”) và một dòng phụ: khi đang truyền “*45,0*% · *120 MB/s* · còn *2 phút*” (phần trăm làm tròn xuống, chưa xong thì không hiện 100%; chưa đo được tốc độ thì bỏ phần tốc độ và thay “còn …” bằng “đang tính thời gian còn lại”; đang nối lại hay chờ dữ liệu thì câu ở mục 8); khi chờ thì câu chờ như bản CLI ở bảng dưới (máy nhận: “Đang chờ bạn trả lời” hoặc “Đang xếp hàng”); khi xong “Đã kiểm tra toàn vẹn”; khi dừng vì lỗi thì câu của mục 8.
 
 Bản CLI (`teleport receive`), mỗi lần một lời hỏi; lượt tới sau xếp hàng tới khi lời hỏi trước được trả lời. Tối đa 10 dòng file, còn lại gộp thành một dòng; cột dung lượng thẳng hàng:
 ```
@@ -471,6 +471,9 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Lượt dừng vì lý do khác (lý do máy này không biết, máy kia không còn biết lượt này…) | Máy gửi: “*PC-Nha* đã dừng lượt gửi.” Máy nhận: “*Laptop-Minh* đã dừng lượt gửi.” | — |
 | Đã tắt app gửi khi lượt truyền đang gián đoạn | “*Laptop-Minh* đã hủy lượt gửi *video.mp4*. Hãy nhờ gửi lại.” | — |
 | Mất mạng | “Đang nối lại…” (không phải lỗi) | Tự xử lý |
+| Giao diện: mất mạng giữa lượt (thẻ ở trạng thái “Đang nối lại…”) | Dòng phụ: “*45,0*% · Đang chờ *PC-Nha* nối lại…” (không hiện tốc độ và thời gian còn lại) | Tự xử lý |
+| Giao diện, máy nhận: đang truyền mà từ 5 giây trở lên không có dữ liệu mới | Dòng phụ: “*45,0*% · Đang chờ dữ liệu…” (không hiện tốc độ và thời gian còn lại) | Tự xử lý |
+| Giao diện, máy gửi: đang truyền mà từ 5 giây trở lên không gửi thêm được dữ liệu (kể cả lúc máy nhận đang kiểm tra file lớn) | Dòng phụ: “*45,0*% · Đang chờ *PC-Nha* phản hồi…” (không hiện tốc độ và thời gian còn lại) | Tự xử lý |
 | Mất kết nối quá lâu (quá hạn nối lại; kể cả lượt nhận dở khi app nhận mở lại sau hạn nối lại) | Máy gửi: “Mất kết nối với *PC-Nha* quá lâu nên lượt gửi đã dừng. Hãy gửi lại.” Máy nhận: “Mất kết nối với *Laptop-Minh* quá lâu nên đã dừng nhận. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.” | Nút “Gửi lại” |
 | Chọn gửi file không có quyền đọc | “Không mở được *video.mp4*: máy này không có quyền đọc file đó.” | Lượt gửi không bắt đầu |
 | Chọn gửi một thư mục | “*ảnh* không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file.” | Lượt gửi không bắt đầu |
