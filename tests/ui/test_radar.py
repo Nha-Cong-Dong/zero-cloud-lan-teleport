@@ -43,6 +43,13 @@ IP_BUTTON = "Nhập IP thủ công"
 UNPAIR_ACTION = "Hủy ghép đôi…"  # spec D11
 CONNECTED_WORD = "đã kết nối"  # spec PR1: câu mới, trạng thái “đã kết nối”
 START_BUTTON = "Bắt đầu"  # spec mục 10 A1
+# Spec PR-2 radar-click “Câu chữ” (UI-14) và “Nút theo hàng đang chọn” (UI-06).
+RADAR_HINT = "Bấm vào một thiết bị để ghép đôi hoặc gửi file, hoặc kéo file thả vào."
+LIST_DESCRIPTION = (
+    "Tab hoặc phím mũi tên để chọn thiết bị, Enter để ghép đôi hoặc gửi file, phím Menu để mở các thao tác."
+)
+SEND_BUTTON = "Gửi file…"
+PAIR_BUTTON = "Ghép đôi…"
 
 
 # =================================================================================================
@@ -929,9 +936,920 @@ def test_accessible_names_of_list_rows_and_ip_button(radar, ui_helpers):
 
 
 def test_drop_hint_text_from_mvp_7_1_is_shown(radar, ui_helpers):
-    """mvp mục 7.1: “Kéo file thả vào một thiết bị” (spec PR1 “Câu”)."""
+    """Câu gợi ý của radar (spec PR-2 radar-click “Câu chữ”, thay câu “Kéo file thả vào một thiết bị” của
+    spec PR1)."""
     load(radar, [view("May-1", paired=True)])
-    assert "Kéo file thả vào một thiết bị" in radar_text(radar, ui_helpers.all_text)
+    assert RADAR_HINT in radar_text(radar, ui_helpers.all_text)
+    assert "Kéo file thả vào một thiết bị" not in radar_text(radar, ui_helpers.all_text), "câu gợi ý cũ"
+
+
+# =================================================================================================
+# Spec PR-2 radar-click: bấm vào thiết bị (COV-03, UX-01), nút theo hàng (UI-06), câu chữ (UI-14)
+#
+# Chuỗi sự kiện chuột của một lần bấm đúp thật trong Qt: press, release (`clicked`), press/dblclick
+# (`doubleClicked`, `activated`), release (`clicked` lần nữa). Mọi test bấm đúp gửi đủ chuỗi đó.
+# Kết quả dương được chờ bằng `waitUntil` (radar có thể hoãn xử lý bằng timer); sau đó `_settle` cho
+# event loop chạy thêm một chút để bắt các lần phát lặp.
+# =================================================================================================
+
+
+class ClickSpy(Spy):
+    """`Spy` + `pick_files_requested`."""
+
+    def __init__(self, radar) -> None:
+        super().__init__(radar)
+        self.picks: list[str] = []
+        radar.pick_files_requested.connect(lambda i: self.picks.append(i))
+
+    @property
+    def pairs(self) -> list:
+        return [a[0] for a in self.calls["pair_requested"]]
+
+
+def _settle(qtbot, ms: int = 30) -> None:
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.processEvents()
+    qtbot.wait(ms)
+
+
+def _row_pos(lst, row: int):
+    return lst.visualRect(lst.model().index(row, 0)).center()
+
+
+def _empty_pos(lst):
+    """Một điểm trong viewport không thuộc hàng nào (dưới hàng cuối)."""
+    from PySide6.QtCore import QPoint
+
+    pos = QPoint(10, lst.viewport().height() - 5)
+    assert not lst.indexAt(pos).isValid(), "tiền đề: điểm này phải là chỗ trống của danh sách"
+    return pos
+
+
+def _send_mouse(lst, kind, pos, button, buttons, modifiers=None, timestamp=None) -> None:
+    """Gửi thẳng một `QMouseEvent` tới viewport (không qua bộ sinh dblclick của QGuiApplication).
+    Không cho `timestamp` thì sự kiện tự dựng có `timestamp()` = 0."""
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    vp = lst.viewport()
+    mods = Qt.KeyboardModifier.NoModifier if modifiers is None else modifiers
+    ev = QMouseEvent(kind, QPointF(pos), QPointF(vp.mapToGlobal(pos)), button, buttons, mods)
+    if timestamp is not None:
+        ev.setTimestamp(timestamp)
+    QApplication.sendEvent(vp, ev)
+
+
+DCLICK_WAYS = ("qtest_click_then_dclick", "manual_press_dblclick", "manual_dblclick_without_second_press")
+
+
+def _double_click(lst, pos, way: str, modifiers=None) -> None:
+    """Một lần bấm đúp chuột trái tại `pos`, theo một trong `DCLICK_WAYS`:
+
+    - `qtest_click_then_dclick`: `QTest.mouseClick` rồi `QTest.mouseDClick` (như người thật).
+    - `manual_press_dblclick`: press, release, press, dblclick, release (Qt 6 trên mọi nền).
+    - `manual_dblclick_without_second_press`: press, release, dblclick, release (kiểu Qt 5 / vài nền).
+    """
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    left, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
+    mods = Qt.KeyboardModifier.NoModifier if modifiers is None else modifiers
+    if way == "qtest_click_then_dclick":
+        QTest.mouseClick(lst.viewport(), left, mods, pos)
+        QTest.mouseDClick(lst.viewport(), left, mods, pos)
+    else:
+        t = QEvent.Type
+        seq = [(t.MouseButtonPress, left), (t.MouseButtonRelease, none)]
+        if way == "manual_press_dblclick":
+            seq.append((t.MouseButtonPress, left))
+        seq += [(t.MouseButtonDblClick, left), (t.MouseButtonRelease, none)]
+        for kind, buttons in seq:  # nút gây ra sự kiện luôn là nút trái (kể cả release)
+            _send_mouse(lst, kind, pos, left, buttons, mods)
+    QApplication.processEvents()
+
+
+def _click(lst, pos, button=None, modifiers=None) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    QTest.mouseClick(
+        lst.viewport(),
+        Qt.MouseButton.LeftButton if button is None else button,
+        Qt.KeyboardModifier.NoModifier if modifiers is None else modifiers,
+        pos,
+    )
+    QApplication.processEvents()
+
+
+def _selected_rows(lst) -> list[int]:
+    return sorted(i.row() for i in lst.selectionModel().selectedIndexes())
+
+
+def _action_button(radar):
+    btn = getattr(radar, "device_action_button", None)
+    assert btn is not None, "RadarView cần thuộc tính công khai `device_action_button` (spec UI-06)"
+    assert btn.objectName() == "deviceActionButton"
+    return btn
+
+
+def _ip_button(radar, ui_helpers):
+    [ip] = ui_helpers.buttons_with_text(radar, IP_BUTTON)
+    return ip
+
+
+@pytest.fixture
+def dclick_interval(qapp):
+    """Đổi `doubleClickInterval` của ứng dụng (để vượt khoảng bấm đúp mà không phải ngủ lâu); khôi phục
+    khi test xong."""
+    from PySide6.QtGui import QGuiApplication
+
+    hints = QGuiApplication.styleHints()
+    old = hints.mouseDoubleClickInterval()
+
+    def set_interval(ms: int) -> int:
+        hints.setMouseDoubleClickInterval(ms)
+        return ms
+
+    yield set_interval
+    hints.setMouseDoubleClickInterval(old)
+
+
+# ---- Bấm một lần ----------------------------------------------------------------------------------
+
+
+def test_single_click_on_unpaired_online_device_requests_pairing_once_and_selects_it(radar, qtbot):
+    """Spec Test 1."""
+    x, other = view("May-X", port=47123), view("May-Y", paired=True)
+    load(radar, [x, other])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    row = the_row(radar, "May-X")
+    _click(lst, _row_pos(lst, row))
+    qtbot.waitUntil(lambda: bool(spy.pairs), timeout=2000)
+    _settle(qtbot)
+    assert len(spy.pairs) == 1, spy.pairs
+    v = spy.pairs[0]
+    assert (v.device_id, v.addresses, v.port) == (x.device_id, x.addresses, x.port)
+    assert spy.picks == []
+    assert _selected_rows(lst) == [row], "bấm một lần phải chọn hàng"
+
+
+def test_single_click_on_paired_device_only_selects_and_shows_send_button(radar, qtbot, dclick_interval):
+    """Spec Test 3. Chờ quá `doubleClickInterval` (đặt ngắn 100 ms) để chắc radar không hoãn rồi phát."""
+    interval = dclick_interval(100)
+    p = view("May-P", paired=True)
+    load(radar, [p, view("May-U")])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    row = the_row(radar, "May-P")
+    _click(lst, _row_pos(lst, row))
+    _settle(qtbot, interval + 80)
+    assert spy.pairs == [] and spy.picks == []
+    assert spy.calls["send_files_requested"] == [] and spy.calls["unpair_requested"] == []
+    assert _selected_rows(lst) == [row]
+    btn = _action_button(radar)
+    assert not btn.isHidden(), "máy đã ghép đôi được chọn → hiện nút “Gửi file…”"
+    assert ui_text(btn.text()) == SEND_BUTTON
+    btn.click()
+    _settle(qtbot)
+    assert spy.picks == [p.device_id]
+    assert spy.pairs == []
+
+
+def ui_text(text: str) -> str:
+    """Chữ trên nút bỏ dấu tắt `&`."""
+    return text.replace("&&", "\0").replace("&", "").replace("\0", "&")
+
+
+def test_click_on_empty_space_emits_nothing(radar, qtbot):
+    """Spec “Bấm vào chỗ trống của danh sách (không có hàng) không phát gì” (một lần và bấm đúp)."""
+    load(radar, [view("May-X"), view("May-P", paired=True)])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    pos = _empty_pos(lst)
+    _click(lst, pos)
+    for way in DCLICK_WAYS:
+        _double_click(lst, pos, way)
+    _settle(qtbot)
+    assert spy.pairs == [] and spy.picks == []
+
+
+# ---- Bấm đúp --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("way", DCLICK_WAYS)
+def test_double_click_on_unpaired_device_requests_pairing_exactly_once(radar, qtbot, way):
+    """Spec Test 2: cả chuỗi bấm đúp chỉ phát đúng một `pair_requested` (lần thứ hai làm
+    `PairingController` hiện câu BUSY), không `pick_files_requested`."""
+    x = view("May-X")
+    load(radar, [x, view("May-P", paired=True)])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    _double_click(lst, _row_pos(lst, the_row(radar, "May-X")), way)
+    qtbot.waitUntil(lambda: bool(spy.pairs), timeout=2000)
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id], f"{way}: {len(spy.pairs)} lần pair_requested"
+    assert spy.picks == []
+
+
+@pytest.mark.parametrize("online", [True, False])
+@pytest.mark.parametrize("way", DCLICK_WAYS)
+def test_double_click_on_paired_device_requests_file_pick_exactly_once(radar, qtbot, way, online):
+    """Spec Test 4: máy đã ghép (online hay không) → đúng một `pick_files_requested`, không ghép đôi."""
+    p = view("May-P", paired=True, online=online)
+    load(radar, [p, view("May-U")])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    _double_click(lst, _row_pos(lst, the_row(radar, "May-P")), way)
+    qtbot.waitUntil(lambda: bool(spy.picks), timeout=2000)
+    _settle(qtbot)
+    assert spy.picks == [p.device_id], f"{way}: {spy.picks}"
+    assert spy.pairs == []
+
+
+@pytest.mark.parametrize("way", DCLICK_WAYS)
+def test_double_click_does_not_rely_on_qt_activated_for_the_mouse(radar, qtbot, way):
+    """Spec: “Không dựa vào `activated` của Qt cho chuột (style khác có thể phát `activated` ngay khi
+    bấm một lần → lặp)”. Dùng style có `SH_ItemView_ActivateItemOnSingleClick` = 1 (như vài theme
+    Linux/KDE): bấm một lần vẫn một `pair_requested`, bấm đúp vẫn đúng một."""
+    from PySide6.QtWidgets import QProxyStyle, QStyle
+
+    class SingleClickActivates(QProxyStyle):
+        def styleHint(self, hint, option=None, widget=None, return_data=None):
+            if hint == QStyle.StyleHint.SH_ItemView_ActivateItemOnSingleClick:
+                return 1
+            return super().styleHint(hint, option, widget, return_data)
+
+    x = view("May-X")
+    load(radar, [x])
+    lst = device_view_widget(radar)
+    style = SingleClickActivates()
+    style.setParent(radar)  # sống cùng radar
+    lst.setStyle(style)
+    spy = ClickSpy(radar)
+    pos = _row_pos(lst, the_row(radar, "May-X"))
+    _double_click(lst, pos, way)
+    qtbot.waitUntil(lambda: bool(spy.pairs), timeout=2000)
+    _settle(qtbot)
+    assert len(spy.pairs) == 1, f"{way}: {len(spy.pairs)} lần pair_requested"
+    assert spy.picks == []
+
+
+def test_single_click_with_single_click_activation_style_emits_once(radar, qtbot):
+    from PySide6.QtWidgets import QProxyStyle, QStyle
+
+    class SingleClickActivates(QProxyStyle):
+        def styleHint(self, hint, option=None, widget=None, return_data=None):
+            if hint == QStyle.StyleHint.SH_ItemView_ActivateItemOnSingleClick:
+                return 1
+            return super().styleHint(hint, option, widget, return_data)
+
+    load(radar, [view("May-X"), view("May-P", paired=True)])
+    lst = device_view_widget(radar)
+    style = SingleClickActivates()
+    style.setParent(radar)
+    lst.setStyle(style)
+    spy = ClickSpy(radar)
+    _click(lst, _row_pos(lst, the_row(radar, "May-X")))
+    qtbot.waitUntil(lambda: bool(spy.pairs), timeout=2000)
+    _click(lst, _row_pos(lst, the_row(radar, "May-P")))
+    _settle(qtbot)
+    assert len(spy.pairs) == 1, spy.pairs
+    assert spy.picks == [], "bấm một lần vào máy đã ghép không mở hộp chọn file, kể cả khi style kích hoạt"
+
+
+def test_click_again_after_double_click_interval_requests_pairing_again(radar, qtbot, dclick_interval):
+    """Spec “Chặn lặp”: bấm lại sau `doubleClickInterval` thì phát như thường. Hai lần `QTest.mouseClick`
+    là hai chuỗi press/release tách biệt: sau mỗi lần nhả, QTest tự đẩy `timestamp()` của sự kiện kế
+    tiếp lên (để hai lần bấm không thành bấm đúp), nên theo dấu thời gian của sự kiện hai lần bấm đã
+    cách nhau quá khoảng bấm đúp; test này vì thế xanh cả khi bỏ khoảng chờ. Khoảng chờ thật (khoảng
+    bấm đúp đặt 40 ms, chờ 150 ms) chỉ để phủ cả cài đặt đo bằng đồng hồ đơn điệu. Bản kiểm bằng dấu
+    thời gian tường minh: `test_clicks_by_event_timestamp_*`, `test_*_after_press_released_off_row`."""
+    interval = dclick_interval(40)
+    x = view("May-X")
+    load(radar, [x])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    pos = _row_pos(lst, the_row(radar, "May-X"))
+    _click(lst, pos)
+    qtbot.waitUntil(lambda: len(spy.pairs) == 1, timeout=2000)
+    _settle(qtbot, interval + 110)
+    _click(lst, pos)
+    qtbot.waitUntil(lambda: len(spy.pairs) == 2, timeout=2000)
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id, x.device_id]
+
+
+def _ts_events(lst, events) -> None:
+    """Gửi chuỗi `(loại, pos, timestamp)` chuột trái tới viewport; loại: press / release / dblclick."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtWidgets import QApplication
+
+    left, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
+    kinds = {
+        "press": (QEvent.Type.MouseButtonPress, left),
+        "release": (QEvent.Type.MouseButtonRelease, none),
+        "dblclick": (QEvent.Type.MouseButtonDblClick, left),
+    }
+    for name, pos, ts in events:
+        kind, buttons = kinds[name]
+        _send_mouse(lst, kind, pos, left, buttons, timestamp=ts)
+    QApplication.processEvents()
+
+
+@pytest.mark.parametrize(
+    ("first", "gap", "expected"),
+    [
+        (10_000, "within", 1),  # cách ≤ khoảng bấm đúp: cùng một chuỗi
+        (10_000, "beyond", 2),  # cách > khoảng bấm đúp: hai lần bấm
+        (2**32 - 100, 600, 2),  # dấu thời gian lùi (quay vòng 32 bit): không coi là cùng chuỗi
+    ],
+    ids=["within_interval", "beyond_interval", "timestamp_wraps_backwards"],
+)
+def test_clicks_by_event_timestamp_on_unpaired_device(radar, qtbot, dclick_interval, first, gap, expected):
+    """Soát vòng 2: chuỗi bấm được xét theo `QMouseEvent.timestamp()` (không ngủ). Hai lần bấm một lần
+    (press/release, không dblclick) cùng một hàng máy chưa ghép, dấu thời gian tường minh."""
+    interval = dclick_interval(400)
+    x = view("May-X")
+    load(radar, [x])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    pos = _row_pos(lst, 0)
+    # Tránh đúng biên: spec không nói khoảng tính từ lần nhấn hay lần nhả trước.
+    if gap == "within":
+        second = first + interval // 2
+    elif gap == "beyond":
+        second = first + 2 * interval
+    else:
+        second = gap
+    _ts_events(lst, [("press", pos, first), ("release", pos, first + 1)])
+    _ts_events(lst, [("press", pos, second), ("release", pos, second + 1)])
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id] * expected, (first, second, len(spy.pairs))
+    assert spy.picks == []
+
+
+def test_unpaired_double_click_after_press_released_off_row_pairs_again(radar, qtbot, dclick_interval):
+    """Soát vòng 2 (B3): bấm X ở ts 10000 → ghép đôi; một giờ sau nhấn trên X nhưng nhả ngoài mọi hàng
+    (không thành bấm), rồi 200 ms sau nhấn + dblclick + nhả trên X → phải ghép đôi lần hai (lần bấm cũ
+    đã quá xa, lần nhấn bị kéo ra ngoài không được tính là đã phát)."""
+    dclick_interval(400)
+    x = view("May-X")
+    load(radar, [x])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    pos, off = _row_pos(lst, 0), _empty_pos(lst)
+    _ts_events(lst, [("press", pos, 10_000), ("release", pos, 10_050)])
+    _settle(qtbot)
+    assert len(spy.pairs) == 1
+    hour = 3_600_000
+    _ts_events(lst, [("press", pos, hour), ("release", off, hour + 50)])
+    _settle(qtbot)
+    assert len(spy.pairs) == 1, "nhấn rồi nhả ngoài hàng không phải là bấm"
+    _ts_events(lst, [("press", pos, hour + 200), ("dblclick", pos, hour + 200), ("release", pos, hour + 250)])
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id] * 2
+    assert spy.picks == []
+
+
+def test_paired_double_click_after_press_released_off_row_picks_again(radar, qtbot, dclick_interval):
+    """Soát vòng 2 (B3), máy đã ghép: bấm đúp ở ts 10000 → chọn file; một giờ sau nhấn trên hàng, nhả
+    ngoài hàng, rồi nhấn + dblclick + nhả trên hàng → chọn file lần hai."""
+    dclick_interval(400)
+    p = view("May-P", paired=True)
+    load(radar, [p])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    pos, off = _row_pos(lst, 0), _empty_pos(lst)
+    _ts_events(
+        lst,
+        [
+            ("press", pos, 10_000),
+            ("release", pos, 10_050),
+            ("press", pos, 10_100),
+            ("dblclick", pos, 10_100),
+            ("release", pos, 10_150),
+        ],
+    )
+    _settle(qtbot)
+    assert spy.picks == [p.device_id]
+    hour = 3_600_000
+    _ts_events(lst, [("press", pos, hour), ("release", off, hour + 50)])
+    _ts_events(lst, [("press", pos, hour + 200), ("dblclick", pos, hour + 200), ("release", pos, hour + 250)])
+    _settle(qtbot)
+    assert spy.picks == [p.device_id] * 2
+    assert spy.pairs == []
+
+
+def test_double_click_on_one_device_does_not_block_click_on_another(radar, qtbot):
+    """Chặn lặp theo thiết bị X: bấm ngay sang máy Y khác vẫn phát cho Y."""
+    x, y = view("May-X"), view("May-Y")
+    load(radar, [x, y])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    _double_click(lst, _row_pos(lst, the_row(radar, "May-X")), "manual_press_dblclick")
+    _click(lst, _row_pos(lst, the_row(radar, "May-Y")))
+    qtbot.waitUntil(lambda: len(spy.pairs) >= 2, timeout=2000)
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id, y.device_id]
+
+
+@pytest.mark.parametrize("modifier", ["ControlModifier", "ShiftModifier"])
+def test_modifier_clicks_never_emit_twice(radar, qtbot, modifier):
+    """Spec: bấm có Ctrl/Shift xử lý như bấm thường hoặc bỏ qua, chỉ cần không phát lặp."""
+    from PySide6.QtCore import Qt
+
+    mods = getattr(Qt.KeyboardModifier, modifier)
+    load(radar, [view("May-X")])
+    lst = device_view_widget(radar)
+    pos = _row_pos(lst, the_row(radar, "May-X"))
+    spy = ClickSpy(radar)
+    _click(lst, pos, modifiers=mods)
+    _settle(qtbot)
+    assert len(spy.pairs) <= 1 and spy.picks == [], spy.pairs
+    spy2 = ClickSpy(radar)
+    for way in DCLICK_WAYS:
+        before = len(spy2.pairs)
+        _double_click(lst, pos, way, modifiers=mods)
+        _settle(qtbot, 60)
+        assert len(spy2.pairs) - before <= 1, f"{way}: {spy2.pairs}"
+    assert spy2.picks == []
+
+
+# ---- Bàn phím -------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("key", ["Key_Return", "Key_Enter"])
+def test_enter_on_unpaired_online_device_requests_pairing_once(radar, qtbot, key):
+    """Spec Test 5 (máy chưa ghép online)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    x = view("May-X")
+    load(radar, [view("May-P", paired=True), x])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    lst.setFocus(Qt.FocusReason.OtherFocusReason)
+    select_row(radar, the_row(radar, "May-X"))
+    QTest.keyClick(lst, getattr(Qt.Key, key))
+    qtbot.waitUntil(lambda: bool(spy.pairs), timeout=2000)
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id]
+    assert spy.picks == []
+
+
+@pytest.mark.parametrize("online", [True, False])
+@pytest.mark.parametrize("key", ["Key_Return", "Key_Enter"])
+def test_enter_on_paired_device_requests_file_pick_once(radar, qtbot, key, online):
+    """Spec Test 5 (máy đã ghép, online hay không)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    p = view("May-P", paired=True, online=online)
+    load(radar, [p, view("May-U")])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    lst.setFocus(Qt.FocusReason.OtherFocusReason)
+    select_row(radar, the_row(radar, "May-P"))
+    QTest.keyClick(lst, getattr(Qt.Key, key))
+    qtbot.waitUntil(lambda: bool(spy.picks), timeout=2000)
+    _settle(qtbot)
+    assert spy.picks == [p.device_id]
+    assert spy.pairs == []
+
+
+def test_each_enter_press_emits_once_and_is_not_blocked_by_a_prior_click(radar, qtbot):
+    """Spec “Chặn lặp”: Enter không bị chặn bởi cơ chế chặn chuỗi bấm đúp, mỗi lần nhấn phát một lần."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    x = view("May-X")
+    load(radar, [x])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    lst.setFocus(Qt.FocusReason.OtherFocusReason)
+    _click(lst, _row_pos(lst, the_row(radar, "May-X")))
+    qtbot.waitUntil(lambda: len(spy.pairs) == 1, timeout=2000)
+    QTest.keyClick(lst, Qt.Key.Key_Return)
+    qtbot.waitUntil(lambda: len(spy.pairs) == 2, timeout=2000)
+    QTest.keyClick(lst, Qt.Key.Key_Return)
+    qtbot.waitUntil(lambda: len(spy.pairs) == 3, timeout=2000)
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id] * 3
+
+
+# ---- Chuột phải, phím Menu, Shift+F10 ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_right_click_on_row_only_opens_menu(radar, qtbot, menus, paired):
+    """Spec Test 6: chuột phải không được tính là bấm; sau đó một lần bấm trái vẫn chỉ là bấm một lần
+    (không ghép với chuột phải thành bấm đúp)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QApplication
+
+    d = view("May-D", paired=paired)
+    load(radar, [d])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    pos = _row_pos(lst, the_row(radar, "May-D"))
+    _click(lst, pos, button=Qt.MouseButton.RightButton)
+    vp = lst.viewport()
+    ev = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, pos, vp.mapToGlobal(pos))
+    QApplication.sendEvent(vp, ev)
+    _settle(qtbot)
+    assert spy.pairs == [] and spy.picks == [], "chỉ mở menu thì không phát gì"
+    assert spy.calls["unpair_requested"] == []
+    _click(lst, pos)
+    _settle(qtbot, 60)
+    if paired:
+        assert spy.pairs == [] and spy.picks == []
+    else:
+        assert len(spy.pairs) == 1 and spy.picks == []
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_menu_key_and_shift_f10_only_open_menu(radar, qtbot, menus, paired):
+    """Spec Test 6 / bảng “Phím Menu, Shift+F10”: mở menu như cũ, không phát gì."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    load(radar, [view("May-D", paired=paired)])
+    spy = ClickSpy(radar)
+    row = the_row(radar, "May-D")
+    items = menus.open(radar, row)  # phím Menu
+    assert items, "phím Menu phải mở menu"
+    lst = device_view_widget(radar)
+    QTest.keyClick(lst, Qt.Key.Key_F10, Qt.KeyboardModifier.ShiftModifier)
+    _settle(qtbot)
+    assert spy.pairs == [] and spy.picks == []
+    assert spy.calls["unpair_requested"] == []
+
+
+# ---- Kéo thả ---------------------------------------------------------------------------------------
+
+
+def test_dragging_files_over_unpaired_row_and_dropping_does_not_request_pairing(radar, qtbot, tmp_path):
+    """Spec Test 10: kéo qua hàng chưa ghép rồi thả → chỉ `send_files_requested` như cũ."""
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
+    from PySide6.QtWidgets import QApplication
+
+    u, p = view("May-U"), view("May-P", paired=True)
+    load(radar, [u, p])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    vp = lst.viewport()
+    mime = QMimeData()
+    a = tmp_path / "a.txt"
+    mime.setUrls([QUrl.fromLocalFile(str(a))])
+    copy, left, nomod = Qt.DropAction.CopyAction, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    p_pos = _row_pos(lst, the_row(radar, "May-P"))
+    u_pos = _row_pos(lst, the_row(radar, "May-U"))
+    QApplication.sendEvent(vp, QDragEnterEvent(p_pos, copy, mime, left, nomod))
+    QApplication.sendEvent(vp, QDragMoveEvent(p_pos, copy, mime, left, nomod))
+    QApplication.sendEvent(vp, QDragMoveEvent(u_pos, copy, mime, left, nomod))
+    QApplication.sendEvent(vp, QDropEvent(QPointF(u_pos), copy, mime, left, nomod))
+    _settle(qtbot)
+    assert spy.pairs == [] and spy.picks == []
+    assert [(i, [Path(x) for x in ps]) for i, ps in spy.calls["send_files_requested"]] == [(u.device_id, [a])]
+
+
+# ---- Nút theo hàng đang chọn (UI-06) ---------------------------------------------------------------
+
+
+def test_action_button_hidden_without_a_selected_device(radar, ui_helpers):
+    """Spec Test 7: ẩn khi radar trống, sau `reset` có hàng (hàng hiện hành nhưng chưa chọn), sau `clear`."""
+    from PySide6.QtCore import QItemSelectionModel
+
+    btn = _action_button(radar)
+    load(radar, [])
+    assert btn.isHidden(), "radar trống → nút ẩn"
+    load(radar, [view("May-X"), view("May-P", paired=True)])
+    lst = device_view_widget(radar)
+    assert _selected_rows(lst) == [], "tiền đề spec: nạp ảnh chụp không chọn sẵn"
+    assert btn.isHidden(), "chưa chọn thiết bị nào → nút ẩn"
+    lst.selectionModel().setCurrentIndex(lst.model().index(0, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
+    assert btn.isHidden(), "hàng hiện hành mà chưa được chọn → nút vẫn ẩn"
+    select_row(radar, the_row(radar, "May-P"))
+    assert not btn.isHidden()
+    reset(radar)
+    assert btn.isHidden(), "sau clear → nút ẩn"
+    assert ui_helpers.buttons_with_text(radar, SEND_BUTTON) == []
+    assert ui_helpers.buttons_with_text(radar, PAIR_BUTTON) == []
+
+
+def test_action_button_text_follows_selected_device_and_its_paired_state(radar):
+    """Spec Test 7: “Ghép đôi…” ↔ “Gửi file…” khi thiết bị đang chọn đổi `paired` (dataChanged)."""
+    x = view("May-X")
+    load(radar, [x])
+    btn = _action_button(radar)
+    select_row(radar, the_row(radar, "May-X"))
+    assert not btn.isHidden()
+    assert ui_text(btn.text()) == PAIR_BUTTON
+    feed(radar, _ev("DeviceConnected", view("May-X", paired=True, connected=True)))  # vừa ghép xong
+    assert not btn.isHidden()
+    assert ui_text(btn.text()) == SEND_BUTTON
+    feed(radar, _ev("DeviceOnline", view("May-X", paired=False)))  # hủy ghép, vẫn trong mạng
+    assert not btn.isHidden()
+    assert ui_text(btn.text()) == PAIR_BUTTON
+
+
+def test_action_button_follows_selection_changes(radar):
+    load(radar, [view("May-X"), view("May-P", paired=True), view("May-Off", paired=True, online=False)])
+    btn = _action_button(radar)
+    for name, expected in (("May-P", SEND_BUTTON), ("May-X", PAIR_BUTTON), ("May-Off", SEND_BUTTON)):
+        select_row(radar, the_row(radar, name))
+        assert not btn.isHidden(), name
+        assert ui_text(btn.text()) == expected, name
+    device_view_widget(radar).clearSelection()
+    assert btn.isHidden(), "bỏ chọn → nút ẩn"
+
+
+def test_action_button_hides_when_selected_unpaired_device_leaves(radar):
+    """Spec Test 7: hàng đang chọn bị bỏ (DeviceOffline máy chưa ghép) → nút ẩn và không hàng nào được
+    chọn (không được để Qt tự chọn hàng bên cạnh: nút sẽ trỏ sang máy người dùng không chọn). Máy rời
+    mạng nằm giữa hai hàng khác để hàng trên lẫn hàng dưới đều có thể bị chọn nhầm."""
+    load(radar, [view("May-A", paired=True), view("May-X"), view("May-Z", paired=True)])
+    btn = _action_button(radar)
+    select_row(radar, the_row(radar, "May-X"))
+    assert not btn.isHidden()
+    feed(radar, _ev("DeviceOffline", view("May-X", online=False)))
+    assert rows_with(radar, "May-X") == []
+    lst = device_view_widget(radar)
+    assert _selected_rows(lst) == [], f"không được tự chọn hàng khác: {_selected_rows(lst)}"
+    assert btn.isHidden()
+
+
+def test_action_button_hides_after_clear_of_selected_device(radar):
+    load(radar, [view("May-P", paired=True)])
+    btn = _action_button(radar)
+    select_row(radar, 0)
+    assert not btn.isHidden()
+    radar.model.clear()
+    assert btn.isHidden()
+
+
+def _selected_ids(radar) -> list[str]:
+    lst = device_view_widget(radar)
+    return [radar.model.devices()[r].device_id for r in _selected_rows(lst)]
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_renaming_selected_device_keeps_it_selected(radar, paired):
+    """Soát code: đổi tên thiết bị đang chọn (khóa sắp xếp đổi, hàng nhảy chỗ) → vẫn chọn đúng thiết bị
+    đó, nút còn hiện đúng chữ."""
+    m = view("May-M", paired=paired)
+    load(radar, [view("May-A", paired=True), m, view("May-Z")])
+    btn = _action_button(radar)
+    select_row(radar, the_row(radar, "May-M"))
+    old_row = the_row(radar, "May-M")
+    feed(radar, _ev("DeviceOnline", view("May-M", name="Zzz-Moi", paired=paired)))
+    assert the_row(radar, "Zzz-Moi") != old_row, "tiền đề: tên mới đổi vị trí hàng"
+    assert _selected_ids(radar) == [m.device_id]
+    assert not btn.isHidden()
+    assert ui_text(btn.text()) == (SEND_BUTTON if paired else PAIR_BUTTON)
+    assert "Zzz-Moi" in btn.accessibleDescription()
+
+
+def test_reset_keeps_selected_device_selected_and_button_shown(radar):
+    """Soát code: nạp lại ảnh chụp (`reset`) khi có thiết bị đang chọn → vẫn chọn nó, nút còn hiện."""
+    p = view("May-P", paired=True)
+    views = [view("May-A"), p, view("May-Z")]
+    load(radar, views)
+    btn = _action_button(radar)
+    select_row(radar, the_row(radar, "May-P"))
+    load(radar, [view("May-B"), *views])  # thêm một hàng phía trên để chỉ số hàng đổi
+    assert _selected_ids(radar) == [p.device_id]
+    assert not btn.isHidden()
+    assert ui_text(btn.text()) == SEND_BUTTON
+
+
+def test_reset_with_only_current_row_keeps_button_hidden(radar):
+    """Soát code: `reset` khi chỉ có hàng hiện hành (chưa chọn) → không tự chọn, nút vẫn ẩn."""
+    from PySide6.QtCore import QItemSelectionModel
+
+    views = [view("May-A"), view("May-P", paired=True)]
+    load(radar, views)
+    lst = device_view_widget(radar)
+    lst.selectionModel().setCurrentIndex(
+        lst.model().index(the_row(radar, "May-P"), 0), QItemSelectionModel.SelectionFlag.NoUpdate
+    )
+    btn = _action_button(radar)
+    assert btn.isHidden()
+    load(radar, views)
+    assert _selected_rows(lst) == []
+    assert btn.isHidden()
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_enter_auto_repeat_does_not_emit_again(radar, qtbot, paired):
+    """Soát code: giữ Enter sinh các `KeyPress` có `autoRepeat` (Windows: chỉ press; X11: cặp
+    release/press, cả hai autoRepeat) → chỉ lần nhấn thật phát."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    d = view("May-D", paired=paired)
+    load(radar, [d])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    lst.setFocus(Qt.FocusReason.OtherFocusReason)
+    select_row(radar, 0)
+    press, release = QEvent.Type.KeyPress, QEvent.Type.KeyRelease
+    ret, nomod = Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier
+    QApplication.sendEvent(lst, QKeyEvent(press, ret, nomod, "\r", False))
+    for _ in range(3):
+        QApplication.sendEvent(lst, QKeyEvent(press, ret, nomod, "", True))
+    QApplication.sendEvent(lst, QKeyEvent(release, ret, nomod, "", True))
+    QApplication.sendEvent(lst, QKeyEvent(press, ret, nomod, "", True))
+    QApplication.sendEvent(lst, QKeyEvent(release, ret, nomod, "\r", False))
+    _settle(qtbot)
+    if paired:
+        assert spy.picks == [d.device_id] and spy.pairs == []
+    else:
+        assert [v.device_id for v in spy.pairs] == [d.device_id] and spy.picks == []
+
+
+@pytest.mark.parametrize("way", DCLICK_WAYS)
+def test_double_click_while_event_loop_is_blocked_emits_pairing_once(radar, qtbot, dclick_interval, way):
+    """Soát code: handler của `pair_requested` chặn luồng Qt lâu hơn `doubleClickInterval` (đặt 40 ms,
+    handler ngủ 120 ms) → phần còn lại của chuỗi bấm đúp tới “muộn” theo đồng hồ, nhưng vẫn là cùng một
+    lần bấm đúp: tổng cộng đúng một `pair_requested`."""
+    interval = dclick_interval(40)
+    x = view("May-X")
+    load(radar, [x])
+    spy = ClickSpy(radar)
+    radar.pair_requested.connect(lambda _v: time.sleep((interval + 80) / 1000))
+    lst = device_view_widget(radar)
+    _double_click(lst, _row_pos(lst, 0), way)
+    qtbot.waitUntil(lambda: bool(spy.pairs), timeout=2000)
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id], f"{way}: {len(spy.pairs)} lần"
+
+
+@pytest.mark.parametrize("way", ["qtest", "manual"])
+def test_fast_triple_click_requests_pairing_once(radar, qtbot, way):
+    """Soát code: bấm ba lần liền (click, dblclick, click trong cùng một chuỗi, mỗi khoảng < interval)
+    → một `pair_requested`."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    x = view("May-X")
+    load(radar, [x])
+    spy = ClickSpy(radar)
+    lst = device_view_widget(radar)
+    pos = _row_pos(lst, 0)
+    left, none, nomod = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier
+    if way == "qtest":
+        QTest.mouseClick(lst.viewport(), left, nomod, pos)
+        QTest.mouseDClick(lst.viewport(), left, nomod, pos)
+        QTest.mouseClick(lst.viewport(), left, nomod, pos)
+    else:
+        t = QEvent.Type
+        seq = [
+            (t.MouseButtonPress, left),
+            (t.MouseButtonRelease, none),
+            (t.MouseButtonPress, left),
+            (t.MouseButtonDblClick, left),
+            (t.MouseButtonRelease, none),
+            (t.MouseButtonPress, left),
+            (t.MouseButtonRelease, none),
+        ]
+        for kind, buttons in seq:
+            _send_mouse(lst, kind, pos, left, buttons)
+    QApplication.processEvents()
+    qtbot.waitUntil(lambda: bool(spy.pairs), timeout=2000)
+    _settle(qtbot)
+    assert [v.device_id for v in spy.pairs] == [x.device_id], f"{way}: {len(spy.pairs)} lần"
+    assert spy.picks == []
+
+
+def test_action_button_pair_uses_latest_view_of_selected_device(radar, qtbot):
+    """Spec: bấm nút đọc thiết bị được chọn tại lúc bấm (view mới nhất của model)."""
+    load(radar, [view("May-X", port=47001)])
+    btn = _action_button(radar)
+    select_row(radar, the_row(radar, "May-X"))
+    newer = view("May-X", port=47999)
+    feed(radar, _ev("DeviceOnline", newer))
+    spy = ClickSpy(radar)
+    assert ui_text(btn.text()) == PAIR_BUTTON
+    btn.click()
+    _settle(qtbot)
+    assert len(spy.pairs) == 1
+    assert (spy.pairs[0].device_id, spy.pairs[0].port) == (newer.device_id, 47999)
+    assert spy.picks == []
+
+
+def test_action_button_after_pairing_completes_requests_file_pick(radar, qtbot):
+    """Chọn máy chưa ghép, nó vừa ghép xong (dataChanged) → bấm nút là “Gửi file…”, không ghép lại."""
+    x = view("May-X")
+    load(radar, [x])
+    btn = _action_button(radar)
+    select_row(radar, 0)
+    feed(radar, _ev("DeviceConnected", view("May-X", paired=True, connected=True)))
+    spy = ClickSpy(radar)
+    btn.click()
+    _settle(qtbot)
+    assert spy.picks == [x.device_id]
+    assert spy.pairs == []
+
+
+def test_action_button_is_left_of_ip_button_on_the_same_row(radar, ui_helpers, qtbot):
+    from PySide6.QtCore import QPoint
+
+    load(radar, [view("May-P", paired=True)])
+    select_row(radar, 0)
+    btn, ip = _action_button(radar), _ip_button(radar, ui_helpers)
+    _settle(qtbot)
+    assert btn.isVisible() and ip.isVisible()
+    b, i = btn.mapTo(radar, QPoint(0, 0)), ip.mapTo(radar, QPoint(0, 0))
+    assert b.x() + btn.width() <= i.x(), "nút hành động nằm bên trái nút “Nhập IP thủ công”"
+    b_mid, i_mid = b.y() + btn.height() / 2, i.y() + ip.height() / 2
+    assert abs(b_mid - i_mid) < max(btn.height(), ip.height()) / 2, "hai nút cùng một hàng"
+
+
+def test_action_button_accessibility_names_the_device(radar):
+    """Spec N12: `accessibleName` = chữ nút; `accessibleDescription` nêu tên máy qua `texts.peer_label`."""
+    from teleport.ui.texts import peer_label
+
+    p, x = view("PC-Nha", paired=True), view("<b>May-X</b>")
+    load(radar, [p, x])
+    btn = _action_button(radar)
+    for v in (p, x):
+        select_row(radar, radar.model.row_of(v.device_id))
+        assert ui_text(btn.accessibleName()) == ui_text(btn.text())
+        assert peer_label(v.name, v.device_id) in btn.accessibleDescription(), btn.accessibleDescription()
+    select_row(radar, radar.model.row_of(p.device_id))
+    assert "May-X" not in btn.accessibleDescription(), "mô tả phải theo thiết bị đang chọn"
+
+
+def test_action_button_text_survives_retranslate(radar):
+    load(radar, [view("May-X"), view("May-P", paired=True)])
+    btn = _action_button(radar)
+    select_row(radar, the_row(radar, "May-X"))
+    radar.retranslate()
+    assert not btn.isHidden() and ui_text(btn.text()) == PAIR_BUTTON
+    select_row(radar, the_row(radar, "May-P"))
+    radar.retranslate()
+    assert not btn.isHidden() and ui_text(btn.text()) == SEND_BUTTON
+    device_view_widget(radar).clearSelection()
+    radar.retranslate()
+    assert btn.isHidden(), "retranslate không được làm hiện nút khi chưa chọn gì"
+
+
+# ---- Thứ tự Tab, câu chữ ---------------------------------------------------------------------------
+
+
+def test_tab_from_last_row_goes_to_action_button_then_ip_button(radar, ui_helpers):
+    """Spec Test 8 (nút hiện): hàng cuối → Tab → nút hành động → Tab → “Nhập IP thủ công”; Shift+Tab
+    quay lại nút hành động."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    load(radar, [view("May-1", paired=True), view("May-2")])
+    radar.activateWindow()
+    lst = device_view_widget(radar)
+    lst.setFocus(Qt.FocusReason.OtherFocusReason)
+    select_row(radar, lst.model().rowCount() - 1)
+    btn, ip = _action_button(radar), _ip_button(radar, ui_helpers)
+    assert not btn.isHidden()
+    QTest.keyClick(lst, Qt.Key.Key_Tab)
+    assert QApplication.focusWidget() is btn, f"Tab từ hàng cuối tới {QApplication.focusWidget()!r}"
+    QTest.keyClick(btn, Qt.Key.Key_Tab)
+    assert QApplication.focusWidget() is ip
+    QTest.keyClick(ip, Qt.Key.Key_Backtab)
+    assert QApplication.focusWidget() is btn
+
+
+def test_tab_skips_hidden_action_button(radar, ui_helpers):
+    """Spec Test 8 (nút ẩn): hàng cuối (hiện hành, chưa chọn) → Tab → thẳng “Nhập IP thủ công”."""
+    from PySide6.QtCore import QItemSelectionModel, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    load(radar, [view("May-1", paired=True)])
+    radar.activateWindow()
+    lst = device_view_widget(radar)
+    lst.selectionModel().setCurrentIndex(lst.model().index(0, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
+    lst.setFocus(Qt.FocusReason.OtherFocusReason)
+    lst.clearSelection()
+    btn, ip = _action_button(radar), _ip_button(radar, ui_helpers)
+    assert btn.isHidden(), "tiền đề: chưa chọn thiết bị nào"
+    QTest.keyClick(lst, Qt.Key.Key_Tab)
+    assert QApplication.focusWidget() is ip
+
+
+def test_device_list_accessible_description_mentions_enter(radar):
+    """Spec UI-14: câu mô tả trợ năng của danh sách."""
+    assert _norm(device_view_widget(radar).accessibleDescription()) == LIST_DESCRIPTION
 
 
 # =================================================================================================
