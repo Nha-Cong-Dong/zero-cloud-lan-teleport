@@ -49,14 +49,22 @@ jobs:
         env:
           TELEPORT_FROZEN_GUI_EXE: ${{ github.workspace }}\dist\teleport-gui\Teleport.exe
         run: pytest -m frozen -v
-      - name: Ghi kích thước thư mục build
+      - name: Kiểm nội dung dist và ghi kích thước
+        # Artifact lấy cả dist/ để zip có thư mục bọc teleport-gui\ (giải nén ra một thư mục, không rải
+        # file); vì vậy dist/ chỉ được có đúng thư mục đó, cạnh Teleport.exe phải có DOC-TRUOC.txt.
         shell: pwsh
         run: |
+          $top = @(Get-ChildItem dist -Force | ForEach-Object Name)
+          if (($top -join ',') -ne 'teleport-gui') { throw "dist/ phải chỉ có teleport-gui, đang có: $($top -join ', ')" }
+          foreach ($name in 'Teleport.exe', 'DOC-TRUOC.txt', 'LICENSE', 'THIRD-PARTY-NOTICES.txt', 'SOURCE.txt') {
+            if (-not (Test-Path -LiteralPath "dist/teleport-gui/$name" -PathType Leaf)) { throw "thiếu dist/teleport-gui/$name" }
+          }
           $bytes = (Get-ChildItem dist/teleport-gui -Recurse -File | Measure-Object Length -Sum).Sum
           "Thư mục dist/teleport-gui: {0:N1} MB" -f ($bytes / 1MB) >> $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         with:
           name: teleport-gui-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.sha7 }}-windows
-          path: dist/teleport-gui/
+          # Một thư mục thì nó là gốc của zip: zip chứa teleport-gui\Teleport.exe, teleport-gui\_internal\...
+          path: dist/
           retention-days: 14
           if-no-files-found: error
