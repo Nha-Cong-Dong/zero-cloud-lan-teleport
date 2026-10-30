@@ -862,6 +862,16 @@ class TransfersView(QWidget):
             row.raise_shown(info.done_bytes + info.unsynced_bytes, info.total_bytes)
             self._render_text(row)
 
+    def remove(self, key: TransferKey) -> None:
+        """Gỡ thẻ của `key` (không có → bỏ qua). Sự kiện tới sau sẽ dựng lại thẻ: bên gọi tự lọc."""
+        row = self._rows.pop(key, None)
+        if row is None:
+            return
+        self._list_layout.removeWidget(row)
+        row.setParent(None)
+        row.deleteLater()
+        self._update_empty()
+
     def clear(self) -> None:
         """Xóa mọi thẻ, thông báo và trạng thái kết nối đã biết (host mới, “Thử lại”)."""
         self.hide_notice()
