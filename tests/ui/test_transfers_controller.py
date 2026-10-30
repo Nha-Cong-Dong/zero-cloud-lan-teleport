@@ -1002,3 +1002,303 @@ def test_close_all_closes_prompts_and_drops_pending_pair_job(env):
     assert env.ctl.offers.keys() == []
     env.ctl.on_pairing_finished(OTHER_ID, True)
     assert env.host.submits == []
+
+
+# =================================================================================================
+# Lượt mới bị chặn ngay lần nối đầu (docstring `ui/transfers.py`, bước 3 của “Gửi”)
+# =================================================================================================
+
+BLOCKING = ["rejected", "identity_mismatch", "version_mismatch"]
+
+
+def _new_send(env, *, device_id: str = PEER_ID):
+    """Một lượt gửi, thẻ dựng qua `on_transfer`; radar lúc đó báo thế nào là do test đặt trước."""
+    key = tkey("send", device_id)
+    env.ctl.on_transfer(tinfo_changed(key, "waiting"))
+    assert env.ctl.view.row(key) is not None
+    return key
+
+
+def _radar(env, *views) -> None:
+    env.model.reset(list(views) or [dview(connected=False)])
+
+
+def _connect_failed(env, result: str, view=None) -> None:
+    from teleport.app.node import ConnectFailed
+    from teleport.core.links import ConnectResult
+
+    env.ctl.on_node_event(ConnectFailed(view or dview(connected=False), ConnectResult(result)))
+
+
+def _cancelled(env) -> list:
+    """Các khóa controller đã xin hủy qua host (chạy mọi `call` đang chờ trên node giả)."""
+    node = FakeNode()
+    env.host.run_calls(node)
+    return node.transfers.cancelled
+
+
+def _progress(key):
+    from teleport.app.transfers import TransferProgress
+
+    return TransferProgress(
+        tinfo(key, status="transferring", done=100),
+        bytes_per_second=0.0,
+        eta=None,
+        shown_bytes=100,
+        idle_seconds=0.0,
+    )
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_blocked_connect_failed_removes_new_send_row_cancels_it_and_shows_notice(env, result):
+    from teleport.core.links import ConnectResult
+    from teleport.ui import send
+
+    _radar(env)
+    key = _new_send(env)
+    _connect_failed(env, result)
+    assert env.ctl.view.row(key) is None, "lượt mới bị chặn: gỡ thẻ"
+    assert _cancelled(env) == [key], "lượt mới bị chặn: hủy qua host (node.transfers.cancel)"
+    expected = send.blocked_message(ConnectResult(result), label(PEER))
+    assert expected is not None
+    assert notice(env) == expected
+
+
+@pytest.mark.parametrize(("result", "action"), [("rejected", REPAIR), ("identity_mismatch", UNPAIR)])
+def test_blocked_new_send_notice_has_action_button(env, result, action):
+    _radar(env)
+    _new_send(env)
+    _connect_failed(env, result)
+    assert env.ctl.view.notice_action_text() == action
+
+
+def test_blocked_new_send_version_mismatch_notice_has_no_action(env):
+    _radar(env)
+    _new_send(env)
+    _connect_failed(env, "version_mismatch")
+    assert notice(env) is not None
+    assert env.ctl.view.notice_action_text() is None
+
+
+def test_blocked_new_send_repair_button_emits_repair_requested(env):
+    got: list = []
+    env.ctl.repair_requested.connect(lambda v: got.append(v))
+    _radar(env)
+    _new_send(env)
+    _connect_failed(env, "rejected")
+    _notice_action_button(env, REPAIR).click()
+    assert [v.device_id for v in got] == [PEER_ID]
+
+
+def test_blocked_new_send_unpair_button_emits_radar_unpair_requested(env):
+    got: list = []
+    env.radar.unpair_requested.connect(lambda i: got.append(i))
+    _radar(env)
+    _new_send(env)
+    _connect_failed(env, "identity_mismatch")
+    _notice_action_button(env, UNPAIR).click()
+    assert got == [PEER_ID]
+
+
+def test_new_send_to_device_missing_from_radar_counts_as_new(env):
+    """Radar chưa biết máy (`device(id)` None) cũng là “chưa kết nối”."""
+    env.model.reset([])
+    key = _new_send(env)
+    _connect_failed(env, "rejected")
+    assert env.ctl.view.row(key) is None
+    assert _cancelled(env) == [key]
+
+
+def test_all_new_sends_to_blocked_device_are_removed_and_cancelled(env):
+    _radar(env)
+    a, b = _new_send(env), _new_send(env)
+    _connect_failed(env, "rejected")
+    assert env.ctl.view.row(a) is None and env.ctl.view.row(b) is None
+    assert sorted(_cancelled(env), key=str) == sorted([a, b], key=str)
+
+
+@pytest.mark.parametrize("late", ["progress", "status", "finished"])
+def test_late_event_of_removed_send_does_not_rebuild_row(env, late):
+    _radar(env)
+    key = _new_send(env)
+    _connect_failed(env, "rejected")
+    if late == "progress":
+        env.ctl.on_transfer(_progress(key))
+    elif late == "status":
+        env.ctl.on_transfer(tinfo_changed(key, "reconnecting"))
+    else:
+        env.ctl.on_transfer(finished(key, "cancelled_user"))
+    assert env.ctl.view.row(key) is None, f"sự kiện tới sau ({late}) không dựng lại thẻ đã gỡ"
+
+
+def test_progress_then_cancel_finished_of_removed_send_do_not_rebuild_row(env):
+    _radar(env)
+    key = _new_send(env)
+    _connect_failed(env, "rejected")
+    env.ctl.on_transfer(_progress(key))
+    env.ctl.on_transfer(tinfo_changed(key, "reconnecting"))
+    env.ctl.on_transfer(finished(key, "cancelled_user"))
+    assert env.ctl.view.row(key) is None
+    assert env.ctl.view.rows() == []
+
+
+def test_active_sends_does_not_list_removed_send(env):
+    _radar(env)
+    _new_send(env)
+    assert env.ctl.active_sends() == [label(PEER)]
+    _connect_failed(env, "rejected")
+    assert env.ctl.active_sends() == []
+
+
+def test_unreachable_does_not_remove_new_send(env):
+    _radar(env, dview(connected=False, online=False))
+    key = _new_send(env)
+    _connect_failed(env, "unreachable", dview(connected=False, online=False))
+    assert env.ctl.view.row(key) is not None
+    assert _cancelled(env) == []
+    assert notice(env) is None
+
+
+def test_unreachable_then_blocked_still_removes_new_send(env):
+    """UNREACHABLE không làm lượt hết “mới”: lần nối sau bị chặn vẫn gỡ."""
+    _radar(env)
+    key = _new_send(env)
+    _connect_failed(env, "unreachable")
+    _connect_failed(env, "rejected")
+    assert env.ctl.view.row(key) is None
+    assert _cancelled(env) == [key]
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_send_created_while_connected_is_kept_when_blocked_later(env, result):
+    """Lượt dở (offer đã đi): bị chặn sau đó vẫn giữ thẻ, không hủy, không thông báo của bước 3."""
+    from teleport.app.node import DeviceDisconnected
+
+    _radar(env, dview(connected=True))
+    key = _new_send(env)
+    env.ctl.on_node_event(DeviceDisconnected(dview(connected=False)))
+    _radar(env, dview(connected=False))
+    _connect_failed(env, result)
+    assert env.ctl.view.row(key) is not None
+    assert _cancelled(env) == []
+    assert notice(env) is None
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_new_send_after_device_connected_is_kept_when_blocked_later(env, result):
+    from teleport.app.node import DeviceConnected, DeviceDisconnected
+
+    _radar(env)
+    key = _new_send(env)
+    env.ctl.on_node_event(DeviceConnected(dview(connected=True), outgoing=True))
+    env.ctl.on_node_event(DeviceDisconnected(dview(connected=False)))
+    _connect_failed(env, result)
+    assert env.ctl.view.row(key) is not None
+    assert _cancelled(env) == []
+    assert notice(env) is None
+
+
+def test_device_connected_of_other_device_keeps_send_new(env):
+    from teleport.app.node import DeviceConnected
+
+    _radar(env, dview(connected=False), dview(OTHER_ID, OTHER, connected=False))
+    key = _new_send(env)
+    env.ctl.on_node_event(DeviceConnected(dview(OTHER_ID, OTHER, connected=True), outgoing=True))
+    _connect_failed(env, "rejected")
+    assert env.ctl.view.row(key) is None
+    assert _cancelled(env) == [key]
+
+
+def test_connect_failed_of_other_device_does_not_remove_send(env):
+    _radar(env, dview(connected=False), dview(OTHER_ID, OTHER, connected=False))
+    key = _new_send(env)
+    _connect_failed(env, "rejected", dview(OTHER_ID, OTHER, connected=False))
+    assert env.ctl.view.row(key) is not None
+    assert _cancelled(env) == []
+    assert notice(env) is None
+
+
+def test_blocked_only_removes_sends_of_that_device(env):
+    _radar(env, dview(connected=False), dview(OTHER_ID, OTHER, connected=False))
+    mine = _new_send(env)
+    other = _new_send(env, device_id=OTHER_ID)
+    _connect_failed(env, "rejected")
+    assert env.ctl.view.row(mine) is None
+    assert env.ctl.view.row(other) is not None
+    assert _cancelled(env) == [mine]
+
+
+def test_blocked_keeps_old_send_but_removes_new_one_to_same_device(env):
+    from teleport.app.node import DeviceDisconnected
+
+    _radar(env, dview(connected=True))
+    old = _new_send(env)
+    env.ctl.on_node_event(DeviceDisconnected(dview(connected=False)))
+    _radar(env, dview(connected=False))
+    new = _new_send(env)
+    _connect_failed(env, "rejected")
+    assert env.ctl.view.row(old) is not None, "lượt dở giữ nguyên"
+    assert env.ctl.view.row(new) is None
+    assert _cancelled(env) == [new]
+    assert notice(env) is not None
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_blocked_without_new_send_shows_no_notice(env, result):
+    """Không có lượt mới: hành vi cũ (chỉ radar), controller không hiện dải thông báo, không hủy."""
+    _radar(env)
+    _connect_failed(env, result)
+    assert notice(env) is None
+    assert _cancelled(env) == []
+
+
+def test_receive_row_is_not_a_new_send(env):
+    _radar(env)
+    key = tkey("receive")
+    env.ctl.on_transfer(offer(key, auto=True))
+    _connect_failed(env, "rejected")
+    assert env.ctl.view.row(key) is not None
+    assert _cancelled(env) == []
+    assert notice(env) is None
+
+
+def test_send_finished_before_connect_failed_is_not_cancelled(env):
+    _radar(env)
+    key = _new_send(env)
+    env.ctl.on_transfer(finished(key, "cancelled_user"))
+    _connect_failed(env, "rejected")
+    assert _cancelled(env) == []
+    assert notice(env) is None
+
+
+def test_send_first_seen_as_finished_is_not_a_new_send(env):
+    _radar(env)
+    key = tkey("send")
+    env.ctl.on_transfer(finished(key, "cancelled_user"))
+    _connect_failed(env, "rejected")
+    assert _cancelled(env) == []
+    assert notice(env) is None
+
+
+def test_second_blocked_connect_failed_does_not_cancel_again(env):
+    _radar(env)
+    key = _new_send(env)
+    _connect_failed(env, "rejected")
+    assert _cancelled(env) == [key]
+    env.ctl.view.hide_notice()
+    _connect_failed(env, "rejected")
+    assert _cancelled(env) == []
+    assert notice(env) is None
+
+
+def test_new_send_of_old_host_is_forgotten_after_attach(env):
+    """`attach` host mới xóa sạch: lượt mới của host cũ không bị hủy, không thông báo."""
+    _radar(env)
+    _new_send(env)
+    new_host = FakeHost(env.tmp / "nhan2")
+    env.ctl.attach(new_host)
+    _connect_failed(env, "rejected")
+    node = FakeNode()
+    new_host.run_calls(node)
+    assert node.transfers.cancelled == []
+    assert notice(env) is None

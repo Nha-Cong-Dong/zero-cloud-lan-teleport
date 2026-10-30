@@ -844,21 +844,12 @@ def setup_b_unpairs_gui(run, gui_wait, p: Peer, a_id: str, b_id: str):
     yield gui_wait(lambda: not p.connected_to(a_id), 10, "kết nối A–B bị đóng")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Lỗi src: lần gửi đầu sau khi máy kia hủy ghép đôi tạo thẻ “Đang nối lại…” mãi mãi; "
-        "ConnectFailed(REJECTED) tới sau đó chỉ vào radar, dải thông báo + nút “Ghép đôi lại” "
-        "chỉ hiện ở lần gửi sau (ui/transfers.py:282-288 chỉ xét `model.failure` trước khi submit; "
-        "on_node_event dòng 219-231 bỏ qua ConnectFailed). Nguồn: spec PR-4 T3.2; mvp F2 (máy đó thấy "
-        "thông báo từ chối) + mục 8 “Máy kia từ chối máy này” (cột hành động “Ghép đôi lại”)."
-    ),
-)
 def test_j_gui_sender_rejected_by_peer_shows_notice_with_repair_button(
     gui, gui_wait, pair, peer, tmp_path, ui_helpers
 ):
     """Ca ngược: B hủy ghép đôi A (GUI). A (vẫn tin B, biết địa chỉ B) gửi tới B lần đầu → trong 15 s
-    dải thông báo bên gửi hiện câu mvp mục 8 “Máy kia từ chối máy này” kèm nút “Ghép đôi lại”."""
+    dải thông báo bên gửi hiện câu mvp mục 8 “Máy kia từ chối máy này” kèm nút “Ghép đôi lại”; lượt mới
+    đó không treo thẻ “Đang nối lại…” (thẻ bị gỡ, không còn lượt gửi dở)."""
     a, b, a_id, b_id, src = pair()
     p = peer(b)
     f = make_file(src, "bi-tu-choi.bin", 200 * KiB)
@@ -871,10 +862,13 @@ def test_j_gui_sender_rejected_by_peer_shows_notice_with_repair_button(
         ctl.request_send(b_id, [f])
         yield gui_wait(lambda: notice_buttons(ctl, REPAIR), 15, "dải thông báo có nút “Ghép đôi lại”")
         seen["notice"] = ctl.view.notice_text()
+        yield gui_wait(lambda: not rows_of(ctl, "send"), 5, "thẻ lượt mới bị gỡ")
+        seen["sending"] = ctl.active_sends()
         run.tray.quit_requested.emit()
 
     gui(["--config-dir", str(a)], script)
     assert seen["notice"] == REFUSED.format(name="May-B"), seen["notice"]
+    assert seen["sending"] == [], seen["sending"]
 
 
 def test_j2_gui_resend_after_peer_refused_shows_notice_repair_button_and_no_new_row(
@@ -909,8 +903,8 @@ def test_j2_gui_resend_after_peer_refused_shows_notice_repair_button_and_no_new_
         yield gui_wait(lambda: repaired, 5, "nút “Ghép đôi lại” phát repair_requested")
         seen["repaired"] = repaired
         seen["files_b"] = files_under(tmp_path / "nhan-B")
-        # Lượt gửi đầu còn đứng ở “Đang nối lại…” (lỗi đang khóa bằng xfail ở test_j) thì Thoát hỏi lại
-        # (`quitConfirmBox`): chọn “Thoát” như người dùng.
+        # Phòng khi lượt gửi đầu còn dở (test_j khóa việc nó bị gỡ): Thoát hỏi lại (`quitConfirmBox`),
+        # chọn “Thoát” như người dùng.
         sending = bool(ctl.active_sends())
         run.tray.quit_requested.emit()
         if sending:

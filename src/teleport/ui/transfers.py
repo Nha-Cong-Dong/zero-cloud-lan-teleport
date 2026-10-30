@@ -28,6 +28,14 @@ file người dùng (D7); việc kiểm file do `transfers.send` làm trên `Dis
    REJECTED → “Ghép đôi lại” (phát `repair_requested(DeviceView)`, luồng ghép đôi nối);
    IDENTITY_MISMATCH → “Hủy ghép đôi” (phát `radar.unpair_requested(device_id)`, luồng ghép đôi hỏi
    xác nhận). Chỉ chưa kết nối thì vẫn gửi: thẻ hiện “Đang chờ kết nối tới X…”.
+   Lần mở kết nối do chính lượt đó gây ra mà bị chặn (`on_node_event` nhận `ConnectFailed` chặn,
+   lần đầu radar biết) → mọi **lượt mới** gửi tới máy đó bị gỡ thẻ và hủy (không treo “Đang nối
+   lại…” tới hạn nối lại), rồi hiện câu và nút như trên. Lượt mới: lượt gửi mà lúc thẻ xuất hiện
+   radar báo chưa kết nối, và chưa có `DeviceConnected` nào của máy đó từ đó tới giờ, tức `offer`
+   chưa từng đi. Lượt đã gửi `offer` (lượt dở) giữ nguyên: bị từ chối khi còn lượt dở thì
+   `core.links` vẫn hẹn thử lại (docstring `core/links.py`), lỗi tạm trông giống bị từ chối.
+   Đánh đổi: lỗi tạm đó (máy kia đang thoát hay khởi động lại) cũng gỡ lượt mới, người dùng gửi lại;
+   lượt bị gỡ vào lịch sử là `CANCELLED_USER` (như bấm “Hủy”).
 4. `host.submit(transfers.send)`; lỗi → `send.send_error_message` (None thì im lặng). Thẻ của lượt
    tự hiện qua `TransferStatusChanged`.
 
@@ -176,6 +184,8 @@ class TransfersController(QObject):
         self._offer_names: dict[TransferKey, str | None] = {}
         self._saved_paths: dict[TransferKey, Path] = {}  # file thật đã lưu cuối (`FileDone.path`)
         self._pending: tuple[str, list[Path]] | None = None  # “ghép rồi gửi” đang chờ
+        self._unoffered: set[TransferKey] = set()  # lượt gửi mới: `offer` chưa từng đi (bước 3)
+        self._dropped: set[TransferKey] = set()  # thẻ đã gỡ, đang chờ `TransferFinished` của lần hủy
         self._pending_timer = QTimer(self)
         self._pending_timer.setSingleShot(True)
         self._pending_timer.timeout.connect(self._drop_pending)
@@ -214,6 +224,8 @@ class TransfersController(QObject):
         self._names = {}
         self._offer_names = {}
         self._saved_paths = {}
+        self._unoffered = set()
+        self._dropped = set()
         self.view.set_device_names(self._names)
         receive_dir = None if host is None else host.options.receive_dir
         self.offers.set_receive_dir(receive_dir)
@@ -247,11 +259,14 @@ class TransfersController(QObject):
             return
         if isinstance(event, DeviceConnected):
             self.view.set_connected(view.device_id, True)
+            self._unoffered = {k for k in self._unoffered if k.device_id != view.device_id}
         elif isinstance(event, DeviceDisconnected):
             self.view.set_connected(view.device_id, False)
         if self._names.get(view.device_id) != view.name:
             self._names[view.device_id] = view.name
             self.view.set_device_names(self._names)
+        if isinstance(event, ConnectFailed):
+            self._on_connect_failed(view, event.result)
 
     def active_sends(self) -> list[str]:
         """Tên hiển thị (`texts.peer_label`) các máy đang có lượt gửi chưa kết thúc, theo thứ tự hàng.
@@ -270,6 +285,22 @@ class TransfersController(QObject):
         return names
 
     def on_transfer(self, update: TransferUpdate) -> None:
+        key = _update_key(update)
+        if key in self._dropped:
+            # Lượt mới đã gỡ thẻ vì bị chặn (bước 3): bỏ mọi sự kiện, tới `TransferFinished` của lần hủy.
+            if isinstance(update, TransferFinished):
+                self._dropped.discard(key)
+                self._offer_names.pop(key, None)
+            return
+        if (
+            key is not None
+            and key.direction is Direction.SEND
+            and not isinstance(update, TransferFinished)
+            and self.view.row(key) is None
+        ):
+            device = self._window.radar.model.device(key.device_id)
+            if device is None or not device.connected:
+                self._unoffered.add(key)
         # Đọc trước `offers.handle`: hộp hỏi mới mở có thể giành active.
         active = isinstance(update, OfferReceived) and self._app_active()
         self.offers.handle(update)
@@ -283,6 +314,7 @@ class TransfersController(QObject):
                 self._saved_paths[update.key] = update.path
         elif isinstance(update, TransferFinished):
             key = update.info.key
+            self._unoffered.discard(key)
             offer_name = self._offer_names.pop(key, None)
             saved_path = self._saved_paths.pop(key, None)
             if update.result is TransferResult.DONE and key.direction is Direction.RECEIVE:
@@ -414,6 +446,23 @@ class TransfersController(QObject):
         else:
             self.view.show_notice(message)
 
+    def _on_connect_failed(self, view: DeviceView, result: ConnectResult) -> None:
+        """`ConnectFailed` chặn khi còn lượt mới tới máy đó: gỡ thẻ, hủy lượt, hiện câu (bước 3)."""
+        keys = [k for k in self._unoffered if k.device_id == view.device_id]
+        if not keys:
+            return
+        message = send.blocked_message(result, self._peer(view.device_id, view))
+        if message is None:
+            return  # chưa kết nối được: lượt chờ tiếp, thẻ đã có câu chờ
+        self._unoffered.difference_update(keys)
+        host = self._host
+        for key in keys:
+            self.view.remove(key)
+            if host is not None:
+                self._dropped.add(key)
+                self.cancel(key)
+        self._show_blocked(message, result, view.device_id, view)
+
     def _request_repair(self, device_id: str) -> None:
         """Nút “Ghép đôi lại”: phát `repair_requested` với view mới nhất của radar (luồng ghép đôi nối)."""
         view = self._window.radar.model.device(device_id)
@@ -464,3 +513,12 @@ class TransfersController(QObject):
     def _log_error(what: str, result: object) -> None:
         if isinstance(result, BaseException):
             log.warning("không %s được: %s", what, type(result).__name__)
+
+
+def _update_key(update: TransferUpdate) -> TransferKey | None:
+    """Khóa lượt của một `TransferUpdate` (có loại mang `key`, có loại mang `info.key`)."""
+    key = getattr(update, "key", None)
+    if isinstance(key, TransferKey):
+        return key
+    info = getattr(update, "info", None)
+    return info.key if isinstance(info, TransferInfo) else None
