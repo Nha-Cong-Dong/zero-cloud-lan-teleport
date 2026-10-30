@@ -20,6 +20,9 @@ lambda, chạy trên thread Qt.
 đã dừng thì không làm gì. Bị hủy → `on_done(CancelledError())`. `done` (đọc trên thread Qt) thành
 True khi `on_done` đã chạy, kể cả khi `submit` báo lỗi ngay vì node chưa chạy.
 
+Lỗi không ai lấy trên loop (task, callback) đi qua `errorlog.loop_exception_handler`: chỉ ghi tên
+loại lỗi và traceback (mvp N9).
+
 Vòng đời trong thread node: dựng `Node` (nhận yêu cầu ghép đôi: `accept_pairing=True`, mvp F3;
 hỏi người dùng từng `offer`), `start()`,
 phát `started` hoặc `start_failed(mã, chi tiết)`, chờ lệnh dừng, rồi đóng như `cli._close_node`:
@@ -59,6 +62,7 @@ from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLockedError
 from teleport.trust.identity import IdentityError
 from teleport.trust.store import TrustStoreError
+from teleport.ui import errorlog
 
 R = TypeVar("R")
 
@@ -401,6 +405,7 @@ class NodeHost(QObject):
 
     async def _main(self) -> None:
         loop = asyncio.get_running_loop()
+        loop.set_exception_handler(errorlog.loop_exception_handler)
         wake = asyncio.Event()
         with self._guard:
             self._loop, self._wake = loop, wake

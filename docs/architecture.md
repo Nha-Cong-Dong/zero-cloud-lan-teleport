@@ -121,6 +121,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | ui | `ui/offer.py` | Hộp hỏi nhận file (mvp mục 7.3, chưa có “Đổi…”, “Luôn nhận”): mỗi lượt một hộp không cha, không chặn, chữ thuần; số dòng file như bản CLI; Enter, Esc, nút X = Từ chối; lượt kết thúc thì tự đóng | ✅ |
 | ui | `ui/transfers_view.py` | Danh sách lượt truyền trong phiên (mvp F5): mỗi lượt một thẻ (tên, máy kia, thanh tiến độ, nhãn trạng thái và dòng phụ: %, tốc độ, còn lại, câu chờ hay câu mvp mục 8), “Hủy”, “Mở thư mục”; dải thông báo không chặn, có thể kèm một nút hành động; chữ máy kia chỉ PlainText | ✅; lịch sử ⬜ |
 | ui | `ui/send.py` | Phần thuần của việc gửi: đường dẫn từ URL file cục bộ, lỗi chọn gửi nhận ra không cần chạm đĩa (quá số file, trùng), câu mvp mục 8 cho lỗi của `transfers.send` và khi thiết bị bị chặn kết nối | ✅ |
+| ui | `ui/errorlog.py` | Ghi lỗi không lộ nội dung (mvp N9): hook `sys.excepthook` / `threading.excepthook` (gồm lỗi trong slot Qt), handler lỗi loop asyncio của `NodeHost`, formatter của file log; chỉ tên loại lỗi và traceback | ✅ |
 | ui | `ui/texts.py`, `ui/i18n.py`, `ui/theme.py` | Câu chữ dùng chung của giao diện; bản dịch `.qm` qua `importlib.resources` (chuỗi nguồn tiếng Việt); bảng màu sáng/tối theo hệ điều hành, đủ tương phản (mvp N12) | ✅ hạ tầng; bản English ⬜ |
 
 Module chỉ được tạo khi có code thật, không tạo file rỗng trước.
@@ -133,7 +134,7 @@ Module chỉ được tạo khi có code thật, không tạo file rỗng trư�
 | `<config_dir>/trusted.json` | Chứng chỉ + tên các thiết bị đã ghép đôi ✅ |
 | `<config_dir>/node.lock` | Khóa: chỉ một node mỗi thư mục cấu hình ✅ |
 | `<config_dir>/gui.lock` | Khóa: chỉ một bản giao diện mỗi thư mục cấu hình (mục 2). Cùng cơ chế `teleport.lock.NodeLock` như `node.lock` (`NodeLock(config_dir, "gui.lock")`), lấy không chờ, giữ suốt đời tiến trình giao diện, kể cả khi node chưa chạy hay khởi động lỗi |
-| `<config_dir>/logs/teleport.log` | Log của giao diện (cần nhất cho bản exe không có cửa sổ dòng lệnh): mức WARNING, xoay khi đầy; cỡ và số bản giữ lại: hằng `LOG_*` trong `teleport.ui.app`. Chỉ bản giao diện đang giữ `gui.lock` ghi. Theo mvp N9: không ghi nội dung file hay clipboard ✅ |
+| `<config_dir>/logs/teleport.log` | Log của giao diện (cần nhất cho bản exe không có cửa sổ dòng lệnh): mức WARNING, xoay khi đầy; cỡ và số bản giữ lại: hằng `LOG_*` trong `teleport.ui.app`. Chỉ bản giao diện đang giữ `gui.lock` ghi. Lỗi không bắt được (thread chính, slot Qt, thread khác, loop asyncio của `NodeHost`) vào đây ở mức ERROR. Theo mvp N9: không ghi nội dung file hay clipboard; lỗi chỉ ghi tên loại và traceback, không ghi nội dung lỗi (`teleport.ui.errorlog`) ✅ |
 | `<config_dir>/identity.lock` | Khóa trong lúc tạo danh tính, để nhiều tiến trình chạy lần đầu cùng lúc nhận cùng một danh tính ✅ |
 | `<config_dir>/settings.json` | Cài đặt người dùng: cổng dự phòng khi 47474 bận ([protocol.md](protocol.md) mục 2.1) ✅; sau này cả cài đặt theo từng thiết bị tin cậy (“Hỏi trước khi nhận”, “Đồng bộ clipboard”), theo `device_id` ⬜. Không đưa vào `trusted.json`: file đó bỏ trường lạ khi ghi và bị bản cũ từ chối nếu tăng `version`. Chi tiết bên dưới |
 | `<config_dir>/history.json` | Lịch sử các lượt truyền đã kết thúc, cả hai chiều (mvp F5), chỉ metadata. Định dạng bên dưới ✅ (mã hóa `teleport.core.history`; đọc/ghi `teleport.app.history`) |
