@@ -2,8 +2,14 @@
 # Spec PyInstaller cho bản GUI Teleport (build thử dạng zip, Windows). Lệnh build (chạy từ gốc repo) ở
 # mục "Build thử bản GUI (Windows)" của docs/CONTRIBUTING.md; workflow: .github/workflows/build-gui.yml.
 # Kết quả: dist/teleport-gui/Teleport.exe (windowed), thư viện trong dist/teleport-gui/_internal/, cùng
-# LICENSE, THIRD-PARTY-NOTICES.txt, SOURCE.txt cạnh Teleport.exe. Thư mục tên teleport-gui, không phải
-# Teleport: Windows không phân biệt hoa thường nên "Teleport" trùng thư mục dist/teleport của bản CLI.
+# LICENSE, THIRD-PARTY-NOTICES.txt, SOURCE.txt (third_party.write_outputs) và DOC-TRUOC.txt (hướng dẫn
+# chạy cho người dùng, chép từ packaging/pyinstaller/ ở cuối file này) cạnh Teleport.exe. Thư mục tên
+# teleport-gui, không phải Teleport: Windows không phân biệt hoa thường nên "Teleport" trùng thư mục
+# dist/teleport của bản CLI.
+#
+# Icon của Teleport.exe: teleport.ico cạnh file này, sinh bằng make_icon.py từ đúng hàm vẽ icon của app
+# (teleport.ui.tray._draw); icon tự vẽ, cùng giấy phép GPL-3.0-or-later của dự án, không dùng tài sản
+# ngoài. Nó vào exe dưới dạng tài nguyên Windows (RT_ICON), không phải file trong _internal/.
 #
 # Giấy phép (ke_hoach mục 1, Giấy phép; Giai đoạn 6 ở mục 5.2): như teleport-cli.spec.
 # - Chỉ --onedir (COLLECT): Qt/PySide6 (LGPL-3.0) và zeroconf (LGPL-2.1) là file riêng trong _internal/
@@ -114,7 +120,8 @@ pyz = PYZ(a.pure)
 
 # Phần Qt không dùng mà hook của PyInstaller vẫn gom (theo đường dẫn đích, chữ thường, dấu "/").
 # Giữ: Qt6Core/Gui/Widgets/Network, plugins/platforms/qwindows.dll, plugins/styles/. PNG đọc được
-# không cần plugin (có sẵn trong QtGui); icon của app vẽ bằng mã (tray.make_icon).
+# không cần plugin (có sẵn trong QtGui); icon cửa sổ và khay vẽ bằng mã lúc chạy (tray.make_icon), icon
+# của Teleport.exe là tài nguyên trong exe (teleport.ico), nên không cần plugin imageformats/iconengines.
 QT_UNUSED = (
     "pyside6/opengl32sw.dll",  # OpenGL phần mềm (Mesa), ui không dùng OpenGL
     "pyside6/translations/*",  # bản dịch của Qt; ui chỉ nạp teleport_*.qm của mình
@@ -198,6 +205,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=version_info,
+    icon=str(SPEC_DIR / "teleport.ico"),
 )
 
 coll = COLLECT(
@@ -215,3 +223,10 @@ third_party.write_outputs(
     dist_dir=Path(DISTPATH) / DIST_NAME,
     repo_dir=REPO_DIR,
 )
+
+# Hướng dẫn cho người dùng cuối, cạnh Teleport.exe. Nguồn trong repo là UTF-8; read_text đổi mọi kiểu
+# xuống dòng (git có thể checkout CRLF) thành "\n". Ghi ra UTF-8 có BOM, xuống dòng CRLF, để Notepad của
+# mọi bản Windows 10 đọc đúng tiếng Việt. Nội dung lấy theo paths.py và ui/app.py (thư mục nhận, log):
+# đổi những chỗ đó thì sửa cả DOC-TRUOC.txt.
+_readme_text = (SPEC_DIR / "DOC-TRUOC.txt").read_text(encoding="utf-8-sig")
+(Path(DISTPATH) / DIST_NAME / "DOC-TRUOC.txt").write_text(_readme_text, encoding="utf-8-sig", newline="\r\n")

@@ -357,13 +357,22 @@ Máy chính có thêm một máy ảo Ubuntu bridged ([benchmark.md](benchmark.m
 
 Phạm vi và tiêu chí H1–H5: [mvp.md](mvp.md) mục 4.1. Buổi demo hết tuần 4 của hackathon, khoảng 08/11/2026. Tới lúc đó lịch này đi trước mục 5.2: chỉ làm phần Giai đoạn 4 mà mvp mục 4.1 cần, mọi việc khác của Giai đoạn 4–5 làm sau buổi demo.
 
+Máy thật thứ hai (máy mượn) chỉ có mặt các ngày 02, 06, 07 và 08/11, nên mọi việc cần hai máy thật dồn vào các ngày đó.
+
 | Ngày | Việc | Xong khi |
 |---|---|---|
-| 29/10–01/11 | Merge khung giao diện; radar; ghép đôi trên giao diện (không có chế độ ẩn) | Hai node trên một máy thấy nhau và ghép đôi được bằng giao diện |
-| 02/11–05/11 | Gửi/nhận trên giao diện: kéo thả, hộp thoại nhận, danh sách lượt truyền; bản zip `--onedir` | H2 đạt giữa hai node trên một máy; bản zip chạy trên Windows Sandbox |
-| 06/11–07/11 | Kiểm H1–H5 trên hai máy thật, sửa lỗi, tập kịch bản demo | H1–H5 có kết quả trong [benchmark.md](benchmark.md) |
+| 30/10–01/11 | Sửa những lỗi giao diện người xem sẽ thấy (thẻ lượt truyền, tiến độ, bấm vào thiết bị), ghi lỗi không bắt được vào log; build zip thử từ `main` bằng CI; kiểm tay hai node trên một máy bằng mã nguồn | Bản sửa đã merge vào `main`; có zip thử từ CI; kiểm tay hai node trên một máy đạt |
+| 02/11 | **Kiểm sớm** trên hai máy thật bằng zip thử, đúng mạng sẽ dùng ngày 08/11: mDNS (H1), sơ bộ H2–H5, đo tốc độ để chọn cỡ file | Lần chạy đầu của zip trên máy mượn chưa cài Python chạy được; có danh sách lỗi trên máy thật |
+| 03/11–04/11 | Đánh bóng giao diện, đóng gói, sửa lỗi tìm được ngày 02/11 | **23:59 04/11 đóng băng**: sau mốc này chỉ sửa lỗi |
+| 05/11 | Build zip ứng viên RC1 từ `main` bằng CI, `pytest -m frozen`; kiểm tay trên exe của RC1; chạy `soat-tai-lieu`; chuẩn bị hai máy và mạng | Có zip ứng viên |
+| 06/11 | **Kiểm H1–H5 chính thức** trên RC1 | H1–H5 có kết quả trong [benchmark.md](benchmark.md) mục 6 |
+| 07/11 | Có sửa thì build RC2 và kiểm lại các H bị ảnh hưởng; **18:00 chốt zip**; quay video dự phòng; tập lại, có một lần đi đường CLI và một lần không có mDNS (nhập IP) | Zip chốt, commit của zip ghi ở [benchmark.md](benchmark.md) mục 6 |
+| 08/11 | Chuẩn bị lại hai máy và mạng như 05/11; không build, không sửa | — |
 
-Đợt kiểm trên hai máy thật này đo luôn được D1, D3, D5 (mục 5.4) nếu kịp; không kịp thì để lại cho đợt đo.
+- Kiểm sớm ngày 02/11 **không tính là đạt**, kể cả khi đủ H1–H5: không ghi kết quả H vào [benchmark.md](benchmark.md) mục 6 và không dời mốc đóng băng.
+- Zip đổi commit sau 06/11 (RC2 hay bản sửa khác) thì kiểm lại các H mà thay đổi đó có thể ảnh hưởng, trên đúng zip mới, trước khi chốt.
+
+Các ngày kiểm chính thức 06–07/11 đo luôn được D1, D3, D5 (mục 5.4) nếu kịp; không kịp thì để lại cho đợt đo.
 
 ---
 
