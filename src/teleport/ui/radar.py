@@ -1,11 +1,13 @@
 """Radar (P4-4h, mvp F2): danh sách thiết bị trong mạng hoặc đã ghép đôi, và ô nhập IP thủ công.
 
 **Model** (`DeviceListModel`): mỗi `device_id` một hàng, giữ `DeviceView` mới nhất, sắp theo
-(NFC(tên).casefold(), device_id) như `app.devices`. Nguồn dữ liệu: ảnh chụp `Node.devices()` lúc
-node `started` (`reset`), rồi từng `NodeEvent` (`apply`): `DeviceOnline`, `DeviceConnected`,
-`DeviceDisconnected`, `ConnectFailed` cập nhật hay thêm hàng; `DeviceOffline` bỏ hàng của thiết bị
-chưa ghép đôi, còn thiết bị đã ghép đôi thì giữ hàng (không thấy trong mạng). Host mới (“Thử lại”)
-→ `clear()`.
+`_sort_key` = (chưa kết nối, chưa ghép đôi, NFC(tên).casefold(), device_id): máy đang kết nối lên
+đầu, rồi máy đã ghép đôi, rồi theo tên. Kết nối / ghép đôi / tên đổi thì hàng dời chỗ
+(`beginMoveRows`); nạp lại cả danh sách cũng sắp theo khóa đó. Nguồn dữ liệu: ảnh chụp
+`Node.devices()` lúc node `started` (`reset`), rồi từng `NodeEvent` (`apply`): `DeviceOnline`,
+`DeviceConnected`, `DeviceDisconnected`, `ConnectFailed` cập nhật hay thêm hàng; `DeviceOffline` bỏ
+hàng của thiết bị chưa ghép đôi, còn thiết bị đã ghép đôi thì giữ hàng (không thấy trong mạng). Host
+mới (“Thử lại”) → `clear()`.
 
 **Lỗi kết nối gần nhất** (spec hackathon mục 9.5): model nhớ `ConnectFailed.result` gần nhất của
 mỗi thiết bị, xóa khi có `DeviceConnected`; `reset` (nạp lại `devices()`) không xóa. Câu hiện trên
@@ -14,8 +16,11 @@ thiết bị còn trong mạng, các lỗi khác hiện tới khi kết nối l�
 không hiện lỗi kết nối.
 
 **Chữ của máy khác**: tên thiết bị đi qua `texts.peer_label` (`core.display.display_name`, ký tự
-điều khiển thành U+FFFD, ≤ 32 cột); hàng của `QListView` vẽ chữ thuần, không HTML. Tên hệ điều hành
-chỉ hiện khi là một trong các giá trị đã biết (`windows`, `macos`, `linux`).
+điều khiển thành U+FFFD, ≤ 32 cột); hàng của `QListView` vẽ chữ thuần, không HTML. Mỗi hàng có biểu
+tượng máy tính của style (`DecorationRole`, không tải ảnh nào) và máy đã ghép đôi viết chữ nửa đậm
+(`FontRole`); chỉ là nhấn mạnh, chữ “(đã ghép)” / “(chưa ghép)” vẫn nói rõ (mvp N12). Không có
+delegate riêng: Qt tự vẽ, nên hit-test, kéo thả, phím giữ nguyên. Tên hệ điều hành chỉ hiện khi là
+một trong các giá trị đã biết (`windows`, `macos`, `linux`).
 
 **Signal** (`ui.app` / `ui.transfers` nối): `pair_requested(DeviceView)` (chỉ khi thiết bị chưa
 ghép đôi và đang trong mạng, spec mục 9.1: bấm một lần, bấm đúp, Enter, nút hay menu “Ghép
@@ -36,20 +41,22 @@ vì luồng Qt có thể vừa bị chặn). Dblclick trên hàng của chuỗi 
 chuỗi mới; release sau dblclick, nhả ngoài hàng đã nhấn, hay nhấn thêm nút chuột khác giữa chừng,
 không tính là bấm. Mỗi chuỗi phát `pair_requested` (hay `pick_files_requested` khi bấm đúp) nhiều
 nhất một lần, vì lần thứ hai làm `PairingController.pair_device` hiện câu “đang bận”. Enter tự lặp
-khi giữ phím bị bỏ. Nút
-`device_action_button` (trái nút “Nhập IP thủ công”) theo thiết bị **được chọn** (không chỉ hàng
-hiện hành): “Gửi file…” / “Ghép đôi…”, không có thì ẩn; lúc bấm đọc lại view mới nhất của model.
-Bỏ một hàng thì lựa chọn trở về đúng thiết bị đã chọn trước đó, hay không chọn gì (Qt tự chọn hàng
-kế tiếp); đổi tên làm đổi thứ tự thì model dời hàng (`beginMoveRows`), lựa chọn đi theo.
+khi giữ phím bị bỏ. Nút `device_action_button` (trái nút “Nhập IP thủ công”) theo thiết bị **được
+chọn** (không chỉ hàng hiện hành): “Gửi file…” / “Ghép đôi…”, không có thì ẩn; lúc bấm đọc lại view
+mới nhất của model. Bỏ một hàng thì lựa chọn trở về đúng thiết bị đã chọn trước đó, hay không chọn
+gì (Qt tự chọn hàng kế tiếp); đổi tên, kết nối hay ghép đôi làm đổi thứ tự thì model dời hàng
+(`beginMoveRows`), lựa chọn đi theo.
 
 **Kéo thả** (mvp F4): danh sách nhận kéo khi `mimeData().hasUrls()` có ít nhất một URL file cục bộ
-(`ui.send.local_paths`, không chạm đĩa), tô viền hàng dưới con trỏ (màu `Highlight` của palette)
-mà không đổi hàng đang chọn. Thả lên hàng → `drop_files(id, urls)` → `send_files_requested(id,
-paths)`, kể cả thiết bị chưa ghép đôi đang trong mạng (`ui.transfers` lo “ghép rồi gửi”); hàng của
-thiết bị chưa ghép đôi không trong mạng (`not can_receive_files`) thì `dragMoveEvent` từ chối thả
-(con trỏ hiện “không được thả”), không tô. Thả vào chỗ trống (hay
-vào câu “Chưa thấy thiết bị nào”) → `drop_hint_requested` với câu mvp mục 8 “Thả file lên một thiết
-bị để gửi.”. URL không phải file cục bộ bị bỏ. `drop_files` là hàm công khai (seam test).
+(`ui.send.local_paths`, không chạm đĩa), tô viền hàng dưới con trỏ (màu `Highlight` của palette) mà
+không đổi hàng đang chọn. Thả lên hàng → `drop_files(id, urls)` → `send_files_requested(id, paths)`,
+kể cả thiết bị chưa ghép đôi đang trong mạng (`ui.transfers` lo “ghép rồi gửi”); hàng của thiết bị
+chưa ghép đôi không trong mạng (`not can_receive_files`) thì `dragMoveEvent` từ chối thả (con trỏ
+hiện “không được thả”), không tô. Thả vào chỗ trống (hay vào khung trống “Chưa thấy thiết bị nào”) →
+`drop_hint_requested` với câu mvp mục 8 “Thả file lên một thiết bị để gửi.”. URL không phải file cục
+bộ bị bỏ. `drop_files` là hàm công khai (seam test). Hàng dời chỗ trong lúc đang kéo (kết nối /
+ghép đôi đổi, thêm hay bỏ hàng) thì `refresh_drop_target` tô lại theo vị trí kéo cuối, nên viền tô
+luôn là hàng dưới con trỏ, đúng thiết bị nhận khi thả (thả dùng `indexAt` của con trỏ).
 
 **Bàn phím và trình đọc màn hình** (mvp N12): Tab / Shift+Tab đi qua **từng** thiết bị rồi mới ra
 khỏi danh sách (vào bằng Tab thì tới thiết bị đầu, bằng Shift+Tab thì tới thiết bị cuối), rồi tới
@@ -59,9 +66,15 @@ Shift+F10, chuột phải) mở menu của thiết bị đang chọn bằng `pop
 (thiết bị đã ghép đôi, hay chưa ghép đôi mà đang trong mạng), “Ghép đôi…”, “Hủy ghép đôi…”. Mỗi hàng có
 `AccessibleTextRole` một dòng; trạng thái luôn nói bằng chữ, không chỉ bằng màu.
 
-**Nhập IP thủ công**: nút luôn hiện (mvp F2) mở một khung ngay trong radar (không hộp thoại chặn):
-ô nhập, “Ghép đôi”, “Hủy”. Sai thì hiện câu mvp mục 8 (dòng `--address` sai, bỏ chữ `--address`),
-không hiện `str(e)` của `parse_manual_address`, không phát signal. Esc trong ô nhập = Hủy.
+**Radar trống**: khung `empty_frame` thay chỗ danh sách, căn giữa theo chiều dọc: câu
+`no_devices_text` (mvp mục 8, có ý tường lửa) và một thanh bận mảnh (`radarBusy`, chỉ cho thấy
+Teleport vẫn đang tìm); có thiết bị thì cả khung ẩn. Câu nhận tiêu điểm bằng Tab (trình đọc màn hình
+đọc được) nhưng không có con trỏ chữ.
+
+**Nhập IP thủ công**: nút luôn hiện (mvp F2) mở một khung ngay trong radar (không hộp thoại chặn): ô
+nhập, “Ghép đôi” (nút chính, tô màu nhấn qua `theme.PRIMARY_PROPERTY`), “Hủy”. Sai thì hiện câu mvp
+mục 8 (dòng `--address` sai, bỏ chữ `--address`), không hiện `str(e)` của `parse_manual_address`,
+không phát signal. Esc trong ô nhập = Hủy.
 """
 
 from __future__ import annotations
@@ -79,6 +92,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QPersistentModelIndex,
     QPoint,
+    QSize,
     Qt,
     QUrl,
     Signal,
@@ -108,7 +122,9 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListView,
     QMenu,
+    QProgressBar,
     QPushButton,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -123,7 +139,7 @@ from teleport.app.node import (
     NodeEvent,
 )
 from teleport.core.links import ConnectResult
-from teleport.ui import send, texts
+from teleport.ui import send, texts, theme
 
 DEVICE_ROLE = Qt.ItemDataRole.UserRole + 1  # DeviceView của hàng
 DEVICE_ID_ROLE = Qt.ItemDataRole.UserRole + 2  # device_id (str)
@@ -132,6 +148,9 @@ FAILURE_ROLE = Qt.ItemDataRole.UserRole + 3  # ConnectResult đang hiện trên 
 _NODE_EVENTS = (DeviceOnline, DeviceOffline, DeviceConnected, DeviceDisconnected, ConnectFailed)
 _OS_LABELS = {"windows": "Windows", "macos": "macOS", "linux": "Linux"}
 _Index = QModelIndex | QPersistentModelIndex
+_ICON_SIZE = 32  # px, biểu tượng máy trên mỗi hàng (hàng cao 2–3 dòng chữ)
+_BUSY_HEIGHT = 4  # px, thanh bận của radar trống
+_BUSY_WIDTH = 160
 
 
 # ---- Câu chữ -------------------------------------------------------------------------------------
@@ -141,7 +160,8 @@ def no_devices_text() -> str:
     """mvp mục 8, “Không thấy thiết bị nào”."""
     return QCoreApplication.translate(
         "Radar",
-        "Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia và kiểm tra hai máy dùng chung một mạng Wi-Fi.",
+        "Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia, kiểm tra hai máy dùng chung một mạng "
+        "Wi-Fi và tường lửa của Windows cho phép Teleport.",
     )
 
 
@@ -166,7 +186,7 @@ def connect_failed_text(view: DeviceView, result: ConnectResult) -> str:
         template = t(
             "Radar",
             "Thấy {name} nhưng không kết nối được. Mạng Wi-Fi này có thể đang chặn các thiết bị nói "
-            "chuyện với nhau (hay gặp ở quán cà phê, khách sạn).",
+            "chuyện với nhau (hay gặp ở quán cà phê, khách sạn). Hãy thử dùng điểm phát Wi-Fi từ điện thoại.",
         )
     return texts.fill(template, name=texts.peer_label(view.name, view.device_id))
 
@@ -211,8 +231,14 @@ def _status_text(view: DeviceView) -> str:
 # ---- Model ---------------------------------------------------------------------------------------
 
 
-def _sort_key(view: DeviceView) -> tuple[str, str]:
-    return unicodedata.normalize("NFC", view.name).casefold(), view.device_id
+def _sort_key(view: DeviceView) -> tuple[bool, bool, str, str]:
+    """Đang kết nối lên đầu, rồi đã ghép đôi, rồi theo tên (NFC, casefold), cuối cùng mã máy."""
+    return (
+        not view.connected,
+        not view.paired,
+        unicodedata.normalize("NFC", view.name).casefold(),
+        view.device_id,
+    )
 
 
 class DeviceListModel(QAbstractListModel):
@@ -308,6 +334,17 @@ class DeviceListModel(QAbstractListModel):
             return "<qt>" + html.escape("\n".join(self._lines(view))).replace("\n", "<br>") + "</qt>"
         if role == Qt.ItemDataRole.AccessibleTextRole:
             return ". ".join(self._lines(view))
+        if role == Qt.ItemDataRole.DecorationRole:
+            # Biểu tượng của style (không tải gì); đọc lúc vẽ để theo style hiện tại.
+            return QApplication.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        if role == Qt.ItemDataRole.FontRole:
+            # Máy đã ghép đôi: chữ nửa đậm (nhấn mạnh; chữ “(đã ghép)” vẫn nói rõ). FontRole áp cho cả
+            # hàng 2–3 dòng, nên DemiBold (`bold()` vẫn True) đỡ nặng hơn Bold. None: font của view.
+            if not view.paired:
+                return None
+            font = QFont(QApplication.font())
+            font.setWeight(QFont.Weight.DemiBold)
+            return font
         if role == DEVICE_ROLE:
             return view
         if role == DEVICE_ID_ROLE:
@@ -388,6 +425,7 @@ class _DeviceList(QListView):
         self.setAcceptDrops(True)
         self.viewport().setAcceptDrops(True)
         self._drop_index = QPersistentModelIndex()  # hàng đang được kéo file qua (tô viền)
+        self._drag_pos: QPoint | None = None  # vị trí kéo cuối (viewport) khi đang có file kéo qua
         self._pressed_index = QPersistentModelIndex()  # hàng dưới lần nhấn chuột trái gần nhất
         self._in_double_click = False  # đã có dblclick: lần nhả kế tiếp không tính là bấm
         self._chain = 0  # số của chuỗi bấm hiện tại
@@ -482,26 +520,45 @@ class _DeviceList(QListView):
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         if not _has_local_files(event):
+            self._drag_pos = None
             self._set_drop_index(QModelIndex())
             event.ignore()
             return
-        index = self.indexAt(event.position().toPoint())
+        self._drag_pos = event.position().toPoint()
+        if not self._update_drop_index():
+            # Thiết bị không gửi tới được (chưa ghép đôi, không trong mạng): không nhận thả ở đây.
+            # Không truyền vùng cho `ignore`: hàng có thể dời chỗ trong lúc kéo (radar sắp theo kết
+            # nối / ghép đôi), nên mỗi lần chuột di đều phải xét lại.
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def refresh_drop_target(self) -> None:
+        """Model đổi hàng trong lúc đang kéo (dời, thêm, bỏ): tô lại đúng hàng dưới con trỏ, để viền
+        tô và nơi thả (`indexAt` lúc thả) luôn là cùng một thiết bị."""
+        if self._drag_pos is not None:
+            self.executeDelayedItemsLayout()  # vị trí hàng mới, trước khi `indexAt`
+            self._update_drop_index()
+
+    def _update_drop_index(self) -> bool:
+        """Tô hàng dưới `_drag_pos` (chỉ tô, không đổi hàng đang chọn); False nếu hàng đó không nhận
+        thả được."""
+        index = self.indexAt(self._drag_pos) if self._drag_pos is not None else QModelIndex()
         if index.isValid():
             view = index.data(DEVICE_ROLE)
             if not isinstance(view, DeviceView) or not can_receive_files(view):
-                # Thiết bị không gửi tới được (chưa ghép đôi, không trong mạng): không nhận thả ở đây.
                 self._set_drop_index(QModelIndex())
-                event.ignore(self.visualRect(index))
-                return
-        # Chỉ tô viền hàng dưới con trỏ, không đổi hàng đang chọn khi file chỉ được kéo qua.
+                return False
         self._set_drop_index(index)
-        event.acceptProposedAction()
+        return True
 
     def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._drag_pos = None
         self._set_drop_index(QModelIndex())
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent) -> None:
+        self._drag_pos = None
         self._set_drop_index(QModelIndex())
         urls = _event_urls(event)
         if not send.local_paths(urls):
@@ -645,21 +702,49 @@ class RadarView(QWidget):
         self.heading_label = _label("radarHeading", bold=True, size_delta=1)
         self.hint_label = _label("radarHint")
         self.empty_label = _label("radarEmpty")
-        self.empty_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByKeyboard | Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        self.empty_label.setForegroundRole(QPalette.ColorRole.PlaceholderText)  # chữ phụ, vẫn ≥ 4,5:1
+        # Chọn bằng chuột được, không có con trỏ chữ khi Tab tới.
+        self.empty_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.empty_label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # trình đọc màn hình đọc được câu
+        # Thanh bận mảnh: Teleport vẫn đang tìm (không mang thông tin nào khác; câu đã đủ nghĩa).
+        self.busy_bar = QProgressBar(self)
+        self.busy_bar.setObjectName("radarBusy")
+        self.busy_bar.setRange(0, 0)
+        self.busy_bar.setTextVisible(False)
+        self.busy_bar.setFixedSize(_BUSY_WIDTH, _BUSY_HEIGHT)
+        self.busy_bar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Khung trống: câu + thanh bận, căn giữa dọc trong chỗ của danh sách.
+        self.empty_frame = QWidget(self)
+        self.empty_frame.setObjectName("radarEmptyFrame")
+        empty_layout = QVBoxLayout(self.empty_frame)
+        empty_layout.setContentsMargins(16, 0, 16, 0)
+        empty_layout.setSpacing(12)
+        empty_layout.addStretch(1)
+        empty_layout.addWidget(self.empty_label)
+        empty_layout.addWidget(self.busy_bar, 0, Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addStretch(1)
 
         self.list_view = _DeviceList(self)
         self.list_view.setObjectName("deviceList")
         # Nối trước `setModel`: phải thấy lựa chọn trước khi view dời nó sang hàng kế tiếp.
         self.model.rowsAboutToBeRemoved.connect(self._remember_removed_selection)
         self.list_view.setModel(self.model)
+        # Hàng dời / thêm / bỏ trong lúc đang kéo file: viền tô theo đúng hàng dưới con trỏ.
+        for signal in (
+            self.model.rowsMoved,
+            self.model.rowsInserted,
+            self.model.rowsRemoved,
+            self.model.layoutChanged,
+            self.model.modelReset,
+        ):
+            signal.connect(self.list_view.refresh_drop_target)
         self.list_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.list_view.setWordWrap(True)
         self.list_view.setUniformItemSizes(False)
         self.list_view.setSpacing(4)
+        self.list_view.setIconSize(QSize(_ICON_SIZE, _ICON_SIZE))
         self.list_view.setTabKeyNavigation(False)  # Tab do `_DeviceList.focusNextPrevChild` xử lý
         self.list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self.list_view.row_clicked.connect(self._on_row_clicked)
@@ -692,6 +777,7 @@ class RadarView(QWidget):
         self.address_error.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.address_submit = QPushButton(self.address_panel)
         self.address_submit.setObjectName("addressSubmit")
+        self.address_submit.setProperty(theme.PRIMARY_PROPERTY, True)
         self.address_cancel = QPushButton(self.address_panel)
         self.address_cancel.setObjectName("addressCancel")
         buttons = QHBoxLayout()
@@ -713,7 +799,7 @@ class RadarView(QWidget):
 
         layout.addWidget(self.heading_label)
         layout.addWidget(self.hint_label)
-        layout.addWidget(self.empty_label, 1, Qt.AlignmentFlag.AlignTop)  # chiếm chỗ của danh sách khi trống
+        layout.addWidget(self.empty_frame, 1)  # chiếm chỗ của danh sách khi trống
         layout.addWidget(self.list_view, 1)
         address_row = QHBoxLayout()
         address_row.addWidget(self.device_action_button)
@@ -888,6 +974,7 @@ class RadarView(QWidget):
         self.empty_label.setText(no_devices_text())
         self.empty_label.setAccessibleName(heading)
         self.empty_label.setAccessibleDescription(no_devices_text())
+        self.busy_bar.setAccessibleName(t("Radar", "Đang tìm thiết bị"))
         self.list_view.setAccessibleName(heading)
         self.list_view.setAccessibleDescription(
             t(
@@ -925,7 +1012,9 @@ class RadarView(QWidget):
 
     def _update_empty(self) -> None:
         empty = self.model.rowCount() == 0
+        self.empty_frame.setVisible(empty)
         self.empty_label.setVisible(empty)
+        self.busy_bar.setVisible(empty)
         self.list_view.setVisible(not empty)
         selection = self.list_view.selectionModel()
         if not empty and selection is not None and not self.list_view.currentIndex().isValid():

@@ -10,7 +10,8 @@ Bốn trạng thái (`ViewState`):
 - RUNNING: sẵn sàng nhận file, tên máy này và thư mục nhận; dòng “Địa chỉ: …” (`address_label`,
   `set_addresses`) để nhập ở máy kia khi mDNS bị chặn; bên dưới là radar (`ui.radar.RadarView`,
   bên trái) và `transfers_area` (bên phải; `ui.transfers.TransfersController` đặt danh sách lượt
-  truyền `TransfersView` vào đây).
+  truyền `TransfersView` vào đây), hai cột rộng bằng nhau. Tiêu đề lớn “Teleport” ẩn (tiêu đề cửa
+  sổ đã có tên app), nhường chỗ cho radar và lượt truyền.
 - ERROR: câu lỗi khởi động (`texts.start_error`) và gợi ý, nút “Thử lại”.
 
 Dòng địa chỉ chỉ hiện ở RUNNING khi có ít nhất một địa chỉ: địa chỉ đầu tiên, thêm `:cổng` khi cổng
@@ -19,8 +20,15 @@ khác `DEFAULT_PORT`; các địa chỉ còn lại nằm ở tooltip (và access
 `NodeHost.submit` và gọi `set_addresses`.
 
 Mọi chữ là chữ thuần (`Qt.PlainText`), đọc được bằng bàn phím (Tab đi qua từng dòng, từng thiết
-bị, có tên cho trình đọc màn hình). Trạng thái luôn nói bằng chữ, không chỉ bằng màu (mvp N12). Phím
-tắt: F5 = Thử lại (khi nút đang hiện), Ctrl+W = đóng cửa sổ, Ctrl+Q = Thoát.
+bị, có tên cho trình đọc màn hình). Nhãn chọn được bằng chuột (chép tên máy, thư mục nhận) nhưng
+không có con trỏ chữ khi Tab tới (không `TextSelectableByKeyboard`). Tiêu điểm ban đầu
+(`_place_focus`): nút đang hiện (“Bắt đầu” / “Thử lại”); RUNNING thì danh sách thiết bị khi radar có
+thiết bị, không thì nút “Nhập IP thủ công”; STARTING thì dòng trạng thái. “Bắt đầu” là nút chính
+(tô màu nhấn, `theme.PRIMARY_PROPERTY`). Trạng thái luôn nói bằng chữ, không chỉ bằng màu (mvp
+N12). Phím tắt: F5 = Thử lại (khi nút đang hiện), Ctrl+W = đóng cửa sổ, Ctrl+Q = Thoát.
+
+Cỡ cửa sổ lúc mở: `default_size(vùng dùng được của màn hình chính)` = `DEFAULT_SIZE` kẹp theo màn
+hình; cỡ tối thiểu 720x460. Không lưu cỡ giữa các lần chạy.
 
 Đóng cửa sổ (`closeEvent`): khay dùng được (`Tray.is_available()`) thì ẩn cửa sổ và phát
 `hidden_to_tray` (app vẫn chạy và nhận file); không có khay thì phát `quit_requested`. Cửa sổ
@@ -33,17 +41,25 @@ from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QFont, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget
 
 from teleport.core.display import display_name
 from teleport.net.connection import DEFAULT_PORT
-from teleport.ui import texts
+from teleport.ui import texts, theme
 from teleport.ui.radar import RadarView
 from teleport.ui.tray import Tray
 
-_TEXT_FLAGS = Qt.TextInteractionFlag.TextSelectableByKeyboard | Qt.TextInteractionFlag.TextSelectableByMouse
+# Chọn bằng chuột để chép; không `TextSelectableByKeyboard`: Tab tới nhãn sẽ hiện con trỏ chữ nhấp nháy.
+_TEXT_FLAGS = Qt.TextInteractionFlag.TextSelectableByMouse
+DEFAULT_SIZE = QSize(980, 660)  # cỡ cửa sổ lúc mở khi màn hình đủ rộng
+MIN_SIZE = QSize(720, 460)
+
+
+def default_size(available: QSize) -> QSize:
+    """Cỡ cửa sổ lúc mở: `DEFAULT_SIZE` kẹp theo vùng dùng được của màn hình (`available`)."""
+    return QSize(min(DEFAULT_SIZE.width(), available.width()), min(DEFAULT_SIZE.height(), available.height()))
 
 
 class ViewState(StrEnum):
@@ -80,7 +96,9 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("mainWindow")
-        self.setMinimumSize(720, 460)
+        self.setMinimumSize(MIN_SIZE)
+        screen = QGuiApplication.primaryScreen()
+        self.resize(DEFAULT_SIZE if screen is None else default_size(screen.availableGeometry().size()))
         self._state = ViewState.STARTING
         self._name: str | None = None
         self._receive_dir: Path | None = None
@@ -113,8 +131,8 @@ class MainWindow(QMainWindow):
         self.transfers_area = QWidget(self.body)
         self.transfers_area.setObjectName("transfersArea")
         QVBoxLayout(self.transfers_area).setContentsMargins(0, 0, 0, 0)
-        body_layout.addWidget(self.radar, 3)
-        body_layout.addWidget(self.transfers_area, 2)
+        body_layout.addWidget(self.radar, 1)
+        body_layout.addWidget(self.transfers_area, 1)
 
         self.retry_button = QPushButton(central)
         self.retry_button.setObjectName("retryButton")
@@ -122,6 +140,7 @@ class MainWindow(QMainWindow):
         self.start_button = QPushButton(central)
         self.start_button.setObjectName("startButton")
         self.start_button.setDefault(True)
+        self.start_button.setProperty(theme.PRIMARY_PROPERTY, True)
         self.start_button.clicked.connect(self.start_requested)
 
         layout.addWidget(self.title_label)
@@ -209,11 +228,18 @@ class MainWindow(QMainWindow):
         self._addresses, self._port = (), None
 
     def _place_focus(self) -> None:
-        """Đặt tiêu điểm bàn phím: nút đang hiện (Bắt đầu / Thử lại), không thì dòng trạng thái."""
+        """Đặt tiêu điểm bàn phím: nút đang hiện (Bắt đầu / Thử lại); RUNNING thì danh sách thiết bị
+        (có thiết bị) hay nút “Nhập IP thủ công”; còn lại (STARTING) dòng trạng thái."""
         for button in (self.start_button, self.retry_button):
             if button.isVisibleTo(self):
                 button.setFocus(Qt.FocusReason.OtherFocusReason)
                 return
+        if self._state is ViewState.RUNNING:
+            target: QWidget = (
+                self.radar.list_view if self.radar.model.rowCount() > 0 else self.radar.address_button
+            )
+            target.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
         self.status_label.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def bring_to_front(self) -> None:
@@ -251,6 +277,7 @@ class MainWindow(QMainWindow):
         self._set_optional(self.hint_label, "\n".join(hints), self.tr("Gợi ý"))
         self._update_address()
         running = self._state is ViewState.RUNNING
+        self.title_label.setVisible(not running)  # tiêu đề cửa sổ đã có tên app; nhường chỗ cho radar
         self.body.setVisible(running)
         self._stretch.setVisible(not running)
         self.retry_button.setVisible(self._state is ViewState.ERROR)

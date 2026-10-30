@@ -1605,7 +1605,9 @@ def test_renaming_selected_device_keeps_it_selected(radar, paired):
     """Soát code: đổi tên thiết bị đang chọn (khóa sắp xếp đổi, hàng nhảy chỗ) → vẫn chọn đúng thiết bị
     đó, nút còn hiện đúng chữ."""
     m = view("May-M", paired=paired)
-    load(radar, [view("May-A", paired=True), m, view("May-Z")])
+    # May-Z cùng nhóm (đã ghép / chưa ghép) với May-M: radar sắp máy đã ghép đôi lên trước (PR-7 B7),
+    # nên chỉ trong cùng nhóm thì đổi tên mới làm hàng nhảy chỗ.
+    load(radar, [view("May-A", paired=True), m, view("May-Z", paired=paired)])
     btn = _action_button(radar)
     select_row(radar, the_row(radar, "May-M"))
     old_row = the_row(radar, "May-M")

@@ -716,7 +716,8 @@ def test_a_drop_on_unpaired_peer_pairs_then_sends_automatically(
     assert seen["a"] == "done" and seen["direction"] == "send", seen
     assert seen["b"] == ["done"], seen
     assert seen["paired_on_radar"] is True
-    assert seen["notice"] is None, seen["notice"]
+    # PR-7 B4: ghép đôi xong chỉ báo ở dải thông báo (không hộp); không có câu lỗi nào khác.
+    assert seen["notice"] in (None, "Đã ghép đôi với “May-B”."), seen["notice"]
     assert _sha256(tmp_path / "nhan-B" / f.name) == want
     assert seen["elapsed"] < 20, seen["elapsed"]
 

@@ -9,14 +9,16 @@ LocalSend, theo mvp mục 7.3 bỏ “Đổi…” và “Luôn nhận”:
 - danh sách file gọn: tối đa `LIST_MAX` dòng “tên  cỡ”, rồi “… và k file khác” nếu còn (chỉ dựng
   chữ cho `LIST_MAX` tên đầu, nên `offer` 1000 file vẫn nhanh);
 - “Lưu vào: …” chữ nhỏ;
-- nút “Từ chối” và “Nhận” (nút chính, chữ đậm).
+- nút “Từ chối” và “Nhận” căn phải; “Nhận” là nút chính (chữ đậm, tô màu nhấn qua property
+  `theme.PRIMARY_PROPERTY`). Hộp rộng tối thiểu `theme.DIALOG_MIN_WIDTH`, như hộp ghép đôi.
 
 Mọi nhãn `Qt.PlainText`; chữ máy kia không vào tooltip. Tên máy gửi qua `texts.peer_label`
 (`display_name`; không có tên thì 8 ký tự đầu của mã máy), tên file qua `texts.file_label`
 (`display_filename`, 48 cột, cắt giữa giữ đuôi). `offer_text` trả toàn bộ chữ đó (chữ thuần).
 
 Bấm “Nhận” / “Từ chối” phát `decided(key, accept)`; Esc hay đóng hộp bằng nút X cũng là từ chối.
-Nút mặc định (Enter) là “Từ chối”: nhận file phải là một lựa chọn có chủ ý. Có `TransferFinished`
+Nút mặc định (Enter) là “Từ chối”: nhận file phải là một lựa chọn có chủ ý (nút được tô màu không
+phải nút mặc định). Có `TransferFinished`
 cùng `key` (ví dụ máy gửi hủy) thì hộp tự đóng, không phát gì. Đổi ngôn ngữ dịch lại chữ đang hiện.
 
 Chuỗi qua `QCoreApplication.translate("Offer", ...)` lúc dùng.
@@ -34,12 +36,12 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLa
 from teleport.app.transfers import OfferReceived, TransferFinished, TransferUpdate
 from teleport.core.display import format_size
 from teleport.core.transfer import TransferKey
-from teleport.ui import texts
+from teleport.ui import texts, theme
 from teleport.ui.send import printable
 from teleport.ui.texts import fill as _fill
 
 LIST_MAX = 10  # số dòng tên file tối đa (mvp mục 7.3)
-_MIN_WIDTH = 420
+_MIN_WIDTH = theme.DIALOG_MIN_WIDTH
 
 
 def offer_parts(offer: OfferReceived, receive_dir: Path | None) -> tuple[str, list[str], str | None]:
@@ -127,6 +129,7 @@ class _Prompt:
         primary = self.accept_button.font()
         primary.setBold(True)  # nút chính; Enter vẫn là “Từ chối”
         self.accept_button.setFont(primary)
+        self.accept_button.setProperty(theme.PRIMARY_PROPERTY, True)  # tô màu nhấn, không phải nút mặc định
         self.accept_button.setAutoDefault(False)
         self.reject_button.setAutoDefault(True)
         self.reject_button.setDefault(True)

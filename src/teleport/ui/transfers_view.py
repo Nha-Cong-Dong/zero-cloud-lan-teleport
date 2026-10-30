@@ -1,18 +1,25 @@
 """Danh sách lượt truyền trong phiên (mvp F4, F5, mục 7.3 “Tiến độ”, mục 8); không lưu ra đĩa.
 
 `TransfersView` nhận mọi `TransferUpdate` qua `handle` (7 loại) và ảnh chụp `transfers()` lúc
-`started` qua `load_snapshot`; mỗi `TransferKey` một thẻ (`TransferRow`), thêm theo thứ tự tới.
-Ảnh chụp gộp với thẻ đã có (`TransferResumed` có thể tới trước `started`, spec-hackathon mục 9.7):
-thẻ đã có giữ nguyên, không nhân đôi.
+`started` qua `load_snapshot`; mỗi `TransferKey` một thẻ (`TransferRow`). Thẻ mới nằm **trên cùng**
+(ngay dưới dải thông báo), như LocalSend / AirDrop: `rows()` trả theo thứ tự hiển thị từ trên xuống
+(mới nhất trước), và Tab đi qua nút của các thẻ cũng theo thứ tự đó. Danh sách trống thì câu “Kéo
+file vào một thiết bị để gửi” nằm giữa vùng cuộn (cả ngang lẫn dọc). Ảnh chụp gộp với thẻ đã có
+(`TransferResumed` có thể tới trước `started`, spec-hackathon mục 9.7): thẻ đã có giữ nguyên, không
+nhân đôi.
 
-Thẻ (kiểu AirDrop / LocalSend): dòng 1 tên file (hay “n file”) kèm cỡ và máy kia (“· tới X” /
-“· từ X”), nút “Mở thư mục” / “Hủy”; dòng 2 thanh tiến độ thang 0–1000 (`shown * 1000 // total`,
-không tràn int32 với file tới 2⁴², spec-hackathon D8); dòng 3 biểu tượng của style (không tải gì)
-+ nhãn trạng thái ngắn (`status_label`: “Đang gửi”, “Đang chờ”, “Xong ✓”, “Lỗi”…) + dòng phụ chữ
-nhỏ (`detail_label`): tiến độ “42,0% · 85,2 MB/s · còn 1 phút”, câu chờ cụ thể (“Đang chờ X trả
-lời…”), “Đã kiểm tra toàn vẹn” khi xong, hay câu mvp mục 8 (chuyện gì xảy ra + làm gì tiếp) khi
-lỗi. Thông tin không chỉ nằm ở màu hay biểu tượng: luôn có chữ (mvp N12); màu theo palette
-(`ui/theme.py`), không mã màu cứng.
+Thẻ (kiểu AirDrop / LocalSend): dòng 1 tên file (hay “n file”) kèm cỡ và máy kia (“· tới X” / “· từ
+X”), nút “Mở thư mục” / “Hủy”; dòng 2 thanh tiến độ thang 0–1000 (`shown * 1000 // total`, không
+tràn int32 với file tới 2⁴², spec-hackathon D8); dòng 3 biểu tượng của style (không tải gì) + nhãn
+trạng thái ngắn (`status_label`: “Đang gửi”, “Đang chờ”, “Xong ✓”, “Lỗi”…) + dòng phụ chữ nhỏ
+(`detail_label`): tiến độ “42,0% · 85,2 MB/s · còn 1 phút”, câu chờ cụ thể (“Đang chờ X trả lời…”),
+“Đã kiểm tra toàn vẹn” khi xong, hay câu mvp mục 8 (chuyện gì xảy ra + làm gì tiếp) khi lỗi. Bên
+nhận xong mà file được lưu khác tên gốc (trùng tên có sẵn: `FileDone.path.name` ≠ tên trong
+`TransferInfo.names`; `FileDone.name` bên nhận đã là tên lưu): “Đã lưu thành video (1).mp4 · Đã kiểm
+tra toàn vẹn” (một file đổi tên) hay “Đã lưu n file với tên mới · Đã kiểm tra toàn vẹn” (từ hai
+file). Lượt kết thúc không thành (hủy, từ chối, lỗi, hết hạn…) thì ẩn thanh tiến độ, chỉ còn chữ;
+xong thì thanh đầy. Thông tin không chỉ nằm ở màu hay biểu tượng: luôn có chữ (mvp N12); màu theo
+palette (`ui/theme.py`), không mã màu cứng.
 
 **Tiến độ nói đúng sự thật** (spec-hackathon PR-1): mỗi thẻ giữ `shown_bytes`, chỉ tăng, ≤ tổng:
 `TransferProgress.shown_bytes`, còn ảnh chụp / `TransferStatusChanged` / `TransferResumed` góp
@@ -46,15 +53,18 @@ màn hình). Tên máy lấy từ `set_device_names` (`devices()`), không có t
 `OfferReceived`, không có nữa thì 8 ký tự đầu mã máy. Chuỗi qua
 `QCoreApplication.translate("Transfers", ...)` lúc dùng; đổi ngôn ngữ vẽ lại chữ mọi thẻ.
 
-**Thông báo** (`show_notice(text, action_text=None, on_action=None)`): một dải chữ thuần ở đầu
-danh sách (trên các thẻ) kèm nút “Đóng”, và khi có thì một nút hành động (“Ghép đôi lại”, “Hủy ghép
-đôi”; bấm thì ẩn dải rồi gọi `on_action`). Bố cục hai hàng (cột lượt hẹp, câu không bị ép thành
-cột chữ): hàng trên biểu tượng thông tin 16 px của style + câu chiếm hết bề ngang, xuống dòng tự
-nhiên khi dài; hàng dưới các nút căn phải. Thứ tự Tab: câu → nút hành động → “Đóng”. Thông báo mới
-thay thông báo cũ (kể cả nút), không hộp thoại chặn. Dùng cho lỗi khi chọn gửi (mvp mục 8, các
-dòng “Chọn gửi…”, “Giao diện: gửi tới…”) và gợi ý kéo thả. Chữ có thể chứa tên máy kia (đã qua
-`peer_label`): chỉ vào nhãn PlainText và accessibleDescription, không vào tooltip. Seam test:
-`notice_text()`, `notice_action_text()`.
+**Thông báo** (`show_notice(text, action_text=None, on_action=None)`): một dải chữ thuần ở đầu danh
+sách (trên các thẻ) kèm nút “Đóng”, và khi có thì một nút hành động (“Ghép đôi lại”, “Hủy ghép đôi”;
+bấm thì ẩn dải rồi gọi `on_action`). Bố cục hai hàng (cột lượt hẹp, câu không bị ép thành cột chữ):
+hàng trên biểu tượng thông tin 16 px của style + câu chiếm hết bề ngang, xuống dòng tự nhiên khi
+dài; hàng dưới các nút căn phải. Thứ tự Tab: câu → nút hành động → “Đóng”. Thông báo mới thay thông
+báo cũ (kể cả nút), không hộp thoại chặn. Dùng cho lỗi khi chọn gửi (mvp mục 8, các dòng “Chọn
+gửi…”, “Giao diện: gửi tới…”) và gợi ý kéo thả. Chữ có thể chứa tên máy kia (đã qua `peer_label`):
+chỉ vào nhãn PlainText và accessibleDescription, không vào tooltip. Seam test: `notice_text()`,
+`notice_action_text()`. Mỗi câu mới phát sự kiện trợ năng `Alert` trên dải (trình đọc màn hình đọc
+ngay). Câu thông báo nhận tiêu điểm bằng Tab (trình đọc màn hình đọc được) nhưng không có con trỏ
+chữ (chọn bằng chuột được). Kết quả ghép đôi thành công cũng hiện ở đây (`ui.app` nối
+`PairingController.notice`), không mở hộp.
 
 Seam cho test (biến cấp module, đọc lúc gọi): `open_url`.
 """
@@ -69,7 +79,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QPalette
+from PySide6.QtGui import QAccessible, QAccessibleEvent, QDesktopServices, QPalette
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -305,6 +315,23 @@ def unreachable_text(peer: str) -> str:
 def done_text() -> str:
     """Dòng phụ của thẻ đã xong."""
     return QCoreApplication.translate("Transfers", "Đã kiểm tra toàn vẹn")
+
+
+def saved_as_text(saved_names: list[str]) -> str:
+    """Dòng phụ của thẻ nhận đã xong khi có file được lưu khác tên gốc; rỗng → `done_text()`.
+
+    Một file: “Đã lưu thành {tên lưu} · Đã kiểm tra toàn vẹn” (tên qua `texts.file_label`); từ hai
+    file: “Đã lưu n file với tên mới · Đã kiểm tra toàn vẹn”.
+    """
+    t = QCoreApplication.translate
+    if not saved_names:
+        return done_text()
+    if len(saved_names) == 1:
+        return _fill(
+            t("Transfers", "Đã lưu thành {file} · Đã kiểm tra toàn vẹn"),
+            file=texts.file_label(saved_names[0]),
+        )
+    return t("Transfers", "Đã lưu %n file với tên mới · Đã kiểm tra toàn vẹn", None, len(saved_names))
 
 
 def result_message(finished: TransferFinished, peer: str, receive_dir: Path | None = None) -> str:
@@ -621,6 +648,8 @@ class TransferRow(QFrame):
         self.stalled_shown = False  # lần vẽ đầy đủ cuối là câu đứng yên (để biết lúc đổi loại câu)
         self.result: TransferFinished | None = None
         self.last_path: Path | None = None  # `FileDone.path` cuối (bên nhận)
+        self.renamed: dict[int, str] = {}  # file_index → tên lưu, khi khác tên gốc (bên nhận)
+        self.offer_names: tuple[str, ...] = ()  # tên file trong `OfferReceived` (dự phòng khi chưa có info)
 
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setAutoFillBackground(True)
@@ -680,6 +709,11 @@ class TransferRow(QFrame):
         self.total_bytes = info.total_bytes
         self.first_name = info.names[0] if info.names else None
 
+    def original_name(self, index: int) -> str | None:
+        """Tên gốc (đã làm sạch) của file thứ `index`: `info.names`, không có thì tên trong `offer`."""
+        names = self.info.names if self.info is not None and self.info.names else self.offer_names
+        return names[index] if 0 <= index < len(names) else None
+
     def raise_shown(self, shown: int, total: int) -> None:
         """Nâng `shown_bytes` lên `shown` (kẹp trong 0…`total`); không bao giờ hạ, thanh không lùi."""
         self.shown_bytes = max(self.shown_bytes, min(max(0, shown), max(0, total)))
@@ -721,10 +755,9 @@ class TransfersView(QWidget):
         self.notice_label = _plain_label()
         self.notice_label.setObjectName("transfersNoticeText")
         self.notice_label.setWordWrap(True)
-        # Đọc được bằng bàn phím và trình đọc màn hình (Tab tới câu, rồi tới nút “Đóng”).
-        self.notice_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByKeyboard | Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        # Đọc được bằng bàn phím và trình đọc màn hình (Tab tới câu, rồi tới nút “Đóng”); chọn bằng
+        # chuột được, không có con trỏ chữ khi Tab tới.
+        self.notice_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.notice_label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.notice_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         # Nút hành động của thông báo (“Ghép đôi lại”, “Hủy ghép đôi”…); chỉ hiện khi có.
@@ -763,10 +796,13 @@ class TransfersView(QWidget):
         self.empty_label.setWordWrap(True)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setForegroundRole(QPalette.ColorRole.PlaceholderText)
+        self.empty_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
+        # Bố cục: [empty_label (vị trí 0), các thẻ (mới nhất ở vị trí 1), khoảng giãn cuối]. Trống thì
+        # câu chiếm cả vùng cuộn (căn giữa); có thẻ thì câu ẩn và khoảng giãn đẩy thẻ lên đầu.
         self._container = QWidget()
         self._list_layout = QVBoxLayout(self._container)
-        self._list_layout.addWidget(self.empty_label)
+        self._list_layout.addWidget(self.empty_label, 1)
         self._list_layout.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -783,7 +819,10 @@ class TransfersView(QWidget):
     # ---- API -----------------------------------------------------------------------------------
 
     def rows(self) -> list[TransferRow]:
-        return list(self._rows.values())
+        """Các thẻ theo thứ tự hiển thị từ trên xuống (mới nhất trước)."""
+        layout = self._list_layout
+        items = (layout.itemAt(i) for i in range(layout.count()))
+        return [w for item in items if item is not None and isinstance(w := item.widget(), TransferRow)]
 
     def row(self, key: TransferKey) -> TransferRow | None:
         return self._rows.get(key)
@@ -814,6 +853,9 @@ class TransfersView(QWidget):
         else:
             self._clear_notice_action()
         self.notice_frame.setVisible(True)
+        # Trình đọc màn hình đọc câu mới ngay (không cần Tab tới): sự kiện Alert của dải, mang tên
+        # “Thông báo” và mô tả là câu.
+        QAccessible.updateAccessibility(QAccessibleEvent(self.notice_frame, QAccessible.Event.Alert))
 
     def hide_notice(self) -> None:
         """Ẩn dải thông báo (nút “Đóng”). Đang có tiêu điểm thì Qt tự chuyển sang widget kế tiếp."""
@@ -908,6 +950,7 @@ class TransfersView(QWidget):
             if row.finished:
                 return
             row.offer_name = update.device_name
+            row.offer_names = tuple(update.names)
             if row.info is None:
                 row.status = TransferStatus.WAITING
                 row.file_count = len(update.files)
@@ -918,6 +961,14 @@ class TransfersView(QWidget):
             existing = self._rows.get(update.key)
             if existing is not None and not existing.finished and update.path is not None:
                 existing.last_path = update.path
+                # Trùng tên có sẵn thì file được lưu với tên khác (protocol.md §4.4). `FileDone.name`
+                # bên nhận ĐÃ là tên lưu cuối: so với tên gốc (đã làm sạch) trong `info.names`, dự
+                # phòng tên trong `OfferReceived`.
+                original = existing.original_name(update.file_index)
+                if original is not None and update.path.name != original:
+                    existing.renamed[update.file_index] = update.path.name
+                else:
+                    existing.renamed.pop(update.file_index, None)
         elif isinstance(update, TransferFinished):
             self._on_finished(update)
         elif isinstance(update, TransferResumed):
@@ -958,8 +1009,11 @@ class TransfersView(QWidget):
         row.cancel_button.clicked.connect(lambda: self._cancel_clicked(row))
         row.open_button.clicked.connect(lambda: self._open_clicked(row))
         self._rows[key] = row
-        # Trước khoảng giãn cuối danh sách: thẻ mới nằm dưới cùng.
-        self._list_layout.insertWidget(self._list_layout.count() - 1, row)
+        # Ngay sau `empty_label` (vị trí 0): thẻ mới nằm trên cùng.
+        self._list_layout.insertWidget(1, row)
+        # Tab theo thứ tự hiển thị: nút của thẻ mới ngay sau dải thông báo, trước các thẻ cũ.
+        QWidget.setTabOrder(self.notice_close, row.open_button)
+        QWidget.setTabOrder(row.open_button, row.cancel_button)
         row.show()  # hiện ngay (layout chỉ hẹn hiện), để nút “Mở thư mục” hiện được trong cùng lượt
         self._update_empty()
         return row
@@ -1004,6 +1058,8 @@ class TransfersView(QWidget):
         row.result = update
         if update.result is TransferResult.DONE:
             row.progress_bar.setValue(BAR_MAX)
+        else:
+            row.progress_bar.setVisible(False)  # không thành: chỉ còn chữ, không để thanh dở dang
         row.cancel_button.setEnabled(False)
         row.cancel_button.setVisible(False)
         row.open_button.setVisible(
@@ -1045,11 +1101,11 @@ class TransfersView(QWidget):
         peer = self._peer(row)
         if row.result is not None:
             result = row.result.result
-            return (
-                result_kind(result),
-                result_status(result),
-                result_message(row.result, peer, self._receive_dir),
-            )
+            if result is TransferResult.DONE and row.key.direction is Direction.RECEIVE and row.renamed:
+                detail = saved_as_text([row.renamed[i] for i in sorted(row.renamed)])
+            else:
+                detail = result_message(row.result, peer, self._receive_dir)
+            return result_kind(result), result_status(result), detail
         direction = row.key.direction
         if row.unreachable:
             return (
@@ -1113,7 +1169,10 @@ class TransfersView(QWidget):
         self._render_status(row)
 
     def _update_empty(self) -> None:
-        self.empty_label.setVisible(not self._rows)
+        empty = not self._rows
+        self.empty_label.setVisible(empty)
+        # Trống: chỉ `empty_label` giãn (câu nằm giữa); có thẻ: khoảng giãn cuối đẩy thẻ lên đầu.
+        self._list_layout.setStretch(self._list_layout.count() - 1, 0 if empty else 1)
 
     def retranslate(self) -> None:
         t = QCoreApplication.translate
