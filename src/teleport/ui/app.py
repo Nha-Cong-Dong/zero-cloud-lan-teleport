@@ -49,21 +49,41 @@ Server coi dữ liệu từ tiến trình khác là không tin cậy: đọc t�
 thì bỏ qua, luôn đóng kết nối; tối đa `IPC_MAX_CONNECTIONS` kết nối cùng lúc. `listen()` lỗi thì
 chỉ ghi WARNING (vẫn chỉ một bản nhờ `gui.lock`).
 
-**Thoát** (`GuiApp.request_quit`, từ “Thoát” ở khay, Ctrl+Q, hay đóng cửa sổ khi không có khay):
-đóng server IPC (`stop_listening`, `gui.lock` giữ tới `shutdown`), đóng các hộp hỏi và hộp
-chọn file (`TransfersController.close_all`), ẩn cửa sổ
-và khay, `NodeHost.stop()` (không chặn), `stopped` → `quit()`; kèm
-`QTimer` dự phòng `close_time_limit() + QUIT_GRACE` giây. Sau `exec()` (trong `finally`):
-`stop()` lần nữa (không sao), đóng `SingleInstance`, `join(JOIN_TIMEOUT)`; thread node vẫn sống
-thì ghi log, `logging.shutdown()`, `os._exit(1)`.
+**Địa chỉ máy này** (dòng “Địa chỉ: …” của cửa sổ chính): lúc `started` đọc ngay một lần
+`(Node.local_addresses(), Node.port)` bằng `NodeHost.submit` (không chạm Node trên thread Qt), rồi
+`address_timer` đọc lại mỗi `ADDRESS_REFRESH_MS` (đổi mạng, đổi Wi-Fi). Lần đọc trước chưa xong thì
+lần hẹn sau bỏ qua; kết quả của host cũ hay về lúc đang thoát bị bỏ; lỗi → WARNING (tên loại lỗi),
+giữ địa chỉ cũ. Timer dừng khi dựng host mới, `start_failed`, Thoát và `shutdown`.
 
 **GC chỉ trên thread Qt** (`ui.gcguard.GcGuard`): ngay sau khi có `QApplication` (trừ `--selftest`),
 `main` tắt GC tự động và thu gom định kỳ trên thread Qt, để đối tượng PySide trong vòng tham chiếu
 không bị hủy ở thread node hay thread đĩa; khôi phục sau `shutdown()`.
 
-Ctrl+C ở cửa sổ dòng lệnh (khi chạy `python -m teleport.ui`): handler SIGINT hẹn luồng Thoát bằng
-`QTimer.singleShot(0, …)` (không gọi thẳng giữa chừng một slot Qt); một
-`QTimer` rỗng 200 ms cho Python có dịp chạy handler trong lúc Qt giữ vòng lặp.
+**Thoát** (`GuiApp.request_quit(confirm=True)`, từ “Thoát” ở khay, Ctrl+Q, hay đóng cửa sổ khi
+không có khay): còn lượt **gửi** chưa kết thúc (`TransfersController.active_sends()`) thì đưa cửa
+sổ lên trước và mở hộp hỏi lại không chặn (`quit_box`, objectName `quitConfirmBox`, `open()`;
+nút mặc định và Esc là “Không”); đang mở rồi thì chỉ đưa hộp lên trước. Chọn “Thoát” mới thoát.
+Không hỏi khi `confirm=False` (Ctrl+C), khi chỉ có lượt nhận dở, hay khi phiên hệ điều hành đang
+kết thúc (`commitDataRequest` tới trong `SESSION_END_GRACE_MS` vừa qua — còn chạy sau đó tức là
+tắt máy bị hủy —, hay `isSavingSession()`): `commitDataRequest` còn đóng hộp
+đang mở, và không bao giờ gọi `QSessionManager.cancel()` (không chặn tắt máy, đăng xuất).
+Luồng thoát thật (`_quit_now`): dừng `address_timer`, đóng hộp hỏi lại, đóng server IPC
+(`stop_listening`, `gui.lock` giữ tới `shutdown`), đóng các hộp hỏi và hộp chọn file
+(`TransfersController.close_all`), ẩn cửa sổ và khay, `NodeHost.stop()` (không chặn), `stopped` →
+`quit()`; kèm `QTimer` dự phòng `close_time_limit() + QUIT_GRACE` giây. Sau `exec()` (trong
+`finally`): `stop()` lần nữa (không sao), đóng `SingleInstance`, `join(JOIN_TIMEOUT)`; thread node
+vẫn sống thì ghi log, `logging.shutdown()`, `os._exit(1)`.
+
+**Bóng thoại khay**: bấm vào bóng thoại (`Tray.message_clicked(folder)`) có thư mục (“Đã nhận…”)
+→ mở thư mục bằng seam cấp module `open_url` (mặc định `QDesktopServices.openUrl`, đọc lúc gọi);
+không có thư mục → đưa cửa sổ chính và mọi hộp đang hiện của app lên trước. Bóng thoại “có yêu cầu
+ghép đôi” (qua `PairingController(window_visible=...)`) và “có file đang chờ” (qua
+`TransfersController(app_active=...)`) chỉ hiện khi app không được dùng (`GuiApp._app_active()`:
+không cửa sổ nào của app đang active).
+
+Ctrl+C ở cửa sổ dòng lệnh (khi chạy `python -m teleport.ui`): handler SIGINT hẹn luồng Thoát không
+hỏi lại (`request_quit(confirm=False)`) bằng `QTimer.singleShot(0, …)` (không gọi thẳng giữa
+chừng một slot Qt); một `QTimer` rỗng 200 ms cho Python có dịp chạy handler trong lúc Qt giữ vòng lặp.
 
 Khi `sys.stderr is None` (exe windowed) thì không in gì và không lỗi: argparse tự bỏ qua, log
 không có handler ra stderr.
@@ -83,14 +103,15 @@ import signal
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import FrameType
 from typing import cast
 
-from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from teleport import paths
 from teleport.app import node as app_node
@@ -100,7 +121,8 @@ from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
 from teleport.ui import errorlog, i18n, send, texts, theme
-from teleport.ui.bridge import NodeHost, NodeOptions, StartError
+from teleport.ui import transfers as ui_transfers
+from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, ViewState
 from teleport.ui.pairing import PairingController, repair_offline_text
@@ -122,6 +144,13 @@ LOG_DIR = "logs"
 LOG_FILE = "teleport.log"
 LOG_MAX_BYTES = 1024 * 1024  # một file log tối đa 1 MiB
 LOG_BACKUPS = 1  # giữ thêm một bản cũ: tối đa 2 file
+ADDRESS_REFRESH_MS = 10_000  # chu kỳ đọc lại địa chỉ máy này (đọc lúc hẹn, test chỉnh được)
+# Sau `commitDataRequest` không hỏi lại khi Thoát trong từng này ms. Phiên kết thúc thật thì tiến trình
+# đã bị đóng trước đó; còn chạy tức là tắt máy bị hủy (app khác chặn), nên hỏi lại như thường.
+SESSION_END_GRACE_MS = 30_000
+
+# Seam: mở URL (thư mục nhận) bằng ứng dụng mặc định của hệ điều hành; đọc lúc gọi.
+open_url: Callable[[QUrl], object] = QDesktopServices.openUrl
 
 _CONNECT_TIMEOUT_MS = 200
 _ACK_TIMEOUT_MS = 1500  # client chờ server đọc lệnh rồi đóng kết nối
@@ -308,6 +337,33 @@ class SingleInstance(QObject):
 # ---- Ráp các phần --------------------------------------------------------------------------
 
 
+def quit_confirm_title() -> str:
+    """Tiêu đề hộp hỏi lại khi Thoát còn lượt gửi dở."""
+    return QCoreApplication.translate("GuiApp", "Thoát Teleport?")
+
+
+def quit_confirm_text(names: Sequence[str]) -> str:
+    """Câu hỏi lại khi Thoát còn lượt gửi dở; `names` đã qua `texts.peer_label`, không rỗng."""
+    t = QCoreApplication.translate
+    if len(names) == 1:
+        return texts.fill(
+            t("GuiApp", "Đang gửi file tới {name}. Thoát bây giờ sẽ hủy lượt gửi."), name=names[0]
+        )
+    return texts.fill(
+        t("GuiApp", "Đang gửi file tới {n} máy. Thoát bây giờ sẽ hủy các lượt gửi."), n=str(len(names))
+    )
+
+
+def quit_cancel_text() -> str:
+    """Nút “Không” của hộp hỏi lại khi Thoát (nút mặc định, Esc)."""
+    return QCoreApplication.translate("GuiApp", "Không")
+
+
+async def _read_addresses(node: app_node.Node) -> tuple[tuple[str, ...], int | None]:
+    """Chạy trên loop của node: địa chỉ IPv4 của máy này và cổng đang lắng nghe."""
+    return (await node.local_addresses(), node.port)
+
+
 class GuiApp(QObject):
     """Cửa sổ, khay, gửi/nhận file (`transfers`) và node của một tiến trình `teleport-gui`.
 
@@ -333,20 +389,30 @@ class GuiApp(QObject):
         self._quitting = False
         self._told_tray = False
         self._start_confirmed = False  # người dùng đã bấm “Bắt đầu” trong phiên này
+        self._session_ending = False  # hệ điều hành đang tắt máy / đăng xuất (`commitDataRequest`)
+        self._quit_box: QMessageBox | None = None
+        self._address_job: SubmitJob | None = None
         self.host: NodeHost | None = None
         self._old_hosts: list[NodeHost] = []
         self.window = MainWindow()
         self.tray = Tray(self)
-        self.transfers = TransfersController(self.window, self.tray, self)
+        self.transfers = TransfersController(
+            self.window, self.tray, self, app_active=lambda: self._app_active()
+        )
         self.pairing = PairingController(
             self,
             notify=lambda _title, text: self.tray.show_message(text),
-            window_visible=self.window.isVisible,
+            window_visible=lambda: self._app_active(),
             message_parent=lambda: self.window,
         )
         self._quit_timer = QTimer(self)  # dự phòng: `quit()` dù node chưa báo `stopped`
         self._quit_timer.setSingleShot(True)
         self._quit_timer.timeout.connect(self._app.quit)
+        self._session_timer = QTimer(self)  # tắt `_session_ending` sau `SESSION_END_GRACE_MS`
+        self._session_timer.setSingleShot(True)
+        self._session_timer.timeout.connect(self._end_session_grace)
+        self.address_timer = QTimer(self)  # đọc lại địa chỉ máy này mỗi `ADDRESS_REFRESH_MS`
+        self.address_timer.timeout.connect(self._refresh_addresses)
 
         self.window.retry_requested.connect(self._on_retry)
         self.window.start_requested.connect(self._on_start_requested)
@@ -354,6 +420,8 @@ class GuiApp(QObject):
         self.window.hidden_to_tray.connect(self._on_hidden_to_tray)
         self.tray.open_requested.connect(self.window.bring_to_front)
         self.tray.quit_requested.connect(self.request_quit)
+        self.tray.message_clicked.connect(self._on_message_clicked)
+        app.commitDataRequest.connect(self._on_commit_data)
         radar = self.window.radar
         radar.pair_requested.connect(self.pairing.pair_device)
         radar.manual_address_entered.connect(self.pairing.pair_address)
@@ -369,6 +437,11 @@ class GuiApp(QObject):
     @property
     def quitting(self) -> bool:
         return self._quitting
+
+    @property
+    def quit_box(self) -> QMessageBox | None:
+        """Hộp hỏi lại khi Thoát còn lượt gửi dở, khi đang mở (objectName `quitConfirmBox`)."""
+        return self._quit_box
 
     def start(self) -> None:
         """Hiện khay, chạy node (hoặc hiện màn “Bắt đầu”), hiện cửa sổ trừ khi `--background` và có khay."""
@@ -396,6 +469,7 @@ class GuiApp(QObject):
         if not self._start_confirmed and not self._setup_done():
             self.window.show_welcome(planned_device_name())
             return
+        self._stop_addresses()
         self.window.radar.model.clear()
         options = self._make_options(self._config_dir)
         host = NodeHost(options, self)
@@ -409,11 +483,27 @@ class GuiApp(QObject):
         self.window.show_starting()
         host.start()
 
-    def request_quit(self) -> None:
+    def request_quit(self, confirm: bool = True) -> None:
+        """Thoát; còn lượt gửi dở và `confirm` thì hỏi lại trước bằng hộp không chặn.
+
+        Không hỏi khi phiên hệ điều hành đang kết thúc (tắt máy, đăng xuất). Đang thoát → bỏ qua.
+        """
+        if self._quitting:
+            return
+        if confirm and not self._session_is_ending():
+            names = self.transfers.active_sends()
+            if names:
+                self._confirm_quit(names)
+                return
+        self._quit_now()
+
+    def _quit_now(self) -> None:
         """Luồng Thoát: dừng node không chặn, `quit()` khi node dừng xong hoặc khi hết hạn dự phòng."""
         if self._quitting:
             return
         self._quitting = True
+        self._stop_addresses()
+        self._close_quit_box()
         if self._instance is not None:
             self._instance.stop_listening()  # bản mở sau không “show” vào app đang tắt
         self.transfers.close_all()
@@ -432,6 +522,8 @@ class GuiApp(QObject):
     def shutdown(self) -> None:
         """Sau `exec()`: dừng node, đóng `SingleInstance`, chờ thread node có hạn; kẹt → `os._exit(1)`."""
         self._quit_timer.stop()
+        self._stop_addresses()
+        self._close_quit_box()
         hosts = [h for h in (self.host, *self._old_hosts) if h is not None]
         for host in hosts:
             host.stop()
@@ -451,7 +543,113 @@ class GuiApp(QObject):
             logging.shutdown()
             os._exit(EXIT_ERROR)
 
+    # ---- Hỏi lại khi Thoát ---------------------------------------------------------------------
+
+    def _session_is_ending(self) -> bool:
+        return self._session_ending or self._app.isSavingSession()
+
+    def _confirm_quit(self, names: list[str]) -> None:
+        """Mở hộp hỏi lại (không chặn); đang mở rồi thì chỉ đưa nó lên trước."""
+        self.window.bring_to_front()
+        box = self._quit_box
+        if box is not None:
+            box.raise_()
+            box.activateWindow()
+            return
+        title = quit_confirm_title()
+        box = QMessageBox(self.window)
+        box.setObjectName("quitConfirmBox")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(quit_confirm_text(names))
+        box.setAccessibleName(title)
+        box.addButton(texts.menu_quit(), QMessageBox.ButtonRole.DestructiveRole)
+        no_button = box.addButton(quit_cancel_text(), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(no_button)
+        box.setEscapeButton(no_button)
+        box.finished.connect(functools.partial(self._on_quit_box_finished, box))
+        self._quit_box = box
+        box.open()
+
+    def _on_quit_box_finished(self, box: QMessageBox, _result: int) -> None:
+        """Hộp hỏi lại đóng: chỉ khi người dùng chọn “Thoát” trên hộp đang hiện mới thoát."""
+        current = self._quit_box is box
+        if current:
+            self._quit_box = None
+        clicked = box.clickedButton()
+        box.deleteLater()
+        if (
+            current
+            and clicked is not None
+            and box.buttonRole(clicked) == QMessageBox.ButtonRole.DestructiveRole
+        ):
+            self._quit_now()
+
+    def _close_quit_box(self) -> None:
+        box, self._quit_box = self._quit_box, None
+        if box is not None:
+            box.close()
+            box.deleteLater()
+
+    def _on_commit_data(self, _manager: object = None) -> None:
+        """Hệ điều hành sắp tắt máy / đăng xuất: không hỏi lại nữa, đóng hộp đang mở.
+
+        Không bao giờ gọi `QSessionManager.cancel()`: Teleport không chặn tắt máy.
+        """
+        self._session_ending = True
+        self._close_quit_box()
+        self._session_timer.start(SESSION_END_GRACE_MS)  # tới lần nữa thì tính lại từ đầu
+
+    def _end_session_grace(self) -> None:
+        self._session_ending = False
+
+    # ---- Địa chỉ máy này -----------------------------------------------------------------------
+
+    def _stop_addresses(self) -> None:
+        self.address_timer.stop()
+        self._address_job = None
+
+    def _refresh_addresses(self) -> None:
+        """Đọc `(local_addresses(), port)` qua `submit`; lần trước chưa xong thì bỏ lần này."""
+        host = self.host
+        if host is None or self._quitting or not host.running:
+            return
+        job = self._address_job
+        if job is not None and not job.done:
+            return
+        self._address_job = host.submit(_read_addresses, functools.partial(self._on_addresses, host))
+
+    def _on_addresses(
+        self, host: NodeHost, result: tuple[tuple[str, ...], int | None] | BaseException
+    ) -> None:
+        if host is not self.host or self._quitting:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không đọc được địa chỉ của máy này: %s", type(result).__name__)
+            return
+        addresses, port = result
+        self.window.set_addresses(addresses, port)
+
     # ---- Slot ----------------------------------------------------------------------------------
+
+    def _app_active(self) -> bool:
+        """App đang được dùng: một cửa sổ của app (cửa sổ chính hay một hộp) đang active."""
+        return ui_transfers.default_app_active()
+
+    def _on_message_clicked(self, folder: object) -> None:
+        """Bấm bóng thoại khay: có thư mục thì mở nó, không thì đưa cửa sổ và các hộp lên trước."""
+        if self._quitting:
+            return
+        if isinstance(folder, Path):
+            if open_url(QUrl.fromLocalFile(str(folder))) is False:
+                log.warning("không mở được thư mục nhận")
+            return
+        self.window.bring_to_front()
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QDialog) and widget.isVisible():
+                widget.raise_()
+                widget.activateWindow()
 
     def _setup_done(self) -> bool:
         try:
@@ -472,6 +670,10 @@ class GuiApp(QObject):
         self.window.show_running(host.node_name, host.options.receive_dir)
         host.call(lambda node: node.devices(), functools.partial(self._on_devices, host))
         self.transfers.on_started(host)
+        if not self._quitting:
+            self._stop_addresses()
+            self._refresh_addresses()
+            self.address_timer.start(ADDRESS_REFRESH_MS)
 
     def _on_devices(self, host: NodeHost, result: tuple[DeviceView, ...] | BaseException) -> None:
         """Ảnh chụp `Node.devices()` lúc `started` (sự kiện tới trước đó đã nằm trong ảnh chụp)."""
@@ -529,6 +731,7 @@ class GuiApp(QObject):
     def _on_start_failed(self, host: NodeHost, code: str, detail: str) -> None:
         if host is not self.host:
             return
+        self._stop_addresses()
         if code != StartError.LOCKED:
             log.warning("node không khởi động được: %s", code)
         self.window.show_error(code, detail)
@@ -691,7 +894,7 @@ def _install_sigint(controller: GuiApp) -> Callable[[], None]:
     previous = signal.getsignal(signal.SIGINT)
 
     def handler(signum: int, frame: FrameType | None) -> None:
-        QTimer.singleShot(0, controller.request_quit)
+        QTimer.singleShot(0, functools.partial(controller.request_quit, confirm=False))
 
     try:
         signal.signal(signal.SIGINT, handler)

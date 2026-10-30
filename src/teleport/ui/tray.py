@@ -1,8 +1,14 @@
 """Biểu tượng ở khay hệ thống (mvp F9) và menu của nó.
 
-Menu có đúng bốn mục, theo thứ tự (M5): “Mở Teleport”, “Gửi file…”, “Tạm dừng nhận”, “Thoát”.
-“Gửi file…” và “Tạm dừng nhận” tắt tới khi P4-6 / P4-0 làm xong. Bấm vào biểu tượng (một lần
-hoặc hai lần) cũng như chọn “Mở Teleport”.
+Menu giữ bốn mục, theo thứ tự (M5): “Mở Teleport”, “Gửi file…”, “Tạm dừng nhận”, “Thoát”
+(`actions()` trả cả bốn). Ở bản hackathon menu chỉ **hiện** hai mục “Mở Teleport” và “Thoát”:
+“Gửi file…” và “Tạm dừng nhận” vừa ẩn vừa tắt tới khi P4-6 / P4-0 làm xong. Bấm vào biểu tượng
+(một lần hoặc hai lần) cũng như chọn “Mở Teleport”.
+
+Bóng thoại (`show_message(text, folder=None)`): chỉ hiện khi có khay và biểu tượng đang hiện; khi
+thật sự hiện thì nhớ `folder` của bóng thoại đó (None cũng nhớ). Người dùng bấm vào bóng thoại
+(`QSystemTrayIcon.messageClicked`) → phát `message_clicked(folder)` với thư mục của bóng thoại gần
+nhất (`Path` hay None); `ui.app` quyết định mở thư mục hay đưa cửa sổ lên trước.
 
 `is_available()` (hàm của module, `Tray.is_available` gọi lại nó) là seam cho test: hệ thống
 không có khay (một số môi trường Linux, `offscreen`) thì đóng cửa sổ là thoát app. Mọi chỗ
@@ -13,6 +19,8 @@ Menu nhận `LanguageChange` (qua event filter) thì gọi `retranslate()`.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
@@ -66,13 +74,15 @@ def make_icon() -> QIcon:
 
 
 class Tray(QObject):
-    """Biểu tượng khay và menu bốn mục. Chỉ hiện khi gọi `show()` và hệ thống có khay."""
+    """Biểu tượng khay và menu (bốn mục, hiện hai). Chỉ hiện khi gọi `show()` và hệ thống có khay."""
 
     open_requested = Signal()
     quit_requested = Signal()
+    message_clicked = Signal(object)  # Path | None: thư mục của bóng thoại gần nhất
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        self._message_folder: Path | None = None
         self._menu = QMenu()
         self._menu.installEventFilter(self)
         self._open = QAction(self._menu)
@@ -80,7 +90,9 @@ class Tray(QObject):
         self._pause = QAction(self._menu)
         self._quit = QAction(self._menu)
         self._send.setEnabled(False)  # P4-6
+        self._send.setVisible(False)
         self._pause.setEnabled(False)  # P4-0
+        self._pause.setVisible(False)
         self._open.triggered.connect(self.open_requested)
         self._quit.triggered.connect(self.quit_requested)
         self._menu.addAction(self._open)
@@ -92,6 +104,7 @@ class Tray(QObject):
         self._icon = QSystemTrayIcon(make_icon(), self)
         self._icon.setContextMenu(self._menu)
         self._icon.activated.connect(self._on_activated)
+        self._icon.messageClicked.connect(self._on_message_clicked)
         self.retranslate()
 
     @staticmethod
@@ -127,9 +140,13 @@ class Tray(QObject):
     def visible(self) -> bool:
         return self._icon.isVisible()
 
-    def show_message(self, text: str) -> None:
-        """Bóng thoại từ biểu tượng khay (không làm gì nếu không có khay hay biểu tượng đang ẩn)."""
+    def show_message(self, text: str, folder: Path | None = None) -> None:
+        """Bóng thoại từ biểu tượng khay (không làm gì nếu không có khay hay biểu tượng đang ẩn).
+
+        `folder`: thư mục mở khi người dùng bấm vào bóng thoại; chỉ nhớ khi bóng thoại thật sự hiện.
+        """
         if Tray.is_available() and self._icon.isVisible():
+            self._message_folder = folder
             self._icon.showMessage(self.tr("Teleport"), text, QSystemTrayIcon.MessageIcon.Information)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
@@ -140,6 +157,9 @@ class Tray(QObject):
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
             self.open_requested.emit()
+
+    def _on_message_clicked(self) -> None:
+        self.message_clicked.emit(self._message_folder)
 
     def dispose(self) -> None:
         """Ẩn biểu tượng và xóa menu (menu không có cha Qt)."""
