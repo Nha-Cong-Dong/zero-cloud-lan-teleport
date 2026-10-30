@@ -36,6 +36,9 @@ KiB = 1024
 MiB = 1024 * 1024
 
 SHORT_DONE = "Xong"  # nhãn ngắn “Xong ✓” (kiểm theo ý nghĩa)
+# Dòng phụ khi xong (mvp mục 7.3 GUI, dòng 3: “khi xong “Đã kiểm tra toàn vẹn””). Kiểm “chứa”, không
+# “bằng”: câu xong có thể thêm phần đầu (ví dụ tên file đã lưu khác tên gốc).
+VERIFIED = "Đã kiểm tra toàn vẹn"
 SHORT_REJECTED = "Đã từ chối"
 SHORT_CANCELLED = "Đã hủy"
 SHORT_RECONNECTING = "Đang nối lại…"  # mvp F6
@@ -62,11 +65,16 @@ class Peer:
         self.thread = threading.Thread(target=self.loop.run_forever, name="test-peer-b", daemon=True)
         self.node = None
         self.updates: list = []
+        self.events: list = []  # `NodeEvent` của B (ca (i), (j): `ConnectFailed`)
         self._lock = threading.Lock()
 
     def _on_update(self, update) -> None:
         with self._lock:
             self.updates.append(update)
+
+    def _on_event(self, event) -> None:
+        with self._lock:
+            self.events.append(event)
 
     def start(self) -> Peer:
         from teleport.app.node import Node
@@ -81,6 +89,7 @@ class Peer:
                 port=0,
                 receive_dir=self.receive_dir,
                 auto_accept=True,
+                on_event=self._on_event,
                 on_transfer_event=self._on_update,
             )
             await self.node.start()
@@ -128,6 +137,21 @@ class Peer:
                 ),
                 default=0,
             )
+
+    def connect_failures(self, device_id: str) -> list[str]:
+        """Giá trị `ConnectResult` của mọi `ConnectFailed` B thấy với `device_id`, theo thứ tự."""
+        with self._lock:
+            return [
+                str(e.result)
+                for e in self.events
+                if type(e).__name__ == "ConnectFailed" and e.device.device_id == device_id
+            ]
+
+    def trusts(self, device_id: str) -> bool:
+        async def check() -> bool:
+            return self.node.store.get(device_id) is not None
+
+        return self.run(check(), 5)
 
     def finished(self, transfer_id: str):
         with self._lock:
@@ -309,6 +333,7 @@ def test_a_gui_receives_64_mib_after_accept_and_row_shows_done(
         )
         row = find_row(ctl, tid)
         seen["status"] = row.status_label.text()
+        seen["detail"] = row.detail_label.text()
         seen["bar"] = (row.progress_bar.value(), row.progress_bar.maximum())
         yield gui_wait(lambda: a_finished(updates, tid), 5, "A thấy TransferFinished")
         seen["a"] = str(a_finished(updates, tid).result)
@@ -323,6 +348,7 @@ def test_a_gui_receives_64_mib_after_accept_and_row_shows_done(
     assert seen["a"] == "done" and seen["b"] == "done"
     assert sha256_of(receive_dir / "video.bin") == want
     assert SHORT_DONE in seen["status"], seen["status"]
+    assert VERIFIED in seen["detail"], seen["detail"]
     assert seen["bar"][0] == seen["bar"][1]
     assert RECEIVED_ONE.format(name="video.bin", peer="May-B") in seen["messages"], seen["messages"]
 
@@ -445,6 +471,7 @@ def test_d_gui_sends_to_peer_with_progress_on_row_then_done(
         [row] = rows_of(ctl, "send")
         tid = row.key.transfer_id
         seen["status"] = row.status_label.text()
+        seen["detail"] = row.detail_label.text()
         seen["notice"] = ctl.view.notice_text()
         yield gui_wait(lambda: a_finished(updates, tid), 5, "A thấy TransferFinished")
         seen["a"] = str(a_finished(updates, tid).result)
@@ -460,6 +487,7 @@ def test_d_gui_sends_to_peer_with_progress_on_row_then_done(
         f"thanh tiến độ phải có giá trị giữa chừng: {set(seen['bars'])}"
     )
     assert SHORT_DONE in seen["status"], seen["status"]
+    assert VERIFIED in seen["detail"], seen["detail"]
     assert sha256_of(tmp_path / "nhan-B" / f.name) == want
 
 
@@ -594,6 +622,7 @@ def test_f_network_cut_shows_reconnecting_then_finishes_without_going_back(
         proxy.resume()
         yield gui_wait(sampled(lambda r: r.finished), 40, "thẻ kết thúc sau khi nối lại")
         seen["status"] = find_row(ctl, tid).status_label.text()
+        seen["detail"] = find_row(ctl, tid).detail_label.text()
         yield gui_wait(lambda: a_finished(updates, tid), 5, "A thấy TransferFinished")
         seen["a"] = str(a_finished(updates, tid).result)
         seen["done_bytes"] = [
@@ -612,6 +641,7 @@ def test_f_network_cut_shows_reconnecting_then_finishes_without_going_back(
     db = seen["done_bytes"]
     assert db and all(x <= y for x, y in itertools.pairwise(db)), f"done_bytes giảm: {db}"
     assert SHORT_DONE in seen["status"], seen["status"]
+    assert VERIFIED in seen["detail"], seen["detail"]
     assert sha256_of(tmp_path / "nhan-gui" / f.name) == want
 
 
@@ -669,6 +699,7 @@ def test_g_restart_gui_mid_transfer_resumes_row_and_finishes(
         yield from connect_b(p, gui_wait, a_id, port)
         yield gui_wait(lambda: find_row(ctl, tid).finished, 40, "thẻ kết thúc sau khi khôi phục")
         seen["status"] = find_row(ctl, tid).status_label.text()
+        seen["detail"] = find_row(ctl, tid).detail_label.text()
         yield gui_wait(lambda: a_finished(updates, tid), 5, "A thấy TransferFinished")
         seen["a"] = str(a_finished(updates, tid).result)
         yield gui_wait(lambda: p.finished(tid), 15, "B thấy lượt kết thúc")
@@ -679,4 +710,195 @@ def test_g_restart_gui_mid_transfer_resumes_row_and_finishes(
     assert seen["rows_after_start"].count(tid) == 1, "một lượt một thẻ (không nhân đôi)"
     assert seen["a"] == "done" and seen["b"] == "done", seen
     assert SHORT_DONE in seen["status"], seen["status"]
+    assert VERIFIED in seen["detail"], seen["detail"]
     assert sha256_of(tmp_path / "nhan-gui" / f.name) == want
+
+
+# =================================================================================================
+# (i), (j) Máy đã hủy ghép đôi (mvp H5, F2 “Hủy ghép đôi có hiệu lực ngay”, mục 8 “Máy kia từ chối máy này”)
+# =================================================================================================
+
+REPAIR = "Ghép đôi lại"  # mvp mục 8, cột hành động của dòng “Máy kia từ chối máy này”
+UNPAIR_ACCEPT = "Hủy ghép đôi"  # mvp mục 8 “Giao diện: hủy ghép đôi”, nút của hộp xác nhận
+REFUSED = "{name} từ chối kết nối từ máy này. Có thể máy đó đã hủy ghép đôi."  # mvp mục 8, cùng dòng
+
+
+def files_under(directory: Path) -> list[Path]:
+    """Mọi file (kể cả file tạm trong thư mục tạm) dưới `directory`; thư mục chưa có → []."""
+    if not directory.exists():
+        return []
+    return [x for x in directory.rglob("*") if x.is_file()]
+
+
+def notice_buttons(ctl, text: str) -> list:
+    """Nút đang hiện trên dải thông báo của danh sách lượt có chữ `text` (như test_transfers_controller)."""
+    from PySide6.QtWidgets import QPushButton
+
+    return [
+        b
+        for b in ctl.view.findChildren(QPushButton)
+        if b.text() == text and not b.isHidden() and b.isVisibleTo(ctl.view)
+    ]
+
+
+def test_i_unpaired_sender_cannot_send_no_offer_box_no_file(gui, gui_wait, pair, peer, tmp_path, ui_helpers):
+    """H5: A (GUI) hủy ghép đôi B qua luồng ghép đôi của GUI; B (vẫn tin A) gửi tới A → A không hỏi,
+    không có thẻ nhận, không có file (kể cả file tạm); B bị A từ chối kết nối (`ConnectFailed(REJECTED)`)."""
+    a, b, a_id, b_id, src = pair()
+    p = peer(b)
+    f = make_file(src, "sau-khi-huy.bin", 200 * KiB)
+    receive_dir = tmp_path / "nhan-gui"
+    updates: list = []
+    seen: dict = {}
+
+    def script(run):
+        yield from start_gui(run, gui_wait, updates)
+        port = yield from a_port(run, gui_wait)
+        yield from connect_b(p, gui_wait, a_id, port)
+        ctl = controller(run)
+        app = run.tray.parent()
+        messages: list[str] = []
+        app.pairing.message.connect(messages.append)
+        yield gui_wait(lambda: run.window.radar.model.device(b_id) is not None, 10, "B trên radar của A")
+        # Đường của người dùng (mvp mục 8 “Giao diện: hủy ghép đôi”): chuột phải → “Hủy ghép đôi…” phát
+        # `radar.unpair_requested`; hộp xác nhận → nút “Hủy ghép đôi”.
+        run.window.radar.unpair_requested.emit(b_id)
+        yield gui_wait(lambda: app.pairing.unpair_box is not None, 5, "hộp xác nhận hủy ghép đôi")
+        [accept] = ui_helpers.buttons_with_text(app.pairing.unpair_box, UNPAIR_ACCEPT)
+        accept.click()
+        yield gui_wait(lambda: messages, 15, "GUI báo kết quả hủy ghép đôi")
+        seen["unpair_message"] = messages[0]
+        forgot: list = []
+        run.host.call(lambda n: n.store.get(b_id) is None, forgot.append)
+        yield gui_wait(lambda: forgot, 5, "đọc kho tin cậy của A")
+        seen["a_forgot_b"] = forgot[0]
+        yield gui_wait(lambda: not p.connected_to(a_id), 10, "kết nối B–A bị đóng")
+        seen["b_still_trusts_a"] = p.trusts(a_id)
+        fut = p.send(a_id, f)
+        yield gui_wait(fut.done, 10, "send() của B trả về")
+        try:
+            seen["send"] = fut.result()
+        except Exception as e:  # ghi lại để báo
+            seen["send"] = e
+        yield gui_wait(lambda: "rejected" in p.connect_failures(a_id), 15, "B bị A từ chối kết nối")
+        # Từ chối ở bắt tay TLS: sau đó không còn đường nào để offer tới A. Vẫn cho thêm vài nhịp để một
+        # hộp hỏi (nếu có lỗi) kịp hiện: đây là kiểm phủ định nên chờ một cửa sổ cố định (~0,5 s) có chủ ý.
+        for _ in range(25):
+            yield
+        seen["offers"] = list(ctl.offers.keys())
+        seen["receive_rows"] = [r.key.transfer_id for r in rows_of(ctl, "receive")]
+        seen["a_offer_events"] = [type(u).__name__ for u in updates if type(u).__name__ == "OfferReceived"]
+        seen["files"] = files_under(receive_dir)
+        key = seen["send"] if not isinstance(seen["send"], BaseException) else None
+        seen["b_finished"] = None if key is None else p.finished(key.transfer_id)
+        seen["boxes"] = list(run.exec_calls)
+        run.tray.quit_requested.emit()
+
+    gui(["--config-dir", str(a)], script)
+    # mvp mục 8 “Giao diện: hủy ghép đôi”, câu khi xong.
+    assert seen["unpair_message"] == "Đã hủy ghép đôi với “May-B”.", seen["unpair_message"]
+    assert seen["a_forgot_b"] is True
+    assert seen["b_still_trusts_a"] is True, "ca này kiểm A từ chối, B phải vẫn tin A"
+    assert seen["offers"] == [], "A đã hủy ghép đôi B: không được có hộp hỏi nhận file"
+    assert seen["receive_rows"] == [], "không có thẻ lượt nhận mới"
+    assert seen["a_offer_events"] == []
+    assert seen["files"] == [], f"thư mục nhận của A phải trống: {seen['files']}"
+    assert seen["boxes"] == [], f"A không được bật hộp nào: {seen['boxes']}"
+    # Hành vi thật: B vẫn tin A nên `send` tạo lượt (trả TransferKey), rồi lần nối tới A bị từ chối
+    # ở bắt tay (`ConnectFailed(REJECTED)`); lượt của B không bao giờ xong.
+    assert not isinstance(seen["send"], BaseException), seen["send"]
+    fin = seen["b_finished"]
+    assert fin is None or str(fin.result) != "done", fin
+
+
+def setup_b_unpairs_gui(run, gui_wait, p: Peer, a_id: str, b_id: str):
+    """Kịch bản con của ca (j): A (GUI) nối tới B (A biết địa chỉ B, như khi radar thấy B qua mDNS hay
+    người dùng nhập IP), rồi B hủy ghép đôi A. A vẫn tin B."""
+
+    async def b_port() -> int:
+        return p.node.port
+
+    port = p.run(b_port(), 5)
+    hinted: list = []
+    run.host.call(lambda n: n.connect_hint(b_id, [LOCAL], port), hinted.append)
+    yield gui_wait(lambda: hinted, 5, "A nối tới B")
+    assert not isinstance(hinted[0], BaseException), hinted[0]
+    yield gui_wait(lambda: p.connected_to(a_id), 10, "A–B đã kết nối")
+    yield gui_wait(lambda: run.window.radar.model.device(b_id) is not None, 10, "B trên radar của A")
+    p.run(p.node.unpair(a_id), 15)
+    yield gui_wait(lambda: not p.connected_to(a_id), 10, "kết nối A–B bị đóng")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Lỗi src: lần gửi đầu sau khi máy kia hủy ghép đôi tạo thẻ “Đang nối lại…” mãi mãi; "
+        "ConnectFailed(REJECTED) tới sau đó chỉ vào radar, dải thông báo + nút “Ghép đôi lại” "
+        "chỉ hiện ở lần gửi sau (ui/transfers.py:282-288 chỉ xét `model.failure` trước khi submit; "
+        "on_node_event dòng 219-231 bỏ qua ConnectFailed). Nguồn: spec PR-4 T3.2; mvp F2 (máy đó thấy "
+        "thông báo từ chối) + mục 8 “Máy kia từ chối máy này” (cột hành động “Ghép đôi lại”)."
+    ),
+)
+def test_j_gui_sender_rejected_by_peer_shows_notice_with_repair_button(
+    gui, gui_wait, pair, peer, tmp_path, ui_helpers
+):
+    """Ca ngược: B hủy ghép đôi A (GUI). A (vẫn tin B, biết địa chỉ B) gửi tới B lần đầu → trong 15 s
+    dải thông báo bên gửi hiện câu mvp mục 8 “Máy kia từ chối máy này” kèm nút “Ghép đôi lại”."""
+    a, b, a_id, b_id, src = pair()
+    p = peer(b)
+    f = make_file(src, "bi-tu-choi.bin", 200 * KiB)
+    seen: dict = {}
+
+    def script(run):
+        yield from start_gui(run, gui_wait)
+        ctl = controller(run)
+        yield from setup_b_unpairs_gui(run, gui_wait, p, a_id, b_id)
+        ctl.request_send(b_id, [f])
+        yield gui_wait(lambda: notice_buttons(ctl, REPAIR), 15, "dải thông báo có nút “Ghép đôi lại”")
+        seen["notice"] = ctl.view.notice_text()
+        run.tray.quit_requested.emit()
+
+    gui(["--config-dir", str(a)], script)
+    assert seen["notice"] == REFUSED.format(name="May-B"), seen["notice"]
+
+
+def test_j2_gui_resend_after_peer_refused_shows_notice_repair_button_and_no_new_row(
+    gui, gui_wait, pair, peer, tmp_path, ui_helpers
+):
+    """Ca ngược, lần gửi sau khi radar đã biết B từ chối (spec-hackathon mục 10 A2): câu mvp mục 8 “Máy
+    kia từ chối máy này”, nút “Ghép đôi lại” (bấm thì phát `repair_requested`), không tạo lượt mới; B
+    không có file."""
+    a, b, a_id, b_id, src = pair()
+    p = peer(b)
+    f = make_file(src, "bi-tu-choi.bin", 200 * KiB)
+    seen: dict = {}
+
+    def script(run):
+        yield from start_gui(run, gui_wait)
+        ctl = controller(run)
+        yield from setup_b_unpairs_gui(run, gui_wait, p, a_id, b_id)
+        ctl.request_send(b_id, [f])  # lần đầu: A nối tới B và bị từ chối
+        yield gui_wait(
+            lambda: str(run.window.radar.model.failure(b_id)) == "rejected", 15, "radar của A biết B từ chối"
+        )
+        seen["rows_before"] = len(rows_of(ctl, "send"))
+        ctl.request_send(b_id, [f])
+        yield gui_wait(lambda: notice_buttons(ctl, REPAIR), 5, "dải thông báo có nút “Ghép đôi lại”")
+        seen["notice"] = ctl.view.notice_text()
+        seen["rows_after"] = len(rows_of(ctl, "send"))
+        repaired: list = []
+        ctl.repair_requested.connect(lambda v: repaired.append(v.device_id))
+        [button] = notice_buttons(ctl, REPAIR)
+        seen["button_name"] = button.accessibleName()
+        button.click()
+        yield gui_wait(lambda: repaired, 5, "nút “Ghép đôi lại” phát repair_requested")
+        seen["repaired"] = repaired
+        seen["files_b"] = files_under(tmp_path / "nhan-B")
+        run.tray.quit_requested.emit()
+
+    gui(["--config-dir", str(a)], script)
+    assert seen["notice"] == REFUSED.format(name="May-B"), seen["notice"]
+    assert seen["rows_after"] == seen["rows_before"], "thiết bị đang chặn: không tạo lượt mới"
+    assert seen["button_name"] == REPAIR
+    assert seen["repaired"] == [b_id]
+    assert seen["files_b"] == [], seen["files_b"]

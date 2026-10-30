@@ -862,3 +862,163 @@ def test_section8_sentences_match_mvp_doc():
     ]
     for sample in samples:
         assert sample in doc, sample
+
+
+# =================================================================================================
+# Từ chối vì ổ nhận: không đủ chỗ / FAT32 (mvp F4 “Hủy và từ chối”, mục 8 hai dòng “Không đủ dung
+# lượng”, “Thư mục nhận nằm trên ổ không chứa được file lớn như vậy”, dòng “Cách gọi ổ…”)
+# =================================================================================================
+
+# Nguyên văn mvp mục 8 (phần in nghiêng thay bằng {chỗ}).
+R_NO_SPACE_RECEIVE = "Đã từ chối {n} file từ {p}: không đủ chỗ trống, cần {needed}, {drive} còn {available}."
+R_NO_SPACE_SEND = "{p} không đủ chỗ trống để nhận: cần {needed}, ổ lưu file trên máy đó còn {available}."
+R_TOO_LARGE_RECEIVE = (
+    "Đã từ chối {n} file từ {p}: {drive} chỉ chứa được file nhỏ hơn {limit}, mà {f} nặng {size}."
+)
+R_TOO_LARGE_SEND = (
+    "{p} không nhận được {f} ({size}): ổ lưu file trên máy đó chỉ chứa được file nhỏ hơn {limit}."
+)
+# Số liệu của ví dụ trong mvp mục 8: cần 12,4 GB, còn 8,1 GB; FAT32: file < 4 GB, video.mp4 8,0 GB.
+NEEDED = int(12.4 * 2**30)
+AVAILABLE = int(8.1 * 2**30)
+FAT32_MAX = 4 * 2**30 - 1  # `max_size`: file lớn nhất hệ file chứa được (protocol `reject{file_too_large}`)
+BIG = 8 * 2**30
+THREE_FILES = (("anh.jpg", 2 * 2**20), ("video.mp4", BIG), ("ghi-chu.txt", 300))
+_UNC_PREFIX = "\\\\?\\UNC\\"  # tiền tố đường dẫn dài của ổ mạng Windows: \\?\UNC\
+
+
+def _expected_drive(receive_dir: str | None) -> str:
+    """Cách gọi ổ theo mvp mục 8 dòng “Cách gọi ổ của thư mục nhận”, viết lại độc lập với code."""
+    import sys
+
+    if receive_dir is None:
+        return "ổ lưu file"
+    if sys.platform == "win32":
+        if receive_dir.startswith(_UNC_PREFIX):
+            share = "\\\\" + receive_dir[len(_UNC_PREFIX) :]
+            return "ổ mạng " + "\\".join(share.split("\\")[:4])
+        return f"ổ {receive_dir[:2].upper()}"
+    return f"ổ chứa {receive_dir}"
+
+
+def rejected(k, result: str, reject_fields: dict, files=THREE_FILES, by_peer: bool = True):
+    """`TransferFinished` của lượt bị từ chối với `Reject` thật (protocol `reject`)."""
+    from teleport.app.transfers import TransferFinished, TransferResult
+    from teleport.core.messages import Reject
+
+    reason = {"rejected_no_space": "no_space", "rejected_file_too_large": "file_too_large"}[result]
+    return TransferFinished(
+        info=info(k, "waiting", files=files),
+        result=TransferResult(result),
+        by_peer=by_peer,
+        reason=reason,
+        file_index=0,
+        reject=Reject(k.transfer_id, reason, **reject_fields),
+    )
+
+
+@pytest.mark.parametrize("receive_dir", [r"D:\x", r"\\?\UNC\srv\share", None])
+@pytest.mark.parametrize(
+    ("direction", "result"),
+    [
+        ("receive", "rejected_no_space"),
+        ("send", "rejected_no_space"),
+        ("receive", "rejected_file_too_large"),
+        ("send", "rejected_file_too_large"),
+    ],
+)
+def test_no_space_and_file_too_large_sentences_both_directions(view, direction, result, receive_dir):
+    from teleport.core.display import format_size
+
+    k = key(direction)
+    view.set_receive_dir(None if receive_dir is None else Path(receive_dir))
+    view.handle(status_changed(k, "waiting", files=THREE_FILES))
+    if result == "rejected_no_space":
+        fields = {"needed": NEEDED, "available": AVAILABLE}
+    else:
+        fields = {"file_index": 1, "max_size": FAT32_MAX}
+    # Bên nhận tự từ chối (không hỏi người dùng); bên gửi nhận `reject` từ máy kia.
+    view.handle(rejected(k, result, fields, by_peer=direction == "send"))
+    detail = view.row(k).detail_label.text()
+
+    values = {
+        "p": PEER,
+        "n": "3",
+        "needed": format_size(NEEDED),
+        "available": format_size(AVAILABLE),
+        "f": "video.mp4",
+        "size": format_size(BIG),
+        "limit": format_size(FAT32_MAX + 1, trim=True),
+        "drive": _expected_drive(receive_dir),
+    }
+    template = {
+        ("receive", "rejected_no_space"): R_NO_SPACE_RECEIVE,
+        ("send", "rejected_no_space"): R_NO_SPACE_SEND,
+        ("receive", "rejected_file_too_large"): R_TOO_LARGE_RECEIVE,
+        ("send", "rejected_file_too_large"): R_TOO_LARGE_SEND,
+    }[(direction, result)]
+    assert detail == fill(template, **values)
+    # Số liệu của ví dụ mvp, kiểm độc lập với `format_size`.
+    if result == "rejected_no_space":
+        assert "12,4 GB" in detail and "8,1 GB" in detail, detail
+    else:
+        assert "nhỏ hơn 4 GB" in detail and "8,0 GB" in detail, detail
+    if direction == "send" and receive_dir is not None:
+        # Câu của máy gửi nói về ổ của máy kia: không lộ thư mục nhận của chính máy này.
+        assert _expected_drive(receive_dir) not in detail, detail
+    assert not any(ord(ch) < 0x20 or 0x7F <= ord(ch) < 0xA0 for ch in detail), repr(detail)
+    assert "`" not in detail
+
+
+@pytest.mark.parametrize("direction", ALL_DIRECTIONS)
+@pytest.mark.parametrize("result", ["rejected_no_space", "rejected_file_too_large"])
+def test_disk_reject_sentences_have_no_control_chars_from_peer_or_path(qtbot, direction, result):
+    """Tên máy kia, tên file (đến từ máy khác) và thư mục nhận có ký tự điều khiển → câu không chứa ký tự
+    điều khiển nào (mvp N8: chữ của máy khác hiện như chữ thuần)."""
+    from teleport.ui.transfers_view import TransfersView
+
+    v = TransfersView()
+    qtbot.addWidget(v)
+    v.set_device_names({PEER_ID: "PC\x1b[31m-Nha\r\n"})
+    v.set_receive_dir(Path("/tmp/nhan\x07\x1b/Teleport"))
+    k = key(direction)
+    files = (("a.txt", 10), ("vi\x1b[2Jdeo\n.mp4", BIG))
+    v.handle(status_changed(k, "waiting", files=files))
+    fields = (
+        {"needed": NEEDED, "available": AVAILABLE}
+        if result == "rejected_no_space"
+        else {"file_index": 1, "max_size": FAT32_MAX}
+    )
+    v.handle(rejected(k, result, fields, files=files, by_peer=direction == "send"))
+    detail = v.row(k).detail_label.text()
+    assert detail, "phải có câu lý do ở cả hai chiều"
+    assert not any(ord(ch) < 0x20 or 0x7F <= ord(ch) < 0xA0 for ch in detail), repr(detail)
+
+
+def test_disk_reject_sentences_match_mvp_doc():
+    """Bốn câu trên khớp nguyên văn ví dụ trong mvp mục 8 (để hằng của test không lệch tài liệu)."""
+    doc = _MVP.read_text(encoding="utf-8")
+    samples = [
+        fill(
+            R_NO_SPACE_RECEIVE,
+            n="*3*",
+            p="*Laptop-Minh*",
+            needed="*12,4 GB*",
+            drive="*ổ D:*",
+            available="*8,1 GB*",
+        ),
+        fill(R_NO_SPACE_SEND, p="*PC-Nha*", needed="*12,4 GB*", available="*8,1 GB*"),
+        fill(
+            R_TOO_LARGE_RECEIVE,
+            n="3",
+            p="*Laptop-Minh*",
+            drive="ổ *E:*",
+            limit="4 GB",
+            f="*video.mp4*",
+            size="8,0 GB",
+        ),
+        fill(R_TOO_LARGE_SEND, p="*PC-Nha*", f="*video.mp4*", size="8,0 GB", limit="4 GB"),
+        r"Windows: “ổ *D:*”; ổ mạng Windows: “ổ mạng *\\máy\chia-sẻ*”",
+    ]
+    for sample in samples:
+        assert sample in doc, sample
