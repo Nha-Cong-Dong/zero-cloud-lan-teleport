@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import logging
 import signal
+import sys
 import threading
 import time
 import uuid
@@ -681,7 +682,10 @@ def test_quit_with_active_send_opens_confirm_box_and_does_not_quit(gapp, qtbot, 
     assert not gapp.quitting
     assert gapp.window.isVisible(), "cửa sổ chính được đưa lên trước"
     assert box.parent() is gapp.window
-    assert box.windowTitle() == QUIT_TITLE
+    # macOS bỏ tiêu đề của QMessageBox (hướng dẫn giao diện Apple), nên ở đó `windowTitle()` rỗng.
+    if sys.platform != "darwin":
+        assert box.windowTitle() == QUIT_TITLE
+    assert box.accessibleName() == QUIT_TITLE
     assert box.text() == QUIT_ONE.format(name=PEER)
     assert box.textFormat() == Qt.TextFormat.PlainText
     yes, no = box_button(box, QUIT_YES), box_button(box, QUIT_NO)

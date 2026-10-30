@@ -32,8 +32,11 @@ sẵn IP.
 **Log ra file** (spec hackathon Q7, mục 9.10): `<config_dir>/logs/teleport.log`, xoay khi đầy
 `LOG_MAX_BYTES`, giữ thêm `LOG_BACKUPS` bản cũ; mức WARNING như log ra stderr. Chỉ gắn **sau**
 `SingleInstance.acquire` thành công (chỉ một tiến trình ghi và xoay file), gỡ và đóng khi `main` trả
-về. Theo mvp N9: chỉ ghi loại lỗi và mã kết quả, không ghi nội dung file hay clipboard. Không tạo
-được thư mục hay file log thì chỉ ghi WARNING ra stderr (nếu có), app vẫn chạy.
+về. Theo mvp N9: chỉ ghi loại lỗi và mã kết quả, không ghi nội dung file hay clipboard; file log
+dùng `errorlog.RedactingFormatter` nên traceback không kèm nội dung lỗi. Cùng lúc gắn file log,
+`errorlog.install_excepthooks` cài hook ghi ERROR mọi lỗi không bắt được (thread chính, slot Qt,
+thread khác), gỡ khi `main` trả về; lỗi lan ra khỏi `main` được ghi trước khi gỡ. Không tạo được
+thư mục hay file log thì chỉ ghi WARNING ra stderr (nếu có), app vẫn chạy.
 
 **Một bản mỗi thư mục cấu hình** (`SingleInstance`): bản GUI giữ `<config_dir>/gui.lock` suốt đời
 tiến trình (không giữ trước `node.lock` được: trên Windows hai fd cùng tiến trình chặn nhau), rồi
@@ -113,7 +116,7 @@ from teleport.app.node import NodeEvent
 from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
-from teleport.ui import i18n, send, texts, theme
+from teleport.ui import errorlog, i18n, send, texts, theme
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.main_window import MainWindow, ViewState
@@ -827,7 +830,7 @@ def _attach_file_log(config_dir: Path) -> logging.Handler | None:
         log.warning("không mở được file log (%s)", type(e).__name__)
         return None
     handler.setLevel(logging.WARNING)
-    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+    handler.setFormatter(errorlog.RedactingFormatter(_LOG_FORMAT))
     logging.getLogger().addHandler(handler)
     return handler
 
@@ -936,6 +939,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK  # bản đang chạy đã hiện cửa sổ
 
     file_log = _attach_file_log(config_dir)  # sau `acquire`: chỉ bản duy nhất ghi và xoay file
+    restore_excepthooks = errorlog.install_excepthooks()
     try:
         controller = GuiApp(app, config_dir, instance, background=args.background)
         restore_sigint = _install_sigint(controller)
@@ -945,6 +949,10 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             restore_sigint()
             controller.shutdown()
+    except Exception as e:  # ghi trước khi gỡ hook và file log; lỗi vẫn lan ra như cũ
+        errorlog.log_uncaught(type(e), e, e.__traceback__)
+        raise
     finally:
+        restore_excepthooks()
         _detach_file_log(file_log)
     return EXIT_OK
