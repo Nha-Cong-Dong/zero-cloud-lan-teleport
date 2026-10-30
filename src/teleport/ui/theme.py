@@ -10,15 +10,16 @@ Không dùng màu để mang thông tin: trạng thái luôn có chữ đi kèm.
 “Nhận”, “Trùng khớp”): đặt dynamic property `PRIMARY_PROPERTY` = True **trước khi hiện** (stylesheet
 đọc property lúc polish). `apply` đặt stylesheet ứng dụng (`primary_stylesheet`) chỉ có luật cho
 `QPushButton[primary="true"]`: nền `palette(highlight)`, chữ `palette(highlighted-text)`, viền 2 px
-cùng màu nền, lề trong 2 px, nên cao đúng bằng nút Fusion bên cạnh (chiều cao chữ + 8 px), không
-`min-height`; `:hover` / `:pressed` đậm hơn (sáng) hay nhạt hơn (tối); `:disabled` về màu nút thường
-với chữ của mục bị tắt. **Tiêu điểm** (`:focus`) đổi hai thứ cùng lúc, nút không đổi cỡ, nền giữ màu
-nhấn: viền sang `focus_ring_color` (màu chữ cửa sổ, tương phản cao với nền cửa sổ) và chữ của nút
-gạch chân. Một màu viền không thể vừa ≥ 3:1 với nền cửa sổ vừa ≥ 3:1 với nền nút (ở chế độ tối viền
-sáng trên nút xanh nhạt chỉ 1,7:1), nên gạch chân (màu chữ của nút, ≥ 4,5:1 với nền nút) là dấu hiệu
-thứ hai, thấy rõ ở cả sáng lẫn tối. Mọi cặp chữ/nền đạt `MIN_CONTRAST` ở cả sáng lẫn tối
-(`primary_colors`). Các nút khác không có luật nào nên Fusion vẽ như cũ. Tô màu chỉ để nhấn: nút mặc
-định (Enter) vẫn là nút an toàn của hộp (“Từ chối”, “Không trùng”), không phải nút chính.
+cùng màu nền, lề trong 2 px, và `min-height` theo chiều cao nút Fusion thường đo lúc `apply` (cỡ chữ
+và lề của Fusion khác nhau giữa Windows, macOS, Linux), nên cao đúng bằng nút bên cạnh; `:hover` /
+`:pressed` đậm hơn (sáng) hay nhạt hơn (tối); `:disabled` về màu nút thường với chữ của mục bị tắt.
+**Tiêu điểm** (`:focus`) đổi hai thứ cùng lúc, nút không đổi cỡ, nền giữ màu nhấn: viền sang
+`focus_ring_color` (màu chữ cửa sổ, tương phản cao với nền cửa sổ) và chữ của nút gạch chân. Một màu
+viền không thể vừa ≥ 3:1 với nền cửa sổ vừa ≥ 3:1 với nền nút (ở chế độ tối viền sáng trên nút xanh
+nhạt chỉ 1,7:1), nên gạch chân (màu chữ của nút, ≥ 4,5:1 với nền nút) là dấu hiệu thứ hai, thấy rõ ở
+cả sáng lẫn tối. Mọi cặp chữ/nền đạt `MIN_CONTRAST` ở cả sáng lẫn tối (`primary_colors`). Các nút
+khác không có luật nào nên Fusion vẽ như cũ. Tô màu chỉ để nhấn: nút mặc định (Enter) vẫn là nút an
+toàn của hộp (“Từ chối”, “Không trùng”), không phải nút chính.
 
 `DIALOG_MIN_WIDTH`: bề ngang tối thiểu chung của hộp nhận file và hộp ghép đôi.
 
@@ -29,10 +30,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 MIN_CONTRAST = 4.5
 PRIMARY_PROPERTY = "primary"  # dynamic property của nút chính (xem docstring module)
+_PRIMARY_FRAME = 8  # px: padding dọc 2·2 + viền 2·2 của nút chính (`primary_stylesheet`)
 DIALOG_MIN_WIDTH = 420  # px, hộp nhận file và hộp ghép đôi
 _CONNECTED_PROPERTY = "teleport_theme_connected"
 
@@ -120,8 +122,12 @@ def focus_ring_color(dark: bool) -> QColor:
     return palette(dark).color(_Role.WindowText)
 
 
-def primary_stylesheet(dark: bool) -> str:
-    """Stylesheet ứng dụng: chỉ tô `QPushButton[primary="true"]` (xem docstring module)."""
+def primary_stylesheet(dark: bool, button_height: int | None = None) -> str:
+    """Stylesheet ứng dụng: chỉ tô `QPushButton[primary="true"]` (xem docstring module).
+
+    `button_height`: chiều cao `sizeHint` của nút Fusion thường trên máy này (`apply` đo); có thì nút
+    chính cao đúng bằng nó, vì cỡ chữ và lề của Fusion khác nhau giữa các hệ điều hành.
+    """
     pal = palette(dark)
     colors = primary_colors(dark)
     ring = focus_ring_color(dark).name()
@@ -135,6 +141,7 @@ def primary_stylesheet(dark: bool) -> str:
             "  border-radius: 4px;",
             "  padding: 2px 12px;",  # + viền 2 px: cao bằng nút Fusion (chữ + 8 px)
             "  min-width: 52px;",  # Fusion cho nút có chữ rộng ít nhất 80 px: 52 + 2·12 + 2·2
+            *([f"  min-height: {max(0, button_height - _PRIMARY_FRAME)}px;"] if button_height else []),
             "}",
             f"{selector}:hover {{ background-color: {colors['hover'][1].name()};"
             f" border-color: {colors['hover'][1].name()}; }}",
@@ -156,10 +163,19 @@ def apply(app: QGuiApplication, scheme: Qt.ColorScheme | None = None) -> None:
     dark = is_dark(scheme)
     app.setPalette(palette(dark))
     if isinstance(app, QApplication):
-        app.setStyleSheet(primary_stylesheet(dark))
+        app.setStyleSheet(primary_stylesheet(dark, _plain_button_height()))
     if not app.property(_CONNECTED_PROPERTY):
         app.setProperty(_CONNECTED_PROPERTY, True)
         app.styleHints().colorSchemeChanged.connect(lambda new: apply(app, new))
+
+
+def _plain_button_height() -> int:
+    """Chiều cao `sizeHint` của một nút thường (không mang `PRIMARY_PROPERTY`, nên Fusion vẽ)."""
+    probe = QPushButton("Ag")
+    try:
+        return probe.sizeHint().height()
+    finally:
+        probe.deleteLater()
 
 
 def _set_style(app: QGuiApplication) -> None:

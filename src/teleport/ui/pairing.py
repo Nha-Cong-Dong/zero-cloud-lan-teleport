@@ -39,8 +39,9 @@ Hành vi chính của `PairingController`:
   `devices()` (không có NodeEvent khi kho tin cậy đổi).
 - Kết quả **thành công** (PAIRED ở cả hai vai, hủy ghép đôi xong) không mở hộp nào: phát
   `notice(câu)` (`ui.app` nối vào dải thông báo của danh sách lượt truyền) và `message(câu)`;
-  cửa sổ chính đang ẩn thì thêm bóng thoại khay (`notify`). Máy vừa được ghép đôi rồi nhận file
-  ngay thì chỉ còn hộp nhận file. Hộp kết quả lỗi đang mở khi đó bị đóng (câu cũ không còn đúng).
+  không có cửa sổ Teleport nào đang được dùng (`window_visible` trả False) thì thêm bóng thoại khay
+  (`notify`). Máy vừa được ghép đôi rồi nhận file ngay thì chỉ còn hộp nhận file. Hộp kết quả lỗi
+  đang mở khi đó bị đóng (câu cũ không còn đúng).
 - Kết quả **lỗi**: một hộp kết quả dùng lại, câu mới thay câu cũ (`setText`), không mở hộp thứ hai,
   nên máy lạ dội yêu cầu không làm dội hộp. Phiên ở vai trả lời dừng trước khi hiện mã thì không báo
   gì.
@@ -1066,8 +1067,9 @@ class PairingController(QObject):
         """Báo một câu kết quả và phát `message`.
 
         `ok` (thành công): không mở hộp; đóng hộp lỗi đang mở (câu cũ không còn đúng) rồi phát
-        `notice`; cửa sổ chính đang ẩn thì báo thêm bằng bóng thoại khay (`notify`), vì dải thông
-        báo nằm trong cửa sổ. Lỗi: hiện trong hộp kết quả dùng lại (câu mới thay câu cũ).
+        `notice`; không có cửa sổ Teleport nào đang được dùng (`window_visible`) thì báo thêm bằng
+        bóng thoại khay (`notify`), vì dải thông báo nằm trong cửa sổ. Lỗi: hiện trong hộp kết quả
+        dùng lại (câu mới thay câu cũ).
         """
         if ok:
             old, self._result_box = self._result_box, None
