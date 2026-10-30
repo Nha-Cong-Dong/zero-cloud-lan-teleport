@@ -123,7 +123,7 @@ Chạy nhiều node trên cùng một máy để phát triển/test: cho mỗi n
 | ui | `ui/send.py` | Phần thuần của việc gửi: đường dẫn từ URL file cục bộ, lỗi chọn gửi nhận ra không cần chạm đĩa (quá số file, trùng), câu mvp mục 8 cho lỗi của `transfers.send` và khi thiết bị bị chặn kết nối | ✅ |
 | ui | `ui/gcguard.py` | `GcGuard`: GC vòng tham chiếu chỉ chạy trên thread Qt (mục 5) | ✅ |
 | ui | `ui/errorlog.py` | Ghi lỗi không lộ nội dung (mvp N9): hook `sys.excepthook` / `threading.excepthook` (gồm lỗi trong slot Qt), handler lỗi loop asyncio của `NodeHost`, formatter của file log; chỉ tên loại lỗi và traceback | ✅ |
-| ui | `ui/texts.py`, `ui/i18n.py`, `ui/theme.py` | Câu chữ dùng chung của giao diện; bản dịch `.qm` qua `importlib.resources` (chuỗi nguồn tiếng Việt); bảng màu sáng/tối theo hệ điều hành, đủ tương phản (mvp N12); nút chính tô màu nhấn qua property `PRIMARY_PROPERTY` (nút mặc định Enter vẫn là nút an toàn), `DIALOG_MIN_WIDTH` chung cho hộp nhận file và hộp ghép đôi | ✅ hạ tầng; bản English ⬜ |
+| ui | `ui/texts.py`, `ui/i18n.py`, `ui/theme.py` | Câu chữ dùng chung của giao diện; bản dịch `.qm` qua `importlib.resources` (chuỗi nguồn tiếng Việt); nguồn duy nhất của token màu (`tokens(dark)`), thang chữ (`font_for`), khoảng cách và góc bo; bảng màu Fusion và stylesheet hẹp sinh từ token, sáng/tối theo hệ điều hành, đủ tương phản (mvp N12); nút chính tô màu nhấn qua property `PRIMARY_PROPERTY` (nút mặc định Enter vẫn là nút an toàn), nhãn theo `TONE_PROPERTY`, khung theo `SURFACE_PROPERTY`, `DIALOG_MIN_WIDTH` chung cho hộp nhận file và hộp ghép đôi | ✅ hạ tầng; bản English ⬜ |
 
 Module chỉ được tạo khi có code thật, không tạo file rỗng trước.
 
