@@ -8,8 +8,8 @@
 # dist/teleport của bản CLI.
 #
 # Icon của Teleport.exe: teleport.ico cạnh file này, sinh bằng make_icon.py từ đúng hàm vẽ icon của app
-# (teleport.ui.tray._draw); icon tự vẽ, cùng giấy phép GPL-3.0-or-later của dự án, không dùng tài sản
-# ngoài. Nó vào exe dưới dạng tài nguyên Windows (RT_ICON), không phải file trong _internal/.
+# (teleport.ui.tray._draw, tức logo SVG nhúng trong ui/logo.py), cùng giấy phép GPL-3.0-or-later của
+# dự án, không dùng tài sản ngoài. Nó vào exe dưới dạng tài nguyên Windows (RT_ICON), không phải file trong _internal/.
 #
 # Giấy phép (ke_hoach mục 1, Giấy phép; Giai đoạn 6 ở mục 5.2): như teleport-cli.spec.
 # - Chỉ --onedir (COLLECT): Qt/PySide6 (LGPL-3.0) và zeroconf (LGPL-2.1) là file riêng trong _internal/
