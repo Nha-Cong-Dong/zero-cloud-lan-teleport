@@ -1,4 +1,5 @@
-"""Test `teleport.app.history` (P4-2, việc 6: T10–T18; spec `specs/spec-p4-2.md` mục 2, 3.2, 4, 7, 11).
+"""Test `teleport.app.history` (P4-2, việc 6: T10–T18; spec `specs/spec-p4-2.md` mục 2, 3.2, 4, 7, 11;
+C3 lịch sử theo từng máy: `specs/spec-dot-c.md` mục 3, 11).
 
 Viết từ đặc tả, không từ code. Không mở socket: `HistoryStore` chạy với `DiskExecutor` thật trên
 `tmp_path`. Seam (spec mục 3.2, 11.12): `history.load`, `history.save`, `history._read_limited` và
@@ -745,3 +746,161 @@ async def test_store_record_after_executor_shutdown_warns_and_does_not_raise(HM,
     ]
     assert errors_logged(caplog) == [], [r.getMessage() for r in errors_logged(caplog)]
     assert [e.transfer_id for e in store.entries()] == [TIDS[1]]
+
+
+# =================================================================================================
+# C3: đọc và xóa theo máy (spec-dot-c mục 3.2, 3.5, 11 sửa 5)
+# =================================================================================================
+
+OTHER = "e" * 32
+
+
+def entry_json_of(k: int, device_id: str) -> dict:
+    d = entry_json(k)
+    d["device_id"] = device_id
+    return d
+
+
+def file_keys(config: Path) -> list[tuple[str, str]]:
+    obj = json.loads((config / "history.json").read_bytes())
+    return [(e["device_id"], e["transfer_id"]) for e in obj["entries"]]
+
+
+@leakcheck
+async def test_store_entries_filter_by_device(HM, executor, config):
+    obj = {"version": 1, "entries": [entry_json_of(3, OTHER), entry_json(2), entry_json_of(1, OTHER)]}
+    (config / "history.json").write_text(json.dumps(obj), encoding="utf-8")
+    store = await loaded_store(HM, executor, config)
+    assert [e.transfer_id for e in store.entries(OTHER)] == [TIDS[3], TIDS[1]]
+    assert [e.transfer_id for e in store.entries(DEV)] == [TIDS[2]]
+    assert store.entries("f" * 32) == ()
+    assert len(store.entries()) == 3
+    await store.flush(5)
+
+
+@leakcheck
+async def test_clear_device_writes_remaining_entries(HM, executor, config, caplog):
+    """`clear(id)` bỏ mục của máy đó trong bộ nhớ và trong file; mục của máy khác giữ nguyên thứ tự.
+    Log chỉ có 8 ký tự đầu của mã máy (mvp N9)."""
+    caplog.set_level(logging.DEBUG, logger="teleport")
+    obj = {"version": 1, "entries": [entry_json_of(3, OTHER), entry_json(2), entry_json_of(1, OTHER)]}
+    (config / "history.json").write_text(json.dumps(obj), encoding="utf-8")
+    store = await loaded_store(HM, executor, config)
+    store.clear(OTHER)
+    assert [(e.device_id, e.transfer_id) for e in store.entries()] == [(DEV, TIDS[2])]
+    store.record(make_entry(4, device_id=OTHER))
+    await store.flush(5)
+    assert file_keys(config) == [(OTHER, TIDS[4]), (DEV, TIDS[2])], "mục sau lần xóa vẫn giữ"
+    assert all(OTHER not in r.getMessage() for r in caplog.records)
+
+
+@leakcheck
+async def test_clear_device_unreadable_file_not_overwritten(
+    HM, executor, config, monkeypatch, caplog, save_spy
+):
+    """File không đọc được lúc nạp: `clear(id)` **không** cấp quyền ghi (ghi đè sẽ mất lịch sử của các
+    máy khác) → chỉ xóa trong bộ nhớ, WARNING, file giữ nguyên."""
+    caplog.set_level(logging.WARNING)
+    path = write_file(config, [7])
+    before = path.read_bytes()
+
+    def denied(p):
+        raise PermissionError(13, "Permission denied", str(p))
+
+    monkeypatch.setattr(HM, "_read_limited", denied)
+    store = await loaded_store(HM, executor, config)
+    store.record(make_entry(1))
+    store.record(make_entry(2, device_id=OTHER))
+    caplog.clear()
+    store.clear(DEV)
+    assert [(e.device_id, e.transfer_id) for e in store.entries()] == [(OTHER, TIDS[2])]
+    assert warnings_of(caplog), "phải có WARNING: chỉ xóa trong bộ nhớ"
+    await asyncio.sleep(0.2)
+    await store.flush(5)
+    assert save_spy.calls == []
+    assert path.read_bytes() == before
+
+
+@leakcheck
+async def test_clear_all_still_overwrites_unreadable(HM, executor, config, monkeypatch):
+    """Sau `clear(id)` (không ghi), `clear()` toàn bộ vẫn ghi file rỗng như trước (ý người dùng)."""
+    path = write_file(config, [7])
+
+    def denied(p):
+        raise PermissionError(13, "Permission denied", str(p))
+
+    monkeypatch.setattr(HM, "_read_limited", denied)
+    store = await loaded_store(HM, executor, config)
+    store.record(make_entry(1, device_id=OTHER))
+    store.clear(OTHER)
+    store.clear()
+    assert store.entries() == ()
+    await store.flush(5)
+    assert json.loads(path.read_bytes()) == EMPTY
+
+
+@leakcheck
+async def test_clear_device_after_flush_only_clears_memory(HM, executor, config, caplog):
+    caplog.set_level(logging.WARNING)
+    write_file(config, [1])
+    store = await loaded_store(HM, executor, config)
+    await store.flush(5)
+    caplog.clear()
+    store.clear(DEV)
+    assert store.entries() == ()
+    assert any("node đã đóng" in r.getMessage() for r in warnings_of(caplog))
+    await asyncio.sleep(0.2)
+    assert file_ids(config) == [TIDS[1]]
+
+
+@leakcheck
+async def test_clear_device_rejects_bad_device_id(HM, executor, config):
+    from teleport.core.history import HistoryError
+
+    write_file(config, [1])
+    store = await loaded_store(HM, executor, config)
+    for bad in ("D" * 32, "d" * 31, 5):
+        with pytest.raises(HistoryError):
+            store.clear(bad)
+    assert [e.transfer_id for e in store.entries()] == [TIDS[1]]
+    await store.flush(5)
+
+
+@leakcheck
+async def test_record_while_loading_merges_with_per_device_cap(HM, executor, config, load_gate):
+    """L4: file có đủ `MAX_HISTORY_PER_DEVICE` mục của DEV và vài mục của OTHER; hai mục của DEV ghi
+    trong lúc nạp thì lên đầu, hai mục cũ nhất của DEV bị bỏ, mục của OTHER giữ đủ và đúng thứ tự."""
+    from teleport.core.history import MAX_HISTORY_PER_DEVICE
+
+    assert MAX_HISTORY_PER_DEVICE == 100
+    dev_ks = list(range(100, 0, -1))  # k lớn = mới hơn
+    raw = [
+        entry_json_of(103, OTHER),
+        *[entry_json(k) for k in dev_ks[:50]],
+        entry_json_of(102, OTHER),
+        *[entry_json(k) for k in dev_ks[50:]],
+        entry_json_of(101, OTHER),
+    ]
+    (config / "history.json").write_text(json.dumps({"version": 1, "entries": raw}), encoding="utf-8")
+    store = HM.HistoryStore(executor=executor, config_dir=config)
+    loading = asyncio.create_task(store.load(10))
+    await wait_until(load_gate.hit.is_set, 5, "việc nạp chưa bắt đầu")
+    store.record(make_entry(201))
+    store.record(make_entry(202))
+    load_gate.gate.set()
+    await asyncio.wait_for(loading, 5)
+
+    dropped = {(DEV, TIDS[2]), (DEV, TIDS[1])}
+    expected = [(DEV, TIDS[202]), (DEV, TIDS[201])] + [
+        (d["device_id"], d["transfer_id"]) for d in raw if (d["device_id"], d["transfer_id"]) not in dropped
+    ]
+    got = [(e.device_id, e.transfer_id) for e in store.entries()]
+    assert got == expected
+    assert [e.transfer_id for e in store.entries(DEV)] == [
+        TIDS[202],
+        TIDS[201],
+        *[TIDS[k] for k in dev_ks[:-2]],
+    ]
+    assert [e.transfer_id for e in store.entries(OTHER)] == [TIDS[103], TIDS[102], TIDS[101]]
+    await store.flush(5)
+    assert file_keys(config) == expected

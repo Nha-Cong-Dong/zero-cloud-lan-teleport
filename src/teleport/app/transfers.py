@@ -1004,16 +1004,26 @@ class TransferManager:
         """Mọi lượt chưa kết thúc, theo thứ tự tạo."""
         return self._engine.transfers()
 
-    def history(self) -> tuple[HistoryEntry, ...]:
-        """Lịch sử các lượt đã kết thúc (mvp F5), mới nhất trước; gọi được ở mọi lúc."""
-        return self._history.entries()
+    def history(self, device_id: str | None = None) -> tuple[HistoryEntry, ...]:
+        """Lịch sử các lượt đã kết thúc (mvp F5), mới nhất trước; gọi được ở mọi lúc.
 
-    def clear_history(self) -> None:
-        """Xóa lịch sử: rỗng ngay trong bộ nhớ, ghi `history.json` rỗng (không xóa file).
+        `device_id` khác None: chỉ các lượt với máy đó (kể cả máy đã hủy ghép đôi); sai dạng →
+        MessageError.
+        """
+        if device_id is not None:
+            device_id = validate_device_id(device_id)
+        return self._history.entries(device_id)
+
+    def clear_history(self, device_id: str | None = None) -> None:
+        """Xóa lịch sử (đồng bộ). None: toàn bộ, rỗng ngay trong bộ nhớ, ghi `history.json` rỗng
+        (không xóa file). Một máy: bỏ mục của máy đó; file không đọc được lúc nạp thì chỉ xóa
+        trong bộ nhớ, không ghi đè (`HistoryStore.clear`). `device_id` sai dạng → MessageError.
 
         Sau `close` chỉ xóa trong bộ nhớ (WARNING).
         """
-        self._history.clear()
+        if device_id is not None:
+            device_id = validate_device_id(device_id)
+        self._history.clear(device_id)
 
     # ---- Cho Node ---------------------------------------------------------------------------
 

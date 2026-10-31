@@ -164,7 +164,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Mỗi lượt truyền hiển thị: % hoàn thành, tốc độ hiện tại, thời gian còn lại, trạng thái (đang xếp hàng / đang chờ chấp nhận / đang gửi / đang nối lại / đang kiểm tra / xong / lỗi / đã hủy). Mỗi chiều giữa hai máy chạy một lượt truyền tại một thời điểm; lượt khác xếp hàng.
   - Nút **Hủy** ở cả hai bên; hủy thì máy nhận xóa file tạm.
   - Nhận xong có thông báo hệ thống; bấm vào thông báo mở thư mục chứa file.
-  - Lịch sử 100 lượt truyền gần nhất, lưu trên máy, xóa được.
+  - Lịch sử tối đa 100 lượt truyền gần nhất với mỗi thiết bị (tối đa 1000 lượt tổng), lưu trên máy; xóa được lịch sử với một thiết bị hay toàn bộ; hủy ghép đôi có hỏi xóa lịch sử với thiết bị đó.
 
 ### F6. Tự nối lại khi rớt mạng
 - **US-09:** Wi-Fi chập chờn hoặc tôi gập laptop giữa chừng, tôi không muốn gửi lại từ đầu.

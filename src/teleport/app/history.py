@@ -14,6 +14,9 @@ module lúc dùng, nên test thay được bằng monkeypatch.
   **không ghi trong cả phiên**, trừ khi người dùng `clear`.
 - **Không ghi trước khi nạp xong:** chưa nạp xong (hay `load` không bao giờ được gọi) thì không
   ghi, trừ khi có `clear`. Mục `record` trước lúc nạp xong được gộp lên đầu kết quả nạp.
+- **Xóa:** `clear()` (toàn bộ) cấp quyền ghi kể cả khi file không đọc được lúc nạp (ý người
+  dùng). `clear(device_id)` chỉ bỏ mục của máy đó và **không** cấp quyền ghi: file không đọc được
+  thì chỉ xóa trong bộ nhớ (WARNING), vì ghi đè sẽ mất lịch sử của các máy khác.
 - **Gộp ghi** (như bia mộ ở `app/transfers.py`): `record` / `clear` đánh dấu và hẹn một lần ghi
   (`call_soon`, hay `call_later` cho đủ `HISTORY_MIN_INTERVAL` từ lần ghi trước). Lần ghi chụp
   tuple các mục bất biến, mã hóa và ghi trong thread. Tối đa một việc đĩa trên `history.json`
@@ -42,13 +45,14 @@ from pathlib import Path
 from teleport import atomic
 from teleport.app.diskio import DiskExecutor, DiskJob
 from teleport.core.history import (
-    MAX_HISTORY,
     MAX_HISTORY_FILE,
     HistoryEntry,
     HistoryError,
     add_entry,
     decode_history,
     encode_history,
+    remove_device,
+    trim_history,
 )
 
 HISTORY_NAME = "history.json"
@@ -180,9 +184,14 @@ class HistoryStore:
         self._last_write: float | None = None  # `loop.time()` lúc lần ghi trước xong
         self._stopped = False  # đang xả lúc đóng hay đã hủy: không hẹn ghi nữa
 
-    def entries(self) -> tuple[HistoryEntry, ...]:
-        """Mọi mục, mới nhất trước (bản bất biến)."""
-        return self._entries
+    def entries(self, device_id: str | None = None) -> tuple[HistoryEntry, ...]:
+        """Mọi mục (hay chỉ mục của `device_id`), mới nhất trước (bản bất biến).
+
+        `device_id` không được kiểm ở đây (`TransferManager.history` kiểm): sai dạng thì rỗng.
+        """
+        if device_id is None:
+            return self._entries
+        return tuple(e for e in self._entries if e.device_id == device_id)
 
     def record(self, entry: HistoryEntry) -> None:
         """Thêm mục của một lượt vừa kết thúc (đồng bộ, không ném, không gọi engine); hẹn ghi."""
@@ -194,12 +203,19 @@ class HistoryStore:
         self._dirty = True
         self._schedule()
 
-    def clear(self) -> None:
-        """Xóa lịch sử: rỗng ngay trong bộ nhớ, bỏ kết quả nạp đang chờ, hẹn ghi file rỗng.
+    def clear(self, device_id: str | None = None) -> None:
+        """Xóa lịch sử: toàn bộ (`device_id` None) hay chỉ của một máy; hẹn ghi.
 
-        Ghi được kể cả khi file không đọc được lúc nạp (ý người dùng). Sau `flush` / `stop` chỉ
-        xóa trong bộ nhớ (WARNING).
+        Toàn bộ: rỗng ngay trong bộ nhớ, bỏ kết quả nạp đang chờ, hẹn ghi file rỗng; ghi được kể
+        cả khi file không đọc được lúc nạp (ý người dùng). Một máy: bỏ mục của máy đó trong bộ
+        nhớ, **không** cấp quyền ghi (file không đọc được thì chỉ xóa trong bộ nhớ, WARNING);
+        không có mục nào của máy đó thì không hẹn ghi; chỉ gọi sau khi nạp xong (assert; `Node`
+        không có đường nào khác: `restore` chờ nạp xong). Sau `flush` / `stop` chỉ xóa trong bộ
+        nhớ (WARNING). `device_id` sai dạng → HistoryError.
         """
+        if device_id is not None:
+            self._clear_device(device_id)
+            return
         self._entries = ()
         self._load_discarded = True
         self._cleared = True
@@ -207,6 +223,22 @@ class HistoryStore:
         self._dirty = True
         if self._stopped:
             log.warning("không ghi được %s: node đã đóng, chỉ xóa lịch sử trong bộ nhớ", HISTORY_NAME)
+            return
+        self._schedule()
+
+    def _clear_device(self, device_id: str) -> None:
+        assert self._loaded, "xóa theo máy chỉ sau khi nạp xong (`Node` gọi sau `restore`)"
+        remaining = remove_device(self._entries, device_id)
+        if len(remaining) == len(self._entries):
+            return  # không có mục nào của máy đó: không hẹn ghi
+        self._entries = remaining
+        self._dirty = True
+        log.info("đã xóa lịch sử với %s", device_id[:8])
+        if self._stopped:
+            log.warning("có thể không ghi được %s: node đã đóng, chỉ xóa lịch sử trong bộ nhớ", HISTORY_NAME)
+            return
+        if self._loaded and not self._writable:
+            log.warning("%s không đọc được lúc nạp: chỉ xóa lịch sử trong bộ nhớ, không ghi đè", HISTORY_NAME)
             return
         self._schedule()
 
@@ -244,7 +276,7 @@ class HistoryStore:
             return  # `clear` đã chạy: bỏ kết quả nạp, vẫn ghi được
         pending = self._entries
         try:
-            merged = tuple(loaded.entries[:MAX_HISTORY])
+            merged = trim_history(loaded.entries)
             for entry in reversed(pending):  # cũ trước, để mục mới nhất ở đầu
                 merged = add_entry(merged, entry)
             writable = loaded.writable is True

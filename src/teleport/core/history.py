@@ -8,7 +8,10 @@ tường do bên gọi đưa vào). Đọc/ghi file, gộp ghi và móc vào lư
   đường dẫn đã lưu; không bao giờ nội dung file). Khóa là (`direction`, `device_id`,
   `transfer_id`).
 - `entry_from_info`: dựng mục từ bản chụp cuối `TransferInfo` của lượt.
-- `add_entry`: chèn mục mới lên đầu, bỏ mục cũ cùng khóa, cắt còn `MAX_HISTORY`.
+- `add_entry`: chèn mục mới lên đầu, bỏ mục cũ cùng khóa, cắt theo hai trần (`trim_history`).
+- `trim_history`: giữ mục theo thứ tự, bỏ mục trùng khóa đứng sau, tối đa
+  `MAX_HISTORY_PER_DEVICE` mục mỗi `device_id` và `MAX_HISTORY_TOTAL` mục tổng (bỏ mục cũ nhất).
+- `remove_device`: bỏ mọi mục của một `device_id`.
 - `encode_history` / `decode_history`: nội dung `history.json`; thứ tự là thứ tự ghi (mới nhất
   trước), không sắp theo `finished_at` (đồng hồ có thể lùi).
 
@@ -38,7 +41,8 @@ from teleport.core.messages import (
 from teleport.core.resume_state import StateError, check_time, format_time, parse_time
 from teleport.core.transfer import Direction, TransferInfo
 
-MAX_HISTORY = 100  # mvp F5: số lượt gần nhất được giữ
+MAX_HISTORY_PER_DEVICE = 100  # mvp F5: số lượt gần nhất được giữ với mỗi thiết bị
+MAX_HISTORY_TOTAL = 1000  # mvp F5: số lượt tối đa của cả bảng (mọi thiết bị)
 MAX_HISTORY_NAMES = 10  # số tên file đầu tiên giữ trong mỗi mục
 MAX_HISTORY_FILE = 4 * 1024 * 1024  # trần `history.json`, byte
 HISTORY_VERSION = 1
@@ -240,27 +244,78 @@ def entry_from_info(
     )
 
 
-def add_entry(entries: Sequence[HistoryEntry], entry: HistoryEntry) -> tuple[HistoryEntry, ...]:
-    """`entry` lên đầu, bỏ mục cũ cùng khóa, cắt còn `MAX_HISTORY` mục (bỏ mục cũ nhất).
+class _Caps:
+    """Bộ đếm hai trần khi duyệt mục từ mới nhất tới cũ nhất (dùng chung cho cắt và giải mã)."""
 
+    __slots__ = ("per_device", "seen", "total")
+
+    def __init__(self) -> None:
+        self.seen: set[tuple[str, str, str]] = set()
+        self.per_device: dict[str, int] = {}
+        self.total = 0
+
+    @property
+    def full(self) -> bool:
+        return self.total >= MAX_HISTORY_TOTAL
+
+    def admit(self, entry: HistoryEntry) -> bool:
+        """Giữ `entry` không: chưa gặp khóa, máy đó chưa đủ trần, tổng chưa đủ trần."""
+        key = _key(entry)
+        count = self.per_device.get(entry.device_id, 0)
+        if key in self.seen or count >= MAX_HISTORY_PER_DEVICE or self.full:
+            return False
+        self.seen.add(key)
+        self.per_device[entry.device_id] = count + 1
+        self.total += 1
+        return True
+
+
+def _check_entries(entries: Iterable[HistoryEntry]) -> list[HistoryEntry]:
+    items = list(entries)
+    if not all(isinstance(e, HistoryEntry) for e in items):
+        raise HistoryError("entries phải là các HistoryEntry")
+    return items
+
+
+def trim_history(entries: Iterable[HistoryEntry]) -> tuple[HistoryEntry, ...]:
+    """Giữ thứ tự (mới nhất trước), bỏ mục trùng khóa đứng sau, cắt theo hai trần.
+
+    Mục bị bỏ khi máy của nó đã có `MAX_HISTORY_PER_DEVICE` mục đứng trước, hay bảng đã có
+    `MAX_HISTORY_TOTAL` mục: tức là bỏ mục cũ nhất của máy đó, rồi mục cũ nhất toàn bảng.
     Phần tử không phải HistoryEntry → HistoryError.
     """
-    if not isinstance(entry, HistoryEntry) or not all(isinstance(e, HistoryEntry) for e in entries):
+    caps = _Caps()
+    return tuple(e for e in _check_entries(entries) if caps.admit(e))
+
+
+def add_entry(entries: Sequence[HistoryEntry], entry: HistoryEntry) -> tuple[HistoryEntry, ...]:
+    """`entry` lên đầu, bỏ mục cũ cùng khóa, cắt theo hai trần (`trim_history`).
+
+    Vượt trần theo máy thì bỏ mục cũ nhất **của cùng `device_id`**, nên máy khác không mất mục;
+    vượt trần tổng thì bỏ mục cũ nhất toàn bảng. Phần tử không phải HistoryEntry → HistoryError.
+    """
+    if not isinstance(entry, HistoryEntry):
         raise HistoryError("entries và entry phải là HistoryEntry")
-    key = _key(entry)
-    rest = [e for e in entries if _key(e) != key]
-    return (entry, *rest[: MAX_HISTORY - 1])
+    return trim_history((entry, *_check_entries(entries)))
+
+
+def remove_device(entries: Iterable[HistoryEntry], device_id: str) -> tuple[HistoryEntry, ...]:
+    """Mọi mục không thuộc `device_id`, giữ thứ tự. `device_id` sai dạng hay phần tử không phải
+    HistoryEntry → HistoryError."""
+    try:
+        device_id = str.__str__(validate_device_id(device_id))
+    except MessageError:
+        raise HistoryError("device_id phải là đúng 32 ký tự hex thường") from None
+    return tuple(e for e in _check_entries(entries) if e.device_id != device_id)
 
 
 def encode_history(entries: Iterable[HistoryEntry]) -> bytes:
     """Nội dung `history.json`: UTF-8, giữ nguyên ký tự Unicode, mỗi mục một dòng, giữ thứ tự.
 
-    Vượt `MAX_HISTORY_FILE` thì bỏ mục cuối (cũ nhất) tới khi vừa. Phần tử không phải
-    HistoryEntry → HistoryError.
+    Không cắt theo số mục (việc của `add_entry` / `trim_history`). Vượt `MAX_HISTORY_FILE` thì
+    bỏ mục cuối (cũ nhất toàn bảng) tới khi vừa. Phần tử không phải HistoryEntry → HistoryError.
     """
-    items = list(entries)
-    if not all(isinstance(item, HistoryEntry) for item in items):
-        raise HistoryError("entries phải là các HistoryEntry")
+    items = _check_entries(entries)
     lines = [item._to_line().encode("utf-8") for item in items]
     sep = len(_SEP.encode("utf-8"))
     # Mỗi mục tốn độ dài dòng + một dấu phân cách; mục đầu dùng `_LEAD` thay dấu phân cách.
@@ -328,7 +383,8 @@ def decode_history(data: bytes | bytearray | memoryview) -> list[HistoryEntry]:
     Cả file hỏng → HistoryError: vượt `MAX_HISTORY_FILE` byte (kiểm trước khi giải mã), không
     phải JSON UTF-8 (chấp nhận BOM), không phải object, `version` khác
     số nguyên 1, `entries` không phải mảng. Mục thiếu hay sai trường bị bỏ; trường lạ bị bỏ qua;
-    trùng khóa thì giữ mục đứng trước; tối đa `MAX_HISTORY` mục.
+    trùng khóa thì giữ mục đứng trước. Duyệt theo thứ tự file và cắt theo hai trần như
+    `trim_history`: tối đa `MAX_HISTORY_PER_DEVICE` mục mỗi máy, `MAX_HISTORY_TOTAL` mục tổng.
     """
     obj = _load_json(data)
     if not isinstance(obj, dict):
@@ -342,17 +398,14 @@ def decode_history(data: bytes | bytearray | memoryview) -> list[HistoryEntry]:
     if not isinstance(raw_entries, list):
         raise HistoryError("entries phải là một mảng")
     result: list[HistoryEntry] = []
-    seen: set[tuple[str, str, str]] = set()
+    caps = _Caps()
     for raw in raw_entries:
-        if len(result) >= MAX_HISTORY:
+        if caps.full:
             break
         try:
             entry = _entry_from_dict(raw)
         except HistoryError:
             continue
-        key = _key(entry)
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(entry)
+        if caps.admit(entry):
+            result.append(entry)
     return result

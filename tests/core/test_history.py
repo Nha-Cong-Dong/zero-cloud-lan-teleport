@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime
 import json
 import math
+from unittest import mock
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -100,14 +101,16 @@ def info(n_files: int, *, direction: Direction = Direction.RECEIVE, done: int | 
 
 
 def test_constants_match_spec():
-    assert H.MAX_HISTORY == 100
+    assert H.MAX_HISTORY_PER_DEVICE == 100  # C3, Q3
+    assert H.MAX_HISTORY_TOTAL == 1000
+    assert not hasattr(H, "MAX_HISTORY"), "trần chung cũ đã được thay bằng hai trần"
     assert H.MAX_HISTORY_NAMES == 10
     assert H.MAX_HISTORY_FILE == 4 * 1024 * 1024
     assert H.HISTORY_VERSION == 1
     assert issubclass(H.HistoryError, ValueError)
 
 
-# --- T1: cắt còn 100 -----------------------------------------------------------------------------
+# --- T1: cắt còn 100 mỗi máy --------------------------------------------------------------------
 
 
 def test_add_entry_keeps_newest_100_and_drops_the_oldest():
@@ -127,6 +130,138 @@ def test_add_entry_does_not_mutate_input():
     first = [make_entry(transfer_id=TIDS[1])]
     H.add_entry(first, make_entry(transfer_id=TIDS[2]))
     assert first == [make_entry(transfer_id=TIDS[1])]
+
+
+# --- C3: trần theo máy, trần tổng, xóa theo máy (spec-dot-c mục 3.5) ------------------------------
+
+DEVS = [f"{k:x}" * 32 for k in range(1, 13)]  # 12 máy: "111…", "222…", …, "ccc…"
+
+
+def dev_entry(device_id: str, k: int) -> H.HistoryEntry:
+    return make_entry(device_id=device_id, transfer_id=f"{k + 1:032x}")
+
+
+def test_per_device_cap_keeps_other_devices():
+    """101 lượt của máy A không đẩy mục của máy B; mục bị bỏ là mục cũ nhất của A."""
+    b_old = make_entry(device_id=DEV_B, transfer_id=TIDS[300])
+    entries: tuple[H.HistoryEntry, ...] = (b_old,)
+    made = [dev_entry(DEV_A, k) for k in range(101)]
+    for e in made:
+        entries = H.add_entry(entries, e)
+    assert len(entries) == 101
+    assert b_old in entries, "mục của máy khác không được bị đẩy ra"
+    assert entries[-1] == b_old
+    a_entries = [e for e in entries if e.device_id == DEV_A]
+    assert a_entries == list(reversed(made[1:])), "giữ 100 lượt mới nhất của A"
+    assert made[0] not in entries
+
+
+def test_total_cap_drops_oldest_overall():
+    """11 máy × 100 lượt = 1100 > 1000: bỏ mục cũ nhất toàn bảng, dù máy đó chưa đủ trần riêng."""
+    entries: tuple[H.HistoryEntry, ...] = ()
+    order = [dev_entry(d, k) for k in range(100) for d in DEVS[:11]]  # xen kẽ các máy
+    for e in order:
+        entries = H.add_entry(entries, e)
+    assert len(entries) == H.MAX_HISTORY_TOTAL
+    assert list(entries) == list(reversed(order))[: H.MAX_HISTORY_TOTAL]
+    assert order[0] not in entries and order[99] not in entries
+    assert order[100] in entries
+    # Thêm một mục nữa: đúng một mục cũ nhất toàn bảng bị bỏ.
+    extra = dev_entry(DEVS[11], 0)
+    after = H.add_entry(entries, extra)
+    assert len(after) == H.MAX_HISTORY_TOTAL
+    assert after[0] == extra and list(after[1:]) == list(entries[:-1])
+
+
+def test_decode_applies_both_caps_in_file_order():
+    # Máy 1: 150 mục đứng đầu file (giữ 100 mục đầu = mới nhất), máy 2: 50 mục, rồi 10 máy khác mỗi
+    # máy 100 mục xen kẽ: ứng viên 100 + 50 + 1000 > 1000, cắt theo thứ tự file.
+    dicts = [entry_dict(device_id=DEVS[0], transfer_id=f"{k + 1:032x}") for k in range(150)]
+    dicts += [entry_dict(device_id=DEVS[1], transfer_id=f"{k + 1:032x}") for k in range(50)]
+    dicts += [entry_dict(device_id=d, transfer_id=f"{k + 1:032x}") for k in range(100) for d in DEVS[2:12]]
+    got = H.decode_history(file_bytes(dicts))
+    keep = [(d["device_id"], d["transfer_id"]) for d in dicts[:100]]  # máy 1: 100 mục đầu
+    keep += [(d["device_id"], d["transfer_id"]) for d in dicts[150:200]]  # máy 2: cả 50
+    keep += [(d["device_id"], d["transfer_id"]) for d in dicts[200:]][: H.MAX_HISTORY_TOTAL - 150]
+    assert [(e.device_id, e.transfer_id) for e in got] == keep
+    assert len(got) == H.MAX_HISTORY_TOTAL
+    # Mục thứ 101 trở đi của máy 1 không chiếm chỗ của máy khác.
+    assert sum(1 for e in got if e.device_id == DEVS[0]) == H.MAX_HISTORY_PER_DEVICE
+
+
+def test_decode_old_file_with_100_mixed_entries_is_unchanged():
+    """File của bản cũ (≤ 100 mục, nhiều máy) đọc ra đúng như cũ: cùng `version` 1, không mất mục."""
+    dicts = [entry_dict(device_id=DEVS[k % 3], transfer_id=TIDS[k]) for k in range(100)]
+    got = H.decode_history(file_bytes(dicts))
+    assert [(e.device_id, e.transfer_id) for e in got] == [(d["device_id"], d["transfer_id"]) for d in dicts]
+
+
+def test_remove_device():
+    a1, a2 = dev_entry(DEV_A, 1), dev_entry(DEV_A, 2)
+    b1 = dev_entry(DEV_B, 1)
+    b_send = make_entry(device_id=DEV_B, direction=Direction.SEND, transfer_id=TIDS[9], saved_path=None)
+    entries = (a2, b1, a1, b_send)
+    assert H.remove_device(entries, DEV_A) == (b1, b_send)
+    assert H.remove_device(entries, DEV_B) == (a2, a1)
+    assert H.remove_device(entries, "c" * 32) == entries
+    assert H.remove_device([], DEV_A) == ()
+    assert isinstance(H.remove_device(list(entries), DEV_A), tuple)
+    assert entries == (a2, b1, a1, b_send), "không đổi đầu vào"
+    for bad in ("A" * 32, "a" * 31, None, 5):
+        with pytest.raises(H.HistoryError):
+            H.remove_device(entries, bad)
+    with pytest.raises(H.HistoryError):
+        H.remove_device([object()], DEV_A)
+
+
+def test_trim_history_applies_both_caps_and_drops_duplicates():
+    dup = make_entry(device_id=DEV_A, transfer_id=f"{1:032x}", result="expired")
+    entries = [dev_entry(DEV_A, k) for k in range(120)] + [dup]
+    got = H.trim_history(entries)
+    assert isinstance(got, tuple)
+    assert list(got) == entries[:100]
+    with pytest.raises(H.HistoryError):
+        H.trim_history([object()])
+
+
+_SMALL_PER_DEVICE, _SMALL_TOTAL = 3, 7
+
+
+@SETTINGS
+@given(st.lists(st.tuples(st.integers(0, 3), st.integers(0, 6), st.booleans()), max_size=60))
+def test_add_entry_property_caps_unique_keys_and_order(ops):
+    """Sau mọi chuỗi `add_entry`: mỗi máy ≤ trần, tổng ≤ trần, khóa không trùng, thứ tự giữ (mô hình:
+    mọi mục đã thêm, mục thêm lại lên đầu, rồi cắt theo hai trần từ mới tới cũ).
+
+    Trần được vá nhỏ để chuỗi ngắn chạm trần; các test trên kiểm hằng thật."""
+    with (
+        mock.patch.object(H, "MAX_HISTORY_PER_DEVICE", _SMALL_PER_DEVICE),
+        mock.patch.object(H, "MAX_HISTORY_TOTAL", _SMALL_TOTAL),
+    ):
+        entries: tuple[H.HistoryEntry, ...] = ()
+        model: list[H.HistoryEntry] = []
+        for dev, k, send in ops:
+            e = make_entry(
+                device_id=DEVS[dev],
+                transfer_id=TIDS[k],
+                direction=Direction.SEND if send else Direction.RECEIVE,
+                saved_path=None,
+            )
+            entries = H.add_entry(entries, e)
+            model = [e, *(m for m in model if key_of(m) != key_of(e))]
+            keys = [key_of(x) for x in entries]
+            assert len(keys) == len(set(keys))
+            assert len(entries) <= _SMALL_TOTAL
+            for d in DEVS[:4]:
+                assert sum(1 for x in entries if x.device_id == d) <= _SMALL_PER_DEVICE
+            assert entries[0] == e
+            counts: dict[str, int] = {}
+            expected = []
+            for m in model:
+                if counts.get(m.device_id, 0) < _SMALL_PER_DEVICE and len(expected) < _SMALL_TOTAL:
+                    counts[m.device_id] = counts.get(m.device_id, 0) + 1
+                    expected.append(m)
+            assert list(entries) == expected
 
 
 # --- T2: khử trùng theo khóa ---------------------------------------------------------------------
@@ -449,7 +584,7 @@ def test_decode_accepts_null_device_name_and_saved_path():
 # --- T7: 150 mục có trùng khóa -------------------------------------------------------------------
 
 
-def test_decode_150_entries_with_duplicates_keeps_first_and_cuts_to_100():
+def test_decode_150_entries_of_one_device_with_duplicates_keeps_first_and_cuts_to_100():
     dicts = [entry_dict(transfer_id=TIDS[k], result="done") for k in range(150)]
     # Mục 5 và 9 trùng khóa với mục 0 và 1 (khác `result`): giữ mục đứng trước.
     dicts[5] = entry_dict(transfer_id=TIDS[0], result="cancelled_user")
