@@ -13,6 +13,7 @@ mục 8 (dòng “Giao diện: gửi tiếp khi đang chờ ghép đôi…”, �
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import uuid
@@ -712,6 +713,67 @@ def test_attach_sets_receive_dir_for_offer_prompts(env):
     assert box is not None
     text = " ".join(w.text() for w in box.findChildren(QLabel))
     assert printable(str(new_host.options.receive_dir)) in text, "hộp hỏi phải hiện thư mục nhận của host mới"
+
+
+def _offer_box_text(env, key) -> str:
+    from PySide6.QtWidgets import QLabel
+
+    box = env.ctl.offers.box(key)
+    assert box is not None
+    return " ".join(w.text() for w in box.findChildren(QLabel) if w.isVisibleTo(box))
+
+
+def _record_tray(monkeypatch) -> list:
+    """Bóng thoại khay kèm thư mục: [(chữ, folder)]."""
+    from teleport.ui.tray import Tray
+
+    got: list = []
+    monkeypatch.setattr(Tray, "show_message", lambda self, text, folder=None: got.append((text, folder)))
+    return got
+
+
+def test_transfers_set_receive_dir_used_as_tray_folder_fallback(env, monkeypatch):
+    """Spec-b1b 2.5: `set_receive_dir` thay `host.options.receive_dir` làm thư mục của bóng thoại
+    “Đã nhận…” khi không có `FileDone.path`, và đặt thư mục cho hộp hỏi."""
+    from teleport.ui.send import printable
+
+    shown = _record_tray(monkeypatch)
+    new_dir = env.tmp / "doi-sang"
+    env.ctl.set_receive_dir(new_dir)
+    env.ctl.on_started(env.host)
+    env.host.run_calls(FakeNode(devices=[dview()], infos=[]))
+    key = tkey("receive")
+    env.ctl.on_transfer(offer(key))
+    assert printable(str(new_dir)) in _offer_box_text(env, key)
+    env.ctl.on_transfer(finished(key))
+    done = [(t, f) for t, f in shown if t == RECEIVED_ONE.format(name="video.mp4", peer=PEER)]
+    assert done == [(RECEIVED_ONE.format(name="video.mp4", peer=PEER), new_dir)], shown
+
+
+def test_attach_with_saved_choice_has_no_receive_dir_until_set(env, monkeypatch):
+    from teleport.app.node import ReceiveDirChoice
+    from teleport.ui.send import printable
+
+    shown = _record_tray(monkeypatch)
+    host = FakeHost(env.tmp / "nhan-x")
+    host.options = dataclasses.replace(host.options, receive_dir=ReceiveDirChoice.SAVED)
+    env.ctl.attach(host)
+    env.ctl.on_started(host)
+    host.run_calls(FakeNode(devices=[dview()], infos=[]))
+    key = tkey("receive")
+    env.ctl.on_transfer(offer(key))
+    text = _offer_box_text(env, key)
+    assert "Lưu vào" not in text, f"SAVED chưa biết thư mục: không hiện dòng “Lưu vào” ({text!r})"
+    assert "saved" not in text.lower()
+    env.ctl.on_transfer(finished(key))
+    done = [f for t, f in shown if t == RECEIVED_ONE.format(name="video.mp4", peer=PEER)]
+    assert done == [None], shown
+
+    later = env.tmp / "da-biet"
+    env.ctl.set_receive_dir(later)
+    key2 = tkey("receive")
+    env.ctl.on_transfer(offer(key2))
+    assert printable(str(later)) in _offer_box_text(env, key2)
 
 
 def tinfo_changed(key, status: str = "waiting"):

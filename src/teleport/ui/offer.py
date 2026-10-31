@@ -20,6 +20,8 @@ Bấm “Nhận” / “Từ chối” phát `decided(key, accept)`; Esc hay đ�
 Nút mặc định (Enter) là “Từ chối”: nhận file phải là một lựa chọn có chủ ý (nút được tô màu không
 phải nút mặc định). Có `TransferFinished`
 cùng `key` (ví dụ máy gửi hủy) thì hộp tự đóng, không phát gì. Đổi ngôn ngữ dịch lại chữ đang hiện.
+Đổi thư mục nhận (`OfferPrompts.set_receive_dir`, từ nút “Đổi…” của cửa sổ chính) cập nhật dòng
+“Lưu vào” của cả các hộp đang mở.
 
 Chuỗi qua `QCoreApplication.translate("Offer", ...)` lúc dùng.
 """
@@ -179,8 +181,11 @@ class OfferPrompts(QObject):
         self._prompts: dict[TransferKey, _Prompt] = {}
 
     def set_receive_dir(self, receive_dir: Path | None) -> None:
-        """Thư mục lưu hiện ở các hộp mở sau lần gọi này."""
+        """Thư mục lưu hiện ở dòng “Lưu vào” của các hộp mở sau lần gọi này và của các hộp đang mở."""
         self._receive_dir = receive_dir
+        for prompt in self._prompts.values():
+            prompt.receive_dir = receive_dir
+            prompt.retranslate()
 
     def handle(self, update: TransferUpdate) -> None:
         """Nhận mọi `TransferUpdate`: mở hộp cho `offer` cần hỏi, đóng hộp khi lượt kết thúc."""
