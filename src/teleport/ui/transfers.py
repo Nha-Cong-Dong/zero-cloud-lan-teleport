@@ -5,7 +5,9 @@ giữ `TransfersView` (`view`, đặt vào `MainWindow.transfers_area`) và `Off
 chỉ chạm node qua `NodeHost.call` / `submit` (không bao giờ gọi `Node` từ thread Qt).
 
 **Host** (`attach`): mỗi `NodeHost` mới (lần đầu, “Bắt đầu”, “Thử lại”) → xóa danh sách lượt và
-thông báo, đóng hộp hỏi, bỏ việc “ghép rồi gửi” đang chờ, đặt thư mục nhận. Mọi kết quả `call` /
+thông báo, đóng hộp hỏi, bỏ việc “ghép rồi gửi” đang chờ, đặt thư mục nhận (`options.receive_dir`
+khi là Path tường minh, không thì None tới khi `ui.app` gọi `set_receive_dir` theo
+`ReceiveDirController`). Mọi kết quả `call` /
 `submit` mang theo host lúc gọi và bị bỏ nếu host đã đổi; `on_node_event` / `on_transfer` chỉ được
 `ui.app` gọi với sự kiện của host hiện tại. Lúc `started` (`on_started`): một `call` đọc
 `(devices(), transfers.transfers())` → tên máy, trạng thái kết nối, ảnh chụp các lượt (gộp với
@@ -48,8 +50,8 @@ chặn. Khay: có `offer` chờ trả lời → `texts.offer_waiting()`, **chỉ
 mới mở có thể giành active); nhận xong một lượt → câu mvp mục 8 “Đã nhận *n* file từ *X*.” (luôn
 hiện; một file: tên file thật đã lưu, lấy từ `FileDone.path.name` cuối, có thể là `ten (1).ext`;
 chưa có thì tên trong `offer`), kèm `folder` để bấm bóng thoại mở thư mục: thư mục cha của file đã
-lưu cuối, không có thì thư mục nhận của host. Tên máy kia qua `texts.peer_label`, tên file qua
-`texts.file_label`; bóng thoại khay là chữ thuần.
+lưu cuối, không có thì thư mục nhận hiện tại (`set_receive_dir`). Tên máy kia qua
+`texts.peer_label`, tên file qua `texts.file_label`; bóng thoại khay là chữ thuần.
 
 **Tóm tắt cho cửa sổ chính**: mỗi `TransfersView.content_changed` (và một lần lúc dựng) gọi
 `MainWindow.set_transfer_summary(has_content(), active_count())`: huy hiệu “Đang truyền n lượt”, màn
@@ -194,6 +196,7 @@ class TransfersController(QObject):
         self._pending_timer.setSingleShot(True)
         self._pending_timer.timeout.connect(self._drop_pending)
         self._dialog: QFileDialog | None = None
+        self._receive_dir: Path | None = None
 
         self.view = TransfersView(window.transfers_area)
         area_layout = window.transfers_area.layout()
@@ -234,8 +237,18 @@ class TransfersController(QObject):
         self._dropped = set()
         self.view.set_device_names(self._names)
         receive_dir = None if host is None else host.options.receive_dir
-        self.offers.set_receive_dir(receive_dir)
-        self.view.set_receive_dir(receive_dir)
+        self.set_receive_dir(receive_dir if isinstance(receive_dir, Path) else None)
+
+    @property
+    def receive_dir(self) -> Path | None:
+        """Thư mục nhận hiện tại (hộp hỏi, câu lỗi, thư mục dự phòng của bóng thoại “Đã nhận…”)."""
+        return self._receive_dir
+
+    def set_receive_dir(self, path: Path | None) -> None:
+        """Đặt thư mục nhận cho hộp hỏi (kể cả hộp đang mở), danh sách lượt và bóng thoại khay."""
+        self._receive_dir = path
+        self.offers.set_receive_dir(path)
+        self.view.set_receive_dir(path)
 
     def on_started(self, host: NodeHost) -> None:
         """Node của `host` đã chạy: đọc một ảnh chụp thiết bị và lượt truyền."""
@@ -328,7 +341,7 @@ class TransfersController(QObject):
                 if saved_path is not None:
                     folder: Path | None = saved_path.parent
                 else:
-                    folder = None if self._host is None else self._host.options.receive_dir
+                    folder = self._receive_dir
                 self._tray.show_message(
                     received_text(
                         update.info,
