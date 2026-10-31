@@ -1,72 +1,167 @@
-"""Theme sáng/tối theo hệ điều hành (mvp N12): bảng màu Fusion, đổi theo `colorSchemeChanged`.
+"""Hệ thiết kế của giao diện (mvp N12): token màu, thang chữ, khoảng cách, góc bo; theme sáng/tối.
 
-`apply(app)` đặt style Fusion (vẽ đúng bảng màu trên mọi hệ điều hành) và bảng màu sáng hay tối
-theo `QStyleHints.colorScheme()` (`Unknown` → sáng), rồi theo dõi `colorSchemeChanged` để đổi theo
-hệ điều hành. Mọi cặp chữ/nền của bảng màu, kể cả chữ mờ (placeholder) và chữ của mục bị tắt,
-đạt tương phản ≥ `MIN_CONTRAST` (WCAG 2.x AA cho chữ thường); `contrast_ratio` tính theo WCAG.
-Không dùng màu để mang thông tin: trạng thái luôn có chữ đi kèm.
+`ui/theme.py` là nguồn duy nhất của màu, cỡ chữ, khoảng cách và góc bo. Màn nào cũng lấy từ đây,
+không ghi mã màu cứng.
 
-**Nút chính** (nút của hành động chính trên mỗi màn / hộp: “Bắt đầu”, “Ghép đôi” của khung nhập IP,
-“Nhận”, “Trùng khớp”): đặt dynamic property `PRIMARY_PROPERTY` = True **trước khi hiện** (stylesheet
-đọc property lúc polish). `apply` đặt stylesheet ứng dụng (`primary_stylesheet`) chỉ có luật cho
-`QPushButton[primary="true"]`: nền `palette(highlight)`, chữ `palette(highlighted-text)`, viền 2 px
-cùng màu nền, lề trong 2 px, và `min-height` theo chiều cao nút Fusion thường đo lúc `apply` (cỡ chữ
-và lề của Fusion khác nhau giữa Windows, macOS, Linux), nên cao đúng bằng nút bên cạnh; `:hover` /
-`:pressed` đậm hơn (sáng) hay nhạt hơn (tối); `:disabled` về màu nút thường với chữ của mục bị tắt.
-**Tiêu điểm** (`:focus`) đổi hai thứ cùng lúc, nút không đổi cỡ, nền giữ màu nhấn: viền sang
-`focus_ring_color` (màu chữ cửa sổ, tương phản cao với nền cửa sổ) và chữ của nút gạch chân. Một màu
-viền không thể vừa ≥ 3:1 với nền cửa sổ vừa ≥ 3:1 với nền nút (ở chế độ tối viền sáng trên nút xanh
-nhạt chỉ 1,7:1), nên gạch chân (màu chữ của nút, ≥ 4,5:1 với nền nút) là dấu hiệu thứ hai, thấy rõ ở
-cả sáng lẫn tối. Mọi cặp chữ/nền đạt `MIN_CONTRAST` ở cả sáng lẫn tối (`primary_colors`). Các nút
-khác không có luật nào nên Fusion vẽ như cũ. Tô màu chỉ để nhấn: nút mặc định (Enter) vẫn là nút an
-toàn của hộp (“Từ chối”, “Không trùng”), không phải nút chính.
+**Token** (`tokens(dark)` → `Tokens`): giá trị theo mockup khung chat của kế hoạch nâng cấp giao diện
+(spec A1). Chỗ lệch mockup để đạt tương phản: `border_strong` sáng `#8C7B62` (mockup `#9C8C72` chỉ
+≈ 2,8:1 trên sidebar); `accent_hover`/`accent_pressed`, `success_bg`, `warning`, `warning_bg` là token
+mới (nút chính nền nhạt chữ đậm nên hover/pressed là màu riêng, không `darker()`). `offline` chỉ dùng
+cho chấm/icon (≥ 3:1); chữ “ngoại tuyến” dùng `text_muted`. Cặp đã kiểm: chữ ≥ `MIN_CONTRAST` trên
+các nền liệt kê ở tiêu chí (a) của `tests/ui/test_tokens.py`; viền/icon (`border_strong`,
+`accent_strong`, `success`, `warning`, `danger`, `offline`) ≥ 3:1 trên nền cửa sổ, nền nổi và
+sidebar; `accent_strong` (thanh tiến độ) ≥ 3:1 trên `track`.
 
-`DIALOG_MIN_WIDTH`: bề ngang tối thiểu chung của hộp nhận file và hộp ghép đôi.
+**Bảng màu** (`palette(dark)`, style Fusion): Window = surface; Base = surface_raised; AlternateBase =
+sidebar; Button = sidebar (sáng) / selected (tối: nền sidebar gần như trùng nền cửa sổ, nút Fusion
+mất cạnh); chữ (Text, WindowText, ButtonText, ToolTipText) = text; ToolTipBase =
+surface_raised; Highlight = accent_strong; HighlightedText = surface_raised (sáng) / surface (tối);
+Link = LinkVisited = accent_text; PlaceholderText và chữ mục bị tắt = text_muted; Light =
+surface_raised; Midlight = selected; Mid = border_strong; Dark = border_strong đậm thêm
+(`darker(115)`, ≥ 3:1 trên surface ở cả hai chế độ); Shadow = text; BrightText = surface_raised (sáng)
+/ surface (tối). Highlight là `accent_strong` chứ không phải bạc hà nhạt `accent`, vì Highlight còn tô
+thanh tiến độ, viền thả, hàng chọn, mục menu khay và viền tiêu điểm Fusion (`highlightedOutline`;
+sáng là `highlight().darker(125)`, tối Fusion vẽ sáng hơn): bạc hà nhạt chỉ ≈ 1,3:1 trên nền (WCAG
+1.4.11). `apply(app)` đặt style Fusion và bảng màu theo
+`QStyleHints.colorScheme()` (`Unknown` → sáng), rồi theo `colorSchemeChanged` để đổi theo hệ điều
+hành. Không dùng màu để mang thông tin: trạng thái luôn có chữ đi kèm.
 
-Không tải font hay ảnh nào: dùng font của hệ điều hành.
+**Thang chữ** (`font_for(style, base)`): TITLE +6 pt đậm (Bold), SECTION +2 pt Medium, cả hai dùng font
+điểm nhấn `ACCENT_FAMILY` nếu đã nạp (`accent_family()`), không thì font của `base`; BODY là `base`;
+CAPTION −1 pt, font của `base`, màu qua `TONE_PROPERTY`. `base` mặc định `QApplication.font()`; font
+đặt cỡ theo pixel thì cộng TITLE +8 px, SECTION +3 px, CAPTION −1 px. Không ghi cứng font thân: dùng
+font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
+
+**Stylesheet ứng dụng** (`stylesheet(dark, button_height)`, `apply` đặt): mọi luật có bộ chọn hẹp
+(`[property]` hoặc `#objectName`), nên widget không mang property thì Fusion vẽ như cũ.
+- `QPushButton[primary="true"]` — **nút chính** (hành động chính của mỗi màn / hộp: “Bắt đầu”, “Ghép
+  đôi” của khung nhập IP, “Nhận”, “Trùng khớp”): nền `accent`, chữ `accent_text`, viền 2 px
+  `accent_strong`, bo `RADIUS_CONTROL`, mã màu viết thẳng từ `primary_colors()` (không qua
+  `palette(highlight)`, vì Highlight là `accent_strong`). `min-height` theo chiều cao nút Fusion
+  thường đo lúc `apply` (cỡ chữ và lề Fusion khác nhau giữa Windows, macOS, Linux), nên cao bằng nút
+  bên cạnh. `:hover`/`:pressed` dùng `accent_hover`/`accent_pressed`; `:disabled` về màu nút thường với
+  chữ của mục bị tắt. **Tiêu điểm** (`:focus`) đổi hai thứ, nút không đổi cỡ: viền sang
+  `focus_ring_color` (màu chữ cửa sổ) và chữ gạch chân. Viền tiêu điểm ≥ 3:1 với cả nền nút lẫn nền
+  cửa sổ, nhưng so với viền thường `accent_strong` chỉ khác ≈ 1,7:1 ở chế độ tối, nên gạch chân (màu
+  chữ của nút, ≥ 4,5:1 với nền nút) là dấu hiệu thứ hai. Tô màu chỉ để nhấn: nút mặc định (Enter)
+  vẫn là nút an toàn của hộp (“Từ chối”, “Không trùng”), không phải nút chính.
+- `QLabel[tone="muted|success|warning|danger"]`: màu chữ theo token cùng tên (`muted` → `text_muted`).
+- `QFrame[surface="sidebar|raised|card"]`: nền `sidebar` (viền phải `border`, không bo) / nền
+  `surface_raised`, viền `border`, bo `RADIUS_CARD` / như `raised` nhưng bo `RADIUS_BLOCK`.
+
+Property (`PRIMARY_PROPERTY`, `TONE_PROPERTY`, `SURFACE_PROPERTY`) đặt **trước khi hiện** (stylesheet
+đọc property lúc polish); đặt sau khi widget đã hiện thì gọi `style().unpolish(w)` rồi
+`style().polish(w)`.
+
+`DIALOG_MIN_WIDTH`: bề ngang tối thiểu chung của hộp nhận file và hộp ghép đôi. `SPACING`: thang
+khoảng cách (px). `RADIUS_*`: góc bo (px) của control, thẻ, khối, bong bóng và đuôi bong bóng.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
+
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QGuiApplication, QPalette
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPalette
 from PySide6.QtWidgets import QApplication, QPushButton
 
 MIN_CONTRAST = 4.5
 PRIMARY_PROPERTY = "primary"  # dynamic property của nút chính (xem docstring module)
-_PRIMARY_FRAME = 8  # px: padding dọc 2·2 + viền 2·2 của nút chính (`primary_stylesheet`)
+TONE_PROPERTY = "tone"  # QLabel[tone="muted|success|warning|danger"]
+SURFACE_PROPERTY = "surface"  # QFrame[surface="sidebar|raised|card"]
+_PRIMARY_FRAME = 8  # px: padding dọc 2·2 + viền 2·2 của nút chính (`stylesheet`)
 DIALOG_MIN_WIDTH = 420  # px, hộp nhận file và hộp ghép đôi
+SPACING = (4, 8, 12, 16, 24, 32)  # px
+RADIUS_CONTROL, RADIUS_CARD, RADIUS_BLOCK, RADIUS_BUBBLE, RADIUS_BUBBLE_TAIL = 6, 8, 12, 14, 4
+ACCENT_FAMILY = "Bricolage Grotesque"
 _CONNECTED_PROPERTY = "teleport_theme_connected"
 
 _Role = QPalette.ColorRole
 _Group = QPalette.ColorGroup
 
-# Màu theo vai trò: (sáng, tối).
-_COLORS: dict[QPalette.ColorRole, tuple[str, str]] = {
-    _Role.Window: ("#f5f6f8", "#1e2126"),
-    _Role.WindowText: ("#1b1f24", "#e8eaed"),
-    _Role.Base: ("#ffffff", "#16181c"),
-    _Role.AlternateBase: ("#eef0f3", "#23272d"),
-    _Role.Text: ("#1b1f24", "#e8eaed"),
-    _Role.Button: ("#e9ecef", "#2a2e35"),
-    _Role.ButtonText: ("#1b1f24", "#e8eaed"),
-    _Role.BrightText: ("#ffffff", "#0b0d10"),
-    _Role.Highlight: ("#0b5cad", "#7ab8ff"),
-    _Role.HighlightedText: ("#ffffff", "#0b0d10"),
-    _Role.Link: ("#0b5cad", "#7ab8ff"),
-    _Role.LinkVisited: ("#5b3a9e", "#c3a6ff"),
-    _Role.ToolTipBase: ("#ffffff", "#2a2e35"),
-    _Role.ToolTipText: ("#1b1f24", "#e8eaed"),
-    _Role.PlaceholderText: ("#545b66", "#a9b0bb"),
-    _Role.Light: ("#ffffff", "#3a3f47"),
-    _Role.Midlight: ("#dfe3e8", "#30353c"),
-    _Role.Mid: ("#b8bec7", "#4a5059"),
-    _Role.Dark: ("#8a919c", "#0f1114"),
-    _Role.Shadow: ("#5c626b", "#000000"),
+
+@dataclass(frozen=True)
+class Tokens:
+    """Màu theo vai trò của một chế độ (sáng hoặc tối); xem docstring module."""
+
+    surface: QColor
+    surface_raised: QColor
+    sidebar: QColor
+    selected: QColor
+    border: QColor
+    border_strong: QColor
+    text: QColor
+    text_muted: QColor
+    accent: QColor
+    accent_hover: QColor
+    accent_pressed: QColor
+    accent_text: QColor
+    accent_strong: QColor
+    accent_subtle: QColor
+    bubble_out: QColor
+    bubble_in: QColor
+    track: QColor
+    offline: QColor
+    success: QColor
+    success_bg: QColor
+    warning: QColor
+    warning_bg: QColor
+    danger: QColor
+    danger_bg: QColor
+
+
+# (sáng, tối) cho từng token; thiếu hay thừa tên so với `Tokens` thì `tokens()` ném TypeError.
+_TOKENS: dict[str, tuple[str, str]] = {
+    "surface": ("#FBF6EC", "#1E1A16"),
+    "surface_raised": ("#FFFDF8", "#2D2721"),
+    "sidebar": ("#F3EBDC", "#25201B"),
+    "selected": ("#E9DFCB", "#3A3229"),
+    "border": ("#E2D6C2", "#3D352C"),
+    "border_strong": ("#8C7B62", "#857761"),
+    "text": ("#2A251E", "#F2EBDF"),
+    "text_muted": ("#665B4D", "#B8AC9A"),
+    "accent": ("#BFEBD9", "#2B5A4A"),
+    "accent_hover": ("#AEE3CD", "#25503F"),
+    "accent_pressed": ("#9DDBC1", "#204636"),
+    "accent_text": ("#0B5E47", "#A3E6CB"),
+    "accent_strong": ("#1E7F61", "#5CC9A0"),
+    "accent_subtle": ("#D9F2E6", "#21443A"),
+    "bubble_out": ("#D9F2E6", "#21443A"),
+    "bubble_in": ("#FFFDF8", "#2D2721"),
+    "track": ("#E7DECD", "#3D352C"),
+    "offline": ("#8A7F70", "#9A8E7D"),
+    "success": ("#256B42", "#6CD49A"),
+    "success_bg": ("#E1F1E6", "#1F3A2A"),
+    "warning": ("#8A5A00", "#F0C46C"),
+    "warning_bg": ("#FBEFD5", "#45381F"),
+    "danger": ("#A8361F", "#F2A38C"),
+    "danger_bg": ("#FBE6DD", "#4A2A22"),
 }
-# Chữ của mục bị tắt: vẫn đọc được (≥ MIN_CONTRAST trên nền của nó) nhưng khác rõ chữ thường.
-_DISABLED_TEXT = ("#5c636e", "#9aa1ad")
-_DISABLED_ROLES = (_Role.WindowText, _Role.Text, _Role.ButtonText)
+
+
+class TextStyle(Enum):
+    """Bậc chữ của thang chữ (xem docstring module)."""
+
+    TITLE = "title"
+    SECTION = "section"
+    BODY = "body"
+    CAPTION = "caption"
+
+
+# Cộng thêm vào cỡ của font gốc: (pt, px) cho font cỡ điểm / font cỡ pixel.
+_SIZE_DELTA: dict[TextStyle, tuple[float, int]] = {
+    TextStyle.TITLE: (6.0, 8),
+    TextStyle.SECTION: (2.0, 3),
+    TextStyle.BODY: (0.0, 0),
+    TextStyle.CAPTION: (-1.0, -1),
+}
+
+
+def tokens(dark: bool) -> Tokens:
+    """Token màu của chế độ sáng (`dark=False`) hay tối."""
+    index = 1 if dark else 0
+    return Tokens(**{name: QColor(pair[index]) for name, pair in _TOKENS.items()})
 
 
 def _linear(channel: float) -> float:
@@ -89,31 +184,49 @@ def is_dark(scheme: Qt.ColorScheme) -> bool:
 
 
 def palette(dark: bool) -> QPalette:
-    """Bảng màu sáng hay tối của Teleport."""
-    index = 1 if dark else 0
+    """Bảng màu sáng hay tối của Teleport, sinh từ token (ánh xạ ở docstring module)."""
+    t = tokens(dark)
+    on_highlight = t.surface if dark else t.surface_raised
+    roles: dict[QPalette.ColorRole, QColor] = {
+        _Role.Window: t.surface,
+        _Role.WindowText: t.text,
+        _Role.Base: t.surface_raised,
+        _Role.AlternateBase: t.sidebar,
+        _Role.Text: t.text,
+        _Role.Button: t.selected if dark else t.sidebar,
+        _Role.ButtonText: t.text,
+        _Role.BrightText: on_highlight,
+        _Role.Highlight: t.accent_strong,
+        _Role.HighlightedText: on_highlight,
+        _Role.Link: t.accent_text,
+        _Role.LinkVisited: t.accent_text,
+        _Role.ToolTipBase: t.surface_raised,
+        _Role.ToolTipText: t.text,
+        _Role.PlaceholderText: t.text_muted,
+        _Role.Light: t.surface_raised,
+        _Role.Midlight: t.selected,
+        _Role.Mid: t.border_strong,
+        _Role.Dark: t.border_strong.darker(115),
+        _Role.Shadow: t.text,
+    }
     pal = QPalette()
-    for role, colors in _COLORS.items():
-        pal.setColor(role, QColor(colors[index]))
-    for role in _DISABLED_ROLES:
-        pal.setColor(_Group.Disabled, role, QColor(_DISABLED_TEXT[index]))
+    for role, color in roles.items():
+        pal.setColor(role, color)
+    # Chữ của mục bị tắt: vẫn đọc được (≥ MIN_CONTRAST trên nền của nó) nhưng khác rõ chữ thường.
+    for role in (_Role.WindowText, _Role.Text, _Role.ButtonText):
+        pal.setColor(_Group.Disabled, role, t.text_muted)
     return pal
 
 
 def primary_colors(dark: bool) -> dict[str, tuple[QColor, QColor]]:
     """(chữ, nền) của nút chính theo trạng thái: `normal`, `hover`, `pressed`, `disabled`."""
+    t = tokens(dark)
     pal = palette(dark)
-    text = pal.color(_Role.HighlightedText)
-    base = pal.color(_Role.Highlight)
-    # Nền sáng: hover/pressed đậm hơn; nền tối (nút xanh nhạt, chữ tối): nhạt hơn. Cả hai cách đều
-    # làm tương phản với chữ tăng lên.
-    hover = base.lighter(110) if dark else base.darker(115)
-    pressed = base.lighter(120) if dark else base.darker(130)
-    disabled = (pal.color(_Group.Disabled, _Role.ButtonText), pal.color(_Role.Button))
     return {
-        "normal": (text, base),
-        "hover": (text, hover),
-        "pressed": (text, pressed),
-        "disabled": disabled,
+        "normal": (t.accent_text, t.accent),
+        "hover": (t.accent_text, t.accent_hover),
+        "pressed": (t.accent_text, t.accent_pressed),
+        "disabled": (pal.color(_Group.Disabled, _Role.ButtonText), pal.color(_Role.Button)),
     }
 
 
@@ -122,40 +235,76 @@ def focus_ring_color(dark: bool) -> QColor:
     return palette(dark).color(_Role.WindowText)
 
 
-def primary_stylesheet(dark: bool, button_height: int | None = None) -> str:
-    """Stylesheet ứng dụng: chỉ tô `QPushButton[primary="true"]` (xem docstring module).
+def accent_family() -> str | None:
+    """`ACCENT_FAMILY` nếu font điểm nhấn đã nạp vào ứng dụng, không thì None."""
+    return ACCENT_FAMILY if QFontDatabase.hasFamily(ACCENT_FAMILY) else None
+
+
+def font_for(style: TextStyle, base: QFont | None = None) -> QFont:
+    """Font của bậc chữ `style`, tính từ `base` (mặc định `QApplication.font()`)."""
+    font = QFont(base if base is not None else QApplication.font())
+    pt_delta, px_delta = _SIZE_DELTA[style]
+    if font.pointSizeF() > 0:
+        font.setPointSizeF(max(1.0, font.pointSizeF() + pt_delta))
+    elif font.pixelSize() > 0:
+        font.setPixelSize(max(1, font.pixelSize() + px_delta))
+    if style in (TextStyle.TITLE, TextStyle.SECTION):
+        family = accent_family()
+        if family is not None:
+            font.setFamilies([family])
+        font.setWeight(QFont.Weight.Bold if style is TextStyle.TITLE else QFont.Weight.Medium)
+    return font
+
+
+def stylesheet(dark: bool, button_height: int | None = None) -> str:
+    """Stylesheet ứng dụng, chỉ bộ chọn hẹp (xem docstring module).
 
     `button_height`: chiều cao `sizeHint` của nút Fusion thường trên máy này (`apply` đo); có thì nút
     chính cao đúng bằng nó, vì cỡ chữ và lề của Fusion khác nhau giữa các hệ điều hành.
     """
+    t = tokens(dark)
     pal = palette(dark)
     colors = primary_colors(dark)
     ring = focus_ring_color(dark).name()
-    selector = f'QPushButton[{PRIMARY_PROPERTY}="true"]'
-    return "\n".join(
-        [
-            f"{selector} {{",
-            "  background-color: palette(highlight);",
-            "  color: palette(highlighted-text);",
-            f"  border: 2px solid {colors['normal'][1].name()};",
-            "  border-radius: 4px;",
-            "  padding: 2px 12px;",  # + viền 2 px: cao bằng nút Fusion (chữ + 8 px)
-            "  min-width: 52px;",  # Fusion cho nút có chữ rộng ít nhất 80 px: 52 + 2·12 + 2·2
-            *([f"  min-height: {max(0, button_height - _PRIMARY_FRAME)}px;"] if button_height else []),
-            "}",
-            f"{selector}:hover {{ background-color: {colors['hover'][1].name()};"
-            f" border-color: {colors['hover'][1].name()}; }}",
-            f"{selector}:pressed {{ background-color: {colors['pressed'][1].name()};"
-            f" border-color: {colors['pressed'][1].name()}; }}",
-            f"{selector}:focus {{ border-color: {ring}; text-decoration: underline; }}",
-            f"{selector}:disabled {{ background-color: {colors['disabled'][1].name()};"
-            f" color: {colors['disabled'][0].name()}; border-color: {pal.color(_Role.Mid).name()}; }}",
-        ]
-    )
+    edge = t.accent_strong.name()
+    primary = f'QPushButton[{PRIMARY_PROPERTY}="true"]'
+    lines = [
+        f"{primary} {{",
+        f"  background-color: {colors['normal'][1].name()};",
+        f"  color: {colors['normal'][0].name()};",
+        f"  border: 2px solid {edge};",
+        f"  border-radius: {RADIUS_CONTROL}px;",
+        "  padding: 2px 12px;",  # + viền 2 px: cao bằng nút Fusion (chữ + 8 px)
+        "  min-width: 52px;",  # Fusion cho nút có chữ rộng ít nhất 80 px: 52 + 2·12 + 2·2
+        *([f"  min-height: {max(0, button_height - _PRIMARY_FRAME)}px;"] if button_height else []),
+        "}",
+        f"{primary}:hover {{ background-color: {colors['hover'][1].name()};"
+        f" color: {colors['hover'][0].name()}; }}",
+        f"{primary}:pressed {{ background-color: {colors['pressed'][1].name()};"
+        f" color: {colors['pressed'][0].name()}; }}",
+        f"{primary}:focus {{ border-color: {ring}; text-decoration: underline; }}",
+        f"{primary}:disabled {{ background-color: {colors['disabled'][1].name()};"
+        f" color: {colors['disabled'][0].name()}; border-color: {pal.color(_Role.Mid).name()}; }}",
+    ]
+    tones = {"muted": t.text_muted, "success": t.success, "warning": t.warning, "danger": t.danger}
+    lines += [
+        f'QLabel[{TONE_PROPERTY}="{name}"] {{ color: {color.name()}; }}' for name, color in tones.items()
+    ]
+    surface = f"QFrame[{SURFACE_PROPERTY}="
+    border = t.border.name()
+    lines += [
+        f'{surface}"sidebar"] {{ background-color: {t.sidebar.name()}; border: none;'
+        f" border-right: 1px solid {border}; border-radius: 0px; }}",
+        f'{surface}"raised"] {{ background-color: {t.surface_raised.name()};'
+        f" border: 1px solid {border}; border-radius: {RADIUS_CARD}px; }}",
+        f'{surface}"card"] {{ background-color: {t.surface_raised.name()};'
+        f" border: 1px solid {border}; border-radius: {RADIUS_BLOCK}px; }}",
+    ]
+    return "\n".join(lines)
 
 
 def apply(app: QGuiApplication, scheme: Qt.ColorScheme | None = None) -> None:
-    """Đặt style Fusion, bảng màu và stylesheet nút chính theo `scheme` (None: theo hệ điều hành);
+    """Đặt style Fusion, bảng màu và stylesheet ứng dụng theo `scheme` (None: theo hệ điều hành);
     theo dõi đổi chế độ."""
     if scheme is None:
         scheme = app.styleHints().colorScheme()
@@ -163,7 +312,7 @@ def apply(app: QGuiApplication, scheme: Qt.ColorScheme | None = None) -> None:
     dark = is_dark(scheme)
     app.setPalette(palette(dark))
     if isinstance(app, QApplication):
-        app.setStyleSheet(primary_stylesheet(dark, _plain_button_height()))
+        app.setStyleSheet(stylesheet(dark, _plain_button_height()))
     if not app.property(_CONNECTED_PROPERTY):
         app.setProperty(_CONNECTED_PROPERTY, True)
         app.styleHints().colorSchemeChanged.connect(lambda new: apply(app, new))

@@ -1313,8 +1313,9 @@ def test_theme_stylesheet_paints_primary_buttons(qapp, restore_style):
     theme.apply(qapp)
     css = _css(qapp)
     assert re.search(_PRIMARY_SEL, css), 'thiếu luật QPushButton[primary="true"]'
-    assert "palette(highlight)" in css
-    assert "palette(highlighted-text)" in css
+    text, background = theme.primary_colors(theme.is_dark(qapp.styleHints().colorScheme()))["normal"]
+    assert f"background-color: {background.name()}" in css, "nền nút chính là token accent"
+    assert f"color: {text.name()}" in css, "chữ nút chính là token accent_text"
     assert re.search(_PRIMARY_SEL + r":disabled", css), "thiếu trạng thái :disabled"
     assert re.search(_PRIMARY_SEL + r":(?:hover|pressed)", css), "thiếu :hover / :pressed"
     assert re.search(_PRIMARY_SEL + r":focus", css), "thiếu :focus thấy rõ"
@@ -1349,8 +1350,6 @@ def _distance(a, b) -> int:
 
 
 def test_primary_button_drawn_with_highlight_and_others_not(window, qapp, qtbot, restore_style):
-    from PySide6.QtGui import QPalette
-
     from teleport.ui import theme
 
     theme.apply(qapp)
@@ -1358,7 +1357,7 @@ def test_primary_button_drawn_with_highlight_and_others_not(window, qapp, qtbot,
     window.show()
     qtbot.waitExposed(window)
     QApplication.processEvents()
-    hl = qapp.palette().color(QPalette.ColorRole.Highlight)
+    hl = theme.primary_colors(theme.is_dark(qapp.styleHints().colorScheme()))["normal"][1]
     highlight = (hl.red(), hl.green(), hl.blue())
     start = _dominant(window.start_button.grab().toImage())
     assert _distance(start, highlight) <= 24, f"nút chính phải tô màu nhấn {highlight}, thấy {start}"
