@@ -751,6 +751,19 @@ class PairingGate:
         """Phiên đang chạy (khởi xướng hoặc trả lời), None nếu rảnh."""
         return self._active
 
+    def initiating_to(self, ip: str) -> bool:
+        """Máy này có đang khởi xướng ghép đôi tới `ip` không (`ip` là `Slot.ip` hay nằm trong `aliases`).
+
+        Dùng cho chế độ ẩn: máy đang ẩn vẫn nhận kết nối ẩn danh từ địa chỉ này, để luật hai
+        bên cùng chủ động của `admit` còn chạy được. `ip` cùng dạng chuẩn như `admit`; sai
+        → ValueError.
+        """
+        _check_ip(ip)
+        active = self._active
+        return (
+            active is not None and active.role is Role.INITIATOR and (ip == active.ip or ip in active.aliases)
+        )
+
     def begin_outgoing(self, ip: str, *, also: Iterable[str] = ()) -> Slot | None:
         """Giữ chỗ cho một phiên khởi xướng tới `ip`; None nếu đang có phiên khác.
 

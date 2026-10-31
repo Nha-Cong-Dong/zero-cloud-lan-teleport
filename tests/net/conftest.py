@@ -399,6 +399,7 @@ async def listener_factory(make_identity):
     """`await listener_factory(identity=None, trusted=(), on_connection=None, ...)` → `ListenerHarness`.
 
     Listener nghe trên 127.0.0.1, cổng 0, và luôn được `close()` khi test kết thúc.
+    `allow_anonymous` (C2, chế độ ẩn) chỉ được truyền cho `Listener` khi khác None.
     """
     harnesses: list[ListenerHarness] = []
 
@@ -410,17 +411,20 @@ async def listener_factory(make_identity):
         is_trusted=None,
         name: str = "Server",
         start: bool = True,
+        allow_anonymous=None,
     ) -> ListenerHarness:
         mod = connection_module()
         identity = identity if identity is not None else make_identity("server")
         h = ListenerHarness(identity, make_hello(identity, name))
         h.trusted_fps = {t.fingerprint for t in trusted}
+        extra = {} if allow_anonymous is None else {"allow_anonymous": allow_anonymous}
         h.listener = mod.Listener(
             identity,
             h.hello,
             [t.cert_pem() for t in trusted],
             is_trusted if is_trusted is not None else h.is_trusted,
             on_connection if on_connection is not None else h.on_connection,
+            **extra,
         )
         harnesses.append(h)
         if start:
