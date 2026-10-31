@@ -1209,6 +1209,21 @@ def has_color(image, rect: QRect, color: QColor, tol: int = 12) -> bool:
     return any(_close(px, color, tol) for px in pixels(image, rect))
 
 
+def has_blend(image, rect: QRect, bg: QColor, fg: QColor, *, at_least: float = 0.5, tol: int = 10) -> bool:
+    """Có điểm ảnh nằm trên đoạn pha nền → `fg`, đậm ít nhất `at_least` (chữ khử răng cưa)."""
+    span = [fg.red() - bg.red(), fg.green() - bg.green(), fg.blue() - bg.blue()]
+    norm = sum(c * c for c in span)
+    for px in pixels(image, rect):
+        d = [px.red() - bg.red(), px.green() - bg.green(), px.blue() - bg.blue()]
+        t = sum(a * b for a, b in zip(d, span, strict=True)) / norm
+        if t < at_least:
+            continue
+        t = min(t, 1.0)
+        if all(abs(d[i] - t * span[i]) <= tol for i in range(3)):
+            return True
+    return False
+
+
 def dominant(image, rect: QRect) -> QColor:
     counts = collections.Counter(px.name() for px in pixels(image, rect))
     return QColor(counts.most_common(1)[0][0])
@@ -1231,10 +1246,11 @@ def test_row_colors(window, qtbot, ui_theme, tmp_path, dark):
     off_rect = row_rect_in_window(window, m.row_of(off.device_id))
     assert _close(dominant(image, sel_rect), tok.selected, 3), "nền hàng đang chọn = selected"
     assert _close(dominant(image, busy_rect), tok.sidebar, 3), "hàng thường: nền sidebar"
-    text_block = QRect(
-        busy_rect.left() + 8 + 40 + 12, busy_rect.top(), busy_rect.width() - 60, busy_rect.height()
-    )
-    assert has_color(image, text_block, tok.accent_text, 16), "dòng phụ BUSY màu accent_text"
+    # Nửa dưới của khối chữ = dòng phụ (tên ở nửa trên). Chữ nhỏ được khử răng cưa: trên Linux
+    # (FreeType) có thể không điểm ảnh nào đạt đúng màu chữ, nên tìm điểm pha giữa nền và màu chữ.
+    half = busy_rect.height() // 2
+    status_block = QRect(busy_rect.left() + 8 + 40 + 12, busy_rect.top() + half, busy_rect.width() - 60, half)
+    assert has_blend(image, status_block, tok.sidebar, tok.accent_text), "dòng phụ BUSY màu accent_text"
     avatar = QRect(off_rect.left(), off_rect.top(), 8 + 40 + 4, off_rect.height())
     assert has_color(image, avatar, tok.offline, 16), "chấm ngoại tuyến có vòng offline"
 
