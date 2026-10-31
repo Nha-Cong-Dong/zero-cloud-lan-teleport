@@ -44,7 +44,7 @@ font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
 **Stylesheet ứng dụng** (`stylesheet(dark, button_height)`, `apply` đặt): mọi luật có bộ chọn hẹp
 (`[property]` hoặc `#objectName`), nên widget không mang property thì Fusion vẽ như cũ.
 - `QPushButton[primary="true"]` — **nút chính** (hành động chính của mỗi màn / hộp: “Bắt đầu”, “Ghép
-  đôi” của khung nhập IP, “Nhận”, “Trùng khớp”): nền `accent`, chữ `accent_text`, viền 2 px
+  đôi” của khung nhập IP, “Nhận”, “Trùng khớp”, “Thử lại”): nền `accent`, chữ `accent_text`, viền 2 px
   `accent_strong`, bo `RADIUS_CONTROL`, mã màu viết thẳng từ `primary_colors()` (không qua
   `palette(highlight)`, vì Highlight là `accent_strong`). `min-height` theo chiều cao nút Fusion
   thường đo lúc `apply` (cỡ chữ và lề Fusion khác nhau giữa Windows, macOS, Linux), nên cao bằng nút

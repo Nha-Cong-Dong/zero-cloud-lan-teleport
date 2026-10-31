@@ -74,7 +74,8 @@ from __future__ import annotations
 import math
 import ntpath
 import sys
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from enum import StrEnum
 from pathlib import Path
 
@@ -738,10 +739,13 @@ class TransfersView(QWidget):
     """Danh sách lượt truyền của phiên, mỗi `TransferKey` một thẻ."""
 
     cancel_requested = Signal(object)  # TransferKey
+    content_changed = Signal()  # thẻ mới, thẻ kết thúc hay bị gỡ, dải thông báo đổi (xem `_changes`)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._rows: dict[TransferKey, TransferRow] = {}
+        self._change_depth = 0  # độ sâu lời gọi lồng của `_changes`
+        self._changed = False
         self._names: dict[str, str | None] = {}
         self._connected: dict[str, bool] = {}
         self._receive_dir: Path | None = None
@@ -770,7 +774,7 @@ class TransfersView(QWidget):
         self.notice_close = QPushButton()
         self.notice_close.setObjectName("transfersNoticeClose")
         self.notice_close.setAutoDefault(False)
-        self.notice_close.clicked.connect(self.hide_notice)
+        self.notice_close.clicked.connect(self._close_clicked)
         # Biểu tượng thông tin của style (trang trí: câu đã đủ nghĩa, không nhận tiêu điểm).
         self.notice_icon = QLabel()
         self.notice_icon.setObjectName("transfersNoticeIcon")
@@ -827,6 +831,14 @@ class TransfersView(QWidget):
     def row(self, key: TransferKey) -> TransferRow | None:
         return self._rows.get(key)
 
+    def has_content(self) -> bool:
+        """Có thẻ nào hay dải thông báo đang hiện (đúng cả khi cửa sổ đang ẩn xuống khay)."""
+        return bool(self._rows) or not self.notice_frame.isHidden()
+
+    def active_count(self) -> int:
+        """Số thẻ chưa kết thúc (`finished` False; `SUSPENDED` giữ thẻ như cũ nên vẫn tính)."""
+        return sum(1 for row in self._rows.values() if not row.finished)
+
     def show_notice(
         self,
         text: str,
@@ -838,9 +850,14 @@ class TransfersView(QWidget):
         `action_text` và `on_action` cùng có → thêm một nút hành động (trước nút “Đóng”); bấm thì
         ẩn thông báo rồi gọi `on_action`. Thiếu một trong hai → không có nút.
         """
-        if not text:
-            self.hide_notice()
-            return
+        with self._changes():
+            self._mark_changed()
+            if not text:
+                self.hide_notice()
+                return
+            self._show_notice(text, action_text, on_action)
+
+    def _show_notice(self, text: str, action_text: str | None, on_action: Callable[[], None] | None) -> None:
         self.notice_label.setText(text)
         self.notice_label.setAccessibleDescription(text)
         self.notice_frame.setAccessibleDescription(text)
@@ -859,11 +876,13 @@ class TransfersView(QWidget):
 
     def hide_notice(self) -> None:
         """Ẩn dải thông báo (nút “Đóng”). Đang có tiêu điểm thì Qt tự chuyển sang widget kế tiếp."""
-        self.notice_frame.setVisible(False)
-        self.notice_label.clear()
-        self.notice_label.setAccessibleDescription("")
-        self.notice_frame.setAccessibleDescription("")
-        self._clear_notice_action()
+        with self._changes():
+            self._mark_changed()
+            self.notice_frame.setVisible(False)
+            self.notice_label.clear()
+            self.notice_label.setAccessibleDescription("")
+            self.notice_frame.setAccessibleDescription("")
+            self._clear_notice_action()
 
     def notice_text(self) -> str | None:
         """Chữ của thông báo đang hiện; không có → None (test)."""
@@ -896,38 +915,48 @@ class TransfersView(QWidget):
 
     def load_snapshot(self, infos: Iterable[TransferInfo]) -> None:
         """Ảnh chụp `transfers()`: thêm thẻ cho lượt chưa có, thẻ đã có giữ nguyên."""
-        for info in infos:
-            if info.key in self._rows:
-                continue
-            row = self._add_row(info.key)
-            row.set_info(info)
-            row.raise_shown(info.done_bytes + info.unsynced_bytes, info.total_bytes)
-            self._render_text(row)
+        with self._changes():
+            self._mark_changed()
+            for info in infos:
+                if info.key in self._rows:
+                    continue
+                row = self._add_row(info.key)
+                row.set_info(info)
+                row.raise_shown(info.done_bytes + info.unsynced_bytes, info.total_bytes)
+                self._render_text(row)
 
     def remove(self, key: TransferKey) -> None:
         """Gỡ thẻ của `key` (không có → bỏ qua). Sự kiện tới sau sẽ dựng lại thẻ: bên gọi tự lọc."""
-        row = self._rows.pop(key, None)
-        if row is None:
-            return
-        self._list_layout.removeWidget(row)
-        row.setParent(None)
-        row.deleteLater()
-        self._update_empty()
-
-    def clear(self) -> None:
-        """Xóa mọi thẻ, thông báo và trạng thái kết nối đã biết (host mới, “Thử lại”)."""
-        self.hide_notice()
-        self._connected.clear()
-        rows = list(self._rows.values())
-        self._rows.clear()
-        for row in rows:
+        with self._changes():
+            self._mark_changed()
+            row = self._rows.pop(key, None)
+            if row is None:
+                return
             self._list_layout.removeWidget(row)
             row.setParent(None)
             row.deleteLater()
-        self._update_empty()
+            self._update_empty()
+
+    def clear(self) -> None:
+        """Xóa mọi thẻ, thông báo và trạng thái kết nối đã biết (host mới, “Thử lại”)."""
+        with self._changes():
+            self._mark_changed()
+            self.hide_notice()
+            self._connected.clear()
+            rows = list(self._rows.values())
+            self._rows.clear()
+            for row in rows:
+                self._list_layout.removeWidget(row)
+                row.setParent(None)
+                row.deleteLater()
+            self._update_empty()
 
     def handle(self, update: TransferUpdate) -> None:
         """Nhận một `TransferUpdate` của node (đã về thread Qt)."""
+        with self._changes():
+            self._handle(update)
+
+    def _handle(self, update: TransferUpdate) -> None:
         if isinstance(update, TransferProgress):
             self._on_progress(update)
         elif isinstance(update, TransferStatusChanged):
@@ -995,10 +1024,35 @@ class TransfersView(QWidget):
         self.notice_action.setAccessibleDescription("")
 
     def _notice_action_clicked(self) -> None:
-        callback = self._notice_callback
+        with self._changes():
+            callback = self._notice_callback
+            self.hide_notice()
+            if callback is not None:
+                callback()
+
+    def _close_clicked(self) -> None:
         self.hide_notice()
-        if callback is not None:
-            callback()
+
+    @contextmanager
+    def _changes(self) -> Iterator[None]:
+        """Gộp thay đổi nội dung: `content_changed` phát đúng một lần khi lời gọi ngoài cùng xong, nếu
+        có thay đổi (lời gọi lồng như `clear` → `hide_notice`, `load_snapshot` → nhiều `_add_row` không
+        phát thêm). Mỗi lời gọi công khai `show_notice`, `hide_notice`, `clear`, `load_snapshot`,
+        `remove` luôn phát một lần; `handle` chỉ khi có thẻ mới hay thẻ vừa kết thúc."""
+        self._change_depth += 1
+        try:
+            yield
+        finally:
+            self._change_depth -= 1
+            if self._change_depth == 0 and self._changed:
+                self._changed = False
+                self.content_changed.emit()
+
+    def _mark_changed(self) -> None:
+        if self._change_depth:
+            self._changed = True
+        else:
+            self.content_changed.emit()
 
     def _ensure(self, key: TransferKey) -> TransferRow:
         row = self._rows.get(key)
@@ -1016,6 +1070,7 @@ class TransfersView(QWidget):
         QWidget.setTabOrder(row.open_button, row.cancel_button)
         row.show()  # hiện ngay (layout chỉ hẹn hiện), để nút “Mở thư mục” hiện được trong cùng lượt
         self._update_empty()
+        self._mark_changed()
         return row
 
     def _on_progress(self, update: TransferProgress) -> None:
@@ -1055,6 +1110,7 @@ class TransfersView(QWidget):
             return
         row.set_info(update.info)
         row.finished = True
+        self._mark_changed()
         row.result = update
         if update.result is TransferResult.DONE:
             row.progress_bar.setValue(BAR_MAX)
@@ -1184,6 +1240,7 @@ class TransfersView(QWidget):
         close = t("Transfers", "Đóng")
         self.notice_close.setText(close)
         self.notice_close.setAccessibleName(close)
+        self._scroll.setAccessibleName(t("Transfers", "Lượt truyền"))
         for row in self._rows.values():
             self._render_text(row)
         self._update_empty()

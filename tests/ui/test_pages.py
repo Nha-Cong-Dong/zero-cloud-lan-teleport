@@ -583,7 +583,8 @@ def test_tab_cycle_never_reaches_hidden_page(window, qtbot, tmp_path):
     _running(window, tmp_path)
     _activate(qtbot, window)
     assert not button.isVisibleTo(window)
-    start = window.status_label
+    # Spec B1 mục 8c: ở RUNNING `status_label` nằm trong màn Bắt đầu (đang ẩn), nên bắt đầu từ tên máy.
+    start = window.name_label
     start.setFocus()
     qtbot.waitUntil(lambda: window.focusWidget() is start, timeout=1000)
     visited = []
@@ -595,7 +596,7 @@ def test_tab_cycle_never_reaches_hidden_page(window, qtbot, tmp_path):
         visited.append(focus)
         if focus is start:
             break
-    assert visited[-1] is start, f"Tab không quay vòng về status_label sau {len(visited)} bước"
+    assert visited[-1] is start, f"Tab không quay vòng về name_label sau {len(visited)} bước"
     assert not any(_focus_in(page, w) for w in visited), "Tab vào widget của trang đang ẩn"
 
 
