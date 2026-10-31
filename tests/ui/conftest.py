@@ -668,3 +668,42 @@ def trust_each_other():
         return id_a, id_b
 
     return run
+
+
+# =================================================================================================
+# Theme sáng/tối cho test widget và test chụp ảnh (spec A3, mục 2.6)
+# =================================================================================================
+
+
+@pytest.fixture
+def ui_theme(qapp):
+    """`ui_theme(dark) -> Tokens`: `theme.apply(qapp, Dark/Light)`, trả token của chế độ đó.
+
+    Gọi được nhiều lần trong một test. Teardown khôi phục `qapp.palette()`, `qapp.styleSheet()` và tên
+    style lưu lúc dựng fixture. Khi đang có stylesheet, `qapp.style()` là proxy QStyleSheetStyle (tên
+    rỗng), nên tên style thật đọc sau khi tạm gỡ stylesheet.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPalette
+
+    from teleport.ui import theme
+
+    old_palette = QPalette(qapp.palette())
+    old_css = qapp.styleSheet()
+    if old_css:
+        qapp.setStyleSheet("")
+    old_style = qapp.style().name()
+    if old_css:
+        qapp.setStyleSheet(old_css)
+
+    def run(dark: bool):
+        theme.apply(qapp, Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
+        return theme.tokens(dark)
+
+    yield run
+
+    qapp.setStyleSheet("")
+    if old_style:
+        qapp.setStyle(old_style)
+    qapp.setPalette(old_palette)
+    qapp.setStyleSheet(old_css)

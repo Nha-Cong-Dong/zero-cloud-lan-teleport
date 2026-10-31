@@ -367,7 +367,7 @@ def test_address_label_is_plain_selectable_tab_focusable_and_named(window):
 
 
 def test_address_label_sits_right_below_detail_label(window):
-    layout = window.centralWidget().layout()
+    layout = window.home_page.layout()
     assert layout.indexOf(window.address_label) == layout.indexOf(window.detail_label) + 1
 
 

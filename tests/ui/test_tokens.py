@@ -83,7 +83,29 @@ NON_TEXT_PAIRS: dict[str, tuple[str, ...]] = {
     "offline": ("surface", "surface_raised", "sidebar"),
 }
 
-TONES = {"muted": "text_muted", "success": "success", "warning": "warning", "danger": "danger"}
+# spec A3 (mục 10, ý 12): thêm luật `QLabel[tone="accent"]` màu `accent_text` (chữ của `StatusBadge` BUSY).
+TONES = {
+    "muted": "text_muted",
+    "success": "success",
+    "warning": "warning",
+    "danger": "danger",
+    "accent": "accent_text",
+}
+
+# spec A3, mục 6 T1: các cặp mà thành phần dùng chung (`ui/widgets.py`) vẽ. Tách riêng khỏi bảng A1
+# để khi đỏ biết ngay cặp nào là của A3. Không hạ ngưỡng: đỏ thì chỉnh token tối thiểu.
+A3_TEXT_PAIRS: dict[str, tuple[str, ...]] = {
+    "text": ("accent_subtle", "success_bg", "warning_bg", "danger_bg"),  # chữ của InfoBar
+    "accent_text": ("sidebar", "selected", "bubble_in", "bubble_out"),  # badge BUSY, chữ nhấn
+    "success": ("bubble_in", "bubble_out", "selected"),
+    "warning": ("sidebar",),
+}
+A3_NON_TEXT_PAIRS: dict[str, tuple[str, ...]] = {
+    "accent_strong": ("accent_subtle", "bubble_in", "selected"),  # viền InfoBar INFO, ATTENTION, chấm BUSY
+    "success": ("selected",),
+    "offline": ("selected",),  # chấm/vòng OFFLINE trên hàng đang chọn
+    "danger": ("bubble_out",),  # viền DANGER của bong bóng gửi đi
+}
 
 # Dòng chữ của các nhóm màu QPalette mà người dùng thấy khi cửa sổ có/không có tiêu điểm.
 LIVE_GROUPS = (Group.Active, Group.Inactive)
@@ -322,6 +344,36 @@ def test_border_and_icon_tokens_reach_3_on_their_backgrounds(dark, fg_name):
     low = [
         f"{fg_name} {_hex(fg)} / {bg} {_hex(getattr(tok, bg))}: {wcag_ratio(fg, getattr(tok, bg)):.2f}"
         for bg in NON_TEXT_PAIRS[fg_name]
+        if wcag_ratio(fg, getattr(tok, bg)) < NON_TEXT_MIN
+    ]
+    assert not low, f"viền/icon < {NON_TEXT_MIN}:1: {low}"
+
+
+@MODES
+@pytest.mark.parametrize("fg_name", list(A3_TEXT_PAIRS))
+def test_a3_text_pairs_reach_4_5(dark, fg_name):
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark)
+    fg = getattr(tok, fg_name)
+    low = [
+        f"{fg_name} {_hex(fg)} / {bg} {_hex(getattr(tok, bg))}: {wcag_ratio(fg, getattr(tok, bg)):.2f}"
+        for bg in A3_TEXT_PAIRS[fg_name]
+        if wcag_ratio(fg, getattr(tok, bg)) < TEXT_MIN
+    ]
+    assert not low, f"chữ < {TEXT_MIN}:1: {low}"
+
+
+@MODES
+@pytest.mark.parametrize("fg_name", list(A3_NON_TEXT_PAIRS))
+def test_a3_non_text_pairs_reach_3(dark, fg_name):
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark)
+    fg = getattr(tok, fg_name)
+    low = [
+        f"{fg_name} {_hex(fg)} / {bg} {_hex(getattr(tok, bg))}: {wcag_ratio(fg, getattr(tok, bg)):.2f}"
+        for bg in A3_NON_TEXT_PAIRS[fg_name]
         if wcag_ratio(fg, getattr(tok, bg)) < NON_TEXT_MIN
     ]
     assert not low, f"viền/icon < {NON_TEXT_MIN}:1: {low}"
