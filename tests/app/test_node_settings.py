@@ -1223,6 +1223,15 @@ async def test_restore_late_handle_closed_on_old_dir_after_change(
             rd_spy.add("open_done", tid)
 
     monkeypatch.setattr(storage.ReceiveDir, "open_for_resume", open_for_resume)
+    # `cleanup` đánh dấu từng lượt `_busy` trong lúc xét; chạy trùng lúc với việc mở lại tới muộn trên
+    # thư mục cũ thì việc đó gặp NotResumableError “đang được dùng” (đã thấy trên CI chạy song song).
+    # Ca này kiểm handle tới muộn *mở được* thì được đóng đúng chỗ, nên dọn tạm bỏ qua lượt này.
+    real_cleanup = storage.ReceiveDir.cleanup
+
+    def cleanup(rd, wall_now, *, own_device_id, skip, retention):
+        return real_cleanup(rd, wall_now, own_device_id=own_device_id, skip=skip | {tid}, retention=retention)
+
+    monkeypatch.setattr(storage.ReceiveDir, "cleanup", cleanup)
     new = tmp_path / "nhan-moi"
     try:
         A = await receiver("A", receive_dir=old, auto_accept=True)

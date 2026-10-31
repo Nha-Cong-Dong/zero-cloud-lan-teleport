@@ -62,6 +62,7 @@ import math
 import os
 import platform
 import re
+import socket
 import ssl
 import time
 from collections.abc import Callable, Coroutine, Iterable, Sequence
@@ -191,9 +192,20 @@ def device_os() -> str:
     return validate_os(value)
 
 
+def _hostname() -> str:
+    """Hostname như `platform.node()` (cùng `socket.gethostname()`, lỗi → chuỗi rỗng) nhưng không qua
+    `platform.uname()`: trên Windows (Python 3.12+) lần gọi `uname()` đầu tiên truy vấn WMI qua COM,
+    mất hàng chục tới hàng trăm ms; gọi từ thread Qt (màn “Bắt đầu”) lúc máy bận từng làm tiến trình
+    crash trên CI Windows. Seam cấp module cho test."""
+    try:
+        return socket.gethostname()
+    except OSError:
+        return ""
+
+
 def default_device_name(identity: Identity) -> str:
     """Tên thiết bị mặc định: hostname (bỏ đuôi `.local`), không dùng được thì `Teleport-<4 ký tự mã>`."""
-    raw = platform.node().strip()
+    raw = _hostname().strip()
     if raw[-len(_LOCAL_SUFFIX) :].lower() == _LOCAL_SUFFIX:
         raw = raw[: -len(_LOCAL_SUFFIX)]
     try:

@@ -912,8 +912,8 @@ def planned_device_name() -> str:
     Hostname dùng được (gần như luôn vậy) thì đúng là tên đó; không thì app dùng `Teleport-<4 ký tự
     đầu mã máy>`, mà mã máy chưa có nên hiện `Teleport-????`. Không I/O đĩa hay mạng.
 
-    Chạy trên thread Qt: `platform.node()` lần đầu có thể mất vài trăm ms (đo được 50–265 ms trên
-    Windows), chỉ một lần lúc mở màn “Bắt đầu”; chấp nhận được.
+    Chạy trên thread Qt, nên hostname lấy bằng `socket.gethostname()` (`app.node._hostname`), không qua
+    `platform.uname()` (truy vấn WMI qua COM trên Windows, docstring của `_hostname`).
     """
     return app_node.default_device_name(cast(Identity, _NoIdentityYet()))
 
