@@ -123,7 +123,7 @@ class PairingOutcome(StrEnum):
     VERSION_MISMATCH = "version_mismatch"  # net.VersionMismatch
     BUSY = "busy"  # máy này đang có phiên khác (begin_outgoing → None)
     SELF = "self"  # máy kia chính là máy này
-    SAVE_FAILED = "save_failed"  # hai bên đã xác nhận nhưng store.add lỗi
+    SAVE_FAILED = "save_failed"  # hai bên đã xác nhận nhưng `before_save` hay `store.add` lỗi
     PROMPT_FAILED = "prompt_failed"  # on_prompt raise: không hiện được mã nên đã hủy phiên
 
 
@@ -285,19 +285,20 @@ class PairingService:
         on_finished: Callable[[PairingFinished], None],
         on_trust_changed: Callable[[], object],  # giá trị trả về bị bỏ qua
         accepting: bool = False,
+        before_save: Callable[[str], None] | None = None,
     ) -> None:
         """`hello.device_id` khác danh tính → ValueError.
 
         `on_prompt=None`: node không hiện mã được nên không ghép đôi được; khi đó
         `accepting=True` → ValueError, và `pair_with` → ValueError.
 
+        `before_save(device_id)`: gọi đồng bộ ngay trước `store.add`, trong cùng khối (Node đặt
+        lại cài đặt theo thiết bị). Raise thì không ghi `trusted.json`, kết quả `SAVE_FAILED`.
+
         Đọc khóa riêng để ký khi ghép đôi (`load_pairing_signer`): không đọc được, hỏng hay
         không khớp chứng chỉ → IdentityError.
         """
-        if not isinstance(hello, Hello):
-            raise ValueError("hello phải là Hello")
-        if hello.device_id != identity.device_id:
-            raise ValueError("hello.device_id phải là device_id của danh tính này")
+        self._check_hello(identity, hello)
         if on_prompt is None and accepting is True:
             raise ValueError("không có on_prompt thì không nhận ghép đôi được (accepting=True)")
         own = peer_cert_from_pem(identity.cert_pem())  # PEM đã chuẩn hóa, giống bản máy kia nhận
@@ -313,6 +314,22 @@ class PairingService:
         self._runs: dict[int, _Run] = {}  # slot.id → phiên đang chạy
         self._closed = False
         self._aborted = False  # abort_all đã chạy: không bao giờ ghi trusted.json nữa
+        self._before_save = before_save
+
+    @staticmethod
+    def _check_hello(identity: Identity, hello: object) -> None:
+        if not isinstance(hello, Hello):
+            raise ValueError("hello phải là Hello")
+        if hello.device_id != identity.device_id:
+            raise ValueError("hello.device_id phải là device_id của danh tính này")
+
+    def set_hello(self, hello: Hello) -> None:
+        """Thay `hello` cho các phiên khởi xướng từ giờ (máy này đổi tên). Kiểm như constructor.
+
+        Phiên đang chạy giữ `hello` đã gửi. Vai trả lời gửi `hello` của `Listener` (`Listener.set_hello`).
+        """
+        self._check_hello(self._identity, hello)
+        self._hello = hello
 
     @property
     def gate(self) -> PairingGate:
@@ -800,6 +817,13 @@ class PairingService:
             log.warning("ghép đôi: bỏ lưu thiết bị %s vì node đang dừng", peer.device_id[:8])
             run.save_failed = True
             return
+        if self._before_save is not None:
+            try:
+                self._before_save(peer.device_id)
+            except Exception as e:
+                log.error("ghép đôi: không lưu được thiết bị %s: %s", peer.device_id[:8], type(e).__name__)
+                run.save_failed = True
+                return
         try:
             # Ghép đôi lại cũng ghi đè mục cũ: tên theo hello, paired_at mới (protocol mục 5.5).
             run.device = self._store.add(PeerCert(peer.device_id, peer.fingerprint, peer.pem), action.name)

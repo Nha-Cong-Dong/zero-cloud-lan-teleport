@@ -60,7 +60,16 @@
   (`_record_history`, trước `_forget_transfer` và trước `_emit`); nạp song song với bia mộ trong
   `restore`, xả song song với bia mộ trong `close()` cùng hạn `TOMBSTONE_FLUSH_TIMEOUT`.
 - **Dọn tạm** (`cleanup_temps`, `Node` hẹn giờ mỗi `CLEANUP_INTERVAL`): `skip` là lượt nhận engine
-  còn giữ và hàng đĩa còn sống, chụp đồng bộ ngay trước khi giao việc.
+  còn giữ và hàng đĩa còn sống, chụp đồng bộ ngay trước khi giao việc; ngưỡng theo
+  `set_temp_retention` (cài đặt), chưa đặt thì `storage.TEMP_RETENTION`.
+- **Nhận hay không** (`engine.receiving`): có thư mục nhận, không `pause_receiving`, chưa đóng; chỉ
+  gán thuộc tính, không gọi engine. Hỏi trước khi nhận theo thiết bị (`ask_before_receive`, đọc lúc
+  `AskUser`); `auto_accept` (`--yes`) tự nhận mọi thiết bị.
+- **Đổi thư mục nhận** (`replace_receive_dir`, chỉ khi `receive_dir_busy()` sai): thư mục cũ
+  thôi dùng và đóng khi không còn ai dùng (`_close_retired`). Mọi việc đĩa chụp thư mục nhận đồng
+  bộ lúc giao việc (hàng đĩa giữ `lane.rd`; dọn tạm, kiểm chỗ trống, `discard_temp`, đóng handle
+  của khôi phục nhận `rd` tường minh), đăng ký là người dùng của nó (`_DirUse`), không đọc lại
+  `_receive_dir` sau `await`.
 
 `preview_sources(paths)` kiểm trước các file sẽ gửi mà không cần node (cùng lỗi như `send`), để
 CLI báo lỗi file trước khi lấy `node.lock` hay đụng mạng.
@@ -197,6 +206,7 @@ __all__ = [
     "FileDone",
     "FileEntry",
     "OfferReceived",
+    "ReceiveDirBusy",
     "SourceError",
     "SourceErrorKind",
     "SourceFile",
@@ -449,6 +459,11 @@ async def preview_sources(paths: Sequence[str | os.PathLike[str]]) -> list[Sourc
 # ---- Việc đĩa --------------------------------------------------------------------------------
 
 
+class ReceiveDirBusy(Exception):
+    """Không đổi được thư mục nhận: còn lượt nhận (ở bất kỳ pha nào, kể cả `offer` chờ hỏi, xếp
+    hàng, chờ nối lại), hàng đĩa còn sống, hay lượt thừa của khôi phục đang được xóa."""
+
+
 class _JobDropped(Exception):
     """Việc đĩa bị `DiskExecutor.shutdown()` bỏ trước khi chạy (không phải task này bị hủy)."""
 
@@ -526,6 +541,14 @@ def _recency(scan: TempScan) -> tuple[bool, float, str]:
     return (last is not None, 0.0 if last is None else last, scan.transfer_id)
 
 
+def _positive_seconds(name: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise TypeError(f"{name} phải là số giây")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} phải là số hữu hạn > 0")
+    return float(value)
+
+
 def _error_label(e: BaseException) -> str:
     """Loại lỗi cho log, kèm `errno` nếu có; không bao giờ `str(e)` (có thể mang đường dẫn, mvp N9)."""
     number = getattr(e, "errno", None)
@@ -551,6 +574,9 @@ class _DiskLane:
 
     device_id: str
     transfer_id: str
+    # Thư mục nhận chụp đồng bộ lúc dựng hàng; mọi việc đĩa của hàng dùng nó (không đọc lại
+    # `TransferManager._receive_dir`, có thể đã đổi). None: không có thư mục nhận (hàng lỗi ngay).
+    rd: ReceiveDir | None = None
     ops: deque[tuple[_LaneAction, bytearray | None]] = field(default_factory=deque)
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     stop: threading.Event = field(default_factory=threading.Event)  # dừng `Reread` đang chạy
@@ -570,6 +596,20 @@ class _DiskLane:
     create_job: DiskJob[TransferTemp] | None = None
     finalize_job: DiskJob[Path] | None = None  # `Finalize` đã giao cho executor, chưa xong
     waiters: set[asyncio.Event] = field(default_factory=set)  # bên đọc khung chờ chỗ trong hàng ghi
+
+
+@dataclass(eq=False)
+class _DirUse:
+    """Ai đang dùng một `ReceiveDir` (`_retire_receive_dir` chỉ đóng nó khi không còn ai).
+
+    `users`: task đã chụp thư mục này (hàng đĩa, dọn tạm, kiểm chỗ trống, `discard_temp`, đóng
+    handle của khôi phục), đăng ký đồng bộ lúc chụp, trả khi task xong. `jobs`: việc đĩa đã giao
+    với thư mục này mà có thể chưa `settled` (task chờ nó có thể đã thôi chờ vì quá hạn).
+    """
+
+    users: int = 0
+    jobs: set[DiskJob[Any]] = field(default_factory=set)
+    idle: asyncio.Event = field(default_factory=asyncio.Event)  # đặt khi `users` về 0
 
 
 @dataclass(eq=False)
@@ -706,10 +746,13 @@ class TransferManager:
         on_event: Callable[[TransferUpdate], None] | None,
         new_id: Callable[[], int],
         set_hold: Callable[[str, bool], None],
+        ask_before_receive: Callable[[str], bool] | None = None,
     ) -> None:
         """Gọi trong event loop. `new_id` cấp `data_id`; `set_hold(device_id, held)` → `LinkTracker.hold`.
 
         `config_dir`: thư mục cấu hình của node, nơi đọc/ghi `tombstones.json`.
+        `ask_before_receive(device_id)`: chính sách hỏi theo thiết bị, đọc đúng lúc có `offer` cần
+        hỏi; chỉ khi trả đúng `False` thì tự nhận (raise → vẫn hỏi). None: luôn hỏi (trừ `auto_accept`).
         """
         self._identity = identity
         self._hello = hello
@@ -720,8 +763,12 @@ class TransferManager:
         self._on_event = on_event
         self._new_id = new_id
         self._set_hold = set_hold
+        self._ask_before_receive = ask_before_receive
         self._loop = asyncio.get_running_loop()
         self._engine = TransferEngine(identity.device_id, receiving=receive_dir is not None)
+        self._paused = False  # `pause_receiving`: chỉ trong phiên, không lưu
+        self._retention: float | None = None  # `set_temp_retention`; None: `storage.TEMP_RETENTION`
+        self._dir_uses: dict[ReceiveDir, _DirUse] = {}  # thư mục nhận → ai đang dùng (`_DirUse`)
         self._auto_accept = False
         self.auto_accept = auto_accept
         self._rate_limit: int | None = None
@@ -783,8 +830,84 @@ class TransferManager:
 
     @property
     def receiving(self) -> bool:
-        """Máy này có nhận `offer` mới không (có thư mục nhận và node chưa đóng)."""
+        """Máy này có nhận `offer` mới không: có thư mục nhận, không tạm dừng nhận và node chưa đóng.
+
+        Khi không nhận, `offer` mới nhận `reject{not_receiving}`; lượt đã có (kể cả `offer` gửi lại
+        khi nối lại, lượt xếp hàng hay chờ hỏi) vẫn đi tiếp.
+        """
         return self._engine.receiving
+
+    @property
+    def receiving_paused(self) -> bool:
+        """Người dùng đang tạm dừng nhận (`pause_receiving`)."""
+        return self._paused
+
+    def pause_receiving(self, paused: bool) -> None:
+        """Tạm dừng (True) hay nhận lại (False) `offer` mới; chỉ trong phiên này, không lưu.
+
+        Chỉ đổi `engine.receiving` (không gọi engine), nên gọi được cả trong lúc đang thực hiện hành
+        động của engine. Không phải bool → TypeError.
+        """
+        if type(paused) is not bool:
+            raise TypeError("paused phải là bool")
+        self._paused = paused
+        self._apply_receiving()
+
+    def _apply_receiving(self) -> None:
+        self._engine.receiving = self._receive_dir is not None and not self._paused and not self._closing
+
+    def busy_devices(self) -> frozenset[str]:
+        """`device_id` của các thiết bị còn ít nhất một lượt chưa kết thúc, cả gửi lẫn nhận."""
+        return frozenset(info.key.device_id for info in self._engine.transfers())
+
+    def receive_dir_busy(self) -> bool:
+        """Còn điều gì giữ thư mục nhận hiện tại, nên chưa đổi được (`replace_receive_dir`).
+
+        True khi còn lượt nhận ở bất kỳ pha nào, hàng đĩa còn sống, hay lượt thừa của khôi phục
+        đang được xóa (`_discarding`).
+        """
+        return (
+            any(info.key.direction is Direction.RECEIVE for info in self._engine.transfers())
+            or bool(self._live_lanes)
+            or bool(self._discarding)
+        )
+
+    def replace_receive_dir(self, rd: ReceiveDir) -> None:
+        """Dùng `rd` làm thư mục nhận từ giờ (đồng bộ); thư mục cũ đóng khi không còn ai dùng.
+
+        Bận (`receive_dir_busy`) → `ReceiveDirBusy`; node đang đóng → RuntimeError; không đổi gì.
+        Trước đó không có thư mục nhận thì từ giờ nhận `offer` (theo luật tạm dừng). Không khôi
+        phục lượt dở có sẵn trong `rd` (chỉ `restore` lúc khởi động làm việc đó).
+        """
+        if not isinstance(rd, ReceiveDir):
+            raise TypeError("rd phải là ReceiveDir")
+        if self._closing:
+            raise RuntimeError("node đang đóng")
+        if self.receive_dir_busy():
+            raise ReceiveDirBusy()
+        old, self._receive_dir = self._receive_dir, rd
+        self._apply_receiving()
+        if old is not None and old is not rd:
+            self._retire_receive_dir(old)
+
+    def set_temp_retention(self, seconds: float | None) -> None:
+        """Ngưỡng `TEMP_RETENTION` của `cleanup_temps` từ lần dọn sau; None: đọc `storage.TEMP_RETENTION`
+        lúc dùng. Không phải số → TypeError; không hữu hạn hay ≤ 0 → ValueError."""
+        if seconds is not None:
+            seconds = _positive_seconds("seconds", seconds)
+        self._retention = seconds
+
+    async def cleanup_settled(self) -> None:
+        """Chờ lần dọn tạm gần nhất (`cleanup_temps`) thật sự xong trong thread (nếu có)."""
+        job = self._cleanup_job
+        if job is not None:
+            await job.settled()
+
+    def set_hello(self, hello: Hello) -> None:
+        """`hello` cho các kết nối dữ liệu mở từ giờ (máy này đổi tên). Sai → ValueError."""
+        if not isinstance(hello, Hello) or hello.device_id != self._identity.device_id:
+            raise ValueError("hello phải là Hello của danh tính này")
+        self._hello = hello
 
     @property
     def receive_dir(self) -> Path | None:
@@ -950,19 +1073,20 @@ class TransferManager:
         handles: list[ResumeHandle] = []
         if rd is not None and running and not self._closing:
             handles = await self._restore_open(rd, list(running.values()))
-        restored = self._restore_apply(own, records, handles, stones, done)
+        restored = self._restore_apply(rd, own, records, handles, stones, done)
         # Sau các lần mở lại (không làm chậm khởi động): xóa lượt thừa, chạy nền; chỉ khi engine đã
         # nhớ bia mộ `expired` của chúng (không thì máy gửi không bao giờ biết lý do).
         if rd is not None and restored and not self._closing:
             for scan in extra:
                 self._discarding.add(scan.transfer_id)  # trước khi `Node` hẹn dọn tạm
-                self._spawn(self._discard_temp(rd, scan.transfer_id), "transfer-discard", disk=True)
+                self._spawn(self._discard_temp(rd, scan.transfer_id), "transfer-discard", disk=True, rd=rd)
 
     async def cleanup_temps(self) -> int | None:
         """Dọn tạm một lần (`ReceiveDir.cleanup`, `Node` hẹn giờ); trả số thư mục lượt đã xóa.
 
         Bỏ qua (chụp đồng bộ ngay trước khi giao việc) `transfer_id` của mọi lượt nhận engine còn
-        giữ, mọi hàng đĩa còn sống và mọi lượt thừa `restore` đang xóa (`_discarding`). None khi:
+        giữ, mọi hàng đĩa còn sống và mọi lượt thừa `restore` đang xóa (`_discarding`). Ngưỡng
+        `retention`: `set_temp_retention`, chưa đặt thì `storage.TEMP_RETENTION` đọc lúc gọi. None khi:
         không có thư mục nhận, node đang đóng, lần dọn trước chưa xong, hay lần này lỗi / quá hạn
         `DISK_SYNC_TIMEOUT` (log, không ném).
         """
@@ -979,17 +1103,19 @@ class TransferManager:
         }
         skip.update(lane.transfer_id for lane in self._live_lanes)
         skip.update(self._discarding)
+        retention = storage.TEMP_RETENTION if self._retention is None else self._retention
         cleanup = functools.partial(
             rd.cleanup,
             _wall_time(),
             own_device_id=self._identity.device_id,
             skip=frozenset(skip),
-            retention=storage.TEMP_RETENTION,
+            retention=retention,
         )
         try:
             job = self._executor.submit(cleanup)
         except RuntimeError:  # executor đã shutdown
             return None
+        self._track_job(rd, job)
         self._cleanup_job = job
         try:
             return await _job_result(job, DISK_SYNC_TIMEOUT)
@@ -1069,7 +1195,7 @@ class TransferManager:
             return
         self._closing = True
         self._call(self._engine.suspend_receiving)
-        self._engine.receiving = False
+        self._apply_receiving()  # `_closing`: không nhận nữa
         self._cancel_every()
 
     async def flush_control(self, timeout: float) -> None:
@@ -1291,7 +1417,8 @@ class TransferManager:
             self._tomb_dirty = True
             self._schedule_tombstone_snapshot()
         elif isinstance(action, CheckSpace):
-            self._spawn(self._check_space(action), f"transfer-check {action.transfer_id[:8]}")
+            rd = self._receive_dir  # chụp lúc giao việc
+            self._spawn(self._check_space(action, rd), f"transfer-check {action.transfer_id[:8]}", rd=rd)
         elif isinstance(action, CheckSource):
             self._spawn(self._check_source(action), f"transfer-check {action.transfer_id[:8]}")
         elif isinstance(action, AskUser):
@@ -1310,14 +1437,77 @@ class TransferManager:
         if self._store.get(device_id) is None:
             raise KeyError(device_id)
 
-    def _spawn(self, coro: Any, name: str, *, disk: bool = False) -> asyncio.Task[Any]:
+    def _spawn(
+        self, coro: Any, name: str, *, disk: bool = False, rd: ReceiveDir | None = None
+    ) -> asyncio.Task[Any]:
+        """Tạo task (mạng hay đĩa). `rd`: task dùng thư mục nhận này; đăng ký ngay (đồng bộ) là một
+        người dùng của nó tới khi task xong (`_retire_receive_dir` chờ)."""
         task = asyncio.create_task(coro, name=f"{_TASK_NAME}.{name}")
         tasks = self._disk_tasks if disk else self._tasks
         tasks.add(task)
         task.add_done_callback(tasks.discard)
+        if rd is not None:
+            use = self._dir_use(rd)
+            use.users += 1
+            use.idle.clear()
+            task.add_done_callback(functools.partial(self._release_dir, rd))
         if disk and self._disk_shut:
             _keep_detached(task)  # sau `_shutdown_disk`: `Node` có thể đã bỏ `TransferManager`
         return task
+
+    # ---- Ai đang dùng thư mục nhận (đổi thư mục nhận lúc chạy) ------------------------------
+
+    def _dir_use(self, rd: ReceiveDir) -> _DirUse:
+        use = self._dir_uses.get(rd)
+        if use is None:
+            use = self._dir_uses[rd] = _DirUse()
+        return use
+
+    def _release_dir(self, rd: ReceiveDir, _task: object = None) -> None:
+        """Một task dùng `rd` vừa xong (callback của task)."""
+        use = self._dir_uses.get(rd)
+        if use is None:
+            return
+        use.users = max(0, use.users - 1)
+        if use.users == 0:
+            use.idle.set()
+
+    def _track_job(self, rd: ReceiveDir, job: DiskJob[Any]) -> None:
+        """Việc đĩa `job` vừa giao với `rd` (đồng bộ, cùng khối với `submit`)."""
+        use = self._dir_use(rd)
+        use.jobs = {j for j in use.jobs if not j.done}
+        use.jobs.add(job)
+
+    def _retire_receive_dir(self, rd: ReceiveDir) -> None:
+        """Thư mục nhận `rd` thôi dùng: task đĩa đóng nó khi không còn ai dùng (`_close_retired`)."""
+        self._spawn(self._close_retired(rd), "transfer-retire-dir", disk=True)
+
+    async def _close_retired(self, rd: ReceiveDir) -> None:
+        """Chờ mọi việc đĩa đã giao với `rd` `settled()` và mọi task đã chụp `rd` xong, rồi đóng `rd`.
+
+        Không có hạn: đóng fd khi một thread đĩa còn dùng nó là không an toàn. Lần kiểm cuối và
+        `rd.close()` nằm trong một khối đồng bộ. Là task đĩa: `close()` chờ có hạn, rồi nó chạy nền
+        (`_shutdown_disk` giữ nó), như đuôi đĩa.
+        """
+        try:
+            while True:
+                use = self._dir_uses.get(rd)
+                if use is None:
+                    break
+                pending = [job for job in use.jobs if not job.done]
+                if pending:
+                    for job in pending:
+                        await job.settled()
+                    continue
+                if use.users:
+                    await use.idle.wait()
+                    continue
+                break
+            self._dir_uses.pop(rd, None)
+            if not rd.closed:
+                rd.close()
+        except Exception:
+            log.exception("đóng thư mục nhận cũ lỗi")
 
     def _update_holds(self) -> None:
         """Thiết bị còn lượt chưa kết thúc ↔ `hold` ở `core.links` (chỉ tính lại khi tập lượt đổi)."""
@@ -1456,12 +1646,23 @@ class TransferManager:
     def _ask_user(self, a: AskUser) -> None:
         key = TransferKey(a.device_id, Direction.RECEIVE, a.transfer_id)
         device = self._store.get(a.device_id)
-        auto = self._auto_accept and not self._closing
+        # Chính sách đọc đúng lúc này; chỉ `False` mới là "Luôn nhận" (lỗi → hỏi).
+        auto = (self._auto_accept or not self._asks(a.device_id)) and not self._closing
         total = sum(entry.size for entry in a.offer.files)
         name = None if device is None else device.name
         self._emit(OfferReceived(key, name, a.offer.files, a.names, total, auto))
         if auto:
             self._loop.call_soon(self._auto_decide, a.device_id, a.transfer_id)
+
+    def _asks(self, device_id: str) -> bool:
+        """Có hỏi người dùng trước khi nhận từ `device_id` không (`ask_before_receive`)."""
+        if self._auto_accept or self._ask_before_receive is None:
+            return True
+        try:
+            return self._ask_before_receive(device_id) is not False
+        except Exception:
+            log.exception("đọc chính sách hỏi trước khi nhận của %s lỗi: vẫn hỏi", device_id[:8])
+            return True
 
     def _auto_decide(self, device_id: str, transfer_id: str) -> None:
         if not self._closing:
@@ -1779,14 +1980,14 @@ class TransferManager:
 
     # ---- Kiểm chỗ trống / file nguồn ---------------------------------------------------------
 
-    async def _check_space(self, a: CheckSpace) -> None:
+    async def _check_space(self, a: CheckSpace, rd: ReceiveDir | None) -> None:
         free: int | None = None
         max_size: int | None = None
-        rd = self._receive_dir
         if rd is not None and not self._closing:
             job = None
             try:
                 job = self._executor.submit(rd.volume_info)
+                self._track_job(rd, job)
                 info = await _job_result(job, DISK_OP_TIMEOUT)
             except asyncio.CancelledError:
                 if job is not None:
@@ -1829,16 +2030,16 @@ class TransferManager:
             log.error("lượt %s đã có hàng đĩa", a.transfer_id[:8])
             self._call(self._engine.storage_failed, a.device_id, a.transfer_id, DiskOp.CREATE_TEMP)
             return
-        lane = _DiskLane(a.device_id, a.transfer_id)
+        lane = _DiskLane(a.device_id, a.transfer_id, rd=self._receive_dir)
         self._lanes[pair] = lane
         self._live_lanes.add(lane)
-        if self._receive_dir is None or self._closing:
+        if lane.rd is None or self._closing:
             # Không tạo được: hàng đĩa ở trạng thái lỗi, các thao tác sau của lượt bị bỏ im lặng
             # tới khi lượt kết thúc (engine nhận `storage_failed` đúng một lần).
             self._fail_lane(lane, DiskOp.CREATE_TEMP)
         else:
             lane.ops.append((a, None))
-        self._spawn(self._run_lane(lane), f"transfer-disk {a.transfer_id[:8]}", disk=True)
+        self._spawn(self._run_lane(lane), f"transfer-disk {a.transfer_id[:8]}", disk=True, rd=lane.rd)
 
     def _lane_for(self, action: _LaneAction) -> _DiskLane | None:
         lane = self._lanes.get((action.device_id, action.transfer_id))
@@ -1972,7 +2173,7 @@ class TransferManager:
 
     async def _lane_op(self, lane: _DiskLane, action: _LaneAction, payload: bytearray | None) -> None:
         device_id, transfer_id = lane.device_id, lane.transfer_id
-        rd = self._receive_dir
+        rd = lane.rd
         assert rd is not None
 
         def submit[R](fn: Callable[..., R], /, *args: object) -> DiskJob[R]:
@@ -2088,11 +2289,11 @@ class TransferManager:
             temp = await _late_result(lane.create_job)
         lane.temp = None
         lane.parts.clear()
-        rd = self._receive_dir
+        rd = lane.rd
         if temp is None or rd is None:
             return
         if lane.suspended or lane.abandoned:
-            await self._close_temp(temp)
+            await self._close_temp(rd, temp)
             return
         # `remove_temp` đóng mọi `.part` của lượt (kể cả `.part` tạo muộn) rồi mới xóa.
         remove = functools.partial(rd.remove_temp, temp, keep_record=lane.keep_record)
@@ -2108,15 +2309,14 @@ class TransferManager:
         except Exception as e:
             log.debug("xóa thư mục tạm của lượt %s lỗi: %s", lane.transfer_id[:8], _error_label(e))
 
-    async def _close_temp(self, temp: TransferTemp) -> None:
+    async def _close_temp(self, rd: ReceiveDir, temp: TransferTemp) -> None:
         """Chỉ đóng handle của `temp` (`close_temp`, không xóa gì) qua executor.
 
-        Điều kiện trước: mọi việc đĩa dùng `temp` đã `settled`. Executor đã shutdown (hay bỏ việc
-        trước khi chạy) thì đóng ngay trên loop: chỉ là đóng fd, không thread nào còn dùng chúng.
+        `rd`: thư mục nhận chứa `temp`, bên gọi chụp đồng bộ lúc giao việc (thư mục nhận hiện tại
+        có thể đã đổi). Điều kiện trước: mọi việc đĩa dùng `temp` đã `settled`. Executor đã
+        shutdown (hay bỏ việc trước khi chạy) thì đóng ngay trên loop: chỉ là đóng fd, không thread
+        nào còn dùng chúng.
         """
-        rd = self._receive_dir
-        if rd is None:
-            return
         job: DiskJob[None] | None = None
         with contextlib.suppress(RuntimeError):  # executor đã shutdown
             job = self._executor.submit(rd.close_temp, temp)
@@ -2163,6 +2363,7 @@ class TransferManager:
             job = self._executor.submit(rd.scan_temps, self._identity.device_id, trusted)
         except RuntimeError:  # executor đã shutdown
             return []
+        self._track_job(rd, job)  # quá hạn mà vẫn chạy: thư mục này chưa được đóng
         try:
             async with asyncio.timeout(DISK_SYNC_TIMEOUT):
                 return await _job_result(job, None)
@@ -2190,6 +2391,7 @@ class TransferManager:
                 job = self._executor.submit(functools.partial(rd.open_for_resume, scan, stop=stop))
             except RuntimeError:  # executor đã shutdown
                 break
+            self._track_job(rd, job)
             self._restore_stops.add(stop)
             jobs.append((scan, job, stop))
         handles: dict[str, ResumeHandle] = {}
@@ -2221,23 +2423,28 @@ class TransferManager:
                 handle = handles.get(scan.transfer_id)
                 if handle is not None:
                     if not completed:  # bị hủy trước khi trao cho engine: chỉ đóng handle
-                        self._spawn(self._close_temp(handle.temp), "transfer-restore-close", disk=True)
+                        close = self._close_temp(rd, handle.temp)
+                        self._spawn(close, "transfer-restore-close", disk=True, rd=rd)
                     continue
                 if job.cancel():  # chưa bắt đầu: bỏ
                     continue
                 stop.set()
-                self._spawn(self._close_late_handle(job), "transfer-restore-late", disk=True)
+                self._spawn(self._close_late_handle(rd, job), "transfer-restore-late", disk=True, rd=rd)
         return [handles[scan.transfer_id] for scan, _, _ in jobs if scan.transfer_id in handles]
 
-    async def _close_late_handle(self, job: DiskJob[ResumeHandle]) -> None:
-        """`open_for_resume` đã bị bỏ (quá hạn): chờ việc thật sự xong, đóng handle nếu nó mở được."""
+    async def _close_late_handle(self, rd: ReceiveDir, job: DiskJob[ResumeHandle]) -> None:
+        """`open_for_resume` đã bị bỏ (quá hạn): chờ việc thật sự xong, đóng handle nếu nó mở được.
+
+        `rd`: thư mục nhận của lần khôi phục (thư mục nhận hiện tại có thể đã đổi).
+        """
         await job.settled()
         handle = await _late_result(job)
         if handle is not None:
-            await self._close_temp(handle.temp)
+            await self._close_temp(rd, handle.temp)
 
     def _restore_apply(
         self,
+        rd: ReceiveDir | None,
         own: str,
         records: list[TombstoneRecord],
         handles: list[ResumeHandle],
@@ -2249,9 +2456,11 @@ class TransferManager:
         Trả True khi engine đã nạp bia mộ (kể cả bia mộ `expired` của lượt thừa); False khi node
         đang đóng hay cả hai lần `engine.restore` đều lỗi: khi đó không được xóa lượt thừa.
         """
+        # `rd`: thư mục `restore` đã mở lại `handles` (None khi không có thư mục nhận).
         if self._closing:
             for handle in handles:
-                self._spawn(self._close_temp(handle.temp), "transfer-restore-close", disk=True)
+                assert rd is not None
+                self._spawn(self._close_temp(rd, handle.temp), "transfer-restore-close", disk=True, rd=rd)
             return False
         wall = _wall_time()
         trusted = self._trusted_ids()
@@ -2262,8 +2471,9 @@ class TransferManager:
             record = handle.record
             sender, transfer_id = record.sender, handle.temp.transfer_id
             pair = (sender, transfer_id)
+            assert rd is not None
             if sender == own or sender not in trusted or sender in senders or pair in self._lanes:
-                self._spawn(self._close_temp(handle.temp), "transfer-restore-close", disk=True)
+                self._spawn(self._close_temp(rd, handle.temp), "transfer-restore-close", disk=True, rd=rd)
                 continue
             senders.add(sender)
             receives.append(
@@ -2279,11 +2489,13 @@ class TransferManager:
             )
             # Hàng đĩa có trước khi thực thi hành động: `RemoveTemp` / `SuspendTemp` của lượt áp
             # vào đúng thư mục đã mở.
-            lane = _DiskLane(sender, transfer_id, temp=handle.temp, parts={handle.file_index: handle.part})
+            lane = _DiskLane(
+                sender, transfer_id, rd=rd, temp=handle.temp, parts={handle.file_index: handle.part}
+            )
             self._lanes[pair] = lane
             self._live_lanes.add(lane)
             lanes.append(lane)
-            self._spawn(self._run_lane(lane), f"transfer-disk {transfer_id[:8]}", disk=True)
+            self._spawn(self._run_lane(lane), f"transfer-disk {transfer_id[:8]}", disk=True, rd=rd)
         try:
             stones = tombstones.to_restored(records, trusted, wall)
         except Exception:  # phòng thủ: mục đã qua `TombstoneRecord`, không được lỗi

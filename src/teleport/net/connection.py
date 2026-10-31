@@ -1280,6 +1280,17 @@ class Listener:
         """Số kết nối đã giao cho `on_connection` mà chưa đóng."""
         return len(self._connections)
 
+    def set_hello(self, hello: Hello) -> None:
+        """Thay `hello` gửi cho các kết nối từ giờ (máy này đổi tên); đồng bộ.
+
+        Kiểm như `__init__`: lệch danh tính hoặc khác phiên bản giao thức → ValueError (giữ bản
+        cũ). Kết nối đang bắt tay có thể nhận bản cũ hay bản mới; kết nối đã mở giữ bản đã gửi.
+        """
+        _check_hello(hello)
+        if hello.device_id != self._identity.device_id:
+            raise ValueError("hello.device_id phải là device_id của danh tính này")
+        self._hello_frame = encode_message(to_dict(hello))
+
     def update_trusted(self, trusted_certs: Iterable[str]) -> None:
         """Thay danh sách tin cậy: mọi kết nối mới từ giờ dùng context mới; cổng không đổi.
 

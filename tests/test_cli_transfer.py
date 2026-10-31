@@ -64,7 +64,8 @@ S_NO_SPACE = "{p} không đủ chỗ trống để nhận: cần {needed}, ổ l
 S_TOO_LARGE = (  # mvp §8
     "{p} không nhận được {file} ({size}): ổ lưu file trên máy đó chỉ chứa được file nhỏ hơn {limit}."
 )
-S_NOT_RECEIVING = "{p} chưa bật nhận file. Trên máy đó hãy chạy `teleport receive` rồi gửi lại."  # A3
+# A3; giữ câu cũ (spec-dot-c mục 13: câu mới đổi cùng ui ở PR D4); đối chiếu mvp §8 ở test riêng
+S_NOT_RECEIVING = "{p} chưa bật nhận file. Trên máy đó hãy chạy `teleport receive` rồi gửi lại."
 S_PEER_STOPPED = "{p} đã dừng nhận giữa chừng. Các file đã gửi xong vẫn nằm trên máy đó."  # 6b
 S_SELF_CANCELLED = "Đã hủy lượt gửi tới {p}. Các file đã gửi xong vẫn nằm trên máy đó."  # M2
 S_SOURCE_CHANGED = "{file} đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại."  # mvp §8
@@ -3865,3 +3866,94 @@ async def test_tty_receive_line_is_not_redrawn_while_done_bytes_is_unchanged(
     redraws = [t for t, s in tty.writes if "\r" in s and hit + 0.5 <= t <= t_release]
     assert redraws == [], f"dòng TTY vẽ lại {len(redraws)} lần khi done_bytes không đổi"
     assert "\r" in tty.getvalue(), "TTY phải vẽ dòng tiến độ bằng CR như cũ"
+
+
+# =================================================================================================
+# C1 (spec-dot-c mục 1.2.6, 1.5; mục 11 H2, L8): `receive` không có `--dir` dùng thư mục đã lưu,
+# câu `not_receiving` mới, `--yes` vẫn tự nhận mọi máy.
+# =================================================================================================
+
+
+def test_c1_not_receiving_sentence_matches_mvp_section_8():
+    """Câu trong test chép đúng dòng mvp §8 (chỗ điền *PC-Nha* là tên máy nhận): tài liệu không lệch."""
+    mvp = (Path(__file__).resolve().parents[1] / "docs" / "mvp.md").read_text(encoding="utf-8")
+    sample = S_NOT_RECEIVING.format(p="*PC-Nha*")
+    assert f"“{sample}”" in mvp
+
+
+def write_r_settings(net, data: dict) -> None:
+    (net.R / "settings.json").write_text(
+        json.dumps({"version": 1, **data}, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def receive_argv_without_dir(net, *, json_mode=True, yes=True) -> list[str]:
+    argv = receive_argv(net, json_mode=json_mode, yes=yes)
+    i = argv.index("--dir")
+    return argv[:i] + argv[i + 2 :]
+
+
+@with_marks(socket_test)
+async def test_c1_receive_without_dir_uses_saved_receive_dir(pair_dirs, transfer_env, cli_runs):
+    """QN1: `receive` không có `--dir` → thư mục nhận đã lưu trong `settings.json` (giao diện lưu)."""
+    net = pair_dirs
+    saved = net.tmp / "da-luu"
+    write_r_settings(net, {"receive_dir": str(saved)})
+    recv = cli_runs("receive", receive_argv_without_dir(net))
+    ready = await recv.wait_event("receiving")
+    assert Path(ready["receive_dir"]) == saved
+    f = make_file(net.src, "a.bin", 1000)
+    send = cli_runs("send", send_argv(net, [f], ready["port"]))
+    assert await send.code(30) == 0, send.text()
+    await recv.wait_event("result", timeout=10)
+    assert sha256_of(saved / "a.bin") == sha256_of(f)
+    assert not net.recv.exists()
+
+
+@with_marks(socket_test)
+async def test_c1_receive_dir_arg_wins_over_saved_and_is_not_persisted(pair_dirs, transfer_env, cli_runs):
+    net = pair_dirs
+    saved = net.tmp / "da-luu"
+    write_r_settings(net, {"receive_dir": str(saved)})
+    recv = cli_runs("receive", receive_argv(net))
+    ready = await recv.wait_event("receiving")
+    assert Path(ready["receive_dir"]) == net.recv
+    recv.press()
+    assert await recv.code(15) == 0
+    data = json.loads((net.R / "settings.json").read_text(encoding="utf-8"))
+    assert data["receive_dir"] == str(saved)
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_c1_receive_without_dir_and_unusable_saved_dir_exits_1(
+    pair_dirs, transfer_env, cli_runs, json_mode
+):
+    """H2: CLI chỉ có một việc là nhận, nên thư mục đã lưu không dùng được → mã 1 kèm câu B9 hiện có
+    (không tự rơi về thư mục mặc định)."""
+    net = pair_dirs
+    target = net.tmp / "la-file"
+    target.write_text("x", encoding="utf-8")
+    write_r_settings(net, {"receive_dir": str(target)})
+    recv = cli_runs("receive", receive_argv_without_dir(net, json_mode=json_mode))
+    assert await recv.code(15) == 1
+    expected = B9.format(dir=target, why=B9E)
+    if json_mode:
+        [ev] = recv.events_of("error")
+        assert (ev["error"], ev["message"]) == ("receive_dir_error", expected)
+    else:
+        assert expected in recv.text(), recv.text()
+    assert target.read_text(encoding="utf-8") == "x"
+    assert lock_is_free(net.R)
+
+
+@with_marks(socket_test)
+async def test_c1_yes_still_accepts_every_device_even_if_saved_policy_asks(pair_dirs, transfer_env, cli_runs):
+    net = pair_dirs
+    write_r_settings(net, {"devices": {net.sid: {"ask_before_receive": True}}})
+    recv = cli_runs("receive", receive_argv(net, yes=True))
+    port = (await recv.wait_event("receiving"))["port"]
+    send = cli_runs("send", send_argv(net, [make_file(net.src, "a.bin", 1000)], port))
+    assert await send.code(30) == 0, send.text()
+    [offer] = recv.events_of("offer")
+    assert offer["auto_accepted"] is True
