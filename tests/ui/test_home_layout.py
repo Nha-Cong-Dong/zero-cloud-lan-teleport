@@ -54,7 +54,7 @@ ADDRESS_A11Y = "Địa chỉ của máy này"
 
 # ---- Hằng của spec (2.3) --------------------------------------------------------------------------
 SIDEBAR_WIDTH = 288
-SIDEBAR_COMPACT_WIDTH = 248
+SIDEBAR_COMPACT_WIDTH = 80  # spec B2 mục 12.5 (B1 là 248)
 COMPACT_BELOW = 820
 START_PANEL_MAX_WIDTH = 460
 MIN_W, MIN_H = 720, 460
@@ -262,7 +262,7 @@ def fill_l12(window, ctl, tmp_path: Path) -> None:
     """Dựng như L12: trang DISCOVER (luôn có từ B5), máy đã ghép đôi, hai thẻ, một thông báo, có địa chỉ."""
     running(window, tmp_path)
     window.set_addresses(["192.0.2.5"], None)
-    window.radar.model.reset([dview("PC-Nha", paired=True, connected=True)])
+    window.devices.reset([dview("PC-Nha", paired=True, connected=True)])
     ctl.view.set_device_names({PEER_ID: "PC-Nha"})
     ctl.view.handle(status_changed(tkey("send", "a" * 32)))
     ctl.view.handle(status_changed(tkey("receive", "b" * 32)))
@@ -271,18 +271,15 @@ def fill_l12(window, ctl, tmp_path: Path) -> None:
 
 
 def fill_l3_full(window, ctl, tmp_path: Path) -> None:
-    """RUNNING đầy đủ của L3: 6 thiết bị, khung nhập IP mở kèm lỗi, 3 thẻ + thông báo, 3 địa chỉ,
-    thư mục nhận dài 200 ký tự."""
+    """RUNNING đầy đủ của L3: 6 thiết bị, 3 thẻ + thông báo, 3 địa chỉ, thư mục nhận dài 200 ký tự (spec
+    B2 mục 8(d): khung nhập IP không còn ở cột trái)."""
     long_dir = Path("C:/" + "r" * 197)
     assert len(str(long_dir)) == 200
     window.show_running("May-A", long_dir)
     window.set_addresses(["192.0.2.5", "192.0.2.6", "192.0.2.7"], 50000)
-    window.radar.model.reset(
+    window.devices.reset(
         [dview(f"May-{i}", paired=i < 2, connected=i == 0) for i in range(6)],
     )
-    window.radar.open_address_entry()
-    window.radar.address_edit.setText("không phải IP")
-    window.radar.submit_address()
     ctl.view.set_device_names({PEER_ID: "PC-Nha"})
     for c in "abc":
         ctl.view.handle(status_changed(tkey("send", c * 32)))
@@ -323,13 +320,13 @@ def test_l1_widget_tree_matches_spec(window):
     assert window.home_stack.indexOf(window.shell) >= 0
     assert window.body.isAncestorOf(window.sidebar)
     assert window.body.isAncestorOf(window.stream_pane)
-    for w in (window.radar, window.machine_card, window.discover_button, window.settings_button):
+    for w in (window.conversations, window.machine_card, window.discover_button, window.settings_button):
         assert window.sidebar.isAncestorOf(w), w.objectName()
     assert window.sidebar.isAncestorOf(window.sidebar_header)
     assert window.sidebar_header.isAncestorOf(window.discover_button)
     assert window.sidebar_header.isAncestorOf(window.brand_label)
     assert window.sidebar_header.isAncestorOf(window.brand_logo)
-    assert window.sidebar_scroll.widget().isAncestorOf(window.radar)
+    assert window.sidebar_scroll.widget().isAncestorOf(window.conversations)
     assert window.stream_pane.indexOf(window.empty_state) >= 0
     assert window.stream_pane.indexOf(window.transfers_area) >= 0
     assert not window.body.isAncestorOf(window.save_bar)
@@ -391,15 +388,16 @@ def test_l1_save_bar_spans_full_width_below_body(window, qtbot, tmp_path):
 
 
 def test_l1_old_public_attributes_live_in_home_page_with_same_types(window):
-    from teleport.ui.radar import RadarView
+    from teleport.ui.conversations import ConversationList
 
     labels = ("status_label", "detail_label", "hint_label", "title_label", "address_label")
     for name in labels:
         assert isinstance(getattr(window, name), QLabel), name
     for name in ("start_button", "retry_button"):
         assert isinstance(getattr(window, name), QPushButton), name
-    assert isinstance(window.radar, RadarView)
-    for name in (*labels, "start_button", "retry_button", "radar", "transfers_area", "body"):
+    assert isinstance(window.conversations, ConversationList)  # spec B2: thay `radar` (`RadarView`)
+    assert not hasattr(window, "radar")
+    for name in (*labels, "start_button", "retry_button", "conversations", "transfers_area", "body"):
         assert window.home_page.isAncestorOf(getattr(window, name)), name
 
 
@@ -443,7 +441,9 @@ def test_l2_sidebar_width_follows_resizes(window, qtbot, tmp_path):
         assert window.sidebar.width() + window.stream_pane.width() == window.body.width(), width
 
 
-def test_l2_resize_keeps_focus_on_address_label(window, qtbot, tmp_path):
+def test_l2_resize_moves_focus_between_address_label_and_compact_machine(window, qtbot, tmp_path):
+    """Spec B2 mục 2.6, 12.25: thu gọn thì `machine_card` ẩn → tiêu điểm sang `compact_machine`; mở rộng
+    lại → `name_label`."""
     running(window, tmp_path)
     window.set_addresses(["192.0.2.5"], None)
     show_window(window, qtbot, 980, 660, active=True)
@@ -451,9 +451,9 @@ def test_l2_resize_keeps_focus_on_address_label(window, qtbot, tmp_path):
     qtbot.waitUntil(lambda: window.focusWidget() is window.address_label, timeout=1000)
     resize_to(window, 720, 660)
     assert window.sidebar_compact
-    assert window.focusWidget() is window.address_label
+    assert window.focusWidget() is window.compact_machine
     resize_to(window, 980, 660)
-    assert window.focusWidget() is window.address_label
+    assert window.focusWidget() is window.name_label
 
 
 # =================================================================================================
@@ -483,8 +483,7 @@ def test_l3_full_running_does_not_grow_window(window, qtbot, make_ctl, tmp_path)
     show_window(window, qtbot, MIN_W, MIN_H)
     fill_l3_full(window, ctl, tmp_path)
     _assert_fits(window)
-    assert window.radar.address_panel.isVisibleTo(window)
-    assert_radar_fits_sidebar(window)
+    assert_conversations_fit_sidebar(window)
 
 
 def test_l3_error_with_long_path_scrolls_start_panel_instead(window, qtbot):
@@ -529,10 +528,13 @@ def test_l4_region_colors(make_window, qtbot, ui_theme, tmp_path, dark):
     assert not wrong, f"mép phải cột trái không phải `border` ở y = {wrong[:5]}…"
     card = window.machine_card
     assert color_at(image, card, window, QPoint(card.width() // 2, 0)) == border, "đường kẻ trên machine_card"
-    # 12.2: nền trong suốt của vùng cuộn và radar: khe giữa tiêu đề và gợi ý của radar là `sidebar`.
-    radar = window.radar
-    gap = QPoint(radar.width() // 2, radar.heading_label.geometry().bottom() + 4)
-    assert color_at(image, radar, window, gap) == sidebar, "điểm trống của radar"
+    # 12.2 (B2 mục 8(d)): nền trong suốt của vùng cuộn và danh sách: điểm trống bên phải nút “＋ Ghép đôi
+    # máy mới” (căn trái) là `sidebar`.
+    conv = window.conversations
+    btn = conv.add_button
+    gap = QPoint(conv.width() - 4, btn.mapTo(conv, btn.rect().center()).y())
+    assert btn.mapTo(conv, QPoint(btn.width(), 0)).x() < gap.x(), "tiền đề: điểm nằm ngoài nút"
+    assert color_at(image, conv, window, gap) == sidebar, "điểm trống của cột trái"
 
 
 # =================================================================================================
@@ -608,7 +610,7 @@ def test_l5_state_sequence_switches_stack_and_focus(window, qtbot, tmp_path):
     steps = [
         ("welcome", lambda: window.start_view, lambda: window.start_button),
         ("starting", lambda: window.start_view, lambda: window.status_label),
-        ("running", lambda: window.shell, lambda: window.radar.address_button),  # radar trống
+        ("running", lambda: window.shell, lambda: window.conversations.add_button),  # chưa có máy
         ("error", lambda: window.start_view, lambda: window.retry_button),
         ("starting", lambda: window.start_view, lambda: window.status_label),
     ]
@@ -616,11 +618,11 @@ def test_l5_state_sequence_switches_stack_and_focus(window, qtbot, tmp_path):
         _apply(window, tmp_path, state)
         assert window.home_stack.currentWidget() is page(), state
         assert window.focusWidget() is focus(), (state, window.focusWidget())
-    # RUNNING khi radar có thiết bị: tiêu điểm vào danh sách.
-    window.radar.model.reset([dview("PC-Nha", paired=True)])
+    # RUNNING khi có máy đã ghép đôi: tiêu điểm vào danh sách.
+    window.devices.reset([dview("PC-Nha", paired=True)])
     _apply(window, tmp_path, "running")
     assert window.home_stack.currentWidget() is window.shell
-    assert window.focusWidget() is window.radar.list_view
+    assert window.focusWidget() is window.conversations.list_view
 
 
 # =================================================================================================
@@ -680,16 +682,16 @@ def test_l7_empty_state_when_nothing_paired_and_no_content(window, tmp_path):
 def test_l7_paired_device_switches_to_transfers_area(window, tmp_path):
     running(window, tmp_path)
     window.set_transfer_summary(False, 0)
-    window.radar.model.reset([dview(paired=True)])
+    window.devices.reset([dview(paired=True)])
     assert window.stream_pane.currentWidget() is window.transfers_area
-    window.radar.model.clear()
+    window.devices.clear()
     assert window.stream_pane.currentWidget() is window.empty_state
 
 
 def test_l7_only_unpaired_devices_keep_empty_state(window, tmp_path):
     running(window, tmp_path)
     window.set_transfer_summary(False, 0)
-    window.radar.model.reset([dview("May-1"), dview("May-2")])
+    window.devices.reset([dview("May-1"), dview("May-2")])
     assert window.stream_pane.currentWidget() is window.empty_state
 
 
@@ -698,7 +700,7 @@ def test_l7_model_signals_recompute_paired_flag(window, tmp_path):
 
     running(window, tmp_path)
     window.set_transfer_summary(False, 0)
-    model = window.radar.model
+    model = window.devices
     model.apply(DeviceOnline(dview("May-1")))  # rowsInserted, chưa ghép đôi
     assert window.stream_pane.currentWidget() is window.empty_state
     model.apply(DeviceOnline(dview("May-1", paired=True)))  # cùng máy, nay đã ghép đôi
@@ -998,7 +1000,7 @@ def index_of(order: list, widget) -> int:
 
 def check_running_order(window, order: list) -> None:
     i_discover = index_of(order, window.discover_button)
-    i_ip = index_of(order, window.radar.address_button)
+    i_ip = index_of(order, window.conversations.add_button)
     i_name = index_of(order, window.name_label)
     i_addr = index_of(order, window.address_label)
     i_copy = index_of(order, window.copy_button)
@@ -1028,11 +1030,11 @@ def test_l12_shift_tab_is_reverse_order(window, qtbot, make_ctl, tmp_path):
     assert closed
     backward, closed = tab_cycle(window, window.discover_button, Qt.Key.Key_Backtab)
     assert closed, "Shift+Tab không quay vòng về discover_button"
-    radar = window.radar
+    rows = window.conversations.list_view
 
-    # Danh sách thiết bị có thể giữ Tab giữa các hàng (12.6): chỉ so các widget ngoài radar, cộng nút IP.
+    # Danh sách giữ Tab giữa các hàng (12.6, B2 2.6): bỏ mục của `list_view` khỏi phép so.
     def key_widgets(seq):
-        return [w for w in seq if not radar.isAncestorOf(w) or w is radar.address_button]
+        return [w for w in seq if w is not rows]
 
     fwd = key_widgets(forward)
     back = key_widgets(backward)
@@ -1174,107 +1176,83 @@ def test_l15_labels_are_plain_and_not_keyboard_selectable(window, tmp_path):
 # =================================================================================================
 
 
-def test_l16_programmatic_focus_scrolls_sidebar(window, qtbot, tmp_path):
-    running(window, tmp_path)
-    window.radar.model.reset([dview(f"May-{i}", paired=i < 2) for i in range(6)])
-    show_window(window, qtbot, MIN_W, MIN_H, active=True)
-    window.radar.open_address_entry()
-    settle()
-    edit = window.radar.address_edit
-    assert window.focusWidget() is edit
-    viewport = window.sidebar_scroll.viewport()
-    top_left = edit.mapTo(viewport, QPoint(0, 0))
-    rect = edit.rect().translated(top_left)
-    assert viewport.rect().contains(rect), f"ô nhập IP {rect} nằm ngoài vùng thấy {viewport.rect()}"
-
-
-def assert_radar_fits_sidebar(window) -> None:
-    """Spec 12.22 (thay phép kiểm cũ `radar.width() >= minimumSizeHint`, luôn đúng): không cuộn ngang
-    được, và radar cần không quá bề ngang vùng cuộn trừ lề trái/phải 12 + 12."""
+def assert_conversations_fit_sidebar(window) -> None:
+    """Spec 12.22 B1 → B2 mục 12.25: không cuộn ngang được, và danh sách cuộc trò chuyện cần không quá bề
+    ngang vùng cuộn trừ lề trái/phải (12 + 12 dạng đầy đủ, 4 + 4 dạng thu gọn, spec B2 mục 2.6)."""
     settle()
     scroll = window.sidebar_scroll
-    assert scroll.horizontalScrollBar().maximum() == 0, "cột trái cuộn ngang được: radar rộng quá chỗ"
-    need = window.radar.minimumSizeHint().width()
-    assert need <= scroll.viewport().width() - 24, (
-        f"radar cần {need} px, chỗ {scroll.viewport().width() - 24}"
-    )
+    assert scroll.horizontalScrollBar().maximum() == 0, "cột trái cuộn ngang được: danh sách rộng quá chỗ"
+    margins = 8 if window.sidebar_compact else 24
+    need = window.conversations.minimumSizeHint().width()
+    room = scroll.viewport().width() - margins
+    assert need <= room, f"danh sách cần {need} px, chỗ {room}"
 
 
-def test_l16_address_entry_open_fits_sidebar_at_min_size(window, qtbot, tmp_path):
-    """12.22 (soat-code vòng 1, cao): khung nhập IP mở ở 720x460 không làm radar rộng hơn cột trái."""
+def test_l16_conversations_fit_sidebar_at_full_width(window, qtbot, tmp_path):
     running(window, tmp_path)
-    window.radar.model.reset([dview(f"May-{i}", paired=i < 2) for i in range(6)])
-    show_window(window, qtbot, MIN_W, MIN_H, active=True)
-    window.radar.open_address_entry()
-    settle()
-    assert window.radar.address_panel.isVisibleTo(window)
-    assert_radar_fits_sidebar(window)
+    window.devices.reset([dview(f"May-{i}", paired=True) for i in range(12)])
+    show_window(window, qtbot, 980, MIN_H)
+    assert not window.sidebar_compact
+    assert_conversations_fit_sidebar(window)
 
 
-def _partly_hidden_list(window, qtbot, tmp_path):
-    """720x460, 8 máy chưa ghép đôi, khung nhập IP mở (tiêu điểm ở ô nhập, cột trái đã cuộn xuống)."""
+def _scrolled_sidebar(window, qtbot, tmp_path):
+    """720x460, 12 máy đã ghép đôi (spec B2 12.25): cột trái cao hơn vùng thấy, cuộn xuống cuối."""
     running(window, tmp_path)
-    window.radar.model.reset([dview(f"May-{i}") for i in range(8)])
+    window.devices.reset([dview(f"May-{i:02d}", paired=True) for i in range(12)])
     show_window(window, qtbot, MIN_W, MIN_H, active=True)
-    window.radar.open_address_entry()
+    bar = window.sidebar_scroll.verticalScrollBar()
+    assert bar.maximum() > 0, "cột trái phải cuộn được (ca của test)"
+    bar.setValue(bar.maximum())
     settle()
-    assert window.focusWidget() is window.radar.address_edit
-    viewport = window.sidebar_scroll.viewport()
-    lv = window.radar.list_view
-    shown = lv.rect().translated(lv.mapTo(viewport, QPoint(0, 0)))
-    assert not viewport.rect().contains(shown), "danh sách phải bị che một phần (ca của test)"
-    return viewport, lv
+    return window.sidebar_scroll.viewport(), window.conversations.list_view, bar
 
 
 def test_l16_click_on_partly_hidden_row_is_not_lost(window, qtbot, tmp_path):
-    """12.22 (soat-code vòng 1, trung bình): nhấn rồi nhả chuột tại cùng một điểm màn hình trên một
-    hàng đang thấy được của danh sách bị che một phần → `row_clicked` phát đúng hàng đó. Tự cuộn tới
-    widget có tiêu điểm lúc nhấn chuột sẽ dời hàng khỏi con trỏ và làm mất cú bấm."""
-    viewport, lv = _partly_hidden_list(window, qtbot, tmp_path)
-    model = window.radar.model
-    row = next(
-        (
-            r
-            for r in range(model.rowCount())
-            if viewport.rect().contains(
-                lv.viewport().mapTo(viewport, lv.visualRect(model.index(r, 0)).center())
-            )
-        ),
-        None,
-    )
-    assert row is not None, "không có hàng nào đang thấy được"
-    point = lv.visualRect(model.index(row, 0)).center()
-    screen_point = lv.viewport().mapToGlobal(point)
-    clicks: list[int] = []
-    lv.row_clicked.connect(lambda index, *_: clicks.append(index.row()))
+    """12.22 (B1) dời sang B2: nhấn rồi nhả chuột trên phần đang thấy của một hàng bị che một phần → máy
+    của hàng đó thành máy hiện hành, cột trái không tự cuộn (cuộn sẽ dời hàng khỏi con trỏ)."""
+    viewport, lv, bar = _scrolled_sidebar(window, qtbot, tmp_path)
+    model = lv.model()
+    view_rect = viewport.rect()
+    target = None
+    for r in range(model.rowCount()):
+        rect = lv.visualRect(model.index(r, 0)).translated(lv.viewport().mapTo(viewport, QPoint(0, 0)))
+        if rect.intersects(view_rect) and not view_rect.contains(rect):
+            target = (r, rect.intersected(view_rect))
+            break
+    assert target is not None, "không có hàng nào bị che một phần"
+    row, visible_part = target
+    expected = window.conversations.model.devices()[row].device_id
+    point = lv.viewport().mapFrom(viewport, visible_part.center())
+    before = bar.value()
     QTest.mousePress(lv.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
     settle()
-    release = lv.viewport().mapFromGlobal(screen_point)  # cùng điểm màn hình, dù view có cuộn
-    QTest.mouseRelease(lv.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, release)
+    QTest.mouseRelease(lv.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
     settle()
-    assert clicks == [row]
+    current = window.conversations.current_device()
+    assert current is not None and current.device_id == expected
+    assert bar.value() == before, "cú bấm chuột không làm cột trái cuộn"
 
 
-def test_l16_keyboard_focus_on_hidden_widget_still_scrolls(window, qtbot, tmp_path):
-    """12.22: bỏ tự cuộn chỉ khi tiêu điểm đến từ chuột; Shift+Tab tới danh sách đang bị che thì cột
-    trái vẫn tự cuộn tới nó (L16 giữ)."""
-    viewport, lv = _partly_hidden_list(window, qtbot, tmp_path)
-    bar = window.sidebar_scroll.verticalScrollBar()
+def test_l16_keyboard_focus_on_hidden_row_still_scrolls(window, qtbot, tmp_path):
+    """12.22 (B1) dời sang B2: Shift+Tab từ “＋ Ghép đôi máy mới” đi ngược qua từng hàng; hàng hiện hành
+    luôn nằm trong vùng thấy (cột trái tự cuộn lên)."""
+    viewport, lv, bar = _scrolled_sidebar(window, qtbot, tmp_path)
+    add = window.conversations.add_button
+    add.setFocus(Qt.FocusReason.OtherFocusReason)
+    qtbot.waitUntil(lambda: window.focusWidget() is add, timeout=1000)
     before = bar.value()
-    assert before > 0, "cột trái phải đang cuộn xuống (ca của test)"
-    for _ in range(10):
-        if window.focusWidget() is lv:
-            break
+    rows = lv.model().rowCount()
+    for _ in range(rows):
         QTest.keyClick(window.focusWidget(), Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier)
         settle()
-    assert window.focusWidget() is lv, "Shift+Tab không tới được danh sách thiết bị"
-    assert bar.value() < before, "cột trái không tự cuộn lên tới danh sách"
-    shown = lv.rect().translated(lv.mapTo(viewport, QPoint(0, 0)))
-    if shown.height() + 16 <= viewport.height():
-        assert viewport.rect().contains(shown), f"danh sách {shown} chưa nằm trọn trong {viewport.rect()}"
-    else:
-        # Cao hơn vùng thấy: `ensureVisible` theo tâm widget thì căn giữa.
-        assert viewport.rect().contains(shown.center()), f"danh sách {shown} không căn vào vùng thấy"
+        assert window.focusWidget() is lv, "Shift+Tab không tới được danh sách"
+        rect = lv.visualRect(lv.currentIndex()).translated(lv.viewport().mapTo(viewport, QPoint(0, 0)))
+        assert rect.top() >= 0 and rect.bottom() < viewport.height(), (
+            f"hàng {lv.currentIndex().row()} {rect} ngoài vùng thấy {viewport.rect()}"
+        )
+    assert lv.currentIndex().row() == 0
+    assert bar.value() < before, "cột trái không tự cuộn lên"
 
 
 def test_l16_scroll_areas_take_no_focus(window):

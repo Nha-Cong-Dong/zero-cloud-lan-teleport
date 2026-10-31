@@ -81,7 +81,7 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 
 **Có:** giao diện tối thiểu trên Windows: radar (danh sách thiết bị, nút nhập IP), ghép đôi bằng mã 6 số, kéo thả hoặc “Gửi file…”, hộp thoại Nhận / Từ chối, danh sách lượt truyền có tiến độ, tốc độ, trạng thái “Đang nối lại…” và nút hủy; tự nối lại và kiểm tra toàn vẹn như F6, F7; bản zip chạy không cần cài Python. CLI giữ như F12.
 
-**Để sau hackathon:** chế độ ẩn và màn hình “Chờ ghép đôi” (F3, F10), màn hình cài đặt (F10), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; biểu tượng hệ điều hành và trạng thái “đang bận” trên radar (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP, nút “Gửi lại” và “Đổi thư mục nhận” (mục 8).
+**Để sau hackathon:** chế độ ẩn và màn hình “Chờ ghép đôi” (F3, F10), màn hình cài đặt (F10), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; hệ điều hành bằng chữ và trạng thái “đang bận” (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP, nút “Gửi lại” và “Đổi thư mục nhận” (mục 8).
 
 **Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](benchmark.md).
 
@@ -116,7 +116,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **US-03:** Khi mạng chặn mDNS, tôi vẫn muốn kết nối bằng cách nhập IP.
 - **AC:**
   - Thiết bị mới xuất hiện trên radar trong < 3 giây; thiết bị thoát app biến mất trong < 10 giây; thiết bị mất mạng đột ngột hoặc ngủ biến mất trong < 2 phút.
-  - Mỗi thiết bị hiển thị tên, biểu tượng hệ điều hành, trạng thái (đã ghép đôi / chưa ghép đôi / đang bận).
+  - Mỗi thiết bị hiển thị tên, biểu tượng loại máy chung (không dùng logo hệ điều hành), hệ điều hành bằng chữ và trạng thái. Trạng thái trên màn “Tìm máy mới”: đã ghép đôi / chưa ghép đôi. Ở danh sách cuộc trò chuyện: trực tuyến / ngoại tuyến / đang bận (còn lượt chưa xong với máy đó, hiện cụ thể như “Đang gửi · 62%”); hệ điều hành hiện ở dòng phụ khi chưa có hoạt động nào với máy đó, và luôn có ở chú thích. Trạng thái luôn có chữ, không chỉ màu.
   - Ô nhập IP luôn có trên màn hình radar (“Tìm máy mới”).
   - Thấy thiết bị qua mDNS mà không kết nối được → báo lỗi “Wi-Fi chặn thiết bị” (mục 8).
 
@@ -146,7 +146,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Máy đã ghép đôi đổi tên (F10): máy này cập nhật tên đã lưu ở lần kết nối kế tiếp với máy đó, không hỏi lại. Kết nối giữa hai máy đã ghép đôi xác thực cả hai bên bằng chứng chỉ đã lưu, nên chỉ chính máy đó đổi được tên của nó; máy lạ hay bản quảng bá trên mạng không đổi được ([protocol.md](protocol.md) mục 5.5).
 
 ### F4. Gửi file
-- **US-06:** Tôi muốn kéo một hoặc nhiều file thả vào thiết bị trên radar để gửi.
+- **US-06:** Tôi muốn kéo một hoặc nhiều file thả lên máy ở cột trái để gửi.
 - **US-07:** Là người nhận, tôi muốn biết ai gửi gì và được quyền từ chối.
 - **AC:**
   - Kéo thả, hoặc “Gửi file…” (chuột phải vào thiết bị, hay chọn thiết bị đã ghép đôi rồi bấm nút “Gửi file…” / bấm đúp / Enter), đều được; hỗ trợ chọn nhiều file.
@@ -289,9 +289,10 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 ```
 
 - Cột trái là các máy đã ghép đôi (mỗi máy một cuộc trò chuyện); cuối cột là máy này, kèm địa chỉ và trạng thái.
+- Cột trái sắp: máy đang truyền, rồi máy trực tuyến, rồi theo hoạt động gần nhất; mỗi hàng có trạng thái và hoạt động gần nhất; thả file lên một hàng là gửi cho máy đó; chuột phải có Gửi file…, Hủy ghép đôi….
 - ⌕ mở màn “Tìm máy mới” (radar, có “Nhập IP thủ công” và “Chờ ghép đôi”).
 - Chưa ghép đôi máy nào thì bên phải là “Ghép đôi máy đầu tiên”.
-- Cửa sổ hẹp thì cột trái thu gọn.
+- Cửa sổ hẹp thì cột trái thu gọn, chỉ còn avatar (tên và trạng thái ở chú thích khi trỏ chuột).
 - Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái.
 - Không hiện tên Wi-Fi.
 
@@ -518,12 +519,11 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: nhận xong một lượt | Bóng thoại ở khay: “Đã nhận *3* file từ *Laptop-Minh*.” (một file: “Đã nhận *video.mp4* từ *Laptop-Minh*.”, với tên file đã lưu trên máy này, ví dụ *video (1).mp4* khi thư mục nhận đã có file cùng tên) | Bấm vào bóng thoại: mở thư mục chứa file. Nút “Mở thư mục” trên thẻ của lượt |
 | Giao diện: địa chỉ của máy này (để nhập IP thủ công ở máy kia) | Khi Teleport đang chạy: dòng chọn được “Địa chỉ: *192.168.1.5*” (thêm “:*cổng*” khi không phải cổng mặc định, [protocol.md](protocol.md) mục 2.1); máy có nhiều địa chỉ thì hiện địa chỉ đầu, các địa chỉ còn lại ở chú thích khi trỏ chuột: “Các địa chỉ khác của máy này: …”. Cập nhật khi đổi mạng (đọc lại mỗi 10 giây). Không đọc được địa chỉ nào thì không hiện dòng này | — |
 | Giao diện: chưa có lượt truyền nào trong lần mở app này | “Kéo file vào một thiết bị để gửi” (ở khung lượt truyền) | — |
-| Giao diện: câu gợi ý dưới tiêu đề radar | “Bấm vào một thiết bị để ghép đôi hoặc gửi file, hoặc kéo file thả vào.” | Bấm thiết bị chưa ghép đôi → ghép đôi; chọn thiết bị đã ghép đôi → nút “Gửi file…” |
-| Giao diện: thả file vào chỗ không có thiết bị trên radar | “Thả file lên một thiết bị để gửi.” | — |
+| Giao diện: thả file vào chỗ không có máy ở cột trái | “Thả file lên một thiết bị để gửi.” | — |
 | Giao diện: gửi tới thiết bị chưa ghép đôi | Mở luồng ghép đôi (mục 7.2); ghép xong thì tự gửi | — |
 | Giao diện: gửi tiếp khi đang chờ ghép đôi để gửi một lượt khác | “Đang chờ ghép đôi với *PC-Nha* để gửi file. Hãy chờ xong rồi gửi tiếp.” (*PC-Nha* là máy đang chờ ghép đôi, không phải máy vừa được chọn gửi) | Chờ lần ghép đôi đang chạy xong rồi gửi lại |
 | Giao diện: gửi tới thiết bị mà lần kết nối gần nhất bị chặn, hoặc lần kết nối mở cho chính lượt gửi đó bị chặn | Câu của dòng “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức” | Lượt gửi không bắt đầu; lượt đã hiện trên danh sách mà chưa gửi được lời mời thì bị gỡ, không chờ nối lại. Kèm nút trên dải thông báo: bị từ chối → “Ghép đôi lại”; danh tính thay đổi → “Hủy ghép đôi” (hỏi xác nhận kèm cảnh báo); khác phiên bản → không có nút |
-| Giao diện: bấm “Ghép đôi lại” khi máy kia không có trong mạng (ví dụ đã ghép bằng IP vì mạng chặn mDNS) | “Không thấy “*PC-Nha*” trong mạng. Nếu mạng chặn việc tìm thiết bị, hãy nhập địa chỉ IP của máy đó để ghép đôi lại.” | Không bắt đầu ghép đôi; mở khung “Nhập IP thủ công” và đặt tiêu điểm vào ô nhập |
+| Giao diện: bấm “Ghép đôi lại” khi máy kia không có trong mạng (ví dụ đã ghép bằng IP vì mạng chặn mDNS) | “Không thấy “*PC-Nha*” trong mạng. Nếu mạng chặn việc tìm thiết bị, hãy nhập địa chỉ IP của máy đó để ghép đôi lại.” | Không bắt đầu ghép đôi; mở màn “Tìm máy mới”, câu hiện ở thanh thông báo của màn đó, đặt tiêu điểm vào ô nhập IP |
 | Giao diện: gửi tới thiết bị đã ghép đôi nhưng chưa kết nối | Trạng thái “Đang chờ kết nối tới *PC-Nha*…” (không phải lỗi) | Tự xử lý |
 | Giao diện: gửi tới thiết bị không (còn) ghép đôi | “Chưa ghép đôi với *PC-Nha* nên chưa gửi được. Hãy ghép đôi rồi gửi lại.” | Lượt gửi không bắt đầu |
 | Giao diện: không gửi được vì lỗi khác lúc bắt đầu lượt | “Không gửi được file tới *PC-Nha*. Hãy thử lại.” | Lượt gửi không bắt đầu |
@@ -538,7 +538,8 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: không mở được cổng khi khởi động | “Không mở được cổng để nhận kết nối (*lỗi*).” kèm dòng “Hãy đóng ứng dụng đang dùng cổng đó rồi bấm Thử lại.” | Nút “Thử lại” |
 | Giao diện: lỗi khác khi khởi động | “Teleport không khởi động được vì một lỗi không mong đợi.” kèm dòng “Hãy bấm Thử lại; nếu vẫn lỗi, hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” |
 | Giao diện: mở app khi máy chưa có danh tính (tạm, tới khi có màn hình lần chạy đầu của F1) | “Bắt đầu dùng Teleport”, rồi “Tên của máy này trong mạng: *X*” (tên mặc định của F1), câu đầu của dòng ngay dưới ô tên thiết bị ở F1, và “Bấm Bắt đầu để Teleport chạy và hiện máy này với các máy khác trong mạng.” Chưa bấm thì Teleport không chạy, không quảng bá | Nút “Bắt đầu” |
-| Giao diện: trạng thái của một thiết bị trên radar | Sau tên và “(đã ghép)” / “(chưa ghép)” (mục 7.1): “đã kết nối”, “đang trong mạng” hoặc “không thấy trong mạng”. Thiết bị đã ghép đôi mà lần kết nối gần nhất lỗi thì thêm câu của dòng “Thấy nhưng không kết nối được” (chỉ khi còn thấy trong mạng), “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức”, tới khi kết nối lại được | — |
+| Giao diện: trạng thái của một thiết bị trên màn “Tìm máy mới” (dạng danh sách) | Sau tên và “(đã ghép)” / “(chưa ghép)” (mục 7.1): “đã kết nối”, “đang trong mạng” hoặc “không thấy trong mạng”. Thiết bị đã ghép đôi mà lần kết nối gần nhất lỗi thì thêm câu của dòng “Thấy nhưng không kết nối được” (chỉ khi còn thấy trong mạng), “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức”, tới khi kết nối lại được | — |
+| Giao diện: trạng thái của một máy ở danh sách cuộc trò chuyện | “Trực tuyến”, “Ngoại tuyến” hoặc lượt đang chạy (“Đang gửi · 62%”…), rồi hoạt động gần nhất. Lần kết nối gần nhất lỗi thì nhãn ngắn “Bị từ chối kết nối”, “Danh tính đã đổi”, “Khác phiên bản” hoặc “Không kết nối được”, kèm câu đầy đủ ở chú thích. Đang kéo file qua hàng: “Thả để gửi *n* file” | — |
 | Giao diện: đang ghép đôi (máy này gửi yêu cầu, máy kia chưa hiện mã) | Hộp “Ghép đôi” có thanh chờ và câu “Đang ghép đôi với “*PC-Nha*”…” (ghép bằng IP: “*192.168.1.5:47474*” thay cho tên) | Nút “Hủy” |
 | Giao diện: ghép đôi xong | “Đã ghép đôi với “*PC-Nha*”.” ở dải thông báo trên danh sách lượt truyền, không mở hộp (cả hai máy); không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) thì thêm bóng thoại ở khay. Ghép đôi lỗi vẫn hiện hộp | Nút “Đóng” của dải thông báo |
 | Giao diện: bấm ghép đôi một thiết bị vừa rời mạng | “Không thấy “*PC-Nha*” trong mạng nữa. Hãy thử lại.” | — |

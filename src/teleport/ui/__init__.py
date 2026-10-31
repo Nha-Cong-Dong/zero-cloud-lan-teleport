@@ -7,12 +7,13 @@ qua `bridge.NodeHost` (không bao giờ gọi `Node` từ thread Qt). Mọi ch�
 
 Module: `app` (điểm vào, một bản mỗi thư mục cấu hình, ráp các phần), `bridge` (thread node),
 `main_window` (cửa sổ chính, khung trang, khung hai cột), `home` (thành phần của trang HOME: khối
-căn giữa, thẻ máy này, chân “Lưu vào”), `tray`, `radar` (danh sách thiết bị, kéo thả), `discover`
-(trang “Tìm máy mới”: radar vòng tròn, ô nhập IP), `motion` (có được chạy hoạt ảnh không), `pairing`
-(hộp ghép đôi, mvp mục 7.2), `transfers` (điều phối gửi/nhận file), `offer` (hộp hỏi nhận file, mvp
-mục 7.3), `transfers_view` (danh sách lượt truyền), `send` (lấy đường dẫn, kiểm trước và câu lỗi khi
-gửi), `texts` (câu chữ dùng chung), `i18n`, `theme` (token màu, thang chữ, stylesheet), `icons`
-(icon SVG đóng gói), `fonts` (font điểm nhấn đóng gói), `widgets` (thành phần dùng chung),
-`gcguard` (gom rác vòng tham chiếu chỉ trên thread Qt), `errorlog` (ghi lỗi vào log không kèm nội
-dung lỗi, mvp N9).
+căn giữa, thẻ máy này, chân “Lưu vào”), `tray`, `radar` (model thiết bị dùng chung và câu chữ của
+nó), `conversations` (danh sách cuộc trò chuyện ở cột trái, kéo thả), `activity` (hoạt động theo
+máy, không Qt), `discover` (trang “Tìm máy mới”: radar vòng tròn, ô nhập IP), `motion` (có được
+chạy hoạt ảnh không), `pairing` (hộp ghép đôi, mvp mục 7.2), `transfers` (điều phối gửi/nhận
+file), `offer` (hộp hỏi nhận file, mvp mục 7.3), `transfers_view` (danh sách lượt truyền), `send`
+(lấy đường dẫn, kiểm trước và câu lỗi khi gửi), `texts` (câu chữ dùng chung), `i18n`, `theme`
+(token màu, thang chữ, stylesheet), `icons` (icon SVG đóng gói), `fonts` (font điểm nhấn đóng gói),
+`widgets` (thành phần dùng chung), `gcguard` (gom rác vòng tham chiếu chỉ trên thread Qt),
+`errorlog` (ghi lỗi vào log không kèm nội dung lỗi, mvp N9).
 """

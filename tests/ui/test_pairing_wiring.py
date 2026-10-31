@@ -1,4 +1,5 @@
-"""Nối dây ghép đôi trong `GuiApp` (PR2): signal radar → `PairingController`, `devices_changed` → radar."""
+"""Nối dây ghép đôi trong `GuiApp` (PR2): signal của trang “Tìm máy mới” và danh sách cuộc trò chuyện →
+`PairingController`, `devices_changed` → `window.devices` (spec B2 mục 2.1, 12.28)."""
 
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ def _view(*, paired: bool = False, name: str = "May-B") -> DeviceView:
     )
 
 
-def test_radar_signals_reach_pairing_controller(qapp, monkeypatch, tmp_path):
+def test_discover_and_conversation_signals_reach_pairing_controller(qapp, monkeypatch, tmp_path):
     calls: list[tuple] = []
     monkeypatch.setattr(PairingController, "pair_device", lambda self, v: calls.append(("pair", v)) or True)
     monkeypatch.setattr(
@@ -33,13 +34,13 @@ def test_radar_signals_reach_pairing_controller(qapp, monkeypatch, tmp_path):
     )
     gui = ui_app.GuiApp(qapp, tmp_path)
     try:
-        radar = gui.window.radar
+        window = gui.window
         view = _view(paired=True)
-        radar.model.reset((view,))
-        radar.pair_requested.emit(view)
-        radar.manual_address_entered.emit("192.168.1.5", 47474)
-        radar.unpair_requested.emit(DEVICE_ID)
-        radar.unpair_requested.emit("b" * 64)  # không có trong radar: không có tên
+        window.devices.reset((view,))
+        window.discover.pair_requested.emit(view)
+        window.discover.manual_address_entered.emit("192.168.1.5", 47474)
+        window.conversations.unpair_requested.emit(DEVICE_ID)
+        window.conversations.unpair_requested.emit("b" * 64)  # không có trong danh sách: không có tên
         assert calls == [
             ("pair", view),
             ("addr", "192.168.1.5", 47474),
@@ -51,14 +52,14 @@ def test_radar_signals_reach_pairing_controller(qapp, monkeypatch, tmp_path):
         gui.window.deleteLater()
 
 
-def test_devices_changed_resets_radar_model(qapp, tmp_path):
+def test_devices_changed_resets_window_devices(qapp, tmp_path):
     gui = ui_app.GuiApp(qapp, tmp_path)
     try:
         gui.pairing.devices_changed.emit((_view(paired=True),))
-        shown = gui.window.radar.model.device(DEVICE_ID)
+        shown = gui.window.devices.device(DEVICE_ID)
         assert shown is not None and shown.paired
         gui.pairing.devices_changed.emit(())
-        assert gui.window.radar.model.device(DEVICE_ID) is None
+        assert gui.window.devices.device(DEVICE_ID) is None
     finally:
         gui.tray.dispose()
         gui.window.deleteLater()

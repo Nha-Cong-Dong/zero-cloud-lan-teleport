@@ -5,13 +5,13 @@ Viết từ spec, không từ code:
 
 - T-H (`MainWindow`): trang DISCOVER có sẵn, `discover_button` (objectName `discoverButton`, icon `search`,
   nhãn “Tìm máy mới”) chỉ hiện ở RUNNING, bấm → DISCOVER; nút “Quay lại” của header về HOME (H2); trang
-  dùng **cùng** `DeviceListModel` với `window.radar.model`; Tab `radar.last_focus_widget()` →
-  `discover_button` → `retry_button`.
+  dùng **cùng** `DeviceListModel` với `window.devices` (spec B2 mục 2.1); Tab `discover_button` →
+  `settings_button`.
 - T-W (`GuiApp`): `pair_requested` → `PairingController.pair_device`, `manual_address_entered` →
-  `pair_address`, `open_device_requested` → HOME + chọn máy trên radar, `pairing.notice` → `info_bar` của
-  trang; `wait_pairing_requested` không nối (D3). `radar_view` trong `settings.json` được đọc lúc `started`
-  (H1: `Node.settings` là property) và ghi khi người dùng bấm `view_button` — chạy qua fixture `gui`
-  (node thật trên 127.0.0.1 → `integration`).
+  `pair_address`, `open_device_requested` → HOME + chọn cuộc trò chuyện của máy (spec B2 2.7),
+  `pairing.notice` → `info_bar` của trang; `wait_pairing_requested` không nối (D3). `radar_view` trong
+  `settings.json` được đọc lúc `started` (H1: `Node.settings` là property) và ghi khi người dùng bấm
+  `view_button` — chạy qua fixture `gui` (node thật trên 127.0.0.1 → `integration`).
 """
 
 from __future__ import annotations
@@ -87,18 +87,20 @@ def gui_app(qapp, tmp_path):
 # =================================================================================================
 
 
-def test_discover_page_is_registered_and_shares_radar_model(window):
+def test_discover_page_is_registered_and_shares_window_devices(window):
     from teleport.ui.discover import DiscoverPage
     from teleport.ui.main_window import Page
 
     assert window.pages.has_page(Page.DISCOVER)
     assert isinstance(window.discover, DiscoverPage)
     assert window.discover.objectName() == "discoverPage"
-    assert window.discover.list_view.model().sourceModel() is window.radar.model, "cùng một model (is)"
+    assert window.discover.list_view.model().sourceModel() is window.devices, "cùng một model (is)"
+    assert window.discover.model is window.devices
+    assert window.conversations.model.sourceModel() is window.devices, "spec B2 12.32"
 
 
-def test_discover_page_follows_radar_model_changes(window, qtbot):
-    window.radar.model.reset([view("May-X"), view("May-P", paired=True)])
+def test_discover_page_follows_window_devices_changes(window, qtbot):
+    window.devices.reset([view("May-X"), view("May-P", paired=True)])
     settle(qtbot)
     shown = {b.device_id for b in window.discover.canvas.bubbles()}
     assert shown == {view("May-X").device_id, view("May-P").device_id}
@@ -151,7 +153,7 @@ def test_discover_page_cannot_open_outside_running(window):
     assert window.current_page is Page.HOME
 
 
-def test_tab_chain_discover_button_then_settings_then_radar(window):
+def test_tab_chain_discover_button_then_settings_then_conversations(window):
     """B1: ở RUNNING, “Tìm máy mới” đứng đầu chuỗi Tab của khung hai cột."""
     assert window.discover_button.nextInFocusChain() is window.settings_button
 
@@ -193,13 +195,13 @@ def test_open_device_goes_home_and_selects_device(gui_app, qtbot, tmp_path):
 
     window = gui_app.window
     p = view("May-P", paired=True, connected=True)
-    window.radar.model.reset([view("May-U"), p])
+    window.devices.reset([view("May-U"), p])
     window.show_running("May-A", tmp_path / "nhan")
     assert window.open_page(Page.DISCOVER)
     window.discover.open_device_requested.emit(p.device_id)
     settle(qtbot)
     assert window.current_page is Page.HOME
-    selected = window.radar.selected_device()
+    selected = window.conversations.current_device()
     assert selected is not None and selected.device_id == p.device_id
 
 

@@ -142,7 +142,7 @@ def test_home_page_holds_old_body(window):
         "address_label",
         "hint_label",
         "body",
-        "radar",
+        "conversations",
         "transfers_area",
     ):
         widget = getattr(window, name)
@@ -457,7 +457,7 @@ def test_focus_moves_to_page_proxy_and_returns_on_back(window, qtbot, tmp_path):
     window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
-    target = window.radar.address_button
+    target = window.conversations.add_button
     target.setFocus()
     qtbot.waitUntil(lambda: window.focusWidget() is target, timeout=1000)
 
@@ -475,7 +475,7 @@ def test_esc_back_also_restores_focus(window, qtbot, tmp_path):
     window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
-    target = window.radar.address_button
+    target = window.conversations.add_button
     target.setFocus()
     qtbot.waitUntil(lambda: window.focusWidget() is target, timeout=1000)
     window.open_page(Page.WAIT_PAIRING)
@@ -584,8 +584,10 @@ def test_tab_cycle_never_reaches_hidden_page(window, qtbot, tmp_path):
     _running(window, tmp_path)
     _activate(qtbot, window)
     assert not button.isVisibleTo(window)
-    # Spec B1 mục 8c: ở RUNNING `status_label` nằm trong màn Bắt đầu (đang ẩn), nên bắt đầu từ tên máy.
-    start = window.name_label
+    # Spec B1 mục 8c: ở RUNNING `status_label` nằm trong màn Bắt đầu (đang ẩn). Spec B2 mục 2.6: cửa sổ
+    # mặc định (nền offscreen) hẹp hơn 820 px nên cột trái thu gọn và `name_label` ẩn; bắt đầu từ nút
+    # “Tìm máy mới” (luôn hiện ở RUNNING).
+    start = window.discover_button
     start.setFocus()
     qtbot.waitUntil(lambda: window.focusWidget() is start, timeout=1000)
     visited = []
@@ -597,7 +599,7 @@ def test_tab_cycle_never_reaches_hidden_page(window, qtbot, tmp_path):
         visited.append(focus)
         if focus is start:
             break
-    assert visited[-1] is start, f"Tab không quay vòng về name_label sau {len(visited)} bước"
+    assert visited[-1] is start, f"Tab không quay vòng về discover_button sau {len(visited)} bước"
     assert not any(_focus_in(page, w) for w in visited), "Tab vào widget của trang đang ẩn"
 
 
