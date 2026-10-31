@@ -117,7 +117,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **AC:**
   - Thiết bị mới xuất hiện trên radar trong < 3 giây; thiết bị thoát app biến mất trong < 10 giây; thiết bị mất mạng đột ngột hoặc ngủ biến mất trong < 2 phút.
   - Mỗi thiết bị hiển thị tên, biểu tượng hệ điều hành, trạng thái (đã ghép đôi / chưa ghép đôi / đang bận).
-  - Nút “Nhập IP thủ công” luôn có trên màn hình radar.
+  - Ô nhập IP luôn có trên màn hình radar (“Tìm máy mới”).
   - Thấy thiết bị qua mDNS mà không kết nối được → báo lỗi “Wi-Fi chặn thiết bị” (mục 8).
 
 ### F3. Ghép đôi
@@ -464,6 +464,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Tình huống | Thông báo | Hành động gợi ý |
 |---|---|---|
 | Không thấy thiết bị nào | Giao diện: “Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia, kiểm tra hai máy dùng chung một mạng Wi-Fi và tường lửa của Windows cho phép Teleport.” CLI: “Chưa thấy thiết bị nào. Hãy mở Teleport trên máy kia và kiểm tra hai máy dùng chung một mạng Wi-Fi.” | Nút “Nhập IP thủ công” |
+| Trang “Tìm máy mới” có máy trong mạng | Giao diện: “Bấm vào một máy để ghép đôi. Máy đã ghép đôi hiện mờ.” | Bấm vào máy để ghép đôi |
 | Thấy nhưng không kết nối được (cô lập thiết bị) | “Thấy *PC-Nha* nhưng không kết nối được. Mạng Wi-Fi này có thể đang chặn các thiết bị nói chuyện với nhau (hay gặp ở quán cà phê, khách sạn).” Giao diện thêm câu: “Hãy thử dùng điểm phát Wi-Fi từ điện thoại.” | Gợi ý dùng hotspot điện thoại |
 | Tường lửa chặn | “Tường lửa của Windows đang chặn Teleport nhận kết nối.” (máy bị chặn tự phát hiện và hiện; nếu chiều ngược lại vẫn kết nối được thì Teleport vẫn chạy, chỉ hiện gợi ý) | Nút “Mở hướng dẫn” |
 | Không mở được kết nối truyền dữ liệu tới máy kia nhiều lần liên tiếp (máy mở kết nối báo) | “Không mở được kết nối truyền dữ liệu tới *PC-Nha*; tường lửa trên máy đó có thể đang chặn Teleport. Teleport vẫn đang thử lại.” | Tự thử lại |

@@ -76,7 +76,11 @@ các thuộc tính công khai (`radar`, `transfers_area`, `body`, `status_label`
   `show_error` gọi `pages.reset()` trước `retranslate`/`_place_focus`.
 - Esc (`_back_action`, `WindowShortcut`, “Quay lại”) chỉ bật khi đang ở trang khác HOME. Hộp thoại
   là cửa sổ riêng nên không bị Esc của cửa sổ chính bắt. Ô nhập trên trang khác HOME phải nhận
-  `ShortcutOverride` cho Esc nếu cần phím đó (như `_AddressEdit` của `ui.radar`).
+  `ShortcutOverride` cho Esc nếu cần phím đó (như `_AddressField` của `ui.discover`). `_AddressEdit`
+  của `ui.radar` chỉ bắt Esc trong `keyPressEvent`, chạy được vì nó nằm ở HOME, nơi `_back_action` tắt.
+- Trang DISCOVER (`self.discover`, `ui.discover.DiscoverPage`, “Tìm máy mới”) luôn có, đăng ký bằng
+  `add_page` cuối `__init__` nên nút “Tìm máy mới” ở đầu cột và nút của màn rỗng luôn hiện; dùng chung
+  model với radar (`self.radar.model`); “Quay lại” của đầu trang = `go_back`.
 - Không có hoạt ảnh chuyển trang: đổi tức thì.
 """
 
@@ -105,6 +109,7 @@ from shiboken6 import isValid
 from teleport.core.display import display_name
 from teleport.net.connection import DEFAULT_PORT
 from teleport.ui import texts, theme
+from teleport.ui.discover import DiscoverPage
 from teleport.ui.home import START_PANEL_MAX_WIDTH as START_PANEL_MAX_WIDTH  # hằng của bảng spec B1 mục 2.3
 from teleport.ui.home import MachineCard, SaveBar, StartPanel
 from teleport.ui.radar import RadarView
@@ -382,6 +387,8 @@ class MainWindow(QMainWindow):
         self.home_stack.addWidget(self.shell)
 
         self.pages.add_page(Page.HOME, self.home_page)
+        self.discover = DiscoverPage(self.radar.model, self.pages)
+        self.discover.header.back_requested.connect(self.go_back)
         self.pages.page_changed.connect(self.page_changed)
         self.pages.page_changed.connect(self._on_page_changed)
         self.setCentralWidget(self.pages)
@@ -437,6 +444,7 @@ class MainWindow(QMainWindow):
             action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             self.addAction(action)
 
+        self.add_page(Page.DISCOVER, self.discover)  # cũng dời “Mở thư mục” về cuối chuỗi Tab
         self._update_page_buttons()
         self.retranslate()
 
