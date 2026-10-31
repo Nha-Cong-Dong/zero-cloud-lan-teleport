@@ -1310,6 +1310,10 @@ class DiscoverPage(QWidget):
             self._restart_waves()  # chỉ khi thôi thu nhỏ; phóng to/toàn màn hình không chạy lại sóng
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        # Lúc cửa sổ bị hủy, PySide có thể đã xóa thuộc tính Python của trang mà Qt vẫn gửi sự kiện
+        # (đổi cỡ `stack`) tới bộ lọc (CI macOS): khi đó bỏ qua.
+        if "stack" not in self.__dict__:
+            return False
         if watched is self.stack and event.type() == QEvent.Type.Resize:
             self._sized = True
             self._sync()
