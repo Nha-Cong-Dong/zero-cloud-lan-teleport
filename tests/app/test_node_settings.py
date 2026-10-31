@@ -1205,16 +1205,20 @@ async def test_restore_late_handle_closed_on_old_dir_after_change(
 
     gate = Gate()
     returned: dict[str, object] = {}
+    failed: dict[str, BaseException] = {}  # lỗi trong thread đĩa: báo thẳng thay vì chờ hết hạn
     real_open = storage.ReceiveDir.open_for_resume
 
     def open_for_resume(rd, scan, *, stop=None):
         if scan.transfer_id != tid:
             return real_open(rd, scan, stop=stop)
-        gate.wait()
         try:
+            gate.wait()
             handle = real_open(rd, scan, stop=None)  # bỏ qua `stop`: trả handle thật, tới muộn
             returned[tid] = handle
             return handle
+        except BaseException as e:
+            failed[tid] = e
+            raise
         finally:
             rd_spy.add("open_done", tid)
 
@@ -1229,7 +1233,9 @@ async def test_restore_late_handle_closed_on_old_dir_after_change(
         assert same_path(root, new)
     finally:
         gate.release.set()
-    await wait_until(lambda: tid in returned, 10, "việc mở lại treo chưa trả handle")
+    # Hạn bằng hạn của `Gate`: trên CI chạy song song (xdist) 10 s từng không đủ.
+    await wait_until(lambda: tid in returned or tid in failed, 30, "việc mở lại treo chưa trả handle")
+    assert tid not in failed, f"open_for_resume tới muộn lỗi: {failed[tid]!r}"
     handle = returned[tid]
     try:
         await wait_until(lambda: handle.temp.closed, 10, "handle tới muộn không được đóng")
