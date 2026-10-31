@@ -1,7 +1,7 @@
 """PR-7 “Giao diện trông như một app” (spec-pr7: B3, B4, B6, B7).
 
 Viết từ spec, không từ code. Mọi widget dựng riêng (không `main()`, không socket): `TransfersView`,
-`MainWindow`, `RadarView` / `DeviceListModel`, `PairingController` với host giả, `OfferPrompts`,
+`MainWindow`, `DeviceListModel`, `PairingController` với host giả, `OfferPrompts`,
 `PairingDialog`, `PairingProgressDialog`; nối dây `ui/app.py` kiểm bằng `GuiApp` không chạy node.
 
 Nhóm:
@@ -11,8 +11,9 @@ Nhóm:
 - B4: ghép đôi xong / hủy ghép đôi xong → `notice`, không hộp; lỗi vẫn hộp; hộp lỗi đang mở thì đóng.
 - B6: câu chữ radar trống, UNREACHABLE, PEER_BUSY / REJECTED.
 - B7: `default_size`, tiêu đề ẩn khi RUNNING, không nhãn nào chọn chữ bằng bàn phím, tiêu điểm khi
-  RUNNING, thứ tự radar (cả property test), icon/font của hàng, `radarBusy`, nút chính, Enter an
-  toàn, tương phản, bề rộng hộp mã.
+  RUNNING, thứ tự của `DeviceListModel` (cả property test), icon/font của hàng, nút chính, Enter an
+  toàn, tương phản, bề rộng hộp mã. Spec B2 gỡ `RadarView`: các ca radar trống / thanh bận / nút “Nhập
+  IP thủ công” bỏ; ca kéo thả khi hàng dời chỗ chuyển sang `test_conversations_drop.py` (T-D4).
 """
 
 from __future__ import annotations
@@ -56,7 +57,6 @@ HOTSPOT_HINT = "Hãy thử dùng điểm phát Wi-Fi từ điện thoại."
 NOT_READY = "{name} đang bận hoặc vừa có một lần ghép đôi không thành. Hãy chờ một lát rồi thử lại."
 OUT_PAIRED = "Đã ghép đôi với “{x}”."
 UNPAIRED = "Đã hủy ghép đôi với “{name}”."
-IP_BUTTON = "Nhập IP thủ công"
 
 
 def fill(template: str, **values: str) -> str:
@@ -391,18 +391,6 @@ def order(model) -> list[str]:
 
 def spec_key(v) -> tuple:
     return (not v.connected, not v.paired, unicodedata.normalize("NFC", v.name).casefold(), v.device_id)
-
-
-@pytest.fixture
-def radar(qtbot):
-    from teleport.ui.radar import RadarView
-
-    w = RadarView()
-    qtbot.addWidget(w)
-    w.resize(480, 400)
-    w.show()
-    qtbot.waitExposed(w)
-    return w
 
 
 # =================================================================================================
@@ -871,7 +859,8 @@ def keyboard_selectable(root) -> list[str]:
 
 
 def full_window(window, tmp_path):
-    """Cửa sổ RUNNING có radar nhiều thiết bị, khung nhập IP mở, danh sách lượt có thẻ và thông báo."""
+    """Cửa sổ RUNNING có nhiều máy ở cột trái, danh sách lượt có thẻ và thông báo (spec B2 12.26: không còn
+    khung nhập IP trong cột trái)."""
     from teleport.ui.transfers_view import TransfersView
 
     tv = TransfersView(window.transfers_area)
@@ -884,10 +873,7 @@ def full_window(window, tmp_path):
     tv.handle(finished(k, "done"))
     tv.handle(finished(tkey("send", "a" * 32), "rejected_user", by_peer=True))
     tv.show_notice("Một thông báo.", "Làm gì đó", lambda: None)
-    window.radar.model.reset([dview("May-X", paired=True, connected=True), dview("May-Y")])
-    window.radar.open_address_entry()
-    window.radar.address_edit.setText("không phải IP")
-    window.radar.submit_address()
+    window.devices.reset([dview("May-X", paired=True, connected=True), dview("May-Y")])
     window.show_running("May-A", tmp_path)
     return tv
 
@@ -902,11 +888,6 @@ def test_no_label_in_main_window_is_keyboard_selectable(window, tmp_path, state)
         "error": lambda: window.show_error("other", "chi tiết"),
     }[state]()
     assert keyboard_selectable(window) == []
-
-
-def test_empty_radar_label_not_keyboard_selectable(radar):
-    assert radar.model.rowCount() == 0
-    assert keyboard_selectable(radar) == []
 
 
 def test_offer_box_and_pairing_dialogs_have_no_keyboard_selectable_label(qtbot):
@@ -931,8 +912,7 @@ def test_offer_box_and_pairing_dialogs_have_no_keyboard_selectable_label(qtbot):
 
 def test_text_labels_stay_mouse_selectable_and_tabbable(window, tmp_path):
     tv = full_window(window, tmp_path)
-    window.radar.model.clear()  # radar trống: câu “Chưa thấy thiết bị nào” hiện
-    labels = [window.status_label, window.detail_label, window.hint_label, window.radar.empty_label]
+    labels = [window.status_label, window.detail_label, window.hint_label]
     labels.append(tv.notice_label)
     for lb in labels:
         flags = lb.textInteractionFlags()
@@ -950,16 +930,17 @@ def show_and_run(window, qtbot, tmp_path):
 
 
 def test_running_focus_goes_to_device_list_when_devices(window, qtbot, tmp_path):
-    window.radar.model.reset([dview("May-X", paired=True)])
+    window.devices.reset([dview("May-X", paired=True)])
     show_and_run(window, qtbot, tmp_path)
-    qtbot.waitUntil(lambda: window.focusWidget() is window.radar.list_view, timeout=1000)
+    qtbot.waitUntil(lambda: window.focusWidget() is window.conversations.list_view, timeout=1000)
     assert window.focusWidget() is not window.status_label
 
 
-def test_running_focus_goes_to_manual_ip_button_when_radar_empty(window, qtbot, tmp_path, ui_helpers):
+def test_running_focus_goes_to_add_device_button_when_no_paired_device(window, qtbot, tmp_path):
+    """Spec B2 2.8: không có máy đã ghép đôi → “＋ Ghép đôi máy mới” (thay nút “Nhập IP thủ công”)."""
     show_and_run(window, qtbot, tmp_path)
-    [ip] = ui_helpers.buttons_with_text(window.radar, IP_BUTTON)
-    qtbot.waitUntil(lambda: window.focusWidget() is ip, timeout=1000)
+    add = window.conversations.add_button
+    qtbot.waitUntil(lambda: window.focusWidget() is add, timeout=1000)
 
 
 # =================================================================================================
@@ -1010,19 +991,6 @@ def test_radar_order_on_row_insert_and_pairing_change(qtbot):
     assert order(m) == ["Bravo", "Yankee", "Alpha", "Aaron", "Zulu"]
     m.apply(DeviceOnline(dview("Zulu", paired=True)))  # vừa ghép đôi
     assert order(m) == ["Bravo", "Yankee", "Alpha", "Zulu", "Aaron"]
-
-
-def test_radar_view_rows_follow_model_order(radar):
-    from teleport.app.node import DeviceConnected
-
-    radar.model.reset([dview("Alpha"), dview("Bravo", paired=True)])
-    radar.model.apply(DeviceConnected(dview("Charlie", paired=True, connected=True), outgoing=True))
-    lst = radar.list_view
-    m = lst.model()
-    texts_in_view = [str(m.data(m.index(r, 0), Qt.ItemDataRole.DisplayRole)) for r in range(m.rowCount())]
-    assert [t.split()[0] for t in texts_in_view] == ["Charlie", "Bravo", "Alpha"]
-    ys = [lst.visualRect(m.index(r, 0)).y() for r in range(m.rowCount())]
-    assert ys == sorted(ys)
 
 
 _NAMES = ["alpha", "Alpha", "bravo", "Ä", "zulu"]
@@ -1127,107 +1095,6 @@ def test_rows_keep_accessible_text_and_tooltip(qtbot):
 
 
 # =================================================================================================
-# B7.6 — Radar trống: căn giữa, thanh bận
-# =================================================================================================
-
-
-def busy_bar(radar):
-    from PySide6.QtWidgets import QProgressBar
-
-    bar = radar.findChild(QProgressBar, "radarBusy")
-    assert bar is not None, "thiếu QProgressBar objectName radarBusy"
-    return bar
-
-
-def test_busy_bar_is_indeterminate_thin_and_textless(radar):
-    bar = busy_bar(radar)
-    assert bar.minimum() == 0 and bar.maximum() == 0
-    assert not bar.isTextVisible()
-    QApplication.processEvents()
-    assert bar.isVisibleTo(radar)
-    assert bar.height() <= 6, f"thanh bận cao {bar.height()} px"
-
-
-def test_busy_bar_only_shown_when_radar_empty(radar):
-    bar = busy_bar(radar)
-    assert bar.isVisibleTo(radar)
-    radar.model.reset([dview("May-X")])
-    assert not bar.isVisibleTo(radar)
-    radar.model.clear()
-    assert bar.isVisibleTo(radar)
-    radar.model.reset([dview("May-X")])
-    radar.model.reset([])
-    assert bar.isVisibleTo(radar)
-
-
-def test_empty_radar_text_and_bar_centered_vertically(radar, qtbot, ui_helpers):
-    bar = busy_bar(radar)
-    label = radar.empty_label
-    [ip] = ui_helpers.buttons_with_text(radar, IP_BUTTON)
-    QApplication.processEvents()
-    top = radar.hint_label.mapTo(radar, radar.hint_label.rect().bottomLeft()).y()
-    bottom = ip.mapTo(radar, QPoint(0, 0)).y()
-    group_top = label.mapTo(radar, QPoint(0, 0)).y()
-    group_bottom = bar.mapTo(radar, bar.rect().bottomLeft()).y()
-    middle = (group_top + group_bottom) / 2
-    assert top < group_top < group_bottom < bottom
-    assert abs(middle - (top + bottom) / 2) < (bottom - top) * 0.15, (
-        f"khối trống ({group_top}–{group_bottom}) phải nằm giữa vùng danh sách ({top}–{bottom})"
-    )
-
-
-def test_manual_ip_button_reachable_by_tab_when_empty(radar, qtbot, ui_helpers):
-    from PySide6.QtTest import QTest
-
-    [ip] = ui_helpers.buttons_with_text(radar, IP_BUTTON)
-    radar.activateWindow()
-    radar.setFocus(Qt.FocusReason.OtherFocusReason)
-    seen = set()
-    for _ in range(8):
-        QTest.keyClick(QApplication.focusWidget() or radar, Qt.Key.Key_Tab)
-        seen.add(QApplication.focusWidget())
-    assert ip in seen
-
-
-def test_drop_on_empty_area_still_gives_hint(radar, tmp_path):
-    """Thả file lên khối trống (câu + thanh bận): sự kiện tới widget nhận thả gần nhất → gợi ý."""
-    from PySide6.QtCore import QMimeData, QPointF, QUrl
-    from PySide6.QtGui import QDragEnterEvent, QDropEvent
-
-    from teleport.ui.radar import drop_hint_text
-
-    hints: list = []
-    sends: list = []
-    radar.drop_hint_requested.connect(lambda *a: hints.append(a))
-    radar.send_files_requested.connect(lambda *a: sends.append(a))
-    bar = busy_bar(radar)
-    QApplication.processEvents()
-    point = bar.mapTo(radar, bar.rect().center())
-    target = radar.childAt(point) or radar
-    while not target.acceptDrops() and target is not radar:
-        target = target.parentWidget()
-    local = target.mapFrom(radar, point)
-    mime = QMimeData()
-    mime.setUrls([QUrl.fromLocalFile(str(tmp_path / "a.txt"))])
-    enter = QDragEnterEvent(
-        local, Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
-    )
-    enter.setAccepted(False)
-    QApplication.sendEvent(target, enter)
-    assert enter.isAccepted(), "khối trống phải nhận kéo file (để gợi ý)"
-    drop = QDropEvent(
-        QPointF(local),
-        Qt.DropAction.CopyAction,
-        mime,
-        Qt.MouseButton.LeftButton,
-        Qt.KeyboardModifier.NoModifier,
-    )
-    QApplication.sendEvent(target, drop)
-    assert sends == []
-    assert hints and hints[-1][0] == drop_hint_text()
-
-
-# =================================================================================================
 # B7.7 — Nút chính, Enter an toàn, tương phản
 # =================================================================================================
 
@@ -1244,14 +1111,12 @@ def test_primary_property_name():
     assert theme.PRIMARY_PROPERTY == "primary"
 
 
-def test_primary_buttons_carry_property(window, radar, qtbot):
+def test_primary_buttons_carry_property(window, qtbot):
     from teleport.ui.offer import OfferPrompts
     from teleport.ui.pairing import PairingDialog
 
     assert is_primary(window.start_button)
-    assert is_primary(window.radar.address_submit)
-    assert is_primary(radar.address_submit)
-    assert not is_primary(radar.address_cancel)
+    assert is_primary(window.discover.address_submit)  # spec B2: ô nhập IP chỉ còn ở “Tìm máy mới”
 
     prompts = OfferPrompts(Path("nhan"))
     k = tkey("receive")
@@ -1359,7 +1224,13 @@ def test_primary_button_drawn_with_highlight_and_others_not(window, qapp, qtbot,
     assert _distance(start, highlight) <= 24, f"nút chính phải tô màu nhấn {highlight}, thấy {start}"
     window.show_running("May-A", None)
     QApplication.processEvents()
-    ordinary = window.radar.address_button
+    from teleport.ui.main_window import Page
+
+    # Spec B2 12.26: nút thường thay `radar.address_button` là `discover.view_button` (trang “Tìm máy mới”).
+    assert window.open_page(Page.DISCOVER)
+    QApplication.processEvents()
+    ordinary = window.discover.view_button
+    assert ordinary.isVisible() and not ordinary.size().isEmpty()
     assert not is_primary(ordinary)
     drawn = _dominant(ordinary.grab().toImage())
     assert _distance(drawn, highlight) > 24, "nút thường không được tô màu nhấn"
@@ -1426,51 +1297,6 @@ def test_code_dialog_buttons_aligned_right_reject_then_accept(qtbot):
         assert dlg.width() - acc.right() < 32, "nút căn phải"
     finally:
         dlg.dismiss()
-
-
-# =================================================================================================
-# Kéo thả khi radar dời hàng (soat-code vòng 1)
-# =================================================================================================
-
-
-def test_drag_highlight_follows_row_under_cursor_when_model_reorders(radar, tmp_path):
-    """Đang kéo file qua một hàng (viền tô), một `DeviceConnected` làm đổi thứ tự hàng: viền và nơi
-    thả phải là thiết bị đang nằm dưới con trỏ, không phải thiết bị cũ đã bị dời đi."""
-    from PySide6.QtCore import QMimeData, QPointF, QUrl
-    from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
-
-    from teleport.app.node import DeviceConnected
-    from teleport.ui.radar import DEVICE_ID_ROLE
-
-    alpha = dview("Alpha", paired=True)
-    beta = dview("Beta", paired=True, connected=True)
-    radar.model.reset([alpha, beta])
-    assert order(radar.model) == ["Beta", "Alpha"]
-    lst = radar.list_view
-    target = lst.viewport()
-    QApplication.processEvents()
-    pos = lst.visualRect(radar.model.index(1, 0)).center()  # hàng thứ hai: Alpha
-    mime = QMimeData()
-    mime.setUrls([QUrl.fromLocalFile(str(tmp_path / "x.txt"))])
-    buttons, mods = Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
-    enter = QDragEnterEvent(pos, Qt.DropAction.CopyAction, mime, buttons, mods)
-    QApplication.sendEvent(target, enter)
-    move = QDragMoveEvent(pos, Qt.DropAction.CopyAction, mime, buttons, mods)
-    QApplication.sendEvent(target, move)
-    assert lst.drop_target() == alpha.device_id, "tiền đề: đang tô hàng Alpha"
-
-    radar.model.apply(DeviceConnected(dview("Alpha", paired=True, connected=True), outgoing=True))
-    QApplication.processEvents()
-    assert order(radar.model) == ["Alpha", "Beta"]
-    under = lst.indexAt(pos).data(DEVICE_ID_ROLE)
-    assert under == beta.device_id, "tiền đề: dưới con trỏ giờ là Beta"
-    assert lst.drop_target() == under, "viền tô phải là thiết bị dưới con trỏ sau khi hàng dời"
-
-    sends: list = []
-    radar.send_files_requested.connect(lambda d, p: sends.append(d))
-    drop = QDropEvent(QPointF(pos), Qt.DropAction.CopyAction, mime, buttons, mods)
-    QApplication.sendEvent(target, drop)
-    assert sends == [beta.device_id], "thả ra phải gửi tới thiết bị dưới con trỏ"
 
 
 # =================================================================================================
