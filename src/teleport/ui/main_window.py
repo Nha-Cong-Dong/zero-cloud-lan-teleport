@@ -23,14 +23,20 @@ nhấn nếu `ui.fonts.install()` đã nạp trước khi dựng cửa sổ), d�
 - Cột trái từ trên xuống: `sidebar_header` (logo 32 px, “Teleport”, nút “Tìm máy mới” và “Cài đặt”),
   `sidebar_scroll` (radar `ui.radar.RadarView` trong `sidebarContent`, nền trong suốt; nội dung cao hơn
   chỗ thì cuộn) và `machine_card` (`home.MachineCard`: máy này, địa chỉ, “Chép địa chỉ”, huy hiệu
-  “Sẵn sàng nhận” / “Đang truyền n lượt”). Bề ngang `SIDEBAR_WIDTH`, cửa sổ hẹp hơn `COMPACT_BELOW`
-  thì `SIDEBAR_COMPACT_WIDTH` (`sidebar_compact`; áp ở `resizeEvent` và `showEvent`). Kiểu chỉ còn
-  avatar là việc của B2.
+  “Sẵn sàng nhận” / “Đang truyền n lượt” / “Không nhận file”). Bề ngang `SIDEBAR_WIDTH`, cửa sổ
+  hẹp hơn `COMPACT_BELOW` thì `SIDEBAR_COMPACT_WIDTH` (`sidebar_compact`; áp ở `resizeEvent` và
+  `showEvent`). Kiểu chỉ còn avatar là việc của B2.
 - Khung phải: `empty_state` (“Ghép đôi máy đầu tiên”) khi radar chưa có máy nào đã ghép đôi **và**
   danh sách lượt rỗng (`set_transfer_summary`), không thì `transfers_area` (`ui.transfers` đặt
   `TransfersView` vào). Nút của `empty_state` chỉ có khi đã có trang DISCOVER.
-- `save_bar` (`home.SaveBar`, “Lưu vào: …” + “Mở thư mục”) chạy hết chiều ngang dưới `body`; ẩn khi
-  không biết thư mục nhận. Bấm “Mở thư mục” phát `open_receive_dir_requested(Path)`.
+- `save_bar` (`home.SaveBar`, “Lưu vào: …” + “Mở thư mục” + “Đổi…”) chạy hết chiều ngang dưới `body`;
+  ẩn khi không biết thư mục nhận lẫn thư mục đã lưu hỏng. Bấm “Mở thư mục” phát
+  `open_receive_dir_requested(Path)`, bấm “Đổi…” phát `change_receive_dir_requested` (`ui.app` mở
+  hộp chọn qua `ui.receive_dir.ReceiveDirController`). Thư mục nhận, thư mục đã lưu hỏng và thư mục
+  đang đổi sang được nhớ (`show_running`, `set_receive_dir`, `set_receive_dir_pending`) và chỉ áp vào
+  `save_bar` và huy hiệu của `machine_card` ở RUNNING (ngoài RUNNING thanh ẩn, huy hiệu không báo
+  “Không nhận file”). Node chạy mà không có thư mục nhận vì thư mục đã lưu hỏng → huy hiệu “Không
+  nhận file” (`machine_card.set_receiving_unavailable`).
 - Nút đầu cột chỉ hiện khi đã có trang tương ứng (`add_page`): không có nút bấm mà không làm gì.
 - Không phần nào làm cửa sổ to hơn `MIN_SIZE`: cột trái cuộn bằng `sidebar_scroll`, khối căn giữa
   bằng `start_scroll`. Tiêu điểm đặt bằng code vào widget trong hai vùng cuộn đó (ví dụ “Nhập IP thủ
@@ -46,8 +52,9 @@ và gọi `set_addresses`.
 **Trợ năng** (mvp N12): mọi chữ là chữ thuần (`Qt.PlainText`), có tên cho trình đọc màn hình; nhãn
 chọn được bằng chuột nhưng không có con trỏ chữ khi Tab tới (không `TextSelectableByKeyboard`).
 Thứ tự Tab ở RUNNING: “Tìm máy mới” → “Cài đặt” → radar → tên máy này → địa chỉ → “Chép địa chỉ” →
-khung phải → “Mở thư mục” (luôn cuối: widget tạo sau như thẻ lượt truyền hay trang mới rơi vào cuối
-chuỗi, nên `set_transfer_summary` và `add_page` dời nút về cuối). WELCOME / ERROR: dòng trạng thái →
+khung phải → “Mở thư mục” → “Đổi…” (luôn cuối: widget tạo sau như thẻ lượt truyền hay trang mới rơi
+vào cuối chuỗi, nên `set_transfer_summary` và `add_page` dời hai nút về cuối bằng `_keep_footer_last`;
+“Mở thư mục” ẩn thì Tab bỏ qua nó, “Đổi…” vẫn cuối). WELCOME / ERROR: dòng trạng thái →
 chi tiết → gợi ý → nút. Tiêu điểm ban đầu (`_place_focus`): nút đang hiện (“Bắt đầu” / “Thử lại”);
 RUNNING thì danh sách thiết bị khi radar có thiết bị, không thì nút “Nhập IP thủ công”; STARTING thì
 dòng trạng thái. Trạng thái luôn nói bằng chữ, không chỉ bằng màu. Phím tắt: F5 = Thử lại (khi nút
@@ -237,6 +244,7 @@ class MainWindow(QMainWindow):
     hidden_to_tray = Signal()
     page_changed = Signal(str)  # giá trị `Page`; nối thẳng từ `PageStack.page_changed`
     open_receive_dir_requested = Signal(object)  # Path; nối thẳng từ `save_bar.open_requested`
+    change_receive_dir_requested = Signal()  # nối thẳng từ `save_bar.change_requested`
 
     def __init__(self) -> None:
         super().__init__()
@@ -247,6 +255,8 @@ class MainWindow(QMainWindow):
         self._state = ViewState.STARTING
         self._name: str | None = None
         self._receive_dir: Path | None = None
+        self._receive_dir_unavailable: Path | None = None
+        self._receive_dir_pending: Path | None = None
         self._planned_name = ""
         self._error_code = ""
         self._error_detail = ""
@@ -380,6 +390,7 @@ class MainWindow(QMainWindow):
 
         self.save_bar = SaveBar(self.shell)
         self.save_bar.open_requested.connect(self.open_receive_dir_requested)
+        self.save_bar.change_requested.connect(self.change_receive_dir_requested)
         shell_layout.addWidget(self.body, 1)
         shell_layout.addWidget(self.save_bar)
 
@@ -416,6 +427,7 @@ class MainWindow(QMainWindow):
             empty.text_label,
             empty.action_button,
             self.save_bar.open_button,  # nội dung của `transfers_area` tạo sau: `_keep_footer_last`
+            self.save_bar.change_button,
         ]
         for first, second in pairwise(rest):
             QWidget.setTabOrder(first, second)
@@ -456,8 +468,18 @@ class MainWindow(QMainWindow):
 
     @property
     def receive_dir(self) -> Path | None:
-        """Thư mục nhận của lần `show_running` gần nhất."""
+        """Thư mục nhận đã nhớ (`show_running` hay `set_receive_dir` gần nhất); None khi không nhận file."""
         return self._receive_dir
+
+    @property
+    def receive_dir_unavailable(self) -> Path | None:
+        """Thư mục nhận đã lưu không mở được (đã nhớ), hay None."""
+        return self._receive_dir_unavailable
+
+    @property
+    def receive_dir_pending(self) -> Path | None:
+        """Thư mục đang đổi sang (đã nhớ), hay None."""
+        return self._receive_dir_pending
 
     @property
     def sidebar_compact(self) -> bool:
@@ -480,11 +502,27 @@ class MainWindow(QMainWindow):
         self.retranslate()
         self._place_focus()
 
-    def show_running(self, name: str | None, receive_dir: Path | None) -> None:
+    def show_running(
+        self, name: str | None, receive_dir: Path | None, unavailable: Path | None = None
+    ) -> None:
+        """Node đã chạy: `receive_dir` là thư mục nhận (None: không nhận file), `unavailable` là thư
+        mục đã lưu không mở được."""
         self._state = ViewState.RUNNING
         self._name, self._receive_dir = name, receive_dir
+        self._receive_dir_unavailable = unavailable
         self.retranslate()
         self._place_focus()
+
+    def set_receive_dir(self, receive_dir: Path | None, unavailable: Path | None = None) -> None:
+        """Nhớ thư mục nhận và thư mục đã lưu hỏng; chỉ hiện ở RUNNING (chân “Lưu vào”, huy hiệu)."""
+        self._receive_dir = receive_dir
+        self._receive_dir_unavailable = unavailable
+        self._apply_receive_dir()
+
+    def set_receive_dir_pending(self, path: Path | None) -> None:
+        """Nhớ thư mục đang đổi sang (“Đang đổi sang …”); None khi không đổi."""
+        self._receive_dir_pending = path
+        self._apply_receive_dir()
 
     def show_error(self, code: str, detail: str = "") -> None:
         """Lỗi khởi động node: `code` là `bridge.StartError`, `detail` đã làm sạch."""
@@ -499,7 +537,7 @@ class MainWindow(QMainWindow):
         """Danh sách lượt có gì không (thẻ hay dải thông báo) và số lượt chưa kết thúc (≥ 0).
 
         Cập nhật huy hiệu của máy này, chọn `empty_state` / `transfers_area`, giữ nút “Mở thư mục”
-        cuối chuỗi Tab. `active` < 0 → ValueError.
+        và “Đổi…” cuối chuỗi Tab. `active` < 0 → ValueError.
         """
         if active < 0:
             raise ValueError(f"số lượt phải ≥ 0: {active}")
@@ -649,9 +687,19 @@ class MainWindow(QMainWindow):
         self.retry_button.setVisible(self._state is ViewState.ERROR)
         self.start_button.setVisible(self._state is ViewState.WELCOME)
         self.machine_card.set_name(self._name if running else None)
-        self.save_bar.set_receive_dir(self._receive_dir if running else None)
+        self._apply_receive_dir()
         self._update_empty_content()
         self._update_stream()
+
+    def _apply_receive_dir(self) -> None:
+        """Áp thư mục nhận đã nhớ vào `save_bar` và huy hiệu; ngoài RUNNING thì xóa cả hai."""
+        running = self._state is ViewState.RUNNING
+        receive_dir = self._receive_dir if running else None
+        unavailable = self._receive_dir_unavailable if running else None
+        self.save_bar.set_state(receive_dir, unavailable, self._receive_dir_pending if running else None)
+        self.machine_card.set_receiving_unavailable(
+            running and receive_dir is None and unavailable is not None
+        )
 
     def _content(self) -> tuple[str, str, list[str]]:
         """(dòng trạng thái, dòng chi tiết, các dòng gợi ý) của khối căn giữa; RUNNING thì rỗng."""
@@ -724,15 +772,24 @@ class MainWindow(QMainWindow):
             self.stream_pane.setCurrentWidget(target)
 
     def _keep_footer_last(self) -> None:
-        """Dời “Mở thư mục” về cuối chuỗi Tab: widget tạo sau cửa sổ (thẻ lượt truyền, trang mới) rơi
-        vào cuối chuỗi, sau nút này."""
-        button = self.save_bar.open_button
+        """Dời “Mở thư mục” rồi “Đổi…” về cuối chuỗi Tab: widget tạo sau cửa sổ (thẻ lượt truyền,
+        trang mới) rơi vào cuối chuỗi, sau hai nút này. Luôn nối “Mở thư mục” → “Đổi…”, kể cả khi
+        “Mở thư mục” đang ẩn (Tab tự bỏ qua widget ẩn)."""
+        open_button = self.save_bar.open_button
+        change_button = self.save_bar.change_button
+        footer = (open_button, change_button)
         last = self.previousInFocusChain()
-        # `setTabOrder` bỏ qua widget NoFocus: lùi tới widget cuối cùng nhận được tiêu điểm bằng Tab.
-        while last is not None and last is not self and not last.focusPolicy() & Qt.FocusPolicy.TabFocus:
+        # `setTabOrder` bỏ qua widget NoFocus: lùi tới widget cuối cùng nhận được tiêu điểm bằng Tab,
+        # bỏ qua chính hai nút chân.
+        while (
+            last is not None
+            and last is not self
+            and (last in footer or not last.focusPolicy() & Qt.FocusPolicy.TabFocus)
+        ):
             last = last.previousInFocusChain()
-        if last is not None and last is not self and last is not button:
-            QWidget.setTabOrder(last, button)
+        if last is not None and last is not self:
+            QWidget.setTabOrder(last, open_button)
+        QWidget.setTabOrder(open_button, change_button)
 
     @staticmethod
     def _set_optional(label: QLabel, text: str, accessible_name: str) -> None:

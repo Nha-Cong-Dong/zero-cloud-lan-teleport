@@ -12,6 +12,7 @@ Hai cách hiện cửa sổ (`show_window`):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 from pathlib import Path
@@ -1364,3 +1365,374 @@ def test_l18_escape_on_home_does_nothing(window, qtbot, tmp_path):
     assert window.isVisible()
     assert changes == []
     assert window.focusWidget() is focus
+
+
+# =================================================================================================
+# B1b — nút [Đổi…] ở chân “Lưu vào” (spec-b1b mục 2.3, 2.4, 2.9, 6.3; mục 11 thắng khi khác)
+# =================================================================================================
+
+CHANGE = "Đổi…"
+CHANGE_A11Y = "Đổi thư mục nhận"
+CHANGING = "Đang đổi sang {path}…"
+NOT_RECEIVING_BAR = "Không nhận file: không mở được {path}"
+NOT_RECEIVING = "Không nhận file"
+
+
+def tooltip_text(widget) -> str:
+    doc = QTextDocument()
+    doc.setHtml(widget.toolTip())
+    return doc.toPlainText()
+
+
+def unavailable_running(window, tmp_path: Path, name: str | None = "May-A") -> Path:
+    """RUNNING mà thư mục đã lưu hỏng: không có thư mục nhận, có `unavailable`."""
+    broken = tmp_path / "o-da-rut"
+    window.show_running(name, None, broken)
+    settle()
+    return broken
+
+
+def test_save_bar_has_change_button_after_open_button(window):
+    from teleport.ui.widgets import IconButton
+
+    bar = window.save_bar
+    button = bar.change_button
+    assert isinstance(button, IconButton)
+    assert button.objectName() == "changeReceiveDirButton"
+    assert button.icon_name == "folder"
+    assert button.text().replace("&", "") == CHANGE
+    assert button.accessibleName() == CHANGE_A11Y
+    assert CHANGE_A11Y in tooltip_text(button), "tooltip nói rõ nút làm gì (spec 11.10)"
+    row = layout_holding(bar.layout(), bar.open_button)
+    assert row is not None and row.indexOf(button) > row.indexOf(bar.open_button)
+    assert focusable(button), "nút nhận Tab"
+
+
+def test_change_button_emits_change_requested(window, tmp_path):
+    running(window, tmp_path)
+    got: list = []
+    window.save_bar.change_requested.connect(lambda: got.append(True))
+    window.save_bar.change_button.click()
+    assert got == [True]
+
+
+def test_window_forwards_change_receive_dir_requested(window, tmp_path):
+    running(window, tmp_path)
+    got: list = []
+    window.change_receive_dir_requested.connect(lambda: got.append(True))
+    window.save_bar.change_button.click()
+    assert got == [True]
+
+
+def test_change_button_full_text_in_accessible_description(window, tmp_path):
+    path = tmp_path / "nhan"
+    window.show_running("A", path)
+    assert str(path) in window.save_bar.change_button.accessibleDescription()
+
+
+def test_save_bar_unavailable_shows_warning_text_hides_open_keeps_change(window, tmp_path):
+    broken = unavailable_running(window, tmp_path)
+    bar = window.save_bar
+    assert visible(bar, window), "thư mục hỏng vẫn hiện thanh (để còn nút Đổi…)"
+    expected = NOT_RECEIVING_BAR.format(path=str(broken))
+    assert bar.full_text == expected
+    assert bar.save_label.text() == expected
+    assert bar.save_label.property("tone") == "warning"
+    assert expected in bar.save_label.accessibleDescription()
+    assert expected in tooltip_text(bar.save_label)
+    assert not visible(bar.open_button, window), "không có thư mục để mở"
+    assert visible(bar.change_button, window) and bar.change_button.isEnabled()
+    assert bar.unavailable == broken
+    assert bar.receive_dir is None
+    assert window.receive_dir is None
+    assert window.receive_dir_unavailable == broken
+
+
+def test_save_bar_unavailable_never_uses_danger(window, tmp_path):
+    unavailable_running(window, tmp_path)
+    tones = {label.property("tone") for label in window.save_bar.findChildren(QLabel)}
+    assert "danger" not in tones
+
+
+def test_save_bar_receive_dir_wins_over_unavailable(window, tmp_path):
+    path = tmp_path / "nhan"
+    window.show_running("A", path, tmp_path / "hong")
+    bar = window.save_bar
+    assert bar.full_text == SAVE_PREFIX + str(path)
+    assert bar.save_label.property("tone") == "muted"
+    assert visible(bar.open_button, window)
+
+
+def test_save_bar_pending_text(window, tmp_path):
+    path = tmp_path / "nhan"
+    new = tmp_path / "moi"
+    window.show_running("A", path)
+    window.set_receive_dir_pending(new)
+    bar = window.save_bar
+    assert bar.pending == new
+    assert bar.full_text == CHANGING.format(path=str(new))
+    assert bar.save_label.property("tone") == "muted"
+    assert visible(bar.open_button, window), "đang đổi: vẫn còn thư mục cũ để mở"
+    window.set_receive_dir_pending(None)
+    assert bar.full_text == SAVE_PREFIX + str(path)
+    # Đang đổi từ trạng thái hỏng: chữ “đang đổi” thắng chữ warning.
+    broken = unavailable_running(window, tmp_path)
+    window.set_receive_dir_pending(new)
+    assert bar.full_text == CHANGING.format(path=str(new))
+    assert bar.save_label.property("tone") == "muted"
+    window.set_receive_dir_pending(None)
+    assert bar.full_text == NOT_RECEIVING_BAR.format(path=str(broken))
+
+
+def test_window_set_receive_dir_after_change(window, tmp_path):
+    unavailable_running(window, tmp_path)
+    new = tmp_path / "moi"
+    window.set_receive_dir(new)
+    bar = window.save_bar
+    assert window.receive_dir == new
+    assert window.receive_dir_unavailable is None
+    assert bar.full_text == SAVE_PREFIX + str(new)
+    assert visible(bar.open_button, window)
+    assert window.badge.text == READY
+
+
+def test_hostile_unavailable_path_is_plain_text(window, tmp_path):
+    from teleport.ui.send import printable
+
+    broken = tmp_path / "<b>x</b>‮y"
+    window.show_running("A", None, broken)
+    label = window.save_bar.save_label
+    assert label.textFormat() == Qt.TextFormat.PlainText
+    assert "‮" not in label.text()
+    assert window.save_bar.full_text == NOT_RECEIVING_BAR.format(path=printable(str(broken)))
+
+
+def test_change_button_stays_enabled_and_focused_while_changing(window, qtbot, tmp_path):
+    running(window, tmp_path)
+    show_window(window, qtbot, 980, 660, active=True)
+    button = window.save_bar.change_button
+    button.setFocus(Qt.FocusReason.TabFocusReason)
+    settle()
+    assert window.focusWidget() is button
+    window.set_receive_dir_pending(tmp_path / "moi")
+    settle()
+    assert button.isEnabled()
+    assert window.focusWidget() is button, "đổi chữ thanh không được làm mất tiêu điểm"
+    window.set_receive_dir_pending(None)
+    window.set_receive_dir(tmp_path / "moi")
+    settle()
+    assert window.focusWidget() is button
+
+
+def test_fixing_unavailable_keeps_change_focus_and_bar_never_hidden(window, qtbot, tmp_path):
+    """Soát B1b: UNAVAILABLE → đang đổi → READY theo thứ tự của `GuiApp` (thư mục trước, rồi
+    xóa `pending`) không được ẩn thanh thoáng qua, nên “Đổi…” giữ tiêu điểm bàn phím."""
+    unavailable_running(window, tmp_path)
+    show_window(window, qtbot, 980, 660, active=True)
+    bar = window.save_bar
+    button = bar.change_button
+    button.setFocus(Qt.FocusReason.TabFocusReason)
+    settle()
+    assert window.focusWidget() is button
+    hidden: list[bool] = []
+    original = bar.setVisible
+
+    def spy(visible: bool) -> None:
+        if not visible:
+            hidden.append(True)
+        original(visible)
+
+    bar.setVisible = spy  # type: ignore[method-assign]
+    window.set_receive_dir_pending(tmp_path / "moi")
+    window.set_receive_dir(tmp_path / "moi", None)
+    window.set_receive_dir_pending(None)
+    settle()
+    assert hidden == [], "thanh không được ẩn giữa chừng"
+    assert window.focusWidget() is button
+
+
+def test_machine_badge_not_receiving_warning(window, tmp_path):
+    from teleport.ui.widgets import BadgeTone
+
+    unavailable_running(window, tmp_path)
+    window.set_transfer_summary(False, 0)
+    assert (window.badge.text, window.badge.tone) == (NOT_RECEIVING, BadgeTone.WARNING)
+    assert window.machine_card.receiving_unavailable is True
+    assert NOT_RECEIVING in window.name_label.accessibleDescription(), "trạng thái bằng chữ (N12)"
+    window.set_receive_dir(tmp_path / "moi")
+    assert (window.badge.text, window.badge.tone) == (READY, BadgeTone.SUCCESS)
+    assert window.machine_card.receiving_unavailable is False
+
+
+def test_badge_priority_active_over_not_receiving(window, tmp_path):
+    from teleport.ui.widgets import BadgeTone
+
+    unavailable_running(window, tmp_path)
+    window.set_transfer_summary(True, 2)
+    assert (window.badge.text, window.badge.tone) == (BUSY.format(n=2), BadgeTone.BUSY)
+    window.set_transfer_summary(True, 0)
+    assert (window.badge.text, window.badge.tone) == (NOT_RECEIVING, BadgeTone.WARNING)
+
+
+def test_machine_card_set_receiving_unavailable(qtbot):
+    from teleport.ui.home import MachineCard
+    from teleport.ui.widgets import BadgeTone
+
+    card = MachineCard()
+    qtbot.addWidget(card)
+    card.set_receiving_unavailable(True)
+    assert card.receiving_unavailable is True
+    assert (card.badge.text, card.badge.tone) == (NOT_RECEIVING, BadgeTone.WARNING)
+    card.set_activity(1)
+    assert card.badge.tone == BadgeTone.BUSY
+    card.set_activity(0)
+    card.set_receiving_unavailable(False)
+    assert (card.badge.text, card.badge.tone) == (READY, BadgeTone.SUCCESS)
+
+
+def test_leaving_running_clears_unavailable_pending_and_badge(window, tmp_path):
+    """Spec-b1b 11.7: ngoài RUNNING thanh ẩn, không còn warning; quay lại RUNNING không mang trạng thái cũ."""
+    from teleport.ui.widgets import BadgeTone
+
+    unavailable_running(window, tmp_path)
+    window.set_receive_dir_pending(tmp_path / "moi")
+    window.show_error("locked", "")
+    bar = window.save_bar
+    assert not visible(bar, window)
+    assert (bar.receive_dir, bar.unavailable, bar.pending) == (None, None, None)
+    assert window.machine_card.receiving_unavailable is False
+    window.show_starting()
+    assert not visible(bar, window)
+    path = tmp_path / "nhan"
+    window.set_receive_dir_pending(None)  # app xóa `pending` qua `state_changed` khi attach host mới
+    window.show_running("A", path)
+    assert bar.unavailable is None and bar.pending is None
+    assert bar.full_text == SAVE_PREFIX + str(path)
+    assert window.badge.tone == BadgeTone.SUCCESS
+
+
+def check_change_last(window, order: list) -> None:
+    i_change = index_of(order, window.save_bar.change_button)
+    assert i_change == len(order) - 1, (
+        f"“Đổi…” phải cuối chuỗi Tab, thấy sau nó: {[w.objectName() for w in order[i_change + 1 :]]}"
+    )
+    in_area = [i for i, w in enumerate(order) if window.transfers_area.isAncestorOf(w)]
+    assert all(i < i_change for i in in_area)
+    if window.save_bar.open_button.isVisibleTo(window):
+        assert index_of(order, window.save_bar.open_button) == i_change - 1, "Mở thư mục → Đổi…"
+
+
+def test_l12_change_button_is_last_in_tab_order(window, qtbot, make_ctl, tmp_path):
+    ctl = make_ctl(window)
+    fill_l12(window, ctl, tmp_path)
+    show_window(window, qtbot, 980, 660, active=True)
+    forward, closed = tab_cycle(window, window.discover_button)
+    assert closed
+    check_running_order(window, forward)
+    check_change_last(window, forward)
+
+    # Thêm thẻ lượt mới (widget tạo sau cửa sổ): “Đổi…” vẫn cuối.
+    new_key = tkey("send", "f" * 32)
+    ctl.view.handle(status_changed(new_key))
+    settle()
+    forward, closed = tab_cycle(window, window.discover_button)
+    assert closed
+    check_running_order(window, forward)
+    check_change_last(window, forward)
+    assert index_of(forward, ctl.view.row(new_key).cancel_button) < index_of(
+        forward, window.save_bar.change_button
+    )
+
+    # `open_button` ẩn (thư mục hỏng): “Đổi…” vẫn cuối, sau khung phải.
+    window.show_running("May-A", None, tmp_path / "hong")
+    ctl.view.handle(status_changed(tkey("send", "e" * 32)))
+    settle()
+    assert not window.save_bar.open_button.isVisibleTo(window)
+    forward, closed = tab_cycle(window, window.discover_button)
+    assert closed
+    check_change_last(window, forward)
+    assert index_of(forward, window.copy_button) < index_of(forward, window.save_bar.change_button)
+
+
+def test_l13_change_button_named_in_every_running_state(window, qtbot, make_ctl, tmp_path):
+    ctl = make_ctl(window)
+    fill_l12(window, ctl, tmp_path)
+    window.show_running("May-A", None, tmp_path / "hong")
+    show_window(window, qtbot, 980, 660)
+    assert unnamed_focusable(window) == []
+    assert icon_buttons_without_tooltip(window) == []
+
+
+def test_unavailable_state_language_change_retranslates(window, qtbot, tmp_path):
+    from teleport.ui.widgets import BadgeTone
+
+    broken = unavailable_running(window, tmp_path)
+    window.set_transfer_summary(False, 0)
+    show_window(window, qtbot, 980, 660)
+    translator = ShoutTranslator()
+    QCoreApplication.installTranslator(translator)
+    try:
+        qtbot.waitUntil(lambda: window.badge.text == shout(NOT_RECEIVING), timeout=3000)
+        assert window.badge.tone == BadgeTone.WARNING
+        bar = window.save_bar
+        assert bar.full_text == shout(NOT_RECEIVING_BAR).format(path=str(broken))
+        assert bar.change_button.accessibleName() == shout(CHANGE_A11Y)
+        assert bar.change_button.text().replace("&", "") == shout(CHANGE)
+        assert shout(CHANGE_A11Y) in tooltip_text(bar.change_button)
+        window.set_receive_dir_pending(tmp_path / "moi")
+        assert bar.full_text == shout(CHANGING).format(path=str(tmp_path / "moi"))
+    finally:
+        QCoreApplication.removeTranslator(translator)
+    qtbot.waitUntil(lambda: window.badge.text == NOT_RECEIVING, timeout=3000)
+    assert window.save_bar.full_text == CHANGING.format(path=str(tmp_path / "moi"))
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_save_bar_icon_follows_state(window, ui_theme, tmp_path, dark):
+    """Spec-b1b 11.12: icon `warning` màu `warning` khi hỏng, `arrow_download` màu `text_muted` khi ổn."""
+    t = ui_theme(dark)
+    unavailable_running(window, tmp_path)
+    settle()
+    icon = window.save_bar.icon_label
+    assert has_color(icon.pixmap(), t.warning), "thư mục hỏng: icon tô `warning`"
+    window.set_receive_dir(tmp_path / "moi")
+    settle()
+    assert has_color(icon.pixmap(), t.text_muted)
+    assert not has_color(icon.pixmap(), t.warning)
+
+
+def test_save_bar_warning_icon_recolors_on_theme_change(window, ui_theme, tmp_path):
+    light = ui_theme(False)
+    unavailable_running(window, tmp_path)
+    settle()
+    assert has_color(window.save_bar.icon_label.pixmap(), light.warning)
+    dark = ui_theme(True)
+    settle()
+    if dark.warning != light.warning:
+        assert has_color(window.save_bar.icon_label.pixmap(), dark.warning)
+        assert not has_color(window.save_bar.icon_label.pixmap(), light.warning)
+
+
+def test_save_bar_state_change_sends_accessibility_alert(window, tmp_path, monkeypatch):
+    """Spec-b1b 11.11: chữ thanh chuyển giữa ba trạng thái → sự kiện Alert trên SaveBar."""
+    from PySide6.QtGui import QAccessible
+
+    alerts: list = []
+    real = QAccessible.updateAccessibility
+
+    def spy(event):
+        with contextlib.suppress(Exception):
+            if event.type() == QAccessible.Event.Alert:
+                alerts.append(event.object())
+        return real(event)
+
+    monkeypatch.setattr(QAccessible, "updateAccessibility", staticmethod(spy))
+    bar = window.save_bar
+    window.show_running("A", tmp_path / "nhan")
+    alerts.clear()
+    window.set_receive_dir_pending(tmp_path / "moi")  # ổn → đang đổi
+    assert any(o is bar or bar.isAncestorOf(o) for o in alerts), "đang đổi: phải có Alert"
+    alerts.clear()
+    window.set_receive_dir_pending(None)
+    window.set_receive_dir(None, tmp_path / "hong")  # → hỏng
+    assert any(o is bar or bar.isAncestorOf(o) for o in alerts), "hỏng: phải có Alert"

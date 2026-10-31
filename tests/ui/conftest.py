@@ -8,11 +8,14 @@
 
 Fixture chính:
 
+- `fake_default_receive_dir` (tự dùng): `paths.default_receive_dir()` trỏ vào `tmp_path`, không bao giờ
+  tạo thư mục trong Downloads thật.
 - `config_dir(label, identity=True)`: thư mục cấu hình mới dưới `tmp_path` (có danh tính nếu cần).
 - `node_hosts`: `make(options) -> NodeHost`; mọi host được `stop()` + `join()` khi test xong.
 - `gui`: chạy `teleport.ui.app.main(argv)` **trong tiến trình**, điều khiển bằng một kịch bản (generator)
   chạy trong event loop Qt; ghi lại mọi `NodeHost`, `Tray`, `MainWindow` được tạo, ép node nghe
-  `127.0.0.1`, cổng 0, không mDNS, thư mục nhận trong `tmp_path`; chặn `os._exit` (lỗi của `main`
+  `127.0.0.1`, cổng 0, không mDNS, thư mục nhận trong `tmp_path` (hay giữ `SAVED` với
+  `keep_receive_dir=True`); chặn `os._exit` (lỗi của `main`
   không giết pytest) và khôi phục handler SIGINT.
 - `peer_node`: một `Node` thật (máy gửi B) chạy event loop riêng trong một thread.
 - `ui_helpers`: hàm phụ trợ (test không import được conftest).
@@ -274,6 +277,21 @@ def theme_state_reset(qapp):
         qapp.setPalette(old_palette)
 
 
+@pytest.fixture(autouse=True)
+def fake_default_receive_dir(monkeypatch, tmp_path) -> Path:
+    """Mọi test ui: `paths.default_receive_dir()` → `tmp_path / "nhan-mac-dinh"` (spec-b1b mục 11.3).
+
+    Giao diện mặc định dùng thư mục nhận đã lưu (`ReceiveDirChoice.SAVED`); chưa lưu gì thì node mở
+    `paths.default_receive_dir()`. Không vá thì test tạo thư mục thật trong Downloads của máy chạy test.
+    Fixture `gui` vá lại lần nữa (thư mục `nhan-gui`); lần vá sau thắng. Trả đường dẫn đã vá.
+    """
+    from teleport import paths
+
+    default = tmp_path / "nhan-mac-dinh"
+    monkeypatch.setattr(paths, "default_receive_dir", lambda: default)
+    return default
+
+
 @pytest.fixture
 def config_dir(tmp_path):
     """`config_dir(label="A", identity=True) -> Path`: thư mục cấu hình mới dưới `tmp_path`."""
@@ -405,10 +423,14 @@ class GuiRun:
 
 @pytest.fixture
 def gui(qapp, monkeypatch, tmp_path):
-    """`gui(argv, script, *, tray=True, timeout=60) -> GuiRun` (đã chạy xong; `run.code` là mã thoát).
+    """`gui(argv, script, *, tray=True, timeout=60, keep_receive_dir=False) -> GuiRun` (đã chạy xong;
+    `run.code` là mã thoát).
 
-    `tray`: giá trị của seam `teleport.ui.tray.is_available`. Thư mục nhận của mọi node là
-    `tmp_path / "nhan-gui"`.
+    `tray`: giá trị của seam `teleport.ui.tray.is_available`. Mặc định thư mục nhận của mọi node bị ép
+    thành đường dẫn tường minh `tmp_path / "nhan-gui"`. `keep_receive_dir=True` (spec-b1b mục 11.2): giữ
+    nguyên `options.receive_dir` của app (`ReceiveDirChoice.SAVED`: thư mục đã lưu trong
+    `settings.json`, chưa lưu thì `paths.default_receive_dir()`, ở đây đã vá thành `tmp_path / "nhan-gui"`),
+    chỉ ép host/cổng/mDNS. Gọi `gui` hai lần trong một test (khởi động lại) thì dùng cùng một giá trị.
     """
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QSystemTrayIcon
@@ -432,6 +454,7 @@ def gui(qapp, monkeypatch, tmp_path):
         tray_available: bool = True,
         timeout: float = 60.0,
         require_script_done: bool = True,
+        keep_receive_dir: bool = False,
     ) -> GuiRun:
         """`require_script_done`: kịch bản phải chạy tới cuối (không thì `main` thoát giữa chừng mà test
         vẫn xanh rỗng). Tắt cho ca `main` thoát trước vòng sự kiện (ví dụ không lấy được bản chính)."""
@@ -453,7 +476,8 @@ def gui(qapp, monkeypatch, tmp_path):
                 options, rest = args[0], args[1:]
             else:
                 options, rest = kwargs.pop("options"), ()
-            options = dataclasses.replace(options, host=LOCAL, port=0, mdns=None, receive_dir=receive_dir)
+            forced = {} if keep_receive_dir else {"receive_dir": receive_dir}
+            options = dataclasses.replace(options, host=LOCAL, port=0, mdns=None, **forced)
             real_host_init(self, options, *rest, **kwargs)
             run.hosts.append(self)
 
