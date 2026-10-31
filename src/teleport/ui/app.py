@@ -10,12 +10,14 @@ log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node 
 `Node.start` tự tạo danh tính (tên mặc định `app.node.default_device_name`). Hiện cửa sổ trừ khi
 `--background` và có khay; `app.exec()`.
 
-**Radar**: `NodeHost.node_event` → `RadarView.model.apply`; lúc `started` lấy ảnh chụp
-`Node.devices()` qua `NodeHost.call` rồi `model.reset`. Sự kiện và kết quả của host cũ bị bỏ; dựng
-host mới (“Thử lại”) thì `model.clear()` trước. Trang “Tìm máy mới” (`MainWindow.discover`,
-`ui.discover.DiscoverPage`) dùng chung model đó: `pair_requested` → `pair_device`,
-`manual_address_entered` → `pair_address`, `notice` của ghép đôi cũng hiện ở thanh thông báo của
-trang; bấm máy đã ghép đôi → về HOME và chọn máy đó trên radar; lựa chọn dạng hiển thị đọc từ
+**Thiết bị** (`MainWindow.devices`, `ui.radar.DeviceListModel`): `NodeHost.node_event` →
+`devices.apply`; lúc `started` lấy ảnh chụp `Node.devices()` qua `NodeHost.call` rồi `devices.reset`.
+Sự kiện và kết quả của host cũ bị bỏ; dựng host mới (“Thử lại”) thì `devices.clear()` trước. Danh sách
+cuộc trò chuyện ở cột trái (`MainWindow.conversations`) và trang “Tìm máy mới” (`MainWindow.discover`,
+`ui.discover.DiscoverPage`) dùng chung model đó. Trang “Tìm máy mới”: `pair_requested` →
+`pair_device`, `manual_address_entered` → `pair_address`, `notice` của ghép đôi cũng hiện ở thanh
+thông báo của trang; bấm máy đã ghép đôi → `MainWindow.open_conversation` (về HOME, chọn cuộc trò
+chuyện của máy đó); lựa chọn dạng hiển thị đọc từ
 `Node.settings.radar_view` lúc `started` (kết quả của host cũ, lúc đang thoát, hay về sau khi người
 dùng đã bấm đổi dạng thì bỏ) và lưu bằng `Node.set_ui_preferences(radar_view=…)`, cả hai qua
 `NodeHost.call`; lỗi → WARNING (tên loại lỗi), lựa chọn vẫn giữ trong RAM.
@@ -36,17 +38,18 @@ hiện ở dải (`_receive_dir_notice`); `state_changed` mà thư mục nhận 
 hỏng, không đang đổi) và dải vẫn hiện đúng câu đó thì ẩn dải. Đang thoát thì không hiện dải, không
 bóng thoại, bỏ `failed`. Thoát và `shutdown` gọi `close_all` (đóng hộp chọn).
 
-**Ghép đôi** (`ui.pairing.PairingController`): radar `pair_requested` → `pair_device`,
-`manual_address_entered` → `pair_address`, `unpair_requested` → hộp xác nhận hủy ghép đôi;
-`devices_changed` (đọc lại `devices()` sau ghép đôi / hủy ghép đôi) → `model.reset`. Mỗi host mới
+**Ghép đôi** (`ui.pairing.PairingController`): ghép đôi máy mới và nhập IP chỉ ở trang “Tìm máy
+mới” (trên); `conversations.unpair_requested` (menu “Hủy ghép đôi…”, nút của dải thông báo) → hộp xác
+nhận hủy ghép đôi; `devices_changed` (đọc lại `devices()` sau ghép đôi / hủy ghép đôi) →
+`devices.reset`. Mỗi host mới
 gọi `set_host` (đóng mọi hộp của host cũ); Thoát gọi `close_all`.
 
 **Ghép rồi gửi**: `TransfersController.pair_needed` → `pair_device`; `PairingController.job_done`
 (việc ghép chủ động kết thúc mà không PAIRED, hay `pair_device` không bắt đầu được) và `paired`
-→ `TransfersController.on_pairing_finished`. Nút “Ghép đôi lại” (`repair_requested`) →
-`pair_device`; không bắt đầu được vì radar không thấy máy kia (không bận, có host) thì dải thông
-báo hiện `repair_offline_text` và mở khung “Nhập IP thủ công” (`open_address_entry`), không điền
-sẵn IP.
+→ `TransfersController.on_pairing_finished` (từ B2 giao diện không còn đường vào luồng này; gỡ ở
+B2c). Nút “Ghép đôi lại” (`repair_requested`) → `pair_device`; không bắt đầu được vì không thấy máy
+kia trong mạng (không bận, có host) thì `MainWindow.open_address_entry(repair_offline_text(…))`: mở
+trang “Tìm máy mới”, câu ở thanh thông báo của trang, tiêu điểm ở ô “Nhập IP…”, không điền sẵn IP.
 
 **Log ra file** (spec hackathon Q7, mục 9.10): `<config_dir>/logs/teleport.log`, xoay khi đầy
 `LOG_MAX_BYTES`, giữ thêm `LOG_BACKUPS` bản cũ; mức WARNING như log ra stderr. Chỉ gắn **sau**
@@ -153,7 +156,7 @@ from teleport.ui import errorlog, fonts, i18n, icons, receive_dir, send, texts, 
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.gcguard import GcGuard
-from teleport.ui.main_window import MainWindow, Page, ViewState
+from teleport.ui.main_window import MainWindow, ViewState
 from teleport.ui.pairing import PairingController, repair_offline_text
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
 from teleport.ui.transfers import TransfersController
@@ -459,10 +462,7 @@ class GuiApp(QObject):
         self.tray.quit_requested.connect(self.request_quit)
         self.tray.message_clicked.connect(self._on_message_clicked)
         app.commitDataRequest.connect(self._on_commit_data)
-        radar = self.window.radar
-        radar.pair_requested.connect(self.pairing.pair_device)
-        radar.manual_address_entered.connect(self.pairing.pair_address)
-        radar.unpair_requested.connect(self._on_unpair_requested)
+        self.window.conversations.unpair_requested.connect(self._on_unpair_requested)
         self.pairing.devices_changed.connect(self._on_devices_changed)
         self.transfers.pair_needed.connect(self._on_pair_needed)
         self.transfers.repair_requested.connect(self._on_repair_requested)
@@ -514,7 +514,7 @@ class GuiApp(QObject):
             self.window.show_welcome(planned_device_name())
             return
         self._stop_addresses()
-        self.window.radar.model.clear()
+        self.window.devices.clear()
         options = self._make_options(self._config_dir)
         host = NodeHost(options, self)
         host.started.connect(functools.partial(self._on_started, host))
@@ -784,7 +784,7 @@ class GuiApp(QObject):
         if isinstance(result, BaseException):
             log.warning("không đọc được danh sách thiết bị: %s", type(result).__name__)
             return
-        self.window.radar.model.reset(result)
+        self.window.devices.reset(result)
 
     def _on_radar_view(self, host: NodeHost, result: str | BaseException | None) -> None:
         """`radar_view` đã lưu; bỏ nếu host cũ, đang thoát, hay người dùng vừa tự chọn dạng."""
@@ -810,14 +810,13 @@ class GuiApp(QObject):
             log.warning("không lưu được cài đặt dạng hiển thị: %s", type(result).__name__)
 
     def _on_open_device(self, device_id: str) -> None:
-        """Bấm máy đã ghép đôi ở trang “Tìm máy mới”: về HOME, chọn máy đó trên radar."""
-        self.window.open_page(Page.HOME)
-        self.window.radar.select_device(device_id)
+        """Bấm máy đã ghép đôi ở trang “Tìm máy mới”: về HOME, mở cuộc trò chuyện của máy đó."""
+        self.window.open_conversation(device_id)
 
     def _on_devices_changed(self, views: tuple[DeviceView, ...]) -> None:
         """Danh sách đọc lại sau ghép đôi / hủy ghép đôi (kho tin cậy đổi không phát NodeEvent)."""
         if not self._quitting:
-            self.window.radar.model.reset(views)
+            self.window.devices.reset(views)
 
     def _on_pair_needed(self, view: DeviceView) -> None:
         """“Ghép rồi gửi”: không bắt đầu được (offline, đang bận) thì bỏ ngay việc chờ gửi."""
@@ -830,7 +829,8 @@ class GuiApp(QObject):
                 )
 
     def _on_repair_requested(self, view: DeviceView) -> None:
-        """Nút “Ghép đôi lại”: radar không thấy máy kia (mDNS bị chặn) thì mời nhập IP.
+        """Nút “Ghép đôi lại”: không thấy máy kia trong mạng (mDNS bị chặn) thì mời nhập IP ở trang
+        “Tìm máy mới”.
 
         Bận thì `pair_device` tự báo câu “đang bận”; chưa có host thì không làm gì. Không điền sẵn
         IP (địa chỉ cũ có thể đã thuộc máy khác).
@@ -838,8 +838,7 @@ class GuiApp(QObject):
         busy = self.pairing.busy
         if self.pairing.pair_device(view) or busy or self.host is None or self._quitting:
             return
-        self.transfers.view.show_notice(repair_offline_text(texts.peer_label(view.name, view.device_id)))
-        self.window.radar.open_address_entry()
+        self.window.open_address_entry(repair_offline_text(texts.peer_label(view.name, view.device_id)))
 
     def _on_pair_job_done(self, device_id: str | None, paired: bool) -> None:
         """Việc ghép chủ động kết thúc; PAIRED thì chờ `paired` (sau khi đã đọc lại `devices()`)."""
@@ -850,12 +849,12 @@ class GuiApp(QObject):
         self.transfers.on_pairing_finished(device_id, True)
 
     def _on_unpair_requested(self, device_id: str) -> None:
-        view = self.window.radar.model.device(device_id)
+        view = self.window.devices.device(device_id)
         self.pairing.request_unpair(device_id, None if view is None else view.name)
 
     def _on_node_event(self, host: NodeHost, event: NodeEvent) -> None:
         if host is self.host and not self._quitting:
-            self.window.radar.model.apply(event)
+            self.window.devices.apply(event)
             self.transfers.on_node_event(event)
 
     def _on_start_failed(self, host: NodeHost, code: str, detail: str) -> None:
@@ -1017,7 +1016,7 @@ def _selftest(app: QApplication) -> int:
         window.show_starting()
         window.show_running("Teleport", Path("Teleport"))
         window.show_running("Teleport", None, Path("Teleport"))
-        window.radar.model.reset(())
+        window.devices.reset(())
         for code in StartError:
             window.show_error(code.value, "")
         transfers = TransfersController(window, tray)

@@ -1,6 +1,6 @@
 """Trang “Tìm máy mới” (`Page.DISCOVER`, mvp F2, F3, N12): radar vòng tròn, ô “Nhập IP…”, dạng danh sách.
 
-**Nguồn dữ liệu**: đúng một `radar.DeviceListModel` (cửa sổ chính truyền `window.radar.model`). Trang
+**Nguồn dữ liệu**: đúng một `radar.DeviceListModel` (cửa sổ chính truyền `window.devices`). Trang
 chỉ đọc model và theo signal của nó (`modelReset`, `rowsInserted`, `rowsRemoved`, `rowsMoved`,
 `dataChanged`, `layoutChanged`), mỗi lần đồng bộ lại toàn bộ (`_sync`), không giữ bản sao danh sách.
 Máy hiện ở đây (`discover_devices`, hàm thuần): đang trong mạng hay đang kết nối; máy đã ghép đôi

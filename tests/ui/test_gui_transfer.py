@@ -452,7 +452,7 @@ def test_d_gui_sends_to_peer_with_progress_on_row_then_done(
         port = yield from a_port(run, gui_wait)
         yield from connect_b(p, gui_wait, a_id, port)
         ctl = controller(run)
-        yield gui_wait(lambda: run.window.radar.model.device(b_id) is not None, 10, "B trên radar")
+        yield gui_wait(lambda: run.window.devices.device(b_id) is not None, 10, "B trên radar")
         rate_set: list = []
         run.host.call(lambda n: setattr(n.transfers, "rate_limit", 2 * MiB), rate_set.append)
         yield gui_wait(lambda: rate_set, 5, "đặt rate_limit cho A")
@@ -525,7 +525,7 @@ def test_e_cancel_from_either_side_is_cancelled_user_and_temp_removed(
             yield gui_wait(fut.done, 10, "send() của B trả khóa")
             b_key = fut.result()
         else:
-            yield gui_wait(lambda: run.window.radar.model.device(b_id) is not None, 10, "B trên radar")
+            yield gui_wait(lambda: run.window.devices.device(b_id) is not None, 10, "B trên radar")
             rate_set: list = []
             run.host.call(lambda n: setattr(n.transfers, "rate_limit", rate), rate_set.append)
             yield gui_wait(lambda: rate_set, 5, "đặt rate_limit cho A")
@@ -774,10 +774,10 @@ def test_i_unpaired_sender_cannot_send_no_offer_box_no_file(gui, gui_wait, pair,
         app = run.tray.parent()
         messages: list[str] = []
         app.pairing.message.connect(messages.append)
-        yield gui_wait(lambda: run.window.radar.model.device(b_id) is not None, 10, "B trên radar của A")
+        yield gui_wait(lambda: run.window.devices.device(b_id) is not None, 10, "B trên radar của A")
         # Đường của người dùng (mvp mục 8 “Giao diện: hủy ghép đôi”): chuột phải → “Hủy ghép đôi…” phát
-        # `radar.unpair_requested`; hộp xác nhận → nút “Hủy ghép đôi”.
-        run.window.radar.unpair_requested.emit(b_id)
+        # `conversations.unpair_requested`; hộp xác nhận → nút “Hủy ghép đôi”.
+        run.window.conversations.unpair_requested.emit(b_id)
         yield gui_wait(lambda: app.pairing.unpair_box is not None, 5, "hộp xác nhận hủy ghép đôi")
         [accept] = ui_helpers.buttons_with_text(app.pairing.unpair_box, UNPAIR_ACCEPT)
         accept.click()
@@ -839,7 +839,7 @@ def setup_b_unpairs_gui(run, gui_wait, p: Peer, a_id: str, b_id: str):
     yield gui_wait(lambda: hinted, 5, "A nối tới B")
     assert not isinstance(hinted[0], BaseException), hinted[0]
     yield gui_wait(lambda: p.connected_to(a_id), 10, "A–B đã kết nối")
-    yield gui_wait(lambda: run.window.radar.model.device(b_id) is not None, 10, "B trên radar của A")
+    yield gui_wait(lambda: run.window.devices.device(b_id) is not None, 10, "B trên radar của A")
     p.run(p.node.unpair(a_id), 15)
     yield gui_wait(lambda: not p.connected_to(a_id), 10, "kết nối A–B bị đóng")
 
@@ -888,7 +888,7 @@ def test_j2_gui_resend_after_peer_refused_shows_notice_repair_button_and_no_new_
         yield from setup_b_unpairs_gui(run, gui_wait, p, a_id, b_id)
         ctl.request_send(b_id, [f])  # lần đầu: A nối tới B và bị từ chối
         yield gui_wait(
-            lambda: str(run.window.radar.model.failure(b_id)) == "rejected", 15, "radar của A biết B từ chối"
+            lambda: str(run.window.devices.failure(b_id)) == "rejected", 15, "radar của A biết B từ chối"
         )
         seen["rows_before"] = len(rows_of(ctl, "send"))
         ctl.request_send(b_id, [f])

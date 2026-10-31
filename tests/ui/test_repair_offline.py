@@ -1,19 +1,20 @@
-"""Nút “Ghép đôi lại” khi radar không thấy máy kia (spec-fix-relink, Lỗi 2: D8–D11, U1–U4).
+"""Nút “Ghép đôi lại” khi không thấy máy kia trong mạng (spec-fix-relink, Lỗi 2: D8–D11, U1–U4; đích đổi
+theo spec B2 mục 2.7 và 12.30, W11).
 
 Viết từ spec, không từ code. Trước đây nút nối thẳng vào `pair_device`, mà `pair_device` trả False im
 lặng khi thiết bị offline / không có địa chỉ (máy ghép bằng IP, mDNS bị chặn) → bấm không có gì xảy ra.
 Đặc tả mới:
 
-- không bận, có host, `pair_device` không bắt đầu được → dải thông báo hiện câu mới có tên thiết bị
-  (`ui.pairing.repair_offline_text`) và mở khung “Nhập IP thủ công” của radar, ô nhập có tiêu điểm,
-  không điền sẵn IP (D8–D10);
+- không bận, có host, `pair_device` không bắt đầu được → mở trang “Tìm máy mới” (DISCOVER), câu mới có
+  tên thiết bị (`ui.pairing.repair_offline_text`) hiện ở thanh thông báo của trang (`info_bar`, mức INFO),
+  ô nhập IP (`discover.address_edit`) có tiêu điểm, không điền sẵn IP (D8–D10; B2 2.7, W11);
 - thiết bị online có địa chỉ → ghép đôi như cũ (hộp tiến độ);
-- đang có lượt ghép khác → câu “đang bận” (`busy_text`), không mở khung nhập IP (D11);
+- đang có lượt ghép khác → câu “đang bận” (`busy_text`), vẫn ở HOME (D11);
 - không có host → không làm gì, không lỗi (D11).
 
 `GuiApp` dựng trực tiếp (như `test_pair_then_send.py`), `PairingController` và `TransfersController`
 dùng chung một host giả; `GuiApp.host` được gán host giả đó (điều kiện “có host” của D8 sau hoi-lai).
-Tiêu điểm kiểm như các test radar: cửa sổ hiện + `activateWindow`, rồi `QApplication.focusWidget()`.
+Tiêu điểm: cửa sổ hiện + `activateWindow`, rồi `QApplication.focusWidget()`.
 """
 
 from __future__ import annotations
@@ -116,14 +117,14 @@ def _dispose(qapp, gui_app) -> None:
 @pytest.fixture
 def env(qapp, tmp_path):
     gui_app, host = _make_app(qapp, tmp_path, with_host=True)
-    yield SimpleNamespace(app=gui_app, host=host, radar=gui_app.window.radar, tmp=tmp_path)
+    yield SimpleNamespace(app=gui_app, host=host, window=gui_app.window, tmp=tmp_path)
     _dispose(qapp, gui_app)
 
 
 @pytest.fixture
 def env_no_host(qapp, tmp_path):
     gui_app, _ = _make_app(qapp, tmp_path, with_host=False)
-    yield SimpleNamespace(app=gui_app, host=None, radar=gui_app.window.radar, tmp=tmp_path)
+    yield SimpleNamespace(app=gui_app, host=None, window=gui_app.window, tmp=tmp_path)
     _dispose(qapp, gui_app)
 
 
@@ -138,8 +139,8 @@ def _rejected_notice_button(env, view: DeviceView):
     from teleport.app.node import ConnectFailed
     from teleport.core.links import ConnectResult
 
-    env.radar.model.reset((view,))
-    env.radar.model.apply(ConnectFailed(view, ConnectResult.REJECTED))
+    env.window.devices.reset((view,))
+    env.window.devices.apply(ConnectFailed(view, ConnectResult.REJECTED))
     env.app.transfers.request_send(B_ID, [env.tmp / "nguon" / "a.bin"])
     tview = env.app.transfers.view
     assert tview.notice_action_text() == REPAIR, (
@@ -154,22 +155,30 @@ def _rejected_notice_button(env, view: DeviceView):
     return found[0]
 
 
+def _at_home(env) -> bool:
+    from teleport.ui.main_window import Page
+
+    return env.window.current_page is Page.HOME
+
+
 def _pair_jobs(env) -> list:
     return list(env.host.submits) if env.host is not None else []
 
 
 # =================================================================================================
-# U1: offline, không địa chỉ → câu mới + mở khung nhập IP có tiêu điểm
+# U1 (W11): offline, không địa chỉ → trang “Tìm máy mới”, câu ở thanh thông báo, tiêu điểm ô nhập IP
 # =================================================================================================
 
 
-def test_u1_repair_offline_device_shows_hint_and_opens_ip_entry_with_focus(env, qtbot):
+def test_u1_repair_offline_device_opens_discover_with_notice_and_focused_ip_entry(env, qtbot):
     from PySide6.QtWidgets import QApplication
 
     from teleport.ui import pairing as pairing_mod
+    from teleport.ui.main_window import Page
+    from teleport.ui.widgets import InfoLevel
 
-    radar = env.radar
-    assert not radar.address_panel.isVisible(), "trước khi bấm: khung nhập IP đang đóng"
+    window = env.window
+    assert window.current_page is Page.HOME
     button = _rejected_notice_button(env, offline_view())
     button.click()
     QApplication.processEvents()
@@ -179,18 +188,20 @@ def test_u1_repair_offline_device_shows_hint_and_opens_ip_entry_with_focus(env, 
     assert env.app.pairing.progress_box is None
     assert _pair_jobs(env) == []
 
-    # Dải thông báo hiện câu mới, có tên thiết bị và mời nhập IP (D8, D9).
-    text = _notice(env)
-    assert B_NAME in text, f"câu mới phải có tên thiết bị, thấy {text!r}"
-    assert "IP" in text, f"câu mới phải mời nhập địa chỉ IP, thấy {text!r}"
-    assert text == pairing_mod.repair_offline_text(B_NAME), text
+    # Trang “Tìm máy mới”, câu mới có tên thiết bị và mời nhập IP ở thanh thông báo (D8, D9; B2 2.7).
+    assert window.current_page is Page.DISCOVER
+    bar = window.discover.info_bar
+    expected = pairing_mod.repair_offline_text(B_NAME)
+    assert B_NAME in expected and "IP" in expected
+    assert bar.isVisibleTo(window), "12.16: mở trang trước rồi mới hiện thanh thông báo"
+    assert expected in (bar.title, bar.text), (bar.title, bar.text)
+    assert bar.level is InfoLevel.INFO
 
-    # Khung “Nhập IP thủ công” mở, ô nhập rỗng (D10) và có tiêu điểm.
-    assert radar.address_panel.isVisible(), "khung nhập IP phải mở"
-    assert radar.address_edit.isVisible()
-    assert radar.address_edit.text() == "", "không điền sẵn IP (D10)"
-    radar.window().activateWindow()
-    qtbot.waitUntil(lambda: QApplication.focusWidget() is radar.address_edit, timeout=2000)
+    # Ô nhập IP rỗng (D10) và có tiêu điểm.
+    edit = window.discover.address_edit
+    assert edit.text() == "", "không điền sẵn IP (D10)"
+    window.activateWindow()
+    qtbot.waitUntil(lambda: QApplication.focusWidget() is edit, timeout=2000)
 
 
 # =================================================================================================
@@ -209,7 +220,7 @@ def test_u2_repair_online_device_starts_pairing_as_before(env):
     assert box is not None and box.isVisible()
     assert B_NAME in box.text()
     assert len(_pair_jobs(env)) == 1
-    assert not env.radar.address_panel.isVisible(), "đang ghép đôi thì không mở khung nhập IP"
+    assert _at_home(env), "đang ghép đôi thì không mở trang nhập IP"
     assert "IP" not in _notice(env), "đang ghép đôi thì không mời nhập IP"
 
 
@@ -239,7 +250,7 @@ def test_u3_repair_while_busy_shows_busy_text_and_keeps_ip_entry_closed(env, mak
     shown = (box.text() if box is not None and box.isVisible() else "", *messages, _notice(env))
     assert busy in shown, f"đang bận phải hiện câu “đang bận”, thấy {shown!r}"
     assert len(_pair_jobs(env)) == jobs_before, "không bắt đầu lượt ghép thứ hai"
-    assert not env.radar.address_panel.isVisible(), "đang bận thì không mở khung nhập IP"
+    assert _at_home(env), "đang bận thì không mở trang nhập IP"
     assert "IP" not in _notice(env), "đang bận thì không mời nhập IP"
 
 
@@ -254,7 +265,7 @@ def test_u4_repair_without_host_does_nothing(env_no_host, make_view, ui_helpers)
 
     env = env_no_host
     view = make_view()
-    env.radar.model.reset((view,))
+    env.window.devices.reset((view,))
     before = _notice(env)
     env.app.transfers.repair_requested.emit(view)  # không lỗi
     QApplication.processEvents()
@@ -263,7 +274,7 @@ def test_u4_repair_without_host_does_nothing(env_no_host, make_view, ui_helpers)
     box = env.app.pairing.result_box
     assert box is None or not box.isVisible()
     assert ui_helpers.visible_message_boxes() == []
-    assert not env.radar.address_panel.isVisible()
+    assert _at_home(env)
     assert _notice(env) == before
 
 

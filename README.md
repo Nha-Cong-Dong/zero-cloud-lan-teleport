@@ -75,7 +75,7 @@ Mọi quyết định đều dựa trên sáu nguyên tắc: **riêng tư tuyệ
 |---|---|---|
 | 📡 | **Radar tự tìm thiết bị** | Mở app là thấy các máy khác đang chạy Teleport trong cùng mạng. Mạng chặn tự tìm thì vẫn nhập IP được |
 | 🤝 | **Ghép đôi một lần** | Lần đầu, hai máy hiện cùng một mã 6 số để bạn xác nhận. Các lần sau tự nhận ra nhau |
-| 📦 | **Gửi file cực lớn** | Kéo thả một hoặc nhiều file vào thiết bị trên radar. Người nhận được hỏi trước khi nhận (tắt được cho từng thiết bị tin cậy) |
+| 📦 | **Gửi file cực lớn** | Kéo thả một hoặc nhiều file lên máy ở cột trái. Người nhận được hỏi trước khi nhận (tắt được cho từng thiết bị tin cậy) |
 | 🔁 | **Tự nối lại** | Rớt Wi-Fi ở 85% thì khi có mạng lại chỉ gửi tiếp phần còn thiếu, kể cả khi đã tắt app nhận hay khởi động lại máy nhận |
 | 🧩 | **Kiểm tra toàn vẹn** | Mỗi khối 1 MiB được kiểm tra bằng SHA-256; cả file được đối chiếu bằng cây băm Merkle. Khối hỏng được gửi lại tự động |
 | 📋 | **Đồng bộ clipboard** | Ctrl+C văn bản hoặc ảnh chụp màn hình trên máy này, Ctrl+V trên máy kia. Bật riêng cho từng thiết bị, mặc định tắt |
@@ -112,13 +112,13 @@ Lần đầu Teleport mở cổng mạng, tường lửa Windows hỏi quyền: 
 ### 2. Dùng giao diện
 
 1. **Mở lần đầu:** cửa sổ hiện tên máy này trong mạng. Bấm **Bắt đầu**. Tên này hiện với mọi máy trong cùng mạng.
-2. **Radar:** cột trái liệt kê các máy đang mở Teleport trong mạng, mỗi máy ghi *(đã ghép)* hoặc *(chưa ghép)*. Không thấy máy kia thì bấm **Nhập IP thủ công**, gõ IP của máy đó rồi bấm **Ghép đôi** (ví dụ `192.168.1.5`; xem IP bằng lệnh `ipconfig`).
-3. **Ghép đôi (một lần cho mỗi cặp máy):** nhấp đúp vào máy chưa ghép (hoặc chuột phải → **Ghép đôi…**). Hai máy cùng hiện một mã 6 số: so mã trên hai màn hình, trùng thì bấm **Trùng khớp** ở **cả hai** máy, khác thì bấm **Không trùng**. Kéo file thả vào máy chưa ghép cũng được: Teleport ghép đôi trước rồi mới gửi.
-4. **Gửi file:** kéo một hoặc nhiều file thả vào máy kia trên radar, hoặc chuột phải vào máy đó → **Gửi file…**. Chưa gửi được thư mục; hãy chọn từng file.
+2. **Tìm máy mới:** cột trái là các máy đã ghép đôi, mỗi máy một cuộc trò chuyện (lúc đầu còn trống). Bấm nút kính lúp ở đầu cột hoặc **Ghép đôi máy mới** để mở trang **Tìm máy mới**: radar hiện các máy đang mở Teleport trong mạng. Không thấy máy kia thì gõ IP của máy đó vào ô **Nhập IP…** ở đầu trang rồi bấm **Ghép đôi** (ví dụ `192.168.1.5`; xem IP bằng lệnh `ipconfig`).
+3. **Ghép đôi (một lần cho mỗi cặp máy):** trên trang **Tìm máy mới**, bấm vào máy chưa ghép. Hai máy cùng hiện một mã 6 số: so mã trên hai màn hình, trùng thì bấm **Trùng khớp** ở **cả hai** máy, khác thì bấm **Không trùng**. Ghép xong, máy đó hiện ở cột trái.
+4. **Gửi file:** kéo một hoặc nhiều file thả lên máy kia ở cột trái, hoặc bấm đúp (hay chuột phải) vào máy đó → **Gửi file…**. Chưa gửi được thư mục; hãy chọn từng file.
 5. **Nhận file:** máy nhận hiện hộp hỏi ai gửi, file gì, nặng bao nhiêu và lưu vào đâu. Bấm **Nhận** hoặc **Từ chối**. File nhận được lưu vào thư mục `Teleport` trong thư mục Tải về (Downloads), và không bao giờ ghi đè file có sẵn: trùng tên thì thành `ten (1).ext`.
 6. **Theo dõi:** cột phải là danh sách lượt truyền với tiến độ, tốc độ, thời gian còn lại và nút **Hủy**. Rớt Wi-Fi hay tắt app nhận giữa chừng thì lượt truyền hiện **Đang nối lại…** và tự chạy tiếp phần còn thiếu khi hai máy thấy lại nhau (mở lại Teleport trên máy nhận). Xong thì hiện **Đã kiểm tra toàn vẹn**; ở máy nhận có thêm nút **Mở thư mục**.
 7. **Chạy nền và thoát:** đóng cửa sổ thì Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Muốn tắt hẳn: chuột phải biểu tượng ở khay → **Thoát**. Nếu tắt hẳn máy **gửi** giữa chừng, lượt đó bị hủy và cần gửi lại.
-8. **Hủy ghép đôi:** chuột phải vào máy trên radar → **Hủy ghép đôi…**. Sau đó hai máy không gửi file cho nhau được nữa cho tới khi ghép đôi lại.
+8. **Hủy ghép đôi:** chuột phải vào máy ở cột trái → **Hủy ghép đôi…**. Sau đó hai máy không gửi file cho nhau được nữa cho tới khi ghép đôi lại.
 
 Hai máy cùng Wi-Fi mà không thấy nhau hay không kết nối được: xem [Câu hỏi thường gặp](#câu-hỏi-thường-gặp).
 
