@@ -1175,6 +1175,8 @@ class Listener:
         trusted_certs: Iterable[str],
         is_trusted: Callable[[str], bool],
         on_connection: Callable[[Connection], Awaitable[None]],
+        *,
+        allow_anonymous: Callable[[str], bool] | None = None,
     ) -> None:
         """`hello` lệch danh tính hoặc khác phiên bản giao thức → ValueError; PEM sai → lỗi của `ssl`.
 
@@ -1184,14 +1186,21 @@ class Listener:
         đó tới phần đồng bộ đầu tiên của `on_connection`. Chỉ khi trả đúng `True` mới tính
         là còn tin cậy; giá trị khác (kể cả giá trị “truthy” như `1`) hoặc raise → coi như
         không tin cậy.
+
+        `allow_anonymous(ip)` (chế độ ẩn, protocol mục 2.3): gọi đồng bộ ngay sau bắt tay TLS với
+        mọi kết nối không có chứng chỉ client còn tin cậy, trước khi gửi `hello`. Không trả đúng
+        `True` (hoặc raise) → cắt kết nối, không gửi byte ứng dụng nào. None → luôn cho.
         """
         _check_hello(hello)
+        if allow_anonymous is not None and not callable(allow_anonymous):
+            raise TypeError("allow_anonymous phải là None hoặc hàm")
         if hello.device_id != identity.device_id:
             raise ValueError("hello.device_id phải là device_id của danh tính này")
         self._identity = identity
         self._ctx = _server_context(identity, trusted_certs)
         self._hello_frame = encode_message(to_dict(hello))
         self._is_trusted = is_trusted
+        self._allow_anonymous = allow_anonymous
         self._on_connection = on_connection
         self._server: asyncio.Server | None = None
         self._port: int | None = None
@@ -1471,10 +1480,11 @@ class Listener:
     ) -> tuple[ConnectionKind, PeerCert | None, Hello, PairRequest | ControlOpen | DataOpen]:
         """Bắt tay TLS, trao `hello`, đọc message mở đầu.
 
-        Với `control_open` và `data_open`, kiểm lại `is_trusted` sau khi đọc message mở
-        đầu (context bắt tay có thể đã cũ); đây là lần kiểm cuối trước khi `_serve` giao
-        kết nối, không có `await` nào ở giữa. Từ chối → `_Refused`, hoặc lỗi I/O / khung /
-        message bay ra nguyên trạng.
+        Kết nối không có chứng chỉ client còn tin cậy (ẩn danh, hay chứng chỉ vừa thôi tin cậy):
+        hỏi `allow_anonymous` trước khi gửi `hello`, không có `await` ở giữa. Với `control_open`
+        và `data_open`, kiểm lại `is_trusted` sau khi đọc message mở đầu (context bắt tay có thể
+        đã cũ); đây là lần kiểm cuối trước khi `_serve` giao kết nối, không có `await` nào ở
+        giữa. Từ chối → `_Refused`, hoặc lỗi I/O / khung / message bay ra nguyên trạng.
         """
         # Await đầu tiên của kết nối (xem _handle). Context hiện tại lúc gọi. Chưa biết loại
         # kết nối, nên hạn tắt TLS phải đủ cho lần đóng gọn dài nhất (kết nối dữ liệu).
@@ -1491,8 +1501,15 @@ class Listener:
             # một lần lỗi của IP (protocol mục 2.3).
             if self._still_trusted(cert.fingerprint):
                 self._gate.trusted(ticket, _now())
-        elif not self._gate.anonymous(ticket, _now()):
-            raise _Refused("quá giới hạn kết nối ẩn danh")
+            elif not self._anonymous_allowed(ticket.ip):
+                raise _Refused("máy đang ẩn")
+        else:
+            # Chế độ ẩn: hỏi trước `gate.anonymous` (token đã trừ ở `admit`, nên từ chối ở đây
+            # không lách được giới hạn tốc độ) và trước khi ghi `hello`.
+            if not self._anonymous_allowed(ticket.ip):
+                raise _Refused("máy đang ẩn")
+            if not self._gate.anonymous(ticket, _now()):
+                raise _Refused("quá giới hạn kết nối ẩn danh")
 
         # Trước message mở đầu, server không gửi gì ngoài hello (protocol mục 2.1).
         await _write_chunks(writer, self._hello_frame)
@@ -1522,6 +1539,17 @@ class Listener:
             if not self._still_trusted(cert.fingerprint):
                 raise _Refused(f"{cert.fingerprint} không còn trong danh sách tin cậy")
         return kind, cert, hello, cast(PairRequest | ControlOpen | DataOpen, opening)
+
+    def _anonymous_allowed(self, ip: str) -> bool:
+        """`allow_anonymous(ip)` là đúng `True`; None → True; raise → False (log DEBUG, tránh ngập log)."""
+        allow = self._allow_anonymous
+        if allow is None:
+            return True
+        try:
+            return allow(ip) is True
+        except Exception as e:
+            log.debug("%s: allow_anonymous raise (%s), từ chối", ip, type(e).__name__)
+            return False
 
     def _still_trusted(self, fingerprint: str) -> bool:
         try:

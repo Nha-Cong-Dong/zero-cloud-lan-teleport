@@ -6,6 +6,23 @@ yêu cầu và đọc địa chỉ card mạng. Mọi quyết định (bản ghi
 thêm/sửa/xóa, khi nào kiểm còn sống, địa chỉ nào quảng bá) nằm ở `core.discovery`.
 
 Mọi callback chạy trong event loop của asyncio; `MdnsDiscovery` không an toàn đa luồng.
+
+Hai chỗ dựa vào phần nội bộ của zeroconf (lý do có chặn trên của phiên bản trong pyproject), viết
+phòng thủ: không có thuộc tính hay lỗi thì chỉ ghi DEBUG và đi tiếp như zeroconf gốc.
+
+- `stop_advertising` / `close`: `async_unregister_service` chỉ xóa registry, không xóa câu trả lời
+  đã xếp trong `out_queue` / `out_delay_queue` (gửi trễ 20 ms–hơn 1 s). Máy khác hỏi dồn thì câu
+  trả lời TTL đầy đủ đi ra sau goodbye, máy khác còn thấy máy này tới hết TTL (chế độ ẩn, mvp F10).
+  `_drop_queued_answers` bỏ mọi bản ghi của dịch vụ khỏi hai hàng đó, đồng bộ ngay sau khi registry
+  bị xóa và trước goodbye đầu tiên.
+- Quảng bá lại trên cùng instance sau `stop_advertising`: một gói TTL đầy đủ của chính máy này
+  đi ra sau goodbye (lớp trên là lớp chặn chính) dội về qua multicast loopback và nằm trong cache
+  (zeroconf nâng TTL lên hàng chục phút), nên bước kiểm trùng tên của zeroconf báo nhầm
+  `NonUniqueNameException`. Lớp phòng thủ thêm: `_forget_own_records` bỏ PTR/SRV/TXT của chính tên
+  này khỏi cache trước khi đăng ký lại một tên đã đăng ký thành công trên instance này. Lần đăng ký
+  đầu (và mọi lần thử sau một lần trùng thật) vẫn kiểm trùng như zeroconf gốc; máy khác trùng
+  `device_id` chỉ xuất hiện trong lúc máy này đang ẩn thì không bị phát hiện ở lần hiện lại (trùng
+  `device_id` vốn chỉ xảy ra khi chép thư mục cấu hình).
 """
 
 from __future__ import annotations
@@ -50,6 +67,7 @@ MAX_CONCURRENT_RESOLVES = 16  # resolve chạy cùng lúc; hàng `resolve` đư�
 # Số chỗ luôn dành cho kiểm còn sống: một loạt thiết bị mới (hoặc kẻ phá spam PTR) không
 # làm bỏ đói việc kiểm thiết bị đã biết.
 PROBE_RESERVED_SLOTS = 4
+_SERVICE_TYPE_ENUMERATION_NAME = "_services._dns-sd._udp.local."  # PTR liệt kê loại dịch vụ (RFC 6763 §9)
 
 # Đích bất kỳ ngoài LAN (TEST-NET-1, RFC 5737) để hỏi tuyến ra ngoài (thường là tuyến mặc định);
 # không có gói nào được gửi.
@@ -82,6 +100,60 @@ def build_service_info(
         other_ttl=RECORD_TTL,
         parsed_addresses=list(addresses),
     )
+
+
+def _is_own_record(record: object, info: AsyncServiceInfo) -> bool:
+    """Bản ghi thuộc dịch vụ `info`: PTR trỏ tới tên dịch vụ, SRV/TXT/NSEC của tên đó, A của `server`.
+
+    Kể cả PTR liệt kê loại dịch vụ (`_services._dns-sd._udp.local.` → loại của `info`): mỗi
+    instance chỉ quảng bá một dịch vụ, nên ẩn đi thì loại đó cũng không còn ai ở máy này.
+    """
+    name = info.name.lower()
+    server = (info.server or "").lower()
+    record_name = getattr(record, "name", None)
+    if isinstance(record_name, str) and record_name.lower() in (name, server):
+        return True
+    alias = getattr(record, "alias", None)
+    if not isinstance(alias, str):
+        return False
+    if alias.lower() == name:
+        return True
+    return (
+        isinstance(record_name, str)
+        and record_name.lower() == _SERVICE_TYPE_ENUMERATION_NAME
+        and alias.lower() == info.type.lower()
+    )
+
+
+def _drop_queued_answers(zc: Zeroconf, info: AsyncServiceInfo) -> None:
+    """Bỏ mọi bản ghi của `info` khỏi câu trả lời multicast đang xếp hàng (API nội bộ zeroconf)."""
+    try:
+        for queue_name in ("out_queue", "out_delay_queue"):
+            queue = getattr(getattr(zc, queue_name, None), "queue", None)
+            if queue is None:
+                log.debug("zeroconf không có %s.queue, bỏ qua bước xóa câu trả lời đang chờ", queue_name)
+                continue
+            for group in list(queue):
+                answers = group.answers
+                for record, additionals in list(answers.items()):
+                    if _is_own_record(record, info):
+                        del answers[record]
+                    elif additionals:
+                        answers[record] = {r for r in additionals if not _is_own_record(r, info)}
+    except Exception as e:  # API nội bộ đổi: vẫn gửi goodbye như zeroconf gốc
+        log.debug("không xóa được câu trả lời mDNS đang chờ (%s)", type(e).__name__)
+
+
+def _forget_own_records(zc: Zeroconf, info: AsyncServiceInfo) -> None:
+    """Bỏ PTR/SRV/TXT của chính `info` khỏi cache zeroconf (gói của mình dội về), trước khi đăng ký lại."""
+    try:
+        cache = zc.cache
+        stale = [r for r in cache.async_entries_with_name(info.type) if _is_own_record(r, info)]
+        stale += cache.async_entries_with_name(info.name)
+        if stale:
+            cache.async_remove_records(stale)
+    except Exception as e:
+        log.debug("không xóa được bản ghi cũ của máy này khỏi cache mDNS (%s)", type(e).__name__)
 
 
 def _route_source(dest: tuple[str, int]) -> str | None:
@@ -180,6 +252,7 @@ class MdnsDiscovery:
         self._closed = False
         self._advertise_lock = asyncio.Lock()
         self._info: AsyncServiceInfo | None = None
+        self._registered_names: set[str] = set()  # tên đã từng đăng ký trên instance này
         self._tracker: DiscoveryTracker | None = None
         self._on_event: Callable[[DeviceEvent], None] | None = None
         self._browser: AsyncServiceBrowser | None = None
@@ -284,24 +357,37 @@ class MdnsDiscovery:
             info = build_service_info(device_id=device_id, name=name, os=os, port=port, addresses=selected)
             aiozc = self._running_zeroconf()  # có thể đã close trong lúc chờ
             if self._info is None:
+                if info.name in self._registered_names:
+                    _forget_own_records(aiozc.zeroconf, info)
                 try:
                     await (await aiozc.async_register_service(info))
                 except NonUniqueNameException as e:
                     raise DiscoveryError("một máy khác trong mạng đang quảng bá cùng mã thiết bị này") from e
+                # Chỉ ghi nhớ sau khi đăng ký được: lần trùng thật không được làm các lần thử sau
+                # xóa bản ghi của máy trùng khỏi cache.
+                self._registered_names.add(info.name)
             else:
                 await (await aiozc.async_update_service(info))
             self._info = info
             log.debug("quảng bá %s cổng %d, địa chỉ %s", info.name, port, ", ".join(selected))
 
     async def stop_advertising(self) -> None:
-        """Gửi goodbye và ngừng quảng bá; chưa quảng bá thì không làm gì."""
+        """Gửi goodbye và ngừng quảng bá; chưa quảng bá thì không làm gì.
+
+        Câu trả lời đang xếp hàng bị bỏ trước goodbye đầu tiên (docstring module), nên từ lúc trả
+        về không còn gói quảng bá nào của máy này đi ra.
+        """
         async with self._advertise_lock:
             await self._unregister()
 
     async def _unregister(self) -> None:
         info, self._info = self._info, None
         if info is not None and self._aiozc is not None:
-            await (await self._aiozc.async_unregister_service(info))
+            # Không có `await` thật nào trong `async_unregister_service` trước khi trả future
+            # goodbye: registry đã xóa, goodbye đầu chưa gửi.
+            goodbye = await self._aiozc.async_unregister_service(info)
+            _drop_queued_answers(self._aiozc.zeroconf, info)
+            await goodbye
 
     # ---- Duyệt -----------------------------------------------------------------------------
 

@@ -581,6 +581,7 @@ class Node:
         self._settings: Settings | None = None  # đọc lúc `start`; đổi cùng lúc với file (`_save_settings`)
         self._receive_dir_error: ReceiveDirUnavailable | None = None  # thư mục `SAVED` không mở được
         self._receive_dir_lock = asyncio.Lock()  # `set_receive_dir` chạy lần lượt
+        self._visible = True  # chế độ ẩn (F10): `settings.visible`, đọc lúc `start`, đổi bằng `set_visible`
 
         self._started = False  # start() đã được gọi (thành công hay không)
         self._running = False  # start() thành công, close() chưa xong
@@ -659,6 +660,7 @@ class Node:
             self._identity, self._store = identity, store
             # Đọc cài đặt đúng một lần; từ đây `self._settings` đổi cùng lúc với file.
             self._settings = Settings.load(self._config_dir)
+            self._visible = self._settings.visible
             if self._save_args and self._name_arg is not None and self._settings.name != self._name_arg:
                 # Lần chạy đầu: lưu tên người dùng chọn trước khi quảng bá nó.
                 self._save_settings(dataclasses.replace(self._settings, name=self._name_arg))
@@ -674,7 +676,14 @@ class Node:
                 accepting=self._accept_pairing,
                 before_save=self._before_pair_save,
             )
-            listener = Listener(identity, hello, store.cert_pems(), store.is_trusted, self._on_connection)
+            listener = Listener(
+                identity,
+                hello,
+                store.cert_pems(),
+                store.is_trusted,
+                self._on_connection,
+                allow_anonymous=self._allows_anonymous,
+            )
             self._hello = hello
             self._pairing, self._listener = pairing, listener
             # Tracker có trước khi mở cổng: kết nối vào có thể tới ngay.
@@ -1043,7 +1052,10 @@ class Node:
     def accept_pairing(self) -> bool:
         """Có nhận yêu cầu ghép đôi tới không; đổi lúc chạy có hiệu lực với yêu cầu kế tiếp.
 
-        Đặt True khi node không có `on_pairing_prompt` → ValueError.
+        Đây là "chế độ chờ ghép đôi" (mvp F3); node không tự đổi nó khi đổi `visible`. Đang ẩn
+        mà `accept_pairing` True thì node vẫn gửi `hello` cho máy lạ (luật `_allows_anonymous`),
+        nên giao diện phải giữ `accept_pairing = visible or đang mở "Chờ ghép đôi"`; CLI chỉ đặt
+        True trong `teleport listen`. Đặt True khi node không có `on_pairing_prompt` → ValueError.
         """
         return self.pairing.accepting
 
@@ -1073,6 +1085,12 @@ class Node:
         """Ảnh chụp cài đặt hiện tại (bất biến). Chưa `start()` → RuntimeError."""
         settings: Settings = self._need(self._settings)
         return settings
+
+    @property
+    def visible(self) -> bool:
+        """Máy chưa ghép đôi có thấy máy này không (F10, `settings.visible`). Chưa `start` → RuntimeError."""
+        self._need(self._settings)
+        return self._visible
 
     @property
     def receive_dir_error(self) -> ReceiveDirUnavailable | None:
@@ -1214,6 +1232,37 @@ class Node:
         current = self._settings.device(device_id)
         value = dataclasses.replace(current, ask_before_receive=ask)
         self._save_settings(self._settings.with_device(device_id, value))
+
+    def set_visible(self, visible: bool) -> None:
+        """Bật/tắt chế độ ẩn (F10) và lưu; không phải bool → TypeError.
+
+        Lưu trước (`SettingsSaveError` thì không đổi gì), rồi đổi luật nhận kết nối ẩn danh ngay
+        (`_allows_anonymous`), rồi gửi goodbye hoặc quảng bá lại ở nền (`_apply_visibility`).
+        Khi ẩn vẫn duyệt mDNS và tự nối ra máy tin cậy. Không đổi `accept_pairing`.
+        """
+        self._check_running()
+        assert self._settings is not None
+        if type(visible) is not bool:
+            raise TypeError("visible phải là bool")
+        if self._settings.visible != visible:
+            self._save_settings(dataclasses.replace(self._settings, visible=visible))
+        if visible == self._visible:
+            return
+        self._visible = visible
+        log.info("máy này %s", "hiện với máy chưa ghép đôi" if visible else "đang ẩn")
+        if self._mdns_opts is not None and self._mdns_opts.advertise:
+            self._spawn(self._apply_visibility(), f"{_TASK_NAME}.visibility")
+
+    def _allows_anonymous(self, ip: str) -> bool:
+        """`Listener`: gửi `hello` cho kết nối ẩn danh từ `ip` không (đồng bộ, protocol mục 2.3).
+
+        Hiện, hoặc đang chờ ghép đôi (`accept_pairing`), hoặc máy này đang khởi xướng ghép đôi
+        tới `ip` (yêu cầu của máy kia khi hai bên cùng chủ động).
+        """
+        if self._visible:
+            return True
+        pairing = self._pairing
+        return pairing is not None and (pairing.accepting or pairing.expects_anonymous_from(ip))
 
     def set_rate_limit(self, value: int | None) -> None:
         """Lưu và áp giới hạn tốc độ gửi (byte/giây; None: không giới hạn). Sai → ValueError."""
@@ -1731,13 +1780,19 @@ class Node:
             return
         self._discovery_active = True
         self._discovery_error = None
-        if opts.advertise:
+        if opts.advertise and self._visible:
             await self._advertise(m)
         else:
             self._mdns_recovered()
 
     async def _advertise(self, m: MdnsDiscovery) -> None:
-        """Quảng bá (hoặc quảng bá lại) máy này; lỗi → `discovery_error`, vẫn duyệt."""
+        """Quảng bá (hoặc quảng bá lại) máy này; lỗi → `discovery_error`, vẫn duyệt.
+
+        Đang ẩn thì không làm gì: mọi đường quảng bá đi qua đây (`_start_mdns`, `_readvertise`,
+        `_apply_visibility`), và trừ lúc `start` đều giữ `_mdns_lock`.
+        """
+        if not self._visible:
+            return
         try:
             await m.advertise(**self._advertise_args())
         except Exception as e:
@@ -1808,7 +1863,10 @@ class Node:
         return dataclasses.replace(before, os=None, online=False, connected=False, addresses=(), port=None)
 
     async def _netwatch(self) -> None:
-        """Cứ NETWORK_CHECK_INTERVAL giây: địa chỉ đổi → khởi động lại mDNS; thức dậy → quảng bá lại."""
+        """Cứ NETWORK_CHECK_INTERVAL giây: địa chỉ đổi → khởi động lại mDNS; thức dậy → quảng bá lại.
+
+        Đang hiện mà lần quảng bá trước lỗi (`discovery_error`, mDNS vẫn chạy) → thử quảng bá lại.
+        """
         opts = self._mdns_opts
         assert opts is not None
         try:
@@ -1839,14 +1897,42 @@ class Node:
             elif change is NetworkChange.WOKE:
                 log.debug("đồng hồ nhảy (máy vừa thức dậy?), quảng bá lại mDNS")
                 await self._readvertise()
+            elif self._visible and self._discovery_error is not None:
+                # Lần quảng bá trước lỗi (mDNS vẫn chạy): thử lại mỗi nhịp, không kẹt ở trạng thái
+                # "hiện" mà không quảng bá. Lỗi lặp lại chỉ ghi DEBUG (`_log_mdns_error`).
+                await self._readvertise()
             if change is not NetworkChange.NONE and self._auto_connect and self._links is not None:
                 self._apply(self._links.network_changed(self._now()))
 
     async def _readvertise(self) -> None:
         async with self._mdns_lock:
             m = self._mdns
-            if m is not None and not self._closing:
+            if m is not None and not self._closing and self._visible:
                 await self._advertise(m)
+
+    async def _apply_visibility(self) -> None:
+        """Áp `_visible` cho mDNS: ẩn → goodbye (`stop_advertising`), hiện → quảng bá lại.
+
+        Chạy dưới `_mdns_lock`, nên quảng bá đang bay lúc gọi `set_visible(False)` kết thúc bằng
+        goodbye này. Sau mỗi `await` kiểm lại `_visible`: đổi trong lúc chờ thì làm lại theo giá
+        trị mới, tới khi khớp. mDNS đang tắt thì thôi (`_start_mdns` của netwatch đọc `_visible`).
+        """
+        async with self._mdns_lock:
+            applied: bool | None = None
+            while not self._closing and self._mdns is not None and applied is not self._visible:
+                m = self._mdns
+                applied = self._visible
+                if applied:
+                    await self._advertise(m)
+                    continue
+                try:
+                    await m.stop_advertising()
+                except Exception as e:
+                    self._log_mdns_error("không ngừng quảng bá được qua mDNS", e)
+                    self._discovery_error = e
+                    continue
+                self._discovery_error = None  # lỗi quảng bá cũ không còn ý nghĩa khi đã ẩn
+                self._mdns_recovered()
 
     async def _restart_mdns(self) -> None:
         """Đóng instance mDNS cũ, báo mọi thiết bị offline, rồi bật instance mới.

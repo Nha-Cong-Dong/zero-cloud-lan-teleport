@@ -1212,3 +1212,110 @@ def test_repeated_bad_signatures_grow_backoff():
         assert until == now + min(BACKOFF_BASE * 2 ** (i - 1), BACKOFF_MAX)
         now = until
     assert g.recent_codes(now) == 0
+
+
+# =================================================================================================
+# C2 = P4-1: chế độ ẩn (F10). `PairingGate.initiating_to(ip)` (spec-dot-c mục 5.2, 5.5): True khi
+# phiên đang chạy là vai khởi xướng và `ip` là đích hoặc một địa chỉ phụ (`aliases`) của nó. Thuần
+# (không đổi trạng thái gate); `ip` sai → ValueError. Listener của máy đang ẩn dùng nó để không cắt
+# kết nối ẩn danh tới từ máy mà nó đang chủ động ghép đôi (protocol §2.3, §5.3).
+# =================================================================================================
+
+
+def _gate_snapshot(g: PairingGate, ips) -> tuple:
+    return (g.active, g.accepting, tuple((g.failures(ip), g.blocked_until(ip)) for ip in ips))
+
+
+def test_initiating_to_ip_and_aliases():
+    g = gate(accepting=False)
+    assert g.initiating_to(IP) is False  # rảnh
+    out = g.begin_outgoing(IP, also=[IP2])
+    assert g.initiating_to(IP) is True
+    assert g.initiating_to(IP2) is True
+    assert g.initiating_to(IP3) is False
+    assert g.initiating_to("10.0.0.1") is False
+    # Không đổi gì: phiên vẫn chạy, luật hai bên cùng chủ động vẫn áp như trước.
+    assert g.active == out
+    adm = g.admit(IP2, LOWER, 0.0)
+    assert adm.cancel_outgoing == out
+    # Phiên khởi xướng đã nhường cho phiên trả lời: không còn "đang khởi xướng" tới ai.
+    assert g.initiating_to(IP) is False
+    assert g.initiating_to(IP2) is False
+
+
+def test_initiating_to_without_aliases_matches_only_target():
+    g = gate()
+    g.begin_outgoing(IP)
+    assert g.initiating_to(IP) is True
+    assert g.initiating_to(IP2) is False
+
+
+def test_initiating_to_is_false_for_responder_session():
+    g = gate(accepting=True)
+    slot = assert_accept(g.admit(IP, PEER, 0.0), IP)
+    assert slot.role == Role.RESPONDER
+    assert g.initiating_to(IP) is False
+
+
+def test_initiating_to_is_false_after_outgoing_finishes():
+    g = gate()
+    out = g.begin_outgoing(IP, also=[IP2])
+    g.finish(out, Outcome.TIMEOUT, 1.0)
+    assert g.active is None
+    assert g.initiating_to(IP) is False
+    assert g.initiating_to(IP2) is False
+
+
+def test_initiating_to_ignores_accepting_and_backoff():
+    g = gate(accepting=True)
+    fail_once(g, IP, 0.0)  # IP đang bị chờ tới 10.0
+    g.accepting = False
+    g.begin_outgoing(IP)
+    assert g.initiating_to(IP) is True
+
+
+def test_initiating_to_does_not_change_gate_state():
+    g = gate()
+    fail_once(g, IP3, 0.0)
+    g.begin_outgoing(IP, also=[IP2])
+    before = _gate_snapshot(g, (IP, IP2, IP3))
+    for ip in (IP, IP2, IP3, "10.0.0.1", IP, IP):
+        g.initiating_to(ip)
+    assert _gate_snapshot(g, (IP, IP2, IP3)) == before
+
+
+@pytest.mark.parametrize("ip", ["", None, 1, b"192.168.1.20", ["192.168.1.20"]], ids=repr)
+def test_initiating_to_rejects_bad_ip(ip):
+    g = gate()
+    with pytest.raises(ValueError):
+        g.initiating_to(ip)
+    g.begin_outgoing(IP)
+    with pytest.raises(ValueError):
+        g.initiating_to(ip)
+    assert g.initiating_to(IP) is True  # lỗi đầu vào không làm hỏng gate
+
+
+_ips = st.sampled_from([IP, IP2, IP3, "10.0.0.1"])
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    target=_ips,
+    also=st.lists(_ips, max_size=3),
+    probe=_ips,
+    accepting=st.booleans(),
+    responder_first=st.booleans(),
+)
+def test_initiating_to_agrees_with_both_initiating_rule(target, also, probe, accepting, responder_first):
+    """`initiating_to(ip)` đúng khi và chỉ khi `admit` từ `ip` rơi vào luật hai bên cùng chủ động."""
+    import copy
+
+    g = gate(accepting=accepting)
+    if responder_first and accepting:
+        assert_accept(g.admit(target, PEER, 0.0), target)  # phiên trả lời đang chạy
+    else:
+        assert g.begin_outgoing(target, also=also) is not None
+    expected = g.initiating_to(probe)
+    trial = copy.deepcopy(g)
+    adm = trial.admit(probe, LOWER, 1.0)  # máy này lớn hơn: luật cùng chủ động → nhận, kèm cancel_outgoing
+    assert expected == (adm.cancel_outgoing is not None)

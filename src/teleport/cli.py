@@ -37,6 +37,8 @@ hủy `close()` (thoát cứng, không chờ đĩa). Ctrl+C lúc đang chờ `no
 `LOCK_TIMEOUT` (khóa chờ bằng `time.sleep`).
 
 `list` chỉ duyệt mDNS vài giây: không giữ `node.lock`, không quảng bá máy này.
+Chế độ ẩn (`settings.visible`, đổi ở giao diện; CLI không có lệnh đổi): `listen`, `receive` và
+`send` tôn trọng nó (không quảng bá) và in một dòng nhắc; `listen` khi ẩn vẫn nhận ghép đôi.
 `listen` quảng bá và duyệt mDNS, tự giữ kết nối với các máy đã ghép đôi và in sự kiện
 thiết bị. `pair <tên>` duyệt mDNS (không quảng bá, không tự kết nối) rồi chọn đúng một
 máy; `pair <ip>` không dùng mDNS. mDNS bật khi nghe trên mọi địa chỉ (mặc định), hoặc
@@ -781,15 +783,18 @@ async def run_listen(args: argparse.Namespace, lines: Lines, out: TextIO, err: T
             addresses=list(addresses),
             discovery=node.discovery_active,
             discovery_error=None if discovery_error is None else _error_text(discovery_error),
+            visible=node.visible,
         )
         suffix = "" if port == DEFAULT_PORT else f":{port}"
         target = f"{addresses[0]}{suffix}" if addresses else f"<địa chỉ IP của máy này>{suffix}"
         discovery_lines: list[str] = []
-        if mdns is not None and discovery_error is None:
+        if not node.visible:
+            discovery_lines.append(_HIDDEN_LISTEN)
+        elif mdns is not None and discovery_error is None:
             discovery_lines.append(
                 "Máy khác trong mạng thấy máy này qua `teleport list` và tự kết nối nếu đã ghép đôi."
             )
-        elif mdns is not None and discovery_error is not None:
+        if mdns is not None and discovery_error is not None:
             discovery_lines.append(
                 f"Cảnh báo: chưa quảng bá được qua mDNS ({_error_text(discovery_error)}); "
                 "máy khác vẫn ghép đôi được bằng IP."
@@ -821,6 +826,12 @@ _ADDRESS_LIKE_RE = re.compile(r"[0-9a-fA-F.:\[\]]*:[0-9a-fA-F.:\[\]]*")
 _DOTTED_LIKE_RE = re.compile(r"[0-9.]*\.[0-9.]*")
 _FULL_ID_RE = re.compile(r"[0-9a-f]{32}")
 _IP_HINT = "teleport pair <ip[:cổng]>"
+# Chế độ ẩn (mvp F10): `listen` in nguyên câu của màn hình “Chờ ghép đôi”; `receive`, `send` in dòng cảnh báo.
+_HIDDEN_LISTEN = "Máy này đang ẩn nên máy kia không tự thấy. Hãy nhập IP của máy này ở máy kia."
+_HIDDEN_WARNING = (
+    "Cảnh báo: máy này đang ẩn (đã tắt “Cho máy chưa ghép đôi thấy máy này” trong cài đặt) nên không "
+    "quảng bá trong mạng; máy đã ghép đôi chỉ tự kết nối được với máy này khi máy kia đang hiện."
+)
 _PAIR_USAGE = "teleport pair <tên | tiền tố mã | ip[:cổng]>"
 
 
@@ -2271,6 +2282,8 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
         return 1
     session.peer_name = current.name
     name = _name_label(current.name)
+    if not node.visible:
+        output.text(_HIDDEN_WARNING)
     if endpoint is not None:
         node.connect_hint(current.device_id, [endpoint[0]], endpoint[1])
         output.text(f"Đang kết nối tới “{name}” tại {endpoint[0]}:{endpoint[1]}…")
@@ -2699,6 +2712,7 @@ async def _receive_main(
         auto_accept=auto_accept,
         discovery=node.discovery_active,
         discovery_error=None if discovery_error is None else _error_text(discovery_error),
+        visible=node.visible,
     )
     text = [
         "Teleport đang chờ nhận file.",
@@ -2708,6 +2722,8 @@ async def _receive_main(
     ]
     if auto_accept:
         text.append("Cảnh báo: đang tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi trước (`--yes`).")
+    if not node.visible:
+        text.append(_HIDDEN_WARNING)
     if mdns is not None and discovery_error is not None:
         text.append(
             f"Cảnh báo: chưa quảng bá được qua mDNS ({_error_text(discovery_error)}); máy khác vẫn gửi được "
