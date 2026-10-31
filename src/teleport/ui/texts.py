@@ -55,6 +55,9 @@ def start_error(code: str, detail: str = "") -> tuple[str, list[str]]:
 
     `detail` theo `bridge.classify_start_error`: CONFIG_DIR là `<đường dẫn>\\n<lỗi>`, RECEIVE_DIR
     là đường dẫn, PORT là lỗi của hệ điều hành.
+
+    E4 (RECEIVE_DIR) chỉ còn cho `NodeOptions.receive_dir` là đường dẫn tường minh (test): giao diện
+    chạy node với thư mục đã lưu, hỏng thì node vẫn chạy mà không nhận file (`ui.receive_dir`).
     """
     t = QCoreApplication.translate
     if code == "locked":  # M2

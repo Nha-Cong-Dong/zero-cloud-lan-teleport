@@ -406,6 +406,24 @@ def test_set_receive_dir_changes_save_to_line(prompts, tmp_path, ui_helpers):
     assert fill(SAVE_TO, path=str(new_dir)) in shown
 
 
+def test_set_receive_dir_updates_open_boxes(prompts, receive_dir, tmp_path, ui_helpers):
+    """Spec-b1b 2.6: đổi thư mục nhận thì mọi hộp đang mở đổi dòng “Lưu vào”."""
+    a, b = make_offer(), make_offer(transfer_id="d" * 32)
+    prompts.handle(a)
+    prompts.handle(b)
+    new_dir = tmp_path / "thu-muc-moi"
+    prompts.set_receive_dir(new_dir)
+    for offer in (a, b):
+        shown = "\n".join(ui_helpers.widget_texts(prompts.box(offer.key)))
+        assert fill(SAVE_TO, path=str(new_dir)) in shown, shown
+        assert fill(SAVE_TO, path=str(receive_dir)) not in shown, shown
+    prompts.set_receive_dir(None)
+    for offer in (a, b):
+        shown = "\n".join(ui_helpers.widget_texts(prompts.box(offer.key)))
+        assert "Lưu vào:" not in shown, "không có thư mục nhận: ẩn dòng “Lưu vào”"
+    assert prompts.decisions == [], "đổi thư mục không tự trả lời hộp nào"
+
+
 def test_close_all_closes_every_box(qtbot, prompts):
     a, b = make_offer(), make_offer(transfer_id="d" * 32)
     prompts.handle(a)

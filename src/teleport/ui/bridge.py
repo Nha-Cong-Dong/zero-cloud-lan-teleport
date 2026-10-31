@@ -33,6 +33,13 @@ dừng giữa chừng nếu task bị hủy sớm), quá hạn mới hủy. Hạ
 dừng thì mọi lỗi khởi động chỉ dẫn tới `stopped`, không phát `start_failed`. Thread kết thúc
 (dừng có trật tự hay khởi động thất bại) thì phát `stopped` đúng một lần.
 
+Thư mục nhận: mặc định `ReceiveDirChoice.SAVED` (thư mục đã lưu; chưa lưu thì thư mục mặc định);
+thư mục đã lưu không mở được thì node vẫn chạy mà không nhận file, không phải lỗi khởi động. Path
+tường minh (test) mà hỏng thì vẫn `start_failed(RECEIVE_DIR)`. Ngay trước khi báo `started`, thread
+node đọc `node.transfers.receive_dir` và `node.receive_dir_error` (lỗi khi đọc → None, ghi tên loại
+lỗi); `NodeHost.receive_dir` / `receive_dir_error` là **ảnh chụp lúc `started`** (trước đó None, sau
+đó không đổi). Sau `started`, nguồn sự thật trên thread Qt là `ui.receive_dir.ReceiveDirController`.
+
 `start_failed` mang mã `StartError` và chi tiết đã làm sạch (ký tự điều khiển thành `·`, có
 giới hạn độ dài). Chi tiết theo mã: CONFIG_DIR `<đường dẫn>\\n<lỗi>`; RECEIVE_DIR đường dẫn;
 PORT lỗi của hệ điều hành; OTHER tên kiểu lỗi; còn lại rỗng. Câu chữ ở `ui.texts.start_error`.
@@ -56,7 +63,14 @@ from typing import Any, TypeVar
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from teleport.app import node as app_node
-from teleport.app.node import ConfigDirError, MdnsOptions, Node, NodeEvent, ReceiveDirUnavailable
+from teleport.app.node import (
+    ConfigDirError,
+    MdnsOptions,
+    Node,
+    NodeEvent,
+    ReceiveDirChoice,
+    ReceiveDirUnavailable,
+)
 from teleport.app.pairing import PairingFinished, PairingPrompt
 from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLockedError
@@ -88,10 +102,13 @@ class StartError(StrEnum):
 
 @dataclass(frozen=True)
 class NodeOptions:
-    """Tham số dựng `Node` của giao diện. Test dùng `host="127.0.0.1"`, `port=0`, `mdns=None`."""
+    """Tham số dựng `Node` của giao diện. Test dùng `host="127.0.0.1"`, `port=0`, `mdns=None`.
+
+    `receive_dir`: mặc định thư mục đã lưu (`ReceiveDirChoice.SAVED`); Path tường minh vẫn được (test).
+    """
 
     config_dir: Path
-    receive_dir: Path
+    receive_dir: Path | ReceiveDirChoice = ReceiveDirChoice.SAVED
     mdns: MdnsOptions | None = field(default_factory=lambda: MdnsOptions(advertise=True))
     host: str = "0.0.0.0"
     port: int | None = None
@@ -235,6 +252,8 @@ class NodeHost(QObject):
         self._state = _State.IDLE
         self._thread: threading.Thread | None = None
         self._node_name: str | None = None
+        self._receive_dir: Path | None = None
+        self._receive_dir_error: Path | None = None
         # Dùng chung giữa hai thread, đọc/ghi khi giữ `_guard`.
         self._guard = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -268,6 +287,18 @@ class NodeHost(QObject):
         """Tên thiết bị của node (`Node.name`), có sau `started`; chưa qua `display_name`."""
         self._check_thread()
         return self._node_name
+
+    @property
+    def receive_dir(self) -> Path | None:
+        """Thư mục nhận lúc `started` (ảnh chụp; trước đó None); None nếu node không nhận file."""
+        self._check_thread()
+        return self._receive_dir
+
+    @property
+    def receive_dir_error(self) -> Path | None:
+        """Thư mục nhận đã lưu không mở được lúc `started` (ảnh chụp; trước đó None), hay None."""
+        self._check_thread()
+        return self._receive_dir_error
 
     def start(self) -> None:
         """Mở thread node; kết quả báo qua `started` / `start_failed`. Gọi lần hai → RuntimeError."""
@@ -373,10 +404,12 @@ class NodeHost(QObject):
         except Exception:
             log.exception("lỗi trong slot của NodeHost")
 
-    def _on_started(self, name: str) -> None:
+    def _on_started(self, name: str, receive_dir: Path | None, receive_dir_error: Path | None) -> None:
         if self._state is _State.STARTING:
             self._state = _State.RUNNING
             self._node_name = name
+            self._receive_dir = receive_dir
+            self._receive_dir_error = receive_dir_error
             self.started.emit()
 
     def _on_start_failed(self, code: str, detail: str) -> None:
@@ -457,11 +490,22 @@ class NodeHost(QObject):
             await self._close_node(node)
             return
         self._serving = True
-        self._post(functools.partial(self._on_started, node.name))
+        receive_dir, receive_dir_error = self._read_receive_dir(node)
+        self._post(functools.partial(self._on_started, node.name, receive_dir, receive_dir_error))
         await wake.wait()
         self._serving = False
         await self._cancel_jobs()
         await self._close_node(node)
+
+    @staticmethod
+    def _read_receive_dir(node: Node) -> tuple[Path | None, Path | None]:
+        """Thread node: (thư mục nhận, thư mục đã lưu không mở được); lỗi khi đọc → (None, None)."""
+        try:
+            error = node.receive_dir_error
+            return node.transfers.receive_dir, None if error is None else error.path
+        except Exception as e:
+            log.warning("không đọc được thư mục nhận của node: %s", type(e).__name__)
+            return None, None
 
     def _fail(self, error: BaseException) -> None:
         code, detail = classify_start_error(error)

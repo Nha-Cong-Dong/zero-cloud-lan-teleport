@@ -293,6 +293,7 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 - Chưa ghép đôi máy nào thì bên phải là “Ghép đôi máy đầu tiên”.
 - Cửa sổ hẹp thì cột trái thu gọn.
 - Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái.
+- “Đổi…” ở chân cửa sổ đổi thư mục nhận chung cho mọi thiết bị; thư mục mới được lưu và dùng cho các lần mở app sau. Thư mục nhận đã lưu không mở được lúc mở app thì app vẫn chạy nhưng không nhận file: thẻ máy này ghi “Không nhận file”, chân cửa sổ nói thư mục nào hỏng và vẫn có “Đổi…” (câu chữ ở mục 8).
 - Không hiện tên Wi-Fi.
 
 Màn “Tìm máy mới”:
@@ -534,7 +535,12 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: không dùng được thư mục cấu hình ngay lúc mở app (trước khi có cửa sổ) | Câu chính như dòng trên, kèm dòng “Hãy kiểm tra quyền ghi vào thư mục đó rồi mở lại Teleport.” | Nút “OK” |
 | Giao diện: danh tính của máy này hỏng khi khởi động | Câu của dòng “Danh tính của chính máy này bị hỏng”, kèm dòng “Hãy chạy “teleport identity” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” (nút “Tạo danh tính mới” làm sau) |
 | Giao diện: không đọc được `trusted.json` khi khởi động | “Không đọc được danh sách thiết bị đã ghép đôi. Teleport sẽ không tự xóa nó để khỏi mất các ghép đôi.” kèm dòng “Hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” |
-| Giao diện: không dùng được thư mục nhận khi khởi động | “Không dùng được thư mục nhận *D:\Downloads\Teleport*.” kèm dòng “Hãy kiểm tra ổ đĩa và quyền ghi rồi bấm Thử lại.” | Nút “Thử lại” |
+| Giao diện: thư mục nhận đã lưu không mở được khi khởi động (ổ bị rút, mất quyền ghi…) | App vẫn chạy nhưng không nhận file, không tự chuyển sang thư mục khác. Dải thông báo: “Teleport đang không nhận file vì không mở được thư mục nhận *E:\Teleport*. Hãy kiểm tra ổ đĩa và quyền ghi rồi chọn lại thư mục đó, hoặc chọn thư mục khác.” Thẻ máy này: “Không nhận file”; chân cửa sổ: “Không nhận file: không mở được *E:\Teleport*”. Đang chạy nền (cửa sổ không hiện): thêm bóng thoại ở khay “Teleport đang không nhận file vì không mở được thư mục nhận. Mở Teleport để chọn thư mục khác.” | Nút “Chọn thư mục nhận” trên dải thông báo; nút “Đổi…” ở chân cửa sổ |
+| Giao diện: đổi thư mục nhận khi đang nhận file | “Chưa đổi được thư mục nhận vì đang nhận file. Hãy đổi lại sau khi các lượt nhận xong.” | Thư mục nhận giữ nguyên; đổi lại sau bằng “Đổi…” |
+| Giao diện: thư mục vừa chọn để nhận file không dùng được (không tạo, không ghi được, đường dẫn quá dài…) | “Không dùng được thư mục *E:\Teleport*. Hãy chọn thư mục khác mà bạn có quyền ghi.” | Nút “Chọn thư mục khác” |
+| Giao diện: thư mục vừa chọn là thư mục riêng của Teleport (thư mục cấu hình hay nằm trong nó, hoặc thư mục `.teleport`) | “Không dùng được thư mục *D:\Teleport\.teleport* để nhận file vì Teleport dùng nó cho việc riêng. Hãy chọn thư mục khác.” | Nút “Chọn thư mục khác” |
+| Giao diện: đổi thư mục nhận mà không ghi được cài đặt | “Chưa đổi được thư mục nhận vì không ghi được cài đặt của Teleport. Hãy kiểm tra quyền ghi vào thư mục cấu hình rồi thử lại.” | Thư mục nhận giữ nguyên |
+| Giao diện: đổi thư mục nhận gặp lỗi khác | “Chưa đổi được thư mục nhận vì một lỗi không mong đợi. Hãy thử lại.” | Thư mục nhận giữ nguyên |
 | Giao diện: không mở được cổng khi khởi động | “Không mở được cổng để nhận kết nối (*lỗi*).” kèm dòng “Hãy đóng ứng dụng đang dùng cổng đó rồi bấm Thử lại.” | Nút “Thử lại” |
 | Giao diện: lỗi khác khi khởi động | “Teleport không khởi động được vì một lỗi không mong đợi.” kèm dòng “Hãy bấm Thử lại; nếu vẫn lỗi, hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” |
 | Giao diện: mở app khi máy chưa có danh tính (tạm, tới khi có màn hình lần chạy đầu của F1) | “Bắt đầu dùng Teleport”, rồi “Tên của máy này trong mạng: *X*” (tên mặc định của F1), câu đầu của dòng ngay dưới ô tên thiết bị ở F1, và “Bấm Bắt đầu để Teleport chạy và hiện máy này với các máy khác trong mạng.” Chưa bấm thì Teleport không chạy, không quảng bá | Nút “Bắt đầu” |
