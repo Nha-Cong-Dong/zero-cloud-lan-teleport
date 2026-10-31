@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 build/
 dist/
+installer/
 
 # File tạm khi nhận và trạng thái nối lại
 *.part
