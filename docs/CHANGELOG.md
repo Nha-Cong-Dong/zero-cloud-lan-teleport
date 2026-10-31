@@ -6,6 +6,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ## [Unreleased]
 
 ### Added
+- Trang “Tìm máy mới” (nút “Tìm máy mới” trên màn chính): radar vòng tròn với “Bạn” ở tâm, mỗi máy trong mạng là một bong bóng không chồng lên nhau và giữ chỗ khi danh sách đổi; máy đã ghép đôi hiện mờ, ưu tiên vòng trong. Bấm máy chưa ghép đôi để ghép đôi, bấm máy đã ghép đôi để về màn chính và chọn máy đó. Ô “Nhập IP…” ở đầu trang để ghép đôi theo địa chỉ khi máy kia không hiện; Esc lần đầu xóa chữ, lần sau quay lại. Có hơn 8 máy hoặc cửa sổ không đủ chỗ thì tự chuyển sang dạng danh sách và nói lý do; nút “Dạng danh sách” / “Dạng vòng tròn” được nhớ cho lần sau. Vòng sóng khi mở trang tự dừng sau vài giây, dừng khi cửa sổ thu nhỏ và tắt theo cài đặt hiệu ứng của Windows. Dùng được bằng Tab, phím mũi tên và trình đọc màn hình.
 - `docs/benchmark.md` mục 7: mvp N4, phần gửi lại sau khi mất kết nối hay tắt app nhận, đo bằng `teleport send` / `receive` thật trên loopback Windows: đạt ở mọi lần đo. Chưa đo: Linux, card mạng thật và macOS (`docs/ke_hoach.md` mục 5.4, D5).
 - Cài đặt lưu trong `settings.json` và đổi được ngay khi Teleport đang chạy, không cần khởi động lại: tên máy, thư mục nhận, giới hạn tốc độ gửi, số ngày giữ phần nhận dở, cùng các tùy chọn của giao diện (ngôn ngữ, khởi động cùng máy, dạng xem). Giao diện sẽ dùng ở các bản sau. Đổi tên máy thì quảng bá trong mạng cập nhật ngay.
 - “Hỏi trước khi nhận” theo từng thiết bị đã ghép đôi, để chọn “Luôn nhận” cho riêng một máy.
