@@ -20,7 +20,7 @@ pytestmark = pytest.mark.gui
 
 REPO = Path(__file__).resolve().parents[2]
 
-# Màu trong SVG (lớp .cls-3 thân con mèo, .cls-4 mũi tên); nền vuông là màu đen mặc định.
+# Màu trong SVG (lớp .cls-2 thân con mèo, .cls-3 mũi tên); nền vuông là màu đen mặc định.
 BODY = QColor("#f5ece0")
 ARROW = QColor("#cea3f3")
 TOLERANCE = 6
