@@ -48,8 +48,9 @@ Hợp đồng thực thi (bên gọi, kể cả bộ mô phỏng của test, ph�
    (các chỉ số khác nhau, tăng dần); `bad` rỗng thì `root = merkle_root(leaves)`, không thì
    `root = None`; báo `reread_done(bad, root)`. `CheckSource`: `stat` file nguồn (file thường)
    và `merkle_root(leaves)` → `source_checked(size, mtime_ms(st_mtime_ns), root)` hoặc
-   `source_failed`. `CheckSpace` → `space_checked(free, max)`, lỗi → `space_checked(None, None)`.
-   `AskUser` → `decide`.
+   `source_failed`. `CheckSpace` → `space_checked(free, max, check_id=CheckSpace.check_id)` trên
+   thư mục nhận chụp lúc giao việc, lỗi → `space_checked(None, None, check_id=...)`. `AskUser` →
+   `decide`. Đổi thư mục nhận (chỉ khi không `has_accepted_receives()`) → `recheck_space`.
 7. Gọi `tick(now)` lúc `next_wakeup()`; gọi sớm hay thừa đều vô hại.
 8. Message của một kết nối điều khiển chỉ được giao sau `control_up` của kết nối đó.
 
@@ -481,11 +482,16 @@ class SuspendTemp:
 
 @dataclass(frozen=True, slots=True)
 class CheckSpace:
-    """Lấy dung lượng trống và `max_file_size` của thư mục nhận, rồi `space_checked`."""
+    """Lấy dung lượng trống và `max_file_size` của thư mục nhận, rồi `space_checked`.
+
+    `check_id`: số engine cấp cho lần kiểm này (tăng dần); bên gọi trả lại nó trong
+    `space_checked` để kết quả của lần kiểm cũ (trước `recheck_space`) bị bỏ.
+    """
 
     device_id: str
     transfer_id: str
     total_size: int
+    check_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -921,6 +927,9 @@ class _Recv:
     names: tuple[str, ...]
     total_size: int
     phase: _Phase = _Phase.QUEUED
+    check_id: int = 0  # `CheckSpace` mới nhất của lượt; kết quả mang số khác bị bỏ
+    rechecking: bool = False  # ASKING: đang kiểm lại trên thư mục nhận mới (`recheck_space`)
+    accept_pending: bool = False  # người dùng đã bấm Nhận trong lúc `rechecking`
     owns_temp: bool = False
     created: bool = False  # đã `temp_created` (hay từ `restore`): được gửi `accept`/`resume`
     expire_restored: bool = False  # từ `restore` với tuổi ≥ `RECONNECT_GRACE`: hết hạn ở `control_up`
@@ -995,6 +1004,7 @@ class TransferEngine:
         self._last_now: float | None = None  # None: chưa có lời gọi thành công nào (`restore` còn gọi được)
         self._next_token = 1
         self._next_order = 1
+        self._next_check_id = 1
         self._actions: list[TransferAction] = []
         self._reports: list[TransferAction] = []
         self._tombstones_changed = False  # lời gọi này đã đổi tập bia mộ → `TombstonesChanged`
@@ -1041,6 +1051,17 @@ class TransferEngine:
                 elif t.phase is _Phase.RUNNING:
                     total += t.total_size - t.verified_bytes - t.have_bytes - t.pending_bytes
         return total
+
+    def has_accepted_receives(self) -> bool:
+        """Còn lượt nhận đã chấp nhận (kể cả lượt khôi phục, đang nối lại, chưa `temp_created`).
+
+        Lượt nhận đang xếp hàng, đang kiểm chỗ trống hay đang hỏi người dùng không tính: đổi thư
+        mục nhận lúc chỉ còn chúng thì gọi `recheck_space`.
+        """
+        return any(
+            isinstance(t, _Recv) and t.phase not in (_Phase.QUEUED, _Phase.CHECKING, _Phase.ASKING)
+            for t in self._transfers.values()
+        )
 
     def next_wakeup(self) -> float | None:
         """Hạn sớm nhất cần `tick`; None nếu không có. TTL của bảng nhớ không được tính."""
@@ -1361,31 +1382,76 @@ class TransferEngine:
         free_bytes: int | None,
         max_file_size: int | None,
         now: float,
+        *,
+        check_id: int | None = None,
     ) -> list[TransferAction]:
-        """Kết quả `CheckSpace` (`free_bytes` thô; None: không biết)."""
+        """Kết quả `CheckSpace` (`free_bytes` thô; None: không biết).
+
+        `check_id` là `CheckSpace.check_id` của lần kiểm; khác lần kiểm mới nhất của lượt (đã có
+        `recheck_space` sau đó) → `[]`. None coi như khớp. Lượt đang hỏi người dùng mà đang kiểm
+        lại: thiếu chỗ hay vượt trần → từ chối như lần kiểm đầu; đủ → thôi kiểm lại, không hỏi lại,
+        và nếu người dùng đã bấm Nhận trong lúc chờ thì chấp nhận ngay như `decide(True)`.
+        """
         validate_device_id(device_id)
         validate_transfer_id(transfer_id)
         free_bytes = _check_optional_size("free_bytes", free_bytes)
         max_file_size = _check_optional_size("max_file_size", max_file_size)
+        check_id = _check_optional_size("check_id", check_id)
         now = self._check_now(now)
         self._accept_now(now)
         found = self._lookup(device_id, Direction.RECEIVE, transfer_id)
         if found is None:
             return []
         peer, t = found
-        if not isinstance(t, _Recv) or t.phase is not _Phase.CHECKING:
+        if not isinstance(t, _Recv) or not (
+            t.phase is _Phase.CHECKING or (t.phase is _Phase.ASKING and t.rechecking)
+        ):
             return []
-        free = None if free_bytes is None else max(0, free_bytes - self.promised_bytes())
+        if check_id is not None and check_id != t.check_id:
+            return []  # kết quả của lần kiểm cũ (thư mục nhận trước `recheck_space`)
+        promised = self.promised_bytes()
+        if t.phase is _Phase.ASKING:
+            promised -= t.total_size  # lượt đang hỏi đã tính chính nó vào phần đã hứa
+        free = None if free_bytes is None else max(0, free_bytes - promised)
         rej = check_offer(t.offer, free_bytes=free, max_file_size=max_file_size)
         if rej is not None:
             self._reject(peer, t, rej, now)
-        else:
+        elif t.phase is _Phase.CHECKING:
             t.phase = _Phase.ASKING
             self._emit(AskUser(device_id, transfer_id, t.offer, t.names))
+        else:
+            t.rechecking = False
+            if t.accept_pending:
+                t.accept_pending = False
+                self._accept_offer(peer, t, now)
+        return self._finish()
+
+    def recheck_space(self, now: float) -> list[TransferAction]:
+        """Thư mục nhận vừa đổi: kiểm lại chỗ trống cho mọi `offer` đang kiểm hay đang hỏi.
+
+        Lượt đang kiểm: `CheckSpace` mới (kết quả của lần cũ bị bỏ). Lượt đang hỏi người dùng:
+        `CheckSpace` mới, không `AskUser` lại; hộp hỏi giữ nguyên, Nhận trong lúc chờ kết quả chỉ
+        được ghi lại (`decide`). Lượt đang xếp hàng được kiểm khi tới lượt. Bên gọi chỉ đổi thư mục
+        khi không còn lượt nhận đã chấp nhận (`has_accepted_receives`), nên phần đã hứa không đổi.
+        """
+        now = self._check_now(now)
+        self._accept_now(now)
+        for t in self._transfers.values():
+            if not isinstance(t, _Recv):
+                continue
+            if t.phase is _Phase.CHECKING:
+                self._emit_check_space(t)
+            elif t.phase is _Phase.ASKING:
+                t.rechecking = True
+                self._emit_check_space(t)
         return self._finish()
 
     def decide(self, device_id: str, transfer_id: str, accept: bool, now: float) -> list[TransferAction]:
-        """Người dùng (hoặc `--yes`) trả lời `AskUser`."""
+        """Người dùng (hoặc `--yes`) trả lời `AskUser`.
+
+        Đang kiểm lại chỗ trống (`recheck_space`): nhận → chỉ ghi lại, chấp nhận khi kết quả đủ chỗ
+        (`space_checked`), bỏ nếu kết quả là từ chối; không nhận → từ chối ngay.
+        """
         validate_device_id(device_id)
         validate_transfer_id(transfer_id)
         _check_bool("accept", accept)
@@ -1399,13 +1465,10 @@ class TransferEngine:
             return []
         if not accept:
             self._reject(peer, t, Reject(transfer_id, RejectReason.USER), now)
-            return self._finish()
-        peer.offers.remove(t)
-        t.phase = _Phase.RUNNING
-        peer.running = t
-        t.owns_temp = True
-        self._emit(CreateTemp(device_id, transfer_id, t.offer))
-        self._start_file(peer, t, 0, now)  # `accept` và `resume` chờ `temp_created`
+        elif t.rechecking:
+            t.accept_pending = True
+        else:
+            self._accept_offer(peer, t, now)
         return self._finish()
 
     def temp_created(self, device_id: str, transfer_id: str, now: float) -> list[TransferAction]:
@@ -2574,7 +2637,22 @@ class TransferEngine:
 
     def _check_space(self, peer: _Peer, t: _Recv) -> None:
         t.phase = _Phase.CHECKING
-        self._emit(CheckSpace(peer.device_id, t.key.transfer_id, t.total_size))
+        self._emit_check_space(t)
+
+    def _emit_check_space(self, t: _Recv) -> None:
+        """`CheckSpace` với `check_id` mới; kết quả của mọi lần kiểm trước của lượt bị bỏ."""
+        t.check_id = self._next_check_id
+        self._next_check_id += 1
+        self._emit(CheckSpace(t.key.device_id, t.key.transfer_id, t.total_size, t.check_id))
+
+    def _accept_offer(self, peer: _Peer, t: _Recv, now: float) -> None:
+        """Chấp nhận `offer` đang hỏi (người dùng đã nhận, đủ chỗ trên thư mục nhận hiện tại)."""
+        peer.offers.remove(t)
+        t.phase = _Phase.RUNNING
+        peer.running = t
+        t.owns_temp = True
+        self._emit(CreateTemp(peer.device_id, t.key.transfer_id, t.offer))
+        self._start_file(peer, t, 0, now)  # `accept` và `resume` chờ `temp_created`
 
     def _advance_queue(self, peer: _Peer) -> None:
         """Không còn lượt đang chạy và hàng không có đầu: `offer` xếp hàng cũ nhất được xét."""
