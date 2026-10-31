@@ -51,6 +51,10 @@ chưa có thì tên trong `offer`), kèm `folder` để bấm bóng thoại mở
 lưu cuối, không có thì thư mục nhận của host. Tên máy kia qua `texts.peer_label`, tên file qua
 `texts.file_label`; bóng thoại khay là chữ thuần.
 
+**Tóm tắt cho cửa sổ chính**: mỗi `TransfersView.content_changed` (và một lần lúc dựng) gọi
+`MainWindow.set_transfer_summary(has_content(), active_count())`: huy hiệu “Đang truyền n lượt”, màn
+rỗng của khung phải, nút “Mở thư mục” cuối chuỗi Tab.
+
 **Lượt gửi dở** (`active_sends()`): tên hiển thị các máy đang có lượt gửi chưa kết thúc, theo các
 hàng của `TransfersView` (không gọi node); `ui.app` dùng để hỏi lại trước khi Thoát.
 
@@ -202,7 +206,9 @@ class TransfersController(QObject):
         radar.pick_files_requested.connect(self.pick_and_send)
         radar.drop_hint_requested.connect(self.view.show_notice)
         self.view.cancel_requested.connect(self.cancel)
+        self.view.content_changed.connect(self._update_summary)
         self.offers.decided.connect(self.decide)
+        self._update_summary()
 
     # ---- Vòng đời host -----------------------------------------------------------------------
 
@@ -420,6 +426,10 @@ class TransfersController(QObject):
             )
 
     # ---- Bên trong ---------------------------------------------------------------------------
+
+    def _update_summary(self) -> None:
+        """Báo cửa sổ chính danh sách lượt có gì không và số lượt chưa kết thúc (huy hiệu, màn rỗng)."""
+        self._window.set_transfer_summary(self.view.has_content(), self.view.active_count())
 
     def _peer(self, device_id: str, view: DeviceView | None) -> str:
         name = view.name if view is not None else self._names.get(device_id)

@@ -414,6 +414,13 @@ Ghép đôi lại cùng `device_id` và cùng fingerprint ✅ (`teleport.app.pai
 - **Cả hai bên** ghi đè mục cũ, cập nhật tên theo `hello` của bên kia và cập nhật `paired_at`. Bên kia đã chứng minh giữ khóa riêng trên chính kết nối đó: bên trả lời qua bắt tay TLS, bên khởi xướng qua chữ ký trong `pair_nonce` (mục 5.1). Máy lạ dùng chứng chỉ công khai của một thiết bị đã tin cậy bị dừng trước khi hiện mã, nên không đổi được tên của thiết bị đó.
 - Lời hỏi ghép đôi ở cả hai vai hiện tên đã lưu, và cả tên mới nếu tên sẽ đổi (mvp mục 7.2).
 
+Máy đã ghép đôi đổi tên ✅ (`teleport.app.node`):
+
+- Mỗi khi có kết nối điều khiển (vào hay ra) với một thiết bị tin cậy, kể cả khi đổi sang kết nối khác (mục 6.1), node so `hello.name` của máy kia với tên đã lưu; khác thì ghi tên mới vào `trusted.json`, giữ chứng chỉ và `paired_at`. Kết nối điều khiển xác thực cả hai chiều bằng chứng chỉ đã lưu và CN khớp `hello.device_id` (mục 2.2), và node kiểm lại fingerprint của kết nối với chứng chỉ đang lưu ngay trước khi ghi, nên chỉ thiết bị giữ đúng khóa riêng mới đổi được tên của nó. Tên mới trùng tên một thiết bị khác vẫn được ghi.
+- Mỗi thiết bị tối đa một lần ghi mỗi `PEER_RENAME_MIN_INTERVAL`. Tên bị trần này chặn được áp khi hết trần, nếu kết nối điều khiển lúc đó vẫn mang đúng chứng chỉ đã lưu; không thì áp ở kết nối sau.
+- Tên trong TXT mDNS không bao giờ đổi tên đã lưu.
+- `os` của `hello` đã xác thực chỉ dùng để hiển thị (hệ điều hành của máy đã ghép đôi, cả khi máy đó ngoại tuyến), không lưu xuống đĩa.
+
 ## 6. Kết nối giữa các thiết bị tin cậy & nối lại
 
 ### 6.1. Kết nối điều khiển ✅

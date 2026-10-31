@@ -366,9 +366,31 @@ def test_address_label_is_plain_selectable_tab_focusable_and_named(window):
     assert label.accessibleName() == ADDRESS_A11Y
 
 
-def test_address_label_sits_right_below_detail_label(window):
-    layout = window.home_page.layout()
-    assert layout.indexOf(window.address_label) == layout.indexOf(window.detail_label) + 1
+def _layout_holding(layout, widget):
+    """Layout (trong cây layout `layout`) chứa trực tiếp `widget`; không có → None."""
+    if layout is None:
+        return None
+    if layout.indexOf(widget) >= 0:
+        return layout
+    for i in range(layout.count()):
+        found = _layout_holding(layout.itemAt(i).layout(), widget)
+        if found is not None:
+            return found
+    return None
+
+
+def test_address_label_sits_right_below_name_label_in_machine_card(window):
+    # Spec B1 mục 8b + 12.4: dòng địa chỉ chuyển từ cột trạng thái (dưới `detail_label`) vào thẻ “máy
+    # này”, ngay dưới tên máy; nó nằm chung một hàng con với nút “Chép địa chỉ”.
+    card = window.machine_card
+    assert card.isAncestorOf(window.address_label)
+    column = _layout_holding(card.layout(), window.name_label)
+    assert column is not None, "name_label phải nằm trong layout của machine_card"
+    below = column.itemAt(column.indexOf(window.name_label) + 1)
+    assert below is not None
+    assert below.widget() is window.address_label or (
+        below.layout() is not None and below.layout().indexOf(window.address_label) >= 0
+    ), "address_label không nằm ngay dưới name_label"
 
 
 # =================================================================================================

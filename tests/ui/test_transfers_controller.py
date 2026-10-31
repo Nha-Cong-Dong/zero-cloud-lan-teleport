@@ -1302,3 +1302,55 @@ def test_new_send_of_old_host_is_forgotten_after_attach(env):
     new_host.run_calls(node)
     assert node.transfers.cancelled == []
     assert notice(env) is None
+
+
+# =================================================================================================
+# V2 (spec B1 mục 2.5, 6 V2): controller báo tóm tắt danh sách lượt cho cửa sổ
+# =================================================================================================
+
+READY = "Sẵn sàng nhận"
+BUSY_ONE = "Đang truyền 1 lượt"
+
+
+def test_v2_summary_set_right_after_construction(env):
+    from teleport.ui.widgets import BadgeTone
+
+    assert env.window.badge.text == READY
+    assert env.window.badge.tone is BadgeTone.SUCCESS
+
+
+def test_v2_badge_follows_transfer_updates(env):
+    from teleport.ui.widgets import BadgeTone
+
+    env.window.show_running("May-A", env.tmp / "nhan")
+    key = tkey("send")
+    env.ctl.on_transfer(tinfo_changed(key, "transferring"))
+    assert env.window.badge.text == BUSY_ONE
+    assert env.window.badge.tone is BadgeTone.BUSY
+    assert env.window.stream_pane.currentWidget() is env.window.transfers_area
+    env.ctl.on_transfer(finished(key, "done"))
+    assert env.window.badge.text == READY
+    assert env.window.badge.tone is BadgeTone.SUCCESS
+    assert env.window.stream_pane.currentWidget() is env.window.transfers_area  # thẻ đã xong vẫn hiện
+
+
+def test_v2_attach_none_resets_badge_and_stream_pane(env):
+    env.window.show_running("May-A", env.tmp / "nhan")
+    env.ctl.on_transfer(tinfo_changed(tkey("send"), "transferring"))
+    assert env.window.badge.text == BUSY_ONE
+    env.ctl.attach(None)
+    assert env.window.badge.text == READY
+    # Luật L7: RUNNING, radar không có máy đã ghép đôi, danh sách rỗng → EmptyState.
+    assert env.window.stream_pane.currentWidget() is env.window.empty_state
+    env.model.reset([dview(paired=True)])
+    assert env.window.stream_pane.currentWidget() is env.window.transfers_area
+
+
+def test_v2_notice_alone_shows_transfers_area(env):
+    env.window.show_running("May-A", env.tmp / "nhan")
+    assert env.window.stream_pane.currentWidget() is env.window.empty_state
+    env.ctl.view.show_notice("Thả file lên một thiết bị để gửi.")
+    assert env.window.stream_pane.currentWidget() is env.window.transfers_area
+    assert env.window.badge.text == READY
+    env.ctl.view.hide_notice()
+    assert env.window.stream_pane.currentWidget() is env.window.empty_state
