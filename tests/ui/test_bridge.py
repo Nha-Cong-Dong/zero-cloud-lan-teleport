@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import socket
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -437,3 +439,108 @@ def test_stop_during_start_closes_without_cancelling_start(
     assert not seen["start_cancelled"], "không được cancel task start"
     assert wait_joined(qtbot, host, 5)
     assert ui_helpers.lock_is_free(d)
+
+
+# --- Thư mục nhận đã lưu (spec-b1b mục 2.1, 6.1) ----------------------------------------------------
+
+
+def _same_dir(a, b) -> bool:
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def test_node_options_defaults_to_saved_receive_dir(tmp_path):
+    from teleport.app.node import ReceiveDirChoice
+    from teleport.ui.bridge import NodeOptions
+
+    assert NodeOptions(config_dir=tmp_path).receive_dir is ReceiveDirChoice.SAVED
+
+
+def test_gui_default_options_use_saved_receive_dir(tmp_path):
+    """Spec-b1b 2.7: app mặc định dùng thư mục đã lưu, không ép `paths.default_receive_dir()`."""
+    from teleport.app.node import ReceiveDirChoice
+    from teleport.ui import app as ui_app
+
+    assert ui_app._default_options(tmp_path).receive_dir is ReceiveDirChoice.SAVED
+
+
+@integration
+def test_saved_receive_dir_uses_default_when_nothing_saved(
+    qtbot, config_dir, node_options, node_hosts, fake_default_receive_dir
+):
+    from teleport.app.node import ReceiveDirChoice
+
+    host = node_hosts(node_options(config_dir("A"), receive_dir=ReceiveDirChoice.SAVED))
+    probe = Probe(host)
+    start_and_wait(qtbot, host, probe)
+    assert host.receive_dir is not None
+    assert _same_dir(host.receive_dir, fake_default_receive_dir)
+    assert host.receive_dir_error is None
+    assert fake_default_receive_dir.is_dir()
+
+
+def test_receive_dir_props_none_before_started(qtbot, config_dir, node_options, node_hosts, tmp_path):
+    host = node_hosts(node_options(config_dir("A"), receive_dir=tmp_path / "nhan-co-dinh"))
+    assert host.receive_dir is None
+    assert host.receive_dir_error is None
+
+
+@integration
+def test_receive_dir_props_none_while_starting(qtbot, config_dir, node_options, node_hosts, tmp_path):
+    host = node_hosts(node_options(config_dir("A"), receive_dir=tmp_path / "nhan-co-dinh"))
+    probe = Probe(host)
+    host.start()
+    seen_before: list = []
+
+    def check() -> bool:
+        if not probe.names():
+            seen_before.append((host.receive_dir, host.receive_dir_error))
+            return False
+        return True
+
+    qtbot.waitUntil(check, timeout=10_000)
+    assert all(v == (None, None) for v in seen_before), seen_before
+    assert probe.names()[0] == "started"
+    assert _same_dir(host.receive_dir, tmp_path / "nhan-co-dinh")
+
+
+@integration
+def test_saved_dir_is_a_file_starts_running_with_receive_dir_error(
+    qtbot, config_dir, node_options, node_hosts, tmp_path
+):
+    """Thư mục đã lưu hỏng (là một file): node vẫn chạy, không nhận file (mvp F10, spec-b1b mục 1)."""
+    from teleport.app.node import ReceiveDirChoice
+    from teleport.app.settings import Settings
+
+    d = config_dir("A")
+    not_a_dir = tmp_path / "da-luu-la-file"
+    not_a_dir.write_bytes(b"x")
+    Settings(receive_dir=str(not_a_dir)).save(d)
+    host = node_hosts(node_options(d, receive_dir=ReceiveDirChoice.SAVED))
+    probe = Probe(host)
+    host.start()
+    qtbot.waitUntil(lambda: bool(probe.names()), timeout=15_000)
+    assert probe.names()[0] == "started", probe.log
+    assert host.running
+    assert host.receive_dir is None
+    assert host.receive_dir_error is not None
+    assert _same_dir(host.receive_dir_error, not_a_dir)
+    assert not_a_dir.read_bytes() == b"x", "file nằm ở chỗ thư mục đã lưu không được bị đụng tới"
+    assert Settings.load(d).receive_dir == str(not_a_dir), "lỗi lúc start không được xóa cài đặt đã lưu"
+
+
+@integration
+def test_receive_dir_props_are_snapshot_at_started(qtbot, config_dir, node_options, node_hosts, tmp_path):
+    """Spec-b1b 2.1: property là ảnh chụp lúc `started`; đổi thư mục sau đó không làm chúng đổi."""
+    old = tmp_path / "nhan-cu"
+    new = tmp_path / "nhan-moi"
+    new.mkdir()
+    host = node_hosts(node_options(config_dir("A"), receive_dir=old))
+    probe = Probe(host)
+    start_and_wait(qtbot, host, probe)
+    assert _same_dir(host.receive_dir, old)
+    got: list = []
+    host.submit(lambda node: node.set_receive_dir(new), got.append)
+    qtbot.waitUntil(lambda: bool(got), timeout=10_000)
+    assert isinstance(got[0], Path) and _same_dir(got[0], new), got
+    assert _same_dir(host.receive_dir, old)
+    assert host.receive_dir_error is None

@@ -24,6 +24,18 @@ dùng đã bấm đổi dạng thì bỏ) và lưu bằng `Node.set_ui_preferenc
 hỏi nhận file và việc gửi; `GuiApp` chỉ báo host mới (`attach`), `started`, `NodeEvent` và
 `TransferUpdate` của host hiện tại cho nó.
 
+**Thư mục nhận** (`ui.receive_dir.ReceiveDirController`, `GuiApp.receive_dir_controller`; spec B1b):
+node chạy với thư mục nhận đã lưu (`ReceiveDirChoice.SAVED`). Host mới → `attach`; `started` →
+`on_started` rồi `show_running(tên, thư mục nhận, thư mục đã lưu hỏng)`. `state_changed` → cửa sổ
+(`set_receive_dir`, `set_receive_dir_pending`) và `TransfersController.set_receive_dir`. “Đổi…” ở
+chân “Lưu vào” (`change_receive_dir_requested`) → `choose(cửa sổ)`. `failed` → dải thông báo của
+`TransfersView`; UNAVAILABLE và RESERVED kèm nút “Chọn thư mục khác”. Thư mục đã lưu hỏng lúc
+`started`: node vẫn chạy (không màn lỗi), dải `unavailable_text` kèm nút “Chọn thư mục nhận”, và
+cửa sổ không hiện (chạy nền) thì thêm bóng thoại khay `unavailable_tray_text`. App nhớ câu cuối nó
+hiện ở dải (`_receive_dir_notice`); `state_changed` mà thư mục nhận đã ổn (có thư mục nhận, hết
+hỏng, không đang đổi) và dải vẫn hiện đúng câu đó thì ẩn dải. Đang thoát thì không hiện dải, không
+bóng thoại, bỏ `failed`. Thoát và `shutdown` gọi `close_all` (đóng hộp chọn).
+
 **Ghép đôi** (`ui.pairing.PairingController`): radar `pair_requested` → `pair_device`,
 `manual_address_entered` → `pair_address`, `unpair_requested` → hộp xác nhận hủy ghép đôi;
 `devices_changed` (đọc lại `devices()` sau ghép đôi / hủy ghép đôi) → `model.reset`. Mỗi host mới
@@ -76,10 +88,11 @@ tắt máy bị hủy —, hay `isSavingSession()`): `commitDataRequest` còn đ
 đang mở, và không bao giờ gọi `QSessionManager.cancel()` (không chặn tắt máy, đăng xuất).
 Luồng thoát thật (`_quit_now`): dừng `address_timer`, đóng hộp hỏi lại, đóng server IPC
 (`stop_listening`, `gui.lock` giữ tới `shutdown`), đóng các hộp hỏi và hộp chọn file
-(`TransfersController.close_all`), ẩn cửa sổ và khay, `NodeHost.stop()` (không chặn), `stopped` →
-`quit()`; kèm `QTimer` dự phòng `close_time_limit() + QUIT_GRACE` giây. Sau `exec()` (trong
-`finally`): `stop()` lần nữa (không sao), đóng `SingleInstance`, `join(JOIN_TIMEOUT)`; thread node
-vẫn sống thì ghi log, `logging.shutdown()`, `os._exit(1)`.
+(`TransfersController.close_all`, `ReceiveDirController.close_all`), ẩn cửa sổ và khay,
+`NodeHost.stop()` (không chặn), `stopped` → `quit()`; kèm `QTimer` dự phòng
+`close_time_limit() + QUIT_GRACE` giây. Sau `exec()` (trong `finally`): `stop()` lần nữa (không
+sao), đóng `SingleInstance`, `join(JOIN_TIMEOUT)`; thread node vẫn sống thì ghi log,
+`logging.shutdown()`, `os._exit(1)`.
 
 **Bóng thoại khay**: bấm vào bóng thoại (`Tray.message_clicked(folder)`) có thư mục (“Đã nhận…”)
 → mở thư mục bằng seam cấp module `open_url` (mặc định `QDesktopServices.openUrl`, đọc lúc gọi);
@@ -136,12 +149,13 @@ from teleport.app.node import NodeEvent
 from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
-from teleport.ui import errorlog, fonts, i18n, icons, send, texts, theme
+from teleport.ui import errorlog, fonts, i18n, icons, receive_dir, send, texts, theme
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, Page, ViewState
 from teleport.ui.pairing import PairingController, repair_offline_text
+from teleport.ui.receive_dir import ChangeError, ReceiveDirController
 from teleport.ui.transfers import TransfersController
 from teleport.ui.tray import Tray, make_icon
 
@@ -383,8 +397,8 @@ async def _read_addresses(node: app_node.Node) -> tuple[tuple[str, ...], int | N
 class GuiApp(QObject):
     """Cửa sổ, khay, gửi/nhận file (`transfers`) và node của một tiến trình `teleport-gui`.
 
-    `make_options` (test) dựng `NodeOptions` cho mỗi lần chạy node; mặc định: thư mục nhận
-    `paths.default_receive_dir()`, mọi địa chỉ, mDNS quảng bá.
+    `make_options` (test) dựng `NodeOptions` cho mỗi lần chạy node; mặc định: thư mục nhận đã lưu
+    (`ReceiveDirChoice.SAVED`; chưa lưu thì `paths.default_receive_dir()`), mọi địa chỉ, mDNS quảng bá.
     """
 
     def __init__(
@@ -408,6 +422,7 @@ class GuiApp(QObject):
         self._session_ending = False  # hệ điều hành đang tắt máy / đăng xuất (`commitDataRequest`)
         self._quit_box: QMessageBox | None = None
         self._address_job: SubmitJob | None = None
+        self._receive_dir_notice: str | None = None  # câu cuối app hiện ở dải về thư mục nhận
         self._view_chosen = False  # người dùng đã bấm đổi dạng hiển thị kể từ lần `started` gần nhất
         self.host: NodeHost | None = None
         self._old_hosts: list[NodeHost] = []
@@ -416,6 +431,7 @@ class GuiApp(QObject):
         self.transfers = TransfersController(
             self.window, self.tray, self, app_active=lambda: self._app_active()
         )
+        self.receive_dir_controller = ReceiveDirController(self)
         self.pairing = PairingController(
             self,
             notify=lambda _title, text: self.tray.show_message(text),
@@ -436,6 +452,9 @@ class GuiApp(QObject):
         self.window.quit_requested.connect(self.request_quit)
         self.window.hidden_to_tray.connect(self._on_hidden_to_tray)
         self.window.open_receive_dir_requested.connect(self._on_open_receive_dir)
+        self.window.change_receive_dir_requested.connect(self._choose_receive_dir)
+        self.receive_dir_controller.state_changed.connect(self._on_receive_dir_state)
+        self.receive_dir_controller.failed.connect(self._on_receive_dir_failed)
         self.tray.open_requested.connect(self.window.bring_to_front)
         self.tray.quit_requested.connect(self.request_quit)
         self.tray.message_clicked.connect(self._on_message_clicked)
@@ -503,6 +522,8 @@ class GuiApp(QObject):
         host.transfer_event.connect(functools.partial(self._on_transfer, host))
         host.node_event.connect(functools.partial(self._on_node_event, host))
         self.host = host
+        self._receive_dir_notice = None
+        self.receive_dir_controller.attach(host)
         self.transfers.attach(host)
         self.pairing.set_host(host)
         self.window.show_starting()
@@ -532,6 +553,7 @@ class GuiApp(QObject):
         if self._instance is not None:
             self._instance.stop_listening()  # bản mở sau không “show” vào app đang tắt
         self.transfers.close_all()
+        self.receive_dir_controller.close_all()
         self.pairing.close_all()
         self.window.hide()
         self.tray.hide()
@@ -553,6 +575,7 @@ class GuiApp(QObject):
         for host in hosts:
             host.stop()
         self.transfers.close_all()
+        self.receive_dir_controller.close_all()
         self.pairing.close_all()
         if self._instance is not None:
             self._instance.stop_listening()
@@ -683,6 +706,47 @@ class GuiApp(QObject):
         if open_url(QUrl.fromLocalFile(str(path))) is False:
             log.warning("không mở được thư mục nhận")
 
+    # ---- Thư mục nhận --------------------------------------------------------------------------
+
+    def _choose_receive_dir(self) -> None:
+        """“Đổi…” ở chân “Lưu vào”, hay nút của dải thông báo: mở hộp chọn thư mục nhận."""
+        if not self._quitting:
+            self.receive_dir_controller.choose(self.window)
+
+    def _on_receive_dir_state(self) -> None:
+        """Thư mục nhận / thư mục hỏng / thư mục đang đổi sang đổi: cập nhật cửa sổ và gửi/nhận."""
+        c = self.receive_dir_controller
+        self.window.set_receive_dir(c.receive_dir, c.unavailable)
+        self.window.set_receive_dir_pending(c.pending)
+        self.transfers.set_receive_dir(c.receive_dir)
+        notice = self._receive_dir_notice
+        if notice is None or c.unavailable is not None or c.receive_dir is None or c.changing:
+            return
+        # Đã ổn: gỡ câu về thư mục nhận mà app đã hiện, nếu dải chưa bị thông báo khác đè.
+        self._receive_dir_notice = None
+        if self.transfers.view.notice_text() == notice:
+            self.transfers.view.hide_notice()
+
+    def _on_receive_dir_failed(self, code: str, text: str) -> None:
+        """Đổi thư mục nhận không được: câu ở dải thông báo (thư mục không dùng được → nút chọn lại)."""
+        if self._quitting:
+            return
+        if code in (ChangeError.UNAVAILABLE, ChangeError.RESERVED):
+            self.transfers.view.show_notice(text, receive_dir.choose_other_text(), self._choose_receive_dir)
+        else:
+            self.transfers.view.show_notice(text)
+        self._receive_dir_notice = text
+
+    def _show_receive_dir_unavailable(self, path: Path) -> None:
+        """Lúc `started`, thư mục nhận đã lưu không mở được: dải thông báo, và bóng thoại khi chạy nền."""
+        if self._quitting:
+            return
+        text = receive_dir.unavailable_text(path)
+        self.transfers.view.show_notice(text, receive_dir.choose_action_text(), self._choose_receive_dir)
+        self._receive_dir_notice = text
+        if not self.window.isVisible():
+            self.tray.show_message(receive_dir.unavailable_tray_text())
+
     def _setup_done(self) -> bool:
         try:
             return (self._config_dir / CERT_FILE).is_file()
@@ -699,11 +763,15 @@ class GuiApp(QObject):
     def _on_started(self, host: NodeHost) -> None:
         if host is not self.host:
             return
-        self.window.show_running(host.node_name, host.options.receive_dir)
+        controller = self.receive_dir_controller
+        controller.on_started(host)
+        self.window.show_running(host.node_name, controller.receive_dir, controller.unavailable)
         host.call(lambda node: node.devices(), functools.partial(self._on_devices, host))
         self._view_chosen = False
         host.call(lambda node: node.settings.radar_view, functools.partial(self._on_radar_view, host))
         self.transfers.on_started(host)
+        if controller.unavailable is not None:
+            self._show_receive_dir_unavailable(controller.unavailable)
         if not self._quitting:
             self._stop_addresses()
             self._refresh_addresses()
@@ -829,7 +897,8 @@ class GuiApp(QObject):
 
 
 def _default_options(config_dir: Path) -> NodeOptions:
-    return NodeOptions(config_dir=config_dir, receive_dir=paths.default_receive_dir())
+    """Mặc định: thư mục nhận đã lưu (`ReceiveDirChoice.SAVED`), mọi địa chỉ, mDNS quảng bá."""
+    return NodeOptions(config_dir=config_dir)
 
 
 class _NoIdentityYet:
@@ -947,12 +1016,22 @@ def _selftest(app: QApplication) -> int:
         window.show_welcome(planned_device_name())
         window.show_starting()
         window.show_running("Teleport", Path("Teleport"))
+        window.show_running("Teleport", None, Path("Teleport"))
         window.radar.model.reset(())
         for code in StartError:
             window.show_error(code.value, "")
         transfers = TransfersController(window, tray)
         transfers.attach(None)
-        if len(tray.actions()) != 4 or transfers.offers.keys() or transfers.view.rows():
+        controller = ReceiveDirController()
+        controller.attach(None)
+        transfers.view.show_notice(receive_dir.unavailable_text(Path("Teleport")))
+        transfers.view.hide_notice()
+        if (
+            len(tray.actions()) != 4
+            or transfers.offers.keys()
+            or transfers.view.rows()
+            or controller.choose(window)
+        ):
             return EXIT_ERROR
         app.processEvents()
         tray.dispose()
