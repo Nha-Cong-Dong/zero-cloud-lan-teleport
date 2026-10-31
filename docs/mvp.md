@@ -353,6 +353,8 @@ Bản giao diện dùng cùng các dòng, khác ở chỗ:
 └───────────────────────────────────────────┘
 ```
 
+“Đổi…” đổi thư mục nhận **chung** cho mọi thiết bị (như trong Cài đặt), không riêng lượt này, và chỉ được khi chưa có lượt nhận nào đã chấp nhận. Đổi xong thì mọi hộp đang mở được kiểm lại chỗ trống trên thư mục mới: không đủ chỗ thì lượt đó bị từ chối và hộp tự đóng; bấm Nhận trong lúc đang kiểm lại thì lượt được nhận ngay khi kiểm xong mà đủ chỗ.
+
 Tên file do máy gửi đặt (đã làm sạch, [ke_hoach.md](ke_hoach.md) mục 3.3) hiện như tên máy ở mục 7.2 (ký tự trông như khoảng trắng, ký tự vô hình và ký tự đổi hướng chữ thành `·`, chữ rộng 2 cột, dấu kết hợp và ZWJ 0 cột) nhưng tối đa **48 cột**, và dài hơn thì **cắt ở giữa, giữ đuôi** (`ten-rat-dai…cuoi.mp4`), để phần mở rộng vẫn còn thấy. Tên máy gửi theo mục 7.2. Máy gửi không có tên (không còn trong thiết bị tin cậy) thì hiện 8 ký tự đầu của mã máy.
 
 Bản giao diện của MVP hackathon (mục 4.1): dòng đầu là ““*Laptop-Minh*” muốn gửi *3* file (*8,4 GB*) tới máy này.” (chữ lớn, đậm), rồi các dòng file như bản CLI dưới đây, “Lưu vào: …” và hai nút. Nút “Đổi…” và ô “Luôn nhận từ thiết bị này” (F4) để sau hackathon. Mỗi lượt một hộp, không chặn cửa sổ chính; Enter, Esc và nút đóng hộp đều là **Từ chối**; máy gửi hủy khi hộp còn mở thì hộp tự đóng.

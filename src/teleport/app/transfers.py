@@ -69,7 +69,9 @@
   thôi dùng và đóng khi không còn ai dùng (`_close_retired`). Mọi việc đĩa chụp thư mục nhận đồng
   bộ lúc giao việc (hàng đĩa giữ `lane.rd`; dọn tạm, kiểm chỗ trống, `discard_temp`, đóng handle
   của khôi phục nhận `rd` tường minh), đăng ký là người dùng của nó (`_DirUse`), không đọc lại
-  `_receive_dir` sau `await`.
+  `_receive_dir` sau `await`. `offer` chưa nhận không làm bận: sau khi đổi, `engine.recheck_space`
+  kiểm lại chúng trên thư mục mới, và `space_checked` mang `check_id` của `CheckSpace` để kết quả
+  kiểm trên thư mục cũ bị bỏ.
 
 `preview_sources(paths)` kiểm trước các file sẽ gửi mà không cần node (cùng lỗi như `send`), để
 CLI báo lỗi file trước khi lấy `node.lock` hay đụng mạng.
@@ -460,8 +462,9 @@ async def preview_sources(paths: Sequence[str | os.PathLike[str]]) -> list[Sourc
 
 
 class ReceiveDirBusy(Exception):
-    """Không đổi được thư mục nhận: còn lượt nhận (ở bất kỳ pha nào, kể cả `offer` chờ hỏi, xếp
-    hàng, chờ nối lại), hàng đĩa còn sống, hay lượt thừa của khôi phục đang được xóa."""
+    """Không đổi được thư mục nhận: còn lượt nhận đã chấp nhận (kể cả chờ nối lại, lượt khôi
+    phục), hàng đĩa còn sống, hay lượt thừa của khôi phục đang được xóa. `offer` chưa nhận
+    (xếp hàng, kiểm chỗ trống, chờ hỏi) không làm bận."""
 
 
 class _JobDropped(Exception):
@@ -863,21 +866,22 @@ class TransferManager:
     def receive_dir_busy(self) -> bool:
         """Còn điều gì giữ thư mục nhận hiện tại, nên chưa đổi được (`replace_receive_dir`).
 
-        True khi còn lượt nhận ở bất kỳ pha nào, hàng đĩa còn sống, hay lượt thừa của khôi phục
-        đang được xóa (`_discarding`).
+        True khi còn lượt nhận đã chấp nhận (`engine.has_accepted_receives`, kể cả lượt khôi phục),
+        hàng đĩa còn sống, hay lượt thừa của khôi phục đang được xóa (`_discarding`). `offer` chưa
+        nhận (đang xếp hàng, kiểm chỗ trống hay hỏi người dùng) không làm bận: đổi thư mục thì
+        chúng được kiểm lại trên thư mục mới (`replace_receive_dir`).
         """
-        return (
-            any(info.key.direction is Direction.RECEIVE for info in self._engine.transfers())
-            or bool(self._live_lanes)
-            or bool(self._discarding)
-        )
+        return self._engine.has_accepted_receives() or bool(self._live_lanes) or bool(self._discarding)
 
     def replace_receive_dir(self, rd: ReceiveDir) -> None:
         """Dùng `rd` làm thư mục nhận từ giờ (đồng bộ); thư mục cũ đóng khi không còn ai dùng.
 
         Bận (`receive_dir_busy`) → `ReceiveDirBusy`; node đang đóng → RuntimeError; không đổi gì.
         Trước đó không có thư mục nhận thì từ giờ nhận `offer` (theo luật tạm dừng). Không khôi
-        phục lượt dở có sẵn trong `rd` (chỉ `restore` lúc khởi động làm việc đó).
+        phục lượt dở có sẵn trong `rd` (chỉ `restore` lúc khởi động làm việc đó). `offer` đang kiểm
+        chỗ trống hay đang hỏi người dùng được kiểm lại trên `rd` (`engine.recheck_space`, chỉ khi
+        thư mục thật sự đổi và engine còn lượt nhận; đang thực hiện hành động thì lên đầu hàng
+        hoãn: kết quả kiểm trên thư mục cũ bị bỏ, hộp hỏi không mở lại).
         """
         if not isinstance(rd, ReceiveDir):
             raise TypeError("rd phải là ReceiveDir")
@@ -887,6 +891,17 @@ class TransferManager:
             raise ReceiveDirBusy()
         old, self._receive_dir = self._receive_dir, rd
         self._apply_receiving()
+        if old is not rd and any(
+            info.key.direction is Direction.RECEIVE for info in self._engine.transfers()
+        ):
+            # `CheckSpace` mới chụp `rd` lúc giao việc. Không có lượt nhận thì không gọi engine
+            # (`restore` phải là lời gọi đầu tiên của engine). Đang thực hiện hành động thì xếp
+            # lên **đầu** hàng hoãn: một `decide(True)` hoãn từ trước phải gặp cờ kiểm lại, không
+            # được chấp nhận lượt trên thư mục mới khi chưa kiểm chỗ trống ở đó.
+            if self._dispatching:
+                self._deferred.appendleft((self._engine.recheck_space, (), {}))
+            else:
+                self._call(self._engine.recheck_space)
         if old is not None and old is not rd:
             self._retire_receive_dir(old)
 
@@ -2007,7 +2022,9 @@ class TransferManager:
                 log.info("không đọc được dung lượng thư mục nhận: %s", _error_label(e))
             else:
                 free, max_size = info.free_bytes, info.max_file_size
-        self._call(self._engine.space_checked, a.device_id, a.transfer_id, free, max_size)
+        self._call(
+            self._engine.space_checked, a.device_id, a.transfer_id, free, max_size, check_id=a.check_id
+        )
 
     async def _check_source(self, a: CheckSource) -> None:
         files = self._sources.get((a.device_id, a.transfer_id))

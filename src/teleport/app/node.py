@@ -1140,8 +1140,9 @@ class Node:
         """Đổi thư mục nhận (chung cho mọi thiết bị) và lưu; trả gốc thật (`ReceiveDir.root`).
 
         Các lời gọi chạy lần lượt. Lỗi: không phải đường dẫn dạng chuỗi → TypeError; node không
-        tự nhận và không có `on_transfer_event` → ValueError; còn lượt nhận, hàng đĩa hay việc dọn
-        của khôi phục (`TransferManager.receive_dir_busy`) → `ReceiveDirBusy`; không mở được →
+        tự nhận và không có `on_transfer_event` → ValueError; còn lượt nhận đã chấp nhận, hàng đĩa
+        hay việc dọn của khôi phục (`TransferManager.receive_dir_busy`; `offer` chưa nhận không
+        tính, chúng được kiểm lại chỗ trống trên thư mục mới) → `ReceiveDirBusy`; không mở được →
         `ReceiveDirUnavailable`; ghi lỗi → `SettingsSaveError`; node chưa chạy hay đóng trong lúc
         mở → RuntimeError. Lỗi thì thư mục nhận và cài đặt không đổi.
 

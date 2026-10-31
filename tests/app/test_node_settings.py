@@ -2,6 +2,9 @@
 
 Viết theo đặc tả, không theo code: `specs/spec-dot-c.md` mục 1.2.3 (`Node`), 1.2.4 (`TransferManager`),
 1.3 (bất biến), 1.5 (tiêu chí xong) và mục 11 (thắng mục 1 khi khác: H1, H2, M1, L1, L2).
+C1c (= P4-0b, spec mục 4.3, 4.6): `offer` chưa nhận (kiểm chỗ trống, chờ hỏi, xếp hàng) không còn làm
+thư mục nhận “bận”; đổi thư mục thì engine kiểm lại chúng trên thư mục mới (`recheck_space`), kết quả
+kiểm trên thư mục cũ bị bỏ (`check_id`), và job `volume_info` của thư mục cũ được chờ trước khi đóng nó.
 
 Quy ước như `test_transfers.py`: hai node thật trên 127.0.0.1 (`transfer_nodes`, **A nhận, B gửi**),
 hằng thời gian rút ngắn bằng `fast`. Chờ theo điều kiện (`wait_until`), không ngủ cố định trừ khi kiểm
@@ -571,7 +574,9 @@ async def test_set_receive_dir_new_offer_lands_in_new_dir_and_old_closed(transfe
     await wait_until(renamed, 10, "không đổi tên được thư mục nhận cũ (còn handle mở)")
 
 
-BUSY_CASES = ["offer-cho-hoi", "dang-nhan", "noi-lai", "khoi-phuc-cho-noi-lai", "dang-discard"]
+# C1c: "offer-cho-hoi" đã bỏ khỏi đây: `offer` chưa nhận không còn làm bận (spec mục 4.3), xem
+# `test_change_dir_with_pending_offer_dialog_then_accept_lands_in_new_dir`.
+BUSY_CASES = ["dang-nhan", "noi-lai", "khoi-phuc-cho-noi-lai", "dang-discard"]
 
 
 @pytest.mark.slow
@@ -587,20 +592,16 @@ async def test_set_receive_dir_busy(
     tmp_path,
     monkeypatch,
 ):
-    """Còn lượt nhận (mọi pha), hàng đĩa còn sống hay đang `discard` → `ReceiveDirBusy`, không mở thư
-    mục mới, không đổi gì (RAM lẫn `settings.json`)."""
+    """Còn lượt nhận đã chấp nhận (đang nhận, chờ nối lại, khôi phục), hàng đĩa còn sống hay đang
+    `discard` → `ReceiveDirBusy`, không mở thư mục mới, không đổi gì (RAM lẫn `settings.json`)."""
     new = tmp_path / "nhan-moi"
     release = None
-    if case in ("offer-cho-hoi", "dang-nhan", "noi-lai"):
-        opts = {"auto_accept": False} if case == "offer-cho-hoi" else {}
-        net = await transfer_nodes(opts, {"rate_limit": SLOW_RATE})
+    if case in ("dang-nhan", "noi-lai"):
+        net = await transfer_nodes({}, {"rate_limit": SLOW_RATE})
         A, B = net.A, net.B
         key = await B.transfers.send(A.id, [make_file(net.src, "f.bin", 24 * MiB)])
         akey = recv_key(net, key.transfer_id)
-        if case == "offer-cho-hoi":
-            await A.trec.wait_kind("OfferReceived", key.transfer_id)
-        else:
-            await wait_status(A, akey, "transferring")
+        await wait_status(A, akey, "transferring")
         if case == "noi-lai":
 
             async def unreachable(*args, **kwargs):
@@ -672,6 +673,303 @@ async def test_set_receive_dir_busy(
         assert same_path(root2, new)
 
 
+# --- C1c: đổi thư mục khi chỉ còn `offer` chưa nhận ------------------------------------------------
+
+
+class VolumeSeam:
+    """Vá `ReceiveDir.volume_info`: chặn (`hold`) hay đổi kết quả (`set_free`) theo thư mục nhận.
+
+    Mỗi lần gọi xong (kể cả lỗi) ghi mốc `("vi_done", khóa đường dẫn)` vào `spy` nếu có, để so thứ
+    tự với `("close", rd)` của `RdSpy`.
+    """
+
+    def __init__(self, monkeypatch, spy: RdSpy | None = None) -> None:
+        self.spy = spy
+        self.holds: dict[str, Gate] = {}
+        self.free: dict[str, int] = {}
+        self.calls: list[str] = []
+        real = storage.ReceiveDir.volume_info
+        seam = self
+
+        def volume_info(rd):
+            key = RdSpy._key(rd.root)
+            seam.calls.append(key)
+            gate = seam.holds.get(key)
+            if gate is not None:
+                gate.wait()
+            try:
+                info = real(rd)
+            finally:
+                if seam.spy is not None:
+                    seam.spy.add("vi_done", key)
+            if key in seam.free:
+                return storage.VolumeInfo(
+                    fs_type=info.fs_type, max_file_size=info.max_file_size, free_bytes=seam.free[key]
+                )
+            return info
+
+        monkeypatch.setattr(storage.ReceiveDir, "volume_info", volume_info)
+
+    def hold(self, path) -> Gate:
+        gate = Gate()
+        self.holds[RdSpy._key(path)] = gate
+        return gate
+
+    def set_free(self, path, free: int) -> None:
+        self.free[RdSpy._key(path)] = free
+
+    def count(self, path) -> int:
+        return self.calls.count(RdSpy._key(path))
+
+
+async def test_change_dir_with_pending_offer_dialog_then_accept_lands_in_new_dir(
+    transfer_nodes, rd_spy, tmp_path, monkeypatch
+):
+    """Hộp hỏi đang mở (`offer` chưa nhận) → đổi thư mục được, không hỏi lại; chỗ trống được kiểm lại
+    trên thư mục mới; bấm Nhận → file nằm trong thư mục mới; thư mục cũ đóng."""
+    vol = VolumeSeam(monkeypatch)
+    net = await transfer_nodes({"auto_accept": False})
+    A, B = net.A, net.B
+    [old_rd] = rd_spy.of_root(net.receive_dir)
+    src = make_file(net.src, "f.bin", 1000)
+    key = await B.transfers.send(A.id, [src])
+    offer = await A.trec.wait_kind("OfferReceived", key.transfer_id)
+    assert A.transfers.receive_dir_busy() is False, "offer chưa nhận không làm bận"
+    new = tmp_path / "nhan-moi"
+    root = await A.set_receive_dir(new)
+    assert same_path(root, new)
+    assert on_disk(A.dir)["receive_dir"] == str(root)
+    await wait_until(lambda: vol.count(new) >= 1, 10, "chưa kiểm lại chỗ trống trên thư mục mới")
+    A.transfers.decide(offer.key, True)
+    fin = await A.trec.wait_finished(key.transfer_id, 30)
+    assert str(fin.result) == "done", fin
+    assert (new / "f.bin").read_bytes() == src.read_bytes()
+    assert not (net.receive_dir / "f.bin").exists()
+    assert len(A.trec.of("OfferReceived", key.transfer_id)) == 1, "không được hỏi người dùng lần hai"
+    await wait_until(lambda: old_rd.closed, 10, "thư mục nhận cũ chưa được đóng")
+    [new_rd] = rd_spy.of_root(new)
+    assert not new_rd.closed
+
+
+async def test_change_dir_accept_while_rechecking_applied_after_check(
+    transfer_nodes, rd_spy, tmp_path, monkeypatch
+):
+    """Bấm Nhận lúc lần kiểm trên thư mục mới chưa xong: chỉ được ghi nhận (chưa nhận gì), nhận ngay
+    khi kết quả đủ chỗ về; file vào thư mục mới."""
+    vol = VolumeSeam(monkeypatch)
+    net = await transfer_nodes({"auto_accept": False})
+    A, B = net.A, net.B
+    src = make_file(net.src, "f.bin", 1000)
+    key = await B.transfers.send(A.id, [src])
+    offer = await A.trec.wait_kind("OfferReceived", key.transfer_id)
+    new = tmp_path / "nhan-moi"
+    gate = vol.hold(new)
+    try:
+        await A.set_receive_dir(new)
+        await wait_until(gate.hit.is_set, 10, "chưa kiểm lại chỗ trống trên thư mục mới")
+        A.transfers.decide(offer.key, True)
+        await asyncio.sleep(0.3)
+        assert A.trec.finished(key.transfer_id) is None
+        assert "transferring" not in A.trec.statuses(key.transfer_id)
+        assert not (new / ".teleport" / key.transfer_id).exists(), "chưa có kết quả kiểm thì chưa nhận"
+    finally:
+        gate.release.set()
+    fin = await A.trec.wait_finished(key.transfer_id, 30)
+    assert str(fin.result) == "done", fin
+    assert (new / "f.bin").read_bytes() == src.read_bytes()
+    assert len(A.trec.of("OfferReceived", key.transfer_id)) == 1
+
+
+async def test_change_dir_with_pending_offer_new_dir_full_rejects(transfer_nodes, tmp_path, monkeypatch):
+    """Thư mục mới không đủ chỗ cho `offer` đang hỏi → từ chối `no_space` như lần kiểm đầu (hộp hỏi tự
+    đóng nhờ `TransferFinished`), máy gửi thấy `rejected_no_space`; Nhận bấm muộn không làm gì."""
+    vol = VolumeSeam(monkeypatch)
+    net = await transfer_nodes({"auto_accept": False})
+    A, B = net.A, net.B
+    key = await B.transfers.send(A.id, [make_file(net.src, "f.bin", 1000)])
+    offer = await A.trec.wait_kind("OfferReceived", key.transfer_id)
+    new = tmp_path / "nhan-moi"
+    vol.set_free(new, 10)
+    await A.set_receive_dir(new)
+    fin_a = await A.trec.wait_finished(key.transfer_id, 15)
+    fin_b = await B.trec.wait_finished(key.transfer_id, 15)
+    assert str(fin_a.result) == "rejected_no_space", fin_a
+    assert str(fin_b.result) == "rejected_no_space" and fin_b.by_peer is True, fin_b
+    A.transfers.decide(offer.key, True)
+    await asyncio.sleep(0.2)
+    assert not (new / ".teleport" / key.transfer_id).exists()
+    assert len(A.trec.of("OfferReceived", key.transfer_id)) == 1
+
+
+async def test_replace_dir_inside_event_after_deferred_accept_still_rechecks(
+    transfer_nodes, tmp_path, monkeypatch
+):
+    """Trong `on_transfer_event` của `OfferReceived` (đang thực hiện hành động: lời gọi engine bị hoãn),
+    gọi `decide(True)` rồi `replace_receive_dir(rd mới)`. Lần kiểm lại phải chạy **trước** `decide` đã
+    hoãn, nên Nhận chỉ được ghi nhận; thư mục mới thiếu chỗ → lượt bị `reject{no_space}`, không tạo
+    thư mục tạm ở đâu cả."""
+    vol = VolumeSeam(monkeypatch)
+    net = await transfer_nodes({"auto_accept": False})
+    A, B = net.A, net.B
+    new = tmp_path / "nhan-moi"
+    vol.set_free(new, 10)
+    new_rd = storage.ReceiveDir.open(new)
+    errors: list[BaseException] = []
+    fired: list[object] = []
+
+    def hook(update) -> None:
+        if type(update).__name__ != "OfferReceived" or fired:
+            return
+        fired.append(update)
+        try:
+            A.transfers.decide(update.key, True)
+            A.transfers.replace_receive_dir(new_rd)
+        except BaseException as e:  # báo ở luồng test, không nuốt
+            errors.append(e)
+
+    A.trec.hooks.append(hook)
+    try:
+        key = await B.transfers.send(A.id, [make_file(net.src, "f.bin", 1000)])
+        fin_a = await A.trec.wait_finished(key.transfer_id, 15)
+        fin_b = await B.trec.wait_finished(key.transfer_id, 15)
+    finally:
+        if errors and not new_rd.closed:
+            new_rd.close()
+    assert errors == [], errors
+    assert same_path(A.transfers.receive_dir, new)
+    assert str(fin_a.result) == "rejected_no_space", fin_a
+    assert str(fin_b.result) == "rejected_no_space" and fin_b.by_peer is True, fin_b
+    assert not (new / ".teleport" / key.transfer_id).exists(), "không được tạo thư mục tạm ở thư mục mới"
+    assert not (net.receive_dir / ".teleport" / key.transfer_id).exists()
+    assert len(A.trec.of("OfferReceived", key.transfer_id)) == 1
+
+
+@pytest.mark.parametrize("case", ["chua-tao-tam", "dang-nhan"])
+async def test_change_dir_with_accepted_receive_busy(case, transfer_nodes, tmp_path, monkeypatch):
+    """Người dùng đã bấm Nhận (kể cả khi thư mục tạm chưa tạo xong) → bận: `ReceiveDirBusy`, không mở
+    thư mục mới, không đổi gì."""
+    release = None
+    if case == "chua-tao-tam":
+        gate = Gate()
+        real_create = storage.ReceiveDir.create_temp
+
+        def create_temp(rd, transfer_id, record):
+            gate.wait()
+            return real_create(rd, transfer_id, record)
+
+        monkeypatch.setattr(storage.ReceiveDir, "create_temp", create_temp)
+        release = gate.release.set
+    net = await transfer_nodes({"auto_accept": False}, {"rate_limit": SLOW_RATE})
+    A, B = net.A, net.B
+    key = await B.transfers.send(A.id, [make_file(net.src, "f.bin", 24 * MiB)])
+    offer = await A.trec.wait_kind("OfferReceived", key.transfer_id)
+    A.transfers.decide(offer.key, True)
+    new = tmp_path / "nhan-moi"
+    try:
+        if case == "chua-tao-tam":
+            await wait_until(gate.hit.is_set, 10, "create_temp chưa chạy")
+        else:
+            await wait_status(A, recv_key(net, key.transfer_id), "transferring")
+        assert A.transfers.receive_dir_busy() is True
+        before = on_disk(A.dir)
+        with pytest.raises(node_mod.ReceiveDirBusy):
+            await A.set_receive_dir(new)
+        assert not new.exists(), "bận thì không được mở (tạo) thư mục mới"
+        assert same_path(A.transfers.receive_dir, net.receive_dir)
+        assert on_disk(A.dir) == before
+    finally:
+        if release is not None:
+            release()
+    A.transfers.cancel(recv_key(net, key.transfer_id))
+    await A.trec.wait_finished(key.transfer_id, 30)
+
+
+async def test_old_volume_info_job_does_not_close_new_dir(transfer_nodes, rd_spy, tmp_path, monkeypatch):
+    """`volume_info` của thư mục cũ còn chạy lúc đổi (offer đang kiểm chỗ trống, chưa làm bận):
+    thư mục cũ chỉ đóng sau khi job đó xong, thư mục mới không bị đóng; kết quả của nó (giả là hết chỗ)
+    về **trước** kết quả kiểm trên thư mục mới mà vẫn bị bỏ (`check_id` cũ); offer được hỏi đúng một
+    lần theo kết quả của thư mục mới."""
+    vol = VolumeSeam(monkeypatch, rd_spy)
+    net = await transfer_nodes({"auto_accept": False})
+    A, B = net.A, net.B
+    [old_rd] = rd_spy.of_root(net.receive_dir)
+    old_gate = vol.hold(net.receive_dir)
+    vol.set_free(net.receive_dir, 0)  # nếu kết quả cũ được dùng, offer bị từ chối `no_space`
+    new = tmp_path / "nhan-moi"
+    new_gate = vol.hold(new)
+    src = make_file(net.src, "f.bin", 1000)
+    key = await B.transfers.send(A.id, [src])
+    try:
+        await wait_until(old_gate.hit.is_set, 10, "chưa kiểm chỗ trống trên thư mục cũ")
+        assert A.trec.of("OfferReceived", key.transfer_id) == []
+        assert A.transfers.receive_dir_busy() is False, "offer đang kiểm chỗ trống không làm bận"
+        root = await A.set_receive_dir(new)
+        assert same_path(root, new)
+        await wait_until(new_gate.hit.is_set, 10, "chưa kiểm lại chỗ trống trên thư mục mới")
+        await asyncio.sleep(0.2)
+        assert not old_rd.closed, "job volume_info của thư mục cũ chưa xong: chưa được đóng"
+        [new_rd] = rd_spy.of_root(new)
+        assert not new_rd.closed
+
+        old_gate.release.set()  # kết quả cũ (hết chỗ) về trước, lúc offer vẫn đang chờ kết quả mới
+        await wait_until(lambda: old_rd.closed, 10, "thư mục nhận cũ chưa được đóng sau khi job xong")
+        old_key = RdSpy._key(net.receive_dir)
+        assert rd_spy.index("vi_done", old_key) < rd_spy.index("close", old_rd), rd_spy.events
+        await asyncio.sleep(0.3)  # cho kết quả cũ kịp tới engine
+        assert A.trec.finished(key.transfer_id) is None, "kết quả kiểm cũ (hết chỗ) phải bị bỏ"
+        assert A.trec.of("OfferReceived", key.transfer_id) == []
+        assert not new_rd.closed
+    finally:
+        old_gate.release.set()
+        new_gate.release.set()
+    offer = await A.trec.wait_kind("OfferReceived", key.transfer_id)
+    A.transfers.decide(offer.key, True)
+    fin = await A.trec.wait_finished(key.transfer_id, 30)
+    assert str(fin.result) == "done", fin
+    assert (new / "f.bin").read_bytes() == src.read_bytes()
+    assert len(A.trec.of("OfferReceived", key.transfer_id)) == 1
+    assert not new_rd.closed
+
+
+async def test_old_volume_info_job_timed_out_still_delays_close(
+    transfer_nodes, rd_spy, tmp_path, monkeypatch
+):
+    """Như trên, nhưng lần kiểm trên thư mục cũ đã hết hạn chờ (`DISK_OP_TIMEOUT`) trong khi job
+    `volume_info` của nó vẫn chạy trong thread: thư mục cũ vẫn chỉ đóng sau khi job đó `settled()`
+    (job được tính vào việc chờ, không chỉ task đang chờ nó)."""
+    vol = VolumeSeam(monkeypatch, rd_spy)
+    net = await transfer_nodes({"auto_accept": False})
+    A, B = net.A, net.B
+    [old_rd] = rd_spy.of_root(net.receive_dir)
+    gate = vol.hold(net.receive_dir)
+    src = make_file(net.src, "f.bin", 1000)
+    # Hạn ngắn chỉ trong lúc kiểm chỗ trống (job cũ bị chặn, job mới chạy ngay); trả lại trước `decide`.
+    monkeypatch.setattr(transfers_mod, "DISK_OP_TIMEOUT", 1.0)
+    key = await B.transfers.send(A.id, [src])
+    new = tmp_path / "nhan-moi"
+    try:
+        await wait_until(gate.hit.is_set, 10, "chưa kiểm chỗ trống trên thư mục cũ")
+        root = await A.set_receive_dir(new)
+        assert same_path(root, new)
+        offer = await A.trec.wait_kind("OfferReceived", key.transfer_id)
+        await asyncio.sleep(1.5)  # hạn chờ của lần kiểm cũ đã qua; job vẫn kẹt ở cổng
+        monkeypatch.setattr(transfers_mod, "DISK_OP_TIMEOUT", 60.0)
+        assert not old_rd.closed, "job volume_info cũ còn chạy trong thread: chưa được đóng thư mục cũ"
+        [new_rd] = rd_spy.of_root(new)
+        assert not new_rd.closed
+    finally:
+        gate.release.set()
+    await wait_until(lambda: old_rd.closed, 10, "thư mục nhận cũ chưa được đóng sau khi job xong")
+    old_key = RdSpy._key(net.receive_dir)
+    assert rd_spy.index("vi_done", old_key) < rd_spy.index("close", old_rd), rd_spy.events
+    assert len(A.trec.of("OfferReceived", key.transfer_id)) == 1
+    A.transfers.decide(offer.key, True)
+    fin = await A.trec.wait_finished(key.transfer_id, 30)
+    assert str(fin.result) == "done", fin
+    assert (new / "f.bin").read_bytes() == src.read_bytes()
+    assert not new_rd.closed
+
+
 async def test_set_receive_dir_unavailable_keeps_old(transfer_nodes, tmp_path):
     net = await transfer_nodes()
     A = net.A
@@ -701,9 +999,10 @@ async def test_set_receive_dir_without_way_to_ask_is_value_error(node_factory, t
     assert not (tmp_path / "nhan").exists()
 
 
-async def test_offer_during_open_raises_busy_and_new_dir_closed(transfer_nodes, rd_spy, tmp_path):
-    """Kiểm lại sau `await`: `offer` tới trong lúc đang mở thư mục mới → `ReceiveDirBusy`, thư mục
-    mới được đóng, không đổi gì; `offer` đó vẫn nhận vào thư mục cũ."""
+async def test_offer_during_open_rechecked_on_new_dir(transfer_nodes, rd_spy, tmp_path):
+    """C1c (thay cho bản C1 “offer tới lúc đang mở → bận”): `offer` chưa nhận tới trong lúc đang mở
+    thư mục mới không làm bận; đổi xong, offer được kiểm lại trên thư mục mới, không hỏi lần hai, và
+    nhận vào thư mục mới."""
     net = await transfer_nodes({"auto_accept": False})
     A, B = net.A, net.B
     new = tmp_path / "nhan-moi"
@@ -716,13 +1015,39 @@ async def test_offer_during_open_raises_busy_and_new_dir_closed(transfer_nodes, 
         offer = await A.trec.wait_kind("OfferReceived", key.transfer_id)
     finally:
         gate.release.set()
+    root = await task
+    assert same_path(root, new)
+    A.transfers.decide(offer.key, True)
+    fin = await A.trec.wait_finished(key.transfer_id, 30)
+    assert str(fin.result) == "done", fin
+    assert (new / "f.bin").read_bytes() == src.read_bytes()
+    assert not (net.receive_dir / "f.bin").exists()
+    assert len(A.trec.of("OfferReceived", key.transfer_id)) == 1
+
+
+async def test_accept_during_open_raises_busy_and_new_dir_closed(transfer_nodes, rd_spy, tmp_path):
+    """Kiểm lại sau `await`: người dùng bấm Nhận (lượt nhận đã chấp nhận) trong lúc đang mở thư mục
+    mới → `ReceiveDirBusy`, thư mục mới được đóng, không đổi gì; lượt đó nhận vào thư mục cũ."""
+    net = await transfer_nodes({"auto_accept": False})
+    A, B = net.A, net.B
+    src = make_file(net.src, "f.bin", 1000)
+    key = await B.transfers.send(A.id, [src])
+    offer = await A.trec.wait_kind("OfferReceived", key.transfer_id)
+    new = tmp_path / "nhan-moi"
+    gate = rd_spy.hold(new)
+    task = asyncio.create_task(A.set_receive_dir(new))
+    try:
+        await wait_until(gate.hit.is_set, 10, "set_receive_dir chưa mở thư mục mới")
+        A.transfers.decide(offer.key, True)
+        await wait_until(A.transfers.receive_dir_busy, 10, "lượt đã chấp nhận chưa làm bận")
+    finally:
+        gate.release.set()
     with pytest.raises(node_mod.ReceiveDirBusy):
         await task
     await wait_until(lambda: all(rd.closed for rd in rd_spy.of_root(new)), 10, "thư mục mới chưa được đóng")
     assert len(rd_spy.of_root(new)) == 1
     assert same_path(A.transfers.receive_dir, net.receive_dir)
     assert "receive_dir" not in on_disk(A.dir)
-    A.transfers.decide(offer.key, True)
     fin = await A.trec.wait_finished(key.transfer_id, 30)
     assert str(fin.result) == "done"
     assert (net.receive_dir / "f.bin").read_bytes() == src.read_bytes()
