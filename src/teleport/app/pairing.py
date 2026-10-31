@@ -350,6 +350,14 @@ class PairingService:
             raise ValueError("không có on_prompt thì không nhận ghép đôi được (accepting=True)")
         self._gate.accepting = value
 
+    def expects_anonymous_from(self, ip: str) -> bool:
+        """Máy này đang khởi xướng ghép đôi tới `ip` (`PairingGate.initiating_to`); `ip` sai → ValueError.
+
+        Node đang ẩn vẫn nhận kết nối ẩn danh từ địa chỉ này (yêu cầu ghép đôi của máy kia khi hai
+        bên cùng chủ động).
+        """
+        return self._gate.initiating_to(ip)
+
     # ---- Bên khởi xướng --------------------------------------------------------------------
 
     async def pair_with(self, addresses: Sequence[str], port: int) -> PairingFinished:

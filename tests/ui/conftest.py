@@ -199,6 +199,30 @@ def ui_helpers():
 
 
 @pytest.fixture(autouse=True)
+def release_stuck_mouse_buttons(qapp):
+    """Mọi test ui bắt đầu với chuột đã nhả.
+
+    `QTest.mouseDClick` (Qt 6) không gửi lần nhả cuối, nên `QApplication.mouseButtons()` còn báo nút
+    trái đang giữ sang test sau, và code xét “tiêu điểm đến từ cú bấm chuột” (`MainWindow`, cuộn cột
+    trái) hiểu sai. Nhả từng nút còn giữ trên một cửa sổ tạm trước khi test chạy.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    held = QApplication.mouseButtons()
+    if held != Qt.MouseButton.NoButton:
+        sink = QWidget()
+        sink.show()
+        for button in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
+            if held & button:
+                QTest.mouseRelease(sink, button)
+        sink.close()
+        sink.deleteLater()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def qt_thread_gc(qapp):
     """Mọi test ui: GC vòng tham chiếu chỉ chạy trên thread Qt (`teleport.ui.gcguard`), như `main`.
 
