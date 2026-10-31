@@ -15,9 +15,13 @@
 # - Chỉ --onedir (COLLECT): Qt/PySide6 (LGPL-3.0) và zeroconf (LGPL-2.1) là file riêng trong _internal/
 #   mà người dùng thay được; zeroconf, PySide6, shiboken6 đóng dạng file .py/.pyd riêng
 #   (module_collection_mode "py"), không gộp vào kho PYZ trong Teleport.exe.
-# - Chỉ đóng phần Qt mà ui dùng (QtCore, QtGui, QtWidgets, QtNetwork cho QLocalServer), plugin nền
-#   tảng qwindows và style; bỏ QtQml/QtQuick/QtPdf/QtSvg…, opengl32sw.dll, bản dịch của Qt (ui không
-#   nạp bản dịch nào của Qt) và plugin không dùng (QT_UNUSED dưới đây), trước khi kiểm giấy phép.
+# - Chỉ đóng phần Qt mà ui dùng (QtCore, QtGui, QtWidgets, QtNetwork cho QLocalServer, QtSvg cho
+#   QSvgRenderer của ui/icons.py), plugin nền tảng qwindows và style; bỏ QtQml/QtQuick/QtPdf/
+#   QtSvgWidgets…, opengl32sw.dll, bản dịch của Qt (ui không nạp bản dịch nào của Qt) và plugin không
+#   dùng (QT_UNUSED dưới đây), trước khi kiểm giấy phép.
+# - Tài sản của ui (src/teleport/ui/assets/: icon Fluent UI System Icons, MIT; font Bricolage Grotesque,
+#   OFL-1.1) đóng nguyên dạng làm file dữ liệu riêng, kèm LICENSE/OFL.txt của chúng; third_party.check
+#   xếp chúng theo SOURCE_ASSETS và dừng build nếu có file lạ trong assets/.
 # - third_party.check kiểm giấy phép mọi file thật sự đóng vào (kể cả thành phần lồng trong Qt,
 #   QT_EMBEDDED) trước EXE/COLLECT; hỏng thì xóa dist/teleport-gui cũ rồi dừng.
 import importlib.util
@@ -53,7 +57,19 @@ hiddenimports = collect_submodules("zeroconf")
 _QM_DIR = SRC_DIR / "teleport" / "ui" / "i18n"
 datas = [(str(qm), "teleport/ui/i18n") for qm in sorted(_QM_DIR.glob("*.qm"))]
 
-# Module Qt ui không dùng (ui chỉ import QtCore, QtGui, QtWidgets, QtNetwork; architecture mục 1).
+# Tài sản của ui (đọc qua importlib.resources: files("teleport.ui") / "assets" / ...). Lấy MỌI file trong
+# assets/ (không lọc theo đuôi), để file lạ lọt vào thư mục đó làm third_party.check dừng build thay vì
+# bị bỏ qua lặng lẽ; đích giữ nguyên đường dẫn tương đối với src/.
+_ASSETS_DIR = SRC_DIR / "teleport" / "ui" / "assets"
+datas += [
+    (str(f), f.parent.relative_to(SRC_DIR).as_posix())
+    for f in sorted(_ASSETS_DIR.rglob("*"))
+    if f.is_file() and "__pycache__" not in f.parts
+]
+
+# Module Qt ui không dùng. ui chỉ import QtCore, QtGui, QtWidgets, QtNetwork (QLocalServer) và QtSvg
+# (chỉ ui/icons.py, cho QSvgRenderer); dùng thêm module Qt nào thì sửa danh sách này và QT_UNUSED dưới
+# đây, rồi rà giấy phép file mới (QT_REVIEWED_FILES trong third_party.py).
 _QT_UNUSED_MODULES = [
     f"PySide6.{name}"
     for name in (
@@ -74,7 +90,6 @@ _QT_UNUSED_MODULES = [
         "QtQuickTest",
         "QtQuickWidgets",
         "QtSql",
-        "QtSvg",
         "QtSvgWidgets",
         "QtTest",
         "QtUiTools",
@@ -119,9 +134,11 @@ a = Analysis(
 pyz = PYZ(a.pure)
 
 # Phần Qt không dùng mà hook của PyInstaller vẫn gom (theo đường dẫn đích, chữ thường, dấu "/").
-# Giữ: Qt6Core/Gui/Widgets/Network, plugins/platforms/qwindows.dll, plugins/styles/. PNG đọc được
+# Giữ: Qt6Core/Gui/Widgets/Network/Svg, plugins/platforms/qwindows.dll, plugins/styles/. PNG đọc được
 # không cần plugin (có sẵn trong QtGui); icon cửa sổ và khay vẽ bằng mã lúc chạy (tray.make_icon), icon
-# của Teleport.exe là tài nguyên trong exe (teleport.ico), nên không cần plugin imageformats/iconengines.
+# SVG của ui vẽ thẳng bằng QSvgRenderer (ui/icons.py, không QIcon(đường dẫn .svg)), icon của
+# Teleport.exe là tài nguyên trong exe (teleport.ico), nên không cần plugin imageformats/iconengines
+# (kể cả qsvg.dll, qsvgicon.dll).
 QT_UNUSED = (
     "pyside6/opengl32sw.dll",  # OpenGL phần mềm (Mesa), ui không dùng OpenGL
     "pyside6/translations/*",  # bản dịch của Qt; ui chỉ nạp teleport_*.qm của mình
@@ -141,7 +158,7 @@ QT_UNUSED = (
     "pyside6/qt6pdf*.dll",
     "pyside6/qt6qml*.dll",
     "pyside6/qt6quick*.dll",
-    "pyside6/qt6svg*.dll",
+    "pyside6/qt6svgwidgets*.dll",
     "pyside6/qt6opengl*.dll",
     "pyside6/qt6virtualkeyboard*.dll",
 )

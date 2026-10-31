@@ -8,8 +8,10 @@ name = "zero-cloud-lan-teleport"
 dynamic = ["version"]
 description = "Zero-Cloud LAN Teleport — chuyển file và clipboard trực tiếp trong mạng LAN"
 readme = "README.md"
-license = "GPL-3.0-or-later"
-license-files = ["LICENSE"]
+# PEP 639: wheel chứa cả icon Fluent UI System Icons (MIT) và font Bricolage Grotesque (OFL-1.1, đóng
+# nguyên dạng file dữ liệu riêng) trong teleport/ui/assets/; docs/ke_hoach.md mục 1 (Giấy phép).
+license = "GPL-3.0-or-later AND MIT AND OFL-1.1"
+license-files = ["LICENSE", "src/teleport/ui/assets/icons/LICENSE", "src/teleport/ui/assets/fonts/OFL.txt"]
 requires-python = ">=3.12"
 dependencies = [
     "cryptography>=42",
@@ -54,8 +56,15 @@ version = { attr = "teleport.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-# Bản dịch đã biên dịch; thư mục chưa có file nào thì glob không khớp gì, build vẫn chạy.
-"teleport.ui" = ["i18n/*.qm"]
+# Bản dịch đã biên dịch (thư mục chưa có file nào thì glob không khớp gì, build vẫn chạy); icon SVG và font
+# của ui kèm file giấy phép của chúng (assets/ không có __init__.py, đọc qua importlib.resources).
+"teleport.ui" = [
+    "i18n/*.qm",
+    "assets/icons/*.svg",
+    "assets/icons/LICENSE",
+    "assets/fonts/*.ttf",
+    "assets/fonts/OFL.txt",
+]
 
 [tool.ruff]
 line-length = 110

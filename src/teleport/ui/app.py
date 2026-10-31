@@ -2,7 +2,8 @@
 
 Luồng khởi động (spec P4-3 mục 4): phân tích tham số (`--config-dir D`, `--background`,
 `--selftest`); thư mục cấu hình = `--config-dir` › `TELEPORT_HOME` › `paths.config_dir()`, tuyệt
-đối; dựng `QApplication` (`setQuitOnLastWindowClosed(False)`); i18n, theme; `SingleInstance.acquire`;
+đối; dựng `QApplication` (`setQuitOnLastWindowClosed(False)`); i18n, font điểm nhấn
+(`ui.fonts.install`, lỗi thì dùng font hệ thống), theme; `SingleInstance.acquire`;
 log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node trong `bridge.NodeHost` nếu máy
 đã có `device.crt`. Chưa có thì cửa sổ hiện màn “Bắt đầu” (spec hackathon mục 10 A1): chưa bấm
 “Bắt đầu” thì không chạy node, không lấy `node.lock`, không quảng bá gì; bấm thì chạy node và
@@ -85,6 +86,13 @@ Ctrl+C ở cửa sổ dòng lệnh (khi chạy `python -m teleport.ui`): handler
 hỏi lại (`request_quit(confirm=False)`) bằng `QTimer.singleShot(0, …)` (không gọi thẳng giữa
 chừng một slot Qt); một `QTimer` rỗng 200 ms cho Python có dịp chạy handler trong lúc Qt giữ vòng lặp.
 
+**`--selftest`** (cho CI và bản exe): dựng mọi thứ ở trên mà không hiện, không lấy khóa, không mở
+mạng; thêm kiểm tài sản đóng gói: lỗi (mã 1) khi thiếu file font điểm nhấn hay Qt từ chối nó
+(`fonts.last_error()` là `MISSING`/`REJECTED`; nạp được mà không thấy tên family thì vẫn qua, vì
+nền `offscreen` khác nhau giữa các hệ điều hành) và khi icon `checkmark_circle` vẽ ra rỗng. Khi
+chạy từ bản đóng gói (`sys.frozen`) thì kiểm thêm `QFontInfo(font_for(SECTION)).styleName()` là
+“Medium” và của TITLE là “Bold” (instance thật của font variable, không đậm giả).
+
 Khi `sys.stderr is None` (exe windowed) thì không in gì và không lỗi: argparse tự bỏ qua, log
 không có handler ra stderr.
 """
@@ -109,7 +117,7 @@ from types import FrameType
 from typing import cast
 
 from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QFontInfo
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
@@ -120,7 +128,7 @@ from teleport.app.node import NodeEvent
 from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
-from teleport.ui import errorlog, i18n, send, texts, theme
+from teleport.ui import errorlog, fonts, i18n, icons, send, texts, theme
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.gcguard import GcGuard
@@ -854,10 +862,32 @@ def _application() -> QApplication:
     return QApplication([sys.argv[0] if sys.argv and sys.argv[0] else "teleport-gui"])
 
 
+def _assets_ok() -> bool:
+    """Phần tài sản của `--selftest`: font điểm nhấn và một icon (xem docstring module)."""
+    fonts.install()
+    error = fonts.last_error()
+    if error in (fonts.MISSING, fonts.REJECTED):
+        log.error("selftest: font điểm nhấn lỗi (%s)", error)
+        return False
+    if getattr(sys, "frozen", False):
+        weights = {theme.TextStyle.SECTION: "Medium", theme.TextStyle.TITLE: "Bold"}
+        for style, expected in weights.items():
+            actual = QFontInfo(theme.font_for(style)).styleName()
+            if actual != expected:
+                log.error("selftest: %s là %r, cần %r", style.name, actual, expected)
+                return False
+    if icons.pixmap("checkmark_circle", 20, theme.tokens(False).success).isNull():
+        log.error("selftest: không vẽ được icon")
+        return False
+    return True
+
+
 def _selftest(app: QApplication) -> int:
-    """Dựng i18n, theme, cửa sổ, menu khay, danh sách lượt mà không hiện; không lấy khóa, không mở mạng."""
+    """Kiểm tài sản, dựng i18n, theme, cửa sổ, khay, danh sách lượt mà không hiện; không khóa, không mạng."""
     try:
         i18n.install(app)
+        if not _assets_ok():
+            return EXIT_ERROR
         theme.apply(app)
         window = MainWindow()
         tray = Tray()
@@ -943,6 +973,7 @@ def main(argv: list[str] | None = None) -> int:
 def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
     """Phần của `main` sau khi có `QApplication` (ngoài `--selftest`), chạy trong `GcGuard`."""
     i18n.install(app)
+    fonts.install()  # lỗi thì `theme.font_for` rơi về font hệ thống
     theme.apply(app)
     try:
         instance = SingleInstance.acquire(config_dir)
