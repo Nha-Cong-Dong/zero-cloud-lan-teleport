@@ -9,7 +9,7 @@ Viết từ spec, không từ code:
   của mục 2.4; góc trên trái số nguyên (L1).
 - T-P: `DiscoverPage` với `DeviceListModel` thật, Qt `offscreen`. Thứ tự chọn dạng theo M4: TOO_MANY →
   NO_ROOM → PREFERENCE → RADAR. Câu gợi ý theo M5. Bấm đúp theo M3: các cách bấm đúp chép từ
-  `DCLICK_WAYS` của `tests/ui/test_radar.py` (không import được file test khác), giữa các kiểu bấm vá
+  `DCLICK_WAYS` của `tests/ui/test_conversations.py` (không import được file test khác), giữa các kiểu bấm vá
   `discover._now` tiến quá `doubleClickInterval`.
 - T-P6 (AC7) theo H5: mở trang bằng `discover_button`.
 - T-M: vá seam `motion._query_client_area_animation` (M6) và `sys.platform`.
@@ -64,7 +64,7 @@ TIP_PAIRED = "Đã ghép đôi"
 TIP_CONNECTED = "đã kết nối"
 TIP_ONLINE = "đang trong mạng"
 
-# tests/ui/test_radar.py, `DCLICK_WAYS` (spec M3): ba chuỗi sự kiện của một lần bấm đúp.
+# tests/ui/test_conversations.py, `DCLICK_WAYS` (spec M3): ba chuỗi sự kiện của một lần bấm đúp.
 DCLICK_WAYS = ("qtest_click_then_dclick", "manual_press_dblclick", "manual_dblclick_without_second_press")
 
 PREFIX = "[x]"  # translator giả, như tests/ui/test_i18n_theme.py
@@ -198,7 +198,8 @@ def send_mouse(target, kind, pos, button, buttons) -> None:
 
 
 def double_click(target, pos, way: str) -> None:
-    """Một lần bấm đúp chuột trái tại `pos` của `target`, theo một trong `DCLICK_WAYS` (test_radar.py)."""
+    """Một lần bấm đúp chuột trái tại `pos` của `target`, theo một trong `DCLICK_WAYS`
+    (`test_conversations.py`)."""
     left, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
     if way == "qtest_click_then_dclick":
         QTest.mouseClick(target, left, Qt.KeyboardModifier.NoModifier, pos)
@@ -1195,7 +1196,7 @@ def test_escape_also_hides_address_error(win, qtbot):
 def test_escape_on_bubble_goes_back(win, qtbot):
     from teleport.ui.main_window import Page
 
-    win.radar.model.reset([view("May-X")])
+    win.devices.reset([view("May-X")])
     open_discover(qtbot, win)
     assert isinstance(QApplication.focusWidget(), type(win.discover.canvas.bubbles()[0]))
     QTest.keyClick(QApplication.focusWidget(), Qt.Key.Key_Escape)
@@ -1628,7 +1629,7 @@ def test_capacity_eight_devices_at_default_window_size(win, qtbot, paired_count)
     """AC4: 980x660, 8 máy, số máy đã ghép 0–8 → RADAR, 8 bong bóng, không chồng (info_bar ẩn)."""
     from teleport.ui.discover import ViewMode
 
-    win.radar.model.reset([view(f"May-{i}", paired=i < paired_count) for i in range(8)])
+    win.devices.reset([view(f"May-{i}", paired=i < paired_count) for i in range(8)])
     open_discover(qtbot, win)
     page = win.discover
     assert page.info_bar.isHidden()
@@ -1646,7 +1647,7 @@ def test_capacity_three_devices_at_minimum_window_size(win, qtbot, count):
 
     win.resize(MIN_SIZE)
     settle(qtbot)
-    win.radar.model.reset([view(f"May-{i}", paired=i == 0) for i in range(count)])
+    win.devices.reset([view(f"May-{i}", paired=i == 0) for i in range(count)])
     open_discover(qtbot, win)
     assert win.discover.view_mode is ViewMode.RADAR, win.discover.list_reason
     assert_no_overlap(win.discover)
@@ -1658,7 +1659,7 @@ def test_eight_devices_at_minimum_window_size_is_radar_or_no_room(win, qtbot):
 
     win.resize(MIN_SIZE)
     settle(qtbot)
-    win.radar.model.reset([view(f"May-{i}") for i in range(8)])
+    win.devices.reset([view(f"May-{i}") for i in range(8)])
     open_discover(qtbot, win)
     page = win.discover
     if page.view_mode is ViewMode.RADAR:
@@ -1833,7 +1834,7 @@ def waves(monkeypatch):
 
 
 def test_waves_run_on_open_and_stop_on_minimize_back_and_list(win, qtbot, waves):
-    win.radar.model.reset([view("May-1")])
+    win.devices.reset([view("May-1")])
     open_discover(qtbot, win)
     canvas = win.discover.canvas
     qtbot.waitUntil(lambda: canvas.wave_running, timeout=2000)
@@ -1860,7 +1861,7 @@ def test_waves_stop_when_window_hidden_to_tray(win, qtbot, waves):
 
 def test_waves_stop_by_themselves_and_restart_when_list_empties_or_fills(win, qtbot, waves):
     waves.set_total(40, 80)
-    model = win.radar.model
+    model = win.devices
     model.reset([view("May-1")])
     open_discover(qtbot, win)
     canvas = win.discover.canvas
@@ -1880,7 +1881,7 @@ def test_waves_never_run_when_system_disables_animations(win, qtbot, waves):
     open_discover(qtbot, win)
     for step in range(6):
         seen.append(canvas.wave_running)
-        win.radar.model.reset([view("May-1")] if step % 2 == 0 else [])
+        win.devices.reset([view("May-1")] if step % 2 == 0 else [])
         settle(qtbot)
         seen.append(canvas.wave_running)
     win.showMinimized()

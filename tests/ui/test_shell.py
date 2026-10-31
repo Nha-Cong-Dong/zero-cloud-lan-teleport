@@ -217,6 +217,7 @@ def test_running_window_shows_device_name_and_receive_dir(gui, gui_wait, config_
 
     def script(run):
         yield gui_wait(lambda: run.windows and host_started(run), 15, "node chạy")
+        run.window.resize(980, 660)  # spec B2 2.6: hẹp hơn 820 px thì cột trái thu gọn, tên máy ẩn
         yield gui_wait(lambda: name in ui_helpers.all_text(run.window), 3, "tên máy hiện trên cửa sổ")
         # Spec B1 mục 12.20: chân “Lưu vào” cắt giữa đường dẫn dài (chữ hiện có “…”), nên đường dẫn
         # đầy đủ kiểm ở mô tả trợ năng của nhãn, không ở chữ hiện.

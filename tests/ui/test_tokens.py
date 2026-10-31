@@ -601,6 +601,91 @@ def test_focus_ring_color_reaches_3_on_surface_raised(dark, accent):
     assert ratio >= NON_TEXT_MIN, f"{_hex(ring)} trên {_hex(tok.surface_raised)}: {ratio:.2f}"
 
 
+# spec B2, T-C (mục 2.9 + 12.17): danh sách cuộc trò chuyện ở cột trái. Nền hàng: `sidebar` (thường),
+# `selected` (đang chọn), trộn 50% `sidebar`/`selected` (rê chuột). Chữ: dòng phụ BUSY `accent_text`,
+# tên `text`, dòng phụ/giờ `text_muted`. Không phải chữ: chấm/vòng trạng thái, viền thả `accent_strong`,
+# icon cảnh báo `warning`/`danger`, viền tiêu điểm `focus_ring_color`.
+B2_TEXT_PAIRS: dict[str, tuple[str, ...]] = {
+    "accent_text": ("sidebar", "selected"),
+    "text": ("selected",),
+    "text_muted": ("selected",),
+}
+B2_NON_TEXT_PAIRS: dict[str, tuple[str, ...]] = {
+    "accent_strong": ("sidebar", "selected", "hover"),
+    "success": ("sidebar", "selected"),
+    "offline": ("sidebar", "selected"),
+    "warning": ("sidebar", "selected", "hover"),
+    "danger": ("sidebar", "selected", "hover"),
+}
+
+
+def _mix_half(a: QColor, b: QColor) -> QColor:
+    """Màu trộn 50% (nền hàng khi rê chuột, spec B2 mục 2.5)."""
+    return QColor((a.red() + b.red()) // 2, (a.green() + b.green()) // 2, (a.blue() + b.blue()) // 2)
+
+
+def _b2_background(tok, name: str) -> QColor:
+    return _mix_half(tok.sidebar, tok.selected) if name == "hover" else getattr(tok, name)
+
+
+@MODES
+@ACCENTS
+@pytest.mark.parametrize("fg_name", list(B2_TEXT_PAIRS))
+def test_b2_conversation_row_text_pairs_reach_4_5(dark, accent, fg_name):
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark, accent)
+    fg = getattr(tok, fg_name)
+    low = [
+        f"{fg_name} {_hex(fg)} / {bg} {_hex(_b2_background(tok, bg))}: "
+        f"{wcag_ratio(fg, _b2_background(tok, bg)):.2f}"
+        for bg in B2_TEXT_PAIRS[fg_name]
+        if wcag_ratio(fg, _b2_background(tok, bg)) < TEXT_MIN
+    ]
+    assert not low, f"chữ < {TEXT_MIN}:1: {low}"
+
+
+@MODES
+@ACCENTS
+@pytest.mark.parametrize("fg_name", list(B2_NON_TEXT_PAIRS))
+def test_b2_conversation_row_non_text_pairs_reach_3(dark, accent, fg_name):
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark, accent)
+    fg = getattr(tok, fg_name)
+    low = [
+        f"{fg_name} {_hex(fg)} / {bg} {_hex(_b2_background(tok, bg))}: "
+        f"{wcag_ratio(fg, _b2_background(tok, bg)):.2f}"
+        for bg in B2_NON_TEXT_PAIRS[fg_name]
+        if wcag_ratio(fg, _b2_background(tok, bg)) < NON_TEXT_MIN
+    ]
+    assert not low, f"viền/icon < {NON_TEXT_MIN}:1: {low}"
+
+
+@MODES
+@ACCENTS
+@pytest.mark.parametrize("bg_name", ["sidebar", "selected"])
+def test_b2_focus_ring_color_reaches_3_on_conversation_rows(dark, accent, bg_name):
+    """Viền tiêu điểm 2 px của hàng (và của `compact_machine`) trên nền thường và nền đang chọn."""
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark, accent)
+    ring = theme.focus_ring_color(dark)
+    bg = getattr(tok, bg_name)
+    ratio = wcag_ratio(ring, bg)
+    assert ratio >= NON_TEXT_MIN, f"{_hex(ring)} trên {bg_name} {_hex(bg)}: {ratio:.2f}"
+
+
+@MODES
+@ACCENTS
+def test_b2_drop_border_on_selected_row_is_distinct_from_selected_background(dark, accent):
+    """Lỗi soat-code A1: viền thả trên hàng đang chọn là `text`, phải ≥ 3 trên `selected`."""
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark, accent)
+    assert wcag_ratio(tok.text, tok.selected) >= NON_TEXT_MIN
+
+
 @ACCENTS
 @MODES
 def test_fusion_focus_frame_reaches_3_on_surfaces(dark, accent):

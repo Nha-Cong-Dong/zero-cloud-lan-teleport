@@ -7,7 +7,7 @@ Viết từ spec và hợp đồng PR3 → PR2 (không từ code):
 - `transfers.pair_needed` → ghép đôi; không bắt đầu được (offline, đang bận) → bỏ ngay việc chờ.
 - Việc ghép chủ động kết thúc mà không PAIRED (mọi đường: từ chối, lỗi, người dùng hủy) → bỏ việc chờ.
 - PAIRED → gửi đúng các đường dẫn đã thả.
-- `transfers.repair_requested` → ghép đôi; `radar.unpair_requested` → hộp xác nhận hủy ghép đôi.
+- `transfers.repair_requested` → ghép đôi; `conversations.unpair_requested` → hộp xác nhận hủy ghép đôi.
 - mvp mục 8: “Đang chờ ghép đôi với *A* để gửi file…” chỉ khi đang có việc chờ thật; “Chưa ghép đôi
   với *X* nên chưa gửi được…” khi `send` báo `KeyError`.
 
@@ -38,7 +38,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QMetaMethod, QObject, QUrl, Signal
+from PySide6.QtCore import QMetaMethod, QObject, Signal
 
 from teleport.app.devices import DeviceView
 from teleport.app.pairing import PairingFinished, PairingOutcome
@@ -107,7 +107,7 @@ def _connected(obj: QObject, signal) -> bool:
 
 def test_gui_app_connects_pair_then_send_signals(gui, gui_wait, config_dir):
     """Hợp đồng PR3 → PR2: đã nối `pair_needed`, `repair_requested`, `job_done`, `paired`,
-    `radar.unpair_requested`."""
+    `conversations.unpair_requested` (spec B2 12.29)."""
     a = config_dir("A", identity=False)  # màn “Bắt đầu”: GuiApp đủ dây nối, không chạy node
     seen: dict = {}
 
@@ -118,8 +118,8 @@ def test_gui_app_connects_pair_then_send_signals(gui, gui_wait, config_dir):
         seen["repair_requested"] = _connected(app.transfers, app.transfers.repair_requested)
         seen["job_done"] = _connected(app.pairing, app.pairing.job_done)
         seen["paired"] = _connected(app.pairing, app.pairing.paired)
-        radar = app.window.radar
-        seen["unpair_requested"] = _connected(radar, radar.unpair_requested)
+        conversations = app.window.conversations
+        seen["unpair_requested"] = _connected(conversations, conversations.unpair_requested)
         run.tray.quit_requested.emit()
 
     gui(["--config-dir", str(a)], script, timeout=20)
@@ -170,6 +170,10 @@ class FakeHost(QObject):
 class _FakeTransfers:
     def __init__(self) -> None:
         self.sent: list[tuple[str, list[Path]]] = []
+
+    def history(self, device_id=None):
+        """Spec B2 12.22: `TransfersController.on_started` đọc thêm lịch sử."""
+        return ()
 
     def send(self, device_id, paths):
         self.sent.append((device_id, list(paths)))
@@ -248,7 +252,7 @@ def env(qapp, tmp_path):
         send_jobs=send_jobs,
         run_sends=run_sends,
         notice=notice,
-        model=gui_app.window.radar.model,
+        model=gui_app.window.devices,
     )
     gui_app.pairing.close_all()
     gui_app.transfers.close_all()
@@ -408,7 +412,7 @@ def test_pair_needed_without_host_drops_pending(qapp, tmp_path):
 
     gui_app = ui_app.GuiApp(qapp, tmp_path)
     try:
-        gui_app.window.radar.model.reset((_view(),))
+        gui_app.window.devices.reset((_view(),))
         gui_app.transfers.request_send(B_ID, [tmp_path / "a.bin"])
         assert gui_app.transfers.pending is None
         gui_app.transfers.request_send(B_ID, [tmp_path / "a.bin"])
@@ -437,7 +441,7 @@ def test_repair_button_starts_pairing(env):
 
 def test_unpair_requested_opens_confirmation_box(env):
     env.model.reset((_view(paired=True),))
-    env.app.window.radar.unpair_requested.emit(B_ID)
+    env.app.window.conversations.unpair_requested.emit(B_ID)
     box = env.app.pairing.unpair_box
     assert box is not None and box.isVisible()
     assert "May-B" in box.text()
@@ -647,7 +651,7 @@ def _show_b_on_radar(run, gui_wait, instances: list, peer: PeerB):
     done: list = []
     run.host.call(lambda _node: fake.emit(DeviceAdded(device)), done.append)
     yield gui_wait(lambda: done, 5, "phát DeviceAdded trên loop của A")
-    model = run.window.radar.model
+    model = run.window.devices
     yield gui_wait(
         lambda: (v := model.device(peer.device_id)) is not None and v.online and not v.paired,
         10,
@@ -656,7 +660,10 @@ def _show_b_on_radar(run, gui_wait, instances: list, peer: PeerB):
 
 
 def _drop(run, device_id: str, *paths: Path) -> bool:
-    return run.window.radar.drop_files(device_id, [QUrl.fromLocalFile(str(p)) for p in paths])
+    """Spec B2 mục 8(f): danh sách cuộc trò chuyện chỉ có máy đã ghép đôi, nên không còn thả lên máy
+    chưa ghép từ giao diện; gọi thẳng `TransfersController.request_send` (“ghép rồi gửi” còn tới B2c)."""
+    run.tray.parent().transfers.request_send(device_id, list(paths))
+    return True
 
 
 def _make_file(directory: Path, name: str, size: int) -> Path:
@@ -706,7 +713,7 @@ def test_a_drop_on_unpaired_peer_pairs_then_sends_automatically(
             "B nhận xong",
         )
         seen["b"] = [str(u.result) for u in p.kinds("TransferFinished") if u.info.key.transfer_id == tid]
-        seen["paired_on_radar"] = run.window.radar.model.device(p.device_id).paired
+        seen["paired_on_radar"] = run.window.devices.device(p.device_id).paired
         seen["notice"] = app.transfers.view.notice_text()
         seen["elapsed"] = time.monotonic() - started
         run.tray.quit_requested.emit()
@@ -759,7 +766,7 @@ def test_b_code_mismatch_drops_pending_no_offer_and_next_drop_pairs_again(
         yield from _a_sends(run, gui_wait, sends)
         seen["a_sends"] = sends
         seen["b_offers"] = p.kinds("OfferReceived")
-        seen["paired_on_radar"] = run.window.radar.model.device(p.device_id).paired
+        seen["paired_on_radar"] = run.window.devices.device(p.device_id).paired
         # Lần thả sau: mở lại ghép đôi bình thường (không phải câu “Đang chờ ghép đôi…”).
         retry_until = time.monotonic() + 10
         while True:
