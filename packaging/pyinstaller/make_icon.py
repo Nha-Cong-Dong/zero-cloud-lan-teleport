@@ -1,13 +1,13 @@
 """Dựng `teleport.ico` (icon của `Teleport.exe`) từ đúng hàm vẽ icon của app, `teleport.ui.tray._draw`.
 
-Icon tự vẽ bằng mã của dự án (ô vuông bo góc xanh, mũi tên trắng), cùng giấy phép GPL-3.0-or-later
-của dự án; không dùng ảnh, font hay tài sản nào bên ngoài. Cửa sổ và khay vẽ icon lúc chạy
-(`tray.make_icon`); file .ico này chỉ để Windows Explorer, thanh tác vụ và lối tắt hiện đúng icon của
-exe (tài nguyên RT_ICON trong exe, không phải file trong `_internal/`).
+Icon là logo của dự án (SVG nhúng trong `ui/logo.py`, cùng giấy phép GPL-3.0-or-later của dự án);
+không dùng ảnh, font hay tài sản nào bên ngoài. Cửa sổ và khay vẽ icon lúc chạy (`tray.make_icon`);
+file .ico này chỉ để Windows Explorer, thanh tác vụ và lối tắt hiện đúng icon của exe (tài nguyên
+RT_ICON trong exe, không phải file trong `_internal/`).
 
 `teleport.ico` đã sinh được commit cạnh script này và `teleport-gui.spec` chỉ đọc file đó: build
-(trên CI hay tại máy) không phải chạy Qt để vẽ, nên không thêm một chỗ có thể hỏng. Sửa `_draw`
-trong `ui/tray.py` (hay nâng PySide6) thì chạy lại script này rồi commit file mới; `--check` báo
+(trên CI hay tại máy) không phải chạy Qt để vẽ, nên không thêm một chỗ có thể hỏng. Sửa logo
+(`ui/logo.py`) hay nâng PySide6 thì chạy lại script này rồi commit file mới; `--check` báo
 file đã cũ (mã thoát 1) mà không ghi gì. Chạy từ gốc repo, trong môi trường đã cài extra `gui`:
 
     python packaging/pyinstaller/make_icon.py           # ghi packaging/pyinstaller/teleport.ico

@@ -14,7 +14,7 @@ nhất (`Path` hay None); `ui.app` quyết định mở thư mục hay đưa c�
 không có khay (một số môi trường Linux, `offscreen`) thì đóng cửa sổ là thoát app. Mọi chỗ
 trong `ui` hỏi qua `Tray.is_available()`, nên vá hàm module hay vá thuộc tính lớp đều có tác dụng.
 
-Biểu tượng vẽ bằng `QPainter` trong code (`make_icon`), không có file tài nguyên, không tải gì.
+Biểu tượng là logo của dự án (`ui/logo.py`, SVG nhúng trong mã) vẽ ở nhiều cỡ (`make_icon`), không tải gì.
 Menu nhận `LanguageChange` (qua event filter) thì gọi `retranslate()`.
 """
 
@@ -22,15 +22,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import QEvent, QObject, Signal
+from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
-from teleport.ui import texts
+from teleport.ui import logo, texts
 
 _ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
-_ICON_BACKGROUND = "#0b5cad"
-_ICON_FOREGROUND = "#ffffff"
 
 
 def is_available() -> bool:
@@ -39,30 +37,8 @@ def is_available() -> bool:
 
 
 def _draw(size: int) -> QPixmap:
-    """Một ô vuông bo góc màu xanh với mũi tên trắng chỉ sang phải (gửi đi)."""
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    try:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        s = float(size)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(_ICON_BACKGROUND))
-        painter.drawRoundedRect(QRectF(0, 0, s, s), s * 0.22, s * 0.22)
-        pen = QPen(QColor(_ICON_FOREGROUND), max(1.5, s * 0.11))
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        path = QPainterPath(QPointF(s * 0.24, s * 0.5))
-        path.lineTo(QPointF(s * 0.74, s * 0.5))
-        path.moveTo(QPointF(s * 0.54, s * 0.3))
-        path.lineTo(QPointF(s * 0.76, s * 0.5))
-        path.lineTo(QPointF(s * 0.54, s * 0.7))
-        painter.drawPath(path)
-    finally:
-        painter.end()
-    return pixmap
+    """Logo của dự án cỡ `size` px (`packaging/pyinstaller/make_icon.py` cũng dựng `teleport.ico` từ đây)."""
+    return logo.pixmap(size)
 
 
 def make_icon() -> QIcon:
