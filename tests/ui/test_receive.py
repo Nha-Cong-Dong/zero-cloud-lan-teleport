@@ -120,7 +120,7 @@ def test_offer_text_uses_m6_with_display_name_and_size(gui, gui_wait, pair, peer
     raw_name = "PC　Nha⠀B"  # khoảng trắng ý tự và chữ nổi trống: hợp lệ nhưng đánh lừa mắt
     a, b, src = pair(name_b=raw_name)
     a_id = load_or_create_identity(a).device_id
-    peer = peer_node(b)
+    peer = peer_node(b, name=raw_name)  # B tự xưng đúng tên A đã lưu (A6 cập nhật tên theo hello)
     raw_file = "bao⠀cao.txt"
     f = make_file(src, raw_file, 1234)
     seen: dict = {}

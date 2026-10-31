@@ -12,6 +12,7 @@ phải tự quyết định.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import json
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ class TrustedDevice:
 class TrustStore:
     """Danh sách thiết bị đã ghép đôi, đồng bộ với `trusted.json`.
 
-    Tạo bằng `TrustStore.load(config_dir)`. `add`/`remove` ghi xuống đĩa ngay; trạng
+    Tạo bằng `TrustStore.load(config_dir)`. `add`/`rename`/`remove` ghi xuống đĩa ngay; trạng
     thái trong bộ nhớ chỉ đổi khi ghi thành công.
     """
 
@@ -129,6 +130,25 @@ class TrustStore:
         devices[device.device_id] = device
         self._save(devices)
         return device
+
+    def rename(self, device_id: str, name: str) -> TrustedDevice:
+        """Đổi tên đã lưu của một thiết bị và ghi xuống đĩa; giữ chứng chỉ, fingerprint, `paired_at`.
+
+        Tên sai → MessageError; không có `device_id` → KeyError; không ghi được →
+        TrustStoreError (RAM không đổi). Tên trùng nguyên tên đang lưu → trả mục cũ, không ghi.
+        Tên trùng tên một thiết bị khác vẫn được (người dùng phân biệt bằng mã thiết bị).
+        """
+        validate_device_name(name)
+        device = self.get(device_id)
+        if device is None:
+            raise KeyError(device_id)
+        if device.name == name:
+            return device
+        renamed = dataclasses.replace(device, name=name)
+        devices = dict(self._devices)
+        devices[device.device_id] = renamed
+        self._save(devices)
+        return renamed
 
     def remove(self, device_id: str) -> TrustedDevice:
         """Xóa một thiết bị và ghi xuống đĩa. Không có → KeyError."""

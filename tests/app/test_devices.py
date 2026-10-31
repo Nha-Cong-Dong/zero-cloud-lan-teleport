@@ -628,3 +628,168 @@ def test_rd3_resolve_device_matches_definition(case):
         with pytest.raises(AmbiguousDevice) as exc:
             resolve_device(query, views)
         assert list(exc.value.candidates) == sorted(expected, key=sort_key)
+
+
+# =================================================================================================
+# C1b: `hello.os` của máy đã ghép đôi (spec đợt C §2.2, §2.5, mục 11 Q6).
+# Máy đã ghép đôi: `os` từ `hello` đã nhớ, rồi mDNS, rồi None. Máy chưa ghép đôi: chỉ mDNS.
+# `os` từ `hello` giữ khi mất mDNS / khởi động lại mDNS, tới khi hủy ghép đôi.
+# =================================================================================================
+
+
+def test_hello_os_wins_over_mdns_for_paired():
+    r = registry(dev(ID_A, "A"))
+    r.seen(seen_dev(ID_A, "A", os="linux"))
+    assert r.get(ID_A).os == "linux"
+    assert r.set_peer_hello(ID_A, os="windows") is True
+    assert r.get(ID_A).os == "windows"
+    # mDNS báo lại HĐH khác: `hello` đã xác thực vẫn thắng.
+    r.seen(seen_dev(ID_A, "A", os="macos"))
+    assert r.get(ID_A).os == "windows"
+    # Các trường khác vẫn theo mDNS / trusted.json.
+    v = r.get(ID_A)
+    assert (v.name, v.paired, v.online, v.port) == ("A", True, True, 47474)
+
+
+def test_hello_os_used_when_paired_device_not_seen_via_mdns():
+    r = registry(dev(ID_A, "A"))
+    assert r.get(ID_A).os is None
+    assert r.set_peer_hello(ID_A, os="macos") is True
+    v = r.get(ID_A)
+    assert (v.os, v.online, v.addresses, v.port) == ("macos", False, (), None)
+
+
+def test_set_peer_hello_returns_whether_view_changed():
+    r = registry(dev(ID_A, "A"))
+    assert r.set_peer_hello(ID_A, os="linux") is True
+    assert r.set_peer_hello(ID_A, os="linux") is False  # đã nhớ đúng giá trị đó
+    assert r.set_peer_hello(ID_A, os="windows") is True
+    # mDNS đã báo đúng HĐH đó: nhớ `hello` không làm view đổi.
+    r2 = registry(dev(ID_B, "B"))
+    r2.seen(seen_dev(ID_B, "B", os="linux"))
+    before = r2.get(ID_B)
+    assert r2.set_peer_hello(ID_B, os="linux") is False
+    assert r2.get(ID_B) == before
+
+
+def test_unpaired_uses_mdns_os():
+    r = registry()
+    r.seen(seen_dev(ID_B, "B", os="linux"))
+    assert r.set_peer_hello(ID_B, os="windows") is False  # chưa ghép đôi: bỏ qua
+    assert r.get(ID_B).os == "linux"
+    assert r.set_peer_hello(ID_C, os="windows") is False  # không có view: bỏ qua
+    assert r.get(ID_C) is None
+    assert r.views() == (r.get(ID_B),)
+    # Bỏ qua hẳn, không nhớ để dùng sau: ghép đôi về sau vẫn chưa có `os` từ `hello`.
+    r.set_trusted([dev(ID_B, "B"), dev(ID_C, "C")])
+    assert r.get(ID_B).os == "linux"
+    assert r.get(ID_C).os is None
+
+
+def test_own_device_hello_ignored():
+    from teleport.app.devices import DeviceRegistry
+
+    r = DeviceRegistry(OWN_ID)
+    r.set_trusted([dev(OWN_ID, "Máy này")])
+    assert r.set_peer_hello(OWN_ID, os="linux") is False
+    assert r.get(OWN_ID) is None
+
+
+def test_os_forgotten_on_unpair():
+    r = registry(dev(ID_A, "A"), dev(ID_B, "B"))
+    r.seen(seen_dev(ID_A, "A", os="linux"))
+    r.set_peer_hello(ID_A, os="windows")
+    r.set_peer_hello(ID_B, os="macos")
+    r.set_trusted([dev(ID_B, "B")])  # hủy ghép đôi A
+    assert r.get(ID_A).os == "linux"  # chỉ còn mDNS
+    assert r.get(ID_A).paired is False
+    # Ghép đôi lại (có thể là danh tính khác cùng mã): `os` cũ từ `hello` không hồi sinh.
+    r.set_trusted([dev(ID_A, "A"), dev(ID_B, "B")])
+    assert r.get(ID_A).os == "linux"
+    r.gone(ID_A)
+    assert r.get(ID_A).os is None
+    # Máy vẫn tin cậy giữ `os` của nó.
+    assert r.get(ID_B).os == "macos"
+
+
+def test_hello_os_kept_when_trusted_set_replaced_with_same_device():
+    """Đổi tên gọi lại `set_trusted(store.devices())`: thiết bị vẫn tin cậy giữ `os` đã nhớ."""
+    r = registry(dev(ID_A, "A"))
+    r.set_peer_hello(ID_A, os="windows")
+    r.set_trusted([dev(ID_A, "A mới")])
+    v = r.get(ID_A)
+    assert (v.name, v.os) == ("A mới", "windows")
+
+
+def test_hello_os_kept_while_paired_device_offline():
+    """Q6: giữ `os` sau khi mất kết nối và mDNS, kể cả khi khởi động lại mDNS."""
+    r = registry(dev(ID_A, "A"))
+    r.seen(seen_dev(ID_A, "A", os="linux"))
+    r.set_peer_hello(ID_A, os="windows")
+    r.set_connected(ID_A, True)
+    r.set_connected(ID_A, False)
+    assert r.get(ID_A).os == "windows"
+    r.gone(ID_A)
+    v = r.get(ID_A)
+    assert (v.os, v.online, v.connected) == ("windows", False, False)
+    r.seen(seen_dev(ID_A, "A", os="linux"))
+    assert r.clear_seen() == (ID_A,)
+    v = r.get(ID_A)
+    assert (v.os, v.online) == ("windows", False)
+    assert r.views() == (v,)
+
+
+@settings(max_examples=200, deadline=None)
+@given(
+    st.lists(
+        st.one_of(
+            st.tuples(
+                st.just("hello"), st.sampled_from([ID_A, ID_B]), st.sampled_from(["windows", "linux", "x_1"])
+            ),
+            st.tuples(st.just("seen"), st.sampled_from([ID_A, ID_B]), st.sampled_from(["macos", "linux"])),
+            st.tuples(st.just("gone"), st.sampled_from([ID_A, ID_B]), st.none()),
+            st.tuples(st.just("clear"), st.none(), st.none()),
+            st.tuples(st.just("trust"), st.frozensets(st.sampled_from([ID_A, ID_B])), st.none()),
+            st.tuples(st.just("connected"), st.sampled_from([ID_A, ID_B]), st.booleans()),
+        ),
+        max_size=30,
+    )
+)
+def test_view_os_matches_definition(ops):
+    """`os` = hello đã nhớ (chỉ khi đang ghép đôi, nhớ từ lúc ghép đôi gần nhất) → mDNS → None."""
+    r = registry(dev(ID_A, "A"), dev(ID_B, "B"))
+    trusted = {ID_A, ID_B}
+    hello: dict[str, str] = {}
+    mdns: dict[str, str] = {}
+    for op, a, b in ops:
+        if op == "hello":
+            before = r.get(a)
+            changed = r.set_peer_hello(a, os=b)
+            if a in trusted:
+                hello[a] = b
+            assert changed == (before != r.get(a))
+        elif op == "seen":
+            r.seen(seen_dev(a, "N", os=b))
+            mdns[a] = b
+        elif op == "gone":
+            r.gone(a)
+            mdns.pop(a, None)
+        elif op == "clear":
+            r.clear_seen()
+            mdns.clear()
+        elif op == "trust":
+            r.set_trusted([dev(i, i[:2]) for i in sorted(a)])
+            for i in trusted - set(a):
+                hello.pop(i, None)
+            trusted = set(a)
+        else:
+            r.set_connected(a, b)
+        for i in (ID_A, ID_B):
+            v = r.get(i)
+            if i not in trusted and i not in mdns:
+                assert v is None
+                continue
+            expected = hello.get(i) if i in trusted else None
+            if expected is None:
+                expected = mdns.get(i)
+            assert v.os == expected
