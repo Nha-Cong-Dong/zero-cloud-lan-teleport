@@ -99,6 +99,9 @@ addopts = "--import-mode=importlib"
 pythonpath = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# Xóa `tmp_path` của test đạt ngay khi test xong: nhiều test truyền file hàng trăm MiB, giữ hết tới cuối
+# phiên thì /tmp của runner Linux từng hết hạn mức (Errno 122) khi chạy song song.
+tmp_path_retention_policy = "failed"
 markers = [
     "integration: cần socket thật trên 127.0.0.1 (bỏ qua bằng -m 'not integration')",
     "slow: chạy quá 1 giây (vòng lặp nhanh: -m 'not slow'; CI vẫn chạy đủ)",
