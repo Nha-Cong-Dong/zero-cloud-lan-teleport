@@ -89,8 +89,11 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Message `clipboard` trong giao thức 1 (`docs/protocol.md` mục 3.2, 3.3), thêm theo kiểu tương thích nên **không tăng số phiên bản**: bản hiện tại bỏ qua `clipboard` hợp lệ; `clipboard` sai dạng làm đóng kết nối điều khiển (rồi nối lại), trên kết nối ghép đôi thì nhận `pair_abort{invalid}`.
 - `teleport.core.clipboard`: lõi sans-IO chia và ráp clipboard (văn bản ≤ 1 MiB, ảnh PNG ≤ 10 MiB, mỗi khung ≤ 768 KiB), mảnh sai, thiếu, trùng, quá trần hay quá hạn thì bỏ clip mà không đóng kết nối, tối đa 5 clip mới mỗi giây cho mỗi thiết bị, chống vòng lặp bằng fingerprint và lọc nội dung trình quản lý mật khẩu đánh dấu nhạy cảm. Chưa đồng bộ clipboard thật giữa hai máy.
 - Lịch sử 100 lượt truyền gần nhất (cả gửi lẫn nhận), lưu trong `history.json` ở thư mục cấu hình và xóa được; giao diện sẽ hiện ở bản sau. File chỉ chứa metadata: tối đa 10 tên file đầu, kích thước, kết quả, giờ kết thúc, tên máy kia và đường dẫn đã lưu ở máy nhận, không bao giờ có nội dung file. File hỏng thì lịch sử bắt đầu lại từ rỗng.
+- Giao diện có bộ icon Fluent UI System Icons (MIT) tô màu theo theme và font điểm nhấn Bricolage Grotesque (SIL OFL 1.1) cho tiêu đề, đóng gói kèm app, không tải gì từ mạng; thiếu font thì dùng font hệ thống. `teleport-gui --selftest` kiểm thêm font và icon đã đóng gói.
+- Bản đóng gói thêm QtSvg (LGPL-3.0, như phần Qt khác) và kèm thông báo giấy phép của icon và font.
 
 ### Changed
+- Biểu thức giấy phép của gói thành `GPL-3.0-or-later AND MIT AND OFL-1.1` (PEP 639) vì gói kèm icon (MIT) và font (OFL); máy dev cần chạy lại `pip install -e .`.
 - Giao diện: cửa sổ mở ở 980x660 (nhỏ hơn nếu màn hình nhỏ); khi đang chạy thì ẩn tiêu đề lớn, radar và danh sách lượt truyền rộng bằng nhau; Tab tới các dòng chữ không còn hiện con trỏ chữ nhấp nháy.
 - Giao diện: thẻ lượt truyền mới nằm trên cùng; bên nhận phải lưu tên khác vì đã có file trùng tên thì thẻ ghi “Đã lưu thành *video-demo (1).mp4* · Đã kiểm tra toàn vẹn”; lượt dừng mà không xong thì ẩn thanh tiến độ.
 - Giao diện: ghép đôi hay hủy ghép đôi xong báo ở dải thông báo thay vì hộp phải bấm OK (khi không dùng cửa sổ Teleport nào, ví dụ cửa sổ ẩn hay bị che, thì thêm bóng thoại ở khay), nên máy nhận vừa ghép đôi chỉ còn hộp hỏi nhận file; ghép đôi lỗi vẫn hiện hộp.

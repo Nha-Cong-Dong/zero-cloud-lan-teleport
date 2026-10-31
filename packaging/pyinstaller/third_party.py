@@ -15,6 +15,11 @@ phần trong SBOM. Qt/PySide6 (bản GUI) không có SBOM trong wheel: thành ph
 từ bảng `QT_EMBEDDED` (rà theo qt_attribution.json đúng phiên bản Qt), văn bản chép sẵn trong
 `licenses/qt-<phiên bản>/`.
 
+Tài sản không phải mã (icon SVG, font) nằm trong `src/teleport/ui/assets/` không thuộc gói Python nào
+của bên thứ ba: chúng là thành phần riêng `asset:<key>` theo bảng `SOURCE_ASSETS` (nguồn, commit ghim,
+giấy phép, file giấy phép đi kèm), kiểm theo `ASSET_LICENSES` chứ không theo `APPROVED`, và được xếp
+loại trước khi tra RECORD hay mã của dự án. File trong `assets/` không khớp mục nào làm build dừng.
+
 Luật (ke_hoach mục 1, Giấy phép): mọi thứ đóng vào phải tương thích GPLv3. Gói nằm ngoài
 `APPROVED`, gói có giấy phép trong metadata khác chuỗi đã duyệt, file không biết thuộc gói nào,
 hay thành phần SBOM có giấy phép ngoài `SPDX_COMPATIBLE` đều làm build dừng với `LicenseAuditError`:
@@ -45,7 +50,9 @@ from pathlib import Path
 # Tên bản phân phối (đã chuẩn hóa) -> chuỗi giấy phép đúng như metadata của gói (License-Expression,
 # không có thì License, không có nữa thì các classifier License). Đã đối chiếu tương thích GPLv3.
 APPROVED: dict[str, str] = {
-    "zero-cloud-lan-teleport": "GPL-3.0-or-later",
+    # Wheel của dự án chứa cả icon (MIT) và font (OFL-1.1) trong teleport/ui/assets/ (PEP 639). Trong
+    # bản build PyInstaller, các file đó là thành phần tài sản riêng (SOURCE_ASSETS), không thuộc gói này.
+    "zero-cloud-lan-teleport": "GPL-3.0-or-later AND MIT AND OFL-1.1",
     "cryptography": "Apache-2.0 OR BSD-3-Clause",
     "cffi": "MIT-0",
     "pycparser": "BSD-3-Clause",
@@ -102,6 +109,78 @@ SPDX_COMPATIBLE: frozenset[str] = frozenset(
         "LicenseRef-MSVC-runtime-system-library",
     }
 )
+
+# ---- Tài sản không phải mã (icon, font) trong src/teleport/ui/assets/ ------------------------------
+# Giấy phép được chấp nhận cho tài sản trong SOURCE_ASSETS, và CHỈ cho chúng (không mở rộng cho gói,
+# SBOM hay Qt). MIT (icon) tương thích GPLv3. OFL-1.1 (font) không phải "tương thích GPLv3": file font
+# được đóng nguyên dạng, là file dữ liệu riêng kèm OFL.txt, cùng phân phối với chương trình như một tác
+# phẩm gộp (ke_hoach mục 1, Giấy phép). Muốn thêm định danh thì sửa ke_hoach mục 1 trước.
+ASSET_LICENSES: frozenset[str] = frozenset({"MIT", "OFL-1.1"})
+
+
+@dataclass(frozen=True)
+class SourceAsset:
+    """Một bộ tài sản lấy nguyên dạng từ dự án bên thứ ba, ghim theo commit.
+
+    `patterns`: mẫu đường dẫn (dấu "/", tương đối với `src/`, cũng là đường dẫn đích trong bản build)
+    của các file thuộc bộ này; `*` không vượt qua "/". `license_file`: file giấy phép đi kèm (cũng
+    phải được đóng vào, văn bản của nó vào THIRD-PARTY-NOTICES.txt).
+    """
+
+    key: str
+    name: str
+    version: str  # bản phát hành hoặc commit đã ghim ở nguồn
+    license: str  # biểu thức SPDX, kiểm theo ASSET_LICENSES
+    patterns: tuple[str, ...]
+    license_file: str
+    source_url: str  # nơi lấy đúng các file đã chép (trỏ tới commit đã ghim)
+
+
+_FLUENT_SHA = "64e5aa757d1b70c24a283256ddcb8269d0f58773"
+_GOOGLE_FONTS_SHA = "6ce172f74aa355ea43eb964fa4a91570a4d3064d"
+# Thư mục chứa tài sản, tương đối với src/. Mọi file đóng vào từ đây phải khớp một mục SOURCE_ASSETS.
+ASSETS_ROOT = "teleport/ui/assets"
+SOURCE_ASSETS: tuple[SourceAsset, ...] = (
+    SourceAsset(
+        key="fluentui-system-icons",
+        name="Fluent UI System Icons",
+        # Mỗi SVG chép nguyên văn từ assets/<Tên Thư Mục>/SVG/ic_fluent_<tên>_<cỡ>_regular.svg của commit
+        # này, đổi tên thành <tên>_<cỡ>_regular.svg; LICENSE là file LICENSE ở gốc repo cùng commit.
+        version=f"commit {_FLUENT_SHA}",
+        license="MIT",
+        patterns=(f"{ASSETS_ROOT}/icons/*.svg", f"{ASSETS_ROOT}/icons/LICENSE"),
+        license_file=f"{ASSETS_ROOT}/icons/LICENSE",
+        source_url=f"https://github.com/microsoft/fluentui-system-icons/tree/{_FLUENT_SHA}/assets",
+    ),
+    SourceAsset(
+        key="bricolage-grotesque",
+        name="Bricolage Grotesque",
+        # BricolageGrotesque.ttf là ofl/bricolagegrotesque/BricolageGrotesque[opsz,wdth,wght].ttf của
+        # commit google/fonts dưới đây (đổi tên, nội dung không đổi); OFL.txt cùng thư mục, cùng commit.
+        version=f"1.001 (font biến thiên), google/fonts commit {_GOOGLE_FONTS_SHA}",
+        license="OFL-1.1",
+        patterns=(f"{ASSETS_ROOT}/fonts/*.ttf", f"{ASSETS_ROOT}/fonts/OFL.txt"),
+        license_file=f"{ASSETS_ROOT}/fonts/OFL.txt",
+        source_url=(
+            f"https://github.com/google/fonts/tree/{_GOOGLE_FONTS_SHA}/ofl/bricolagegrotesque"
+            " (dự án gốc: https://github.com/ateliertriay/bricolage)"
+        ),
+    ),
+)
+
+
+def _match_asset(rel: str) -> tuple[SourceAsset, bool] | None:
+    """Mục SOURCE_ASSETS mà đường dẫn `rel` (tương đối với src/, dấu "/") thuộc về, và `rel` có phải
+    file giấy phép của mục đó không. Không khớp thì None. So không phân biệt hoa thường (Windows)."""
+    rel_l = rel.lower()
+    folder, _, base = rel_l.rpartition("/")
+    for asset in SOURCE_ASSETS:
+        for pattern in asset.patterns:
+            p_folder, _, p_base = pattern.lower().rpartition("/")
+            if folder == p_folder and fnmatch.fnmatchcase(base, p_base):
+                return asset, rel_l == asset.license_file.lower()
+    return None
+
 
 # Thành phần SBOM mà metadata không ghi giấy phép: tên -> (bản chính tối thiểu, SPDX, nguồn dữ kiện).
 SBOM_KNOWN_LICENSES: dict[str, tuple[int, str, str]] = {
@@ -232,22 +311,24 @@ VCRUNTIME_NOTE = (
 
 # ---- Bản GUI: Qt/PySide6 -------------------------------------------------------------------------
 # Bản phân phối mang DLL Qt (PySide6-Essentials) và phiên bản Qt mà QT_EMBEDDED đã rà. Nâng PySide6
-# thì build dừng (`qt_embedded_files`): rà lại qt_attribution.json của qtbase và pyside-setup đúng tag
-# mới, chép văn bản vào licenses/qt-<phiên bản>/ rồi sửa các hằng dưới đây và bản ghim của
-# PySide6-Essentials, shiboken6 trong constraints.txt.
+# thì build dừng (`qt_embedded_files`): rà lại qt_attribution.json của qtbase và pyside-setup, cùng
+# qt_attribution.json/REUSE.toml của qtsvg (Qt6Svg.dll) đúng tag mới, chép văn bản vào
+# licenses/qt-<phiên bản>/ rồi sửa các hằng dưới đây và bản ghim của PySide6-Essentials, shiboken6
+# trong constraints.txt.
 QT_OWNER = "pyside6-essentials"
 QT_LICENSE_VERSION = "6.12.0"
 QT_LICENSES_DIR = f"qt-{QT_LICENSE_VERSION}"
-QT_SOURCE_URL = (
-    f"https://download.qt.io/official_releases/qt/6.12/{QT_LICENSE_VERSION}/submodules/"
-    f"qtbase-everywhere-src-{QT_LICENSE_VERSION}.tar.xz"
-)
+_QT_SUBMODULES = f"https://download.qt.io/official_releases/qt/6.12/{QT_LICENSE_VERSION}/submodules/"
+# qtbase: Qt6Core/Gui/Widgets/Network.dll và plugin; qtsvg: Qt6Svg.dll (QSvgRenderer cho icon của ui).
+QT_SOURCE_URL = f"{_QT_SUBMODULES}qtbase-everywhere-src-{QT_LICENSE_VERSION}.tar.xz"
+QTSVG_SOURCE_URL = f"{_QT_SUBMODULES}qtsvg-everywhere-src-{QT_LICENSE_VERSION}.tar.xz"
 # PyPI không có sdist của PySide6-Essentials/shiboken6, nên chỉ tới gói mã nguồn chính thức của Qt.
 PYSIDE_SOURCE_URL = (
     f"https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-{QT_LICENSE_VERSION}-src/"
     f"pyside-setup-everywhere-src-{QT_LICENSE_VERSION}.tar.xz"
 )
 _QTBASE = f"https://github.com/qt/qtbase/blob/v{QT_LICENSE_VERSION}/{{}}"
+_QTSVG = f"https://github.com/qt/qtsvg/blob/v{QT_LICENSE_VERSION}/{{}}"
 _PYSIDE = f"https://github.com/pyside/pyside-setup/blob/v{QT_LICENSE_VERSION}/{{}}"
 
 # Giấy phép được chấp nhận cho thành phần lồng trong Qt/PySide6 (QT_EMBEDDED): SPDX_COMPATIBLE cộng các
@@ -282,12 +363,14 @@ QT_REVIEWED_FILES: frozenset[str] = frozenset(
         "pyside6/qt6gui.dll",
         "pyside6/qt6widgets.dll",
         "pyside6/qt6network.dll",
+        "pyside6/qt6svg.dll",  # qtsvg: rà theo REUSE.toml (v6.12.0 không có qt_attribution.json)
         "pyside6/plugins/platforms/qwindows.dll",
         "pyside6/plugins/styles/qmodernwindowsstyle.dll",
         "pyside6/qtcore.pyd",
         "pyside6/qtgui.pyd",
         "pyside6/qtwidgets.pyd",
         "pyside6/qtnetwork.pyd",
+        "pyside6/qtsvg.pyd",
         "pyside6/pyside6.abi3.dll",
         "shiboken6/shiboken6.abi3.dll",
         "shiboken6/shiboken.pyd",
@@ -307,11 +390,22 @@ MSVC_RUNTIME_NOTE = (
 # đối chiếu chuỗi trong DLL thật. Không ghi thành phần chỉ có trên hệ khác (forkfd, pixman ARM NEON,
 # macOS, X11/Wayland) hay nằm trong file không đóng vào (libjpeg của plugin qjpeg, SQLite của QtSql,
 # libdbus của QtDBus).
+# qtsvg v6.12.0 (Qt6Svg.dll) không có qt_attribution.json và không có src/3rdparty/; thành phần bên thứ ba
+# duy nhất được khai là src/svg/REUSE.toml (và licenseRule.json): qsvghandler.cpp có thêm
+# HPND-sell-variant, "Copyright 2002 USC Information Sciences Institute" (mã gốc XSVG). Đã kiểm 30/10:
+# văn bản qsvghandler.cpp ở tag đó không còn chuỗi nào của XSVG (mã cung tròn nằm ở Qt6Gui, mục XSVG
+# dưới đây), nhưng vẫn ghi theo khai báo của chính qtsvg vì không rõ thì không bỏ.
 type QtEmbedded = tuple[str, str, str, tuple[tuple[str, str], ...], str]
 
 
 def _qt(path: str, name: str) -> tuple[str, str]:
+    """(file trong licenses/qt-<ver>/, URL nguồn trong qtbase đúng tag)."""
     return (name, _QTBASE.format(path))
+
+
+def _qtsvg(path: str, name: str) -> tuple[str, str]:
+    """(file trong licenses/qt-<ver>/, URL nguồn trong qtsvg đúng tag)."""
+    return (name, _QTSVG.format(path))
 
 
 _CC0 = _qt("LICENSES/CC0-1.0.txt", "CC0-1.0.txt")
@@ -521,6 +615,13 @@ QT_EMBEDDED: tuple[QtEmbedded, ...] = (
         "",
     ),
     (
+        "pyside6/qt6svg.dll",
+        "XSVG (USC Information Sciences Institute), theo REUSE.toml của qtsvg cho qsvghandler.cpp",
+        "HPND-sell-variant",
+        (_qtsvg("LICENSES/HPND-sell-variant.txt", "qtsvg-HPND-sell-variant.txt"),),
+        "",
+    ),
+    (
         "pyside6/plugins/platforms/qwindows.dll",
         "Wintab API (header)",
         "LicenseRef-Lcs-Telegraphics",
@@ -558,7 +659,15 @@ _LGPL3_NOTE = (
     "file LICENSE cùng thư mục. Cách thay thư viện và nơi lấy mã nguồn: SOURCE.txt."
 )
 PACKAGE_LICENSE_TEXTS: dict[str, tuple[str, tuple[tuple[str, str, str], ...]]] = {
-    QT_OWNER: (_LGPL3_NOTE + "\nMã nguồn Qt: " + QT_SOURCE_URL, _LGPL3),
+    QT_OWNER: (
+        _LGPL3_NOTE
+        + "\nMã nguồn Qt: "
+        + QT_SOURCE_URL
+        + " (Qt6Core, Qt6Gui, Qt6Widgets, Qt6Network và plugin) ; "
+        + QTSVG_SOURCE_URL
+        + " (Qt6Svg)",
+        _LGPL3,
+    ),
     "shiboken6": (_LGPL3_NOTE, _LGPL3),
 }
 # Dòng "Mã nguồn:" của gói không có sdist trên PyPI: trỏ tới gói mã nguồn chính thức thay link PyPI.
@@ -631,11 +740,16 @@ GUI_EDITION = Edition("bản GUI", "Teleport.exe")
 
 @dataclass
 class Component:
+    """Một thành phần đóng vào: gói Python (khóa là tên đã chuẩn hóa), "python", hay tài sản
+    (`asset:<key>`, `asset` là mục SOURCE_ASSETS, `license_path` là file nguồn của giấy phép đi kèm)."""
+
     key: str
     name: str
     version: str
     license: str
     files: list[str] = field(default_factory=list)
+    asset: SourceAsset | None = None
+    license_path: str | None = None
 
 
 def _normalize(name: str) -> str:
@@ -914,16 +1028,38 @@ def collect_components(
 ) -> tuple[dict[str, Component], dict[str, list[str]]]:
     """Phân loại mọi file trong TOC theo thành phần.
 
-    Trả (thành phần, file của CPython có chứa thành phần bên thứ ba theo `PYTHON_EMBEDDED`).
+    Trả (thành phần, file của CPython có chứa thành phần bên thứ ba theo `PYTHON_EMBEDDED`). File có
+    nguồn dưới `repo_dir/src/teleport/ui/assets/` xếp vào thành phần tài sản `asset:<key>` trước mọi
+    nhánh khác (RECORD của bản cài editable hay thường đều có thể chứa chúng); không khớp mục nào của
+    `SOURCE_ASSETS` thì `LicenseAuditError`.
     """
     owners = _owner_index()
     # Mã của dự án: src/ (gói teleport) và packaging/ (launcher). Không lấy cả gốc repo vì venv
     # build có thể nằm trong repo (.venv/), file của venv phải tra theo RECORD.
-    own_roots = [_norm_path(repo_dir / "src"), _norm_path(repo_dir / "packaging")]
+    src_root = _norm_path(repo_dir / "src")
+    assets_root = _norm_path(repo_dir / "src" / ASSETS_ROOT)
+    own_roots = [src_root, _norm_path(repo_dir / "packaging")]
     python_dirs = _python_dirs(base_prefix)
     components: dict[str, Component] = {}
     python_files: dict[str, list[str]] = {}  # tiền tố trong PYTHON_EMBEDDED -> tên file đã đóng vào
     unknown: list[str] = []
+    stray_assets: list[str] = []
+
+    def add_asset(path: str, dest: str, src: str) -> None:
+        rel = os.path.relpath(path, src_root).replace(os.sep, "/")
+        match = _match_asset(rel)
+        if match is None:
+            stray_assets.append(f"{dest} <- {src}")
+            return
+        asset, is_license = match
+        key = f"asset:{asset.key}"
+        comp = components.get(key)
+        if comp is None:
+            comp = Component(key, asset.name, asset.version, asset.license, asset=asset)
+            components[key] = comp
+        comp.files.append(dest)
+        if is_license:
+            comp.license_path = src
 
     def add(dist: md.Distribution, dest: str) -> None:
         key = _normalize(dist.name)
@@ -940,8 +1076,11 @@ def collect_components(
         source = _localpyc_source(dest, path, base_prefix)
         if source is not None:
             path = _norm_path(source)
+        # Tài sản trước tiên: chúng nằm trong src/ của dự án nhưng không theo giấy phép của dự án.
+        if _is_under(path, assets_root) and path != assets_root:
+            add_asset(path, dest, src)
         # Tra RECORD trước: site-packages có thể nằm trong thư mục cài Python (không dùng venv).
-        if path in owners:
+        elif path in owners:
             add(owners[path], dest)
         elif any(_is_under(path, root) for root in own_roots):
             add(md.distribution("zero-cloud-lan-teleport"), dest)
@@ -960,6 +1099,11 @@ def collect_components(
                     python_files.setdefault(prefix, []).append(base)
         else:
             unknown.append(f"{dest} <- {src}")
+    if stray_assets:
+        raise LicenseAuditError(
+            f"file trong src/{ASSETS_ROOT}/ không thuộc mục nào của SOURCE_ASSETS (thêm nguồn, commit"
+            " ghim và giấy phép trước khi đóng vào):\n  " + "\n  ".join(sorted(stray_assets))
+        )
     if unknown:
         raise LicenseAuditError(
             "không xác định được file sau thuộc gói nào:\n  " + "\n  ".join(sorted(unknown))
@@ -973,11 +1117,24 @@ def collect_components(
 def audit(
     components: dict[str, Component], python_files: dict[str, list[str]]
 ) -> dict[str, list[tuple[str, str, str, str]]]:
-    """Dừng build nếu có gì chưa duyệt; trả thành phần SBOM của từng gói (đã kiểm)."""
+    """Dừng build nếu có gì chưa duyệt; trả thành phần SBOM của từng gói (đã kiểm).
+
+    Tài sản (`comp.asset`) kiểm theo `ASSET_LICENSES` và phải đóng kèm file giấy phép của nó; không
+    tra `APPROVED`, metadata hay SBOM (chúng không phải bản phân phối Python).
+    """
     errors = []
     sboms: dict[str, list[tuple[str, str, str, str]]] = {}
     for key, comp in sorted(components.items()):
         if key == "python":
+            continue
+        if comp.asset is not None:
+            if not _spdx_in(comp.license, ASSET_LICENSES):
+                errors.append(f"{comp.name} ({key}): giấy phép {comp.license!r} ngoài ASSET_LICENSES")
+            if comp.license_path is None:
+                errors.append(f"{comp.name} ({key}): thiếu file giấy phép đi kèm {comp.asset.license_file}")
+            continue
+        if key.startswith("asset:"):
+            errors.append(f"{comp.name} ({key}): khóa tài sản nhưng không có mục SOURCE_ASSETS")
             continue
         expected = APPROVED.get(key)
         if expected is None:
@@ -1055,6 +1212,29 @@ def _python_library_versions() -> dict[str, str]:
     return versions
 
 
+def _asset_notice(comp: Component) -> list[str]:
+    """Phần riêng của một thành phần tài sản trong THIRD-PARTY-NOTICES.txt, sau dòng tên và "Giấy phép:":
+    nguồn, số file, văn bản giấy phép nguyên văn từ file giấy phép đã đóng kèm (không đọc metadata)."""
+    asset = comp.asset
+    if asset is None or comp.license_path is None:
+        raise LicenseAuditError(f"{comp.name}: thiếu file giấy phép đi kèm")
+    folder, _, license_name = asset.license_file.rpartition("/")
+    folder = folder.replace("/", "\\")
+    lines = [
+        f"Mã nguồn: {asset.source_url}",
+        f"Đóng nguyên dạng {len(comp.files)} file dữ liệu (không sửa nội dung, kể cả {license_name})"
+        f" trong _internal\\{folder}\\.",
+    ]
+    if asset.license == "OFL-1.1":
+        lines.append(
+            "Font là tác phẩm riêng đi cùng chương trình (tác phẩm gộp): OFL-1.1 áp dụng cho file font,"
+            " không cho Teleport."
+        )
+    text = Path(comp.license_path).read_text(encoding="utf-8")
+    lines += [_SEPARATOR, f"[{comp.name}] {license_name}", "", text.rstrip()]
+    return lines
+
+
 def build_notices(
     components: dict[str, Component],
     python_files: dict[str, list[str]],
@@ -1113,7 +1293,7 @@ def build_notices(
     if qt_files:
         lines.append(
             f"  - Thành phần bên thứ ba nằm trong Qt {QT_LICENSE_VERSION} (theo qt_attribution.json của"
-            " qtbase), văn bản ở mục pyside6-essentials:"
+            " qtbase và pyside-setup, REUSE.toml của qtsvg), văn bản ở cuối file này:"
         )
         for (_pattern, name, lic, _texts, _credit), files in qt_files:
             lines.append(f"      {name} ({', '.join(files)}): {lic}.")
@@ -1132,6 +1312,9 @@ def build_notices(
             lines.append(python_license.rstrip())
             for title, source, text in extra_texts:
                 lines += [_SEPARATOR, f"[Python] {title}", f"Nguồn: {source}", "", text.rstrip()]
+            continue
+        if comp.asset is not None:
+            lines += _asset_notice(comp)
             continue
         dist = md.distribution(comp.name)
         urls = _project_urls(dist)
@@ -1159,8 +1342,9 @@ def build_notices(
             "",
             _SEPARATOR,
             f"Thành phần bên thứ ba lồng trong Qt {QT_LICENSE_VERSION} và PySide6/shiboken6",
-            "Theo qt_attribution.json của qtbase và pyside-setup đúng phiên bản. Thành phần có hai giấy phép",
-            "(OR) được dùng theo nhánh tương thích GPLv3 (ví dụ FreeType theo FTL).",
+            "Theo qt_attribution.json của qtbase và pyside-setup, REUSE.toml của qtsvg, đúng phiên bản.",
+            "Thành phần có hai giấy phép (OR) được dùng theo nhánh tương thích GPLv3 (ví dụ FreeType",
+            "theo FTL).",
         ]
         credits = sorted({credit for (_p, _n, _l, _t, credit), _files in qt_files if credit})
         lines += [f"Ghi công: {credit}" for credit in credits]
@@ -1227,9 +1411,17 @@ def build_source(
             "nguồn dưới đây với cùng phiên bản và cùng trình biên dịch (MSVC, 64-bit) để giữ tương thích nhị",
             "phân; thay DLL Qt thì thay cả bộ Qt6*.dll và plugin cùng lúc.",
             f"Mã nguồn Qt {QT_LICENSE_VERSION}: {QT_SOURCE_URL}",
+        ]
+        if any(f.replace("\\", "/").lower() == "pyside6/qt6svg.dll" for f in qt.files):
+            lines.append(f"Mã nguồn Qt SVG {QT_LICENSE_VERSION} (Qt6Svg.dll): {QTSVG_SOURCE_URL}")
+        lines += [
             f"Mã nguồn PySide6/shiboken6 {QT_LICENSE_VERSION}: {PYSIDE_SOURCE_URL}",
             "Kho mã PySide6: " + " ; ".join(_project_urls(md.distribution(qt.name))[1:]),
         ]
+    assets = [(comp, comp.asset) for _key, comp in sorted(components.items()) if comp.asset is not None]
+    if assets:
+        lines += ["", "Tài sản không phải mã, đóng nguyên dạng (file nguồn chính là file đã đóng vào):"]
+        lines += [f"  {c.name} ({a.version}, {c.license}): {a.source_url}" for c, a in assets]
     lines += [
         "",
         "Mã nguồn các thành phần khác: xem dòng 'Mã nguồn:' của từng thành phần",
@@ -1282,7 +1474,7 @@ def check(
         qt_files=qt_files,
     )
     source = build_source(components, repo_dir=repo_dir, app_version=app_version, edition=edition)
-    report = ["Thành phần đóng vào bản build (giấy phép theo metadata):"]
+    report = ["Thành phần đóng vào bản build (giấy phép theo metadata; tài sản theo SOURCE_ASSETS):"]
     for _key, comp in sorted(components.items()):
         report.append(f"  {comp.name} {comp.version}: {comp.license} ({len(comp.files)} file)")
     for prefix, name, lic, _where, _markers in PYTHON_EMBEDDED:

@@ -14,6 +14,9 @@ Bốn trạng thái (`ViewState`):
   sổ đã có tên app), nhường chỗ cho radar và lượt truyền.
 - ERROR: câu lỗi khởi động (`texts.start_error`) và gợi ý, nút “Thử lại”.
 
+Tiêu đề lớn “Teleport” (`title_label`) dùng bậc chữ `theme.TextStyle.TITLE` (font điểm nhấn nếu
+`ui.fonts.install()` đã nạp trước khi dựng cửa sổ, không thì font hệ thống đậm).
+
 Dòng địa chỉ chỉ hiện ở RUNNING khi có ít nhất một địa chỉ: địa chỉ đầu tiên, thêm `:cổng` khi cổng
 khác `DEFAULT_PORT`; các địa chỉ còn lại nằm ở tooltip (và accessibleDescription). Rời RUNNING
 (`show_welcome`, `show_starting`, `show_error`) thì quên địa chỉ đã nhớ. `ui.app` đọc địa chỉ qua
@@ -113,7 +116,8 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(10)
 
-        self.title_label = _label("titleLabel", size_delta=6, bold=True)
+        self.title_label = _label("titleLabel")
+        self.title_label.setFont(theme.font_for(theme.TextStyle.TITLE, self.title_label.font()))
         self.title_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self.title_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # chỉ là tên app; tiêu đề cửa sổ đã có
         self.status_label = _label("statusLabel", size_delta=2, bold=True)

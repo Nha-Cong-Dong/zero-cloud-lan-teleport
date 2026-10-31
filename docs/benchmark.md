@@ -28,7 +28,7 @@
 | mvp N8 | — | chưa đo |
 | mvp N9 | — | chưa đo |
 | mvp N10 | — | chưa đo |
-| mvp N11 | — | chưa đo |
+| mvp N11 | 2026-10-30/31: cỡ bản zip GUI Windows (PyInstaller `--onedir`) trước/sau A2, chưa có bộ cài (mục 8.2) | **chưa đo**: chưa có bộ cài; cỡ zip chỉ để tham khảo (mục 8.3) |
 | mvp N12 | — | chưa đo |
 | mvp mục 4.1 (H1–H5) | — | chưa đo (mục 6) |
 
@@ -645,16 +645,6 @@ Tiêu chí H1–H5, cách kiểm và điều kiện đạt (máy, mạng, bản 
 
 Lần đo tay N2 ở mục 5.4 không tính cho H2: không so SHA-256 của file ở hai máy.
 
-## 7. mvp N4: Nối lại" vào cuối file (sau §6; không đánh số lại §6 vì ke_hoach.md trỏ "benchmark.md mục 6").
-3. Đổi dòng "> **Cập nhật:**" ở đầu file thành 2026-10-31.
--->
-
-### Dòng cho bảng §2
-
-| mvp N4 | 2026-10-31: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, qua proxy TCP trên loopback, file 1 GiB, cắt ở 85 % theo 6 kiểu (mục 7.3) | **CHƯA ĐỦ DỮ LIỆU**: trên loopback Windows phần gửi thừa mỗi gián đoạn lớn nhất 24,31 MiB, ĐẠT ở mọi lần (49/49); theo tiêu chí ở mục 7.1 thì **không đặt** `SO_RCVBUF`/`SO_SNDBUF` trên Windows. Linux (máy ảo), card mạng thật / Wi-Fi và macOS chưa đo (mục 7.4) |
-
----
-
 ## 7. mvp N4: Nối lại
 
 ### 7.1. Định nghĩa phép đo
@@ -762,3 +752,71 @@ Linux, host Windows ↔ máy ảo Ubuntu bridged, cắt bằng `VBoxManage contr
    `& $PY n4_vm_host.py --vm Teleport-N1 --config-dir <S> --to <tên máy ảo> --address <VM_IP>:47474 --src <file 1 GiB> --kinds link10,link60 --repeat 3`
 4. Chiều máy ảo gửi → host nhận (đo `SO_SNDBUF` của Linux): mở tường lửa host tạm cho IP máy ảo (Administrator, như `n1_firewall.ps1` ở mục 3.5), rồi host `& $PY n4_vm_host.py --role recv-host --vm Teleport-N1 --config-dir <S> --dir <thư mục nhận> --port 47474 --kinds link10,link60 --repeat 3`; mỗi lượt chạy `teleport --config-dir ~/n4/R send --json <file> --to <tên host> --address <HOST_IP>:47474` trong máy ảo và dán dòng `result` của nó khi script hỏi.
 5. Dọn: `VBoxManage controlvm Teleport-N1 setlinkstate1 on` (script tự bật lại khi lỗi), đóng tường lửa, xóa file nhận.
+
+## 8. mvp N11: Cài đặt (cỡ gói)
+
+### 8.1. Định nghĩa phép đo
+
+- **Cỡ thư mục:** tổng `st_size` của mọi file trong `dist\teleport-gui\` do PyInstaller `--onedir` tạo từ `packaging/pyinstaller/teleport-gui.spec` (không tính cỡ thư mục, cụm đĩa).
+- **Cỡ zip:** cỡ file zip tạo từ thư mục đó bằng `zipfile` của Python, `ZIP_DEFLATED` mức 6, gốc zip là `teleport-gui\`, file xếp theo đường dẫn. Đây **không** phải zip artifact của workflow “Build GUI (thử)” (do GitHub nén) và **không** phải bộ cài mà mvp N11 đặt trần; chỉ để so các bản build với nhau.
+- Đơn vị: byte; MiB = 2²⁰ byte.
+
+### 8.2. Lần đo 2026-10-30/31: trước/sau A2 (QtSvg, 47 icon SVG, font Bricolage Grotesque)
+
+**Môi trường build** (như nhau cho ba bản, cùng một venv build riêng trong scratchpad)
+
+| | |
+|---|---|
+| Máy | Windows 11 Pro 10.0.26300 |
+| Công cụ | PyInstaller 6.22.3 (contrib hooks 2026.9), PySide6-Essentials 6.12.0, Python 3.14.5 |
+| Nguồn | Worktree `feat/ui-assets`, trên commit `9639b08` (A1) cộng thay đổi chưa commit của A2; ba bản build từ ba trạng thái của cây làm việc, không có commit riêng. `teleport.__version__` = `0.1.0a0` |
+
+**Kết quả**
+
+| Bản | Số file | Thư mục (B) | Thư mục (MiB) | Zip (B) | Zip (MiB) | Nguồn số |
+|---|---|---|---|---|---|---|
+| Trước A2 | 97 | 79 593 643 | 75,91 | 33 969 172 | 32,40 | `dong-goi` đo (build 30/10 23:13 giờ máy); kiểm lại 31/10 từ thư mục build và zip còn trong scratchpad: khớp từng byte, zip tạo lại cũng khớp |
+| Chỉ phần đóng gói của A2 | 149 | 80 787 141 | 77,04 | 34 584 189 | 32,98 | `dong-goi` đo (build 30/10 23:22 giờ máy); kiểm lại 31/10 như dòng trên: khớp |
+| Sau A2 | 149 | 80 803 033 | 77,06 | 34 601 261 | 33,00 | `do-dac` đo 31/10 (build 31/10 06:22 giờ máy); zip tạo lại khớp |
+
+“Chỉ phần đóng gói” đã có đủ 52 file mới của A2 (danh sách file giống hệt bản sau A2); hai bản khác nhau chủ yếu ở mã Python của `ui` (archive PYZ trong `Teleport.exe`, +15 891 B); `THIRD-PARTY-NOTICES.txt` +1 B, `SOURCE.txt` và `base_library.zip` khác nội dung nhưng cùng cỡ.
+
+**Chênh lệch sau A2 so với trước A2:** thư mục +1 209 390 B (+1,52%), zip +632 089 B (+1,86%), +52 file. Phần thêm vào thư mục:
+
+| Thành phần | B |
+|---|---|
+| `Qt6Svg.dll` | 608 056 |
+| `QtSvg.pyd` | 116 536 |
+| `BricolageGrotesque.ttf` (+ `OFL.txt`: tổng 412 899) | 408 496 |
+| 47 icon SVG (+ `LICENSE`: tổng 46 273) | 45 195 |
+| `Teleport.exe` (chứa archive PYZ, tức mã Python của `ui`) | 15 891 |
+| `THIRD-PARTY-NOTICES.txt` | 9 017 |
+| `SOURCE.txt` | 718 |
+
+Phần lớn thêm vào là QtSvg (724 592 B, khoảng 60%) và font (khoảng 34%); icon chỉ khoảng 4%.
+
+### 8.3. So với mvp N11 và việc còn lại
+
+- Trần của mvp N11 áp cho **bộ cài** Windows; chưa có bộ cài nên mục này là **chưa đo**. Cỡ zip ở trên chỉ để tham khảo: bộ cài nén cùng các file này, nhưng cỡ còn tùy công cụ và mức nén.
+- Zip sau A2 dưới trần của mvp N11 với khoảng cách lớn. Thư mục đã giải nén (cái người dùng thấy sau khi cài) xấp xỉ trần: dưới trần nếu “MB” trong mvp N11 là MiB, **trên** trần nếu là 10⁶ byte. mvp N11 không nói rõ đơn vị và không đặt trần cho cỡ sau khi cài; ghi lại để chủ của `mvp.md` quyết.
+- Còn lại: cỡ bộ cài thật, “không cần khởi động lại” và gỡ cài đặt sạch, kiểm trên máy ảo sạch theo mvp N11 (Giai đoạn 6, [ke_hoach.md](ke_hoach.md) mục 5.2).
+
+**Cách đo lại:** build theo `CONTRIBUTING.md`, rồi chạy script tạo zip và in cỡ (đặt ngoài repo, nội dung đúng như dưới):
+
+```python
+import sys, zipfile, pathlib
+
+dist = pathlib.Path(sys.argv[1])
+out = pathlib.Path(sys.argv[2])
+total = 0
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+    for p in sorted((dist / "teleport-gui").rglob("*")):
+        if p.is_file():
+            total += p.stat().st_size
+            z.write(p, p.relative_to(dist).as_posix())
+print(f"thư mục {total} B; zip {out.stat().st_size} B")
+```
+
+```powershell
+python -I zipsize.py <thư mục dist> <đường dẫn zip ra>
+```

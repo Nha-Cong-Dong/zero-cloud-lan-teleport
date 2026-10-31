@@ -13,13 +13,17 @@ dịch thật. Bản phân phối giả (dist-info có METADATA, RECORD, SBOM) �
 
 from __future__ import annotations
 
+import dataclasses
+import fnmatch
 import importlib.util
 import inspect
 import json
 import os
+import re
 import shutil
 import struct
 import sys
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -915,3 +919,246 @@ def test_qt_set_still_rejects_gpl2_only_and_nested_lgpl() -> None:
     assert tp._spdx_in("GPL-2.0-only", tp.QT_SPDX_COMPATIBLE) is False
     assert tp._spdx_in("LGPL-2.1-or-later", tp.QT_SPDX_COMPATIBLE) is False
     assert tp._spdx_in("FTL OR GPL-2.0-only", tp.QT_SPDX_COMPATIBLE) is True
+
+
+# ------------------------------------------- 8. Tài sản không phải mã (A2: icon, font)
+# spec-a1-a2 mục A2 (Giấy phép) và “Áp dụng hoi-lai 30/10”: tài sản trong src/teleport/ui/assets/ là thành
+# phần `asset:<key>` theo SOURCE_ASSETS, kiểm theo ASSET_LICENSES (MIT, OFL-1.1) chỉ cho tài sản; file lạ
+# trong assets/ làm build dừng; NOTICES in nguyên văn MIT và OFL.
+
+_REAL_ASSETS = _REPO / "src" / "teleport" / "ui" / "assets"
+_ICON_KEY = "asset:fluentui-system-icons"
+_FONT_KEY = "asset:bricolage-grotesque"
+_TWO_ICON_FILES = ["teleport/ui/assets/icons/add_20_regular.svg", "teleport/ui/assets/icons/LICENSE"]
+
+
+def _real_asset_rels() -> list[str]:
+    """Mọi file thật dưới src/teleport/ui/assets/, tương đối với src/, dấu "/"."""
+    src = _REPO / "src"
+    return sorted(p.relative_to(src).as_posix() for p in _REAL_ASSETS.rglob("*") if p.is_file())
+
+
+def _asset_toc(repo: Path, rels: list[str], *, copy_real: bool = True) -> list[tuple[str, str, str]]:
+    """Dựng các file `rels` (tương đối với src/) trong repo giả, chép nội dung thật nếu có; trả TOC."""
+    toc = []
+    for rel in rels:
+        target = repo / "src" / rel
+        real = _REPO / "src" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if copy_real and real.is_file():
+            shutil.copyfile(real, target)
+        else:
+            target.write_bytes(b"x")
+        toc.append((rel, str(target), "DATA"))
+    return toc
+
+
+def _collect(repo: Path, base: Path, rels: list[str]) -> tuple[dict, dict]:
+    """`collect_components` trên TOC chỉ có tài sản; trả riêng các thành phần `asset:*` (bỏ thành phần
+    bootloader của PyInstaller mà hàm luôn thêm, xem fixture `fake_pyinstaller`)."""
+    components, python_files = tp.collect_components(
+        _asset_toc(repo, rels), repo_dir=repo, base_prefix=str(base)
+    )
+    assert set(components) - {"pyinstaller"} == {k for k in components if k.startswith("asset:")}
+    return {k: c for k, c in components.items() if k.startswith("asset:")}, python_files
+
+
+@pytest.fixture
+def fake_pyinstaller(make_dist: DistMaker) -> None:
+    """`collect_components` luôn ghi bootloader vào thành phần `pyinstaller`; CI chạy pytest không cài
+    PyInstaller nên giả metadata (như `test_check_rejects_unmappable_localpyc`)."""
+    make_dist("pyinstaller", "GPL-2.0-or-later", version="6.0")
+
+
+def _matches(pattern: str, rel: str) -> bool:
+    """Mẫu SOURCE_ASSETS theo docstring: `*` không vượt qua "/", không phân biệt hoa thường."""
+    p_dir, _, p_base = pattern.lower().rpartition("/")
+    r_dir, _, r_base = rel.lower().rpartition("/")
+    return p_dir == r_dir and fnmatch.fnmatchcase(r_base, p_base)
+
+
+def test_asset_licenses_are_exactly_mit_and_ofl() -> None:
+    assert frozenset({"MIT", "OFL-1.1"}) == tp.ASSET_LICENSES
+
+
+def test_ofl_is_rejected_outside_assets() -> None:
+    assert "OFL-1.1" not in tp.SPDX_COMPATIBLE
+    assert "OFL-1.1" not in tp.QT_SPDX_COMPATIBLE
+    assert tp.spdx_compatible("OFL-1.1") is False
+    assert tp.spdx_compatible("MIT AND OFL-1.1") is False
+
+
+def test_audit_rejects_sbom_component_with_ofl(make_dist: DistMaker, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gói Python (không phải tài sản) mang OFL-1.1 qua SBOM vẫn bị chặn: OFL chỉ hợp lệ cho tài sản."""
+    sbom = _sbom(_sbom_component("font-in-wheel", "1.0", {"license": {"id": "OFL-1.1"}}))
+    with pytest.raises(LicenseAuditError, match="font-in-wheel"):
+        tp.audit(_approved_fake_with_sbom(make_dist, monkeypatch, sbom), {})
+
+
+def test_source_assets_have_two_entries_with_spec_licenses() -> None:
+    by_key = {a.key: a for a in tp.SOURCE_ASSETS}
+    assert set(by_key) == {"fluentui-system-icons", "bricolage-grotesque"}
+    assert by_key["fluentui-system-icons"].license == "MIT"
+    assert by_key["bricolage-grotesque"].license == "OFL-1.1"
+    for asset in tp.SOURCE_ASSETS:
+        assert asset.license in tp.ASSET_LICENSES, asset.key
+        assert asset.source_url.startswith("https://"), asset.key
+
+
+def test_source_assets_pin_a_commit() -> None:
+    """Tài sản tải về lấy từ commit ghim (spec A2, Rủi ro): URL và phiên bản nêu cùng một SHA 40 ký tự."""
+    for asset in tp.SOURCE_ASSETS:
+        sha = re.search(r"\b[0-9a-f]{40}\b", asset.source_url)
+        assert sha, asset.source_url
+        assert sha.group(0) in asset.version, (asset.key, asset.version)
+
+
+def test_every_real_asset_file_matches_exactly_one_source_asset() -> None:
+    rels = _real_asset_rels()
+    assert len([r for r in rels if r.endswith(".svg")]) == 47
+    for rel in rels:
+        owners = [a.key for a in tp.SOURCE_ASSETS if any(_matches(p, rel) for p in a.patterns)]
+        assert len(owners) == 1, (rel, owners)
+
+
+def test_every_source_asset_license_file_exists_and_is_covered() -> None:
+    expected_text = {"MIT": "MIT License", "OFL-1.1": "SIL OPEN FONT LICENSE Version 1.1"}
+    rels = _real_asset_rels()
+    for asset in tp.SOURCE_ASSETS:
+        path = _REPO / "src" / asset.license_file
+        assert path.is_file(), asset.license_file
+        assert any(_matches(p, asset.license_file) for p in asset.patterns), asset.key
+        assert expected_text[asset.license] in path.read_text(encoding="utf-8"), asset.key
+        mine = [r for r in rels if any(_matches(p, r) for p in asset.patterns)]
+        data_files = [r for r in mine if r != asset.license_file]
+        assert data_files, f"{asset.key}: không có file dữ liệu nào khớp mẫu"
+
+
+@pytest.mark.usefixtures("fake_pyinstaller")
+def test_collect_components_puts_real_assets_into_asset_components(repo: Path, base: Path) -> None:
+    components, _python = _collect(repo, base, _real_asset_rels())
+    assert set(components) == {_ICON_KEY, _FONT_KEY}
+    icons, font = components[_ICON_KEY], components[_FONT_KEY]
+    assert icons.license == "MIT"
+    assert font.license == "OFL-1.1"
+    assert len(icons.files) == 48  # 47 SVG + LICENSE
+    assert len(font.files) == 2  # .ttf + OFL.txt
+    assert icons.license_path is not None
+    assert font.license_path is not None
+    assert icons.asset is not None
+    assert font.asset is not None
+
+
+@pytest.mark.usefixtures("fake_pyinstaller")
+def test_collect_components_classifies_assets_before_project_code(repo: Path, base: Path) -> None:
+    toc = _asset_toc(repo, _TWO_ICON_FILES)
+    code = _touch(repo / "src" / "teleport" / "ui" / "icons.py")
+    toc.append(("teleport/ui/icons.py", str(code), "DATA"))
+    components, _python = tp.collect_components(toc, repo_dir=repo, base_prefix=str(base))
+    assert set(components) == {_ICON_KEY, "zero-cloud-lan-teleport", "pyinstaller"}
+    assert components[_ICON_KEY].files == _TWO_ICON_FILES
+    project = components["zero-cloud-lan-teleport"].files
+    assert "teleport/ui/icons.py" in project
+    assert not [f for f in project if "assets" in f], project  # tài sản không tính vào giấy phép dự án
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "teleport/ui/assets/icons/evil.png",
+        "teleport/ui/assets/icons/sub/add_20_regular.svg",  # `*` không vượt qua "/"
+        "teleport/ui/assets/fonts/Other.otf",
+        "teleport/ui/assets/fonts/LICENSE",
+        "teleport/ui/assets/README.txt",
+        "teleport/ui/assets/images/logo.svg",
+        "teleport/ui/assets/icons/add_20_regular.svg.bak",
+    ],
+)
+@pytest.mark.usefixtures("fake_pyinstaller")
+def test_stray_file_in_assets_stops_build(repo: Path, base: Path, rel: str) -> None:
+    toc = _asset_toc(repo, _TWO_ICON_FILES) + _asset_toc(repo, [rel], copy_real=False)
+    with pytest.raises(LicenseAuditError) as excinfo:
+        tp.collect_components(toc, repo_dir=repo, base_prefix=str(base))
+    message = str(excinfo.value)
+    assert rel in message
+    assert "teleport/ui/assets/icons/add_20_regular.svg <-" not in message
+
+
+@pytest.mark.usefixtures("fake_pyinstaller")
+def test_audit_accepts_assets_with_license_files(repo: Path, base: Path) -> None:
+    components, python_files = _collect(repo, base, _real_asset_rels())
+    assert tp.audit(components, python_files) == {}
+
+
+@pytest.mark.usefixtures("fake_pyinstaller")
+def test_audit_rejects_asset_without_its_license_file(repo: Path, base: Path) -> None:
+    rels = [r for r in _real_asset_rels() if not r.endswith("/OFL.txt")]
+    components, python_files = _collect(repo, base, rels)
+    with pytest.raises(LicenseAuditError, match=r"OFL\.txt"):
+        tp.audit(components, python_files)
+
+
+@pytest.mark.usefixtures("fake_pyinstaller")
+def test_audit_rejects_asset_with_license_outside_asset_licenses(
+    repo: Path, base: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gpl2 = tuple(
+        dataclasses.replace(a, license="GPL-2.0-only") if a.key == "fluentui-system-icons" else a
+        for a in tp.SOURCE_ASSETS
+    )
+    monkeypatch.setattr(tp, "SOURCE_ASSETS", gpl2)
+    components, python_files = _collect(repo, base, _real_asset_rels())
+    with pytest.raises(LicenseAuditError, match="Fluent UI System Icons"):
+        tp.audit(components, python_files)
+
+
+@pytest.mark.usefixtures("fake_pyinstaller")
+def test_notices_quote_mit_and_ofl_for_assets(repo: Path, base: Path) -> None:
+    components, python_files = _collect(repo, base, _real_asset_rels())
+    notices = tp.build_notices(components, python_files, {}, app_version="9.9.9", edition=tp.GUI_EDITION)
+    assert "Fluent UI System Icons" in notices
+    assert "Bricolage Grotesque" in notices
+    assert "MIT License" in notices
+    assert "SIL OPEN FONT LICENSE Version 1.1" in notices
+    # Nguyên văn: cả văn bản LICENSE của icon và OFL.txt của font nằm trong NOTICES.
+    mit = (_REAL_ASSETS / "icons" / "LICENSE").read_text(encoding="utf-8").strip()
+    ofl = (_REAL_ASSETS / "fonts" / "OFL.txt").read_text(encoding="utf-8").strip()
+    assert mit in notices
+    assert ofl in notices
+    for asset in tp.SOURCE_ASSETS:
+        assert asset.source_url in notices
+
+
+@pytest.mark.usefixtures("build_tools_versions", "fake_pyinstaller")
+def test_gui_source_lists_icon_font_and_qtsvg_urls(repo: Path, base: Path) -> None:
+    pytest.importorskip("PySide6")
+    comps = _gui_components()
+    comps[tp.QT_OWNER].files.append("PySide6\\Qt6Svg.dll")
+    asset_comps, _python = _collect(repo, base, _real_asset_rels())
+    comps.update(asset_comps)
+    text = tp.build_source(comps, repo_dir=_REPO, app_version="9.9.9", edition=tp.GUI_EDITION)
+    assert "qtsvg-everywhere-src-6.12.0.tar.xz" in text
+    for asset in tp.SOURCE_ASSETS:
+        assert asset.source_url in text
+
+
+def test_qtsvg_dll_and_pyd_are_reviewed_but_svgwidgets_is_not() -> None:
+    assert "pyside6/qt6svg.dll" in tp.QT_REVIEWED_FILES
+    assert "pyside6/qtsvg.pyd" in tp.QT_REVIEWED_FILES
+    tp.qt_embedded_files(_qt_components("PySide6\\Qt6Core.dll", "PySide6\\Qt6Svg.dll", "PySide6\\QtSvg.pyd"))
+    with pytest.raises(LicenseAuditError, match=r"qt6svgwidgets\.dll"):
+        tp.qt_embedded_files(_qt_components("PySide6\\Qt6Svg.dll", "PySide6\\Qt6SvgWidgets.dll"))
+
+
+def test_pyproject_license_and_package_data_cover_assets() -> None:
+    project = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["project"]["license"] == "GPL-3.0-or-later AND MIT AND OFL-1.1"
+    assert tp.APPROVED["zero-cloud-lan-teleport"] == project["project"]["license"]
+    license_files = set(project["project"]["license-files"])
+    needed = {"LICENSE", "src/teleport/ui/assets/icons/LICENSE", "src/teleport/ui/assets/fonts/OFL.txt"}
+    assert needed <= license_files
+    globs = project["tool"]["setuptools"]["package-data"]["teleport.ui"]
+    ui_dir = _REPO / "src" / "teleport" / "ui"
+    covered = {p.relative_to(ui_dir).as_posix() for g in globs for p in ui_dir.glob(g) if p.is_file()}
+    real = {p.relative_to(ui_dir).as_posix() for p in _REAL_ASSETS.rglob("*") if p.is_file()}
+    assert real <= covered, sorted(real - covered)

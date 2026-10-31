@@ -8,9 +8,9 @@ thì cả module bị bỏ qua. Chạy riêng:
     pytest tests/packaging -m frozen
 
 Exe windowed không có stdout/stderr (`sys.stderr is None`, docstring `teleport/ui/app.py`), nên chỉ
-kiểm mã thoát của `--selftest` (dựng QApplication, i18n, theme, cửa sổ, khay mà không hiện; không lấy
-khóa, không mở mạng) và bố cục thư mục build. Chạy bằng nền tảng Qt thật (`qwindows`): bản build chỉ
-đóng plugin đó.
+kiểm mã thoát của `--selftest` (dựng QApplication, i18n, theme, font, icon, cửa sổ, khay mà không
+hiện; không lấy khóa, không mở mạng; chi tiết ở docstring `teleport/ui/app.py`) và bố cục thư mục
+build. Chạy bằng nền tảng Qt thật (`qwindows`): bản build chỉ đóng plugin đó.
 
 Giới hạn: không chạy node thật từ exe (sẽ bật hộp hỏi tường lửa của Windows); giải nén trên máy sạch
 (Windows Sandbox), khay và radar kiểm bằng tay. Khi `ui` ghi log ra `<config_dir>/logs/` (spec
@@ -106,6 +106,9 @@ def test_license_files_next_to_exe() -> None:
     assert "bản GUI cho Windows" in notices
     assert "GNU LESSER GENERAL PUBLIC LICENSE" in notices
     assert "Ghi công: Portions of this software" in notices
+    assert "Fluent UI System Icons" in notices
+    assert "MIT License" in notices
+    assert "SIL OPEN FONT LICENSE Version 1.1" in notices
     source = (DIST / "SOURCE.txt").read_text(encoding="utf-8")
     assert "_internal\\PySide6\\" in source
     assert "qtbase-everywhere-src-" in source
@@ -118,11 +121,12 @@ def test_license_files_next_to_exe() -> None:
         "PySide6/Qt6Qml*.dll",
         "PySide6/Qt6Quick*.dll",
         "PySide6/Qt6Pdf*.dll",
-        "PySide6/Qt6Svg*.dll",
+        "PySide6/Qt6SvgWidgets*.dll",  # Qt6Svg.dll thì cần (QSvgRenderer của ui/icons.py)
         "PySide6/QtQml*.pyd",
         "PySide6/translations/*",
         "PySide6/plugins/tls/*",
         "PySide6/plugins/imageformats/*",
+        "PySide6/plugins/iconengines/*",  # icon vẽ bằng QSvgRenderer, không qua QIcon(svg)
         "PySide6/plugins/platforms/qoffscreen.dll",
         "api-ms-win-*.dll",
         "ucrtbase.dll",
@@ -140,6 +144,12 @@ def test_unused_qt_parts_are_not_bundled(pattern: str) -> None:
         "PySide6/Qt6Network.dll",  # QLocalServer (một bản mỗi thư mục cấu hình)
         "PySide6/plugins/platforms/qwindows.dll",
         "PySide6/plugins/styles/qmodernwindowsstyle.dll",
+        "PySide6/Qt6Svg.dll",
+        "PySide6/QtSvg.pyd",
+        "teleport/ui/assets/icons/LICENSE",
+        "teleport/ui/assets/icons/checkmark_circle_20_regular.svg",
+        "teleport/ui/assets/fonts/BricolageGrotesque.ttf",
+        "teleport/ui/assets/fonts/OFL.txt",
     ],
 )
 def test_needed_qt_parts_are_bundled(rel: str) -> None:

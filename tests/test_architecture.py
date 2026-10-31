@@ -153,3 +153,66 @@ def test_ui_does_not_import_cli():
         if name == "teleport.cli" or name.startswith("teleport.cli.") or name == "teleport.__main__"
     ]
     assert not violations, "\n".join(violations)
+
+
+# A2 (spec-a1-a2, hoi-lai 30/10): chỉ `ui/icons.py` dùng QtSvg (bản build đóng Qt6Svg.dll vì nó, và bỏ
+# QtSvgWidgets). `imported_modules` chỉ trả "PySide6" cho `from PySide6 import QtSvg`, nên phải đọc cả tên
+# trong `ImportFrom`.
+QTSVG_OWNER = PACKAGE / "ui" / "icons.py"
+
+
+def qtsvg_imports(path: Path) -> list[str]:
+    """Mọi cách import QtSvg/QtSvgWidgets trong file: `import PySide6.QtSvg`, `from PySide6.QtSvg import …`,
+    `from PySide6 import QtSvg`."""
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8-sig"))):
+        if isinstance(node, ast.Import):
+            found += [a.name for a in node.names if a.name.startswith("PySide6.QtSvg")]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            parts = node.module.split(".")
+            if parts[0] != "PySide6":
+                continue
+            if len(parts) > 1 and parts[1].startswith("QtSvg"):
+                found.append(node.module)
+            elif len(parts) == 1:
+                found += [f"PySide6.{a.name}" for a in node.names if a.name.startswith("QtSvg")]
+    return found
+
+
+def test_only_ui_icons_imports_qtsvg():
+    files = sorted(PACKAGE.rglob("*.py"))
+    violations = [
+        f"{path.relative_to(PACKAGE)} import {name}"
+        for path in files
+        if path != QTSVG_OWNER
+        for name in qtsvg_imports(path)
+    ]
+    assert not violations, "\n".join(violations)
+
+
+def test_ui_icons_imports_qtsvg_not_qtsvgwidgets():
+    if not QTSVG_OWNER.exists():
+        pytest.fail("chưa có src/teleport/ui/icons.py (A2)")
+    names = qtsvg_imports(QTSVG_OWNER)
+    assert "PySide6.QtSvg" in names, names
+    assert not [n for n in names if n.startswith("PySide6.QtSvgWidgets")], names
+
+
+def test_qtsvg_import_check_sees_every_import_form(tmp_path):
+    """Bộ dò bắt cả ba dạng import (không thì test trên xanh rỗng), và không bắt nhầm module khác."""
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "from PySide6 import QtSvg\n"
+        "from PySide6 import QtCore, QtSvgWidgets as W\n"
+        "import PySide6.QtSvg\n"
+        "from PySide6.QtSvg import QSvgRenderer\n"
+        "from PySide6 import QtGui\n"
+        "import PySide6.QtWidgets\n",
+        encoding="utf-8",
+    )
+    assert qtsvg_imports(probe) == [
+        "PySide6.QtSvg",
+        "PySide6.QtSvgWidgets",
+        "PySide6.QtSvg",
+        "PySide6.QtSvg",
+    ]
