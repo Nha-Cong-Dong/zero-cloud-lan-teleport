@@ -304,10 +304,10 @@ async def test_history_is_recorded_without_on_transfer_event(transfer_nodes):
 
 
 @leakcheck
-async def test_preloaded_100_entries_plus_one_transfer_keeps_100_across_restart(
+async def test_preloaded_100_entries_of_other_device_plus_one_transfer_keeps_101_across_restart(
     transfer_nodes, restart, tmp_path, caplog
 ):
-    """T20. Đột biến “bỏ cắt 100” làm test này đỏ."""
+    """T20. Trần theo máy (mvp F5): 100 mục của máy khác không bị lượt mới với B đẩy ra."""
     old_dev = "c" * 32
     config_a = tmp_path / "A"
     config_a.mkdir(parents=True, exist_ok=True)
@@ -320,10 +320,11 @@ async def test_preloaded_100_entries_plus_one_transfer_keeps_100_across_restart(
     tid = key.transfer_id
     await A.trec.wait_finished(tid)
     hist = A.transfers.history()
-    assert len(hist) == 100
+    assert len(hist) == 101
     assert hist[0].transfer_id == tid
-    assert [e.transfer_id for e in hist[1:]] == [d["transfer_id"] for d in old[:99]]
-    assert old[99]["transfer_id"] not in {e.transfer_id for e in hist}, "mục cũ nhất phải mất"
+    assert [e.transfer_id for e in hist[1:]] == [d["transfer_id"] for d in old], "máy khác không mất mục"
+    assert len(A.transfers.history(old_dev)) == 100
+    assert [e.transfer_id for e in A.transfers.history(B.id)] == [tid]
 
     await close_cleanly(A, caplog)
     assert file_ids(config_a) == [e.transfer_id for e in hist]

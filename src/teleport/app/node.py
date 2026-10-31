@@ -1346,7 +1346,7 @@ class Node:
 
     # ---- Hủy ghép đôi ----------------------------------------------------------------------
 
-    async def unpair(self, device_id: str) -> TrustedDevice:
+    async def unpair(self, device_id: str, *, clear_history: bool = False) -> TrustedDevice:
         """Hủy ghép đôi: xóa khỏi kho, đổi danh sách tin cậy của cổng, đóng kết nối của máy đó.
 
         Không có `device_id` → KeyError; không ghi được → TrustStoreError (không đổi gì).
@@ -1356,6 +1356,9 @@ class Node:
         của nó đã bị xóa khỏi `settings.json` (ghi lỗi thì chỉ WARNING: mục đó không có hiệu lực
         và bị bỏ ở lần ghi sau), và kết nối của nó đã bắt đầu đóng (chờ tối đa
         UNPAIR_CLOSE_TIMEOUT). Node chưa chạy → RuntimeError.
+
+        `clear_history`: xóa luôn lịch sử với máy đó (mvp F5), gồm cả các mục `UNPAIRED` vừa
+        sinh; mặc định giữ (mục của máy đã hủy ghép đôi còn tới khi xóa toàn bộ lịch sử).
         """
         if not self._running:
             raise RuntimeError("node chưa chạy")
@@ -1372,6 +1375,8 @@ class Node:
         closes = self._trust_changed()
         if self._transfers is not None:
             self._transfers.forget_device(device.device_id)
+            if clear_history:  # sau `forget_device`: các mục `UNPAIRED` của nó cũng bị xóa
+                self._transfers.clear_history(device.device_id)
         if closes:
             await asyncio.wait(closes, timeout=UNPAIR_CLOSE_TIMEOUT)
         log.info("đã hủy ghép đôi với %s", device.device_id[:8])
