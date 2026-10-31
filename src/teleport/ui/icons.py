@@ -22,6 +22,9 @@ bỏ mục dùng lâu nhất khi đầy; nội dung SVG đọc một lần mỗi
 đóng gói lỗi) → ghi WARNING (không kèm nội dung), trả pixmap rỗng, không đệm; giao diện vẫn chạy,
 còn `--selftest` bắt được (`ui/app.py`).
 
+`render_svg(data, size, dpr)` vẽ một SVG bất kỳ đủ màu, không tô và không đệm: dùng cho logo của dự án
+(`ui/logo.py`), để `QtSvg` vẫn chỉ bị import ở đây.
+
 `icon(name, size, color, disabled)` dựng `QIcon` từ pixmap ở dpr 1, 2 và dpr lớn nhất của các màn
 hình đang có, cho chế độ Normal và (nếu có `disabled`) Disabled. Không có `disabled` thì Qt tự làm mờ
 ảnh Normal cho chế độ Disabled; giao diện nên truyền màu chữ bị tắt (`text_muted`) để đủ tương phản.
@@ -119,6 +122,29 @@ def _read_svg(name: str, size: int) -> bytes | None:
     return data
 
 
+def render_svg(data: bytes, size: int, dpr: float = 1.0) -> QPixmap:
+    """Vẽ SVG `data` đủ màu (không tô lại) vào pixmap trong suốt cỡ `size` px logic, tỉ lệ `dpr`.
+
+    SVG hỏng → pixmap rỗng; nơi gọi tự ghi log. Không đệm (dùng cho logo, `ui/logo.py`).
+    """
+    if not dpr > 0:
+        raise ValueError(f"dpr phải > 0: {dpr}")
+    renderer = QSvgRenderer(QByteArray(data))
+    if not renderer.isValid():
+        return QPixmap()
+    side = max(1, round(size * dpr))
+    result = QPixmap(side, side)
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        renderer.render(painter, QRectF(0, 0, side, side))
+    finally:
+        painter.end()
+    result.setDevicePixelRatio(dpr)
+    return result
+
+
 def pixmap(name: str, size: int, color: QColor, dpr: float = 1.0) -> QPixmap:
     """Icon `name` cỡ `size` px logic, tô `color`, cho màn hình tỉ lệ `dpr` (xem docstring module).
 
@@ -135,22 +161,16 @@ def pixmap(name: str, size: int, color: QColor, dpr: float = 1.0) -> QPixmap:
     data = _read_svg(name, size)
     if data is None:
         return QPixmap()
-    renderer = QSvgRenderer(QByteArray(data))
-    if not renderer.isValid():
+    result = render_svg(data, size, dpr)
+    if result.isNull():
         log.warning("icon %s cỡ %d không phải SVG hợp lệ", name, size)
-        return QPixmap()
-    side = max(1, round(size * dpr))
-    result = QPixmap(side, side)
-    result.fill(Qt.GlobalColor.transparent)
+        return result
     painter = QPainter(result)
     try:
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        renderer.render(painter, QRectF(0, 0, side, side))
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
         painter.fillRect(result.rect(), color)
     finally:
         painter.end()
-    result.setDevicePixelRatio(dpr)
     _pixmaps[key] = result
     if len(_pixmaps) > CACHE_LIMIT:
         _pixmaps.popitem(last=False)
