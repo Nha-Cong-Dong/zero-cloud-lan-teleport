@@ -1,4 +1,5 @@
-"""Điều phối gửi/nhận file của giao diện (mvp F4, F5): nối radar, danh sách lượt, hộp hỏi, node.
+"""Điều phối gửi/nhận file của giao diện (mvp F4, F5): nối danh sách cuộc trò chuyện, danh sách lượt,
+hộp hỏi, node.
 
 `TransfersController` sống trên thread Qt, dựng trong `ui.app.GuiApp` (thuộc tính `transfers`). Nó
 giữ `TransfersView` (`view`, đặt vào `MainWindow.transfers_area`) và `OfferPrompts` (`offers`), và
@@ -13,28 +14,39 @@ khi là Path tường minh, không thì None tới khi `ui.app` gọi `set_recei
 `(devices(), transfers.transfers())` → tên máy, trạng thái kết nối, ảnh chụp các lượt (gộp với
 `TransferResumed` tới trước, spec hackathon mục 9.7).
 
+**Hoạt động theo máy** (spec B2 mục 2.3; danh sách cuộc trò chuyện ở cột trái): `activity`
+(`ui.activity.ActivityTracker`) theo dõi lượt đang chạy và lượt đã kết thúc gần nhất của mỗi máy, rồi
+đẩy vào `window.conversations.model.set_activity` mỗi khi một máy đổi. Nguồn: các `TransferUpdate`
+của `on_transfer` (sau `view.handle`; mốc là giờ tường `_wall_now()` lúc nhận, seam cấp module đọc
+lúc gọi), ảnh chụp `transfers()` lúc `started`, và một `call` thứ hai lúc `started` đọc
+`latest_by_device(node.transfers.history())` (rút gọn trên thread node). Kết quả của host cũ hay về
+sau `close_all` bị bỏ; lỗi → WARNING (tên loại lỗi). Host mới (`attach`) → xóa hết. Không polling node.
+Lượt bị gỡ thẻ (bước 3 dưới đây) vẫn báo `TransferFinished` cho `activity` để máy hết “đang bận”.
+
 **Gửi** (`request_send(device_id, paths)`, từ kéo thả hay “Gửi file…”): thread Qt không `stat`
 file người dùng (D7); việc kiểm file do `transfers.send` làm trên `DiskExecutor` của node.
 1. Danh sách rỗng → bỏ qua; `send.selection_error` (quá `MAX_OFFER_FILES` file, trùng) → thông báo.
-2. Thiết bị chưa ghép đôi → “ghép rồi gửi”: nhớ một việc chờ `(device_id, paths)` và phát
-   `pair_needed(DeviceView)` (luồng ghép đôi nối vào). Chưa ai nối `pair_needed` → không giữ việc
-   chờ, hiện câu mvp mục 8 “Chưa ghép đôi với *X*…”. Đã có việc chờ → câu mvp mục 8 “Đang chờ ghép
-   đôi với *A* để gửi file…” (*A* là máy **đang chờ ghép**). `on_pairing_finished(peer_device_id,
-   paired)` kết thúc việc chờ: khớp `peer_device_id` (không theo `session_id`, spec mục 9.2) và
-   `paired` → gửi; không ghép được (`paired` False, với `peer_device_id` khớp hay None) → bỏ việc chờ
-   (luồng ghép đôi tự báo lỗi). Lưới an toàn: luồng ghép đôi không báo lại thì việc chờ tự bỏ, im
-   lặng, sau `PENDING_PAIR_TIMEOUT` giây (`QTimer` một lần; `attach`, `close_all` và lúc việc chờ
-   kết thúc thì dừng hẹn).
-3. Kết nối đang bị chặn (`ConnectFailed` gần nhất trên radar là REJECTED, IDENTITY_MISMATCH,
-   VERSION_MISMATCH; spec mục 10 A2) → câu mvp mục 8, không tạo lượt. Dải thông báo kèm nút:
+2. Thiết bị chưa ghép đôi → “ghép rồi gửi” (từ B2 giao diện không còn đường nào gửi tới máy chưa ghép
+   đôi: danh sách cuộc trò chuyện chỉ có máy đã ghép đôi; phần này gỡ ở B2c): nhớ một việc chờ
+   `(device_id, paths)` và phát `pair_needed(DeviceView)` (luồng ghép đôi nối vào). Chưa ai nối
+   `pair_needed` → không giữ việc chờ, hiện câu mvp mục 8 “Chưa ghép đôi với *X*…”. Đã có việc chờ
+   → câu mvp mục 8 “Đang chờ ghép đôi với *A* để gửi file…” (*A* là máy **đang chờ ghép**).
+   `on_pairing_finished(peer_device_id, paired)` kết thúc việc chờ: khớp `peer_device_id` (không
+   theo `session_id`, spec mục 9.2) và `paired` → gửi; không ghép được (`paired` False, với
+   `peer_device_id` khớp hay None) → bỏ việc chờ (luồng ghép đôi tự báo lỗi). Lưới an toàn: luồng
+   ghép đôi không báo lại thì việc chờ tự bỏ, im lặng, sau `PENDING_PAIR_TIMEOUT` giây (`QTimer` một
+   lần; `attach`, `close_all` và lúc việc chờ kết thúc thì dừng hẹn).
+3. Kết nối đang bị chặn (`ConnectFailed` gần nhất trong `window.devices` là REJECTED,
+   IDENTITY_MISMATCH, VERSION_MISMATCH; spec mục 10 A2) → câu mvp mục 8, không tạo lượt. Dải thông
+   báo kèm nút:
    REJECTED → “Ghép đôi lại” (phát `repair_requested(DeviceView)`, luồng ghép đôi nối);
-   IDENTITY_MISMATCH → “Hủy ghép đôi” (phát `radar.unpair_requested(device_id)`, luồng ghép đôi hỏi
-   xác nhận). Chỉ chưa kết nối thì vẫn gửi: thẻ hiện “Đang chờ kết nối tới X…”.
+   IDENTITY_MISMATCH → “Hủy ghép đôi” (phát `conversations.unpair_requested(device_id)`, luồng ghép
+   đôi hỏi xác nhận). Chỉ chưa kết nối thì vẫn gửi: thẻ hiện “Đang chờ kết nối tới X…”.
    Lần mở kết nối do chính lượt đó gây ra mà bị chặn (`on_node_event` nhận `ConnectFailed` chặn,
-   lần đầu radar biết) → mọi **lượt mới** gửi tới máy đó bị gỡ thẻ và hủy (không treo “Đang nối
-   lại…” tới hạn nối lại), rồi hiện câu và nút như trên. Lượt mới: lượt gửi mà lúc thẻ xuất hiện
-   radar báo chưa kết nối, và chưa có `DeviceConnected` nào của máy đó từ đó tới giờ, tức `offer`
-   chưa từng đi. Lượt đã gửi `offer` (lượt dở) giữ nguyên: bị từ chối khi còn lượt dở thì
+   lần đầu `window.devices` biết) → mọi **lượt mới** gửi tới máy đó bị gỡ thẻ và hủy (không treo
+   “Đang nối lại…” tới hạn nối lại), rồi hiện câu và nút như trên. Lượt mới: lượt gửi mà lúc thẻ xuất
+   hiện `window.devices` báo chưa kết nối, và chưa có `DeviceConnected` nào của máy đó từ đó tới giờ,
+   tức `offer` chưa từng đi. Lượt đã gửi `offer` (lượt dở) giữ nguyên: bị từ chối khi còn lượt dở thì
    `core.links` vẫn hẹn thử lại (docstring `core/links.py`), lỗi tạm trông giống bị từ chối.
    Đánh đổi: lỗi tạm đó (máy kia đang thoát hay khởi động lại) cũng gỡ lượt mới, người dùng gửi lại;
    lượt bị gỡ vào lịch sử là `CANCELLED_USER` (như bấm “Hủy”).
@@ -67,7 +79,8 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -96,6 +109,7 @@ from teleport.app.transfers import (
 from teleport.core import pairing
 from teleport.core.links import ConnectResult
 from teleport.ui import send, texts
+from teleport.ui.activity import ActivityTracker, FinishedTransfer, latest_by_device
 from teleport.ui.bridge import NodeHost
 from teleport.ui.main_window import MainWindow
 from teleport.ui.offer import OfferPrompts
@@ -104,6 +118,8 @@ from teleport.ui.tray import Tray
 
 # Seam: dựng hộp chọn file (test thay bằng hàm trả hộp giả). Nhận cha (cửa sổ chính).
 file_dialog_factory: Callable[[QWidget | None], QFileDialog] = QFileDialog
+# Seam: giờ tường (giây epoch) làm mốc hoạt động của lượt; đọc lúc gọi.
+_wall_now: Callable[[], float] = time.time
 
 log = logging.getLogger(__name__)
 
@@ -164,7 +180,8 @@ def pick_title(peer: str) -> str:
 
 
 class TransfersController(QObject):
-    """Gửi/nhận file trên thread Qt: radar → node, sự kiện lượt → danh sách lượt, hộp hỏi, khay."""
+    """Gửi/nhận file trên thread Qt: cột trái → node, sự kiện lượt → danh sách lượt, hoạt động theo
+    máy, hộp hỏi, khay."""
 
     pair_needed = Signal(object)  # DeviceView: chưa ghép đôi, cần ghép trước khi gửi
     repair_requested = Signal(object)  # DeviceView: nút “Ghép đôi lại” (máy kia từ chối máy này)
@@ -196,6 +213,8 @@ class TransfersController(QObject):
         self._pending_timer.setSingleShot(True)
         self._pending_timer.timeout.connect(self._drop_pending)
         self._dialog: QFileDialog | None = None
+        self._closing = False  # `close_all` đã chạy: bỏ kết quả đọc lịch sử về muộn
+        self.activity = ActivityTracker()
         self._receive_dir: Path | None = None
 
         self.view = TransfersView(window.transfers_area)
@@ -204,10 +223,10 @@ class TransfersController(QObject):
             area_layout.addWidget(self.view)
         self.offers = OfferPrompts(parent=self)
 
-        radar = window.radar
-        radar.send_files_requested.connect(self.request_send)
-        radar.pick_files_requested.connect(self.pick_and_send)
-        radar.drop_hint_requested.connect(self.view.show_notice)
+        conversations = window.conversations
+        conversations.send_files_requested.connect(self.request_send)
+        conversations.pick_files_requested.connect(self.pick_and_send)
+        conversations.drop_hint_requested.connect(self.view.show_notice)
         self.view.cancel_requested.connect(self.cancel)
         self.view.content_changed.connect(self._update_summary)
         self.offers.decided.connect(self.decide)
@@ -225,9 +244,11 @@ class TransfersController(QObject):
         return self._pending
 
     def attach(self, host: NodeHost | None) -> None:
-        """Dùng `host` mới: xóa lượt và thông báo, đóng hộp hỏi, bỏ việc chờ, đặt thư mục nhận."""
+        """Dùng `host` mới: xóa lượt, hoạt động và thông báo, đóng hộp hỏi, bỏ việc chờ, đặt thư mục nhận."""
         self._host = host
         self.view.clear()
+        self.activity.clear()
+        self._window.conversations.model.clear_activity()
         self.offers.close_all()
         self._drop_pending()
         self._names = {}
@@ -251,16 +272,22 @@ class TransfersController(QObject):
         self.view.set_receive_dir(path)
 
     def on_started(self, host: NodeHost) -> None:
-        """Node của `host` đã chạy: đọc một ảnh chụp thiết bị và lượt truyền."""
+        """Node của `host` đã chạy: đọc một ảnh chụp thiết bị và lượt truyền, và lượt gần nhất của mỗi máy
+        trong lịch sử."""
         if host is not self._host:
             return
         host.call(
             lambda node: (node.devices(), node.transfers.transfers()),
             functools.partial(self._on_snapshot, host),
         )
+        host.call(
+            lambda node: latest_by_device(node.transfers.history()),
+            functools.partial(self._on_history, host),
+        )
 
     def close_all(self) -> None:
         """App đang thoát: đóng hộp hỏi và hộp chọn file, bỏ việc chờ."""
+        self._closing = True
         self.offers.close_all()
         self._drop_pending()
         dialog, self._dialog = self._dialog, None
@@ -292,7 +319,7 @@ class TransfersController(QObject):
 
         Mỗi máy một lần (theo `device_id`). Chỉ đọc các hàng của `TransfersView`, không gọi node.
         """
-        model = self._window.radar.model
+        model = self._window.devices
         seen: set[str] = set()
         names: list[str] = []
         for row in self.view.rows():
@@ -306,10 +333,12 @@ class TransfersController(QObject):
     def on_transfer(self, update: TransferUpdate) -> None:
         key = _update_key(update)
         if key in self._dropped:
-            # Lượt mới đã gỡ thẻ vì bị chặn (bước 3): bỏ mọi sự kiện, tới `TransferFinished` của lần hủy.
+            # Lượt mới đã gỡ thẻ vì bị chặn (bước 3): bỏ mọi sự kiện, tới `TransferFinished` của lần hủy;
+            # sự kiện đó vẫn vào `activity` để máy hết “đang bận”.
             if isinstance(update, TransferFinished):
                 self._dropped.discard(key)
                 self._offer_names.pop(key, None)
+                self._track(update)
             return
         if (
             key is not None
@@ -317,13 +346,14 @@ class TransfersController(QObject):
             and not isinstance(update, TransferFinished)
             and self.view.row(key) is None
         ):
-            device = self._window.radar.model.device(key.device_id)
+            device = self._window.devices.device(key.device_id)
             if device is None or not device.connected:
                 self._unoffered.add(key)
         # Đọc trước `offers.handle`: hộp hỏi mới mở có thể giành active.
         active = isinstance(update, OfferReceived) and self._app_active()
         self.offers.handle(update)
         self.view.handle(update)
+        self._track(update)
         if isinstance(update, OfferReceived):
             self._offer_names[update.key] = update.device_name
             if not update.auto_accepted and not active:
@@ -362,7 +392,7 @@ class TransfersController(QObject):
         if error is not None:
             self.view.show_notice(error)
             return
-        model = self._window.radar.model
+        model = self._window.devices
         view = model.device(device_id)
         peer = self._peer(device_id, view)
         if view is not None and not view.paired:
@@ -371,7 +401,7 @@ class TransfersController(QObject):
                 self.view.show_notice(pair_wait_text(self._peer(waiting_id, model.device(waiting_id))))
                 return
             if not view.online:
-                return  # không ghép đôi được với máy không trong mạng (radar cũng không nhận thả)
+                return  # không ghép đôi được với máy không trong mạng
             if not self.isSignalConnected(QMetaMethod.fromSignal(self.pair_needed)):
                 # Chưa có luồng ghép đôi nào nối vào: không giữ việc chờ (sẽ kẹt mãi).
                 self.view.show_notice(send.not_paired_message(peer))
@@ -400,9 +430,7 @@ class TransfersController(QObject):
         device_id, paths = pending
         if paired and peer_device_id == device_id:
             self._drop_pending()
-            self._submit_send(
-                device_id, paths, self._peer(device_id, self._window.radar.model.device(device_id))
-            )
+            self._submit_send(device_id, paths, self._peer(device_id, self._window.devices.device(device_id)))
         elif not paired and (peer_device_id is None or peer_device_id == device_id):
             self._drop_pending()
 
@@ -412,7 +440,7 @@ class TransfersController(QObject):
         if old is not None:
             old.close()
             old.deleteLater()
-        view = self._window.radar.model.device(device_id)
+        view = self._window.devices.device(device_id)
         dialog = file_dialog_factory(self._window)
         dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
         dialog.setWindowTitle(pick_title(self._peer(device_id, view)))
@@ -439,6 +467,17 @@ class TransfersController(QObject):
             )
 
     # ---- Bên trong ---------------------------------------------------------------------------
+
+    def _track(self, update: TransferUpdate) -> None:
+        """Đưa `update` vào `activity`; máy đổi thì đẩy hoạt động mới vào danh sách cuộc trò chuyện."""
+        device_id = self.activity.handle(update, _wall_now())
+        if device_id is not None:
+            self._push_activity((device_id,))
+
+    def _push_activity(self, device_ids: Iterable[str]) -> None:
+        model = self._window.conversations.model
+        for device_id in device_ids:
+            model.set_activity(device_id, self.activity.get(device_id))
 
     def _update_summary(self) -> None:
         """Báo cửa sổ chính danh sách lượt có gì không và số lượt chưa kết thúc (huy hiệu, màn rỗng)."""
@@ -487,14 +526,14 @@ class TransfersController(QObject):
         self._show_blocked(message, result, view.device_id, view)
 
     def _request_repair(self, device_id: str) -> None:
-        """Nút “Ghép đôi lại”: phát `repair_requested` với view mới nhất của radar (luồng ghép đôi nối)."""
-        view = self._window.radar.model.device(device_id)
+        """Nút “Ghép đôi lại”: phát `repair_requested` với view mới nhất (luồng ghép đôi nối)."""
+        view = self._window.devices.device(device_id)
         if view is not None:
             self.repair_requested.emit(view)
 
     def _request_unpair(self, device_id: str) -> None:
-        """Nút “Hủy ghép đôi”: qua `radar.unpair_requested` (luồng ghép đôi hỏi xác nhận, kèm cảnh báo)."""
-        self._window.radar.unpair_requested.emit(device_id)
+        """Nút “Hủy ghép đôi”: qua `conversations.unpair_requested` (luồng ghép đôi hỏi xác nhận)."""
+        self._window.conversations.unpair_requested.emit(device_id)
 
     def _submit_send(self, device_id: str, paths: list[Path], peer: str) -> None:
         host = self._host
@@ -526,6 +565,17 @@ class TransfersController(QObject):
                 self.view.set_connected(device.device_id, device.connected)
         self.view.set_device_names(self._names)
         self.view.load_snapshot(infos)
+        self._push_activity(sorted(self.activity.load_snapshot(infos, _wall_now())))
+
+    def _on_history(self, host: NodeHost, result: object) -> None:
+        """Lượt gần nhất của mỗi máy trong lịch sử (lúc `started`); chỉ dùng cho máy chưa có trong phiên."""
+        if host is not self._host or self._closing:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không đọc được lịch sử lượt truyền: %s", type(result).__name__)
+            return
+        latest = cast(dict[str, FinishedTransfer], result)
+        self._push_activity(sorted(self.activity.load_history(latest)))
 
     def _dialog_finished(self, dialog: QFileDialog) -> None:
         if self._dialog is dialog:

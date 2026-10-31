@@ -440,6 +440,7 @@ def test_gui_shows_loopback_address_reads_off_qt_thread_and_refreshes(gui, gui_w
     def script(run):
         yield gui_wait(lambda: run.windows and host_started(run), 15, "node chạy")
         win = run.window
+        win.resize(980, 660)  # spec B2 2.6: hẹp hơn 820 px thì cột trái thu gọn, `machine_card` ẩn
         yield gui_wait(
             lambda: (
                 address_spy.port is not None
@@ -488,6 +489,7 @@ def test_gui_address_read_error_keeps_old_address_and_logs_type(
     def script(run):
         yield gui_wait(lambda: run.windows and host_started(run), 15, "node chạy")
         win = run.window
+        win.resize(980, 660)  # spec B2 2.6: hẹp hơn 820 px thì cột trái thu gọn, `machine_card` ẩn
         yield gui_wait(lambda: win.address_label.isVisibleTo(win), 5, "nhãn địa chỉ")
         before = win.address_label.text()
         run.tray.parent().address_timer.setInterval(30)
@@ -523,6 +525,7 @@ def test_gui_address_read_in_flight_is_not_stacked(gui, gui_wait, config_dir, ad
     def script(run):
         yield gui_wait(lambda: run.windows and host_started(run), 15, "node chạy")
         win = run.window
+        win.resize(980, 660)  # spec B2 2.6: hẹp hơn 820 px thì cột trái thu gọn, `machine_card` ẩn
         yield gui_wait(lambda: win.address_label.isVisibleTo(win), 5, "nhãn địa chỉ")
         run.tray.parent().address_timer.setInterval(30)
         yield gui_wait(lambda: address_spy.calls >= 2, 5, "lần đọc thứ hai")
@@ -544,6 +547,7 @@ def test_gui_start_failed_stops_address_timer_and_hides_label(gui, gui_wait, con
     def script(run):
         yield gui_wait(lambda: run.windows and host_started(run), 15, "node chạy")
         win = run.window
+        win.resize(980, 660)  # spec B2 2.6: hẹp hơn 820 px thì cột trái thu gọn, `machine_card` ẩn
         yield gui_wait(lambda: win.address_label.isVisibleTo(win), 5, "nhãn địa chỉ")
         timer = run.tray.parent().address_timer
         seen["before"] = timer.isActive()
@@ -580,6 +584,7 @@ def test_gui_retry_after_locked_shows_address_of_new_host(gui, gui_wait, config_
         run.window.retry_requested.emit()
         yield gui_wait(lambda: len(run.hosts) >= 2 and host_started(run), 15, "node chạy sau Thử lại")
         win = run.window
+        win.resize(980, 660)  # spec B2 2.6: hẹp hơn 820 px thì cột trái thu gọn, `machine_card` ẩn
         yield gui_wait(
             lambda: (
                 win.address_label.text() == ADDRESS.format(address=f"127.0.0.1:{address_spy.port}")
