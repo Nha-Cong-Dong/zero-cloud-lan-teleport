@@ -30,9 +30,9 @@ pip install -e ".[dev,gui]"                      # runtime deps + PySide6-Essent
 pytest                                           # all tests
 pytest -m "not integration"                      # skip tests that open real sockets on 127.0.0.1
 pytest -m "not slow"                             # fast loop while iterating; still run the full pytest before a PR
-pytest -n 4 --dist loadgroup                     # full suite in parallel (CI: -n auto); more workers make timed tests flake (architecture.md §6)
+pytest -n 4 --dist loadgroup -m "not gui"       # parallel, then `pytest -m gui` serially (CI: -n auto); why: architecture.md §6
 pytest tests/net/test_tls.py::test_verify_fingerprint_accepts_equal   # single test
-ruff check . ; ruff format --check .             # CI runs exactly: ruff check, ruff format --check, mypy src, pytest -n auto --dist loadgroup
+ruff check . ; ruff format --check .             # CI runs exactly: ruff check, ruff format --check, mypy src, pytest -n auto --dist loadgroup -m "not gui", pytest -m gui
 mypy src                                         # type check; config in [tool.mypy] of pyproject.toml
 teleport identity                                # CLI entry point (also: python -m teleport)
 teleport listen                                  # wait for pairing (shows the 6-digit code, asks [c/k])

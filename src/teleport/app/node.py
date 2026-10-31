@@ -195,8 +195,7 @@ def device_os() -> str:
 def _hostname() -> str:
     """Hostname như `platform.node()` (cùng `socket.gethostname()`, lỗi → chuỗi rỗng) nhưng không qua
     `platform.uname()`: trên Windows (Python 3.12+) lần gọi `uname()` đầu tiên truy vấn WMI qua COM,
-    mất hàng chục tới hàng trăm ms; gọi từ thread Qt (màn “Bắt đầu”) lúc máy bận từng làm tiến trình
-    crash trên CI Windows. Seam cấp module cho test."""
+    mất hàng chục tới hàng trăm ms, mà màn “Bắt đầu” gọi trên thread Qt. Seam cấp module cho test."""
     try:
         return socket.gethostname()
     except OSError:

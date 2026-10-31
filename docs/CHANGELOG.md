@@ -176,7 +176,8 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lời hỏi `[c/k]` của `listen`, `pair` và `receive` được in lại khi có dòng khác in chen giữa lúc đang chờ trả lời.
 
 ### Fixed
-- Windows: lấy tên máy (màn “Bắt đầu”, tên mặc định khi tạo danh tính) không còn đi qua truy vấn WMI của Windows, vốn mất 50–265 ms và chạy ngay trên thread giao diện; trên CI, bước này lúc máy bận từng làm tiến trình giao diện crash.
+- Windows: lấy tên máy (màn “Bắt đầu”, tên mặc định khi tạo danh tính) không còn đi qua truy vấn WMI của Windows, vốn mất 50–265 ms và chạy ngay trên thread giao diện.
+- Giao diện: thông báo từ khay mang logo Teleport thay vì biểu tượng chữ “i” của hệ thống. Trên Windows, chạy từ mã nguồn (`python -m teleport.ui`, `teleport-gui`) thì taskbar hiện logo Teleport và thông báo không còn ghi “Python”.
 - Giao diện: khi kéo file qua máy đang được chọn, viền “thả vào đây” không còn trùng màu nền của hàng nên vẫn thấy rõ (cả nền sáng lẫn tối).
 - Giao diện: gửi file lần đầu tới máy đã hủy ghép đôi máy này giờ báo ngay “*X* từ chối kết nối từ máy này…” kèm nút “Ghép đôi lại”, và lượt gửi đó bị gỡ khỏi danh sách; trước đây thẻ đứng mãi ở “Đang nối lại…” và câu báo chỉ hiện ở lần gửi sau. Lượt bị gỡ vẫn vào lịch sử là đã hủy, như khi bấm “Hủy”. Lượt đang truyền dở mà bị từ chối vẫn tự nối lại như cũ.
 - Giao diện: app có thể crash ngẫu nhiên (đã thấy trên macOS), vì bộ thu gom rác của Python đôi khi hủy cửa sổ hay hộp thoại đã đóng ngay trong thread chạy kết nối mạng, ngoài thread giao diện. Giờ việc thu gom rác của app có giao diện chỉ chạy trên thread giao diện.

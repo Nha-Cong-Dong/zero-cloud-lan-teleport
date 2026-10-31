@@ -8,7 +8,8 @@ Menu giữ bốn mục, theo thứ tự (M5): “Mở Teleport”, “Gửi file
 Bóng thoại (`show_message(text, folder=None)`): chỉ hiện khi có khay và biểu tượng đang hiện; khi
 thật sự hiện thì nhớ `folder` của bóng thoại đó (None cũng nhớ). Người dùng bấm vào bóng thoại
 (`QSystemTrayIcon.messageClicked`) → phát `message_clicked(folder)` với thư mục của bóng thoại gần
-nhất (`Path` hay None); `ui.app` quyết định mở thư mục hay đưa cửa sổ lên trước.
+nhất (`Path` hay None); `ui.app` quyết định mở thư mục hay đưa cửa sổ lên trước. Bóng thoại mang logo
+(`make_icon`), không dùng icon chuẩn “i” của hệ thống.
 
 `is_available()` (hàm của module, `Tray.is_available` gọi lại nó) là seam cho test: hệ thống
 không có khay (một số môi trường Linux, `offscreen`) thì đóng cửa sổ là thoát app. Mọi chỗ
@@ -123,7 +124,7 @@ class Tray(QObject):
         """
         if Tray.is_available() and self._icon.isVisible():
             self._message_folder = folder
-            self._icon.showMessage(self.tr("Teleport"), text, QSystemTrayIcon.MessageIcon.Information)
+            self._icon.showMessage(self.tr("Teleport"), text, self._icon.icon())  # logo, không icon “i”
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self._menu and event.type() == QEvent.Type.LanguageChange:

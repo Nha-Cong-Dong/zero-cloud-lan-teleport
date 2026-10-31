@@ -4,8 +4,8 @@
   chạy được trên CI không có màn hình. Không cài PySide6 (extra `gui`) thì cả thư mục bị bỏ qua.
 - Mọi test trong thư mục này được gắn marker `gui`; test mở socket gắn thêm `integration`. Khi chạy song
   song (`-n … --dist loadgroup`) chúng cùng nhóm `xdist_group("gui")`, tức chạy lần lượt trong một
-  worker như khi chạy tuần tự: trên runner Windows của CI, test chạy `main` trong tiến trình từng crash
-  (access violation trong `app.exec()`) khi trộn lẫn với test khác trên nhiều worker.
+  worker. CI vẫn chạy chúng riêng (`pytest -m gui`, tuần tự): trộn với test tầng khác trong một worker
+  thì vòng sự kiện Qt từng abort (docs/architecture.md mục 6).
 - Module `teleport.ui.*` chỉ được import **bên trong** fixture/test, để `ui` đang viết dở chỉ làm đỏ các
   test dùng tới nó (giống `tests/conftest.py`).
 

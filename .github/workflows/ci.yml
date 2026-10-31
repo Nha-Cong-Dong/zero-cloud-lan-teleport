@@ -42,7 +42,10 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
-      # Song song theo số lõi của runner; test marker mdns và test tests/ui mỗi loại dồn vào một worker
-      # (tests/conftest.py, tests/ui/conftest.py). Worker crash thì dừng ngay: xdist chạy lại test vừa
-      # crash ở worker mới và từng treo tới hết timeout-minutes.
-      - run: pytest -q -n auto --dist loadgroup --max-worker-restart=0
+      # Song song theo số lõi của runner, trừ test tests/ui; test marker mdns dồn vào một worker
+      # (tests/conftest.py). Worker crash thì dừng ngay: xdist chạy lại test vừa crash ở worker mới
+      # và từng treo tới hết timeout-minutes.
+      - run: pytest -q -n auto --dist loadgroup --max-worker-restart=0 -m "not gui"
+      # Test tests/ui chạy tuần tự ở tiến trình riêng: trong worker xdist đã chạy test khác, vòng sự
+      # kiện Qt từng abort (Windows, chưa rõ nguyên nhân; architecture.md mục 6).
+      - run: pytest -q -m gui
