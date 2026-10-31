@@ -30,6 +30,13 @@ không import được conftest: lớp phụ trợ (`CliRun`, `Proc`, mDNS giả
 - `read_state` (fix(app) 1e, phạm vi session): đọc `.state` độc lập theo định dạng ở architecture mục 4,
   không qua `teleport.*`.
 
+3. Registry giả cho tự khởi động (spec D2 1.2, mục 5 “Rủi ro”, tiêu chí xong 4).
+
+Fixture tự động `fake_registry` thay seam `teleport.app.autostart.registry` (đọc lúc gọi) bằng một
+`FakeRegistry` trong bộ nhớ cho **mọi** test, nên không test nào ghi registry thật của máy chạy test.
+Test lấy chính bản giả đó bằng cách xin fixture `fake_registry`. Module chưa import được (đang viết dở,
+hay chưa có) thì fixture trả None và không vá gì.
+
 Module `teleport.*` ngoài `core.admission` chỉ được import **bên trong** fixture, để một module đang
 viết dở chỉ làm đỏ các test dùng tới nó.
 """
@@ -168,6 +175,71 @@ def relaxed_admission_rates(request: pytest.FixtureRequest, monkeypatch: pytest.
     # tốc độ thật.
     for name in RATE_CONSTANTS:
         monkeypatch.setattr(admission, name, RELAXED_RATE)
+
+
+# =================================================================================================
+# Registry giả cho `teleport.app.autostart` (spec D2 1.2)
+# =================================================================================================
+
+
+class FakeRegistry:
+    """`Registry` giả (HKCU trong bộ nhớ) theo giao diện ở spec D2 1.2.
+
+    - `values[(key, name)] = (dữ liệu, kiểu)`; kiểu theo mã `winreg.REG_*` (khai lại ở đây để chạy được
+      ngoài Windows).
+    - `errors["get" | "set" | "delete"] = OSError(...)`: thao tác đó ném lỗi (giả Windows từ chối).
+    - `calls`: mọi thao tác theo thứ tự, `("get", key, name)`, `("set", key, name, value, kind)`,
+      `("delete", key, name)`; `writes()` chỉ các thao tác ghi/xóa.
+    """
+
+    REG_SZ = 1
+    REG_EXPAND_SZ = 2
+    REG_BINARY = 3
+    REG_DWORD = 4
+
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str], tuple[object, int]] = {}
+        self.errors: dict[str, OSError] = {}
+        self.calls: list[tuple] = []
+
+    def _maybe_fail(self, op: str) -> None:
+        error = self.errors.get(op)
+        if error is not None:
+            raise error
+
+    def get(self, key: str, name: str) -> tuple[object, int] | None:
+        self.calls.append(("get", key, name))
+        self._maybe_fail("get")
+        return self.values.get((key, name))
+
+    def set(self, key: str, name: str, value: str, kind: int) -> None:
+        self.calls.append(("set", key, name, value, kind))
+        self._maybe_fail("set")
+        self.values[(key, name)] = (value, kind)
+
+    def delete(self, key: str, name: str) -> bool:
+        self.calls.append(("delete", key, name))
+        self._maybe_fail("delete")
+        return self.values.pop((key, name), None) is not None
+
+    def writes(self) -> list[tuple]:
+        return [c for c in self.calls if c[0] != "get"]
+
+
+@pytest.fixture(autouse=True)
+def fake_registry(monkeypatch: pytest.MonkeyPatch):
+    """Mọi test: `teleport.app.autostart.registry` là một `FakeRegistry` mới (không bao giờ registry
+    thật). Module chưa import được → None, không vá gì."""
+    import importlib
+
+    try:
+        autostart = importlib.import_module("teleport.app.autostart")
+    except ImportError:
+        yield None
+        return
+    fake = FakeRegistry()
+    monkeypatch.setattr(autostart, "registry", fake, raising=False)
+    yield fake
 
 
 # =================================================================================================

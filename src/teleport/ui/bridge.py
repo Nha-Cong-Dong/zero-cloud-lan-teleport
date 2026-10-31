@@ -23,8 +23,20 @@ True khi `on_done` đã chạy, kể cả khi `submit` báo lỗi ngay vì node 
 Lỗi không ai lấy trên loop (task, callback) đi qua `errorlog.loop_exception_handler`: chỉ ghi tên
 loại lỗi và traceback (mvp N9).
 
-Vòng đời trong thread node: dựng `Node` (nhận yêu cầu ghép đôi: `accept_pairing=True`, mvp F3;
-hỏi người dùng từng `offer`), `start()`,
+**Luật nhận yêu cầu ghép đôi** (Q9 của spec C2, spec D2 mục 1.3 và 9.3): `Node` được dựng với
+`accept_pairing=False` (đóng mặc định). Ngay sau khi `start()` xong, trên thread node và trước khi
+post `started`, `NodeHost.apply_pairing_policy(node)` đặt `node.accept_pairing = node.visible or
+đang mở “Chờ ghép đôi”`. Trạng thái “đang chờ ghép đôi” là một biến duy nhất của `NodeHost`
+(`_wait_pairing_open`), chỉ đọc/ghi trên thread node: D3 đặt nó bằng `set_wait_pairing_open(node, flag)`
+trong một `call` (đặt rồi áp lại luật ngay). **Hợp đồng**: mọi chỗ đổi `visible` phải gọi
+`node.set_visible(v)` rồi `host.apply_pairing_policy(node)` trong **cùng một** `host.call` (một khối
+đồng bộ trên loop), nên không có lúc nào máy ẩn mà vẫn nhận yêu cầu ghép đôi (máy ẩn đang gửi `hello`
+cho máy lạ qua `Node._allows_anonymous`). Khoảng trống chấp nhận được: từ lúc cổng mở tới hết
+`start()`, `accept_pairing` còn False nên máy đang hiện chưa nhận ghép đôi trong vài trăm ms đó (máy
+ẩn thì đúng luật). Hàm thuần `apply_pairing_policy(node, wait_pairing_open=...)` là bảng chân trị.
+
+Vòng đời trong thread node: dựng `Node` (`accept_pairing=False`, xem trên; hỏi người dùng từng
+`offer`), `start()`, áp luật nhận ghép đôi,
 phát `started` hoặc `start_failed(mã, chi tiết)`, chờ lệnh dừng, rồi đóng như `cli._close_node`:
 `close()` chạy trong task riêng, không bị hủy trước hạn `app.node.close_time_limit()` (zeroconf
 dừng giữa chừng nếu task bị hủy sớm), quá hạn mới hủy. Hạn được đọc qua thuộc tính module
@@ -124,6 +136,15 @@ def _clean(text: str) -> str:
 
 def _os_error_text(error: OSError) -> str:
     return error.strerror or str(error) or type(error).__name__
+
+
+def apply_pairing_policy(node: Node, *, wait_pairing_open: bool = False) -> None:
+    """Thread node, đồng bộ: `node.accept_pairing = node.visible or wait_pairing_open`.
+
+    Bảng chân trị của luật nhận ghép đôi (docstring module). Bên trong `NodeHost` luôn đi qua
+    `NodeHost.apply_pairing_policy(node)`, nơi đọc biến “đang chờ ghép đôi” của host.
+    """
+    node.accept_pairing = bool(node.visible or wait_pairing_open)
 
 
 def classify_start_error(error: BaseException) -> tuple[StartError, str]:
@@ -261,6 +282,7 @@ class NodeHost(QObject):
         self._stop_requested = False
         # Chỉ thread node.
         self._node: Node | None = None
+        self._wait_pairing_open = False  # trang “Chờ ghép đôi” đang mở (D3); luật nhận ghép đôi
         self._serving = False  # node đã chạy và chưa bắt đầu dừng
         self._jobs: set[asyncio.Future[Any]] = set()  # việc `submit` đang chạy
 
@@ -299,6 +321,23 @@ class NodeHost(QObject):
         """Thư mục nhận đã lưu không mở được lúc `started` (ảnh chụp; trước đó None), hay None."""
         self._check_thread()
         return self._receive_dir_error
+
+    def set_node_name(self, name: str) -> None:
+        """Thread Qt: nhớ tên mới của node (sau `Node.set_name` thành công); chưa qua `display_name`."""
+        self._check_thread()
+        self._node_name = name
+
+    def apply_pairing_policy(self, node: Node) -> None:
+        """**Thread node** (bên trong `call`): áp luật nhận ghép đôi với biến “đang chờ ghép đôi” của host.
+
+        Không nhận tham số từ bên gọi: “đang chờ ghép đôi” chỉ có một nguồn (`set_wait_pairing_open`).
+        """
+        apply_pairing_policy(node, wait_pairing_open=self._wait_pairing_open)
+
+    def set_wait_pairing_open(self, node: Node, open_: bool) -> None:
+        """**Thread node** (bên trong `call`): đặt “đang chờ ghép đôi” (D3) rồi áp lại luật ngay."""
+        self._wait_pairing_open = bool(open_)
+        self.apply_pairing_policy(node)
 
     def start(self) -> None:
         """Mở thread node; kết quả báo qua `started` / `start_failed`. Gọi lần hai → RuntimeError."""
@@ -451,7 +490,7 @@ class NodeHost(QObject):
                 host=opts.host,
                 port=opts.port,
                 mdns=opts.mdns,
-                accept_pairing=True,
+                accept_pairing=False,  # đóng mặc định; mở theo luật sau `start()`
                 on_pairing_prompt=self._pairing_prompt_callback,
                 on_pairing_finished=self._pairing_finished_callback,
                 auto_connect=True,
@@ -489,6 +528,10 @@ class NodeHost(QObject):
         if wake.is_set():
             await self._close_node(node)
             return
+        try:
+            self.apply_pairing_policy(node)  # trước `started`: máy hiện nhận ghép đôi từ đây
+        except Exception as e:
+            log.error("không áp được luật nhận ghép đôi: %s", type(e).__name__)
         self._serving = True
         receive_dir, receive_dir_error = self._read_receive_dir(node)
         self._post(functools.partial(self._on_started, node.name, receive_dir, receive_dir_error))

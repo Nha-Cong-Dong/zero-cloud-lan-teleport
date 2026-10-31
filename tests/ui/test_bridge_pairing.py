@@ -1,6 +1,8 @@
 """`NodeHost` cho ghép đôi trên GUI (PR2, hợp đồng spec-pr2-api.md mục 1; spec-hackathon D2, 9.4).
 
-- Node GUI dựng với `accept_pairing=True`; `pairing_prompt` / `pairing_finished` phát trên thread Qt.
+- Node GUI đang hiện (mặc định) nhận ghép đôi: từ spec D2 (1.3) `accept_pairing` = `visible or đang chờ
+  ghép đôi`, áp trước `started` (test riêng: `test_bridge_policy.py`); `pairing_prompt` /
+  `pairing_finished` phát trên thread Qt.
 - `submit` trả `SubmitJob`: `cancel()` hủy được `pair_with` đang chạy → `on_done(CancelledError)` và
   `pairing_finished` CANCELLED; `cancel()` lúc nào cũng không lỗi (trước khi task kịp tạo, sau khi xong,
   khi node đã dừng); `done` thành True khi `on_done` đã chạy.

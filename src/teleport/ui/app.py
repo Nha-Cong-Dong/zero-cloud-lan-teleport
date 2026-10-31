@@ -22,6 +22,18 @@ chuyện của máy đó); lựa chọn dạng hiển thị đọc từ
 dùng đã bấm đổi dạng thì bỏ) và lưu bằng `Node.set_ui_preferences(radar_view=…)`, cả hai qua
 `NodeHost.call`; lỗi → WARNING (tên loại lỗi), lựa chọn vẫn giữ trong RAM.
 
+**Cài đặt** (spec D2): trang `ui.settings.SettingsPage` đăng ký ở đây (`window.add_page(SETTINGS)`,
+nên ⚙ và Ctrl+, chỉ có khi chạy qua `GuiApp`), model thiết bị truyền vào đúng một chỗ (`_device_model`);
+`SettingsController` (`GuiApp.settings`) nhận host mới (`attach`), `started` (`on_started`), Thoát
+(`close_all`) và `shutdown`. “Hủy ghép đôi…” của trang → hộp xác nhận của `PairingController` như ở
+danh sách cuộc trò chuyện; “Tìm máy mới” → trang DISCOVER; hàng Thư mục nhận theo
+`receive_dir_controller` (`state_changed` →
+`page.set_receive_dir(thư mục, thư mục hỏng, đang đổi sang)`, “Mở” như chân “Lưu vào”, “Đổi…” →
+`choose(cửa sổ)`, `failed` khi trang Cài đặt đang mở thì thêm câu lỗi ở thanh thông báo của trang);
+`name_changed` → `MainWindow.set_device_name` và `NodeHost.set_node_name`; huy hiệu “Đang ẩn” của thẻ
+máy này theo `Node.visible` đọc lúc `started` và `visibility_changed`. Ngôn ngữ đã lưu
+(`settings.json`) được áp lúc khởi động (`_saved_language`, chỉ đọc, lỗi gì cũng về theo hệ điều hành).
+
 **Gửi/nhận file**: `ui.transfers.TransfersController` (`GuiApp.transfers`) giữ danh sách lượt, hộp
 hỏi nhận file và việc gửi; `GuiApp` chỉ báo host mới (`attach`), `started`, `NodeEvent` và
 `TransferUpdate` của host hiện tại cho nó.
@@ -157,6 +169,7 @@ from teleport import paths
 from teleport.app import node as app_node
 from teleport.app.devices import DeviceView
 from teleport.app.node import NodeEvent
+from teleport.app.settings import Settings
 from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
@@ -164,11 +177,14 @@ from teleport.ui import errorlog, fonts, i18n, icons, receive_dir, send, texts, 
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.gcguard import GcGuard
-from teleport.ui.main_window import MainWindow, ViewState
+from teleport.ui.main_window import MainWindow, Page, ViewState
 from teleport.ui.pairing import PairingController, repair_offline_text
+from teleport.ui.radar import DeviceListModel
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
+from teleport.ui.settings import SettingsController, SettingsPage
 from teleport.ui.transfers import TransfersController
 from teleport.ui.tray import Tray, make_icon
+from teleport.ui.widgets import InfoLevel
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -438,6 +454,7 @@ class GuiApp(QObject):
         self._quit_box: QMessageBox | None = None
         self._address_job: SubmitJob | None = None
         self._receive_dir_notice: str | None = None  # câu cuối app hiện ở dải về thư mục nhận
+        self._settings_dir_notice: str | None = None  # câu lỗi thư mục nhận đang ở trang Cài đặt
         self._view_chosen = False  # người dùng đã bấm đổi dạng hiển thị kể từ lần `started` gần nhất
         self.host: NodeHost | None = None
         self._old_hosts: list[NodeHost] = []
@@ -481,6 +498,24 @@ class GuiApp(QObject):
         self.pairing.job_done.connect(self._on_pair_job_done)
         self.pairing.paired.connect(self._on_paired)
         self.pairing.notice.connect(self.transfers.view.show_notice)
+        settings_page = SettingsPage(self._device_model(), self.window.pages)
+        self.window.add_page(Page.SETTINGS, settings_page)
+        settings_page.header.back_requested.connect(self.window.go_back)
+        self.settings = SettingsController(
+            settings_page,
+            config_dir,
+            self,
+            message_parent=lambda: self.window,
+            open_url=lambda url: open_url(url),
+            log_files=lambda: log_files(self._config_dir),
+        )
+        settings_page.unpair_requested.connect(self._on_unpair_requested)
+        settings_page.discover_requested.connect(lambda: self.window.open_page(Page.DISCOVER))
+        settings_page.open_receive_dir_requested.connect(self._on_open_receive_dir)
+        settings_page.change_receive_dir_requested.connect(self._choose_receive_dir)
+        settings_page.set_change_available(True)
+        self.settings.name_changed.connect(self._on_name_changed)
+        self.settings.visibility_changed.connect(self._on_visibility_changed)
         discover = self.window.discover
         discover.pair_requested.connect(self.pairing.pair_device)
         discover.manual_address_entered.connect(self.pairing.pair_address)
@@ -493,6 +528,10 @@ class GuiApp(QObject):
     @property
     def quitting(self) -> bool:
         return self._quitting
+
+    def _device_model(self) -> DeviceListModel:
+        """Model thiết bị dùng chung cho trang Cài đặt (một chỗ duy nhất; B2 đổi nguồn ở đây)."""
+        return self.window.devices
 
     @property
     def quit_box(self) -> QMessageBox | None:
@@ -535,9 +574,12 @@ class GuiApp(QObject):
         host.node_event.connect(functools.partial(self._on_node_event, host))
         self.host = host
         self._receive_dir_notice = None
+        self._settings_dir_notice = None
         self.receive_dir_controller.attach(host)
         self.transfers.attach(host)
         self.pairing.set_host(host)
+        self.settings.attach(host)
+        self.window.set_machine_hidden(False)
         self.window.show_starting()
         host.start()
 
@@ -567,6 +609,7 @@ class GuiApp(QObject):
         self.transfers.close_all()
         self.receive_dir_controller.close_all()
         self.pairing.close_all()
+        self.settings.close_all()
         self.window.hide()
         self.tray.hide()
         self._quit_timer.start(int((app_node.close_time_limit() + QUIT_GRACE) * 1000))
@@ -589,6 +632,7 @@ class GuiApp(QObject):
         self.transfers.close_all()
         self.receive_dir_controller.close_all()
         self.pairing.close_all()
+        self.settings.shutdown()
         if self._instance is not None:
             self._instance.stop_listening()
         deadline = time.monotonic() + JOIN_TIMEOUT
@@ -729,10 +773,17 @@ class GuiApp(QObject):
         """Thư mục nhận / thư mục hỏng / thư mục đang đổi sang đổi: cập nhật cửa sổ và gửi/nhận."""
         c = self.receive_dir_controller
         self.window.set_receive_dir(c.receive_dir, c.unavailable)
+        self.settings.page.set_receive_dir(c.receive_dir, c.unavailable, c.pending)
         self.window.set_receive_dir_pending(c.pending)
         self.transfers.set_receive_dir(c.receive_dir)
+        if c.unavailable is not None or c.receive_dir is None or c.changing:
+            return
+        # Đã ổn: gỡ câu lỗi thư mục nhận ở trang Cài đặt nếu trang còn hiện đúng câu đó.
+        settings_notice, self._settings_dir_notice = self._settings_dir_notice, None
+        if settings_notice is not None and self.settings.notice_text() == settings_notice:
+            self.settings.page.clear_notice()
         notice = self._receive_dir_notice
-        if notice is None or c.unavailable is not None or c.receive_dir is None or c.changing:
+        if notice is None:
             return
         # Đã ổn: gỡ câu về thư mục nhận mà app đã hiện, nếu dải chưa bị thông báo khác đè.
         self._receive_dir_notice = None
@@ -748,6 +799,12 @@ class GuiApp(QObject):
         else:
             self.transfers.view.show_notice(text)
         self._receive_dir_notice = text
+        if self.window.current_page is Page.SETTINGS:  # người dùng bấm “Đổi…” ở trang Cài đặt
+            action = None
+            if code in (ChangeError.UNAVAILABLE, ChangeError.RESERVED):
+                action = (receive_dir.choose_other_text(), self._choose_receive_dir)
+            self.settings.show_notice(InfoLevel.ERROR, text, action=action)
+            self._settings_dir_notice = text
 
     def _show_receive_dir_unavailable(self, path: Path) -> None:
         """Lúc `started`, thư mục nhận đã lưu không mở được: dải thông báo, và bóng thoại khi chạy nền."""
@@ -784,6 +841,8 @@ class GuiApp(QObject):
         self.transfers.on_started(host)
         if controller.unavailable is not None:
             self._show_receive_dir_unavailable(controller.unavailable)
+        self.settings.on_started(host)
+        host.call(lambda node: node.visible, functools.partial(self._on_visible_read, host))
         if not self._quitting:
             self._stop_addresses()
             self._refresh_addresses()
@@ -820,6 +879,26 @@ class GuiApp(QObject):
     def _on_view_saved(result: object) -> None:
         if isinstance(result, BaseException):
             log.warning("không lưu được cài đặt dạng hiển thị: %s", type(result).__name__)
+
+    def _on_visible_read(self, host: NodeHost, result: object) -> None:
+        """`Node.visible` lúc `started`: huy hiệu “Đang ẩn” của thẻ máy này."""
+        if host is not self.host or self._quitting:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không đọc được chế độ ẩn: %s", type(result).__name__)
+            return
+        self.window.set_machine_hidden(result is False)
+
+    def _on_visibility_changed(self, visible: bool) -> None:
+        """Đổi ẩn/hiện trong Cài đặt xong: huy hiệu “Đang ẩn”."""
+        self.window.set_machine_hidden(not visible)
+
+    def _on_name_changed(self, name: str) -> None:
+        """Đổi tên trong Cài đặt xong: thẻ máy này và tên host nhớ."""
+        self.window.set_device_name(name)
+        host = self.host
+        if host is not None:
+            host.set_node_name(name)
 
     def _on_open_device(self, device_id: str) -> None:
         """Bấm máy đã ghép đôi ở trang “Tìm máy mới”: về HOME, mở cuộc trò chuyện của máy đó."""
@@ -905,6 +984,21 @@ class GuiApp(QObject):
         if not self._told_tray:
             self._told_tray = True
             self.tray.show_message(texts.still_running())
+
+
+def log_files(config_dir: Path) -> list[Path]:
+    """File log để xuất, bản cũ (đã xoay) trước: `teleport.log.1`, `teleport.log`."""
+    directory = config_dir / LOG_DIR
+    return [directory / f"{LOG_FILE}.{n}" for n in range(LOG_BACKUPS, 0, -1)] + [directory / LOG_FILE]
+
+
+def _saved_language(config_dir: Path) -> str | None:
+    """Ngôn ngữ đã lưu ở `settings.json` (chỉ đọc); lỗi gì cũng None (theo hệ điều hành)."""
+    try:
+        return Settings.load(config_dir).language
+    except Exception as e:
+        log.debug("không đọc được ngôn ngữ đã lưu: %s", type(e).__name__)
+        return None
 
 
 def _default_options(config_dir: Path) -> NodeOptions:
@@ -1046,6 +1140,9 @@ def _selftest(app: QApplication) -> int:
         window.devices.reset(())
         for code in StartError:
             window.show_error(code.value, "")
+        settings_page = SettingsPage(window.devices, window.pages)
+        window.add_page(Page.SETTINGS, settings_page)
+        settings_page.set_receive_dir(Path("Teleport"))
         transfers = TransfersController(window, tray)
         transfers.attach(None)
         controller = ReceiveDirController()
@@ -1131,7 +1228,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
     """Phần của `main` sau khi có `QApplication` (ngoài `--selftest`), chạy trong `GcGuard`."""
-    i18n.install(app)
+    i18n.install(app, _saved_language(config_dir))
     fonts.install()  # lỗi thì `theme.font_for` rơi về font hệ thống
     theme.apply(app)
     try:

@@ -180,7 +180,6 @@ _WAVE_COUNT = 3
 _WAVE_ALPHA = 0.45
 _ADDRESS_MAX_LENGTH = 64
 _ADDRESS_WIDTH = 220  # px, ô “Nhập IP…”
-_OS_LABELS = {"windows": "Windows", "macos": "macOS", "linux": "Linux"}
 _PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
 _ENTER_KEYS = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
 _PLAIN_MODIFIERS = (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
@@ -421,7 +420,7 @@ class RadarBubble(QAbstractButton):
         self.setProperty("paired", bool(view.paired))
         name = self._name()
         self.setAccessibleName(_bubble_accessible_name(name, view.paired))
-        os_label = _OS_LABELS.get(view.os or "")
+        os_label = texts.os_label(view.os)
         hint = _bubble_hint(view.paired)
         self.setAccessibleDescription(f"{os_label}. {hint}" if os_label else hint)
         lines = [name, _status_text(view)]
