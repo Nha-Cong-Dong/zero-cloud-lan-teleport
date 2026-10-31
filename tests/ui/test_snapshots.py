@@ -16,15 +16,16 @@ nên biến môi trường thắng)::
 Ảnh không commit vào repo: đính vào PR. Các PR của đợt B thêm cảnh của mình vào `SCENES`.
 
 Cảnh: `welcome`, `starting`, `running` (một địa chỉ, chưa có máy đã ghép đôi → “Ghép đôi máy đầu
-tiên”), `running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo), `error`, `widgets` (trang
+tiên”), `running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo),
+`running_unavailable` (thư mục nhận đã lưu không mở được, spec B1b), `error`, `widgets` (trang
 mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`), `page` (RUNNING, mở một trang mẫu có
 `PageHeader` ở chỗ SETTINGS, vì DISCOVER đã là trang thật), `discover` (trang “Tìm máy mới”: 4 máy
 chưa ghép đôi, một tên dài bị cắt “…”, 2 máy đã ghép đôi), `discover_list` (9 máy: tự sang dạng danh
 sách), `conversations` (spec B2 mục 7: 4 máy đã ghép đôi ở cột trái — đang gửi 62% và đang chọn,
 trực tuyến đã nhận một file, ngoại tuyến đã gửi hôm qua, trực tuyến bị từ chối kết nối — và thẻ đang
 gửi ở khung phải), `conversations_drop` (như trên, đang kéo 3 file qua hàng đang chọn). Giờ cố định
-bằng seam `_wall_now` của `ui.conversations` và `ui.transfers` (`NOW`). Tổng 11 cảnh × 2 chế độ × 2
-cỡ = 44 ảnh.
+bằng seam `_wall_now` của `ui.conversations` và `ui.transfers` (`NOW`). Tổng 12 cảnh × 2 chế độ × 2
+cỡ = 48 ảnh.
 """
 
 from __future__ import annotations
@@ -175,6 +176,23 @@ def scene_running_full(qtbot) -> QWidget:
     window.set_transfer_summary(view.has_content(), view.active_count())
 
     window.show_running("Laptop-Minh", folder)
+    window.set_addresses(["192.168.1.15"], None)
+    return window
+
+
+def scene_running_unavailable(qtbot) -> QWidget:
+    """RUNNING mà thư mục nhận đã lưu không mở được (spec B1b): huy hiệu “Không nhận file”, chân “Lưu
+    vào” báo warning kèm “Đổi…”, dải thông báo có nút “Chọn thư mục nhận”."""
+    from teleport.ui import receive_dir
+    from teleport.ui.transfers_view import TransfersView
+
+    window = _main_window(qtbot)
+    view = TransfersView(window.transfers_area)
+    window.transfers_area.layout().addWidget(view)
+    missing = Path("E:/Teleport")
+    view.show_notice(receive_dir.unavailable_text(missing), receive_dir.choose_action_text(), lambda: None)
+    window.set_transfer_summary(view.has_content(), view.active_count())
+    window.show_running("Laptop-Minh", None, missing)
     window.set_addresses(["192.168.1.15"], None)
     return window
 
@@ -487,6 +505,7 @@ SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     "starting": (scene_starting, True, "surface"),
     "running": (scene_running, True, "sidebar"),
     "running_full": (scene_running_full, True, "sidebar"),
+    "running_unavailable": (scene_running_unavailable, True, "sidebar"),
     "error": (scene_error, True, "surface"),
     "widgets": (scene_widgets, False, None),
     "page": (scene_page, True, "surface"),

@@ -383,7 +383,9 @@ def test_w3_tab_order_full_sidebar(env, qtbot):
     assert in_area, "Tab không vào được thẻ lượt truyền"
     i_open = index_of(order, w.save_bar.open_button)
     assert all(idx[-1] < i < i_open for i in in_area)
-    assert i_open == len(order) - 1, f"“{OPEN_DIR}” phải cuối chuỗi"
+    # B1b: “Đổi…” (`change_button`) ngay sau “Mở thư mục”, cuối chuỗi.
+    assert i_open == len(order) - 2, f"“{OPEN_DIR}” phải ngay trước “Đổi…”"
+    assert index_of(order, w.save_bar.change_button) == len(order) - 1, "“Đổi…” phải cuối chuỗi"
     assert all(x is not w.compact_machine for x in order), "compact_machine ẩn thì bị bỏ qua"
 
 
@@ -400,7 +402,8 @@ def test_w3_tab_order_compact_sidebar(env, qtbot):
     assert idx == sorted(idx)
     for hidden in (w.name_label, w.address_label, w.copy_button):
         assert all(x is not hidden for x in order), "widget ẩn bị Tab ghé"
-    assert index_of(order, w.save_bar.open_button) == len(order) - 1
+    assert index_of(order, w.save_bar.open_button) == len(order) - 2
+    assert index_of(order, w.save_bar.change_button) == len(order) - 1
 
 
 def test_w3_shift_tab_reverses_outside_rows(env, qtbot):
