@@ -2049,7 +2049,7 @@ class _MdnsPeer:
 
 @integration
 @slow
-@pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
+@pytest.mark.mdns
 def test_mdns_peer_appears_and_disappears_on_radar_within_n1(
     qtbot, qapp, config_dir, node_options, monkeypatch
 ):

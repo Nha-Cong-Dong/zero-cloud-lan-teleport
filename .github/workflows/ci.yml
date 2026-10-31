@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Push commit mới vào cùng PR thì hủy lần chạy cũ; trên main mỗi commit vẫn chạy đủ.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
@@ -37,4 +42,5 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
-      - run: pytest -q
+      # Song song theo số lõi của runner; test marker mdns dồn vào một worker (tests/conftest.py).
+      - run: pytest -q -n auto --dist loadgroup

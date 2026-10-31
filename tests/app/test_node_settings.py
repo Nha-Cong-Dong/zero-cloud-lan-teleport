@@ -432,7 +432,7 @@ async def test_set_name_readvertises_with_new_name(node_factory, fake_mdns):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
+@pytest.mark.mdns
 async def test_set_name_txt_updated_within_3s(node_factory):
     """mDNS thật trên loopback: máy kia thấy tên mới (TXT) trong 3 s sau `set_name`."""
 

@@ -187,7 +187,7 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 | Giao diện (extra `gui`) | `PySide6-Essentials` (kèm `shiboken6`) | LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only (dùng theo LGPL-3.0, mục 1) |
 | Icon và font của giao diện (tài sản trong `src/teleport/ui/assets/`, nguồn và commit ghim ở `SOURCE_ASSETS` của `packaging/pyinstaller/third_party.py`) | Fluent UI System Icons (SVG `_regular`, `microsoft/fluentui-system-icons`); font biến thiên Bricolage Grotesque (`google/fonts`) | MIT / OFL-1.1 (đóng nguyên dạng, mục 1) |
 | Đo RAM | `psutil` | BSD |
-| Kiểm thử | `pytest`, `pytest-asyncio`, `hypothesis`, `pytest-qt` | MIT / Apache / MPL / MIT |
+| Kiểm thử | `pytest`, `pytest-asyncio`, `hypothesis`, `pytest-qt`, `pytest-xdist` | MIT / Apache / MPL / MIT / MIT |
 | Lint & format | `ruff` | MIT |
 | Kiểm tra kiểu | `mypy` (từ Giai đoạn 2) | MIT |
 | CI / phát hành | GitHub Actions | — |

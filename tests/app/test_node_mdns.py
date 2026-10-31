@@ -7,7 +7,6 @@ device_id của chính nó, vì tiến trình khác có thể cũng đang quản
 """
 
 import asyncio
-import os
 import time
 
 import pytest
@@ -25,7 +24,7 @@ from teleport.lock import NodeLock
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1"),
+    pytest.mark.mdns,
     pytest.mark.usefixtures("no_leaks"),
     pytest.mark.filterwarnings("error::ResourceWarning"),
     pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning"),
