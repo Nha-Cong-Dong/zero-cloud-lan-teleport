@@ -57,10 +57,12 @@ version = { attr = "teleport.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-# Bản dịch đã biên dịch (thư mục chưa có file nào thì glob không khớp gì, build vẫn chạy); icon SVG và font
-# của ui kèm file giấy phép của chúng (assets/ không có __init__.py, đọc qua importlib.resources).
+# Bản dịch đã biên dịch kèm nguồn `.ts` của nó (thư mục chưa có file nào thì glob không khớp gì, build vẫn
+# chạy); icon SVG và font của ui kèm file giấy phép của chúng (assets/ không có __init__.py, đọc qua
+# importlib.resources).
 "teleport.ui" = [
     "i18n/*.qm",
+    "i18n/*.ts",
     "assets/icons/*.svg",
     "assets/icons/LICENSE",
     "assets/fonts/*.ttf",

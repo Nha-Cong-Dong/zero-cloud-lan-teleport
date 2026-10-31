@@ -220,9 +220,12 @@ def translator():
 # Fixture `ui_theme` (việc #4): khôi phục palette, stylesheet, style
 # =================================================================================================
 
-# Hai test dưới chạy liền nhau theo thứ tự trong file: test đầu đặt trạng thái mốc rồi dùng `ui_theme`
-# (lấy bằng `getfixturevalue`, nên được dọn khi test đầu xong); test sau kiểm trạng thái mốc được trả lại.
-# Trạng thái gốc của QApplication được trả lại ở cuối test sau, hoặc ở teardown của module.
+# Hai test dưới chạy liền nhau theo thứ tự trong file: test đầu dùng `sentinel_state` (đặt trạng thái mốc)
+# rồi `ui_theme` (lấy bằng `getfixturevalue`, nên được dọn trước `sentinel_state`); teardown của
+# `sentinel_state` ghi lại trạng thái `ui_theme` trả về, test sau kiểm nó là trạng thái mốc. Ghi lại trong
+# teardown chứ không để trạng thái rò sang test sau, vì fixture autouse `theme_state_reset` (spec-d6 mục 12
+# ý 5) khôi phục palette + stylesheet của trước mỗi test. Trạng thái gốc được trả ở teardown của
+# `sentinel_state`, hoặc ở teardown của module.
 _SENTINEL: dict = {}
 _SENTINEL_CSS = 'QLabel[teleportSentinel="true"] { color: #123456; }'
 
@@ -247,10 +250,12 @@ def _restore_app_after_module():
         _restore_original(app)
 
 
-def test_ui_theme_applies_scheme_and_returns_tokens(qapp, request):
+@pytest.fixture
+def sentinel_state(qapp):
+    """Đặt trạng thái mốc trước `ui_theme`; teardown (chạy **sau** teardown của `ui_theme`, trước fixture
+    autouse `theme_state_reset` khôi phục trạng thái trước test) ghi lại cái `ui_theme` để lại vào
+    `_SENTINEL["seen"]` cho test sau kiểm, rồi trả trạng thái gốc."""
     from PySide6.QtGui import QPalette
-
-    from teleport.ui import theme
 
     css = qapp.styleSheet()
     qapp.setStyleSheet("")
@@ -260,7 +265,19 @@ def test_ui_theme_applies_scheme_and_returns_tokens(qapp, request):
     pal.setColor(QPalette.ColorRole.Window, QColor("#010203"))
     qapp.setPalette(pal)
     qapp.setStyleSheet(_SENTINEL_CSS)
+    yield
+    seen_css = qapp.styleSheet()
+    seen_window = _hex(qapp.palette().color(QPalette.ColorRole.Window))
+    qapp.setStyleSheet("")  # tên style thật chỉ đọc được khi không có stylesheet
+    _SENTINEL["seen"] = (seen_css, seen_window, qapp.style().name())
     _SENTINEL["ready"] = True
+    _restore_original(qapp)
+
+
+def test_ui_theme_applies_scheme_and_returns_tokens(qapp, request, sentinel_state):
+    from PySide6.QtGui import QPalette
+
+    from teleport.ui import theme
 
     ui_theme = request.getfixturevalue("ui_theme")
     tok = ui_theme(True)
@@ -271,18 +288,13 @@ def test_ui_theme_applies_scheme_and_returns_tokens(qapp, request):
     assert qapp.styleSheet() != _SENTINEL_CSS
 
 
-def test_ui_theme_teardown_restored_palette_stylesheet_and_style(qapp):
-    from PySide6.QtGui import QPalette
-
+def test_ui_theme_teardown_restored_palette_stylesheet_and_style():
     if not _SENTINEL.pop("ready", False):
         pytest.skip("chỉ chạy ngay sau test_ui_theme_applies_scheme_and_returns_tokens")
-    try:
-        assert qapp.styleSheet() == _SENTINEL_CSS
-        assert _hex(qapp.palette().color(QPalette.ColorRole.Window)) == "#010203"
-        qapp.setStyleSheet("")  # tên style thật chỉ đọc được khi không có stylesheet
-        assert qapp.style().name().lower() == "windows"
-    finally:
-        _restore_original(qapp)
+    css, window, style_name = _SENTINEL.pop("seen")
+    assert css == _SENTINEL_CSS
+    assert window == "#010203"
+    assert style_name.lower() == "windows"
 
 
 # =================================================================================================

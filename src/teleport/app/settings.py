@@ -38,6 +38,9 @@ MIN_RETENTION_DAYS = 1
 MAX_RETENTION_DAYS = 365
 MAX_RECEIVE_DIR_LEN = 32767  # ký tự; trần đường dẫn dài của Windows
 RADAR_VIEWS = ("radar", "list")
+THEMES = ("light", "dark")  # chế độ màu ép; None = theo hệ điều hành
+# Mã màu nhấn: chỉ kiểm dạng (`app` không biết bảng màu của `ui`); mã lạ đúng dạng được giữ nguyên.
+ACCENT_RE = re.compile(r"[a-z][a-z0-9_]{0,31}", re.ASCII)
 
 _LANGUAGE_RE = re.compile(r"[a-z]{2,3}(_[A-Z]{2})?", re.ASCII)  # như `ui/i18n.py`: `vi`, `vi_VN`
 
@@ -53,6 +56,8 @@ _FIELDS = (
     "autostart",
     "first_run_done",
     "radar_view",
+    "theme",
+    "accent",
     "devices",
 )
 _DEVICE_FIELDS = ("ask_before_receive", "clipboard")
@@ -145,6 +150,26 @@ def _check_radar_view(value: object) -> str | None:
     return value
 
 
+def _check_theme(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("theme phải là None hoặc chuỗi")
+    if value not in THEMES:
+        raise ValueError(f"theme phải là None hoặc một trong {THEMES}")
+    return value
+
+
+def _check_accent(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("accent phải là None hoặc chuỗi")
+    if not ACCENT_RE.fullmatch(value):
+        raise ValueError("accent phải có dạng chữ thường, số, `_`, bắt đầu bằng chữ, ≤ 32 ký tự")
+    return value
+
+
 _CHECKS: dict[str, Any] = {
     "name": _check_name,
     "receive_dir": _check_receive_dir,
@@ -155,6 +180,8 @@ _CHECKS: dict[str, Any] = {
     "autostart": lambda v: _check_bool("autostart", v),
     "first_run_done": lambda v: _check_bool("first_run_done", v),
     "radar_view": _check_radar_view,
+    "theme": _check_theme,
+    "accent": _check_accent,
 }
 # Trường bool: `null` trong file không hợp lệ (khác các trường có thể là None).
 _BOOL_FIELDS = frozenset({"visible", "autostart", "first_run_done"})
@@ -199,6 +226,8 @@ class Settings:
     autostart: bool = False
     first_run_done: bool = False
     radar_view: str | None = None  # None = giao diện tự chọn
+    theme: str | None = None  # None = theo hệ điều hành; ngoài ra một trong THEMES
+    accent: str | None = None  # None = màu nhấn mặc định; mã lạ đúng dạng: `ui` hiện mặc định
     devices: Mapping[str, DeviceSettings] = field(default_factory=dict)
     # `load` không đọc được file (OSError khác "chưa có file"): bản này là mặc định chứ không phải nội
     # dung file, nên `save` chép nguyên file đang có sang `.bak` trước khi ghi đè. Không ghi ra file.
@@ -280,7 +309,16 @@ class Settings:
         data.update((k, v) for k, v in self.extra.items() if k != "version")
         if self.port is not None:
             data["port"] = self.port
-        for name in ("name", "receive_dir", "rate_limit", "temp_retention_days", "language", "radar_view"):
+        for name in (
+            "name",
+            "receive_dir",
+            "rate_limit",
+            "temp_retention_days",
+            "language",
+            "radar_view",
+            "theme",
+            "accent",
+        ):
             value = getattr(self, name)
             if value is not None:
                 data[name] = value

@@ -1319,6 +1319,8 @@ class Node:
         autostart: bool | _Unset = _UNSET,
         first_run_done: bool | _Unset = _UNSET,
         radar_view: str | _Unset | None = _UNSET,
+        theme: str | _Unset | None = _UNSET,
+        accent: str | _Unset | None = _UNSET,
     ) -> None:
         """Lưu cài đặt của giao diện (chỉ lưu; app không làm gì thêm). Trường không truyền giữ nguyên.
 
@@ -1333,6 +1335,8 @@ class Node:
                 ("autostart", autostart),
                 ("first_run_done", first_run_done),
                 ("radar_view", radar_view),
+                ("theme", theme),
+                ("accent", accent),
             )
             if value is not _UNSET
         }
