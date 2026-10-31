@@ -1,7 +1,8 @@
 # Build thử bản GUI Teleport (Teleport.exe, windowed) cho Windows bằng PyInstaller (--onedir) rồi chạy
-# test khói trên exe. Artifact riêng với bản CLI (build-cli.yml). Chỉ chạy tay (workflow_dispatch);
-# không gắn tag, không tạo Release, không dùng secret, không ký mã. Artifact là bản tạm (giữ 14 ngày),
-# không phải bản phát hành.
+# test khói trên exe; sau đó đóng bộ cài bằng Inno Setup (packaging/inno/teleport.iss) và chạy test
+# cài/gỡ trên bộ cài. Hai artifact riêng với bản CLI (build-cli.yml): zip thư mục dist và file bộ cài.
+# Chỉ chạy tay (workflow_dispatch); không gắn tag, không tạo Release, không dùng secret, không ký mã.
+# Artifact là bản tạm (giữ 14 ngày), không phải bản phát hành.
 name: Build GUI (thử)
 
 on:
@@ -14,7 +15,15 @@ jobs:
   build-windows:
     name: windows-latest / Python 3.12.10
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      # Inno Setup ghim đúng bản đã duyệt giấy phép (docs/ke_hoach.md mục 1, Giấy phép; văn bản ở
+      # packaging/inno/licenses/). Tải từ GitHub Release chính thức của jrsoftware/issrc và kiểm SHA-256
+      # trước khi chạy. Nâng bản: đọc lại giấy phép, thay license và Vietnamese.isl đúng tag mới, sửa
+      # ba dòng này cùng lúc.
+      INNO_VERSION: "6.7.3"
+      INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+      INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,7 +52,17 @@ jobs:
         shell: bash
         run: |
           version="$(python -c 'import teleport; print(teleport.__version__)')"
+          # Số phiên bản 4 phần cho VERSIONINFO của bộ cài: phần release của PEP 440, đệm 0 đủ 4 số
+          # (0.1.0a0 -> 0.1.0.0); AppVersion vẫn là chuỗi gốc.
+          numeric="$(python -c '
+          import teleport
+          from packaging.version import Version
+          release = list(Version(teleport.__version__).release)
+          assert len(release) <= 4, release
+          print(".".join(str(n) for n in release + [0] * (4 - len(release))))
+          ')"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "version_numeric=${numeric}" >> "$GITHUB_OUTPUT"
           echo "sha7=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Test khói trên exe (pytest -m frozen)
         env:
@@ -66,5 +85,51 @@ jobs:
           name: teleport-gui-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.sha7 }}-windows
           # Một thư mục thì nó là gốc của zip: zip chứa teleport-gui\Teleport.exe, teleport-gui\_internal\...
           path: dist/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Cài Inno Setup (bản ghim, kiểm SHA-256)
+        # Cài vào thư mục riêng trong RUNNER_TEMP và gọi ISCC bằng đường dẫn đầy đủ, để không dùng nhầm
+        # bản Inno Setup có sẵn trên runner.
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_VERSION.exe"
+          $dir = Join-Path $env:RUNNER_TEMP "inno-$env:INNO_VERSION"
+          Invoke-WebRequest -Uri $env:INNO_URL -OutFile $setup
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          if ($hash -ne $env:INNO_SHA256) { throw "SHA-256 của bộ cài Inno Setup sai: $hash" }
+          $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', "/DIR=`"$dir`"")
+          if ($p.ExitCode -ne 0) { throw "Cài Inno Setup lỗi, mã $($p.ExitCode)" }
+          $iscc = Join-Path $dir 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) { throw "không thấy $iscc" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+      - name: Build bộ cài bằng Inno Setup
+        # Ra installer/ (ngoài dist/, vì artifact zip lấy cả dist/). Phiên bản lấy từ teleport.__version__.
+        shell: pwsh
+        run: |
+          & $env:ISCC `
+            "/DAppVersion=${{ steps.meta.outputs.version }}" `
+            "/DAppVersionNumeric=${{ steps.meta.outputs.version_numeric }}" `
+            "/DSourceDir=$PWD\dist\teleport-gui" `
+            "/O$PWD\installer" `
+            packaging\inno\teleport.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC lỗi, mã $LASTEXITCODE" }
+      - name: Kiểm cỡ bộ cài và ghi kích thước
+        # Ngưỡng là cỡ bộ cài Windows ở mvp N11 (MB = 10^6 byte). Vượt thì dừng, không tải artifact.
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem installer -File)
+          if ($files.Count -ne 1) { throw "installer/ phải có đúng một file, đang có: $($files.Name -join ', ')" }
+          $exe = $files[0]
+          "Bộ cài $($exe.Name): {0:N2} MiB ({1} B)" -f ($exe.Length / 1MB), $exe.Length >> $env:GITHUB_STEP_SUMMARY
+          if ($exe.Length -gt 80000000) { throw "Bộ cài $($exe.Length) B vượt ngưỡng mvp N11 (80 000 000 B)" }
+          "TELEPORT_INSTALLER_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+      - name: Test cài/gỡ trên bộ cài (pytest -m frozen)
+        # Runner chạy với quyền admin nên test cài cho cả máy và rule tường lửa cũng chạy.
+        run: pytest tests/packaging/test_installer.py -m frozen -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teleport-gui-setup-${{ steps.meta.outputs.version }}-${{ steps.meta.outputs.sha7 }}-windows
+          path: installer/
           retention-days: 14
           if-no-files-found: error

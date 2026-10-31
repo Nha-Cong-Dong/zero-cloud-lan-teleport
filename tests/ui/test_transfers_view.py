@@ -1442,3 +1442,124 @@ def test_notice_keeps_object_names_and_tab_order(qtbot, view):
     assert view.notice_label.nextInFocusChain() is view.notice_action
     assert view.notice_action.nextInFocusChain() is view.notice_close
     assert view.notice_action_text() == action
+
+
+# =================================================================================================
+# V1 (spec B1 mục 2.5, 6 V1, 12.10, 12.11): `content_changed`, `has_content`, `active_count`
+# =================================================================================================
+
+
+@pytest.fixture
+def changes(view):
+    """Số lần `content_changed` đã phát (đếm từ lúc dựng fixture)."""
+    seen: list[int] = []
+    view.content_changed.connect(lambda: seen.append(1))
+    return seen
+
+
+def _snapshot_infos():
+    return [info(key("send", "1" * 32), "transferring"), info(key("receive", "2" * 32), "waiting")]
+
+
+def test_v1_empty_view_has_no_content(view):
+    assert view.has_content() is False
+    assert view.active_count() == 0
+
+
+# (tên, thao tác trên view rỗng, has_content sau đó, active_count sau đó)
+V1_FROM_EMPTY = [
+    ("status_changed tạo thẻ", lambda v: v.handle(status_changed(key("send"), "transferring")), True, 1),
+    ("offer tạo thẻ nhận", lambda v: v.handle(offer_received(key("receive"))), True, 1),
+    ("progress tạo thẻ", lambda v: v.handle(progress(key("send"), 10, 1000)), True, 1),
+    (
+        "finished tạo thẻ đã kết thúc",
+        lambda v: v.handle(finished(key("send"), "done", status="verifying")),
+        True,
+        0,
+    ),
+    ("show_notice", lambda v: v.show_notice("Một thông báo."), True, 0),
+    ("hide_notice", lambda v: v.hide_notice(), False, 0),
+    ("clear", lambda v: v.clear(), False, 0),
+    ("load_snapshot", lambda v: v.load_snapshot(_snapshot_infos()), True, 2),
+]
+
+
+@pytest.mark.parametrize(
+    ("what", "action", "content", "active"), V1_FROM_EMPTY, ids=[c[0] for c in V1_FROM_EMPTY]
+)
+def test_v1_each_public_call_emits_content_changed_once(view, changes, what, action, content, active):
+    action(view)
+    assert len(changes) == 1, f"{what}: content_changed phát {len(changes)} lần"
+    assert view.has_content() is content
+    assert view.active_count() == active
+
+
+def test_v1_card_finishing_emits_once_and_lowers_active_count(view, changes):
+    a, b = key("send", "a" * 32), key("receive", "b" * 32)
+    view.handle(status_changed(a, "transferring"))
+    view.handle(status_changed(b, "transferring"))
+    assert (len(changes), view.active_count()) == (2, 2)
+    view.handle(finished(a, "done", status="verifying"))
+    assert len(changes) == 3
+    assert view.active_count() == 1
+    assert view.has_content() is True
+    view.handle(finished(b, "cancelled_user"))
+    assert len(changes) == 4
+    assert view.active_count() == 0
+    assert view.has_content() is True  # thẻ đã kết thúc vẫn là nội dung
+
+
+def test_v1_suspended_does_not_lower_active_count(view, changes):
+    k = key("receive")
+    view.handle(status_changed(k, "transferring"))
+    view.handle(finished(k, "suspended"))
+    assert view.active_count() == 1
+    assert view.row(k) is not None and view.row(k).finished is False
+
+
+def test_v1_notice_close_button_emits_once(view, changes):
+    view.show_notice("Một thông báo.", "Làm gì đó", lambda: None)
+    assert len(changes) == 1
+    view.notice_close.click()
+    assert len(changes) == 2
+    assert view.has_content() is False
+
+
+def test_v1_clear_with_rows_and_notice_emits_once(view, changes):
+    view.handle(status_changed(key("send", "a" * 32), "transferring"))
+    view.handle(status_changed(key("send", "b" * 32), "transferring"))
+    view.show_notice("Một thông báo.")
+    before = len(changes)
+    view.clear()
+    assert len(changes) == before + 1
+    assert view.has_content() is False
+    assert view.active_count() == 0
+
+
+def test_v1_load_snapshot_with_many_rows_emits_once(view, changes):
+    infos = [info(key("send", c * 32), "transferring") for c in "abcde"]
+    view.load_snapshot(infos)
+    assert len(changes) == 1
+    assert view.active_count() == 5
+
+
+def test_v1_remove_emits_once_and_updates_counts(view, changes):
+    a, b = key("send", "a" * 32), key("send", "b" * 32)
+    view.handle(status_changed(a, "transferring"))
+    view.handle(status_changed(b, "transferring"))
+    before = len(changes)
+    view.remove(a)
+    assert len(changes) == before + 1
+    assert view.active_count() == 1
+    view.remove(b)
+    assert view.has_content() is False
+    assert view.active_count() == 0
+
+
+def test_v1_has_content_counts_notice_while_view_hidden(view):
+    # 12.11: cửa sổ ẩn xuống khay thì dải thông báo vẫn tính là nội dung.
+    view.hide()
+    view.show_notice("Một thông báo.")
+    assert view.has_content() is True
+    view.hide_notice()
+    assert view.has_content() is False

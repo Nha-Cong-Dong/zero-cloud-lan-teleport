@@ -92,6 +92,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QPersistentModelIndex,
     QPoint,
+    QRect,
     QSize,
     Qt,
     QUrl,
@@ -116,8 +117,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QBoxLayout,
     QFrame,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListView,
@@ -658,6 +659,45 @@ def _has_local_files(event: QDragEnterEvent | QDragMoveEvent | QDropEvent) -> bo
     return bool(send.local_paths(_event_urls(event)))
 
 
+class _ButtonRow(QBoxLayout):
+    """Hàng nút dưới danh sách: hai nút cạnh nhau khi đủ chỗ, không thì xếp thành hai hàng.
+
+    Cột trái của cửa sổ chính hẹp (spec B1 mục 8h): “Gửi file…” + “Nhập IP thủ công” cạnh nhau rộng
+    hơn chỗ có. Bề ngang tối thiểu là của nút rộng nhất (như khi xếp dọc), nên hàng không kéo radar
+    rộng ra; `setGeometry` chọn hướng theo bề ngang thật.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(QBoxLayout.Direction.LeftToRight)
+
+    def _shown(self) -> list[QSize]:
+        items = (self.itemAt(i) for i in range(self.count()))
+        return [item.sizeHint() for item in items if item is not None and not item.isEmpty()]
+
+    def _fits(self, width: int) -> bool:
+        hints = self._shown()
+        margins = self.contentsMargins()
+        need = sum(h.width() for h in hints) + max(0, len(hints) - 1) * max(0, self.spacing())
+        return width >= need + margins.left() + margins.right()
+
+    def minimumSize(self) -> QSize:
+        size = super().minimumSize()
+        items = (self.itemAt(i) for i in range(self.count()))
+        widest = max(
+            (item.minimumSize().width() for item in items if item is not None and not item.isEmpty()),
+            default=0,
+        )
+        margins = self.contentsMargins()
+        return QSize(widest + margins.left() + margins.right(), size.height())
+
+    def setGeometry(self, rect: QRect) -> None:
+        direction = QBoxLayout.Direction
+        wanted = direction.LeftToRight if self._fits(rect.width()) else direction.TopToBottom
+        if wanted != self.direction():
+            self.setDirection(wanted)
+        super().setGeometry(rect)
+
+
 def _label(object_name: str, *, bold: bool = False, size_delta: int = 0) -> QLabel:
     label = QLabel()
     label.setObjectName(object_name)
@@ -768,19 +808,21 @@ class RadarView(QWidget):
         self.address_panel.setFrameShape(QFrame.Shape.StyledPanel)
         panel = QVBoxLayout(self.address_panel)
         self.address_label = _label("addressLabel")
+        self.address_label.setMinimumWidth(1)  # xuống dòng theo bề ngang thật, không kéo rộng cột hẹp (B1)
         self.address_edit = _AddressEdit(self.address_panel)
         self.address_edit.setObjectName("addressEdit")
         self.address_edit.setMaxLength(64)
         self.address_edit.setInputMethodHints(Qt.InputMethodHint.ImhPreferNumbers)
         self.address_label.setBuddy(self.address_edit)
         self.address_error = _label("addressError")
+        self.address_error.setMinimumWidth(1)  # như `address_label`: câu lỗi dài không kéo rộng cột hẹp
         self.address_error.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.address_submit = QPushButton(self.address_panel)
         self.address_submit.setObjectName("addressSubmit")
         self.address_submit.setProperty(theme.PRIMARY_PROPERTY, True)
         self.address_cancel = QPushButton(self.address_panel)
         self.address_cancel.setObjectName("addressCancel")
-        buttons = QHBoxLayout()
+        buttons = _ButtonRow()  # “Hủy” + “Ghép đôi” xuống hai hàng khi cột hẹp (chữ to)
         buttons.addStretch(1)
         buttons.addWidget(self.address_cancel)
         buttons.addWidget(self.address_submit)
@@ -801,7 +843,7 @@ class RadarView(QWidget):
         layout.addWidget(self.hint_label)
         layout.addWidget(self.empty_frame, 1)  # chiếm chỗ của danh sách khi trống
         layout.addWidget(self.list_view, 1)
-        address_row = QHBoxLayout()
+        address_row = _ButtonRow()
         address_row.addWidget(self.device_action_button)
         address_row.addWidget(self.address_button)
         address_row.addStretch(1)

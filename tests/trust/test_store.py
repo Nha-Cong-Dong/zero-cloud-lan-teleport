@@ -751,3 +751,102 @@ def test_stores_on_same_dir_see_each_others_saved_changes(cfg, peer):
     assert b.is_trusted(peer.fingerprint)
     b.remove(peer.device_id)
     assert TrustStore.load(cfg).devices() == []
+
+
+# --- C1b: `rename` (spec đợt C §2.2, §2.5) -----------------------------------------------------
+
+
+def test_rename_keeps_cert_and_paired_at(cfg, peer, make_peer):
+    store = TrustStore.load(cfg)
+    other = make_peer()
+    store.add(peer, "PC-Cu", now=NOW)
+    store.add(other, "Khac", now=NOW)
+    before = store.get(peer.device_id)
+
+    renamed = store.rename(peer.device_id, "PC-Moi")
+
+    assert renamed == dataclasses.replace(before, name="PC-Moi")
+    assert store.get(peer.device_id) == renamed
+    assert store.find_by_name("PC-Cu") == []
+    assert store.find_by_name("PC-Moi") == [renamed]
+    # Ghi đĩa: đọc lại thấy tên mới, chứng chỉ / fingerprint / paired_at giữ nguyên; máy khác không đổi.
+    reloaded = TrustStore.load(cfg)
+    assert reloaded.get(peer.device_id) == renamed
+    assert reloaded.get(peer.device_id).cert_pem == before.cert_pem
+    assert reloaded.get(peer.device_id).fingerprint == peer.fingerprint
+    assert reloaded.get(peer.device_id).paired_at == NOW_TRUNC
+    assert reloaded.get(other.device_id).name == "Khac"
+    assert reloaded.is_trusted(peer.fingerprint) and reloaded.is_trusted(other.fingerprint)
+    assert no_tmp_left(cfg)
+
+
+def test_rename_to_name_of_other_device_still_applies(cfg, peer, make_peer):
+    """Mục 11 M2: đổi tên trùng tên máy khác vẫn cập nhật (tìm theo tên sẽ báo nhiều kết quả)."""
+    store = TrustStore.load(cfg)
+    other = make_peer()
+    store.add(peer, "PC-Cu", now=NOW)
+    store.add(other, "Trung", now=NOW)
+    store.rename(peer.device_id, "Trung")
+    assert {d.device_id for d in TrustStore.load(cfg).find_by_name("Trung")} == {
+        peer.device_id,
+        other.device_id,
+    }
+
+
+def test_rename_same_name_no_write(cfg, peer, monkeypatch):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    before = store.get(peer.device_id)
+    writes = []
+    real_replace = os.replace
+
+    def spy_replace(src, dst, *args, **kwargs):
+        writes.append(os.path.basename(os.fspath(dst)))
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", spy_replace)
+    mtime = (cfg / TRUSTED_FILE).stat().st_mtime_ns
+    result = store.rename(peer.device_id, "PC")
+    assert result == before
+    assert TRUSTED_FILE not in writes
+    assert (cfg / TRUSTED_FILE).stat().st_mtime_ns == mtime
+    assert no_tmp_left(cfg)
+
+
+@pytest.mark.parametrize("name", ["", " PC", "PC ", "x" * 65, "\x1b[31m", "a\u202eb", "\ufeffPC", 123, None])
+def test_rename_unknown_keyerror_invalid_name(cfg, peer, make_peer, name):
+    from teleport.core.messages import MessageError
+
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    before = (cfg / TRUSTED_FILE).read_bytes()
+    # Tên sai trên thiết bị có thật → MessageError, không ghi.
+    with pytest.raises(MessageError):
+        store.rename(peer.device_id, name)
+    # Tên đúng trên thiết bị không có → KeyError, không ghi.
+    with pytest.raises(KeyError):
+        store.rename(make_peer().device_id, "Ten-hop-le")
+    assert (cfg / TRUSTED_FILE).read_bytes() == before
+    assert [d.name for d in store.devices()] == ["PC"]
+
+
+def test_rename_write_failure_raises_and_keeps_ram(cfg, peer, monkeypatch):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    before_bytes = (cfg / TRUSTED_FILE).read_bytes()
+    before = store.get(peer.device_id)
+    real_replace = os.replace
+
+    def failing_replace(src, dst, *args, **kwargs):
+        if os.path.basename(os.fspath(dst)) == TRUSTED_FILE:
+            raise PermissionError(13, "giả lập file đang bị khóa")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    with pytest.raises(TrustStoreError):
+        store.rename(peer.device_id, "Moi")
+    monkeypatch.undo()
+    assert store.get(peer.device_id) == before
+    assert store.find_by_name("Moi") == []
+    assert (cfg / TRUSTED_FILE).read_bytes() == before_bytes
+    assert no_tmp_left(cfg)

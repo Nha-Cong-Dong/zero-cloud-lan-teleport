@@ -1221,7 +1221,11 @@ def pair_dirs(tmp_path):
     )
 
 
-def send_argv(net, files, port: int | None = None, *, json_mode=True, to=RECEIVER, config=None, extra=()):
+def send_argv(
+    net, files, port: int | None = None, *, json_mode=True, to=RECEIVER, config=None, name=SENDER, extra=()
+):
+    """`name`: `--name` của máy gửi; phải trùng tên máy nhận đã lưu cho nó (A6: máy nhận cập nhật tên đã
+    lưu theo `hello.name` của kết nối điều khiển)."""
     address = [] if port is None else ["--address", f"{LOCAL}:{port}"]
     return [
         "--config-dir",
@@ -1233,7 +1237,7 @@ def send_argv(net, files, port: int | None = None, *, json_mode=True, to=RECEIVE
         *address,
         *(["--json"] if json_mode else []),
         "--name",
-        SENDER,
+        name,
         "--host",
         LOCAL,
         *extra,
@@ -2820,7 +2824,7 @@ async def test_rerun_receive_restores_one_transfer_per_sender(
     src1 = make_file(net.src, "lon.bin", size)
     src2 = make_file(net.tmp / "nguon2", "khac.bin", size)
     send1 = cli_runs("send", send_argv(net, [src1], proxy.port, extra=RESUME_RATE))
-    send2 = cli_runs("send", send_argv(net, [src2], proxy.port, config=s2, extra=RESUME_RATE))
+    send2 = cli_runs("send", send_argv(net, [src2], proxy.port, config=s2, name=SECOND, extra=RESUME_RATE))
     tids = await marked_transfers(net, 2)
     recv.press()
     assert await recv.code(15) == 0
@@ -3421,7 +3425,9 @@ async def test_e1_open_prompt_is_reprinted_after_other_lines_and_blocks_progress
     port = await port_for(node_spy, net.R)
     # Lượt 1 (từ C): nhận, chạy ~5 s.
     big = make_file(net.tmp / "nguon-c", "c.bin", 20 * MiB)
-    send_c = cli_runs("send", send_argv(net, [big], port, config=c_dir, extra=["--limit-rate", "4M"]))
+    send_c = cli_runs(
+        "send", send_argv(net, [big], port, config=c_dir, name="May-C", extra=["--limit-rate", "4M"])
+    )
     await recv.wait_text(C4_HEAD.format(s="May-C", n=1, size="20,0 MB"))
     recv.say("c")
     await asyncio.sleep(0.5)
@@ -3453,7 +3459,7 @@ async def test_e3_ctrl_c_with_pending_offers_opens_no_new_prompt(pair_dirs, tran
     sends = [cli_runs("send", send_argv(net, [make_file(net.src, "s.bin", 1000)], port))]
     for i, d in enumerate(others):
         f = make_file(net.tmp / f"nguon-{i}", f"x{i}.bin", 1000)
-        sends.append(cli_runs("send", send_argv(net, [f], port, config=d)))
+        sends.append(cli_runs("send", send_argv(net, [f], port, config=d, name=f"May-{i}")))
     await recv.wait_text(C4_ASK)
     for run in sends:
         await run.wait_event("status")  # đã có lượt (đang chờ trả lời)
@@ -3481,7 +3487,8 @@ async def test_e4_stdin_eof_with_pending_offers_prints_b13_once_and_no_c6(
     send_s = cli_runs("send", send_argv(net, [make_file(net.src, "s.bin", 1000)], port))
     await recv.wait_text(C4_ASK)
     send_c = cli_runs(
-        "send", send_argv(net, [make_file(net.tmp / "nguon-c", "c.bin", 1000)], port, config=c_dir)
+        "send",
+        send_argv(net, [make_file(net.tmp / "nguon-c", "c.bin", 1000)], port, config=c_dir, name="May-C"),
     )
     await send_c.wait_event("status")
     await asyncio.sleep(0.3)
@@ -3530,7 +3537,7 @@ async def test_m14_offers_arriving_after_stdin_eof_print_m14_each_and_b13_once(
     assert await send_s.code(15) == 1
     assert send_s.events_of("result")[0]["result"] == "rejected_user"
     one = [make_file(net.tmp / "nguon-c", "c.bin", 1000)]
-    send_c = cli_runs("send", send_argv(net, one, port, config=c_dir))
+    send_c = cli_runs("send", send_argv(net, one, port, config=c_dir, name="May-C"))
     assert await send_c.code(15) == 1
     assert send_c.events_of("result")[0]["result"] == "rejected_user"
     m14_s, m14_c = M14.format(n=2, s=SENDER), M14.format(n=1, s="May-C")
@@ -3558,7 +3565,8 @@ async def test_m14_offer_queued_at_eof_gets_m14_and_open_prompt_gets_b13(
     send_s = cli_runs("send", send_argv(net, [make_file(net.src, "s.bin", 1000)], port))
     await recv.wait_text(C4_ASK)
     send_c = cli_runs(
-        "send", send_argv(net, [make_file(net.tmp / "nguon-c", "c.bin", 1000)], port, config=c_dir)
+        "send",
+        send_argv(net, [make_file(net.tmp / "nguon-c", "c.bin", 1000)], port, config=c_dir, name="May-C"),
     )
     await send_c.wait_event("status")
     await asyncio.sleep(0.3)
@@ -3589,7 +3597,7 @@ async def test_m15_ctrl_c_with_open_and_queued_offer(pair_dirs, transfer_env, cl
     await recv.wait_text(C4_ASK)
     src_c = net.tmp / "nguon-c"
     files_c = [make_file(src_c, "c1.bin", 1000), make_file(src_c, "c2.bin", 1000)]
-    send_c = cli_runs("send", send_argv(net, files_c, port, config=c_dir))
+    send_c = cli_runs("send", send_argv(net, files_c, port, config=c_dir, name="May-C"))
     await send_c.wait_event("status")
     await asyncio.sleep(0.3)
     assert recv.text().count("muốn gửi") == 1, "chỉ một lời hỏi mở, offer kia còn xếp hàng"

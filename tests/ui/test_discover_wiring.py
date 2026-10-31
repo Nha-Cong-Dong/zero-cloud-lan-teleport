@@ -113,8 +113,7 @@ def test_discover_button_is_named_icon_button(window):
     assert b.icon_name == "search"
     assert b.label == HOME_BUTTON
     assert b.accessibleName() == HOME_BUTTON
-    assert b.text().replace("&", "") == HOME_BUTTON, "show_text=True: nút có chữ"
-    assert window.home_page.isAncestorOf(b)
+    assert window.sidebar_header.isAncestorOf(b), "B1: nút ở đầu cột trái"
 
 
 @pytest.mark.parametrize("state", ["welcome", "starting", "error", "running"])
@@ -152,10 +151,9 @@ def test_discover_page_cannot_open_outside_running(window):
     assert window.current_page is Page.HOME
 
 
-def test_tab_chain_radar_then_discover_button_then_retry(window):
-    last = window.radar.last_focus_widget()
-    assert last.nextInFocusChain() is window.discover_button
-    assert window.discover_button.nextInFocusChain() is window.retry_button
+def test_tab_chain_discover_button_then_settings_then_radar(window):
+    """B1: ở RUNNING, “Tìm máy mới” đứng đầu chuỗi Tab của khung hai cột."""
+    assert window.discover_button.nextInFocusChain() is window.settings_button
 
 
 def test_discover_button_label_is_retranslated(window, qtbot, tmp_path):

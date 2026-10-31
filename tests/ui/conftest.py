@@ -199,6 +199,30 @@ def ui_helpers():
 
 
 @pytest.fixture(autouse=True)
+def release_stuck_mouse_buttons(qapp):
+    """Mọi test ui bắt đầu với chuột đã nhả.
+
+    `QTest.mouseDClick` (Qt 6) không gửi lần nhả cuối, nên `QApplication.mouseButtons()` còn báo nút
+    trái đang giữ sang test sau, và code xét “tiêu điểm đến từ cú bấm chuột” (`MainWindow`, cuộn cột
+    trái) hiểu sai. Nhả từng nút còn giữ trên một cửa sổ tạm trước khi test chạy.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    held = QApplication.mouseButtons()
+    if held != Qt.MouseButton.NoButton:
+        sink = QWidget()
+        sink.show()
+        for button in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
+            if held & button:
+                QTest.mouseRelease(sink, button)
+        sink.close()
+        sink.deleteLater()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def qt_thread_gc(qapp):
     """Mọi test ui: GC vòng tham chiếu chỉ chạy trên thread Qt (`teleport.ui.gcguard`), như `main`.
 
@@ -562,10 +586,15 @@ def gui_wait():
 
 
 class PeerNode:
-    """Một `Node` (máy B) chạy trong thread riêng. Mọi lời gọi tới node đi qua loop của nó."""
+    """Một `Node` (máy B) chạy trong thread riêng. Mọi lời gọi tới node đi qua loop của nó.
 
-    def __init__(self, config: Path) -> None:
+    `name`: tên máy B tự xưng; nên trùng tên A đã lưu cho B, vì A cập nhật tên đã lưu theo `hello.name`
+    khi kết nối điều khiển lên (A6).
+    """
+
+    def __init__(self, config: Path, name: str = "May-B") -> None:
         self.config = config
+        self.name = name
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, name="test-peer-node", daemon=True)
         self.node = None
@@ -590,7 +619,7 @@ class PeerNode:
         async def go():
             self.node = Node(
                 self.config,
-                name="May-B",
+                name=self.name,
                 host=LOCAL,
                 port=0,
                 on_event=self._on_event,
@@ -640,11 +669,11 @@ class PeerNode:
 
 @pytest.fixture
 def peer_node():
-    """`peer_node(config_dir) -> PeerNode` đã start; đóng khi test xong."""
+    """`peer_node(config_dir, name="May-B") -> PeerNode` đã start; đóng khi test xong."""
     made: list[PeerNode] = []
 
-    def make(config: Path) -> PeerNode:
-        peer = PeerNode(config)
+    def make(config: Path, name: str = "May-B") -> PeerNode:
+        peer = PeerNode(config, name)
         made.append(peer)
         return peer.start()
 
