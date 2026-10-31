@@ -152,7 +152,8 @@ def test_home_page_holds_old_body(window):
 def test_only_home_page_exists_by_default(window):
     from teleport.ui.main_window import Page
 
-    assert [p for p in Page if window.pages.has_page(p)] == [Page.HOME]
+    # B5: DISCOVER là trang thật
+    assert [p for p in Page if window.pages.has_page(p)] == [Page.HOME, Page.DISCOVER]
 
 
 # =================================================================================================
@@ -164,11 +165,11 @@ def test_add_page_rejects_duplicate(window):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
-    assert window.pages.has_page(Page.DISCOVER)
+    window.add_page(Page.WAIT_PAIRING, page)
+    assert window.pages.has_page(Page.WAIT_PAIRING)
     other, _ = _page("B")
     with pytest.raises(ValueError):
-        window.add_page(Page.DISCOVER, other)
+        window.add_page(Page.WAIT_PAIRING, other)
     with pytest.raises(ValueError):
         window.pages.add_page(Page.HOME, other)
 
@@ -188,9 +189,9 @@ def test_add_page_names_unnamed_widget_and_keeps_existing_name(window):
     unnamed, _ = _page()
     named, _ = _page("B")
     named.setObjectName("trangCaiDat")
-    window.add_page(Page.DISCOVER, unnamed)
+    window.add_page(Page.WAIT_PAIRING, unnamed)
     window.add_page(Page.SETTINGS, named)
-    assert unnamed.objectName() == "discoverPage"
+    assert unnamed.objectName() == "wait_pairingPage"
     assert named.objectName() == "trangCaiDat"
 
 
@@ -199,7 +200,7 @@ def test_add_page_does_not_switch_page(window):
 
     seen = _record(window.page_changed)
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     assert window.pages.current_page is Page.HOME
     assert seen == []
 
@@ -214,7 +215,7 @@ def test_open_page_refused_unless_running(window, state):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     {
         "fresh": lambda: None,
         "welcome": lambda: window.show_welcome("May-A"),
@@ -222,7 +223,7 @@ def test_open_page_refused_unless_running(window, state):
         "error": lambda: window.show_error("other", ""),
     }[state]()
     seen = _record(window.page_changed)
-    assert window.open_page(Page.DISCOVER) is False
+    assert window.open_page(Page.WAIT_PAIRING) is False
     assert window.pages.current_page is Page.HOME
     assert seen == []
 
@@ -231,18 +232,18 @@ def test_open_page_when_running_emits_once(window, tmp_path):
     from teleport.ui.main_window import Page, ViewState
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     assert window.view_state is ViewState.RUNNING
     seen = _record(window.page_changed)
     pages_seen = _record(window.pages.page_changed)
-    assert window.open_page(Page.DISCOVER) is True
-    assert window.pages.current_page is Page.DISCOVER
+    assert window.open_page(Page.WAIT_PAIRING) is True
+    assert window.pages.current_page is Page.WAIT_PAIRING
     assert window.pages.currentWidget() is page
-    assert seen == ["discover"]
-    assert pages_seen == ["discover"]
-    window.open_page(Page.DISCOVER)
-    assert seen == ["discover"], "mở lại cùng trang không phát thêm"
+    assert seen == ["wait_pairing"]
+    assert pages_seen == ["wait_pairing"]
+    window.open_page(Page.WAIT_PAIRING)
+    assert seen == ["wait_pairing"], "mở lại cùng trang không phát thêm"
 
 
 def test_open_page_unknown_page_raises_when_running(window, tmp_path):
@@ -257,10 +258,10 @@ def test_go_back_delegates_to_page_stack(window, tmp_path):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     assert window.go_back() is False
-    window.open_page(Page.DISCOVER)
+    window.open_page(Page.WAIT_PAIRING)
     assert window.go_back() is True
     assert window.pages.current_page is Page.HOME
     assert window.go_back() is False
@@ -386,10 +387,10 @@ def test_back_action_enabled_only_off_home(window, tmp_path):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     assert not window._back_action.isEnabled()
-    window.open_page(Page.DISCOVER)
+    window.open_page(Page.WAIT_PAIRING)
     assert window._back_action.isEnabled()
     window.go_back()
     assert not window._back_action.isEnabled()
@@ -399,10 +400,10 @@ def test_esc_on_page_goes_back_home(window, qtbot, tmp_path):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
-    assert window.open_page(Page.DISCOVER)
+    assert window.open_page(Page.WAIT_PAIRING)
     seen = _record(window.page_changed)
     QTest.keyClick(window, Qt.Key.Key_Escape)
     qtbot.waitUntil(lambda: window.pages.current_page is Page.HOME, timeout=1000)
@@ -413,7 +414,7 @@ def test_esc_on_home_does_nothing(window, qtbot, tmp_path):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
     seen = _record(window.page_changed)
@@ -430,10 +431,10 @@ def test_esc_in_child_dialog_does_not_go_back(window, qtbot, tmp_path):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
-    window.open_page(Page.DISCOVER)
+    window.open_page(Page.WAIT_PAIRING)
     dialog = QDialog(window)
     dialog.setLayout(QVBoxLayout())
     dialog.layout().addWidget(QPushButton("OK"))
@@ -441,7 +442,7 @@ def test_esc_in_child_dialog_does_not_go_back(window, qtbot, tmp_path):
     QTest.keyClick(dialog, Qt.Key.Key_Escape)
     qtbot.waitUntil(lambda: not dialog.isVisible(), timeout=1000)
     QApplication.processEvents()
-    assert window.pages.current_page is Page.DISCOVER
+    assert window.pages.current_page is Page.WAIT_PAIRING
 
 
 # =================================================================================================
@@ -453,14 +454,14 @@ def test_focus_moves_to_page_proxy_and_returns_on_back(window, qtbot, tmp_path):
     from teleport.ui.main_window import Page
 
     page, button = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
     target = window.radar.address_button
     target.setFocus()
     qtbot.waitUntil(lambda: window.focusWidget() is target, timeout=1000)
 
-    assert window.open_page(Page.DISCOVER)
+    assert window.open_page(Page.WAIT_PAIRING)
     qtbot.waitUntil(lambda: window.focusWidget() is button, timeout=1000)
 
     assert window.go_back()
@@ -471,13 +472,13 @@ def test_esc_back_also_restores_focus(window, qtbot, tmp_path):
     from teleport.ui.main_window import Page
 
     page, button = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
     target = window.radar.address_button
     target.setFocus()
     qtbot.waitUntil(lambda: window.focusWidget() is target, timeout=1000)
-    window.open_page(Page.DISCOVER)
+    window.open_page(Page.WAIT_PAIRING)
     qtbot.waitUntil(lambda: window.focusWidget() is button, timeout=1000)
     QTest.keyClick(button, Qt.Key.Key_Escape)
     qtbot.waitUntil(lambda: window.focusWidget() is target, timeout=1000)
@@ -546,7 +547,7 @@ def test_leaving_running_resets_to_home(window, qtbot, tmp_path, state):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
 
@@ -557,7 +558,7 @@ def test_leaving_running_resets_to_home(window, qtbot, tmp_path, state):
 
     _running(window, tmp_path)
     QApplication.processEvents()
-    assert window.open_page(Page.DISCOVER)
+    assert window.open_page(Page.WAIT_PAIRING)
     seen = _record(window.page_changed)
     STATES[state](window)
     QApplication.processEvents()
@@ -579,7 +580,7 @@ def test_tab_cycle_never_reaches_hidden_page(window, qtbot, tmp_path):
     from teleport.ui.main_window import Page
 
     page, button = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
     assert not button.isVisibleTo(window)
@@ -624,14 +625,14 @@ def test_go_back_with_deleted_remembered_widget_focuses_real_home_control(window
     from teleport.ui.main_window import Page
 
     page, button = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     extra = QPushButton("Sẽ bị xóa")
     window.home_page.layout().addWidget(extra)
     _running(window, tmp_path)
     _activate(qtbot, window)
     extra.setFocus()
     qtbot.waitUntil(lambda: window.focusWidget() is extra, timeout=1000)
-    assert window.open_page(Page.DISCOVER)
+    assert window.open_page(Page.WAIT_PAIRING)
     qtbot.waitUntil(lambda: window.focusWidget() is button, timeout=1000)
 
     extra.deleteLater()
@@ -677,26 +678,26 @@ def test_open_page_accepts_string_when_running(window, tmp_path):
     from teleport.ui.main_window import Page
 
     page, _ = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
-    assert window.open_page("discover") is True
-    assert window.pages.current_page is Page.DISCOVER
+    assert window.open_page("wait_pairing") is True
+    assert window.pages.current_page is Page.WAIT_PAIRING
 
 
 def test_show_running_again_keeps_current_page_and_focus(window, qtbot, tmp_path):
     from teleport.ui.main_window import Page
 
     page, button = _page()
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.WAIT_PAIRING, page)
     _running(window, tmp_path)
     _activate(qtbot, window)
-    assert window.open_page(Page.DISCOVER)
+    assert window.open_page(Page.WAIT_PAIRING)
     qtbot.waitUntil(lambda: window.focusWidget() is button, timeout=1000)
     seen = _record(window.page_changed)
 
     window.show_running("May-B", tmp_path / "khac")
     QApplication.processEvents()
-    assert window.pages.current_page is Page.DISCOVER
+    assert window.pages.current_page is Page.WAIT_PAIRING
     assert window.pages.currentWidget() is page
     assert window.focusWidget() is button
     assert seen == []

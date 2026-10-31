@@ -388,6 +388,38 @@ def test_focus_ring_color_reaches_3_on_surface(dark):
     assert wcag_ratio(ring, tok.surface) >= NON_TEXT_MIN, f"{_hex(ring)} trên {_hex(tok.surface)}"
 
 
+# spec B5, T-C: cặp màu của màn “Tìm máy mới” (bong bóng chưa ghép nền `surface_raised`, rê chuột nền
+# `selected`, viền `border_strong` trên canvas `surface`, viền tiêu điểm 2 px). Chỉ thêm cặp còn thiếu; các
+# cặp đã có ở bảng A1/A3 được kiểm là vẫn còn trong bảng (bảng bị sửa bớt thì test này đỏ).
+B5_TEXT_PAIRS: dict[str, tuple[str, ...]] = {
+    "accent_text": ("surface_raised", "selected"),  # dòng phụ “Chưa ghép đôi”
+    "text": ("selected",),  # tên máy khi rê chuột
+    "text_muted": ("selected",),  # tên + “Đã ghép” của máy đã ghép khi rê chuột
+}
+B5_NON_TEXT_PAIRS: dict[str, tuple[str, ...]] = {"border_strong": ("surface",)}
+
+
+def test_b5_pairs_already_covered_by_earlier_tables():
+    for table, earlier in (
+        (B5_TEXT_PAIRS, (TEXT_PAIRS, A3_TEXT_PAIRS)),
+        (B5_NON_TEXT_PAIRS, (NON_TEXT_PAIRS,)),
+    ):
+        for fg, backgrounds in table.items():
+            for bg in backgrounds:
+                assert any(bg in t.get(fg, ()) for t in earlier), f"cặp B5 {fg}/{bg} không còn được kiểm"
+
+
+@MODES
+def test_focus_ring_color_reaches_3_on_surface_raised(dark):
+    """B5 T-C: viền tiêu điểm của bong bóng chưa ghép (nền `surface_raised`)."""
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark)
+    ring = theme.focus_ring_color(dark)
+    ratio = wcag_ratio(ring, tok.surface_raised)
+    assert ratio >= NON_TEXT_MIN, f"{_hex(ring)} trên {_hex(tok.surface_raised)}: {ratio:.2f}"
+
+
 @MODES
 def test_fusion_focus_frame_reaches_3_on_surfaces(dark):
     """Khung tiêu điểm Fusion (`highlightedOutline`): sáng là `highlight().darker(125)`, tối Fusion vẽ

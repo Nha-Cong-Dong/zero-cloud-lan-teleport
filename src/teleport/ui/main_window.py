@@ -54,7 +54,12 @@ chỉ có khi được `add_page`.
   `show_error` gọi `pages.reset()` trước `retranslate`/`_place_focus`.
 - Esc (`_back_action`, `WindowShortcut`, “Quay lại”) chỉ bật khi đang ở trang khác HOME. Hộp thoại
   là cửa sổ riêng nên không bị Esc của cửa sổ chính bắt. Ô nhập trên trang khác HOME phải nhận
-  `ShortcutOverride` cho Esc nếu cần phím đó (như `_AddressEdit` của `ui.radar`).
+  `ShortcutOverride` cho Esc nếu cần phím đó (như `_AddressField` của `ui.discover`). `_AddressEdit`
+  của `ui.radar` chỉ bắt Esc trong `keyPressEvent`, chạy được vì nó nằm ở HOME, nơi `_back_action` tắt.
+- Trang DISCOVER (`self.discover`, `ui.discover.DiscoverPage`, “Tìm máy mới”) có sẵn, dùng chung model
+  với radar (`self.radar.model`); “Quay lại” của đầu trang = `go_back`. Mở bằng nút
+  `discover_button` (objectName `discoverButton`, icon kèm chữ “Tìm máy mới”, đầu hàng nút dưới đáy
+  trang HOME, chỉ hiện ở RUNNING; Tab: radar → nút này → “Thử lại”).
 - Không có hoạt ảnh chuyển trang: đổi tức thì.
 """
 
@@ -80,8 +85,10 @@ from shiboken6 import isValid
 from teleport.core.display import display_name
 from teleport.net.connection import DEFAULT_PORT
 from teleport.ui import texts, theme
+from teleport.ui.discover import DiscoverPage
 from teleport.ui.radar import RadarView
 from teleport.ui.tray import Tray
+from teleport.ui.widgets import IconButton
 
 # Chọn bằng chuột để chép; không `TextSelectableByKeyboard`: Tab tới nhãn sẽ hiện con trỏ chữ nhấp nháy.
 _TEXT_FLAGS = Qt.TextInteractionFlag.TextSelectableByMouse
@@ -281,12 +288,19 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.body, 1)
         self._stretch = QWidget(central)  # đẩy nút xuống đáy khi không có radar
         layout.addWidget(self._stretch, 1)
+        self.discover_button = IconButton("search", self.tr("Tìm máy mới"), central, show_text=True)
+        self.discover_button.setObjectName("discoverButton")
+        self.discover_button.clicked.connect(lambda: self.open_page(Page.DISCOVER))
         buttons = QHBoxLayout()
+        buttons.addWidget(self.discover_button)
         buttons.addStretch(1)
         buttons.addWidget(self.retry_button)
         buttons.addWidget(self.start_button)
         layout.addLayout(buttons)
         self.pages.add_page(Page.HOME, self.home_page)
+        self.discover = DiscoverPage(self.radar.model, self.pages)
+        self.pages.add_page(Page.DISCOVER, self.discover)
+        self.discover.header.back_requested.connect(self.go_back)
         self.pages.page_changed.connect(self.page_changed)
         self.pages.page_changed.connect(self._on_page_changed)
         self.setCentralWidget(self.pages)
@@ -295,7 +309,8 @@ class MainWindow(QMainWindow):
         QWidget.setTabOrder(self.detail_label, self.address_label)
         QWidget.setTabOrder(self.address_label, self.hint_label)
         QWidget.setTabOrder(self.hint_label, self.radar.first_focus_widget())
-        QWidget.setTabOrder(self.radar.last_focus_widget(), self.retry_button)
+        QWidget.setTabOrder(self.radar.last_focus_widget(), self.discover_button)
+        QWidget.setTabOrder(self.discover_button, self.retry_button)
         QWidget.setTabOrder(self.retry_button, self.start_button)
 
         self._retry_action = QAction(self)
@@ -468,6 +483,8 @@ class MainWindow(QMainWindow):
         self.title_label.setVisible(not running)  # tiêu đề cửa sổ đã có tên app; nhường chỗ cho radar
         self.body.setVisible(running)
         self._stretch.setVisible(not running)
+        self.discover_button.set_label(self.tr("Tìm máy mới"))
+        self.discover_button.setVisible(running)
         self.retry_button.setVisible(self._state is ViewState.ERROR)
         self.start_button.setVisible(self._state is ViewState.WELCOME)
 
