@@ -1175,6 +1175,10 @@ class DiscoverPage(QWidget):
         self.view_button.setAccessibleName(label)
         self.view_button.setVisible(not forced)
         reason = _mode_reason_text(self._reason, self._count)
+        # Câu lý do thay chỗ nút trên cùng hàng: không thấp hơn nút, để khung radar ở dạng vòng tròn
+        # không bao giờ nhỏ hơn lúc đang ở dạng danh sách (macOS/Linux: nút cao hơn nhãn). Không thì
+        # bố cục vừa đặt lúc về dạng vòng tròn tràn khỏi khung cho tới lần đổi cỡ kế tiếp.
+        self.mode_reason_label.setMinimumHeight(self.view_button.sizeHint().height())
         self.mode_reason_label.setText(reason)
         self.mode_reason_label.setAccessibleName(reason)
         self.mode_reason_label.setVisible(forced)

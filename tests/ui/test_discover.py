@@ -1550,6 +1550,19 @@ def test_more_than_eight_devices_forces_list_and_back(ui):
     assert_no_overlap(page)
 
 
+def test_back_to_radar_fits_when_button_is_taller_than_reason_label(ui):
+    """Nút cao hơn câu lý do (macOS/Linux): về dạng vòng tròn, bong bóng vẫn nằm trong khung ngay."""
+    from teleport.ui.discover import ViewMode
+
+    page = ui.page
+    page.view_button.setStyleSheet("padding: 14px")  # giả nút cao hơn nhãn như trên macOS/Linux
+    nine = [view(f"May-{i}", paired=i < 3) for i in range(9)]
+    ui.load(nine)
+    ui.load(nine[:8])
+    assert page.view_mode is ViewMode.RADAR
+    assert_no_overlap(page)
+
+
 def test_count_uses_filtered_devices(ui):
     from teleport.ui.discover import ViewMode
 
