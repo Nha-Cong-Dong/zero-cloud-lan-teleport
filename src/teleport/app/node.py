@@ -16,7 +16,10 @@ trả về; đổi kết nối (`LinkSwitched`) không báo `NodeEvent` mà chuy
 `TransferManager` sang kết nối mới. Thiết bị còn lượt truyền dở được `hold` (nối lại theo
 lịch kể cả khi mDNS báo máy đi). `DeviceRegistry` gộp mDNS + `trusted.json` + trạng thái
 kết nối thành `DeviceView` cho giao diện, và `on_event` báo `NodeEvent` (thiết bị
-lên/xuống, kết nối được/mất/lỗi).
+lên/xuống, kết nối được/mất/lỗi, máy đã ghép đôi đổi tên). Mỗi `LinkUp` / `LinkSwitched`,
+`hello` của kết nối điều khiển đã xác thực cập nhật `os` của view (chỉ RAM) và tên trong
+`trusted.json` (`_refresh_peer`, protocol §5.5; tối đa một lần ghi mỗi
+`PEER_RENAME_MIN_INTERVAL` cho mỗi thiết bị, tên bị trần chặn được hẹn áp khi hết trần).
 
 mDNS là tùy chọn (`mdns=None`: tắt) và chỉ là gợi ý địa chỉ: kết nối luôn kiểm chứng
 chỉ server với chứng chỉ đã lưu ngay trong bắt tay. Kết nối ra mở xong thì node báo
@@ -105,6 +108,7 @@ from teleport.core.messages import (
     PROTOCOL_VERSION,
     ConnectionKind,
     Hello,
+    MessageError,
     Ping,
     Pong,
     validate_device_id,
@@ -128,7 +132,7 @@ from teleport.net.connection import (
 )
 from teleport.net.discovery import PROBE_TICK, DiscoveryError, MdnsDiscovery
 from teleport.trust.identity import Identity, load_or_create_identity
-from teleport.trust.store import TrustedDevice, TrustStore
+from teleport.trust.store import TrustedDevice, TrustStore, TrustStoreError
 
 LOCK_TIMEOUT = 2.0  # chờ node.lock (khóa của tiến trình vừa chết có thể chưa được nhả, nhất là Windows)
 UNPAIR_CLOSE_TIMEOUT = 1.0  # unpair chờ đóng kết nối của máy bị hủy
@@ -136,6 +140,7 @@ NETWORK_CHECK_INTERVAL = 5.0  # giây giữa hai lần đọc địa chỉ + đ�
 SCAN_TIMEOUT = 3.0  # mặc định của scan_devices / teleport list
 MAX_SCAN_TIMEOUT = 60.0
 MDNS_CLOSE_ALLOWANCE = 2.0  # close(): chờ đóng mỗi instance mDNS (goodbye, socket) tối đa; còn lại chạy nền
+PEER_RENAME_MIN_INTERVAL = 30.0  # giây tối thiểu giữa hai lần ghi tên mới của cùng một máy đã ghép đôi
 _wall_clock = time.time  # test patch để giả máy thức dậy
 _mono_clock = time.monotonic
 # DEFAULT_PORT import từ teleport.net.connection; Node đọc qua biến toàn cục của module này
@@ -316,7 +321,17 @@ class ConnectFailed:
     result: ConnectResult  # không bao giờ OK
 
 
-NodeEvent = DeviceOnline | DeviceOffline | DeviceConnected | DeviceDisconnected | ConnectFailed
+@dataclass(frozen=True, slots=True)
+class DeviceRenamed:
+    """Máy đã ghép đôi đổi tên: tên mới (theo `hello` đã xác thực) đã ghi vào `trusted.json`."""
+
+    device: DeviceView  # view với tên mới
+    old_name: str
+
+
+NodeEvent = (
+    DeviceOnline | DeviceOffline | DeviceConnected | DeviceDisconnected | ConnectFailed | DeviceRenamed
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,6 +485,11 @@ def _ignore(_: object) -> None:
     return None
 
 
+def _gone_view(view: DeviceView) -> DeviceView:
+    """View cuối của một thiết bị chưa ghép đôi vừa rời khỏi registry: bỏ mọi thứ mDNS báo."""
+    return dataclasses.replace(view, os=None, online=False, connected=False, addresses=(), port=None)
+
+
 class Node:
     """Một node Teleport trên một thư mục cấu hình. Dùng một lần: `start()`, rồi `close()`."""
 
@@ -612,6 +632,11 @@ class Node:
         self._discovery_active = False
         self._discovery_error: Exception | None = None
         self._mdns_error_key: tuple[str, type, str] | None = None  # lỗi mDNS đã ghi WARNING gần nhất
+        # Máy đã ghép đôi đổi tên (`_refresh_peer`): lần thử ghi gần nhất (giờ loop), tên chờ hết
+        # trần PEER_RENAME_MIN_INTERVAL và hẹn giờ áp nó, theo device_id.
+        self._renamed_at: dict[str, float] = {}
+        self._pending_names: dict[str, str] = {}
+        self._rename_timers: dict[str, asyncio.TimerHandle] = {}
 
     # ---- Vòng đời --------------------------------------------------------------------------
 
@@ -725,6 +750,7 @@ class Node:
                 )
         except BaseException:
             self._closing = True  # _apply không tạo task mới nữa
+            self._cancel_rename_timers()
             try:
                 await self._abort_start(listener)
             finally:
@@ -889,6 +915,7 @@ class Node:
             self._close_done.set()
             return
         self._closing = True
+        self._cancel_rename_timers()
         assert self._pairing is not None and self._listener is not None
         listener_closing = False
         transfers = self._transfers
@@ -1276,7 +1303,11 @@ class Node:
         """`PairingService` ngay trước `store.add`: ghép đôi (kể cả lại) đặt lại cài đặt theo thiết bị.
 
         Chỉ ghi khi file có mục của thiết bị; ghi lỗi → SettingsSaveError (ghép đôi `SAVE_FAILED`).
+        Tên đang chờ hết trần đổi tên bị bỏ (không đè tên vừa ghép đôi), và lần ghép đôi tính là
+        một lần ghi tên: cùng khối đồng bộ với `store.add`, nên hẹn giờ không chen vào giữa.
         """
+        self._drop_pending_name(device_id)
+        self._renamed_at[device_id] = self._now()
         if self._settings is not None and device_id in self._settings.devices:
             self._save_settings(self._settings.with_device(device_id, None))
 
@@ -1407,6 +1438,7 @@ class Node:
             log.exception("không cập nhật được danh sách tin cậy của cổng")
         ids = self._trusted_ids()
         self._registry.set_trusted(self._store.devices())
+        self._forget_peer_names()
         closes = self._apply(self._links.trusted_changed(ids, self._now()))
         if self._mdns is not None:
             try:
@@ -1601,8 +1633,11 @@ class Node:
                 event.old_conn_id,
                 event.conn_id,
             )
+            self._refresh_peer(event.device_id, self._conns.get(event.conn_id))
             self._transfer_control_up(event.device_id, event.conn_id, event.outgoing)
         elif isinstance(event, LinkUp):
+            # Trước `_transfer_control_up` và `DeviceConnected`: offer và view mang tên, `os` mới.
+            self._refresh_peer(event.device_id, self._conns.get(event.conn_id))
             self._transfer_control_up(event.device_id, event.conn_id, event.outgoing)
             registry.set_connected(event.device_id, True)
             log.info("đã kết nối với %s", event.device_id[:8])
@@ -1623,6 +1658,103 @@ class Node:
             view = registry.get(event.device_id)
             if view is not None:
                 self._emit(ConnectFailed(view, event.result))
+
+    def _refresh_peer(self, device_id: str, conn: Connection | None) -> None:
+        """Kết nối điều khiển hiện tại của máy đã ghép đôi vừa có hay vừa đổi (đồng bộ): nhớ
+        `hello.os`, và ghi `hello.name` vào `trusted.json` nếu máy đó đã đổi tên.
+
+        Chỉ áp khi node không đang đóng, thiết bị còn trong kho và fingerprint của `conn` khớp
+        chứng chỉ đã lưu: kết nối điều khiển đã xác thực hai chiều, nên chỉ chính máy đó đổi được
+        tên của nó. Không có `await` từ lúc kiểm tới lúc ghi. Đổi tên không đổi tin cậy: không gọi
+        `_trust_changed` (cổng, tracker, mDNS giữ nguyên).
+
+        Giá trị trả về của `set_peer_hello` bị bỏ qua: ở `LinkSwitched`, `os` đổi mà tên không đổi
+        thì không có sự kiện nào (view mới thấy ở lần đọc sau). Chấp nhận được: `os` chỉ để hiển
+        thị, và một máy đổi hệ điều hành mà vẫn giữ danh tính là chuyện hiếm.
+        """
+        if conn is None or self._closing or self._store is None or self._registry is None:
+            return
+        device = self._store.get(device_id)
+        if device is None or conn.peer.fingerprint != device.fingerprint:
+            return
+        hello = conn.peer.hello
+        try:
+            self._registry.set_peer_hello(device_id, os=hello.os)
+            self._rename_peer(device, hello.name)
+        except Exception:  # không để lỗi ở đây cắt ngang `_apply` của tracker
+            log.exception("không cập nhật được thông tin của %s", device_id[:8])
+
+    def _rename_peer(self, device: TrustedDevice, name: str) -> None:
+        """Ghi tên mới (đã xác thực) của `device`, tối đa một lần mỗi PEER_RENAME_MIN_INTERVAL.
+
+        Bị trần chặn thì nhớ tên đó và hẹn áp khi hết trần (`_apply_pending_name`). Lỗi ghi chỉ
+        WARNING: kết nối vẫn chạy, lần thử vẫn tính vào trần (máy nối lại liên tục không biến loop
+        thành vòng ghi đĩa).
+        """
+        assert self._store is not None and self._registry is not None
+        device_id = device.device_id
+        if name == device.name:
+            self._drop_pending_name(device_id)
+            return
+        now = self._now()
+        interval = PEER_RENAME_MIN_INTERVAL
+        last = self._renamed_at.get(device_id)
+        if last is not None and now - last < interval:
+            self._pending_names[device_id] = name
+            if device_id not in self._rename_timers:
+                self._rename_timers[device_id] = asyncio.get_running_loop().call_later(
+                    last + interval - now, self._apply_pending_name, device_id
+                )
+            return
+        self._drop_pending_name(device_id)
+        self._renamed_at[device_id] = now
+        try:
+            self._store.rename(device_id, name)
+        except (MessageError, KeyError, TrustStoreError) as e:
+            log.warning("không lưu được tên mới của %s (%s)", device_id[:8], type(e).__name__)
+            return
+        self._registry.set_trusted(self._store.devices())
+        log.info("%s đổi tên, đã cập nhật trusted.json", device_id[:8])
+        view = self._registry.get(device_id)
+        if view is not None:
+            self._emit(DeviceRenamed(view, device.name))
+
+    def _drop_pending_name(self, device_id: str) -> None:
+        self._pending_names.pop(device_id, None)
+        timer = self._rename_timers.pop(device_id, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _apply_pending_name(self, device_id: str) -> None:
+        """Hẹn giờ của tên bị trần chặn: áp nếu kết nối điều khiển HIỆN TẠI vẫn đúng chứng chỉ đã lưu."""
+        self._rename_timers.pop(device_id, None)
+        name = self._pending_names.pop(device_id, None)
+        if name is None or self._closing or self._store is None or self._links is None:
+            return
+        device = self._store.get(device_id)
+        conn_id = self._links.connected().get(device_id)
+        conn = None if conn_id is None else self._conns.get(conn_id)
+        if device is None or conn is None or conn.peer.fingerprint != device.fingerprint:
+            return
+        try:
+            self._rename_peer(device, name)
+        except Exception:
+            log.exception("không áp được tên mới của %s", device_id[:8])
+
+    def _forget_peer_names(self) -> None:
+        """Bỏ trạng thái đổi tên của thiết bị không còn tin cậy (gọi sau khi kho đổi)."""
+        if self._store is None:
+            return
+        for device_id in list(self._renamed_at.keys() | self._pending_names.keys()):
+            if self._store.get(device_id) is None:
+                self._renamed_at.pop(device_id, None)
+                self._drop_pending_name(device_id)
+
+    def _cancel_rename_timers(self) -> None:
+        for timer in self._rename_timers.values():
+            timer.cancel()
+        self._rename_timers.clear()
+        self._pending_names.clear()
 
     def _transfer_control_up(self, device_id: str, conn_id: int, outgoing: bool) -> None:
         """Kết nối điều khiển hiện tại của thiết bị vừa có hay vừa đổi → `TransferManager`."""
@@ -1798,14 +1930,18 @@ class Node:
             self._emit(DeviceOffline(self._offline_view(device, before)))
 
     def _offline_view(self, device: DiscoveredDevice, before: DeviceView | None) -> DeviceView:
-        """View cuối của một thiết bị vừa rời mạng (online=False, không địa chỉ, cổng)."""
+        """View cuối của một thiết bị vừa rời mạng (online=False, không địa chỉ, cổng).
+
+        Máy đã ghép đôi vẫn có view trong registry, giữ `os` từ `hello` đã nhớ. Không còn
+        view thì máy đó chưa ghép đôi: `os` của nó chỉ đến từ mDNS nên bỏ.
+        """
         assert self._registry is not None
         after = self._registry.get(device.device_id)
         if after is not None:
             return after
-        if before is None:
-            before = DeviceView(device.device_id, device.name, None, False, False, False, (), None)
-        return dataclasses.replace(before, os=None, online=False, connected=False, addresses=(), port=None)
+        return _gone_view(
+            before or DeviceView(device.device_id, device.name, None, False, False, False, (), None)
+        )
 
     async def _netwatch(self) -> None:
         """Cứ NETWORK_CHECK_INTERVAL giây: địa chỉ đổi → khởi động lại mDNS; thức dậy → quảng bá lại."""
@@ -1868,11 +2004,9 @@ class Node:
                 self._apply(self._links.device_gone(device_id, now))
                 view = before.get(device_id)
                 if view is not None:
+                    # Máy đã ghép đôi còn view (giữ `os` từ `hello`); không còn thì chưa ghép đôi.
                     after = self._registry.get(device_id)
-                    offline = after or dataclasses.replace(
-                        view, os=None, online=False, connected=False, addresses=(), port=None
-                    )
-                    self._emit(DeviceOffline(offline))
+                    self._emit(DeviceOffline(after or _gone_view(view)))
             if old is not None:
                 await old.close()
                 self._mdns_closing.discard(old)

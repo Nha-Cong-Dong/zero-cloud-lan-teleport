@@ -133,7 +133,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Máy đã ghép đôi cài lại Teleport hiện như một thiết bị mới chưa ghép đôi; app gợi ý ghép đôi lại và đề nghị xóa mục cũ trùng tên (mục 8).
   - Máy này nhận yêu cầu ghép đôi từ máy khác khi:
     - giao diện, máy này đang *hiện* (F10): luôn nhận;
-    - giao diện, máy này đang *ẩn* (F10): chỉ trong lúc mở màn hình “Chờ ghép đôi” (nút “Chờ ghép đôi” ở cửa sổ chính, mục 7.1, 7.5); đóng màn hình thì thôi nhận;
+    - giao diện, máy này đang *ẩn* (F10): chỉ trong lúc mở màn hình “Chờ ghép đôi” (nút “Chờ ghép đôi” ở màn Tìm máy mới, mục 7.1, 7.5); đóng màn hình thì thôi nhận;
     - CLI: chỉ trong lúc chạy `teleport listen`.
 
     Mở màn hình “Chờ ghép đôi” hoặc chạy `teleport listen` gọi là **chế độ chờ ghép đôi**. Ngoài các trường hợp trên, máy gửi yêu cầu thấy “chưa sẵn sàng ghép đôi” (mục 8).
@@ -143,6 +143,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Khi nhận yêu cầu ghép đôi, máy này hiện tối đa **5 mã mỗi phút** (gộp mọi máy gửi yêu cầu); quá thì yêu cầu mới nhận “chưa sẵn sàng ghép đôi” (mục 8). Từ mã thứ **3** trong 1 phút, máy này cảnh báo có thể có người đang thử giả mạo (mục 8). Nhờ vậy kẻ đứng giữa chỉ thử được vài mã trong lúc người dùng chờ xác nhận.
   - Không ghép đôi đè lên một thiết bị tin cậy có cùng mã thiết bị nhưng danh tính khác; phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa.
   - Ghép đôi lại với một thiết bị tin cậy (cùng mã thiết bị, cùng danh tính, ví dụ sau khi ghép đôi một phía): lời hỏi hiện thêm tên đã lưu, và tên mới nếu tên sẽ đổi (mục 7.2). Ghép đôi xong, **cả hai máy** cập nhật tên theo tên máy kia đang dùng, vì lúc ghép đôi mỗi máy đã xác minh máy kia giữ đúng khóa của thiết bị đó ([protocol.md](protocol.md) mục 5.1, 5.5). Máy lạ chỉ có chứng chỉ công khai của thiết bị đó thì bị chặn trước khi hiện mã.
+  - Máy đã ghép đôi đổi tên (F10): máy này cập nhật tên đã lưu ở lần kết nối kế tiếp với máy đó, không hỏi lại. Kết nối giữa hai máy đã ghép đôi xác thực cả hai bên bằng chứng chỉ đã lưu, nên chỉ chính máy đó đổi được tên của nó; máy lạ hay bản quảng bá trên mạng không đổi được ([protocol.md](protocol.md) mục 5.5).
 
 ### F4. Gửi file
 - **US-06:** Tôi muốn kéo một hoặc nhiều file thả vào thiết bị trên radar để gửi.
@@ -263,22 +264,48 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 
 ## 7. Màn hình (wireframe)
 
-### 7.1. Cửa sổ chính — Radar
+### 7.1. Cửa sổ chính — khung chat theo từng máy
 ```
-┌─ Teleport ──────────────────────────────────────────── _ □ × ┐
-│  Laptop-Minh · Wi-Fi “NhaMinh-5G”                ⚙ Cài đặt     │
-│ ┌──────────────────────────────────┐ ┌───────────────────────┐ │
-│ │            ·    ·    ·           │ │ Đang truyền           │ │
-│ │       ·       ╭───╮      ·       │ │ video.mp4  → PC-Nha   │ │
-│ │    ● PC-Nha   │ ◉ │              │ │ ███████░░░  72%       │ │
-│ │   (đã ghép)   ╰───╯  ○ MacBook   │ │ 58 MB/s · còn 41s  ✕  │ │
-│ │       ·        Bạn   (chưa ghép) │ ├───────────────────────┤ │
-│ │            ·    ·    ·           │ │ Gần đây               │ │
-│ └──────────────────────────────────┘ │ ✔ report.pdf ← PC-Nha │ │
-│   Bấm vào thiết bị hoặc kéo file vào │ ✔ build.zip → PC-Nha  │ │
-│   [ Gửi file… ] [ Nhập IP thủ công ] └───────────────────────┘ │
-│   [ Chờ ghép đôi ]                                             │
-└────────────────────────────────────────────────────────────────┘
+┌─ Teleport ──────────────────────────────────────────────────────────────┐
+│ [▶] Teleport      [⌕] [⚙] │ (PC) PC-Nha                       [📂] [⋯]  │
+│ ┌────────────────────────┐ │ ● Trực tuyến · Windows · 192.168.1.20       │
+│ │(PC)● PC-Nha            │ ├─────────────────────────────────────────────┤
+│ │      Đang gửi · 62%    │ │            — Đã ghép đôi · 28/10 —          │
+│ └────────────────────────┘ │ ┌ anh-cuoi.zip · 1,8 GB ┐                   │
+│ (Lap)● MacBook-Lan         │ │ ✓ Đã lưu · Mở thư mục │                   │
+│        Đã nhận bao-cao.pdf │ └───────────────────────┘                   │
+│ (Lap)○ Ubuntu-Lab          │              ┌ phim-4k.mkv · 18 GB      ┐  │
+│        Ngoại tuyến·hôm qua │              │███████░░░░ 62%     ⏸ ✕   │  │
+│ ＋ Ghép đôi máy mới         │              │94 MB/s · còn 1 phút      │  │
+│                            │              └──────────────────────────┘  │
+│                            │ ┌ PC-Nha muốn gửi 2 file (340 MB) ┐        │
+│ (◆) Máy này            [⧉] │ │ [Từ chối] [Nhận]                │        │
+│     Laptop-Minh            │ └─────────────────────────────────┘        │
+│     Địa chỉ: 192.168.1.15  │ [Gửi file] [Thư mục] [Gửi clipboard]       │
+│     ● Sẵn sàng nhận        │                     hoặc kéo file vào đây  │
+├────────────────────────────┴─────────────────────────────────────────────┤
+│ ↓ Lưu vào: Downloads\Teleport                      [Mở thư mục] [Đổi…]   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+- Cột trái là các máy đã ghép đôi (mỗi máy một cuộc trò chuyện); cuối cột là máy này, kèm địa chỉ và trạng thái.
+- ⌕ mở màn “Tìm máy mới” (radar, có “Nhập IP thủ công” và “Chờ ghép đôi”).
+- Chưa ghép đôi máy nào thì bên phải là “Ghép đôi máy đầu tiên”.
+- Cửa sổ hẹp thì cột trái thu gọn.
+- Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái.
+- Không hiện tên Wi-Fi.
+
+Màn “Tìm máy mới”:
+```
+┌─ Teleport ───────────────────────────────────────────────────────┐
+│ [← Quay lại]  Tìm máy mới                 [ Nhập IP thủ công… ]  │
+│                ·          ·          ·                           │
+│   (PC) PC-Khách         ╭───╮        (PC) PC-Nha · đã ghép       │
+│     Chưa ghép đôi       │ ◉ │                                    │
+│                ·        ╰───╯ Bạn          (Lap) Laptop-Bảo      │
+│                ·          ·          ·       Chưa ghép đôi       │
+│ Đang tìm trong mạng… Bấm một máy để ghép đôi.   [ Chờ ghép đôi ] │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### 7.2. Ghép đôi
@@ -359,7 +386,7 @@ Tên file do máy gửi đặt (đã làm sạch, [ke_hoach.md](ke_hoach.md) m�
 
 Bản giao diện của MVP hackathon (mục 4.1): dòng đầu là ““*Laptop-Minh*” muốn gửi *3* file (*8,4 GB*) tới máy này.” (chữ lớn, đậm), rồi các dòng file như bản CLI dưới đây, “Lưu vào: …” và hai nút. Nút “Đổi…” và ô “Luôn nhận từ thiết bị này” (F4) để sau hackathon. Mỗi lượt một hộp, không chặn cửa sổ chính; Enter, Esc và nút đóng hộp đều là **Từ chối**; máy gửi hủy khi hộp còn mở thì hộp tự đóng.
 
-Danh sách lượt truyền của giao diện (khung bên phải ở mục 7.1) có một thẻ cho mỗi lượt trong lần mở app này:
+Danh sách lượt truyền của giao diện (khung bên phải của cửa sổ chính, mục 7.1) có một thẻ cho mỗi lượt trong lần mở app này:
 - Dòng 1: “*video.mp4* (*8,0 GB*) · tới *PC-Nha*” (bên nhận “· từ *Laptop-Minh*”; nhiều file: “*3* file (*8,4 GB*)”) và nút “Hủy”; bên nhận xong thì nút “Mở thư mục”.
 - Dòng 2: thanh tiến độ.
 - Dòng 3: nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang kiểm tra”, “Đang nối lại…”, “Xong ✓”, “Đã từ chối”, “Đã hủy”, “Lỗi”) và một dòng phụ: khi đang truyền “*45,0*% · *120 MB/s* · còn *2 phút*” (phần trăm làm tròn xuống, chưa xong thì không hiện 100%; chưa đo được tốc độ thì bỏ phần tốc độ và thay “còn …” bằng “đang tính thời gian còn lại”; đang nối lại hay chờ dữ liệu thì câu ở mục 8); khi chờ thì câu chờ như bản CLI ở bảng dưới (máy nhận: “Đang chờ bạn trả lời” hoặc “Đang xếp hàng”); khi xong “Đã kiểm tra toàn vẹn” (bên nhận mà file phải lưu tên khác vì đã có file trùng tên: “Đã lưu thành *video-demo (1).mp4* · Đã kiểm tra toàn vẹn”; từ hai file đổi tên: “Đã lưu *2* file với tên mới · Đã kiểm tra toàn vẹn”); khi dừng vì lỗi thì câu của mục 8. Lượt dừng mà không xong (hủy, từ chối, lỗi) thì ẩn thanh tiến độ.
@@ -421,7 +448,7 @@ Trên terminal, dòng tiến độ được vẽ lại tại chỗ, cắt vừa 
 │                                 [ Đóng ]  │
 └───────────────────────────────────────────┘
 ```
-- Mở bằng nút “Chờ ghép đôi” ở cửa sổ chính; máy này nhận yêu cầu ghép đôi thế nào khi màn hình mở hay đóng: F3.
+- Mở bằng nút “Chờ ghép đôi” ở màn Tìm máy mới (mục 7.1); máy này nhận yêu cầu ghép đôi thế nào khi màn hình mở hay đóng: F3.
 - “Địa chỉ”: mọi địa chỉ IPv4 của máy này, kèm `:cổng` khi cổng khác cổng mặc định (protocol mục 2), giống `teleport listen`.
 - Hai dòng “Máy này đang ẩn…” chỉ hiện khi máy này đang ẩn (F10).
 - Có yêu cầu ghép đôi thì lời hỏi hiện theo mục 7.2.

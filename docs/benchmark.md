@@ -28,7 +28,7 @@
 | mvp N8 | — | chưa đo |
 | mvp N9 | — | chưa đo |
 | mvp N10 | — | chưa đo |
-| mvp N11 | 2026-10-30/31: cỡ bản zip GUI Windows (PyInstaller `--onedir`) trước/sau A2, chưa có bộ cài (mục 8.2) | **chưa đo**: chưa có bộ cài; cỡ zip chỉ để tham khảo (mục 8.3) |
+| mvp N11 | 2026-10-31: bộ cài Inno Setup thử (PR E2), cài/gỡ silent `/CURRENTUSER` 3 lần trên máy dev Windows 11 (mục 8.4); trước đó cỡ zip GUI trước/sau A2 (mục 8.2) | **CHƯA ĐỦ DỮ LIỆU**: cỡ bộ cài dưới trần theo cả hai cách hiểu “MB”, không cần khởi động lại và gỡ sạch thư mục cài, khóa gỡ cài đặt, lối tắt ở chế độ một người dùng; chế độ quản trị (rule tường lửa) và máy ảo sạch chưa đo (mục 8.3) |
 | mvp N12 | — | chưa đo |
 | mvp mục 4.1 (H1–H5) | — | chưa đo (mục 6) |
 
@@ -759,7 +759,11 @@ Linux, host Windows ↔ máy ảo Ubuntu bridged, cắt bằng `VBoxManage contr
 
 - **Cỡ thư mục:** tổng `st_size` của mọi file trong `dist\teleport-gui\` do PyInstaller `--onedir` tạo từ `packaging/pyinstaller/teleport-gui.spec` (không tính cỡ thư mục, cụm đĩa).
 - **Cỡ zip:** cỡ file zip tạo từ thư mục đó bằng `zipfile` của Python, `ZIP_DEFLATED` mức 6, gốc zip là `teleport-gui\`, file xếp theo đường dẫn. Đây **không** phải zip artifact của workflow “Build GUI (thử)” (do GitHub nén) và **không** phải bộ cài mà mvp N11 đặt trần; chỉ để so các bản build với nhau.
-- Đơn vị: byte; MiB = 2²⁰ byte.
+- **Cỡ bộ cài:** `Length` của file `teleport-setup-<phiên bản>-x64.exe` do ISCC build từ `packaging/inno/teleport.iss` và thư mục `dist\teleport-gui\` (mục “Bộ cài Windows” trong `CONTRIBUTING.md`). Đây là cỡ mà trần của mvp N11 áp vào.
+- **Cỡ sau khi cài:** tổng `Length` của mọi file trong thư mục cài sau khi cài silent xong, **kể cả** `unins000.exe` và `unins000.dat` của Inno; đếm số file cùng lúc. Không tính cỡ thư mục, cụm đĩa, lối tắt Start Menu và khóa registry.
+- **Không cần khởi động lại:** dòng `Need to restart Windows?` trong log của bộ cài (`/LOG=`) và của trình gỡ.
+- **Gỡ sạch:** sau khi trình gỡ chạy xong, thư mục cài, khóa `HKCU\...\Uninstall\{AppId}_is1` và lối tắt Start Menu đều không còn. Dữ liệu người dùng ở `%APPDATA%\Teleport` được giữ khi gỡ silent theo thiết kế ([architecture.md](architecture.md) mục 4, “Bộ cài Windows”), không thuộc phép kiểm này.
+- Đơn vị: byte; MiB = 2²⁰ byte; MB = 10⁶ byte.
 
 ### 8.2. Lần đo 2026-10-30/31: trước/sau A2 (QtSvg, 47 icon SVG, font Bricolage Grotesque)
 
@@ -797,6 +801,21 @@ Phần lớn thêm vào là QtSvg (724 592 B, khoảng 60%) và font (khoảng 3
 
 ### 8.3. So với mvp N11 và việc còn lại
 
+Từ 2026-10-31 (mục 8.4, bộ cài thử của PR E2, chế độ `/CURRENTUSER`, máy dev chứ không phải máy ảo sạch):
+
+| Tiêu chí của mvp N11 | Số đo | Kết luận |
+|---|---|---|
+| Cỡ bộ cài ≤ trần | 26 078 484 B = 24,87 MiB = 26,08 MB (10⁶): dưới trần dù “MB” là MiB hay 10⁶ byte, còn dư khoảng 3 lần | **ĐẠT** (cả hai cách hiểu) |
+| Không cần khởi động lại | Log cài và log gỡ: `Need to restart Windows? No` ở cả 3 lần | **ĐẠT ở chế độ một người dùng**; chế độ quản trị (có rule tường lửa) chưa đo |
+| Gỡ cài đặt sạch | 3/3 lần: thư mục cài, khóa `Uninstall\{AppId}_is1`, lối tắt Start Menu mất; log gỡ `Removed all? Yes` | **ĐẠT ở chế độ một người dùng**; tùy chọn xóa dữ liệu (chỉ hỏi khi gỡ có giao diện) và chế độ quản trị chưa kiểm |
+| Kiểm trên máy ảo sạch | — | **chưa đo** |
+
+- Cỡ **sau khi cài** là 85 256 013 B = 81,31 MiB = 85,26 MB (10⁶), 151 file: **trên** con số 80 dù hiểu “MB” theo cách nào. mvp N11 chỉ đặt trần cho bộ cài, không cho cỡ sau khi cài; ghi lại để chủ của `mvp.md` quyết có cần trần cho cỡ này không. Riêng các file của app (không tính `unins000.*`) là 80 826 254 B = 77,08 MiB = 80,83 MB; trình gỡ của Inno thêm 4 429 759 B.
+- Cỡ zip ở mục 8.2 chỉ để so các bản build với nhau. Bộ cài (`lzma2/max`, nén khối) bằng 75 % zip “Sau A2” của mục 8.2 (26 078 484 / 34 601 261 B); hai bản build khác nhau (thư mục `dist` chênh 24 414 B) nên tỉ lệ này chỉ để tham khảo.
+- Còn **chưa đo**: (1) cài/gỡ ở chế độ quản trị (mặc định khi cài bằng tay, cần quyền quản trị): “không cần khởi động lại” và việc tạo/xóa hai rule tường lửa; (2) toàn bộ phép kiểm trên **máy ảo Windows sạch** như mvp N11 yêu cầu (máy dev đã có sẵn `%APPDATA%\Teleport`, Python, VC++ runtime…); (3) gỡ có giao diện với lựa chọn giữ/xóa cài đặt và thiết bị tin cậy. Thuộc Giai đoạn 6 ([ke_hoach.md](ke_hoach.md) mục 5.2).
+
+Trước 2026-10-31 (giữ nguyên):
+
 - Trần của mvp N11 áp cho **bộ cài** Windows; chưa có bộ cài nên mục này là **chưa đo**. Cỡ zip ở trên chỉ để tham khảo: bộ cài nén cùng các file này, nhưng cỡ còn tùy công cụ và mức nén.
 - Zip sau A2 dưới trần của mvp N11 với khoảng cách lớn. Thư mục đã giải nén (cái người dùng thấy sau khi cài) xấp xỉ trần: dưới trần nếu “MB” trong mvp N11 là MiB, **trên** trần nếu là 10⁶ byte. mvp N11 không nói rõ đơn vị và không đặt trần cho cỡ sau khi cài; ghi lại để chủ của `mvp.md` quyết.
 - Còn lại: cỡ bộ cài thật, “không cần khởi động lại” và gỡ cài đặt sạch, kiểm trên máy ảo sạch theo mvp N11 (Giai đoạn 6, [ke_hoach.md](ke_hoach.md) mục 5.2).
@@ -820,3 +839,44 @@ print(f"thư mục {total} B; zip {out.stat().st_size} B")
 ```powershell
 python -I zipsize.py <thư mục dist> <đường dẫn zip ra>
 ```
+
+### 8.4. Bộ cài
+
+#### Lần đo 2026-10-31: bộ cài Inno Setup thử của PR E2, cài/gỡ `/CURRENTUSER`
+
+**Môi trường**
+
+| | |
+|---|---|
+| Máy | Windows 11 Pro 10.0.26300, Intel Core i7-12800H, RAM 15,7 GiB; máy dev, **không** phải máy ảo sạch (đã có `%APPDATA%\Teleport` từ trước, không bị bộ cài động tới) |
+| Quyền | Không elevated; cài với `/CURRENTUSER` nên không tạo rule tường lửa (log cài không có dòng `netsh`) |
+| Nguồn | Worktree `installer-e2-439eb3`, commit `f42b64f` **cộng thay đổi chưa commit** của PR E2 sau các sửa lỗi soát code (bộ cài build lại 31/10 14:25 giờ máy; `dist` không build lại) (`packaging/inno/`, `build-gui.yml`, `pyproject.toml`, docs; không đổi `src/`). `teleport.__version__` = `0.1.0a0` |
+| Build | `dist\teleport-gui\` (149 file, 80 827 447 B) build bằng `.venv` của worktree: Python 3.14.5, PyInstaller 6.22.3 theo `packaging/pyinstaller/requirements.txt`; bộ cài build bằng ISCC 6.7.3 (log cài: `Inno Setup version 6.7.3`), `Compression=lzma2/max`, `SolidCompression=yes` |
+| Bộ cài | `installer\teleport-setup-0.1.0a0-x64.exe`, SHA-256 `C3A416A42DE5EA1D1D4F37A7D534C434E62C683BAB0295E4CA5C90DA0DE38D10` |
+
+**Cách chạy mỗi lần:** `teleport-setup-….exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER /NORESTART /DIR=%TEMP%\tpn11\app /LOG=…`, đo thư mục cài và khóa gỡ cài đặt, rồi `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /LOG=…` và chờ tới khi khóa và thư mục mất. `/NORESTART` để bộ cài không tự khởi động lại máy nếu cần; log vẫn ghi `Need to restart Windows?` đúng như khi không có cờ này. Không chạy app.
+
+**Kết quả** (3 lần, 0 lần hỏng; số liệu cỡ giống hệt nhau ở cả 3 lần)
+
+| Đại lượng | B | MiB | MB (10⁶) | Số file |
+|---|---|---|---|---|
+| Bộ cài | 26 078 484 | 24,87 | 26,08 | 1 |
+| Thư mục sau khi cài (kể cả `unins000.*`) | 85 256 013 | 81,31 | 85,26 | 151 |
+| Trong đó `unins000.exe` + `unins000.dat` | 4 376 082 + 53 677 = 4 429 759 | 4,22 | 4,43 | 2 |
+| Trong đó file của app | 80 826 254 | 77,08 | 80,83 | 149 |
+
+- So với `dist\teleport-gui\`: bộ cài bỏ `DOC-TRUOC.txt` (2 714 B) và thêm `licenses\InnoSetup-license.txt` (1 521 B), ngoài ra giống hệt danh sách file.
+- `EstimatedSize` trong khóa gỡ cài đặt (Inno tự tính, hiện ở “Apps”): 83 180 KiB.
+- Khởi động lại: log cài và log gỡ đều `Need to restart Windows? No` ở cả 3 lần; Restart Manager báo không có ứng dụng nào giữ file.
+- Gỡ: 3/3 lần thư mục cài, khóa `HKCU\...\Uninstall\{A82B1EF5-F24A-4DA0-841B-09F4E2F6D4C1}_is1` và `Teleport.lnk` trong Start Menu đều mất; log gỡ `Removed all? Yes`. Giá trị `Teleport` ở `HKCU\...\Run` không có trước và sau. Lối tắt Desktop không được tạo (tùy chọn mặc định tắt).
+- Thời gian (đồng hồ `Stopwatch`, chỉ ghi nhận, mvp N11 không đặt ngưỡng): cài 4,79 / 8,70 / 3,82 s; gỡ 2,12 / 1,55 / 2,26 s.
+
+**Giới hạn:** máy dev chứ không phải máy ảo sạch; chỉ chế độ một người dùng; không có lần cài có giao diện. Kết luận so với mvp N11 ở mục 8.3.
+
+**Cách đo lại:** build `dist\teleport-gui\` và bộ cài theo `CONTRIBUTING.md` (ISCC chạy qua PowerShell, không qua Git Bash), kiểm máy chưa cài Teleport bằng bộ cài, rồi chạy script đo (đặt ngoài repo; lưu UTF-8 **có BOM** để Windows PowerShell 5.1 đọc đúng tiếng Việt), trong PowerShell không elevated:
+
+```powershell
+& <scratchpad>\n11_installer.ps1 -Setup installer\teleport-setup-0.1.0a0-x64.exe -DistDir dist\teleport-gui -Repeat 3
+```
+
+Script (`n11_installer.ps1`, phiên đo 2026-10-31) dừng ngay nếu khóa gỡ cài đặt của Teleport đã có ở HKCU hoặc HKLM, nếu `%TEMP%\tpn11` đã có hoặc nếu đang elevated; mỗi lần cài/gỡ có hạn 180 s; cuối cùng xóa `%TEMP%\tpn11` (chỉ khi khóa gỡ cài đặt đã mất). Đường dẫn cài phải ngắn: thư mục quá sâu làm bộ cài lỗi 206.

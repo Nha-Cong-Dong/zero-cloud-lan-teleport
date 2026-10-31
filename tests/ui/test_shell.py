@@ -218,13 +218,15 @@ def test_running_window_shows_device_name_and_receive_dir(gui, gui_wait, config_
     def script(run):
         yield gui_wait(lambda: run.windows and host_started(run), 15, "node chạy")
         yield gui_wait(lambda: name in ui_helpers.all_text(run.window), 3, "tên máy hiện trên cửa sổ")
-        seen["text"] = ui_helpers.all_text(run.window)
+        # Spec B1 mục 12.20: chân “Lưu vào” cắt giữa đường dẫn dài (chữ hiện có “…”), nên đường dẫn
+        # đầy đủ kiểm ở mô tả trợ năng của nhãn, không ở chữ hiện.
+        seen["text"] = run.window.save_bar.save_label.accessibleDescription()
         quit_via_tray(run, ui_helpers.plain)
 
     run = gui(["--config-dir", str(d)], script)
     text = seen["text"]
     shown = {str(receive_dir), os.path.normpath(receive_dir), receive_dir.as_posix()}
-    assert any(s in text for s in shown), f"thư mục nhận {receive_dir} không hiện: {text!r}"
+    assert any(s in text for s in shown), f"thư mục nhận {receive_dir} không có trong mô tả: {text!r}"
     assert run.code == 0
 
 
