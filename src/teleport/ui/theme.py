@@ -10,7 +10,16 @@ mới (nút chính nền nhạt chữ đậm nên hover/pressed là màu riêng,
 cho chấm/icon (≥ 3:1); chữ “ngoại tuyến” dùng `text_muted`. Cặp đã kiểm: chữ ≥ `MIN_CONTRAST` trên
 các nền liệt kê ở tiêu chí (a) của `tests/ui/test_tokens.py`; viền/icon (`border_strong`,
 `accent_strong`, `success`, `warning`, `danger`, `offline`) ≥ 3:1 trên nền cửa sổ, nền nổi và
-sidebar; `accent_strong` (thanh tiến độ) ≥ 3:1 trên `track`.
+sidebar; `accent_strong` (thanh tiến độ) ≥ 3:1 trên `track`. Spec A3 thêm cặp cho `ui/widgets.py`
+(bong bóng, `InfoBar`, badge, avatar trên hàng chọn); để `offline` ≥ 3:1 trên `selected`, `offline`
+sáng làm tối từ `#8A7F70` của A1 xuống `#897E6F` (bước nhỏ nhất đạt ngưỡng).
+
+**Chế độ của một widget** (`tokens_for(widget)`): widget tự vẽ (`ui/widgets.py`) lấy token theo
+`is_dark_palette(QApplication.palette())`: tối khi độ sáng của `Window` thấp hơn của `WindowText`, nên
+không cần biến toàn cục và test không gọi `apply` thì là sáng. Đọc bảng màu **của ứng dụng**, không
+của widget: QStyleSheetStyle ghi màu nền trong suốt vào bảng màu của widget khớp luật
+`background: transparent`, làm phép so độ sáng sai. Widget tự vẽ bắt `PaletteChange` và
+`ApplicationPaletteChange` để vẽ lại khi đổi chế độ.
 
 **Bảng màu** (`palette(dark)`, style Fusion): Window = surface; Base = surface_raised; AlternateBase =
 sidebar; Button = sidebar (sáng) / selected (tối: nền sidebar gần như trùng nền cửa sổ, nút Fusion
@@ -45,13 +54,19 @@ font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
   cửa sổ, nhưng so với viền thường `accent_strong` chỉ khác ≈ 1,7:1 ở chế độ tối, nên gạch chân (màu
   chữ của nút, ≥ 4,5:1 với nền nút) là dấu hiệu thứ hai. Tô màu chỉ để nhấn: nút mặc định (Enter)
   vẫn là nút an toàn của hộp (“Từ chối”, “Không trùng”), không phải nút chính.
-- `QLabel[tone="muted|success|warning|danger"]`: màu chữ theo token cùng tên (`muted` → `text_muted`).
+- `QToolButton[iconButton="true"]` — **nút icon** (`widgets.IconButton`): nền trong suốt, viền 2 px
+  trong suốt (giữ nguyên cỡ nút khi có tiêu điểm), bo `RADIUS_CONTROL`, padding 4 px, chữ `text`;
+  `:hover` nền `selected`; `:pressed` nền `border`; `:focus` viền `focus_ring_color` (khớp luật thì
+  Fusion không vẽ viền tiêu điểm nữa, nên luật này bắt buộc); `:disabled` chữ `text_muted`;
+  `::menu-indicator` không ảnh, rộng 0 (nút ⋯ có menu không hiện mũi tên).
+- `QLabel[tone="muted|success|warning|danger|accent"]`: màu chữ theo token cùng tên (`muted` →
+  `text_muted`, `accent` → `accent_text`).
 - `QFrame[surface="sidebar|raised|card"]`: nền `sidebar` (viền phải `border`, không bo) / nền
   `surface_raised`, viền `border`, bo `RADIUS_CARD` / như `raised` nhưng bo `RADIUS_BLOCK`.
 
-Property (`PRIMARY_PROPERTY`, `TONE_PROPERTY`, `SURFACE_PROPERTY`) đặt **trước khi hiện** (stylesheet
-đọc property lúc polish); đặt sau khi widget đã hiện thì gọi `style().unpolish(w)` rồi
-`style().polish(w)`.
+Property (`PRIMARY_PROPERTY`, `TONE_PROPERTY`, `SURFACE_PROPERTY`, `ICON_BUTTON_PROPERTY`) đặt
+**trước khi hiện** (stylesheet đọc property lúc polish); đặt sau khi widget đã hiện thì gọi
+`style().unpolish(w)` rồi `style().polish(w)`.
 
 `DIALOG_MIN_WIDTH`: bề ngang tối thiểu chung của hộp nhận file và hộp ghép đôi. `SPACING`: thang
 khoảng cách (px). `RADIUS_*`: góc bo (px) của control, thẻ, khối, bong bóng và đuôi bong bóng.
@@ -64,12 +79,13 @@ from enum import Enum
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPalette
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 MIN_CONTRAST = 4.5
 PRIMARY_PROPERTY = "primary"  # dynamic property của nút chính (xem docstring module)
-TONE_PROPERTY = "tone"  # QLabel[tone="muted|success|warning|danger"]
+TONE_PROPERTY = "tone"  # QLabel[tone="muted|success|warning|danger|accent"]
 SURFACE_PROPERTY = "surface"  # QFrame[surface="sidebar|raised|card"]
+ICON_BUTTON_PROPERTY = "iconButton"  # QToolButton[iconButton="true"] (widgets.IconButton)
 _PRIMARY_FRAME = 8  # px: padding dọc 2·2 + viền 2·2 của nút chính (`stylesheet`)
 DIALOG_MIN_WIDTH = 420  # px, hộp nhận file và hộp ghép đôi
 SPACING = (4, 8, 12, 16, 24, 32)  # px
@@ -130,7 +146,7 @@ _TOKENS: dict[str, tuple[str, str]] = {
     "bubble_out": ("#D9F2E6", "#21443A"),
     "bubble_in": ("#FFFDF8", "#2D2721"),
     "track": ("#E7DECD", "#3D352C"),
-    "offline": ("#8A7F70", "#9A8E7D"),
+    "offline": ("#897E6F", "#9A8E7D"),
     "success": ("#256B42", "#6CD49A"),
     "success_bg": ("#E1F1E6", "#1F3A2A"),
     "warning": ("#8A5A00", "#F0C46C"),
@@ -181,6 +197,21 @@ def contrast_ratio(fg: QColor, bg: QColor) -> float:
 
 def is_dark(scheme: Qt.ColorScheme) -> bool:
     return scheme == Qt.ColorScheme.Dark
+
+
+def is_dark_palette(pal: QPalette) -> bool:
+    """True khi `Window` của `pal` tối hơn `WindowText` (bảng màu tối)."""
+    return _luminance(pal.color(_Role.Window)) < _luminance(pal.color(_Role.WindowText))
+
+
+def tokens_for(widget: QWidget) -> Tokens:
+    """Token theo chế độ đang áp cho ứng dụng của `widget` (xem docstring module).
+
+    Đọc `QApplication.palette()`, không đọc `widget.palette()`; `widget` giữ trong chữ ký để nơi gọi
+    không phải biết chuyện đó.
+    """
+    del widget
+    return tokens(is_dark_palette(QApplication.palette()))
 
 
 def palette(dark: bool) -> QPalette:
@@ -286,7 +317,23 @@ def stylesheet(dark: bool, button_height: int | None = None) -> str:
         f"{primary}:disabled {{ background-color: {colors['disabled'][1].name()};"
         f" color: {colors['disabled'][0].name()}; border-color: {pal.color(_Role.Mid).name()}; }}",
     ]
-    tones = {"muted": t.text_muted, "success": t.success, "warning": t.warning, "danger": t.danger}
+    icon_button = f'QToolButton[{ICON_BUTTON_PROPERTY}="true"]'
+    lines += [
+        f"{icon_button} {{ background: transparent; border: 2px solid transparent;"
+        f" border-radius: {RADIUS_CONTROL}px; padding: 4px; color: {t.text.name()}; }}",
+        f"{icon_button}:hover {{ background: {t.selected.name()}; }}",
+        f"{icon_button}:pressed {{ background: {t.border.name()}; }}",
+        f"{icon_button}:focus {{ border-color: {ring}; }}",
+        f"{icon_button}:disabled {{ color: {t.text_muted.name()}; }}",
+        f"{icon_button}::menu-indicator {{ image: none; width: 0px; }}",
+    ]
+    tones = {
+        "muted": t.text_muted,
+        "success": t.success,
+        "warning": t.warning,
+        "danger": t.danger,
+        "accent": t.accent_text,
+    }
     lines += [
         f'QLabel[{TONE_PROPERTY}="{name}"] {{ color: {color.name()}; }}' for name, color in tones.items()
     ]
