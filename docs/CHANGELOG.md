@@ -175,6 +175,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lời hỏi `[c/k]` của `listen`, `pair` và `receive` được in lại khi có dòng khác in chen giữa lúc đang chờ trả lời.
 
 ### Fixed
+- Giao diện: thông báo từ khay mang logo Teleport thay vì biểu tượng chữ “i” của hệ thống. Trên Windows, chạy từ mã nguồn (`python -m teleport.ui`, `teleport-gui`) thì taskbar hiện logo Teleport và thông báo không còn ghi “Python”.
 - Giao diện: gửi file lần đầu tới máy đã hủy ghép đôi máy này giờ báo ngay “*X* từ chối kết nối từ máy này…” kèm nút “Ghép đôi lại”, và lượt gửi đó bị gỡ khỏi danh sách; trước đây thẻ đứng mãi ở “Đang nối lại…” và câu báo chỉ hiện ở lần gửi sau. Lượt bị gỡ vẫn vào lịch sử là đã hủy, như khi bấm “Hủy”. Lượt đang truyền dở mà bị từ chối vẫn tự nối lại như cũ.
 - Giao diện: app có thể crash ngẫu nhiên (đã thấy trên macOS), vì bộ thu gom rác của Python đôi khi hủy cửa sổ hay hộp thoại đã đóng ngay trong thread chạy kết nối mạng, ngoài thread giao diện. Giờ việc thu gom rác của app có giao diện chỉ chạy trên thread giao diện.
 - Giao diện: lỗi không bắt được (thread chính, slot Qt, thread khác, loop asyncio của node) nay được ghi vào `logs/teleport.log` ở mức ERROR thay vì mất khi chạy bản exe không có cửa sổ dòng lệnh. Log lỗi chỉ ghi tên loại lỗi và traceback, không ghi nội dung lỗi (có thể chứa đường dẫn hay tên file).

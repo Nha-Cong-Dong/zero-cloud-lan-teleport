@@ -101,6 +101,14 @@ nền `offscreen` khác nhau giữa các hệ điều hành) và khi icon `check
 chạy từ bản đóng gói (`sys.frozen`) thì kiểm thêm `QFontInfo(font_for(SECTION)).styleName()` là
 “Medium” và của TITLE là “Bold” (instance thật của font variable, không đậm giả).
 
+**Danh tính trên Windows** (`APP_USER_MODEL_ID`): chạy từ mã nguồn (`python`/`pythonw`, không
+`sys.frozen`), `main` gọi `SetCurrentProcessExplicitAppUserModelID` trước khi dựng `QApplication`;
+không có thì Windows gộp cửa sổ và bóng thoại khay vào `python.exe` (icon Python ở taskbar, toast ghi
+“Python”). Đặt rồi thì taskbar dùng icon cửa sổ (logo), còn đầu toast hiện nguyên chuỗi định danh (không
+lối tắt nào đăng ký tên cho nó). Bản exe không đặt: Windows nhận danh tính theo `Teleport.exe` (icon,
+FileDescription nhúng trong exe; lối tắt của bộ cài trỏ đúng exe đó), nên bản zip không hiện chuỗi
+định danh. Gọi lỗi → DEBUG, app vẫn chạy.
+
 Khi `sys.stderr is None` (exe windowed) thì không in gì và không lỗi: argparse tự bỏ qua, log
 không có handler ra stderr.
 """
@@ -148,6 +156,10 @@ from teleport.ui.tray import Tray, make_icon
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_USAGE = 2
+
+# AppUserModelID khi chạy từ mã nguồn trên Windows (docstring module). Giữ cố định: đổi là ghim taskbar và
+# cài đặt thông báo của Windows cho bản chạy từ nguồn mất theo.
+APP_USER_MODEL_ID = "NhaCongDong.Teleport"
 
 GUI_LOCK_FILE = "gui.lock"
 SHOW_COMMAND = b"show\n"
@@ -908,6 +920,21 @@ def _detach_file_log(handler: logging.Handler | None) -> None:
         handler.close()
 
 
+def _set_app_user_model_id() -> None:
+    """Đặt `APP_USER_MODEL_ID` (Windows, không phải bản exe; xem docstring module). Không ném lỗi."""
+    if sys.platform != "win32" or getattr(sys, "frozen", False):
+        return
+    import ctypes
+
+    try:
+        result = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except Exception as e:  # thiếu hàm (Windows quá cũ) hay ctypes lỗi
+        log.debug("không đặt được AppUserModelID: %s", type(e).__name__)
+        return
+    if result != 0:  # HRESULT khác S_OK
+        log.debug("SetCurrentProcessExplicitAppUserModelID trả 0x%08x", result & 0xFFFFFFFF)
+
+
 def _application() -> QApplication:
     existing = QApplication.instance()
     if existing is not None:
@@ -1006,6 +1033,7 @@ def main(argv: list[str] | None = None) -> int:
         return e.code if isinstance(e.code, int) else EXIT_USAGE
     config_dir = Path(os.path.abspath(args.config_dir if args.config_dir else paths.config_dir()))
 
+    _set_app_user_model_id()  # trước khi có cửa sổ nào (taskbar đọc lúc cửa sổ hiện)
     app = _application()
     app.setApplicationName("Teleport")
     app.setWindowIcon(make_icon())
