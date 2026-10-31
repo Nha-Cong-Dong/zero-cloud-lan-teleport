@@ -48,10 +48,6 @@ DISCOVER = "Tìm máy mới"
 SETTINGS = "Cài đặt"
 DEVICES = "Thiết bị"
 EMPTY_TITLE = "Ghép đôi máy đầu tiên"
-EMPTY_TEXT_NO_DISCOVER = (
-    "Mở Teleport trên máy kia, trong cùng mạng với máy này. Máy đó sẽ hiện ở cột bên trái; bấm vào tên "
-    "máy để ghép đôi."
-)
 EMPTY_TEXT_DISCOVER = "Mở Teleport trên máy kia, trong cùng mạng với máy này, rồi bấm Tìm máy mới."
 STARTING_BAR = "Đang khởi động"
 TRANSFERS = "Lượt truyền"
@@ -264,10 +260,7 @@ def color_at(image, widget, window, point: QPoint) -> str:
 
 
 def fill_l12(window, ctl, tmp_path: Path) -> None:
-    """Dựng như L12: trang DISCOVER, một máy đã ghép đôi, hai thẻ và một thông báo, có địa chỉ."""
-    from teleport.ui.main_window import Page
-
-    window.add_page(Page.DISCOVER, make_page())
+    """Dựng như L12: trang DISCOVER (luôn có từ B5), máy đã ghép đôi, hai thẻ, một thông báo, có địa chỉ."""
     running(window, tmp_path)
     window.set_addresses(["192.0.2.5"], None)
     window.radar.model.reset([dview("PC-Nha", paired=True, connected=True)])
@@ -637,29 +630,30 @@ def test_l5_state_sequence_switches_stack_and_focus(window, qtbot, tmp_path):
 
 
 def test_l6_header_buttons_hidden_without_pages(window, tmp_path):
-    running(window, tmp_path)
-    assert not visible(window.discover_button, window)
-    assert not visible(window.settings_button, window)
-
-
-@pytest.mark.parametrize("page_name", ["discover", "settings"])
-@pytest.mark.parametrize("add_first", [True, False], ids=["add-then-run", "run-then-add"])
-def test_l6_header_button_appears_with_page_and_opens_it(window, tmp_path, page_name, add_first):
+    """Trang DISCOVER luôn có từ B5 nên nút “Tìm máy mới” luôn hiện; “Cài đặt” chờ trang của nó."""
     from teleport.ui.main_window import Page
 
-    page = Page(page_name)
-    button = window.discover_button if page is Page.DISCOVER else window.settings_button
-    other = window.settings_button if page is Page.DISCOVER else window.discover_button
+    running(window, tmp_path)
+    assert visible(window.discover_button, window)
+    assert not visible(window.settings_button, window)
+    window.discover_button.click()
+    assert window.current_page is Page.DISCOVER
+
+
+@pytest.mark.parametrize("add_first", [True, False], ids=["add-then-run", "run-then-add"])
+def test_l6_header_button_appears_with_page_and_opens_it(window, tmp_path, add_first):
+    from teleport.ui.main_window import Page
+
     if add_first:
-        window.add_page(page, make_page())
+        window.add_page(Page.SETTINGS, make_page())
         running(window, tmp_path)
     else:
         running(window, tmp_path)
-        window.add_page(page, make_page())
-    assert visible(button, window)
-    assert not visible(other, window)
-    button.click()
-    assert window.current_page is page
+        window.add_page(Page.SETTINGS, make_page())
+    assert visible(window.settings_button, window)
+    assert visible(window.discover_button, window)
+    window.settings_button.click()
+    assert window.current_page is Page.SETTINGS
 
 
 def test_l6_header_buttons_names_and_tooltips(window):
@@ -679,8 +673,9 @@ def test_l7_empty_state_when_nothing_paired_and_no_content(window, tmp_path):
     window.set_transfer_summary(False, 0)
     assert window.stream_pane.currentWidget() is window.empty_state
     assert window.empty_state.title_label.text() == EMPTY_TITLE
-    assert window.empty_state.text_label.text() == EMPTY_TEXT_NO_DISCOVER
-    assert window.empty_state.action_button.isHidden()
+    # B5: trang DISCOVER luôn có, nên màn rỗng luôn có nút “Tìm máy mới”.
+    assert window.empty_state.text_label.text() == EMPTY_TEXT_DISCOVER
+    assert not window.empty_state.action_button.isHidden()
 
 
 def test_l7_paired_device_switches_to_transfers_area(window, tmp_path):
@@ -729,7 +724,6 @@ def test_l7_discover_page_adds_action_button(window, tmp_path):
 
     running(window, tmp_path)
     window.set_transfer_summary(False, 0)
-    window.add_page(Page.DISCOVER, make_page())
     state = window.empty_state
     assert not state.action_button.isHidden()
     assert state.action_button.text().replace("&", "") == DISCOVER
@@ -1132,9 +1126,6 @@ def test_l13_names_of_new_regions(window):
 
 
 def test_l14_language_change_retranslates_new_texts(window, qtbot, tmp_path):
-    from teleport.ui.main_window import Page
-
-    window.add_page(Page.DISCOVER, make_page())
     window.show_running("May-A", Path("C:/T"))
     window.set_addresses(["192.0.2.5"], None)
     window.set_transfer_summary(False, 0)

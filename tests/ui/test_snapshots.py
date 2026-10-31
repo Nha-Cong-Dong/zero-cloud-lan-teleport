@@ -18,8 +18,10 @@ nên biến môi trường thắng)::
 Cảnh: `welcome`, `starting`, `running` (một địa chỉ, radar rỗng → “Ghép đôi máy đầu tiên”),
 `running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo), `running_unavailable`
 (thư mục nhận đã lưu không mở được, spec B1b), `error`, `widgets` (trang mẫu mọi thành phần của
-`ui/widgets.py` trong `QScrollArea`), `page` (RUNNING, mở một trang có `PageHeader`). Tổng 8 cảnh × 2
-chế độ × 2 cỡ = 32 ảnh.
+`ui/widgets.py` trong `QScrollArea`), `page` (RUNNING, mở một trang mẫu có `PageHeader` ở chỗ
+SETTINGS, vì DISCOVER đã là trang thật), `discover` (trang “Tìm máy mới”: 4 máy chưa ghép đôi, một
+tên dài bị cắt “…”, 2 máy đã ghép đôi), `discover_list` (9 máy: tự sang dạng danh sách). Tổng 10 cảnh
+× 2 chế độ × 2 cỡ = 40 ảnh.
 """
 
 from __future__ import annotations
@@ -328,9 +330,60 @@ def scene_page(qtbot) -> QWidget:
     empty.set_content("search", "Chưa thấy máy nào", "Mở Teleport trên máy kia, cùng mạng Wi-Fi hoặc dây.")
     layout.addWidget(empty, 1)
     page.setFocusProxy(header.back_button)
-    window.add_page(Page.DISCOVER, page)
+    window.add_page(Page.SETTINGS, page)
+    assert window.open_page(Page.SETTINGS)
+    return window
+
+
+def _peer(name: str, *, paired: bool = False, connected: bool = False, os_name: str | None = "windows"):
+    from teleport.app.devices import DeviceView
+
+    return DeviceView(
+        device_id="id-" + name.lower().replace(" ", "-"),
+        name=name,
+        os=os_name,
+        paired=paired,
+        online=True,
+        connected=connected,
+        addresses=("192.168.1.20",),
+        port=None,
+    )
+
+
+def _discover_window(qtbot, views) -> QWidget:
+    from teleport.ui.main_window import Page
+
+    window = scene_running(qtbot)
+    window.radar.model.reset(views)
     assert window.open_page(Page.DISCOVER)
     return window
+
+
+def scene_discover(qtbot) -> QWidget:
+    views = [
+        _peer("Laptop-Lan"),
+        _peer("PC-Phong-Khach"),
+        _peer("MacBook của Hà", os_name="macos"),
+        _peer("May-Ke-Toan-Tang-3-Phong-Hop-Lon"),  # tên dài: cắt “…”
+        _peer("PC-Nha", paired=True, connected=True),
+        _peer("Surface-Minh", paired=True),
+    ]
+    return _discover_window(qtbot, views)
+
+
+def scene_discover_list(qtbot) -> QWidget:
+    names = (
+        "Laptop-Lan",
+        "PC-Phong-Khach",
+        "MacBook của Hà",
+        "Ubuntu-Lab",
+        "Laptop-Tuan",
+        "PC-Le-Tan",
+        "Mini-PC",
+    )
+    views = [_peer(name, os_name="linux" if name == "Ubuntu-Lab" else "windows") for name in names]
+    views += [_peer("PC-Nha", paired=True, connected=True), _peer("Surface-Minh", paired=True)]
+    return _discover_window(qtbot, views)
 
 
 SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
@@ -343,6 +396,8 @@ SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     "error": (scene_error, True, "surface"),
     "widgets": (scene_widgets, False, None),
     "page": (scene_page, True, "surface"),
+    "discover": (scene_discover, True, "surface"),
+    "discover_list": (scene_discover_list, True, "surface"),
 }
 
 

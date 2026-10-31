@@ -12,7 +12,13 @@ log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node 
 
 **Radar**: `NodeHost.node_event` → `RadarView.model.apply`; lúc `started` lấy ảnh chụp
 `Node.devices()` qua `NodeHost.call` rồi `model.reset`. Sự kiện và kết quả của host cũ bị bỏ; dựng
-host mới (“Thử lại”) thì `model.clear()` trước.
+host mới (“Thử lại”) thì `model.clear()` trước. Trang “Tìm máy mới” (`MainWindow.discover`,
+`ui.discover.DiscoverPage`) dùng chung model đó: `pair_requested` → `pair_device`,
+`manual_address_entered` → `pair_address`, `notice` của ghép đôi cũng hiện ở thanh thông báo của
+trang; bấm máy đã ghép đôi → về HOME và chọn máy đó trên radar; lựa chọn dạng hiển thị đọc từ
+`Node.settings.radar_view` lúc `started` (kết quả của host cũ, lúc đang thoát, hay về sau khi người
+dùng đã bấm đổi dạng thì bỏ) và lưu bằng `Node.set_ui_preferences(radar_view=…)`, cả hai qua
+`NodeHost.call`; lỗi → WARNING (tên loại lỗi), lựa chọn vẫn giữ trong RAM.
 
 **Gửi/nhận file**: `ui.transfers.TransfersController` (`GuiApp.transfers`) giữ danh sách lượt, hộp
 hỏi nhận file và việc gửi; `GuiApp` chỉ báo host mới (`attach`), `started`, `NodeEvent` và
@@ -147,7 +153,7 @@ from teleport.ui import errorlog, fonts, i18n, icons, receive_dir, send, texts, 
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.gcguard import GcGuard
-from teleport.ui.main_window import MainWindow, ViewState
+from teleport.ui.main_window import MainWindow, Page, ViewState
 from teleport.ui.pairing import PairingController, repair_offline_text
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
 from teleport.ui.transfers import TransfersController
@@ -417,6 +423,7 @@ class GuiApp(QObject):
         self._quit_box: QMessageBox | None = None
         self._address_job: SubmitJob | None = None
         self._receive_dir_notice: str | None = None  # câu cuối app hiện ở dải về thư mục nhận
+        self._view_chosen = False  # người dùng đã bấm đổi dạng hiển thị kể từ lần `started` gần nhất
         self.host: NodeHost | None = None
         self._old_hosts: list[NodeHost] = []
         self.window = MainWindow()
@@ -462,6 +469,12 @@ class GuiApp(QObject):
         self.pairing.job_done.connect(self._on_pair_job_done)
         self.pairing.paired.connect(self._on_paired)
         self.pairing.notice.connect(self.transfers.view.show_notice)
+        discover = self.window.discover
+        discover.pair_requested.connect(self.pairing.pair_device)
+        discover.manual_address_entered.connect(self.pairing.pair_address)
+        discover.open_device_requested.connect(self._on_open_device)
+        discover.view_preference_changed.connect(self._on_view_preference)
+        self.pairing.notice.connect(discover.show_notice)
         if instance is not None:
             instance.show_requested.connect(self._on_show_requested)
 
@@ -754,6 +767,8 @@ class GuiApp(QObject):
         controller.on_started(host)
         self.window.show_running(host.node_name, controller.receive_dir, controller.unavailable)
         host.call(lambda node: node.devices(), functools.partial(self._on_devices, host))
+        self._view_chosen = False
+        host.call(lambda node: node.settings.radar_view, functools.partial(self._on_radar_view, host))
         self.transfers.on_started(host)
         if controller.unavailable is not None:
             self._show_receive_dir_unavailable(controller.unavailable)
@@ -770,6 +785,34 @@ class GuiApp(QObject):
             log.warning("không đọc được danh sách thiết bị: %s", type(result).__name__)
             return
         self.window.radar.model.reset(result)
+
+    def _on_radar_view(self, host: NodeHost, result: str | BaseException | None) -> None:
+        """`radar_view` đã lưu; bỏ nếu host cũ, đang thoát, hay người dùng vừa tự chọn dạng."""
+        if host is not self.host or self._quitting:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không đọc được cài đặt dạng hiển thị: %s", type(result).__name__)
+            return
+        if not self._view_chosen:
+            self.window.discover.set_view_preference(result)
+
+    def _on_view_preference(self, value: str) -> None:
+        """Người dùng bấm đổi dạng hiển thị: lưu `radar_view` (lỗi thì vẫn giữ trong RAM)."""
+        self._view_chosen = True
+        host = self.host
+        if host is None or self._quitting:
+            return
+        host.call(lambda node: node.set_ui_preferences(radar_view=value), self._on_view_saved)
+
+    @staticmethod
+    def _on_view_saved(result: object) -> None:
+        if isinstance(result, BaseException):
+            log.warning("không lưu được cài đặt dạng hiển thị: %s", type(result).__name__)
+
+    def _on_open_device(self, device_id: str) -> None:
+        """Bấm máy đã ghép đôi ở trang “Tìm máy mới”: về HOME, chọn máy đó trên radar."""
+        self.window.open_page(Page.HOME)
+        self.window.radar.select_device(device_id)
 
     def _on_devices_changed(self, views: tuple[DeviceView, ...]) -> None:
         """Danh sách đọc lại sau ghép đôi / hủy ghép đôi (kho tin cậy đổi không phát NodeEvent)."""

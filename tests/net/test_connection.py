@@ -3647,3 +3647,230 @@ async def test_set_hello_rejects_other_device_or_protocol(fast, listener_factory
         assert conn.peer.hello.name == "Giu-Nguyen"
     finally:
         await conn.close()
+
+
+# =================================================================================================
+# C2 = P4-1: chế độ ẩn (F10), `Listener(..., allow_anonymous=...)` (spec-dot-c mục 5.2, 5.3, 5.5 và
+# mục 11: M4, L7). Kết nối không có chứng chỉ client còn tin cậy: ngay sau bắt tay TLS, trước khi gửi
+# `hello`, Listener gọi `allow_anonymous(ip)`; không trả đúng `True` (hoặc ném lỗi) → hủy kết nối,
+# 0 byte ứng dụng. Kết nối có chứng chỉ client còn tin cậy không bị ảnh hưởng. Viết theo đặc tả.
+# =================================================================================================
+
+
+class AllowRecorder:
+    """`allow_anonymous` giả: ghi mọi IP được hỏi, trả `result` (hoặc ném `error`)."""
+
+    def __init__(self, result: object = False, error: BaseException | None = None) -> None:
+        self.result = result
+        self.error = error
+        self.calls: list[object] = []
+
+    def __call__(self, ip):
+        self.calls.append(ip)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+async def assert_zero_bytes_after_tls(h, peer, within: float = 3.0) -> float:
+    """Bắt tay TLS đã xong (có chứng chỉ server), rồi server đóng mà không gửi một byte ứng dụng nào."""
+    ssl_object = peer.writer.get_extra_info("ssl_object")
+    assert ssl_object is not None, "bắt tay TLS chưa xong"
+    der = ssl_object.getpeercert(binary_form=True)
+    assert der is not None and hashlib.sha256(der).hexdigest() == h.identity.fingerprint
+    elapsed, data = await peer.expect_closed(within)
+    assert data == b"", f"máy đang ẩn gửi {len(data)} byte ứng dụng cho kết nối ẩn danh: {data[:80]!r}"
+    await h.wait_idle()
+    assert h.calls == 0
+    assert h.listener.connection_count == 0
+    return elapsed
+
+
+@pytest.mark.integration
+async def test_hidden_anonymous_gets_zero_bytes_after_tls(slow_opening, listener_factory, raw_client, ids):
+    allow = AllowRecorder(False)
+    h = await listener_factory(ids.server, trusted=[ids.b], allow_anonymous=allow)
+    peer = await raw_client(h.port, None)
+    elapsed = await assert_zero_bytes_after_tls(h, peer)
+    # OPENING_TIMEOUT = 5 s: đóng trong < 1 s nghĩa là từ chối ngay, không chờ hết giờ.
+    assert elapsed < 1.0, f"đóng sau {elapsed:.2f} s: có vẻ chờ hết giờ thay vì từ chối ngay"
+    assert allow.calls == [LOCAL]
+
+
+@pytest.mark.integration
+async def test_hidden_anonymous_never_sees_name_even_if_it_sends_hello_first(
+    slow_opening, listener_factory, raw_client, ids
+):
+    """Máy lạ không chờ `hello` mà gửi luôn `hello` + `pair_request`: vẫn không nhận được gì."""
+    allow = AllowRecorder(False)
+    h = await listener_factory(ids.server, allow_anonymous=allow, name="Ten-Bi-Mat")
+    peer = await raw_client(h.port, None)
+    peer.send_dict(wire_hello(ids.anon, "Anon"))
+    peer.send_dict(to_dict(pair_request(ids.anon)))
+    await peer.drain()
+    await assert_zero_bytes_after_tls(h, peer)
+    assert allow.calls == [LOCAL]
+
+
+@pytest.mark.integration
+async def test_hidden_open_pairing_is_refused(fast, listener_factory, ids):
+    """Client thật (`open_pairing`) tới máy đang ẩn: không lấy được `hello` của server → lỗi kết nối."""
+    allow = AllowRecorder(False)
+    h = await listener_factory(ids.server, allow_anonymous=allow)
+    with pytest.raises(ConnectError):
+        await anon_pairing(h, ids)
+    await h.wait_idle()
+    assert h.calls == 0
+    assert allow.calls and set(allow.calls) == {LOCAL}
+
+
+@pytest.mark.integration
+async def test_hidden_trusted_control_ok(fast, listener_factory, ids):
+    allow = AllowRecorder(False)
+    h = await listener_factory(ids.server, trusted=[ids.b], allow_anonymous=allow)
+    conn = await b_control(h, ids)
+    try:
+        assert conn.kind is ConnectionKind.CONTROL
+        assert conn.peer.hello == h.hello
+        server = await h.next()
+        assert server.kind is ConnectionKind.CONTROL
+        assert server.peer.fingerprint == ids.b.fingerprint
+        await conn.send(Ping(t=5))
+        assert await asyncio.wait_for(server.receive(), 2) == Ping(t=5)
+    finally:
+        await conn.close()
+    # Kết nối có chứng chỉ client còn tin cậy không đi qua luật ẩn danh.
+    assert allow.calls == []
+
+
+@pytest.mark.integration
+async def test_hidden_trusted_data_connection_ok(fast, listener_factory, raw_client, ids):
+    allow = AllowRecorder(False)
+    h = await listener_factory(ids.server, trusted=[ids.b], allow_anonymous=allow)
+    peer = await raw_opening(raw_client, h, ids.b, wire_hello(ids.b), DATA_OPEN)
+    server = await h.next()
+    assert server.kind is ConnectionKind.DATA
+    assert server.peer.fingerprint == ids.b.fingerprint
+    peer.abort()
+    assert allow.calls == []
+
+
+@pytest.mark.integration
+async def test_hidden_untrusted_client_cert_asks_allow_anonymous(
+    slow_opening, listener_factory, raw_client, ids
+):
+    """M4 (spec-dot-c mục 11): bắt tay bằng context cũ với chứng chỉ của máy vừa bị hủy ghép đôi
+    (context còn chấp nhận, `is_trusted` thì không): Listener vẫn hỏi `allow_anonymous`, và máy
+    đang ẩn không gửi `hello` cho nó."""
+    allow = AllowRecorder(False)
+    h = await listener_factory(ids.server, trusted=[ids.b], allow_anonymous=allow)
+    h.trusted_fps.clear()  # thôi tin cậy, nhưng chưa `update_trusted`: context bắt tay vẫn nhận B
+    peer = await raw_client(h.port, ids.b)
+    elapsed = await assert_zero_bytes_after_tls(h, peer)
+    assert elapsed < 1.0, f"đóng sau {elapsed:.2f} s: có vẻ chờ hết giờ thay vì từ chối ngay"
+    assert allow.calls == [LOCAL]
+
+
+@pytest.mark.integration
+async def test_untrusted_client_cert_allowed_anonymous_gets_hello(fast, listener_factory, raw_client, ids):
+    """Ca đối chứng của M4: `allow_anonymous` trả True thì kết nối đó đi như ẩn danh thường (nhận `hello`)."""
+    allow = AllowRecorder(True)
+    h = await listener_factory(ids.server, trusted=[ids.b], allow_anonymous=allow)
+    h.trusted_fps.clear()
+    peer = await raw_client(h.port, ids.b)
+    hello = await peer.read_hello()
+    assert hello["device_id"] == ids.server.device_id
+    assert allow.calls == [LOCAL]
+
+
+@pytest.mark.integration
+async def test_allow_anonymous_raise_refuses(slow_opening, listener_factory, raw_client, ids, caplog):
+    caplog.set_level(logging.DEBUG, logger="teleport")
+    allow = AllowRecorder(error=RuntimeError("lỗi giả lập trong allow_anonymous"))
+    h = await listener_factory(ids.server, trusted=[ids.b], allow_anonymous=allow)
+    for i in range(3):
+        peer = await raw_client(h.port, None)
+        elapsed = await assert_zero_bytes_after_tls(h, peer)
+        assert elapsed < 1.0, f"lần {i}: đóng sau {elapsed:.2f} s thay vì từ chối ngay"
+    assert allow.calls == [LOCAL] * 3
+    # L7: ghi ở mức DEBUG, không WARNING/ERROR hay traceback mỗi kết nối (lũ kết nối không làm ngập log).
+    loud = [r for r in caplog.records if r.name.startswith("teleport") and r.levelno >= logging.WARNING]
+    assert loud == [], [f"{r.levelname} {r.getMessage()}" for r in loud]
+    tracebacks = [r for r in caplog.records if r.name.startswith("teleport") and r.exc_info]
+    assert tracebacks == [], [r.getMessage() for r in tracebacks]
+    # Listener vẫn sống: thiết bị tin cậy vẫn vào được.
+    conn = await b_control(h, ids)
+    try:
+        assert (await h.next()).peer.fingerprint == ids.b.fingerprint
+    finally:
+        await conn.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "result", [False, None, 1, "True", object()], ids=["False", "None", "1", "str", "object"]
+)
+async def test_allow_anonymous_only_exact_true_admits(
+    slow_opening, listener_factory, raw_client, ids, result
+):
+    allow = AllowRecorder(result)
+    h = await listener_factory(ids.server, allow_anonymous=allow)
+    peer = await raw_client(h.port, None)
+    await assert_zero_bytes_after_tls(h, peer)
+    assert allow.calls == [LOCAL]
+
+
+@pytest.mark.integration
+async def test_allow_anonymous_true_lets_pairing_through(fast, listener_factory, ids):
+    allow = AllowRecorder(True)
+    h = await listener_factory(ids.server, allow_anonymous=allow)
+    conn = await anon_pairing(h, ids)
+    try:
+        assert conn.peer.hello == h.hello
+        await conn.send(pair_request(ids.anon))
+        server = await h.next()
+        assert server.kind is ConnectionKind.PAIRING
+    finally:
+        await conn.close()
+    assert allow.calls == [LOCAL]
+
+
+@pytest.mark.integration
+async def test_allow_anonymous_is_asked_per_connection_and_change_takes_effect(
+    slow_opening, listener_factory, raw_client, ids
+):
+    """Kết quả không bị nhớ: đổi giá trị trả về thì kết nối kế tiếp theo giá trị mới (bật/tắt lúc chạy)."""
+    allow = AllowRecorder(False)
+    h = await listener_factory(ids.server, allow_anonymous=allow)
+    await assert_zero_bytes_after_tls(h, await raw_client(h.port, None))
+    allow.result = True
+    peer = await raw_client(h.port, None)
+    await peer.read_hello()
+    peer.abort()
+    await h.wait_idle()
+    allow.result = False
+    await assert_zero_bytes_after_tls(h, await raw_client(h.port, None))
+    assert allow.calls == [LOCAL] * 3
+
+
+@pytest.mark.integration
+async def test_allow_anonymous_not_asked_without_finished_tls(fast, listener_factory, raw_client, ids):
+    """TCP trần (không bắt tay TLS) không bao giờ tới bước hỏi `allow_anonymous`."""
+    allow = AllowRecorder(False)
+    h = await listener_factory(ids.server, allow_anonymous=allow)
+    peer = await raw_client(h.port, None, use_tls=False)
+    peer.send_bytes(b"GET / HTTP/1.0\r\n\r\n")
+    await peer.drain()
+    await peer.expect_closed(5.0)
+    await h.wait_idle()
+    assert allow.calls == []
+
+
+@pytest.mark.integration
+async def test_allow_anonymous_none_keeps_old_behaviour(fast, listener_factory, raw_client, ids):
+    """`allow_anonymous=None` (mặc định) là luôn cho: kết nối ẩn danh vẫn nhận `hello` như trước."""
+    h = await listener_factory(ids.server)
+    peer = await raw_client(h.port, None)
+    assert (await peer.read_hello())["device_id"] == ids.server.device_id
+    explicit = Listener(ids.server, h.hello, [], h.is_trusted, h.on_connection, allow_anonymous=None)
+    await explicit.close()
