@@ -86,6 +86,35 @@ pytest -m frozen
 
 Build trên GitHub: workflow `build-gui` ([.github/workflows/build-gui.yml](../.github/workflows/build-gui.yml)), chạy tay như `build-cli` (“Build GUI (thử)”, hoặc `gh workflow run build-gui.yml --ref main`). Artifact `teleport-gui-<phiên bản>-<sha7>-windows` riêng với zip CLI và, khác zip CLI, có thư mục bọc: giải nén ra `teleport-gui\` chứa `Teleport.exe`, `_internal\`, ba file giấy phép và `DOC-TRUOC.txt`. Chạy thử bản zip (tường lửa, SmartScreen, chỗ giải nén): làm theo `DOC-TRUOC.txt`.
 
+## Bộ cài Windows (Inno Setup)
+Bộ cài đóng thư mục `dist/teleport-gui/` của mục trên bằng Inno Setup, theo script `packaging/inno/teleport.iss` (bản dịch tiếng Việt của Inno trong `packaging/inno/languages/`, giấy phép Inno trong `packaging/inno/licenses/`). Đây vẫn là bản build thử: chưa ký mã, không gắn tag, không tạo GitHub Release. Bộ cài cài gì, tạo rule tường lửa nào, gỡ thì giữ/xóa gì: [architecture.md](architecture.md) mục 4 (“Bộ cài Windows”); giấy phép của Inno: [ke_hoach.md](ke_hoach.md) mục 1 (Giấy phép).
+
+Dùng đúng bản Inno Setup mà workflow ghim (`INNO_VERSION`, `INNO_URL`, `INNO_SHA256` trong [.github/workflows/build-gui.yml](../.github/workflows/build-gui.yml)): tải bộ cài từ GitHub Release chính thức của `jrsoftware/issrc` ở `INNO_URL`, so SHA-256 với `INNO_SHA256` rồi mới cài. Bản khác thì giấy phép và `Vietnamese.isl` chưa được rà. Build từ gốc repo, sau khi đã build `dist/teleport-gui/`; ba tham số `/D` là bắt buộc, phiên bản lấy từ `teleport.__version__` (`AppVersionNumeric`: phần release của phiên bản, đệm 0 đủ 4 số, ví dụ `0.1.0a0` → `0.1.0.0`):
+
+```powershell
+$v = python -c "import teleport; print(teleport.__version__)"
+$n = python -c "import teleport; from packaging.version import Version; r = list(Version(teleport.__version__).release); print('.'.join(map(str, r + [0] * (4 - len(r)))))"
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" /DAppVersion=$v /DAppVersionNumeric=$n "/DSourceDir=$PWD\dist\teleport-gui" "/O$PWD\installer" packaging\inno\teleport.iss
+```
+
+Kết quả là một file `installer\teleport-setup-<phiên bản>-x64.exe` (`installer/` đã có trong `.gitignore`). Cài thử không cần quyền quản trị, không tạo rule tường lửa, vào thư mục riêng (đường dẫn thư mục cài nên ngắn: thư mục quá sâu làm bộ cài lỗi 206, tên file quá dài):
+
+```powershell
+.\installer\teleport-setup-<phiên bản>-x64.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER /DIR=C:\tp\cai-thu /LOG=C:\tp\cai.log
+C:\tp\cai-thu\unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /LOG=C:\tp\go.log
+```
+
+Test cài/gỡ trên bộ cài (marker `frozen`, [architecture.md](architecture.md) mục 6) dùng biến riêng; chạy khi máy chưa cài Teleport bằng bộ cài, ca rule tường lửa chỉ chạy khi terminal có quyền quản trị:
+
+```powershell
+$env:TELEPORT_INSTALLER_EXE = "$PWD\installer\teleport-setup-<phiên bản>-x64.exe"
+pytest tests/packaging/test_installer.py -m frozen
+```
+
+Workflow `build-gui` làm tiếp các bước này sau test khói của exe: cài Inno bản ghim, build bộ cài, dừng nếu bộ cài vượt cỡ ở mvp N11, ghi cỡ (MiB và byte) vào Step Summary, chạy test trên, rồi tải lên artifact `teleport-gui-setup-<phiên bản>-<sha7>-windows` chứa file bộ cài, riêng với zip `teleport-gui-…`.
+
+Khắc phục sự cố: hai rule tường lửa của bản cài cho cả máy chỉ cho máy cùng subnet vào (`remoteip=localsubnet`); máy ở subnet khác hay đi qua VPN thì Windows chặn, kể cả khi gõ IP thủ công.
+
 ## Phát hành
 1. Chuyển mục `[Unreleased]` trong `CHANGELOG.md` thành `[X.Y.Z] - YYYY-MM-DD`, đúng số của tag (bản thử nghiệm: `[0.1.0-alpha] - YYYY-MM-DD`).
 2. Cập nhật `__version__` trong `src/teleport/__init__.py`. Đây là nguồn duy nhất của số phiên bản; `pyproject.toml` tự đọc từ đó.
