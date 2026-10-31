@@ -143,6 +143,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Khi nhận yêu cầu ghép đôi, máy này hiện tối đa **5 mã mỗi phút** (gộp mọi máy gửi yêu cầu); quá thì yêu cầu mới nhận “chưa sẵn sàng ghép đôi” (mục 8). Từ mã thứ **3** trong 1 phút, máy này cảnh báo có thể có người đang thử giả mạo (mục 8). Nhờ vậy kẻ đứng giữa chỉ thử được vài mã trong lúc người dùng chờ xác nhận.
   - Không ghép đôi đè lên một thiết bị tin cậy có cùng mã thiết bị nhưng danh tính khác; phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa.
   - Ghép đôi lại với một thiết bị tin cậy (cùng mã thiết bị, cùng danh tính, ví dụ sau khi ghép đôi một phía): lời hỏi hiện thêm tên đã lưu, và tên mới nếu tên sẽ đổi (mục 7.2). Ghép đôi xong, **cả hai máy** cập nhật tên theo tên máy kia đang dùng, vì lúc ghép đôi mỗi máy đã xác minh máy kia giữ đúng khóa của thiết bị đó ([protocol.md](protocol.md) mục 5.1, 5.5). Máy lạ chỉ có chứng chỉ công khai của thiết bị đó thì bị chặn trước khi hiện mã.
+  - Máy đã ghép đôi đổi tên (F10): máy này cập nhật tên đã lưu ở lần kết nối kế tiếp với máy đó, không hỏi lại. Kết nối giữa hai máy đã ghép đôi xác thực cả hai bên bằng chứng chỉ đã lưu, nên chỉ chính máy đó đổi được tên của nó; máy lạ hay bản quảng bá trên mạng không đổi được ([protocol.md](protocol.md) mục 5.5).
 
 ### F4. Gửi file
 - **US-06:** Tôi muốn kéo một hoặc nhiều file thả vào thiết bị trên radar để gửi.

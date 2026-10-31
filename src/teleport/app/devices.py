@@ -3,7 +3,9 @@
 - `DeviceRegistry` / `DeviceView`: gộp `trusted.json`, mDNS và trạng thái kết nối.
   Mỗi thiết bị đã ghép đôi hoặc đang thấy qua mDNS có một view. `paired` và tên của
   thiết bị đã ghép đôi chỉ lấy từ `trusted.json`; mDNS chỉ là gợi ý (tên của thiết bị
-  chưa ghép đôi, hệ điều hành, địa chỉ, cổng).
+  chưa ghép đôi, hệ điều hành, địa chỉ, cổng). Hệ điều hành của thiết bị đã ghép đôi lấy
+  trước hết từ `hello.os` của kết nối điều khiển đã xác thực (`set_peer_hello`), chỉ giữ
+  trong RAM.
 - `parse_manual_address`: địa chỉ nhập tay (`ip[:cổng]`).
 - `resolve_trusted` / `resolve_device`: tên hoặc tiền tố mã thiết bị.
 
@@ -39,7 +41,9 @@ class DeviceView:
 
     device_id: str
     name: str  # đã ghép đôi: tên trong trusted.json; chưa: tên TXT mDNS
-    os: str | None  # từ mDNS; None nếu không thấy qua mDNS
+    # Đã ghép đôi: `hello.os` đã xác thực đã nhớ (giữ cả khi ngoại tuyến), không có thì mDNS;
+    # chưa ghép đôi: mDNS. None nếu không có nguồn nào.
+    os: str | None
     paired: bool  # CHỈ theo trusted.json
     online: bool  # mDNS đang thấy (không tính kết nối)
     connected: bool  # có kết nối điều khiển (chỉ có thể True khi paired)
@@ -90,6 +94,7 @@ class DeviceRegistry:
 
     Có view khi thiết bị đã ghép đôi hoặc đang thấy qua mDNS; máy này không bao giờ có
     view. Dữ liệu mDNS không bao giờ đổi `paired` hay tên của thiết bị đã ghép đôi.
+    `os` từ `hello` của thiết bị đã ghép đôi giữ tới khi thiết bị đó thôi tin cậy.
     """
 
     def __init__(self, own_device_id: str) -> None:
@@ -97,11 +102,25 @@ class DeviceRegistry:
         self._trusted: dict[str, TrustedDevice] = {}
         self._seen: dict[str, DiscoveredDevice] = {}
         self._connected: set[str] = set()
+        self._hello_os: dict[str, str] = {}  # device_id → `hello.os` đã xác thực (chỉ thiết bị tin cậy)
 
     def set_trusted(self, devices: Iterable[TrustedDevice]) -> None:
-        """Thay toàn bộ tập thiết bị đã ghép đôi; thiết bị thôi tin cậy mất trạng thái kết nối."""
+        """Thay toàn bộ tập thiết bị đã ghép đôi; thiết bị thôi tin cậy mất kết nối và `os` đã nhớ."""
         self._trusted = {d.device_id: d for d in devices if d.device_id != self._own_id}
         self._connected &= self._trusted.keys()
+        self._hello_os = {k: v for k, v in self._hello_os.items() if k in self._trusted}
+
+    def set_peer_hello(self, device_id: str, *, os: str) -> bool:
+        """Nhớ `hello.os` của kết nối điều khiển đã xác thực; True nếu view đổi.
+
+        Thiết bị chưa ghép đôi bị bỏ qua (False). `os` phải là giá trị đã qua
+        `core.messages.validate_os` (`PeerInfo.hello` của `net` đã kiểm).
+        """
+        if device_id not in self._trusted:
+            return False
+        before = self.get(device_id)
+        self._hello_os[device_id] = os
+        return self.get(device_id) != before
 
     def seen(self, device: DiscoveredDevice) -> None:
         """mDNS thấy (hoặc thấy lại, đổi) một thiết bị (`DeviceAdded` / `DeviceUpdated`)."""
@@ -139,10 +158,13 @@ class DeviceRegistry:
             name = seen.name
         else:
             return None
+        os_name = self._hello_os.get(device_id) if trusted is not None else None
+        if os_name is None and seen is not None:
+            os_name = seen.os
         return DeviceView(
             device_id=device_id,
             name=name,
-            os=seen.os if seen is not None else None,
+            os=os_name,
             paired=trusted is not None,
             online=seen is not None,
             connected=device_id in self._connected,
