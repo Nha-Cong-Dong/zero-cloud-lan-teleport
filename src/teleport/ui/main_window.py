@@ -21,21 +21,35 @@ nhấn nếu `ui.fonts.install()` đã nạp trước khi dựng cửa sổ), d�
 - `body` (`runningBody`): cột trái `sidebar` (`QFrame[surface="sidebar"]`, nền `sidebar`, viền phải
   1 px `border` nằm trong bề ngang của cột) và khung phải `stream_pane` (nền `surface`).
 - Cột trái từ trên xuống: `sidebar_header` (logo 32 px, “Teleport”, nút “Tìm máy mới” và “Cài đặt”),
-  `sidebar_scroll` (radar `ui.radar.RadarView` trong `sidebarContent`, nền trong suốt; nội dung cao hơn
-  chỗ thì cuộn) và `machine_card` (`home.MachineCard`: máy này, địa chỉ, “Chép địa chỉ”, huy hiệu
-  “Sẵn sàng nhận” / “Đang truyền n lượt”). Bề ngang `SIDEBAR_WIDTH`, cửa sổ hẹp hơn `COMPACT_BELOW`
-  thì `SIDEBAR_COMPACT_WIDTH` (`sidebar_compact`; áp ở `resizeEvent` và `showEvent`). Kiểu chỉ còn
-  avatar là việc của B2.
-- Khung phải: `empty_state` (“Ghép đôi máy đầu tiên”) khi radar chưa có máy nào đã ghép đôi **và**
+  `sidebar_scroll` (danh sách cuộc trò chuyện `conversations`, `ui.conversations.ConversationList`, trong
+  `sidebarContent`, nền trong suốt; nội dung cao hơn chỗ thì cuộn) và `machine_card`
+  (`home.MachineCard`: máy này, địa chỉ, “Chép địa chỉ”, huy hiệu “Sẵn sàng nhận” / “Đang truyền n lượt”
+  / “Không nhận file”). Model thiết bị `devices` (`radar.DeviceListModel`, cha là cửa sổ) dùng chung cho
+  danh sách cuộc trò chuyện và trang DISCOVER; `ui.app` nạp nó. Danh sách cao đúng số hàng (không thanh
+  cuộn riêng); hàng hiện hành đổi bằng bàn phím hay bằng code thì `sidebar_scroll` cuộn tới hàng đó.
+- **Thu gọn** (`_apply_compact`, ở `resizeEvent` và `showEvent`; chỉ làm khi trạng thái đổi thật):
+  cửa sổ hẹp hơn `COMPACT_BELOW` thì cột trái rộng `SIDEBAR_COMPACT_WIDTH` (`sidebar_compact`): danh
+  sách chỉ còn avatar (`conversations.set_compact`), đầu cột xếp dọc và căn giữa, ẩn chữ “Teleport”,
+  lề hẹp; `machine_card` ẩn, thay bằng `compact_machine` (`_CompactMachine`: avatar máy này, bấm để
+  chép địa chỉ; tên, huy hiệu, địa chỉ ở mô tả trợ năng và tooltip). Tiêu điểm ở widget sắp ẩn
+  (`name_label`, `address_label`, `copy_button`) → `compact_machine`; rời thu gọn mà tiêu điểm ở
+  `compact_machine` → `name_label` (ẩn thì `copy_button`, rồi danh sách hay nút “＋”).
+- Khung phải: `empty_state` (“Ghép đôi máy đầu tiên”) khi chưa có máy nào đã ghép đôi **và**
   danh sách lượt rỗng (`set_transfer_summary`), không thì `transfers_area` (`ui.transfers` đặt
   `TransfersView` vào). Nút của `empty_state` chỉ có khi đã có trang DISCOVER.
-- `save_bar` (`home.SaveBar`, “Lưu vào: …” + “Mở thư mục”) chạy hết chiều ngang dưới `body`; ẩn khi
-  không biết thư mục nhận. Bấm “Mở thư mục” phát `open_receive_dir_requested(Path)`.
+- `save_bar` (`home.SaveBar`, “Lưu vào: …” + “Mở thư mục” + “Đổi…”) chạy hết chiều ngang dưới `body`;
+  ẩn khi không biết thư mục nhận lẫn thư mục đã lưu hỏng. Bấm “Mở thư mục” phát
+  `open_receive_dir_requested(Path)`, bấm “Đổi…” phát `change_receive_dir_requested` (`ui.app` mở
+  hộp chọn qua `ui.receive_dir.ReceiveDirController`). Thư mục nhận, thư mục đã lưu hỏng và thư mục
+  đang đổi sang được nhớ (`show_running`, `set_receive_dir`, `set_receive_dir_pending`) và chỉ áp vào
+  `save_bar` và huy hiệu của `machine_card` ở RUNNING (ngoài RUNNING thanh ẩn, huy hiệu không báo
+  “Không nhận file”). Node chạy mà không có thư mục nhận vì thư mục đã lưu hỏng → huy hiệu “Không
+  nhận file” (`machine_card.set_receiving_unavailable`).
 - Nút đầu cột chỉ hiện khi đã có trang tương ứng (`add_page`): không có nút bấm mà không làm gì.
 - Không phần nào làm cửa sổ to hơn `MIN_SIZE`: cột trái cuộn bằng `sidebar_scroll`, khối căn giữa
-  bằng `start_scroll`. Tiêu điểm đặt bằng code vào widget trong hai vùng cuộn đó (ví dụ “Nhập IP thủ
-  công”) thì vùng cuộn tự cuộn tới (`QApplication.focusChanged`; không khi tiêu điểm đến từ cú bấm chuột,
-  để cú bấm vào hàng bị che một phần không trượt).
+  bằng `start_scroll`. Tiêu điểm đặt bằng code vào widget trong hai vùng cuộn đó thì vùng cuộn tự cuộn
+  tới (danh sách cuộc trò chuyện: tới hàng hiện hành; `QApplication.focusChanged`; không khi tiêu điểm
+  đến từ cú bấm chuột, để cú bấm vào hàng bị che một phần không trượt).
 
 Dòng địa chỉ (`address_label`, trong `machine_card`) chỉ hiện ở RUNNING khi có ít nhất một địa chỉ:
 địa chỉ đầu tiên, thêm `:cổng` khi cổng khác `DEFAULT_PORT`; các địa chỉ còn lại nằm ở tooltip (và
@@ -45,11 +59,14 @@ và gọi `set_addresses`.
 
 **Trợ năng** (mvp N12): mọi chữ là chữ thuần (`Qt.PlainText`), có tên cho trình đọc màn hình; nhãn
 chọn được bằng chuột nhưng không có con trỏ chữ khi Tab tới (không `TextSelectableByKeyboard`).
-Thứ tự Tab ở RUNNING: “Tìm máy mới” → “Cài đặt” → radar → tên máy này → địa chỉ → “Chép địa chỉ” →
-khung phải → “Mở thư mục” (luôn cuối: widget tạo sau như thẻ lượt truyền hay trang mới rơi vào cuối
-chuỗi, nên `set_transfer_summary` và `add_page` dời nút về cuối). WELCOME / ERROR: dòng trạng thái →
+Thứ tự Tab ở RUNNING: “Tìm máy mới” → “Cài đặt” → từng hàng của danh sách cuộc trò chuyện → “Ghép
+đôi máy mới” → tên máy này → địa chỉ → “Chép địa chỉ” → `compact_machine` → khung phải → “Mở thư
+mục” → “Đổi…” (luôn cuối: widget tạo sau như thẻ lượt truyền hay trang mới rơi vào cuối chuỗi, nên
+`set_transfer_summary` và `add_page` dời hai nút về cuối bằng `_keep_footer_last`; “Mở thư mục” ẩn
+thì Tab bỏ qua nó, “Đổi…” vẫn cuối). WELCOME / ERROR: dòng trạng thái →
 chi tiết → gợi ý → nút. Tiêu điểm ban đầu (`_place_focus`): nút đang hiện (“Bắt đầu” / “Thử lại”);
-RUNNING thì danh sách thiết bị khi radar có thiết bị, không thì nút “Nhập IP thủ công”; STARTING thì
+RUNNING thì danh sách cuộc trò chuyện khi có máy đã ghép đôi (`conversations.model.rowCount()`), không
+thì nút “Ghép đôi máy mới”; STARTING thì
 dòng trạng thái. Trạng thái luôn nói bằng chữ, không chỉ bằng màu. Phím tắt: F5 = Thử lại (khi nút
 đang hiện), Ctrl+W = đóng cửa sổ, Ctrl+Q = Thoát.
 
@@ -62,7 +79,7 @@ không tự thoát app: `ui.app` quyết định. Ẩn xuống khay giữ nguyê
 
 **Khung trang** (spec A3): `centralWidget()` là `PageStack` (`self.pages`, objectName `pageStack`),
 một `QStackedWidget`. Mọi thứ ở trên nằm trong trang HOME (`self.home_page`, objectName `homePage`);
-các thuộc tính công khai (`radar`, `transfers_area`, `body`, `status_label`…) giữ tên. Tên trang là
+các thuộc tính công khai (`conversations`, `transfers_area`, `body`, `status_label`…) giữ tên. Tên trang là
 `Page` (HOME, DISCOVER, SETTINGS, WAIT_PAIRING); trang chỉ có khi được `add_page`.
 - `PageStack.show_page(page)`: chưa có → KeyError; trùng trang hiện tại thì thôi; HOME xóa lịch sử;
   trang đã nằm trong lịch sử thì cắt lịch sử tới ngay trước nó (không vòng); còn lại đẩy (trang hiện
@@ -76,31 +93,61 @@ các thuộc tính công khai (`radar`, `transfers_area`, `body`, `status_label`
   `show_error` gọi `pages.reset()` trước `retranslate`/`_place_focus`.
 - Esc (`_back_action`, `WindowShortcut`, “Quay lại”) chỉ bật khi đang ở trang khác HOME. Hộp thoại
   là cửa sổ riêng nên không bị Esc của cửa sổ chính bắt. Ô nhập trên trang khác HOME phải nhận
-  `ShortcutOverride` cho Esc nếu cần phím đó (như `_AddressField` của `ui.discover`). `_AddressEdit`
-  của `ui.radar` chỉ bắt Esc trong `keyPressEvent`, chạy được vì nó nằm ở HOME, nơi `_back_action` tắt.
+  `ShortcutOverride` cho Esc nếu cần phím đó (như `_AddressField` của `ui.discover`).
 - Trang DISCOVER (`self.discover`, `ui.discover.DiscoverPage`, “Tìm máy mới”) luôn có, đăng ký bằng
-  `add_page` cuối `__init__` nên nút “Tìm máy mới” ở đầu cột và nút của màn rỗng luôn hiện; dùng chung
-  model với radar (`self.radar.model`); “Quay lại” của đầu trang = `go_back`.
+  `add_page` cuối `__init__` nên nút “Tìm máy mới” ở đầu cột, nút “＋ Ghép đôi máy mới” và nút của màn
+  rỗng luôn mở được; dùng chung model `devices`; “Quay lại” của đầu trang = `go_back`.
+- `open_conversation(id)`: về HOME, chọn máy đó trong danh sách, tiêu điểm vào danh sách; máy không có
+  trong danh sách → False. `open_address_entry(notice)`: mở DISCOVER (chỉ ở RUNNING), rồi mới hiện
+  `notice` ở thanh thông báo của trang (mức INFO; `DiscoverPage.showEvent` xóa thanh khi trang hiện) và
+  đặt tiêu điểm vào ô “Nhập IP…”.
 - Không có hoạt ảnh chuyển trang: đổi tức thì.
 """
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Sequence
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QGuiApplication, QKeySequence, QResizeEvent, QShowEvent
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QModelIndex,
+    QPoint,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import (
+    QAccessible,
+    QAccessibleEvent,
+    QAction,
+    QCloseEvent,
+    QGuiApplication,
+    QKeySequence,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QResizeEvent,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QApplication,
+    QBoxLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QScrollArea,
     QStackedWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -109,20 +156,36 @@ from shiboken6 import isValid
 from teleport.core.display import display_name
 from teleport.net.connection import DEFAULT_PORT
 from teleport.ui import texts, theme
+from teleport.ui.conversations import ConversationList
 from teleport.ui.discover import DiscoverPage
 from teleport.ui.home import START_PANEL_MAX_WIDTH as START_PANEL_MAX_WIDTH  # hằng của bảng spec B1 mục 2.3
 from teleport.ui.home import MachineCard, SaveBar, StartPanel
-from teleport.ui.radar import RadarView
+from teleport.ui.radar import DeviceListModel
 from teleport.ui.tray import Tray, make_icon
-from teleport.ui.widgets import EmptyState, IconButton
+from teleport.ui.widgets import (
+    AvatarKind,
+    EmptyState,
+    IconButton,
+    InfoLevel,
+    Presence,
+    paint_avatar,
+    safe_tooltip,
+)
 
 DEFAULT_SIZE = QSize(980, 660)  # cỡ cửa sổ lúc mở khi màn hình đủ rộng
 MIN_SIZE = QSize(720, 460)
 SIDEBAR_WIDTH = 288  # px, cột trái (kể cả viền phải 1 px)
-SIDEBAR_COMPACT_WIDTH = 248  # px, cột trái khi cửa sổ hẹp
+SIDEBAR_COMPACT_WIDTH = 80  # px, cột trái thu gọn (chỉ còn avatar) khi cửa sổ hẹp
 COMPACT_BELOW = 820  # px: cửa sổ hẹp hơn thì cột trái thu gọn
 _BRAND_LOGO = 32  # px
 _LAYOUT_PASSES = 5  # tối đa số lượt chạy layout trước khi cuộn tới widget có tiêu điểm
+_COMPACT_MACHINE = 48  # px, nút “Máy này” khi cột trái thu gọn
+_COMPACT_AVATAR = 40  # px
+_COPIED_TOOLTIP_MS = 2000
+_HEADER_MARGINS = (16, 16, 12, 8)  # px, đầu cột trái dạng đầy đủ
+_HEADER_COMPACT_MARGINS = (0, 12, 0, 8)
+_CONTENT_MARGINS = (theme.SPACING[2], 0, theme.SPACING[2], theme.SPACING[2])  # px, lề `sidebarContent`
+_CONTENT_COMPACT_MARGINS = (4, 0, 4, 8)
 
 
 def default_size(available: QSize) -> QSize:
@@ -228,6 +291,99 @@ class ViewState(StrEnum):
     ERROR = "error"
 
 
+class _CompactMachine(QAbstractButton):
+    """“Máy này” khi cột trái thu gọn: avatar 48 px thay cho `machine_card` (spec B2 mục 2.6).
+
+    Bấm (chuột, Space) chép địa chỉ như “Chép địa chỉ” của `machine_card` (clipboard, tooltip “Đã chép
+    địa chỉ …”, sự kiện trợ năng Alert, `machine_card.address_copied`); chưa có địa chỉ thì không làm
+    gì. Tên, chữ huy hiệu và địa chỉ nằm ở mô tả trợ năng và tooltip (`update_info`). Nền `selected` khi
+    rê chuột, viền tiêu điểm 2 px `focus_ring_color`; chấm của avatar: ONLINE khi không có lượt nào,
+    BUSY khi đang truyền (chữ ở huy hiệu trong mô tả).
+    """
+
+    def __init__(self, card: MachineCard, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("compactMachine")
+        self._card = card
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFixedSize(_COMPACT_MACHINE, _COMPACT_MACHINE)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.clicked.connect(self._copy)
+        self.update_info()
+
+    def update_info(self) -> None:
+        """Dựng lại tên, mô tả trợ năng và tooltip từ `machine_card` (tên, huy hiệu, địa chỉ)."""
+        t = QCoreApplication.translate
+        self.setAccessibleName(t("Home", "Máy này"))
+        card = self._card
+        parts = [card.name_label.text(), card.badge.text, card.address_label.text()]
+        sentences = [part if part.endswith((".", "…")) else part + "." for part in parts if part]
+        if card.copy_value is not None:
+            sentences.append(t("MainWindow", "Bấm để chép địa chỉ."))
+        text = " ".join(sentences)
+        self.setAccessibleDescription(text)
+        self.setToolTip(safe_tooltip(text) if text else "")
+        self.update()
+
+    def _copy(self) -> None:
+        value = self._card.copy_value
+        if value is None:
+            return
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(value)
+        message = texts.fill(QCoreApplication.translate("Home", "Đã chép địa chỉ {address}"), address=value)
+        QToolTip.showText(
+            self.mapToGlobal(QPoint(0, self.height())),
+            safe_tooltip(message),
+            self,
+            QRect(),
+            _COPIED_TOOLTIP_MS,
+        )
+        # Cố gắng tốt nhất: có HĐH không chuyển Alert tới trình đọc màn hình.
+        with contextlib.suppress(Exception):
+            QAccessible.updateAccessibility(QAccessibleEvent(self, QAccessible.Event.Alert))
+        self._card.address_copied.emit(value)
+
+    def sizeHint(self) -> QSize:
+        return QSize(_COMPACT_MACHINE, _COMPACT_MACHINE)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        t = theme.tokens_for(self)
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            cell = QRectF(self.rect())
+            hovered = self.underMouse() or self.isDown()
+            if hovered:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(t.selected)
+                painter.drawRoundedRect(cell, theme.RADIUS_CARD, theme.RADIUS_CARD)
+            inset = (_COMPACT_MACHINE - _COMPACT_AVATAR) / 2
+            paint_avatar(
+                painter,
+                cell.adjusted(inset, inset, -inset, -inset),
+                kind=AvatarKind.DESKTOP,
+                presence=Presence.ONLINE if self._card.active == 0 else Presence.BUSY,
+                emphasis=True,
+                ring=t.selected if hovered else t.sidebar,
+                tokens=t,
+                dpr=self.devicePixelRatioF(),
+            )
+            if self.hasFocus():
+                dark = theme.is_dark_palette(QApplication.palette())
+                painter.setPen(QPen(theme.focus_ring_color(dark), 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), theme.RADIUS_CARD, theme.RADIUS_CARD)
+        finally:
+            painter.end()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self.update()
+
+
 class MainWindow(QMainWindow):
     """Cửa sổ chính; trạng thái đổi bằng các hàm `show_*`."""
 
@@ -237,6 +393,7 @@ class MainWindow(QMainWindow):
     hidden_to_tray = Signal()
     page_changed = Signal(str)  # giá trị `Page`; nối thẳng từ `PageStack.page_changed`
     open_receive_dir_requested = Signal(object)  # Path; nối thẳng từ `save_bar.open_requested`
+    change_receive_dir_requested = Signal()  # nối thẳng từ `save_bar.change_requested`
 
     def __init__(self) -> None:
         super().__init__()
@@ -247,6 +404,8 @@ class MainWindow(QMainWindow):
         self._state = ViewState.STARTING
         self._name: str | None = None
         self._receive_dir: Path | None = None
+        self._receive_dir_unavailable: Path | None = None
+        self._receive_dir_pending: Path | None = None
         self._planned_name = ""
         self._error_code = ""
         self._error_detail = ""
@@ -254,8 +413,12 @@ class MainWindow(QMainWindow):
         self._port: int | None = None
         self._has_content = False  # danh sách lượt có thẻ hay dải thông báo (`set_transfer_summary`)
         self._active = 0
-        self._has_paired = False  # radar có máy đã ghép đôi
+        self._has_paired = False  # danh sách cuộc trò chuyện có máy (đã ghép đôi)
         self._scroll_target: QWidget | None = None  # widget chờ được cuộn tới (`_on_focus_changed`)
+        self._compact_applied: bool | None = None  # dạng cột trái đã áp (`_apply_compact`)
+        # Các thiết bị (ảnh chụp `devices()` + `NodeEvent`), dùng chung cho danh sách cuộc trò chuyện
+        # và trang “Tìm máy mới”.
+        self.devices = DeviceListModel(self)
 
         # Trang HOME: khối căn giữa (WELCOME / STARTING / ERROR) hay khung hai cột (RUNNING).
         self.pages = PageStack(self)
@@ -291,7 +454,7 @@ class MainWindow(QMainWindow):
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(0)
 
-        # Cột trái: đầu cột, radar cuộn được, máy này.
+        # Cột trái: đầu cột, danh sách cuộc trò chuyện cuộn được, máy này.
         self.sidebar = QFrame(self.body)
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setProperty(theme.SURFACE_PROPERTY, "sidebar")
@@ -319,17 +482,18 @@ class MainWindow(QMainWindow):
         self.settings_button = IconButton("settings", self.tr("Cài đặt"), self.sidebar_header)
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.clicked.connect(self._open_settings)
-        header_layout = QHBoxLayout(self.sidebar_header)
-        header_layout.setContentsMargins(16, 16, 12, 8)
-        header_layout.setSpacing(theme.SPACING[1])
-        header_layout.addWidget(self.brand_logo, 0, Qt.AlignmentFlag.AlignVCenter)
-        header_layout.addWidget(self.brand_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        header_layout.addStretch(1)
-        header_buttons = QHBoxLayout()
-        header_buttons.setSpacing(theme.SPACING[0])
-        header_buttons.addWidget(self.discover_button)
-        header_buttons.addWidget(self.settings_button)
-        header_layout.addLayout(header_buttons)
+        # Thu gọn thì cả hai hàng xếp dọc (`setDirection`) và căn giữa (`_apply_compact`).
+        self.header_layout = QHBoxLayout(self.sidebar_header)
+        self.header_layout.setContentsMargins(*_HEADER_MARGINS)
+        self.header_layout.setSpacing(theme.SPACING[1])
+        self.header_layout.addWidget(self.brand_logo, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.header_layout.addWidget(self.brand_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.header_layout.addStretch(1)
+        self.header_buttons = QHBoxLayout()
+        self.header_buttons.setSpacing(theme.SPACING[0])
+        self.header_buttons.addWidget(self.discover_button)
+        self.header_buttons.addWidget(self.settings_button)
+        self.header_layout.addLayout(self.header_buttons)
 
         self.sidebar_scroll = QScrollArea(self.sidebar)
         self.sidebar_scroll.setObjectName("sidebarScroll")
@@ -339,28 +503,38 @@ class MainWindow(QMainWindow):
         self.sidebar_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # mặc định StrongFocus: Tab ghé vô ích
         sidebar_content = QWidget()
         sidebar_content.setObjectName("sidebarContent")
-        content_layout = QVBoxLayout(sidebar_content)
-        content_layout.setContentsMargins(theme.SPACING[2], 0, theme.SPACING[2], theme.SPACING[2])
-        content_layout.setSpacing(0)
-        self.radar = RadarView(sidebar_content)
-        content_layout.addWidget(self.radar)
+        self._content_layout = QVBoxLayout(sidebar_content)
+        self._content_layout.setContentsMargins(*_CONTENT_MARGINS)
+        self._content_layout.setSpacing(0)
+        self.conversations = ConversationList(self.devices, sidebar_content)
+        self._content_layout.addWidget(self.conversations)
         self.sidebar_scroll.setWidget(sidebar_content)
-        # `setWidget` bật autofill: tắt lại để thấy nền `sidebar` của cột (B2 thay danh sách tô Base).
+        # `setWidget` bật autofill: tắt lại để thấy nền `sidebar` của cột.
         viewport = self.sidebar_scroll.viewport()
         if viewport is not None:
             viewport.setAutoFillBackground(False)
         sidebar_content.setAutoFillBackground(False)
-        self.radar.setAutoFillBackground(False)
+        self.conversations.add_device_requested.connect(self._open_discover)
 
         self.machine_card = MachineCard(self.sidebar)
         self.name_label = self.machine_card.name_label
         self.address_label = self.machine_card.address_label
         self.copy_button = self.machine_card.copy_button
         self.badge = self.machine_card.badge
+        # Thu gọn: nút “Máy này” chỉ có avatar thay chỗ `machine_card`, ngay dưới nó, căn giữa.
+        self.compact_footer = QWidget(self.sidebar)
+        self.compact_footer.setObjectName("compactFooter")
+        footer_layout = QVBoxLayout(self.compact_footer)
+        footer_layout.setContentsMargins(0, theme.SPACING[1], 0, theme.SPACING[1])
+        self.compact_machine = _CompactMachine(self.machine_card, self.compact_footer)
+        footer_layout.addWidget(self.compact_machine, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.compact_footer.setVisible(False)
+        self.compact_machine.setVisible(False)
 
         sidebar_layout.addWidget(self.sidebar_header)
         sidebar_layout.addWidget(self.sidebar_scroll, 1)
         sidebar_layout.addWidget(self.machine_card)
+        sidebar_layout.addWidget(self.compact_footer)
 
         # Khung phải: màn rỗng hay danh sách lượt truyền (`ui.transfers`).
         self.stream_pane = QStackedWidget(self.body)
@@ -380,6 +554,7 @@ class MainWindow(QMainWindow):
 
         self.save_bar = SaveBar(self.shell)
         self.save_bar.open_requested.connect(self.open_receive_dir_requested)
+        self.save_bar.change_requested.connect(self.change_receive_dir_requested)
         shell_layout.addWidget(self.body, 1)
         shell_layout.addWidget(self.save_bar)
 
@@ -387,7 +562,7 @@ class MainWindow(QMainWindow):
         self.home_stack.addWidget(self.shell)
 
         self.pages.add_page(Page.HOME, self.home_page)
-        self.discover = DiscoverPage(self.radar.model, self.pages)
+        self.discover = DiscoverPage(self.devices, self.pages)
         self.discover.header.back_requested.connect(self.go_back)
         self.pages.page_changed.connect(self.page_changed)
         self.pages.page_changed.connect(self._on_page_changed)
@@ -403,26 +578,31 @@ class MainWindow(QMainWindow):
             self.start_button,
             self.discover_button,
             self.settings_button,
-            self.radar.first_focus_widget(),
+            self.conversations.first_focus_widget(),
         ]
         for first, second in pairwise(chain):
             QWidget.setTabOrder(first, second)
         rest: list[QWidget] = [
-            self.radar.last_focus_widget(),
+            self.conversations.last_focus_widget(),
             self.name_label,
             self.address_label,
             self.copy_button,
+            self.compact_machine,
             empty.title_label,
             empty.text_label,
             empty.action_button,
             self.save_bar.open_button,  # nội dung của `transfers_area` tạo sau: `_keep_footer_last`
+            self.save_bar.change_button,
         ]
         for first, second in pairwise(rest):
             QWidget.setTabOrder(first, second)
 
-        model = self.radar.model
-        for signal in (model.modelReset, model.rowsInserted, model.rowsRemoved, model.dataChanged):
+        model = self.conversations.model
+        for signal in (model.modelReset, model.rowsInserted, model.rowsRemoved, model.layoutChanged):
             signal.connect(self._update_paired)
+        selection = self.conversations.list_view.selectionModel()
+        if selection is not None:
+            selection.currentChanged.connect(self._on_conversation_current)
         app = QApplication.instance()
         if isinstance(app, QApplication):
             app.focusChanged.connect(self._on_focus_changed)
@@ -456,8 +636,18 @@ class MainWindow(QMainWindow):
 
     @property
     def receive_dir(self) -> Path | None:
-        """Thư mục nhận của lần `show_running` gần nhất."""
+        """Thư mục nhận đã nhớ (`show_running` hay `set_receive_dir` gần nhất); None khi không nhận file."""
         return self._receive_dir
+
+    @property
+    def receive_dir_unavailable(self) -> Path | None:
+        """Thư mục nhận đã lưu không mở được (đã nhớ), hay None."""
+        return self._receive_dir_unavailable
+
+    @property
+    def receive_dir_pending(self) -> Path | None:
+        """Thư mục đang đổi sang (đã nhớ), hay None."""
+        return self._receive_dir_pending
 
     @property
     def sidebar_compact(self) -> bool:
@@ -480,11 +670,27 @@ class MainWindow(QMainWindow):
         self.retranslate()
         self._place_focus()
 
-    def show_running(self, name: str | None, receive_dir: Path | None) -> None:
+    def show_running(
+        self, name: str | None, receive_dir: Path | None, unavailable: Path | None = None
+    ) -> None:
+        """Node đã chạy: `receive_dir` là thư mục nhận (None: không nhận file), `unavailable` là thư
+        mục đã lưu không mở được."""
         self._state = ViewState.RUNNING
         self._name, self._receive_dir = name, receive_dir
+        self._receive_dir_unavailable = unavailable
         self.retranslate()
         self._place_focus()
+
+    def set_receive_dir(self, receive_dir: Path | None, unavailable: Path | None = None) -> None:
+        """Nhớ thư mục nhận và thư mục đã lưu hỏng; chỉ hiện ở RUNNING (chân “Lưu vào”, huy hiệu)."""
+        self._receive_dir = receive_dir
+        self._receive_dir_unavailable = unavailable
+        self._apply_receive_dir()
+
+    def set_receive_dir_pending(self, path: Path | None) -> None:
+        """Nhớ thư mục đang đổi sang (“Đang đổi sang …”); None khi không đổi."""
+        self._receive_dir_pending = path
+        self._apply_receive_dir()
 
     def show_error(self, code: str, detail: str = "") -> None:
         """Lỗi khởi động node: `code` là `bridge.StartError`, `detail` đã làm sạch."""
@@ -499,13 +705,14 @@ class MainWindow(QMainWindow):
         """Danh sách lượt có gì không (thẻ hay dải thông báo) và số lượt chưa kết thúc (≥ 0).
 
         Cập nhật huy hiệu của máy này, chọn `empty_state` / `transfers_area`, giữ nút “Mở thư mục”
-        cuối chuỗi Tab. `active` < 0 → ValueError.
+        và “Đổi…” cuối chuỗi Tab. `active` < 0 → ValueError.
         """
         if active < 0:
             raise ValueError(f"số lượt phải ≥ 0: {active}")
         self._has_content = bool(has_content)
         self._active = active
         self.machine_card.set_activity(active)
+        self.compact_machine.update_info()
         self._update_stream()
         self._keep_footer_last()
 
@@ -537,6 +744,31 @@ class MainWindow(QMainWindow):
         if moved:
             self._ensure_home_focus()
         return moved
+
+    def open_conversation(self, device_id: str) -> bool:
+        """Về HOME, chọn cuộc trò chuyện của máy `device_id` và đặt tiêu điểm vào danh sách.
+
+        Máy không có trong danh sách (chưa ghép đôi, không biết) → False, đứng yên."""
+        if self.conversations.model.row_of(device_id) < 0:
+            return False
+        if not self.open_page(Page.HOME):
+            return False
+        self.conversations.select_device(device_id)
+        self.conversations.list_view.setFocus(Qt.FocusReason.OtherFocusReason)
+        return True
+
+    def open_address_entry(self, notice: str | None = None) -> bool:
+        """Mở trang “Tìm máy mới”, hiện `notice` (mức INFO) ở thanh thông báo của trang và đặt tiêu điểm
+        vào ô “Nhập IP…” (chọn hết chữ). Không ở RUNNING → False.
+
+        Mở trang **trước** rồi mới hiện câu: `DiscoverPage.showEvent` xóa thanh thông báo (câu cũ)."""
+        if not self.open_page(Page.DISCOVER):
+            return False
+        if notice:
+            self.discover.info_bar.show_message(InfoLevel.INFO, notice)
+        self.discover.address_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.discover.address_edit.selectAll()
+        return True
 
     def _ensure_home_focus(self) -> None:
         """Về HOME mà tiêu điểm rơi vào chính `home_page` (không nhận tiêu điểm, không proxy) hay không
@@ -579,8 +811,8 @@ class MainWindow(QMainWindow):
         self._addresses, self._port = (), None
 
     def _place_focus(self) -> None:
-        """Đặt tiêu điểm bàn phím: nút đang hiện (Bắt đầu / Thử lại); RUNNING thì danh sách thiết bị
-        (có thiết bị) hay nút “Nhập IP thủ công”; còn lại (STARTING) dòng trạng thái.
+        """Đặt tiêu điểm bàn phím: nút đang hiện (Bắt đầu / Thử lại); RUNNING thì danh sách cuộc trò
+        chuyện (có máy đã ghép đôi) hay nút “Ghép đôi máy mới”; còn lại (STARTING) dòng trạng thái.
 
         Đang ở trang khác HOME thì thôi (`show_running` không đưa về HOME; trang đó tự giữ tiêu điểm)."""
         if self.pages.current_page is not Page.HOME:
@@ -590,8 +822,9 @@ class MainWindow(QMainWindow):
                 button.setFocus(Qt.FocusReason.OtherFocusReason)
                 return
         if self._state is ViewState.RUNNING:
+            conversations = self.conversations
             target: QWidget = (
-                self.radar.list_view if self.radar.model.rowCount() > 0 else self.radar.address_button
+                conversations.list_view if conversations.model.rowCount() > 0 else conversations.add_button
             )
             target.setFocus(Qt.FocusReason.OtherFocusReason)
             return
@@ -649,9 +882,20 @@ class MainWindow(QMainWindow):
         self.retry_button.setVisible(self._state is ViewState.ERROR)
         self.start_button.setVisible(self._state is ViewState.WELCOME)
         self.machine_card.set_name(self._name if running else None)
-        self.save_bar.set_receive_dir(self._receive_dir if running else None)
+        self.compact_machine.update_info()
+        self._apply_receive_dir()
         self._update_empty_content()
         self._update_stream()
+
+    def _apply_receive_dir(self) -> None:
+        """Áp thư mục nhận đã nhớ vào `save_bar` và huy hiệu; ngoài RUNNING thì xóa cả hai."""
+        running = self._state is ViewState.RUNNING
+        receive_dir = self._receive_dir if running else None
+        unavailable = self._receive_dir_unavailable if running else None
+        self.save_bar.set_state(receive_dir, unavailable, self._receive_dir_pending if running else None)
+        self.machine_card.set_receiving_unavailable(
+            running and receive_dir is None and unavailable is not None
+        )
 
     def _content(self) -> tuple[str, str, list[str]]:
         """(dòng trạng thái, dòng chi tiết, các dòng gợi ý) của khối căn giữa; RUNNING thì rỗng."""
@@ -692,6 +936,7 @@ class MainWindow(QMainWindow):
         self.address_label.setToolTip(others)
         self.address_label.setVisible(bool(text))
         self.machine_card.set_copy_value(shown[0] if text else None)
+        self.compact_machine.update_info()
 
     def _update_empty_content(self) -> None:
         """Chữ và nút của màn rỗng ở khung phải; nút “Tìm máy mới” chỉ khi đã có trang DISCOVER."""
@@ -713,7 +958,7 @@ class MainWindow(QMainWindow):
             empty.action_button.setAccessibleName(action)
 
     def _update_paired(self) -> None:
-        self._has_paired = any(view.paired for view in self.radar.model.devices())
+        self._has_paired = self.conversations.model.rowCount() > 0
         self._update_stream()
 
     def _update_stream(self) -> None:
@@ -724,15 +969,24 @@ class MainWindow(QMainWindow):
             self.stream_pane.setCurrentWidget(target)
 
     def _keep_footer_last(self) -> None:
-        """Dời “Mở thư mục” về cuối chuỗi Tab: widget tạo sau cửa sổ (thẻ lượt truyền, trang mới) rơi
-        vào cuối chuỗi, sau nút này."""
-        button = self.save_bar.open_button
+        """Dời “Mở thư mục” rồi “Đổi…” về cuối chuỗi Tab: widget tạo sau cửa sổ (thẻ lượt truyền,
+        trang mới) rơi vào cuối chuỗi, sau hai nút này. Luôn nối “Mở thư mục” → “Đổi…”, kể cả khi
+        “Mở thư mục” đang ẩn (Tab tự bỏ qua widget ẩn)."""
+        open_button = self.save_bar.open_button
+        change_button = self.save_bar.change_button
+        footer = (open_button, change_button)
         last = self.previousInFocusChain()
-        # `setTabOrder` bỏ qua widget NoFocus: lùi tới widget cuối cùng nhận được tiêu điểm bằng Tab.
-        while last is not None and last is not self and not last.focusPolicy() & Qt.FocusPolicy.TabFocus:
+        # `setTabOrder` bỏ qua widget NoFocus: lùi tới widget cuối cùng nhận được tiêu điểm bằng Tab,
+        # bỏ qua chính hai nút chân.
+        while (
+            last is not None
+            and last is not self
+            and (last in footer or not last.focusPolicy() & Qt.FocusPolicy.TabFocus)
+        ):
             last = last.previousInFocusChain()
-        if last is not None and last is not self and last is not button:
-            QWidget.setTabOrder(last, button)
+        if last is not None and last is not self:
+            QWidget.setTabOrder(last, open_button)
+        QWidget.setTabOrder(open_button, change_button)
 
     @staticmethod
     def _set_optional(label: QLabel, text: str, accessible_name: str) -> None:
@@ -743,10 +997,73 @@ class MainWindow(QMainWindow):
 
     # ---- Bố cục ------------------------------------------------------------------------------
 
-    def _apply_sidebar_width(self) -> None:
-        width = SIDEBAR_COMPACT_WIDTH if self.sidebar_compact else SIDEBAR_WIDTH
+    def _apply_compact(self) -> None:
+        """Bề ngang cột trái theo cửa sổ; dạng thu gọn / đầy đủ chỉ đổi khi trạng thái đổi thật.
+
+        Thu gọn: danh sách chỉ còn avatar, đầu cột xếp dọc và căn giữa (ẩn chữ “Teleport”), lề hẹp,
+        `compact_machine` thay `machine_card`. Tiêu điểm đang ở widget sắp ẩn thì chuyển sang widget
+        tương ứng của dạng mới (spec B2 mục 2.6, 12.15)."""
+        compact = self.sidebar_compact
+        width = SIDEBAR_COMPACT_WIDTH if compact else SIDEBAR_WIDTH
         if self.sidebar.width() != width or self.sidebar.minimumWidth() != width:
             self.sidebar.setFixedWidth(width)
+        if compact == self._compact_applied:
+            return
+        self._compact_applied = compact
+        focus = self.focusWidget()
+        self.conversations.set_compact(compact)
+        direction = QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight
+        self.header_layout.setDirection(direction)
+        self.header_buttons.setDirection(direction)
+        align = Qt.AlignmentFlag.AlignHCenter if compact else Qt.AlignmentFlag.AlignVCenter
+        self.header_layout.setAlignment(self.brand_logo, align)
+        self.header_layout.setAlignment(self.header_buttons, align)
+        for button in (self.discover_button, self.settings_button):
+            self.header_buttons.setAlignment(button, align)
+        self.header_layout.setContentsMargins(*(_HEADER_COMPACT_MARGINS if compact else _HEADER_MARGINS))
+        self.brand_label.setVisible(not compact)
+        self._content_layout.setContentsMargins(*(_CONTENT_COMPACT_MARGINS if compact else _CONTENT_MARGINS))
+        self.machine_card.setVisible(not compact)
+        self.compact_footer.setVisible(compact)
+        self.compact_machine.setVisible(compact)
+        self._move_focus_after_compact(focus, compact)
+
+    def _move_focus_after_compact(self, focus: QWidget | None, compact: bool) -> None:
+        if focus is None or not isValid(focus):
+            return
+        if compact and focus in (self.name_label, self.address_label, self.copy_button):
+            self.compact_machine.setFocus(Qt.FocusReason.OtherFocusReason)
+        elif not compact and focus is self.compact_machine:
+            for target in (self.name_label, self.copy_button):
+                if target.isVisibleTo(self):
+                    target.setFocus(Qt.FocusReason.OtherFocusReason)
+                    return
+            conversations = self.conversations
+            fallback = (
+                conversations.list_view
+                if conversations.list_view.isVisibleTo(self)
+                else conversations.add_button
+            )
+            fallback.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _on_conversation_current(self, current: QModelIndex, _previous: QModelIndex) -> None:
+        """Hàng hiện hành đổi bằng bàn phím (hay bằng code): cuộn cột trái tới hàng đó."""
+        if QApplication.mouseButtons() != Qt.MouseButton.NoButton or not current.isValid():
+            return
+        self._scroll_to_row(current)
+
+    def _scroll_to_row(self, index: QModelIndex) -> bool:
+        inner = self.sidebar_scroll.widget()
+        view = self.conversations.list_view
+        if inner is None or not view.isVisibleTo(self):
+            return False
+        rect = view.row_rect(index)
+        if rect.isEmpty():
+            return False
+        center = view.viewport().mapTo(inner, rect.center())
+        margin = self.conversations.delegate.row_height() // 2 + theme.SPACING[1]
+        self.sidebar_scroll.ensureVisible(center.x(), center.y(), 0, margin)
+        return True
 
     def _on_focus_changed(self, _old: QWidget | None, new: QWidget | None) -> None:
         """Tiêu điểm vào một widget trong vùng cuộn (kể cả đặt bằng code) → cuộn tới nó."""
@@ -773,6 +1090,10 @@ class MainWindow(QMainWindow):
         self._scroll_into_view(target)
 
     def _scroll_into_view(self, widget: QWidget) -> bool:
+        view = self.conversations.list_view
+        if widget is view and view.currentIndex().isValid():
+            # Danh sách cao hơn vùng thấy: cuộn tới hàng hiện hành, không tới giữa danh sách.
+            return self._scroll_to_row(view.currentIndex())
         for scroll in (self.sidebar_scroll, self.start_view.start_scroll):
             inner = scroll.widget()
             if inner is not None and inner.isAncestorOf(widget):
@@ -790,11 +1111,11 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._apply_sidebar_width()
+        self._apply_compact()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
-        self._apply_sidebar_width()
+        self._apply_compact()
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)

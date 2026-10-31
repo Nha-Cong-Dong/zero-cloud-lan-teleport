@@ -15,16 +15,22 @@ nên biến môi trường thắng)::
 
 Ảnh không commit vào repo: đính vào PR. Các PR của đợt B thêm cảnh của mình vào `SCENES`.
 
-Cảnh: `welcome`, `starting`, `running` (một địa chỉ, radar rỗng → “Ghép đôi máy đầu tiên”),
-`running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo), `error`, `widgets` (trang
+Cảnh: `welcome`, `starting`, `running` (một địa chỉ, chưa có máy đã ghép đôi → “Ghép đôi máy đầu
+tiên”), `running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo),
+`running_unavailable` (thư mục nhận đã lưu không mở được, spec B1b), `error`, `widgets` (trang
 mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`), `page` (RUNNING, mở một trang mẫu có
 `PageHeader` ở chỗ SETTINGS, vì DISCOVER đã là trang thật), `discover` (trang “Tìm máy mới”: 4 máy
 chưa ghép đôi, một tên dài bị cắt “…”, 2 máy đã ghép đôi), `discover_list` (9 máy: tự sang dạng danh
-sách). Tổng 9 cảnh × 2 chế độ × 2 cỡ = 36 ảnh.
+sách), `conversations` (spec B2 mục 7: 4 máy đã ghép đôi ở cột trái — đang gửi 62% và đang chọn,
+trực tuyến đã nhận một file, ngoại tuyến đã gửi hôm qua, trực tuyến bị từ chối kết nối — và thẻ đang
+gửi ở khung phải), `conversations_drop` (như trên, đang kéo 3 file qua hàng đang chọn). Giờ cố định
+bằng seam `_wall_now` của `ui.conversations` và `ui.transfers` (`NOW`). Tổng 12 cảnh × 2 chế độ × 2
+cỡ = 48 ảnh.
 """
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import os
 from collections.abc import Callable
@@ -42,6 +48,8 @@ pytestmark = pytest.mark.slow
 
 SIZES = ((980, 660), (720, 460))
 SNAPSHOT_ENV = "TELEPORT_UI_SNAPSHOT_DIR"
+NOW = datetime.datetime(2026, 10, 31, 10, 45).timestamp()  # giờ địa phương cố định của các cảnh
+RECEIVE_DIR = Path("C:/Users/Minh/Downloads/Teleport")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -54,6 +62,15 @@ def accent_font(qapp):
     yield
     if not was_installed:
         fonts._reset()
+
+
+@pytest.fixture(autouse=True)
+def fixed_clock(monkeypatch):
+    """Giờ tường cố định (`NOW`) cho chữ giờ của danh sách cuộc trò chuyện."""
+    from teleport.ui import conversations, transfers
+
+    monkeypatch.setattr(conversations, "_wall_now", lambda: NOW)
+    monkeypatch.setattr(transfers, "_wall_now", lambda: NOW)
 
 
 # ---- Cảnh --------------------------------------------------------------------------------------
@@ -134,7 +151,7 @@ def scene_running_full(qtbot) -> QWidget:
     nha = _device("PC-Nha", paired=True, online=True, connected=True)
     lan = _device("MacBook-Lan", paired=True, online=False, connected=False)
     guest = _device("PC-Khach", paired=False, online=True, connected=False)
-    window.radar.model.reset([nha, lan, guest])
+    window.devices.reset([nha, lan, guest])
 
     view = TransfersView(window.transfers_area)
     window.transfers_area.layout().addWidget(view)
@@ -159,6 +176,23 @@ def scene_running_full(qtbot) -> QWidget:
     window.set_transfer_summary(view.has_content(), view.active_count())
 
     window.show_running("Laptop-Minh", folder)
+    window.set_addresses(["192.168.1.15"], None)
+    return window
+
+
+def scene_running_unavailable(qtbot) -> QWidget:
+    """RUNNING mà thư mục nhận đã lưu không mở được (spec B1b): huy hiệu “Không nhận file”, chân “Lưu
+    vào” báo warning kèm “Đổi…”, dải thông báo có nút “Chọn thư mục nhận”."""
+    from teleport.ui import receive_dir
+    from teleport.ui.transfers_view import TransfersView
+
+    window = _main_window(qtbot)
+    view = TransfersView(window.transfers_area)
+    window.transfers_area.layout().addWidget(view)
+    missing = Path("E:/Teleport")
+    view.show_notice(receive_dir.unavailable_text(missing), receive_dir.choose_action_text(), lambda: None)
+    window.set_transfer_summary(view.has_content(), view.active_count())
+    window.show_running("Laptop-Minh", None, missing)
     window.set_addresses(["192.168.1.15"], None)
     return window
 
@@ -336,7 +370,7 @@ def _discover_window(qtbot, views) -> QWidget:
     from teleport.ui.main_window import Page
 
     window = scene_running(qtbot)
-    window.radar.model.reset(views)
+    window.devices.reset(views)
     assert window.open_page(Page.DISCOVER)
     return window
 
@@ -368,17 +402,117 @@ def scene_discover_list(qtbot) -> QWidget:
     return _discover_window(qtbot, views)
 
 
+def _at(day: int, hour: int, minute: int) -> float:
+    return datetime.datetime(2026, 10, day, hour, minute).timestamp()
+
+
+def scene_conversations(qtbot) -> QWidget:
+    """Spec B2 mục 7: bốn máy đã ghép đôi ở cột trái, PC-Nha đang gửi 62% và đang được chọn."""
+    from teleport.app.devices import DeviceView
+    from teleport.app.node import ConnectFailed
+    from teleport.app.transfers import (
+        Direction,
+        TransferProgress,
+        TransferResult,
+        TransferStatus,
+        TransferStatusChanged,
+    )
+    from teleport.core.links import ConnectResult
+    from teleport.ui.activity import ActiveTransfer, DeviceActivity, FinishedTransfer
+    from teleport.ui.transfers_view import TransfersView
+
+    def paired(label: str, os_name: str, *, online: bool, connected: bool = False) -> DeviceView:
+        return DeviceView(
+            device_id=hashlib.sha256(label.encode()).hexdigest()[:32],
+            name=label,
+            os=os_name,
+            paired=True,
+            online=online,
+            connected=connected,
+            addresses=("192.168.1.20",) if online else (),
+            port=47474 if online else None,
+        )
+
+    window = _main_window(qtbot)
+    nha = paired("PC-Nha", "windows", online=True, connected=True)
+    lan = paired("MacBook-Lan", "macos", online=True)
+    lab = paired("Ubuntu-Lab", "linux", online=False)
+    old = paired("May-Cu", "windows", online=True)
+    window.devices.reset([nha, lan, lab, old])
+    window.devices.apply(ConnectFailed(device=old, result=ConnectResult.REJECTED))
+
+    size = 18 * 2**30
+    sending = _transfer_info(
+        nha.device_id, "send", "a" * 32, "transferring", "phim-4k.mkv", size, size * 62 // 100
+    )
+    model = window.conversations.model
+    model.set_activity(
+        nha.device_id,
+        DeviceActivity(
+            active=(
+                ActiveTransfer(
+                    key=sending.key,
+                    status=TransferStatus.TRANSFERRING,
+                    file_count=1,
+                    first_name="phim-4k.mkv",
+                    shown_bytes=sending.done_bytes,
+                    total_bytes=size,
+                    started_at=_at(31, 10, 42),
+                ),
+            ),
+            last=None,
+        ),
+    )
+    model.set_activity(
+        lan.device_id,
+        DeviceActivity(
+            active=(),
+            last=FinishedTransfer(Direction.RECEIVE, TransferResult.DONE, 1, "bao-cao.pdf", _at(31, 9, 15)),
+        ),
+    )
+    model.set_activity(
+        lab.device_id,
+        DeviceActivity(
+            active=(),
+            last=FinishedTransfer(Direction.SEND, TransferResult.DONE, 3, "slide.pptx", _at(30, 16, 30)),
+        ),
+    )
+    window.conversations.select_device(nha.device_id)
+
+    view = TransfersView(window.transfers_area)
+    window.transfers_area.layout().addWidget(view)
+    view.set_device_names({d.device_id: d.name for d in (nha, lan, lab, old)})
+    view.handle(TransferStatusChanged(sending))
+    view.handle(TransferProgress(sending, 94 * 2**20, 60.0, shown_bytes=sending.done_bytes, idle_seconds=0.0))
+    window.set_transfer_summary(view.has_content(), view.active_count())
+
+    window.show_running("Laptop-Minh", RECEIVE_DIR)
+    window.set_addresses(["192.168.1.15"], None)
+    return window
+
+
+def scene_conversations_drop(qtbot) -> QWidget:
+    """Như `conversations`, đang kéo 3 file qua hàng đang chọn (PC-Nha): viền nét đứt, câu thả."""
+    window = scene_conversations(qtbot)
+    nha_id = hashlib.sha256(b"PC-Nha").hexdigest()[:32]
+    window.conversations.list_view.preview_drop(nha_id, 3)
+    return window
+
+
 SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     # tên cảnh: (hàm dựng, là cửa sổ chính, token mà điểm (4,4) phải bằng; None: không kiểm góc)
     "welcome": (scene_welcome, True, "surface"),
     "starting": (scene_starting, True, "surface"),
     "running": (scene_running, True, "sidebar"),
     "running_full": (scene_running_full, True, "sidebar"),
+    "running_unavailable": (scene_running_unavailable, True, "sidebar"),
     "error": (scene_error, True, "surface"),
     "widgets": (scene_widgets, False, None),
     "page": (scene_page, True, "surface"),
     "discover": (scene_discover, True, "surface"),
     "discover_list": (scene_discover_list, True, "surface"),
+    "conversations": (scene_conversations, True, "sidebar"),
+    "conversations_drop": (scene_conversations_drop, True, "sidebar"),
 }
 
 

@@ -12,6 +12,7 @@ Hai cách hiện cửa sổ (`show_window`):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 from pathlib import Path
@@ -54,7 +55,7 @@ ADDRESS_A11Y = "Địa chỉ của máy này"
 
 # ---- Hằng của spec (2.3) --------------------------------------------------------------------------
 SIDEBAR_WIDTH = 288
-SIDEBAR_COMPACT_WIDTH = 248
+SIDEBAR_COMPACT_WIDTH = 80  # spec B2 mục 12.5 (B1 là 248)
 COMPACT_BELOW = 820
 START_PANEL_MAX_WIDTH = 460
 MIN_W, MIN_H = 720, 460
@@ -262,7 +263,7 @@ def fill_l12(window, ctl, tmp_path: Path) -> None:
     """Dựng như L12: trang DISCOVER (luôn có từ B5), máy đã ghép đôi, hai thẻ, một thông báo, có địa chỉ."""
     running(window, tmp_path)
     window.set_addresses(["192.0.2.5"], None)
-    window.radar.model.reset([dview("PC-Nha", paired=True, connected=True)])
+    window.devices.reset([dview("PC-Nha", paired=True, connected=True)])
     ctl.view.set_device_names({PEER_ID: "PC-Nha"})
     ctl.view.handle(status_changed(tkey("send", "a" * 32)))
     ctl.view.handle(status_changed(tkey("receive", "b" * 32)))
@@ -271,18 +272,15 @@ def fill_l12(window, ctl, tmp_path: Path) -> None:
 
 
 def fill_l3_full(window, ctl, tmp_path: Path) -> None:
-    """RUNNING đầy đủ của L3: 6 thiết bị, khung nhập IP mở kèm lỗi, 3 thẻ + thông báo, 3 địa chỉ,
-    thư mục nhận dài 200 ký tự."""
+    """RUNNING đầy đủ của L3: 6 thiết bị, 3 thẻ + thông báo, 3 địa chỉ, thư mục nhận dài 200 ký tự (spec
+    B2 mục 8(d): khung nhập IP không còn ở cột trái)."""
     long_dir = Path("C:/" + "r" * 197)
     assert len(str(long_dir)) == 200
     window.show_running("May-A", long_dir)
     window.set_addresses(["192.0.2.5", "192.0.2.6", "192.0.2.7"], 50000)
-    window.radar.model.reset(
+    window.devices.reset(
         [dview(f"May-{i}", paired=i < 2, connected=i == 0) for i in range(6)],
     )
-    window.radar.open_address_entry()
-    window.radar.address_edit.setText("không phải IP")
-    window.radar.submit_address()
     ctl.view.set_device_names({PEER_ID: "PC-Nha"})
     for c in "abc":
         ctl.view.handle(status_changed(tkey("send", c * 32)))
@@ -323,13 +321,13 @@ def test_l1_widget_tree_matches_spec(window):
     assert window.home_stack.indexOf(window.shell) >= 0
     assert window.body.isAncestorOf(window.sidebar)
     assert window.body.isAncestorOf(window.stream_pane)
-    for w in (window.radar, window.machine_card, window.discover_button, window.settings_button):
+    for w in (window.conversations, window.machine_card, window.discover_button, window.settings_button):
         assert window.sidebar.isAncestorOf(w), w.objectName()
     assert window.sidebar.isAncestorOf(window.sidebar_header)
     assert window.sidebar_header.isAncestorOf(window.discover_button)
     assert window.sidebar_header.isAncestorOf(window.brand_label)
     assert window.sidebar_header.isAncestorOf(window.brand_logo)
-    assert window.sidebar_scroll.widget().isAncestorOf(window.radar)
+    assert window.sidebar_scroll.widget().isAncestorOf(window.conversations)
     assert window.stream_pane.indexOf(window.empty_state) >= 0
     assert window.stream_pane.indexOf(window.transfers_area) >= 0
     assert not window.body.isAncestorOf(window.save_bar)
@@ -391,15 +389,16 @@ def test_l1_save_bar_spans_full_width_below_body(window, qtbot, tmp_path):
 
 
 def test_l1_old_public_attributes_live_in_home_page_with_same_types(window):
-    from teleport.ui.radar import RadarView
+    from teleport.ui.conversations import ConversationList
 
     labels = ("status_label", "detail_label", "hint_label", "title_label", "address_label")
     for name in labels:
         assert isinstance(getattr(window, name), QLabel), name
     for name in ("start_button", "retry_button"):
         assert isinstance(getattr(window, name), QPushButton), name
-    assert isinstance(window.radar, RadarView)
-    for name in (*labels, "start_button", "retry_button", "radar", "transfers_area", "body"):
+    assert isinstance(window.conversations, ConversationList)  # spec B2: thay `radar` (`RadarView`)
+    assert not hasattr(window, "radar")
+    for name in (*labels, "start_button", "retry_button", "conversations", "transfers_area", "body"):
         assert window.home_page.isAncestorOf(getattr(window, name)), name
 
 
@@ -443,7 +442,9 @@ def test_l2_sidebar_width_follows_resizes(window, qtbot, tmp_path):
         assert window.sidebar.width() + window.stream_pane.width() == window.body.width(), width
 
 
-def test_l2_resize_keeps_focus_on_address_label(window, qtbot, tmp_path):
+def test_l2_resize_moves_focus_between_address_label_and_compact_machine(window, qtbot, tmp_path):
+    """Spec B2 mục 2.6, 12.25: thu gọn thì `machine_card` ẩn → tiêu điểm sang `compact_machine`; mở rộng
+    lại → `name_label`."""
     running(window, tmp_path)
     window.set_addresses(["192.0.2.5"], None)
     show_window(window, qtbot, 980, 660, active=True)
@@ -451,9 +452,9 @@ def test_l2_resize_keeps_focus_on_address_label(window, qtbot, tmp_path):
     qtbot.waitUntil(lambda: window.focusWidget() is window.address_label, timeout=1000)
     resize_to(window, 720, 660)
     assert window.sidebar_compact
-    assert window.focusWidget() is window.address_label
+    assert window.focusWidget() is window.compact_machine
     resize_to(window, 980, 660)
-    assert window.focusWidget() is window.address_label
+    assert window.focusWidget() is window.name_label
 
 
 # =================================================================================================
@@ -483,8 +484,7 @@ def test_l3_full_running_does_not_grow_window(window, qtbot, make_ctl, tmp_path)
     show_window(window, qtbot, MIN_W, MIN_H)
     fill_l3_full(window, ctl, tmp_path)
     _assert_fits(window)
-    assert window.radar.address_panel.isVisibleTo(window)
-    assert_radar_fits_sidebar(window)
+    assert_conversations_fit_sidebar(window)
 
 
 def test_l3_error_with_long_path_scrolls_start_panel_instead(window, qtbot):
@@ -529,10 +529,13 @@ def test_l4_region_colors(make_window, qtbot, ui_theme, tmp_path, dark):
     assert not wrong, f"mép phải cột trái không phải `border` ở y = {wrong[:5]}…"
     card = window.machine_card
     assert color_at(image, card, window, QPoint(card.width() // 2, 0)) == border, "đường kẻ trên machine_card"
-    # 12.2: nền trong suốt của vùng cuộn và radar: khe giữa tiêu đề và gợi ý của radar là `sidebar`.
-    radar = window.radar
-    gap = QPoint(radar.width() // 2, radar.heading_label.geometry().bottom() + 4)
-    assert color_at(image, radar, window, gap) == sidebar, "điểm trống của radar"
+    # 12.2 (B2 mục 8(d)): nền trong suốt của vùng cuộn và danh sách: điểm trống bên phải nút “＋ Ghép đôi
+    # máy mới” (căn trái) là `sidebar`.
+    conv = window.conversations
+    btn = conv.add_button
+    gap = QPoint(conv.width() - 4, btn.mapTo(conv, btn.rect().center()).y())
+    assert btn.mapTo(conv, QPoint(btn.width(), 0)).x() < gap.x(), "tiền đề: điểm nằm ngoài nút"
+    assert color_at(image, conv, window, gap) == sidebar, "điểm trống của cột trái"
 
 
 # =================================================================================================
@@ -608,7 +611,7 @@ def test_l5_state_sequence_switches_stack_and_focus(window, qtbot, tmp_path):
     steps = [
         ("welcome", lambda: window.start_view, lambda: window.start_button),
         ("starting", lambda: window.start_view, lambda: window.status_label),
-        ("running", lambda: window.shell, lambda: window.radar.address_button),  # radar trống
+        ("running", lambda: window.shell, lambda: window.conversations.add_button),  # chưa có máy
         ("error", lambda: window.start_view, lambda: window.retry_button),
         ("starting", lambda: window.start_view, lambda: window.status_label),
     ]
@@ -616,11 +619,11 @@ def test_l5_state_sequence_switches_stack_and_focus(window, qtbot, tmp_path):
         _apply(window, tmp_path, state)
         assert window.home_stack.currentWidget() is page(), state
         assert window.focusWidget() is focus(), (state, window.focusWidget())
-    # RUNNING khi radar có thiết bị: tiêu điểm vào danh sách.
-    window.radar.model.reset([dview("PC-Nha", paired=True)])
+    # RUNNING khi có máy đã ghép đôi: tiêu điểm vào danh sách.
+    window.devices.reset([dview("PC-Nha", paired=True)])
     _apply(window, tmp_path, "running")
     assert window.home_stack.currentWidget() is window.shell
-    assert window.focusWidget() is window.radar.list_view
+    assert window.focusWidget() is window.conversations.list_view
 
 
 # =================================================================================================
@@ -680,16 +683,16 @@ def test_l7_empty_state_when_nothing_paired_and_no_content(window, tmp_path):
 def test_l7_paired_device_switches_to_transfers_area(window, tmp_path):
     running(window, tmp_path)
     window.set_transfer_summary(False, 0)
-    window.radar.model.reset([dview(paired=True)])
+    window.devices.reset([dview(paired=True)])
     assert window.stream_pane.currentWidget() is window.transfers_area
-    window.radar.model.clear()
+    window.devices.clear()
     assert window.stream_pane.currentWidget() is window.empty_state
 
 
 def test_l7_only_unpaired_devices_keep_empty_state(window, tmp_path):
     running(window, tmp_path)
     window.set_transfer_summary(False, 0)
-    window.radar.model.reset([dview("May-1"), dview("May-2")])
+    window.devices.reset([dview("May-1"), dview("May-2")])
     assert window.stream_pane.currentWidget() is window.empty_state
 
 
@@ -698,7 +701,7 @@ def test_l7_model_signals_recompute_paired_flag(window, tmp_path):
 
     running(window, tmp_path)
     window.set_transfer_summary(False, 0)
-    model = window.radar.model
+    model = window.devices
     model.apply(DeviceOnline(dview("May-1")))  # rowsInserted, chưa ghép đôi
     assert window.stream_pane.currentWidget() is window.empty_state
     model.apply(DeviceOnline(dview("May-1", paired=True)))  # cùng máy, nay đã ghép đôi
@@ -998,7 +1001,7 @@ def index_of(order: list, widget) -> int:
 
 def check_running_order(window, order: list) -> None:
     i_discover = index_of(order, window.discover_button)
-    i_ip = index_of(order, window.radar.address_button)
+    i_ip = index_of(order, window.conversations.add_button)
     i_name = index_of(order, window.name_label)
     i_addr = index_of(order, window.address_label)
     i_copy = index_of(order, window.copy_button)
@@ -1028,11 +1031,11 @@ def test_l12_shift_tab_is_reverse_order(window, qtbot, make_ctl, tmp_path):
     assert closed
     backward, closed = tab_cycle(window, window.discover_button, Qt.Key.Key_Backtab)
     assert closed, "Shift+Tab không quay vòng về discover_button"
-    radar = window.radar
+    rows = window.conversations.list_view
 
-    # Danh sách thiết bị có thể giữ Tab giữa các hàng (12.6): chỉ so các widget ngoài radar, cộng nút IP.
+    # Danh sách giữ Tab giữa các hàng (12.6, B2 2.6): bỏ mục của `list_view` khỏi phép so.
     def key_widgets(seq):
-        return [w for w in seq if not radar.isAncestorOf(w) or w is radar.address_button]
+        return [w for w in seq if w is not rows]
 
     fwd = key_widgets(forward)
     back = key_widgets(backward)
@@ -1174,107 +1177,83 @@ def test_l15_labels_are_plain_and_not_keyboard_selectable(window, tmp_path):
 # =================================================================================================
 
 
-def test_l16_programmatic_focus_scrolls_sidebar(window, qtbot, tmp_path):
-    running(window, tmp_path)
-    window.radar.model.reset([dview(f"May-{i}", paired=i < 2) for i in range(6)])
-    show_window(window, qtbot, MIN_W, MIN_H, active=True)
-    window.radar.open_address_entry()
-    settle()
-    edit = window.radar.address_edit
-    assert window.focusWidget() is edit
-    viewport = window.sidebar_scroll.viewport()
-    top_left = edit.mapTo(viewport, QPoint(0, 0))
-    rect = edit.rect().translated(top_left)
-    assert viewport.rect().contains(rect), f"ô nhập IP {rect} nằm ngoài vùng thấy {viewport.rect()}"
-
-
-def assert_radar_fits_sidebar(window) -> None:
-    """Spec 12.22 (thay phép kiểm cũ `radar.width() >= minimumSizeHint`, luôn đúng): không cuộn ngang
-    được, và radar cần không quá bề ngang vùng cuộn trừ lề trái/phải 12 + 12."""
+def assert_conversations_fit_sidebar(window) -> None:
+    """Spec 12.22 B1 → B2 mục 12.25: không cuộn ngang được, và danh sách cuộc trò chuyện cần không quá bề
+    ngang vùng cuộn trừ lề trái/phải (12 + 12 dạng đầy đủ, 4 + 4 dạng thu gọn, spec B2 mục 2.6)."""
     settle()
     scroll = window.sidebar_scroll
-    assert scroll.horizontalScrollBar().maximum() == 0, "cột trái cuộn ngang được: radar rộng quá chỗ"
-    need = window.radar.minimumSizeHint().width()
-    assert need <= scroll.viewport().width() - 24, (
-        f"radar cần {need} px, chỗ {scroll.viewport().width() - 24}"
-    )
+    assert scroll.horizontalScrollBar().maximum() == 0, "cột trái cuộn ngang được: danh sách rộng quá chỗ"
+    margins = 8 if window.sidebar_compact else 24
+    need = window.conversations.minimumSizeHint().width()
+    room = scroll.viewport().width() - margins
+    assert need <= room, f"danh sách cần {need} px, chỗ {room}"
 
 
-def test_l16_address_entry_open_fits_sidebar_at_min_size(window, qtbot, tmp_path):
-    """12.22 (soat-code vòng 1, cao): khung nhập IP mở ở 720x460 không làm radar rộng hơn cột trái."""
+def test_l16_conversations_fit_sidebar_at_full_width(window, qtbot, tmp_path):
     running(window, tmp_path)
-    window.radar.model.reset([dview(f"May-{i}", paired=i < 2) for i in range(6)])
-    show_window(window, qtbot, MIN_W, MIN_H, active=True)
-    window.radar.open_address_entry()
-    settle()
-    assert window.radar.address_panel.isVisibleTo(window)
-    assert_radar_fits_sidebar(window)
+    window.devices.reset([dview(f"May-{i}", paired=True) for i in range(12)])
+    show_window(window, qtbot, 980, MIN_H)
+    assert not window.sidebar_compact
+    assert_conversations_fit_sidebar(window)
 
 
-def _partly_hidden_list(window, qtbot, tmp_path):
-    """720x460, 8 máy chưa ghép đôi, khung nhập IP mở (tiêu điểm ở ô nhập, cột trái đã cuộn xuống)."""
+def _scrolled_sidebar(window, qtbot, tmp_path):
+    """720x460, 12 máy đã ghép đôi (spec B2 12.25): cột trái cao hơn vùng thấy, cuộn xuống cuối."""
     running(window, tmp_path)
-    window.radar.model.reset([dview(f"May-{i}") for i in range(8)])
+    window.devices.reset([dview(f"May-{i:02d}", paired=True) for i in range(12)])
     show_window(window, qtbot, MIN_W, MIN_H, active=True)
-    window.radar.open_address_entry()
+    bar = window.sidebar_scroll.verticalScrollBar()
+    assert bar.maximum() > 0, "cột trái phải cuộn được (ca của test)"
+    bar.setValue(bar.maximum())
     settle()
-    assert window.focusWidget() is window.radar.address_edit
-    viewport = window.sidebar_scroll.viewport()
-    lv = window.radar.list_view
-    shown = lv.rect().translated(lv.mapTo(viewport, QPoint(0, 0)))
-    assert not viewport.rect().contains(shown), "danh sách phải bị che một phần (ca của test)"
-    return viewport, lv
+    return window.sidebar_scroll.viewport(), window.conversations.list_view, bar
 
 
 def test_l16_click_on_partly_hidden_row_is_not_lost(window, qtbot, tmp_path):
-    """12.22 (soat-code vòng 1, trung bình): nhấn rồi nhả chuột tại cùng một điểm màn hình trên một
-    hàng đang thấy được của danh sách bị che một phần → `row_clicked` phát đúng hàng đó. Tự cuộn tới
-    widget có tiêu điểm lúc nhấn chuột sẽ dời hàng khỏi con trỏ và làm mất cú bấm."""
-    viewport, lv = _partly_hidden_list(window, qtbot, tmp_path)
-    model = window.radar.model
-    row = next(
-        (
-            r
-            for r in range(model.rowCount())
-            if viewport.rect().contains(
-                lv.viewport().mapTo(viewport, lv.visualRect(model.index(r, 0)).center())
-            )
-        ),
-        None,
-    )
-    assert row is not None, "không có hàng nào đang thấy được"
-    point = lv.visualRect(model.index(row, 0)).center()
-    screen_point = lv.viewport().mapToGlobal(point)
-    clicks: list[int] = []
-    lv.row_clicked.connect(lambda index, *_: clicks.append(index.row()))
+    """12.22 (B1) dời sang B2: nhấn rồi nhả chuột trên phần đang thấy của một hàng bị che một phần → máy
+    của hàng đó thành máy hiện hành, cột trái không tự cuộn (cuộn sẽ dời hàng khỏi con trỏ)."""
+    viewport, lv, bar = _scrolled_sidebar(window, qtbot, tmp_path)
+    model = lv.model()
+    view_rect = viewport.rect()
+    target = None
+    for r in range(model.rowCount()):
+        rect = lv.visualRect(model.index(r, 0)).translated(lv.viewport().mapTo(viewport, QPoint(0, 0)))
+        if rect.intersects(view_rect) and not view_rect.contains(rect):
+            target = (r, rect.intersected(view_rect))
+            break
+    assert target is not None, "không có hàng nào bị che một phần"
+    row, visible_part = target
+    expected = window.conversations.model.devices()[row].device_id
+    point = lv.viewport().mapFrom(viewport, visible_part.center())
+    before = bar.value()
     QTest.mousePress(lv.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
     settle()
-    release = lv.viewport().mapFromGlobal(screen_point)  # cùng điểm màn hình, dù view có cuộn
-    QTest.mouseRelease(lv.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, release)
+    QTest.mouseRelease(lv.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, point)
     settle()
-    assert clicks == [row]
+    current = window.conversations.current_device()
+    assert current is not None and current.device_id == expected
+    assert bar.value() == before, "cú bấm chuột không làm cột trái cuộn"
 
 
-def test_l16_keyboard_focus_on_hidden_widget_still_scrolls(window, qtbot, tmp_path):
-    """12.22: bỏ tự cuộn chỉ khi tiêu điểm đến từ chuột; Shift+Tab tới danh sách đang bị che thì cột
-    trái vẫn tự cuộn tới nó (L16 giữ)."""
-    viewport, lv = _partly_hidden_list(window, qtbot, tmp_path)
-    bar = window.sidebar_scroll.verticalScrollBar()
+def test_l16_keyboard_focus_on_hidden_row_still_scrolls(window, qtbot, tmp_path):
+    """12.22 (B1) dời sang B2: Shift+Tab từ “＋ Ghép đôi máy mới” đi ngược qua từng hàng; hàng hiện hành
+    luôn nằm trong vùng thấy (cột trái tự cuộn lên)."""
+    viewport, lv, bar = _scrolled_sidebar(window, qtbot, tmp_path)
+    add = window.conversations.add_button
+    add.setFocus(Qt.FocusReason.OtherFocusReason)
+    qtbot.waitUntil(lambda: window.focusWidget() is add, timeout=1000)
     before = bar.value()
-    assert before > 0, "cột trái phải đang cuộn xuống (ca của test)"
-    for _ in range(10):
-        if window.focusWidget() is lv:
-            break
+    rows = lv.model().rowCount()
+    for _ in range(rows):
         QTest.keyClick(window.focusWidget(), Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier)
         settle()
-    assert window.focusWidget() is lv, "Shift+Tab không tới được danh sách thiết bị"
-    assert bar.value() < before, "cột trái không tự cuộn lên tới danh sách"
-    shown = lv.rect().translated(lv.mapTo(viewport, QPoint(0, 0)))
-    if shown.height() + 16 <= viewport.height():
-        assert viewport.rect().contains(shown), f"danh sách {shown} chưa nằm trọn trong {viewport.rect()}"
-    else:
-        # Cao hơn vùng thấy: `ensureVisible` theo tâm widget thì căn giữa.
-        assert viewport.rect().contains(shown.center()), f"danh sách {shown} không căn vào vùng thấy"
+        assert window.focusWidget() is lv, "Shift+Tab không tới được danh sách"
+        rect = lv.visualRect(lv.currentIndex()).translated(lv.viewport().mapTo(viewport, QPoint(0, 0)))
+        assert rect.top() >= 0 and rect.bottom() < viewport.height(), (
+            f"hàng {lv.currentIndex().row()} {rect} ngoài vùng thấy {viewport.rect()}"
+        )
+    assert lv.currentIndex().row() == 0
+    assert bar.value() < before, "cột trái không tự cuộn lên"
 
 
 def test_l16_scroll_areas_take_no_focus(window):
@@ -1364,3 +1343,374 @@ def test_l18_escape_on_home_does_nothing(window, qtbot, tmp_path):
     assert window.isVisible()
     assert changes == []
     assert window.focusWidget() is focus
+
+
+# =================================================================================================
+# B1b — nút [Đổi…] ở chân “Lưu vào” (spec-b1b mục 2.3, 2.4, 2.9, 6.3; mục 11 thắng khi khác)
+# =================================================================================================
+
+CHANGE = "Đổi…"
+CHANGE_A11Y = "Đổi thư mục nhận"
+CHANGING = "Đang đổi sang {path}…"
+NOT_RECEIVING_BAR = "Không nhận file: không mở được {path}"
+NOT_RECEIVING = "Không nhận file"
+
+
+def tooltip_text(widget) -> str:
+    doc = QTextDocument()
+    doc.setHtml(widget.toolTip())
+    return doc.toPlainText()
+
+
+def unavailable_running(window, tmp_path: Path, name: str | None = "May-A") -> Path:
+    """RUNNING mà thư mục đã lưu hỏng: không có thư mục nhận, có `unavailable`."""
+    broken = tmp_path / "o-da-rut"
+    window.show_running(name, None, broken)
+    settle()
+    return broken
+
+
+def test_save_bar_has_change_button_after_open_button(window):
+    from teleport.ui.widgets import IconButton
+
+    bar = window.save_bar
+    button = bar.change_button
+    assert isinstance(button, IconButton)
+    assert button.objectName() == "changeReceiveDirButton"
+    assert button.icon_name == "folder"
+    assert button.text().replace("&", "") == CHANGE
+    assert button.accessibleName() == CHANGE_A11Y
+    assert CHANGE_A11Y in tooltip_text(button), "tooltip nói rõ nút làm gì (spec 11.10)"
+    row = layout_holding(bar.layout(), bar.open_button)
+    assert row is not None and row.indexOf(button) > row.indexOf(bar.open_button)
+    assert focusable(button), "nút nhận Tab"
+
+
+def test_change_button_emits_change_requested(window, tmp_path):
+    running(window, tmp_path)
+    got: list = []
+    window.save_bar.change_requested.connect(lambda: got.append(True))
+    window.save_bar.change_button.click()
+    assert got == [True]
+
+
+def test_window_forwards_change_receive_dir_requested(window, tmp_path):
+    running(window, tmp_path)
+    got: list = []
+    window.change_receive_dir_requested.connect(lambda: got.append(True))
+    window.save_bar.change_button.click()
+    assert got == [True]
+
+
+def test_change_button_full_text_in_accessible_description(window, tmp_path):
+    path = tmp_path / "nhan"
+    window.show_running("A", path)
+    assert str(path) in window.save_bar.change_button.accessibleDescription()
+
+
+def test_save_bar_unavailable_shows_warning_text_hides_open_keeps_change(window, tmp_path):
+    broken = unavailable_running(window, tmp_path)
+    bar = window.save_bar
+    assert visible(bar, window), "thư mục hỏng vẫn hiện thanh (để còn nút Đổi…)"
+    expected = NOT_RECEIVING_BAR.format(path=str(broken))
+    assert bar.full_text == expected
+    assert bar.save_label.text() == expected
+    assert bar.save_label.property("tone") == "warning"
+    assert expected in bar.save_label.accessibleDescription()
+    assert expected in tooltip_text(bar.save_label)
+    assert not visible(bar.open_button, window), "không có thư mục để mở"
+    assert visible(bar.change_button, window) and bar.change_button.isEnabled()
+    assert bar.unavailable == broken
+    assert bar.receive_dir is None
+    assert window.receive_dir is None
+    assert window.receive_dir_unavailable == broken
+
+
+def test_save_bar_unavailable_never_uses_danger(window, tmp_path):
+    unavailable_running(window, tmp_path)
+    tones = {label.property("tone") for label in window.save_bar.findChildren(QLabel)}
+    assert "danger" not in tones
+
+
+def test_save_bar_receive_dir_wins_over_unavailable(window, tmp_path):
+    path = tmp_path / "nhan"
+    window.show_running("A", path, tmp_path / "hong")
+    bar = window.save_bar
+    assert bar.full_text == SAVE_PREFIX + str(path)
+    assert bar.save_label.property("tone") == "muted"
+    assert visible(bar.open_button, window)
+
+
+def test_save_bar_pending_text(window, tmp_path):
+    path = tmp_path / "nhan"
+    new = tmp_path / "moi"
+    window.show_running("A", path)
+    window.set_receive_dir_pending(new)
+    bar = window.save_bar
+    assert bar.pending == new
+    assert bar.full_text == CHANGING.format(path=str(new))
+    assert bar.save_label.property("tone") == "muted"
+    assert visible(bar.open_button, window), "đang đổi: vẫn còn thư mục cũ để mở"
+    window.set_receive_dir_pending(None)
+    assert bar.full_text == SAVE_PREFIX + str(path)
+    # Đang đổi từ trạng thái hỏng: chữ “đang đổi” thắng chữ warning.
+    broken = unavailable_running(window, tmp_path)
+    window.set_receive_dir_pending(new)
+    assert bar.full_text == CHANGING.format(path=str(new))
+    assert bar.save_label.property("tone") == "muted"
+    window.set_receive_dir_pending(None)
+    assert bar.full_text == NOT_RECEIVING_BAR.format(path=str(broken))
+
+
+def test_window_set_receive_dir_after_change(window, tmp_path):
+    unavailable_running(window, tmp_path)
+    new = tmp_path / "moi"
+    window.set_receive_dir(new)
+    bar = window.save_bar
+    assert window.receive_dir == new
+    assert window.receive_dir_unavailable is None
+    assert bar.full_text == SAVE_PREFIX + str(new)
+    assert visible(bar.open_button, window)
+    assert window.badge.text == READY
+
+
+def test_hostile_unavailable_path_is_plain_text(window, tmp_path):
+    from teleport.ui.send import printable
+
+    broken = tmp_path / "<b>x</b>‮y"
+    window.show_running("A", None, broken)
+    label = window.save_bar.save_label
+    assert label.textFormat() == Qt.TextFormat.PlainText
+    assert "‮" not in label.text()
+    assert window.save_bar.full_text == NOT_RECEIVING_BAR.format(path=printable(str(broken)))
+
+
+def test_change_button_stays_enabled_and_focused_while_changing(window, qtbot, tmp_path):
+    running(window, tmp_path)
+    show_window(window, qtbot, 980, 660, active=True)
+    button = window.save_bar.change_button
+    button.setFocus(Qt.FocusReason.TabFocusReason)
+    settle()
+    assert window.focusWidget() is button
+    window.set_receive_dir_pending(tmp_path / "moi")
+    settle()
+    assert button.isEnabled()
+    assert window.focusWidget() is button, "đổi chữ thanh không được làm mất tiêu điểm"
+    window.set_receive_dir_pending(None)
+    window.set_receive_dir(tmp_path / "moi")
+    settle()
+    assert window.focusWidget() is button
+
+
+def test_fixing_unavailable_keeps_change_focus_and_bar_never_hidden(window, qtbot, tmp_path):
+    """Soát B1b: UNAVAILABLE → đang đổi → READY theo thứ tự của `GuiApp` (thư mục trước, rồi
+    xóa `pending`) không được ẩn thanh thoáng qua, nên “Đổi…” giữ tiêu điểm bàn phím."""
+    unavailable_running(window, tmp_path)
+    show_window(window, qtbot, 980, 660, active=True)
+    bar = window.save_bar
+    button = bar.change_button
+    button.setFocus(Qt.FocusReason.TabFocusReason)
+    settle()
+    assert window.focusWidget() is button
+    hidden: list[bool] = []
+    original = bar.setVisible
+
+    def spy(visible: bool) -> None:
+        if not visible:
+            hidden.append(True)
+        original(visible)
+
+    bar.setVisible = spy  # type: ignore[method-assign]
+    window.set_receive_dir_pending(tmp_path / "moi")
+    window.set_receive_dir(tmp_path / "moi", None)
+    window.set_receive_dir_pending(None)
+    settle()
+    assert hidden == [], "thanh không được ẩn giữa chừng"
+    assert window.focusWidget() is button
+
+
+def test_machine_badge_not_receiving_warning(window, tmp_path):
+    from teleport.ui.widgets import BadgeTone
+
+    unavailable_running(window, tmp_path)
+    window.set_transfer_summary(False, 0)
+    assert (window.badge.text, window.badge.tone) == (NOT_RECEIVING, BadgeTone.WARNING)
+    assert window.machine_card.receiving_unavailable is True
+    assert NOT_RECEIVING in window.name_label.accessibleDescription(), "trạng thái bằng chữ (N12)"
+    window.set_receive_dir(tmp_path / "moi")
+    assert (window.badge.text, window.badge.tone) == (READY, BadgeTone.SUCCESS)
+    assert window.machine_card.receiving_unavailable is False
+
+
+def test_badge_priority_active_over_not_receiving(window, tmp_path):
+    from teleport.ui.widgets import BadgeTone
+
+    unavailable_running(window, tmp_path)
+    window.set_transfer_summary(True, 2)
+    assert (window.badge.text, window.badge.tone) == (BUSY.format(n=2), BadgeTone.BUSY)
+    window.set_transfer_summary(True, 0)
+    assert (window.badge.text, window.badge.tone) == (NOT_RECEIVING, BadgeTone.WARNING)
+
+
+def test_machine_card_set_receiving_unavailable(qtbot):
+    from teleport.ui.home import MachineCard
+    from teleport.ui.widgets import BadgeTone
+
+    card = MachineCard()
+    qtbot.addWidget(card)
+    card.set_receiving_unavailable(True)
+    assert card.receiving_unavailable is True
+    assert (card.badge.text, card.badge.tone) == (NOT_RECEIVING, BadgeTone.WARNING)
+    card.set_activity(1)
+    assert card.badge.tone == BadgeTone.BUSY
+    card.set_activity(0)
+    card.set_receiving_unavailable(False)
+    assert (card.badge.text, card.badge.tone) == (READY, BadgeTone.SUCCESS)
+
+
+def test_leaving_running_clears_unavailable_pending_and_badge(window, tmp_path):
+    """Spec-b1b 11.7: ngoài RUNNING thanh ẩn, không còn warning; quay lại RUNNING không mang trạng thái cũ."""
+    from teleport.ui.widgets import BadgeTone
+
+    unavailable_running(window, tmp_path)
+    window.set_receive_dir_pending(tmp_path / "moi")
+    window.show_error("locked", "")
+    bar = window.save_bar
+    assert not visible(bar, window)
+    assert (bar.receive_dir, bar.unavailable, bar.pending) == (None, None, None)
+    assert window.machine_card.receiving_unavailable is False
+    window.show_starting()
+    assert not visible(bar, window)
+    path = tmp_path / "nhan"
+    window.set_receive_dir_pending(None)  # app xóa `pending` qua `state_changed` khi attach host mới
+    window.show_running("A", path)
+    assert bar.unavailable is None and bar.pending is None
+    assert bar.full_text == SAVE_PREFIX + str(path)
+    assert window.badge.tone == BadgeTone.SUCCESS
+
+
+def check_change_last(window, order: list) -> None:
+    i_change = index_of(order, window.save_bar.change_button)
+    assert i_change == len(order) - 1, (
+        f"“Đổi…” phải cuối chuỗi Tab, thấy sau nó: {[w.objectName() for w in order[i_change + 1 :]]}"
+    )
+    in_area = [i for i, w in enumerate(order) if window.transfers_area.isAncestorOf(w)]
+    assert all(i < i_change for i in in_area)
+    if window.save_bar.open_button.isVisibleTo(window):
+        assert index_of(order, window.save_bar.open_button) == i_change - 1, "Mở thư mục → Đổi…"
+
+
+def test_l12_change_button_is_last_in_tab_order(window, qtbot, make_ctl, tmp_path):
+    ctl = make_ctl(window)
+    fill_l12(window, ctl, tmp_path)
+    show_window(window, qtbot, 980, 660, active=True)
+    forward, closed = tab_cycle(window, window.discover_button)
+    assert closed
+    check_running_order(window, forward)
+    check_change_last(window, forward)
+
+    # Thêm thẻ lượt mới (widget tạo sau cửa sổ): “Đổi…” vẫn cuối.
+    new_key = tkey("send", "f" * 32)
+    ctl.view.handle(status_changed(new_key))
+    settle()
+    forward, closed = tab_cycle(window, window.discover_button)
+    assert closed
+    check_running_order(window, forward)
+    check_change_last(window, forward)
+    assert index_of(forward, ctl.view.row(new_key).cancel_button) < index_of(
+        forward, window.save_bar.change_button
+    )
+
+    # `open_button` ẩn (thư mục hỏng): “Đổi…” vẫn cuối, sau khung phải.
+    window.show_running("May-A", None, tmp_path / "hong")
+    ctl.view.handle(status_changed(tkey("send", "e" * 32)))
+    settle()
+    assert not window.save_bar.open_button.isVisibleTo(window)
+    forward, closed = tab_cycle(window, window.discover_button)
+    assert closed
+    check_change_last(window, forward)
+    assert index_of(forward, window.copy_button) < index_of(forward, window.save_bar.change_button)
+
+
+def test_l13_change_button_named_in_every_running_state(window, qtbot, make_ctl, tmp_path):
+    ctl = make_ctl(window)
+    fill_l12(window, ctl, tmp_path)
+    window.show_running("May-A", None, tmp_path / "hong")
+    show_window(window, qtbot, 980, 660)
+    assert unnamed_focusable(window) == []
+    assert icon_buttons_without_tooltip(window) == []
+
+
+def test_unavailable_state_language_change_retranslates(window, qtbot, tmp_path):
+    from teleport.ui.widgets import BadgeTone
+
+    broken = unavailable_running(window, tmp_path)
+    window.set_transfer_summary(False, 0)
+    show_window(window, qtbot, 980, 660)
+    translator = ShoutTranslator()
+    QCoreApplication.installTranslator(translator)
+    try:
+        qtbot.waitUntil(lambda: window.badge.text == shout(NOT_RECEIVING), timeout=3000)
+        assert window.badge.tone == BadgeTone.WARNING
+        bar = window.save_bar
+        assert bar.full_text == shout(NOT_RECEIVING_BAR).format(path=str(broken))
+        assert bar.change_button.accessibleName() == shout(CHANGE_A11Y)
+        assert bar.change_button.text().replace("&", "") == shout(CHANGE)
+        assert shout(CHANGE_A11Y) in tooltip_text(bar.change_button)
+        window.set_receive_dir_pending(tmp_path / "moi")
+        assert bar.full_text == shout(CHANGING).format(path=str(tmp_path / "moi"))
+    finally:
+        QCoreApplication.removeTranslator(translator)
+    qtbot.waitUntil(lambda: window.badge.text == NOT_RECEIVING, timeout=3000)
+    assert window.save_bar.full_text == CHANGING.format(path=str(tmp_path / "moi"))
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_save_bar_icon_follows_state(window, ui_theme, tmp_path, dark):
+    """Spec-b1b 11.12: icon `warning` màu `warning` khi hỏng, `arrow_download` màu `text_muted` khi ổn."""
+    t = ui_theme(dark)
+    unavailable_running(window, tmp_path)
+    settle()
+    icon = window.save_bar.icon_label
+    assert has_color(icon.pixmap(), t.warning), "thư mục hỏng: icon tô `warning`"
+    window.set_receive_dir(tmp_path / "moi")
+    settle()
+    assert has_color(icon.pixmap(), t.text_muted)
+    assert not has_color(icon.pixmap(), t.warning)
+
+
+def test_save_bar_warning_icon_recolors_on_theme_change(window, ui_theme, tmp_path):
+    light = ui_theme(False)
+    unavailable_running(window, tmp_path)
+    settle()
+    assert has_color(window.save_bar.icon_label.pixmap(), light.warning)
+    dark = ui_theme(True)
+    settle()
+    if dark.warning != light.warning:
+        assert has_color(window.save_bar.icon_label.pixmap(), dark.warning)
+        assert not has_color(window.save_bar.icon_label.pixmap(), light.warning)
+
+
+def test_save_bar_state_change_sends_accessibility_alert(window, tmp_path, monkeypatch):
+    """Spec-b1b 11.11: chữ thanh chuyển giữa ba trạng thái → sự kiện Alert trên SaveBar."""
+    from PySide6.QtGui import QAccessible
+
+    alerts: list = []
+    real = QAccessible.updateAccessibility
+
+    def spy(event):
+        with contextlib.suppress(Exception):
+            if event.type() == QAccessible.Event.Alert:
+                alerts.append(event.object())
+        return real(event)
+
+    monkeypatch.setattr(QAccessible, "updateAccessibility", staticmethod(spy))
+    bar = window.save_bar
+    window.show_running("A", tmp_path / "nhan")
+    alerts.clear()
+    window.set_receive_dir_pending(tmp_path / "moi")  # ổn → đang đổi
+    assert any(o is bar or bar.isAncestorOf(o) for o in alerts), "đang đổi: phải có Alert"
+    alerts.clear()
+    window.set_receive_dir_pending(None)
+    window.set_receive_dir(None, tmp_path / "hong")  # → hỏng
+    assert any(o is bar or bar.isAncestorOf(o) for o in alerts), "hỏng: phải có Alert"

@@ -217,6 +217,7 @@ def test_running_window_shows_device_name_and_receive_dir(gui, gui_wait, config_
 
     def script(run):
         yield gui_wait(lambda: run.windows and host_started(run), 15, "node chạy")
+        run.window.resize(980, 660)  # spec B2 2.6: hẹp hơn 820 px thì cột trái thu gọn, tên máy ẩn
         yield gui_wait(lambda: name in ui_helpers.all_text(run.window), 3, "tên máy hiện trên cửa sổ")
         # Spec B1 mục 12.20: chân “Lưu vào” cắt giữa đường dẫn dài (chữ hiện có “…”), nên đường dẫn
         # đầy đủ kiểm ở mô tả trợ năng của nhãn, không ở chữ hiện.
@@ -489,7 +490,12 @@ def test_start_error_text_for_every_code_is_filled(qapp, code):
 
 def test_start_error_hints_match_mvp_doc():
     doc = (Path(__file__).resolve().parents[2] / "docs" / "mvp.md").read_text(encoding="utf-8")
-    for hint in START_ERROR_HINTS.values():
+    for code, hint in START_ERROR_HINTS.items():
+        if code == "receive_dir":
+            # Spec-b1b 11.4: giao diện dùng thư mục đã lưu (SAVED), hỏng thì vẫn chạy; dòng mvp mục 8 cũ
+            # được viết lại. Câu E4 chỉ còn cho đường dẫn tường minh (test), không còn trong mvp.
+            assert "thư mục nhận đã lưu không mở được khi khởi động" in doc
+            continue
         assert f"“{hint}”" in doc, hint
     assert "“Không mở được cổng để nhận kết nối (*lỗi*).”" in doc
 

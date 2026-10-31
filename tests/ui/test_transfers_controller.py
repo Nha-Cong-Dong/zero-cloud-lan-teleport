@@ -13,6 +13,7 @@ mục 8 (dòng “Giao diện: gửi tiếp khi đang chờ ghép đôi…”, �
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import uuid
@@ -168,6 +169,10 @@ class FakeTransfers:
     def transfers(self):
         return self.infos
 
+    def history(self, device_id=None):
+        """Spec B2 12.22: `on_started` đọc thêm lịch sử."""
+        return ()
+
 
 class FakeNode:
     def __init__(self, devices=(), infos=()) -> None:
@@ -244,8 +249,8 @@ def env(qtbot, monkeypatch, tmp_path):
         ctl=ctl,
         host=host,
         messages=messages,
-        radar=window.radar,
-        model=window.radar.model,
+        conversations=window.conversations,  # spec B2 12.34: thay `radar`
+        model=window.devices,
         tmp=tmp_path,
     )
     yield ns
@@ -431,10 +436,10 @@ def test_rejected_notice_has_repair_button_that_emits_repair_requested(env):
     assert notice(env) is None, "bấm nút hành động thì dải thông báo ẩn"
 
 
-def test_identity_mismatch_notice_has_unpair_button_that_emits_radar_unpair_requested(env):
-    """mvp mục 8 “Danh tính thiết bị thay đổi”: nút “Hủy ghép đôi” → `radar.unpair_requested(id)`."""
+def test_identity_mismatch_notice_has_unpair_button_that_emits_conversations_unpair_requested(env):
+    """mvp mục 8 “Danh tính thiết bị thay đổi”: nút “Hủy ghép đôi” → `conversations.unpair_requested(id)`."""
     got: list = []
-    env.radar.unpair_requested.connect(lambda i: got.append(i))
+    env.conversations.unpair_requested.connect(lambda i: got.append(i))
     _blocked(env, "identity_mismatch")
     assert env.ctl.view.notice_action_text() == UNPAIR
     _notice_action_button(env, UNPAIR).click()
@@ -714,6 +719,67 @@ def test_attach_sets_receive_dir_for_offer_prompts(env):
     assert printable(str(new_host.options.receive_dir)) in text, "hộp hỏi phải hiện thư mục nhận của host mới"
 
 
+def _offer_box_text(env, key) -> str:
+    from PySide6.QtWidgets import QLabel
+
+    box = env.ctl.offers.box(key)
+    assert box is not None
+    return " ".join(w.text() for w in box.findChildren(QLabel) if w.isVisibleTo(box))
+
+
+def _record_tray(monkeypatch) -> list:
+    """Bóng thoại khay kèm thư mục: [(chữ, folder)]."""
+    from teleport.ui.tray import Tray
+
+    got: list = []
+    monkeypatch.setattr(Tray, "show_message", lambda self, text, folder=None: got.append((text, folder)))
+    return got
+
+
+def test_transfers_set_receive_dir_used_as_tray_folder_fallback(env, monkeypatch):
+    """Spec-b1b 2.5: `set_receive_dir` thay `host.options.receive_dir` làm thư mục của bóng thoại
+    “Đã nhận…” khi không có `FileDone.path`, và đặt thư mục cho hộp hỏi."""
+    from teleport.ui.send import printable
+
+    shown = _record_tray(monkeypatch)
+    new_dir = env.tmp / "doi-sang"
+    env.ctl.set_receive_dir(new_dir)
+    env.ctl.on_started(env.host)
+    env.host.run_calls(FakeNode(devices=[dview()], infos=[]))
+    key = tkey("receive")
+    env.ctl.on_transfer(offer(key))
+    assert printable(str(new_dir)) in _offer_box_text(env, key)
+    env.ctl.on_transfer(finished(key))
+    done = [(t, f) for t, f in shown if t == RECEIVED_ONE.format(name="video.mp4", peer=PEER)]
+    assert done == [(RECEIVED_ONE.format(name="video.mp4", peer=PEER), new_dir)], shown
+
+
+def test_attach_with_saved_choice_has_no_receive_dir_until_set(env, monkeypatch):
+    from teleport.app.node import ReceiveDirChoice
+    from teleport.ui.send import printable
+
+    shown = _record_tray(monkeypatch)
+    host = FakeHost(env.tmp / "nhan-x")
+    host.options = dataclasses.replace(host.options, receive_dir=ReceiveDirChoice.SAVED)
+    env.ctl.attach(host)
+    env.ctl.on_started(host)
+    host.run_calls(FakeNode(devices=[dview()], infos=[]))
+    key = tkey("receive")
+    env.ctl.on_transfer(offer(key))
+    text = _offer_box_text(env, key)
+    assert "Lưu vào" not in text, f"SAVED chưa biết thư mục: không hiện dòng “Lưu vào” ({text!r})"
+    assert "saved" not in text.lower()
+    env.ctl.on_transfer(finished(key))
+    done = [f for t, f in shown if t == RECEIVED_ONE.format(name="video.mp4", peer=PEER)]
+    assert done == [None], shown
+
+    later = env.tmp / "da-biet"
+    env.ctl.set_receive_dir(later)
+    key2 = tkey("receive")
+    env.ctl.on_transfer(offer(key2))
+    assert printable(str(later)) in _offer_box_text(env, key2)
+
+
 def tinfo_changed(key, status: str = "waiting"):
     from teleport.app.transfers import TransferStatusChanged
 
@@ -898,10 +964,10 @@ def test_decide_method_calls_transfers_decide(env):
     assert node.transfers.decided == [(key, True)]
 
 
-def test_radar_send_files_requested_goes_to_request_send(env):
+def test_conversations_send_files_requested_goes_to_request_send(env):
     env.model.reset([dview()])
     paths = files(env)
-    env.radar.send_files_requested.emit(PEER_ID, paths)
+    env.conversations.send_files_requested.emit(PEER_ID, paths)
     assert env.host.sent() == [(PEER_ID, paths)]
 
 
@@ -967,20 +1033,20 @@ def test_files_selected_in_dialog_are_sent_to_device(env, dialogs):
     assert env.host.sent() == [(PEER_ID, paths)]
 
 
-def test_radar_pick_files_requested_opens_dialog_for_that_device(env, dialogs):
+def test_conversations_pick_files_requested_opens_dialog_for_that_device(env, dialogs):
     env.model.reset([dview()])
-    env.radar.pick_files_requested.emit(PEER_ID)
+    env.conversations.pick_files_requested.emit(PEER_ID)
     assert len(dialogs.made) == 1
     paths = files(env, 1)
     dialogs.made[0].filesSelected.emit([str(paths[0])])
     assert env.host.sent() == [(PEER_ID, paths)]
 
 
-def test_drop_on_empty_radar_space_shows_hint(env, ui_helpers):
+def test_drop_on_empty_conversations_space_shows_hint(env, ui_helpers):
     from PySide6.QtCore import QUrl
 
     env.model.reset([dview()])
-    env.radar.drop_files(None, [QUrl.fromLocalFile(str(p)) for p in files(env)])
+    env.conversations.drop_files(None, [QUrl.fromLocalFile(str(p)) for p in files(env)])
     shown = (notice(env) or "") + "\n" + ui_helpers.all_text(env.window)
     assert DROP_HINT in shown
     assert env.host.submits == []
@@ -1090,9 +1156,9 @@ def test_blocked_new_send_repair_button_emits_repair_requested(env):
     assert [v.device_id for v in got] == [PEER_ID]
 
 
-def test_blocked_new_send_unpair_button_emits_radar_unpair_requested(env):
+def test_blocked_new_send_unpair_button_emits_conversations_unpair_requested(env):
     got: list = []
-    env.radar.unpair_requested.connect(lambda i: got.append(i))
+    env.conversations.unpair_requested.connect(lambda i: got.append(i))
     _radar(env)
     _new_send(env)
     _connect_failed(env, "identity_mismatch")
