@@ -3,7 +3,7 @@
 > **Vai trò:** số đo thực tế của các yêu cầu phi chức năng và kết quả kiểm tiêu chí MVP hackathon.
 > **Nguồn duy nhất cho:** định nghĩa từng phép đo, môi trường, kết quả từng lần đo và kết luận so với ngưỡng.
 > **Không chứa:** ngưỡng yêu cầu → [mvp.md](mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](ke_hoach.md) mục 5.1.
-> **Cập nhật:** 2026-10-30
+> **Cập nhật:** 2026-10-31
 
 ## 1. Quy ước
 
@@ -21,7 +21,7 @@
 | mvp N1 | 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged trên cùng máy (mục 3.3) | **ĐẠT trên máy ảo bridged**; chưa đo trên hai máy thật (mục 3.4) |
 | mvp N2 | 2026-10-29/30: đo tay qua giao diện, hai máy Windows thật qua Wi-Fi 2,4 GHz, một file 1,89 GiB (mục 5.4) | **CHƯA ĐỦ DỮ LIỆU**: lần đo tay cho tỉ số khoảng 0,96 nhưng không theo phương pháp mục 5.1 (1 lần Teleport, 2 lần SMB, một cỡ file, bấm giờ tay); lượt đo theo mục 5.1 và mạng dây chưa đo (mục 5.3) |
 | mvp N3 | 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8). 2026-10-28: trước/sau thay đổi ghi trạng thái nối lại bền, 1 GiB và 1000 file nhỏ (mục 4.9) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), 10 GiB qua card mạng giữa hai máy, lúc rảnh của app có giao diện chưa đo (mục 4.4). Sau thay đổi ghi trạng thái nối lại bền (mục 4.9), tiêu chí 1 và 2a vẫn ĐẠT với 1 GiB và 1000 file nhỏ |
-| mvp N4 | — | chưa đo |
+| mvp N4 | 2026-10-31: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, qua proxy TCP trên loopback, file 1 GiB, cắt ở 85 % theo 6 kiểu (mục 7.3) | **CHƯA ĐỦ DỮ LIỆU**: trên loopback Windows phần gửi thừa mỗi gián đoạn lớn nhất 24,31 MiB, ĐẠT ở mọi lần (49/49); theo tiêu chí ở mục 7.1 thì **không đặt** `SO_RCVBUF`/`SO_SNDBUF` trên Windows. Linux (máy ảo), card mạng thật / Wi-Fi và macOS chưa đo (mục 7.4, D5) |
 | mvp N5 | — | chưa đo |
 | mvp N6 | — | chưa đo |
 | mvp N7 | — | chưa đo |
@@ -644,3 +644,121 @@ Tiêu chí H1–H5, cách kiểm và điều kiện đạt (máy, mạng, bản 
 | H5 | — | chưa đo |
 
 Lần đo tay N2 ở mục 5.4 không tính cho H2: không so SHA-256 của file ở hai máy.
+
+## 7. mvp N4: Nối lại" vào cuối file (sau §6; không đánh số lại §6 vì ke_hoach.md trỏ "benchmark.md mục 6").
+3. Đổi dòng "> **Cập nhật:**" ở đầu file thành 2026-10-31.
+-->
+
+### Dòng cho bảng §2
+
+| mvp N4 | 2026-10-31: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, qua proxy TCP trên loopback, file 1 GiB, cắt ở 85 % theo 6 kiểu (mục 7.3) | **CHƯA ĐỦ DỮ LIỆU**: trên loopback Windows phần gửi thừa mỗi gián đoạn lớn nhất 24,31 MiB, ĐẠT ở mọi lần (49/49); theo tiêu chí ở mục 7.1 thì **không đặt** `SO_RCVBUF`/`SO_SNDBUF` trên Windows. Linux (máy ảo), card mạng thật / Wi-Fi và macOS chưa đo (mục 7.4) |
+
+---
+
+## 7. mvp N4: Nối lại
+
+### 7.1. Định nghĩa phép đo
+
+- **Phần gửi thừa của một lượt** = `payload_sent − cỡ file`, với `payload_sent` lấy từ dòng `result` của `teleport send --json` (tức `TransferFinished.payload_sent`; cách đếm và vì sao là cận trên: [architecture.md](architecture.md) mục 5, “Byte payload đã gửi”). Không đếm header khung, TLS hay kết nối điều khiển.
+- **Phần gửi thừa mỗi gián đoạn** = phần gửi thừa của lượt chia cho số lần gián đoạn trong lượt. Mỗi lượt ở đây có đúng một lần gián đoạn, nên hai số bằng nhau.
+- **Vị trí cắt:** khi tổng byte TCP chiều gửi → nhận đi qua proxy (mọi kết nối, gồm TLS và kết nối điều khiển) chạm 85 % cỡ file. Vì phần TLS và khung, vị trí này tương ứng khoảng 84–85 % payload.
+- **So với mvp N4:** “phần chưa nhận” tính theo bitfield bên nhận ([protocol.md](protocol.md) mục 4.3). Phần gửi thừa mỗi gián đoạn phải nằm trong phần cộng thêm của mvp N4.
+- **Tiêu chí chốt bộ đệm socket** (quyết định ghi ở [protocol.md](protocol.md) mục 4.3, đoạn “Giới hạn gửi lại”): lấy giá trị **lớn nhất** của phần gửi thừa mỗi gián đoạn qua mọi lần đo trên một hệ điều hành (gồm cả khối đã nhận mà chưa đánh dấu, không chỉ bộ đệm socket). Lớn nhất ≤ 48 MiB → không đặt `SO_RCVBUF`/`SO_SNDBUF` trên hệ điều hành đó; vượt → đặt theo hệ điều hành.
+- Thống kê theo mục 1. Kết luận từng lần: ĐẠT khi lượt xong (`result: done` ở hai bên, mã thoát `send` = 0, SHA-256 khớp) và phần gửi thừa nằm trong ngưỡng mvp N4.
+
+### 7.2. Phương pháp
+
+Script `n4_bench.py` chạy hai tiến trình con thật, `teleport receive --json --yes --host 127.0.0.1 --port 0` và `teleport send --json --address 127.0.0.1:<cổng proxy>`, cấu hình riêng mỗi lượt (hai danh tính mới, đã tin nhau trong `trusted.json`), không mDNS, không giới hạn tốc độ. Giữa hai bên là proxy `TcpProxy` của `tests/conftest.py` (bộ đệm nhỏ có backpressure, mặc định `SO_RCVBUF`/`SO_SNDBUF` của socket proxy 64 KiB, đoạn 64 KiB), để phần byte nằm trong proxy lúc cắt không làm phình số đo; biến thể “proxy bộ đệm mặc định” bỏ hai lệnh đặt bộ đệm của proxy. Socket của Teleport ở hai đầu luôn dùng mặc định của hệ điều hành (mã đo không đặt bộ đệm).
+
+Proxy tự chặn đúng lúc chạm vị trí cắt (`TcpProxy.block_at`), rồi theo kiểu:
+
+| Kiểu | Làm gì sau khi chặn |
+|---|---|
+| `rst` | RST mọi kết nối ngay, cho chuyển tiếp lại |
+| `block10` / `block60` | chặn 10 / 60 s (không chuyển byte, không đóng gì), rồi cho đi tiếp |
+| `block10rst` | chặn 10 s, RST mọi kết nối, cho chuyển tiếp lại |
+| `kill` | sau 1 s, giết `receive` (TerminateProcess), chạy lại `receive` cùng thư mục nhận, chờ `restored`, đổi đích proxy, RST kết nối cũ, cho chuyển tiếp lại |
+| `killlive` | không chặn trước: script đọc bộ đếm proxy khoảng 1 ms một lần và giết `receive` ngay khi chạm vị trí cắt, trong lúc dữ liệu đang chạy; rồi chặn proxy (giữ kết nối mới), chạy lại `receive` như `kill` |
+
+Hai kiểu `kill`/`killlive` là ca “tắt app nhận” của mvp N4; các kiểu còn lại là ca rớt mạng. File nguồn 1 GiB ngẫu nhiên, dùng lại giữa các lượt; mỗi lượt kiểm SHA-256 file nhận, rồi xóa thư mục tạm của lượt. Thứ tự các kiểu xen kẽ trong từng vòng. Ngoài số đo chính, script ghi: số khối đã `MARK` trong `.state` lúc cắt (đọc độc lập bằng helper `_read_state_file` của `tests/conftest.py`), các `status` của `send`, số kết nối proxy đã nhận, thời gian.
+
+### 7.3. Lần đo 2026-10-31: loopback trên một máy Windows 11
+
+Bốn lượt, giờ UTC 2026-10-30 23:11–23:38: `run-20261030T231150Z` (4 kiểu chính × 5), `run-20261030T232458Z` (`killlive`, `block10rst` × 5), `run-20261030T232931Z` (proxy bộ đệm mặc định: `rst`, `killlive`, `block60` × 3), `run-20261030T233530Z` (`killlive` × 10). Kiểu `killlive` được thêm vào script sau lượt đầu; nhánh `kill` không đổi.
+
+Mã đo: worktree `c0-so-buf`, nhánh `claude/c0-so-buf`, commit `411e2f4` (`main`), `src/` không sửa (`src_dirty: false`). Lệnh chạy bằng `python.exe` của `.venv` ở checkout chính, mã nạp từ `src/` của worktree qua `PYTHONPATH` (đã kiểm `teleport.__file__`).
+
+**Môi trường**
+
+| | |
+|---|---|
+| Hệ điều hành | Windows 11 Pro, bản 10.0.26300 |
+| Python | 3.14.5 (64 bit, qua `.venv`) |
+| Teleport | `__version__` 0.1.0a0, commit `411e2f4d6135898581ef22716c1a6cb9ddac4d0b` |
+| cryptography / zeroconf | 50.0.2 / 0.151.5 (mDNS tắt ở cả hai lệnh vì `--host 127.0.0.1`) |
+| CPU / RAM | Intel Core i7-12800H, 20 luồng / 15,7 GiB, trống 5,5 GiB lúc bắt đầu |
+| Mạng | loopback 127.0.0.1 qua proxy; `SO_RCVBUF`/`SO_SNDBUF` ban đầu của socket TCP mới: 65 536 / 65 536 byte; `netsh int tcp show global`: Receive Window Auto-Tuning Level `normal` |
+| Tải khác | các agent khác chạy `pytest` trên máy này trong lúc đo (thấy ít nhất hai lượt pytest bắt đầu 06:20 và 06:38 giờ máy) |
+
+**Kết quả** (phần gửi thừa mỗi gián đoạn, MiB; 1 gián đoạn mỗi lượt; p95 theo hạng gần nhất)
+
+| Kiểu | Proxy | Hợp lệ / hỏng | Trung vị | p95 | Min | Max | Kết luận |
+|---|---|---|---|---|---|---|---|
+| `rst` | 64 KiB | 5 / 0 | 2,50 | 2,56 | 2,44 | 2,56 | ĐẠT |
+| `block10` | 64 KiB | 5 / 0 | 0,00 | 0,00 | 0,00 | 0,00 | ĐẠT |
+| `block60` | 64 KiB | 5 / 0 | 2,50 | 2,62 | 2,31 | 2,62 | ĐẠT |
+| `block10rst` | 64 KiB | 5 / 0 | 2,19 | 2,44 | 2,12 | 2,44 | ĐẠT |
+| `kill` | 64 KiB | 5 / 0 | 7,25 | 7,62 | 6,75 | 7,62 | ĐẠT |
+| `killlive` | 64 KiB | 15 / 0 | 23,69 | 24,31 | 6,94 | 24,31 | ĐẠT |
+| `rst` | mặc định | 3 / 0 | 2,31 | 2,50 | 1,56 | 2,50 | ĐẠT |
+| `block60` | mặc định | 3 / 0 | 2,69 | 2,81 | 2,44 | 2,81 | ĐẠT |
+| `killlive` | mặc định | 3 / 0 | 24,19 | 24,25 | 23,31 | 24,25 | ĐẠT |
+
+Lớn nhất qua mọi lần: **24,31 MiB** (25 493 504 byte, `killlive`, proxy 64 KiB). Cả 49 lượt xong với `result: done` hai bên, SHA-256 khớp, mã thoát `send` 0, thư mục tạm đã xóa; không lần nào quá hạn hay lỗi đo.
+
+**Phần gửi thừa đến từ đâu** (theo số khối đã `MARK` lúc cắt; khối 1 MiB)
+
+- `block10`: kết nối không đứt (không có `reconnecting`), byte bị giữ trong proxy đi tiếp, không gửi lại gì.
+- `rst`, `block10rst`, `block60`: có `reconnecting`. Trước khi gửi `resume`, bên nhận đánh dấu các khối đã ghi mà chưa đánh dấu ([protocol.md](protocol.md) mục 4.3), nên phần gửi thừa chỉ còn dữ liệu đang trên đường lúc đứt (bộ đệm socket hai đầu, proxy, khối đang đọc dở): 1,56–2,81 MiB. Với `block60`, `.state` lúc hết chặn đã có 869 khối, tức bên nhận đã tự đánh dấu phần còn lại trong lúc chặn.
+- `kill`, `killlive`: phần đã nhận mà chưa `MARK` mất theo tiến trình. Khi lần `MARK` gần nhất trước lúc giết là khối 848 (vị trí cắt khoảng 870,4–871,8 MiB byte TCP), phần gửi thừa 23,0–24,31 MiB; khi là khối 864 thì 6,75–8,38 MiB. Phần lớn nhất vì vậy là các khối chưa đánh dấu (cận trên ở [protocol.md](protocol.md) mục 4.3), phần do bộ đệm socket cộng proxy chỉ khoảng 1,5–2,8 MiB như ở các kiểu rớt mạng.
+- Proxy bộ đệm mặc định không làm số đo lớn hơn rõ so với proxy 64 KiB (lớn nhất 2,81 so với 2,62 MiB ở các kiểu rớt mạng; 24,25 so với 24,31 MiB ở `killlive`).
+
+**Kết luận**
+
+- Trên loopback Windows: mọi lần nằm trong ngưỡng mvp N4 (**ĐẠT**, 49/49).
+- Tiêu chí chốt bộ đệm (mục 7.1): lớn nhất 24,31 MiB ≤ 48 MiB → **không đặt** `SO_RCVBUF`/`SO_SNDBUF` trên Windows (theo số đo loopback). Linux chưa đo (mục 7.4); quyết định cho Linux và lý do: [protocol.md](protocol.md) mục 4.3.
+
+**Giới hạn của lần đo này**
+
+- Loopback: RTT gần bằng 0, nên tự điều chỉnh bộ đệm của Windows (theo băng thông × RTT) có thể giữ bộ đệm nhỏ hơn khi qua card mạng thật; phần do bộ đệm socket trên mạng thật có thể lớn hơn số ở đây. Card mạng thật và Wi-Fi: D5.
+- Có thêm một proxy ở giữa; proxy giữ tối đa vài đoạn 64 KiB và bộ đệm socket của chính nó, làm số đo lớn hơn một chút chứ không nhỏ hơn.
+- Vị trí cắt tính theo byte TCP qua proxy, không theo payload; `killlive` giết theo bộ đếm đọc khoảng 1 ms một lần, nên vị trí giết lệch tới khoảng 1,4 MiB sau mốc.
+- Chỉ Windows 11 ↔ Windows 11 trên cùng một máy, Python 3.14, một cỡ file (1 GiB); có tải của các agent khác (thông lượng không phải đối tượng đo).
+
+### 7.4. Việc còn lại
+
+- **Linux: chưa đo.** Máy ảo `Teleport-N1` (mục 3.3) đang tắt; phiên đo không có kênh chạy lệnh trong máy ảo (agent của mục 3.5 chỉ có lệnh cho N1, không có `guestcontrol` hay SSH đã cấu hình), Teleport trong máy ảo còn ở commit `efa9d5b` và phải cập nhật lên commit cần đo (cần Internet trong máy ảo), và chiều máy ảo gửi → host nhận cần mở tường lửa của host bằng quyền Administrator. Cần người dùng chạy theo mục 7.5; dời vào đợt đo D5 ([ke_hoach.md](ke_hoach.md) mục 5.4).
+- Card mạng thật, Wi-Fi (tắt Wi-Fi giữa lượt rồi bật lại) và macOS: **chưa đo**, thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D5).
+- Nhiều file trong một lượt, và nhiều lần gián đoạn trong một lượt: **chưa đo**.
+
+### 7.5. Cách đo lại
+
+Script nằm ngoài repo (không commit). Chạy bằng `python.exe` của `.venv`, với `PYTHONPATH` trỏ `src` của mã cần đo; thư mục tạm của mỗi lượt nằm trong `%TEMP%` (đường dẫn dài hơn thì `receive` báo đường dẫn quá dài), file nguồn ở `%TEMP%\teleport-n4-data` (xóa khi xong).
+
+```
+# loopback, trên một máy (PowerShell)
+$env:PYTHONIOENCODING = "utf-8"
+& $PY n4_bench.py --repo <repo> --kinds rst,block10,block60,kill --repeat 5 --size-mib 1024 --out results
+& $PY n4_bench.py --repo <repo> --kinds killlive,block10rst --repeat 5 --size-mib 1024 --out results
+& $PY n4_bench.py --repo <repo> --kinds rst,killlive,block60 --repeat 3 --size-mib 1024 --proxy-buf os --out results
+& $PY n4_bench.py --summarize (Get-ChildItem results\run-*.jsonl).FullName
+```
+
+Linux, host Windows ↔ máy ảo Ubuntu bridged, cắt bằng `VBoxManage controlvm Teleport-N1 setlinkstate1 off`, chờ 10 / 60 s, `on` (script `n4_vm_host.py`, chạy trên host; không có proxy, hai đầu là socket thật của Windows và Linux):
+
+1. Trong máy ảo: cập nhật Teleport lên đúng commit cần đo (`git fetch`, `git checkout <commit>`, `.venv/bin/pip install -e .`); `sudo ufw status` là *active* thì mở cổng 47474 chỉ cho IP host.
+2. Ghép đôi một lần: máy ảo `teleport --config-dir ~/n4/R listen --port 47474`; host `teleport --config-dir <S> pair <VM_IP>:47474`; xác nhận mã hai bên.
+3. Chiều host gửi → máy ảo nhận: máy ảo `teleport --config-dir ~/n4/R receive --json --yes --dir ~/n4/nhan --port 47474`, và xóa file đã nhận xong giữa các lượt (`rm ~/n4/nhan/*.bin`). Host:
+   `& $PY n4_vm_host.py --vm Teleport-N1 --config-dir <S> --to <tên máy ảo> --address <VM_IP>:47474 --src <file 1 GiB> --kinds link10,link60 --repeat 3`
+4. Chiều máy ảo gửi → host nhận (đo `SO_SNDBUF` của Linux): mở tường lửa host tạm cho IP máy ảo (Administrator, như `n1_firewall.ps1` ở mục 3.5), rồi host `& $PY n4_vm_host.py --role recv-host --vm Teleport-N1 --config-dir <S> --dir <thư mục nhận> --port 47474 --kinds link10,link60 --repeat 3`; mỗi lượt chạy `teleport --config-dir ~/n4/R send --json <file> --to <tên host> --address <HOST_IP>:47474` trong máy ảo và dán dòng `result` của nó khi script hỏi.
+5. Dọn: `VBoxManage controlvm Teleport-N1 setlinkstate1 on` (script tự bật lại khi lỗi), đóng tường lửa, xóa file nhận.
