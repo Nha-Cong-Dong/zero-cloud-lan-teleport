@@ -581,12 +581,8 @@ def test_suspended_keeps_progress_bar(view):
 # =================================================================================================
 
 
-def test_radar_and_transfers_columns_stretch_one_to_one(window):
-    layout = window.body.layout()
-    radar_i = layout.indexOf(window.radar)
-    area_i = layout.indexOf(window.transfers_area)
-    assert radar_i >= 0 and area_i >= 0
-    assert layout.stretch(radar_i) == layout.stretch(area_i) > 0
+# B3.4 (radar : lượt = 1:1) đã bỏ: spec B1 (mục 8a) đổi sang cột trái cố định 288/248 px; bề ngang
+# mới kiểm ở `test_home_layout.py` (L2).
 
 
 def test_transfers_empty_label_centered_both_ways(view, qtbot):

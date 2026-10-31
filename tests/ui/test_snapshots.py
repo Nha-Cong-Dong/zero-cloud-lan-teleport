@@ -1,7 +1,9 @@
-"""Chụp ảnh các màn chính ở sáng/tối, 980x660 và 720x460 (spec A3 mục 2.6, S1).
+"""Chụp ảnh các màn chính ở sáng/tối, 980x660 và 720x460 (spec A3 mục 2.6, S1; spec B1 mục 7).
 
-Trên CI (offscreen) đây là kiểm tra khói: dựng được mọi cảnh ở cả hai chế độ, ảnh đúng cỡ, ảnh sáng
-khác ảnh tối, góc cửa sổ của cảnh `MainWindow` là màu `surface` của chế độ đó.
+Trên CI (offscreen) đây là kiểm tra khói: dựng được mọi cảnh ở cả hai chế độ, ảnh đúng cỡ, cửa sổ
+không phình quá cỡ đã đặt, ảnh sáng khác ảnh tối, và điểm (4,4) của cảnh có token góc đúng màu token
+đó ở chế độ đó (`surface` cho khối căn giữa và trang, `sidebar` cho khung hai cột vì cột trái nằm ở
+góc).
 
 Ảnh để duyệt: đặt `TELEPORT_UI_SNAPSHOT_DIR` thì mỗi cảnh ghi
 `<cảnh>_<light|dark>_<w>x<h>.png` vào thư mục đó (tạo nếu chưa có); không đặt thì không ghi gì. Chụp
@@ -13,12 +15,15 @@ nên biến môi trường thắng)::
 
 Ảnh không commit vào repo: đính vào PR. Các PR của đợt B thêm cảnh của mình vào `SCENES`.
 
-Cảnh: `welcome`, `running` (một địa chỉ, radar rỗng), `error`, `widgets` (trang mẫu mọi thành phần
-của `ui/widgets.py` trong `QScrollArea`), `page` (RUNNING, mở một trang có `PageHeader`).
+Cảnh: `welcome`, `starting`, `running` (một địa chỉ, radar rỗng → “Ghép đôi máy đầu tiên”),
+`running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo), `error`, `widgets` (trang
+mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`), `page` (RUNNING, mở một trang có
+`PageHeader`). Tổng 7 cảnh × 2 chế độ × 2 cỡ = 28 ảnh.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -66,9 +71,92 @@ def scene_welcome(qtbot) -> QWidget:
     return window
 
 
+def scene_starting(qtbot) -> QWidget:
+    window = _main_window(qtbot)
+    window.show_starting()
+    return window
+
+
 def scene_running(qtbot) -> QWidget:
     window = _main_window(qtbot)
-    window.show_running("Laptop-Minh", Path.home() / "Downloads" / "Teleport")
+    window.show_running("Laptop-Minh", Path("C:/Users/Minh/Downloads/Teleport"))
+    window.set_addresses(["192.168.1.15"], None)
+    return window
+
+
+def _device(label: str, *, paired: bool, online: bool, connected: bool):
+    from teleport.app.devices import DeviceView
+
+    return DeviceView(
+        device_id=hashlib.sha256(label.encode()).hexdigest()[:32],
+        name=label,
+        os="windows" if online else None,
+        paired=paired,
+        online=online,
+        connected=connected,
+        addresses=("192.168.1.20",) if online else (),
+        port=47474 if online else None,
+    )
+
+
+def _transfer_info(
+    device_id: str, direction: str, transfer_id: str, status: str, name: str, size: int, done: int
+):
+    from teleport.core.messages import FileEntry
+    from teleport.core.transfer import Direction, TransferInfo, TransferKey, TransferStatus
+
+    return TransferInfo(
+        key=TransferKey(device_id, Direction(direction), transfer_id),
+        status=TransferStatus(status),
+        files=(FileEntry(name, size, 1_700_000_000_000),),
+        names=(name,),
+        file_index=0,
+        done_bytes=done,
+        total_bytes=size,
+        unsynced_bytes=0,
+    )
+
+
+def scene_running_full(qtbot) -> QWidget:
+    """RUNNING đầy đủ: ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo (spec B1 mục 7)."""
+    from teleport.app.transfers import (
+        FileDone,
+        TransferFinished,
+        TransferProgress,
+        TransferResult,
+        TransferStatusChanged,
+    )
+    from teleport.ui.transfers_view import TransfersView
+
+    window = _main_window(qtbot)
+    nha = _device("PC-Nha", paired=True, online=True, connected=True)
+    lan = _device("MacBook-Lan", paired=True, online=False, connected=False)
+    guest = _device("PC-Khach", paired=False, online=True, connected=False)
+    window.radar.model.reset([nha, lan, guest])
+
+    view = TransfersView(window.transfers_area)
+    window.transfers_area.layout().addWidget(view)
+    view.set_device_names({nha.device_id: nha.name, lan.device_id: lan.name})
+    size = 18 * 2**30
+    sending = _transfer_info(
+        nha.device_id, "send", "a" * 32, "transferring", "phim-4k.mkv", size, size * 62 // 100
+    )
+    view.handle(TransferStatusChanged(sending))
+    view.handle(TransferProgress(sending, 94 * 2**20, 60.0, shown_bytes=sending.done_bytes, idle_seconds=0.0))
+    small = 340 * 2**20
+    received = _transfer_info(lan.device_id, "receive", "b" * 32, "verifying", "anh-cuoi.zip", small, small)
+    view.handle(TransferStatusChanged(received))
+    folder = Path("C:/Users/Minh/Downloads/Teleport")
+    view.handle(FileDone(received.key, 0, "anh-cuoi.zip", folder / "anh-cuoi.zip"))
+    view.handle(
+        TransferFinished(
+            info=received, result=TransferResult.DONE, by_peer=False, reason=None, file_index=0, reject=None
+        )
+    )
+    view.show_notice("Đã ghép đôi với PC-Nha.")
+    window.set_transfer_summary(view.has_content(), view.active_count())
+
+    window.show_running("Laptop-Minh", folder)
     window.set_addresses(["192.168.1.15"], None)
     return window
 
@@ -227,13 +315,15 @@ def scene_page(qtbot) -> QWidget:
     return window
 
 
-SCENES: dict[str, tuple[Callable[..., QWidget], bool]] = {
-    # tên cảnh: (hàm dựng, là cửa sổ chính)
-    "welcome": (scene_welcome, True),
-    "running": (scene_running, True),
-    "error": (scene_error, True),
-    "widgets": (scene_widgets, False),
-    "page": (scene_page, True),
+SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
+    # tên cảnh: (hàm dựng, là cửa sổ chính, token mà điểm (4,4) phải bằng; None: không kiểm góc)
+    "welcome": (scene_welcome, True, "surface"),
+    "starting": (scene_starting, True, "surface"),
+    "running": (scene_running, True, "sidebar"),
+    "running_full": (scene_running_full, True, "sidebar"),
+    "error": (scene_error, True, "surface"),
+    "widgets": (scene_widgets, False, None),
+    "page": (scene_page, True, "surface"),
 }
 
 
@@ -262,7 +352,7 @@ def _save(image: QImage, scene: str, mode: str, width: int, height: int) -> None
 @pytest.mark.parametrize(("width", "height"), SIZES, ids=[f"{w}x{h}" for w, h in SIZES])
 @pytest.mark.parametrize("scene", list(SCENES))
 def test_snapshot(qtbot, ui_theme, scene, width, height):
-    build, is_window = SCENES[scene]
+    build, is_window, corner_token = SCENES[scene]
     images: dict[str, QImage] = {}
     for dark, mode in ((False, "light"), (True, "dark")):
         tokens = ui_theme(dark)
@@ -271,8 +361,11 @@ def test_snapshot(qtbot, ui_theme, scene, width, height):
         dpr = widget.devicePixelRatioF()
         assert (image.width(), image.height()) == (round(width * dpr), round(height * dpr)), mode
         if is_window:
+            assert (widget.width(), widget.height()) == (width, height), (mode, widget.size())
+        if corner_token is not None:
             corner = QColor(image.pixel(round(4 * dpr), round(4 * dpr)))
-            assert corner.name() == tokens.surface.name(), (mode, corner.name())
+            expected = getattr(tokens, corner_token)
+            assert corner.name() == expected.name(), (mode, corner_token, corner.name())
         _save(image, scene, mode, width, height)
         images[mode] = image
     assert images["light"] != images["dark"]

@@ -77,7 +77,9 @@ vẫn sống thì ghi log, `logging.shutdown()`, `os._exit(1)`.
 
 **Bóng thoại khay**: bấm vào bóng thoại (`Tray.message_clicked(folder)`) có thư mục (“Đã nhận…”)
 → mở thư mục bằng seam cấp module `open_url` (mặc định `QDesktopServices.openUrl`, đọc lúc gọi);
-không có thư mục → đưa cửa sổ chính và mọi hộp đang hiện của app lên trước. Bóng thoại “có yêu cầu
+không có thư mục → đưa cửa sổ chính và mọi hộp đang hiện của app lên trước. “Mở thư mục” ở chân
+“Lưu vào” của cửa sổ chính (`open_receive_dir_requested`) mở thư mục nhận theo cùng cách; mở không
+được thì chỉ ghi log, không hiện hộp nào. Bóng thoại “có yêu cầu
 ghép đôi” (qua `PairingController(window_visible=...)`) và “có file đang chờ” (qua
 `TransfersController(app_active=...)`) chỉ hiện khi app không được dùng (`GuiApp._app_active()`:
 không cửa sổ nào của app đang active).
@@ -426,6 +428,7 @@ class GuiApp(QObject):
         self.window.start_requested.connect(self._on_start_requested)
         self.window.quit_requested.connect(self.request_quit)
         self.window.hidden_to_tray.connect(self._on_hidden_to_tray)
+        self.window.open_receive_dir_requested.connect(self._on_open_receive_dir)
         self.tray.open_requested.connect(self.window.bring_to_front)
         self.tray.quit_requested.connect(self.request_quit)
         self.tray.message_clicked.connect(self._on_message_clicked)
@@ -659,6 +662,13 @@ class GuiApp(QObject):
             if isinstance(widget, QDialog) and widget.isVisible():
                 widget.raise_()
                 widget.activateWindow()
+
+    def _on_open_receive_dir(self, path: object) -> None:
+        """“Mở thư mục” ở chân “Lưu vào”: mở thư mục nhận bằng ứng dụng mặc định; lỗi chỉ ghi log."""
+        if self._quitting or not isinstance(path, Path):
+            return
+        if open_url(QUrl.fromLocalFile(str(path))) is False:
+            log.warning("không mở được thư mục nhận")
 
     def _setup_done(self) -> bool:
         try:
