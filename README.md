@@ -235,7 +235,7 @@ Nếu PowerShell chặn `Activate.ps1`, chạy `Set-ExecutionPolicy -Scope Curre
 | `teleport listen` | Chờ ghép đôi: hiện mã 6 số, hỏi xác nhận |
 | `teleport pair <tên \| tiền tố mã \| ip[:cổng]>` | Ghép đôi với một máy |
 | `teleport unpair <thiết bị>` | Hủy ghép đôi (khi không có node nào — `listen`, `receive`, `send` — đang chạy) |
-| `teleport receive [--dir <thư mục>] [--yes]` | Chờ nhận file từ các máy đã ghép đôi, hỏi `[c/k]` mỗi lượt (`--yes`: tự nhận); mặc định lưu vào `Teleport` trong thư mục Tải về; Ctrl+C tạm dừng lượt đang nhận, chạy lại để nhận tiếp |
+| `teleport receive [--dir <thư mục>] [--yes]` | Chờ nhận file từ các máy đã ghép đôi, hỏi `[c/k]` mỗi lượt (`--yes`: tự nhận); mặc định lưu vào thư mục nhận đã lưu trong cài đặt (giao diện), chưa có thì `Teleport` trong thư mục Tải về; Ctrl+C tạm dừng lượt đang nhận, chạy lại để nhận tiếp |
 | `teleport send <file...> --to <thiết bị> [--address ip[:cổng]] [--limit-rate 20M]` | Gửi file tới một máy đã ghép đôi (máy đó chạy `teleport receive`); Ctrl+C để hủy; mất kết nối thì tự nối lại, chờ tới 24 giờ |
 | `teleport --version` | Xem phiên bản |
 | `teleport-gui [--config-dir <thư mục>] [--background]` | Mở giao diện (hoặc `python -m teleport.ui`); mỗi thư mục cấu hình một bản, `--background` mở thẳng xuống khay |

@@ -115,6 +115,7 @@ from teleport.app.node import (
     MdnsOptions,
     Node,
     NodeEvent,
+    ReceiveDirChoice,
     ReceiveDirUnavailable,
     find_trusted,
     scan_devices,
@@ -2281,6 +2282,7 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
         return 1
     else:
         output.text(f"Đang tìm “{name}” trong mạng…")
+    rate = node.transfers.rate_limit  # không có `--limit-rate`: giới hạn đã lưu trong cài đặt
     if rate is not None:
         output.text(f"Giới hạn tốc độ gửi: {format_size(rate, trim=True)}/s.")
     output.event(
@@ -2652,7 +2654,10 @@ async def _receive_main(
         return 2
     auto_accept = bool(getattr(args, "yes", False))
     raw_dir = getattr(args, "dir", None)
-    receive_dir = Path(os.path.abspath(os.path.expanduser(raw_dir))) if raw_dir else default_receive_dir()
+    # Không có `--dir`: thư mục nhận đã lưu (giao diện), chưa có thì mặc định (QN1).
+    receive_dir: Path | ReceiveDirChoice = (
+        Path(os.path.abspath(os.path.expanduser(raw_dir))) if raw_dir else ReceiveDirChoice.SAVED
+    )
     mdns = _mdns_options(args, advertise=True)
     node = Node(
         _config(args),
@@ -2671,10 +2676,18 @@ async def _receive_main(
     code = await _start_transfer_node(node, output)
     if code is not None:
         return code
+    error = node.receive_dir_error
+    root = node.transfers.receive_dir
+    if error is not None or root is None:
+        # Thư mục đã lưu không mở được: node vẫn chạy được, nhưng `receive` chỉ có việc nhận.
+        if error is None:  # không xảy ra: có thư mục nhận hoặc có lỗi
+            error = ReceiveDirUnavailable(default_receive_dir())
+        message = receive_dir_error_message(error)
+        output.error("receive_dir_error", message[0], extra=message[1:], path=str(error.path))
+        return 1
     session.started = True  # cùng bước với lúc `start` trả về (không `await` xen giữa)
     addresses = await node.local_addresses()
     port = node.port
-    root = node.transfers.receive_dir or receive_dir
     discovery_error = node.discovery_error
     output.event(
         "receiving",
@@ -2836,7 +2849,9 @@ def _port_type(text: str) -> int:
 
 def _add_node_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="in sự kiện dạng JSON Lines")
-    parser.add_argument("--name", help="tên thiết bị cho lần chạy này (mặc định: tên máy)")
+    parser.add_argument(
+        "--name", help="tên thiết bị cho lần chạy này (mặc định: tên đã lưu, chưa có thì tên máy)"
+    )
     # Ẩn: chỉ để test bind 127.0.0.1 và cổng 0 (tránh hộp thoại tường lửa Windows).
     parser.add_argument("--host", default=_ANY_HOST, help=argparse.SUPPRESS)
     parser.add_argument("--port", type=_port_type, default=None, help=argparse.SUPPRESS)
@@ -2918,14 +2933,22 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument(
         "--limit-rate",
         metavar="<tốc độ>",
-        help="giới hạn tốc độ gửi (byte/giây, hệ nhị phân), ví dụ 20M hoặc 512K; tối thiểu 64K",
+        help=(
+            "giới hạn tốc độ gửi (byte/giây, hệ nhị phân), ví dụ 20M hoặc 512K; tối thiểu 64K "
+            "(mặc định: theo cài đặt)"
+        ),
     )
     _add_node_options(send)
     send.set_defaults(handler=cmd_send)
 
     receive = sub.add_parser("receive", help="nhận file từ các thiết bị đã ghép đôi")
     receive.add_argument(
-        "--dir", metavar="<thư mục>", help="thư mục lưu file nhận (mặc định: Teleport trong thư mục Tải về)"
+        "--dir",
+        metavar="<thư mục>",
+        help=(
+            "thư mục lưu file nhận (mặc định: thư mục đã lưu trong cài đặt, chưa có thì Teleport "
+            "trong thư mục Tải về)"
+        ),
     )
     receive.add_argument(
         "--yes", action="store_true", help="tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi"

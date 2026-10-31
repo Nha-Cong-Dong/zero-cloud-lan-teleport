@@ -3595,3 +3595,55 @@ async def test_pong_flush_and_close_share_one_close_timeout(fast, monkeypatch, l
         gate.open()
         await cancel_wait(*(t for t in (task, app_send) if t is not None))
         sock.close()
+
+
+# =================================================================================================
+# C1 (spec-dot-c mục 1.2.2): `Listener.set_hello` (máy này đổi tên lúc chạy)
+# =================================================================================================
+
+
+@pytest.mark.integration
+async def test_listener_set_hello_new_connections_get_new_name(fast, listener_factory, ids):
+    """Kết nối mở sau `set_hello` nhận `hello` mới; kết nối đã mở giữ `hello` đã gửi."""
+    h = await listener_factory(ids.server, trusted=[ids.b], name="Ten-Cu")
+    old = await b_control(h, ids)
+    try:
+        assert old.peer.hello.name == "Ten-Cu"
+        new_hello = hello_of(ids.server, "Ten-Moi")
+        assert h.listener.set_hello(new_hello) is None
+        pairing = await anon_pairing(h, ids)
+        try:
+            assert pairing.peer.hello == new_hello
+        finally:
+            await pairing.close()
+        control = await b_control(h, ids)
+        try:
+            assert control.peer.hello == new_hello
+        finally:
+            await control.close()
+        assert old.peer.hello.name == "Ten-Cu"
+        assert h.listener.port == h.port  # cổng không đổi
+    finally:
+        await old.close()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["thiet-bi-khac", "giao-thuc-khac", "khong-phai-hello"],
+)
+@pytest.mark.integration
+async def test_set_hello_rejects_other_device_or_protocol(fast, listener_factory, ids, bad):
+    """Kiểm như `__init__`: sai thì `ValueError` và vẫn giữ `hello` cũ cho kết nối sau."""
+    h = await listener_factory(ids.server, name="Giu-Nguyen")
+    value = {
+        "thiet-bi-khac": hello_of(ids.x, "Ke-Gia"),
+        "giao-thuc-khac": hello_of(ids.server, "Ke-Gia", protocol=PROTOCOL_VERSION + 1),
+        "khong-phai-hello": {"type": "hello", "name": "Ke-Gia"},
+    }[bad]
+    with pytest.raises(ValueError):
+        h.listener.set_hello(value)
+    conn = await anon_pairing(h, ids)
+    try:
+        assert conn.peer.hello.name == "Giu-Nguyen"
+    finally:
+        await conn.close()

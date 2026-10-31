@@ -38,6 +38,12 @@ theo hàm này). Mỗi instance mDNS chỉ được chờ đóng tối đa `MDNS
 và hủy mọi lượt truyền với nó (không có `await` xen giữa), rồi đóng kết nối đó. Kết nối
 (vào hay ra) được đăng ký trước mọi `await`. Ghi `trusted.json` / `settings.json` chạy
 đồng bộ trên event loop: file nhỏ, và nhờ vậy trạng thái trong RAM đổi cùng lúc với file.
+
+Cài đặt (`app.settings`, đọc một lần lúc `start`): tên, thư mục nhận (`ReceiveDirChoice.SAVED`),
+giới hạn tốc độ, ngưỡng dọn tạm, cài đặt theo thiết bị ("Hỏi trước khi nhận") và cài đặt của
+giao diện; đổi lúc chạy bằng các setter (`set_name`, `set_receive_dir`…), ghi file trước rồi mới
+đổi RAM. Cài đặt theo thiết bị chỉ có hiệu lực với thiết bị đang tin cậy; `unpair`,
+`unpair_offline` và ghép đôi (kể cả ghép đôi lại) xóa mục của thiết bị đó.
 """
 
 from __future__ import annotations
@@ -57,18 +63,20 @@ import ssl
 import time
 from collections.abc import Callable, Coroutine, Iterable, Sequence
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Final, Self
 
 import teleport
+from teleport import paths
 from teleport.app import pairing as app_pairing
 from teleport.app import storage
 from teleport.app import transfers as app_transfers
 from teleport.app.devices import DeviceNotFound, DeviceRegistry, DeviceView, resolve_trusted
 from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt, PairingService
-from teleport.app.settings import Settings
-from teleport.app.transfers import TransferManager, TransferUpdate
+from teleport.app.settings import DeviceSettings, Settings, SettingsSaveError
+from teleport.app.transfers import ReceiveDirBusy, TransferManager, TransferUpdate
 from teleport.core.discovery import (
     PROBE_INTERVAL,
     RESOLVE_TIMEOUT,
@@ -152,6 +160,21 @@ _CONNECT_RESULTS: tuple[tuple[type[ConnectError], ConnectResult], ...] = (
 )
 
 log = logging.getLogger(__name__)
+
+
+class ReceiveDirChoice(Enum):
+    """Giá trị đặc biệt của `Node(receive_dir=...)`."""
+
+    # Thư mục nhận đã lưu (`settings.receive_dir`); chưa lưu thì `paths.default_receive_dir()`.
+    # Không mở được thì node vẫn chạy mà không nhận file (`Node.receive_dir_error`).
+    SAVED = "saved"
+
+
+class _Unset(Enum):
+    UNSET = "unset"
+
+
+_UNSET: Final = _Unset.UNSET  # `set_ui_preferences`: trường không đổi
 
 
 def device_os() -> str:
@@ -301,7 +324,7 @@ class ScanResult:
     """Kết quả `scan_devices` (`teleport list`)."""
 
     device_id: str  # máy này
-    name: str  # default_device_name(identity)
+    name: str  # Settings.load().name or default_device_name(identity)
     port: int  # Settings.load().port or DEFAULT_PORT
     devices: tuple[DeviceView, ...]  # thấy qua mDNS + thiết bị tin cậy không thấy; connected luôn False
 
@@ -358,7 +381,9 @@ def unpair_offline(config_dir: Path, query: str, *, lock_timeout: float | None =
     `query` là tên hoặc tiền tố mã thiết bị (`resolve_trusted`). Thư mục cấu hình chưa
     có → DeviceNotFound ngay, không tạo gì. Lỗi bay ra nguyên trạng: NodeLockedError
     (đang có node chạy), TrustStoreError, DeviceNotFound, AmbiguousDevice, OSError
-    (không tạo/khóa được, ví dụ đường dẫn là một file).
+    (không tạo/khóa được, ví dụ đường dẫn là một file). Xóa xong, vẫn giữ khóa, bỏ mục cài
+    đặt theo thiết bị của máy đó trong `settings.json` (nếu có); không ghi được thì chỉ WARNING
+    (mục đó không có hiệu lực vì máy không còn tin cậy, và bị bỏ ở lần ghi sau).
     """
     config_dir = Path(config_dir)
     if not config_dir.exists():
@@ -368,7 +393,15 @@ def unpair_offline(config_dir: Path, query: str, *, lock_timeout: float | None =
     try:
         store = TrustStore.load(config_dir)
         device = resolve_trusted(query, store.devices())
-        return store.remove(device.device_id)
+        removed = store.remove(device.device_id)
+        settings = Settings.load(config_dir)
+        if removed.device_id in settings.devices:
+            ids = [d.device_id for d in store.devices()]
+            try:
+                settings.with_device(removed.device_id, None).pruned(ids).save(config_dir)
+            except (OSError, ValueError, TypeError, RecursionError) as e:
+                log.warning("không xóa được cài đặt theo thiết bị trong settings.json (%s)", type(e).__name__)
+        return removed
     finally:
         lock.release()
 
@@ -427,7 +460,7 @@ async def scan_devices(
         registry.seen(device)
     return ScanResult(
         device_id=identity.device_id,
-        name=default_device_name(identity),
+        name=settings.name or default_device_name(identity),
         port=settings.port or DEFAULT_PORT,
         devices=registry.views(),
     )
@@ -454,14 +487,17 @@ class Node:
         auto_connect: bool = True,
         auto_connect_to: str | None = None,
         on_event: Callable[[NodeEvent], None] | None = None,
-        receive_dir: str | os.PathLike[str] | None = None,
+        receive_dir: str | os.PathLike[str] | ReceiveDirChoice | None = None,
         auto_accept: bool = False,
         rate_limit: int | None = None,
         on_transfer_event: Callable[[TransferUpdate], None] | None = None,
+        save_args: bool = False,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
 
-        `name=None`: hostname. `port=None`: cổng đã lưu (hoặc 47474), bận thì để hệ điều
+        Cài đặt (`settings.json`) đọc một lần lúc `start()`. `name=None`: tên đã lưu, chưa có thì
+        hostname; `name` khác None chỉ dùng cho lần chạy này (không lưu, trừ `save_args`).
+        `port=None`: cổng đã lưu (hoặc 47474), bận thì để hệ điều
         hành chọn và lưu lại; `port` là số: đúng cổng đó, không dự phòng, không lưu.
         `host` được kiểm lúc `start()`. `mdns=None`: không dùng mDNS; khác None mà không
         phải `MdnsOptions` → TypeError. `auto_connect`: tự mở và giữ kết nối điều khiển
@@ -473,13 +509,22 @@ class Node:
         khi đó `accept_pairing=True` → ValueError.
 
         Truyền file (`app.transfers`): `receive_dir=None` → không nhận file (`offer` nhận
-        `reject{not_receiving}`); khác None → mở lúc `start()` (tạo nếu chưa có). Có
+        `reject{not_receiving}`); đường dẫn → mở lúc `start()` (tạo nếu chưa có), không mở
+        được thì `start` thất bại; `ReceiveDirChoice.SAVED` → thư mục đã lưu (chưa lưu thì
+        `paths.default_receive_dir()`), không mở được thì node vẫn chạy mà không nhận file
+        (`receive_dir_error`, đổi bằng `set_receive_dir`). Có
         `receive_dir` mà không tự nhận (`auto_accept=False`) và không có `on_transfer_event`
         để hỏi người dùng → ValueError. `auto_accept` không phải bool → ValueError.
-        `rate_limit`: None hoặc số nguyên ≥ `transfers.MIN_RATE_LIMIT` byte/giây, sai →
+        `rate_limit`: None (giới hạn đã lưu, chưa có thì không giới hạn) hoặc số nguyên ≥
+        `transfers.MIN_RATE_LIMIT` byte/giây chỉ cho lần chạy này (không lưu), sai →
         ValueError. `on_transfer_event` nhận `TransferUpdate`, gọi đồng bộ trên loop; raise
         thì chỉ ghi log. `receive_dir` không phải đường dẫn dạng chuỗi, `on_transfer_event`
         không gọi được → TypeError.
+
+        `save_args` (lần chạy đầu của giao diện): `start()` lưu `name` (nếu có) trước khi dựng
+        `hello`, và lưu `receive_dir` (nếu là đường dẫn) ngay sau khi mở được, trước khi mở cổng
+        và quảng bá; ghi lỗi thì `start` thất bại với `SettingsSaveError` (không quảng bá một tên
+        người dùng chưa chọn). Không phải bool → ValueError.
         """
         if name is not None:
             validate_device_name(name)
@@ -498,7 +543,8 @@ class Node:
             if not auto_connect:
                 raise ValueError("auto_connect_to cần auto_connect=True")
         receive_path: Path | None = None
-        if receive_dir is not None:
+        receive_saved = isinstance(receive_dir, ReceiveDirChoice)  # chỉ có SAVED
+        if receive_dir is not None and not isinstance(receive_dir, ReceiveDirChoice):
             raw = os.fspath(receive_dir)  # không phải đường dẫn → TypeError
             if not isinstance(raw, str):
                 raise TypeError("receive_dir phải là đường dẫn dạng chuỗi")
@@ -510,8 +556,11 @@ class Node:
             raise ValueError(f"rate_limit phải là None hoặc số nguyên ≥ {minimum} (byte/giây)")
         if on_transfer_event is not None and not callable(on_transfer_event):
             raise TypeError("on_transfer_event phải là hàm")
-        if receive_path is not None and not auto_accept and on_transfer_event is None:
+        has_dir = receive_path is not None or receive_saved
+        if has_dir and not auto_accept and on_transfer_event is None:
             raise ValueError("receive_dir cần auto_accept=True hoặc on_transfer_event để hỏi người dùng")
+        if type(save_args) is not bool:
+            raise ValueError("save_args phải là bool")
         self._config_dir = Path(config_dir)
         self._name_arg = name
         self._port_arg = port
@@ -524,9 +573,14 @@ class Node:
         self._auto_connect_to = auto_connect_to  # None: mọi thiết bị tin cậy
         self._on_event = on_event or _ignore
         self._receive_path = receive_path
+        self._receive_saved = receive_saved  # `ReceiveDirChoice.SAVED`
         self._auto_accept = auto_accept
-        self._rate_limit = rate_limit
+        self._rate_limit = rate_limit  # None: giới hạn đã lưu
         self._on_transfer_event = on_transfer_event
+        self._save_args = save_args
+        self._settings: Settings | None = None  # đọc lúc `start`; đổi cùng lúc với file (`_save_settings`)
+        self._receive_dir_error: ReceiveDirUnavailable | None = None  # thư mục `SAVED` không mở được
+        self._receive_dir_lock = asyncio.Lock()  # `set_receive_dir` chạy lần lượt
 
         self._started = False  # start() đã được gọi (thành công hay không)
         self._running = False  # start() thành công, close() chưa xong
@@ -562,9 +616,10 @@ class Node:
     # ---- Vòng đời --------------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Lấy `node.lock`, nạp danh tính và kho tin cậy, mở cổng, bật mDNS (nếu có).
+        """Lấy `node.lock`, nạp danh tính, kho tin cậy và cài đặt, mở cổng, bật mDNS (nếu có).
 
-        Có `receive_dir` thì mở thư mục nhận (qua `DiskExecutor`, hạn `DISK_OP_TIMEOUT`). Tạo
+        Cài đặt đọc một lần (`Settings.load`) trước khi dựng `hello`. Có `receive_dir` thì mở thư mục
+        nhận (qua `DiskExecutor`, hạn `DISK_OP_TIMEOUT`). Tạo
         `TransferManager` và chạy `TransferManager.restore()` trước khi mở cổng: khôi phục bia mộ
         (`tombstones.json`, nạp song song với `history.json`), lượt đã xong và lượt nhận dở; `start`
         có thể chậm thêm tối đa hạn đọc bia mộ (`DISK_OP_TIMEOUT`) + hạn quét (`DISK_SYNC_TIMEOUT`)
@@ -575,7 +630,9 @@ class Node:
         Lỗi bay ra sau khi đã dọn (đóng cổng, đóng mDNS, nhả khóa): NodeLockedError,
         IdentityError (cả khi `PairingService` không đọc được khóa để ký lúc ghép đôi),
         TrustStoreError, ConfigDirError (OSError khi lấy khóa, nạp danh
-        tính hay kho tin cậy), ReceiveDirUnavailable (không mở được thư mục nhận), OSError
+        tính hay kho tin cậy), ReceiveDirUnavailable (không mở được thư mục nhận là đường dẫn
+        tường minh; `SAVED` thì không lỗi: `receive_dir_error`), SettingsSaveError (`save_args`
+        mà không ghi được `settings.json`), OSError
         (không mở được cổng), ValueError (`host` sai). Bị
         hủy lần nữa trong lúc dọn thì cổng vẫn đóng đồng bộ trước khi nhả khóa, còn mDNS
         đóng nền sau khi đã nhả khóa. Thất bại hay bị hủy trong lúc khôi phục: lần mở lại xong muộn
@@ -599,7 +656,13 @@ class Node:
                 store = TrustStore.load(self._config_dir)
             except OSError as e:
                 raise ConfigDirError(self._config_dir, e) from e
-            name = self._name_arg or default_device_name(identity)
+            self._identity, self._store = identity, store
+            # Đọc cài đặt đúng một lần; từ đây `self._settings` đổi cùng lúc với file.
+            self._settings = Settings.load(self._config_dir)
+            if self._save_args and self._name_arg is not None and self._settings.name != self._name_arg:
+                # Lần chạy đầu: lưu tên người dùng chọn trước khi quảng bá nó.
+                self._save_settings(dataclasses.replace(self._settings, name=self._name_arg))
+            name = self._name_arg or self._settings.name or default_device_name(identity)
             hello = Hello(PROTOCOL_VERSION, identity.device_id, name, teleport.__version__, device_os())
             pairing = PairingService(
                 identity=identity,
@@ -609,9 +672,10 @@ class Node:
                 on_finished=self._pairing_finished,
                 on_trust_changed=self._trust_changed,
                 accepting=self._accept_pairing,
+                before_save=self._before_pair_save,
             )
             listener = Listener(identity, hello, store.cert_pems(), store.is_trusted, self._on_connection)
-            self._identity, self._store, self._hello = identity, store, hello
+            self._hello = hello
             self._pairing, self._listener = pairing, listener
             # Tracker có trước khi mở cổng: kết nối vào có thể tới ngay.
             self._registry = DeviceRegistry(identity.device_id)
@@ -619,13 +683,10 @@ class Node:
             self._registry.set_trusted(store.devices())
             self._apply(self._links.trusted_changed(self._trusted_ids(), self._now()))
             disk = self._disk = DiskExecutor()
-            receive_dir = None
-            if self._receive_path is not None:
-                receive_dir = await self._open_receive_dir(disk, self._receive_path)
-                if self._close_done is not None:
-                    receive_dir.close()
-                    raise RuntimeError("Node đã bị đóng trong lúc khởi động")
+            receive_dir = await self._start_receive_dir(disk)
             # TransferManager có trước khi mở cổng: kết nối dữ liệu vào có thể tới ngay.
+            settings = self._settings
+            assert settings is not None
             transfers = TransferManager(
                 identity=identity,
                 hello=hello,
@@ -634,11 +695,14 @@ class Node:
                 receive_dir=receive_dir,
                 config_dir=self._config_dir,
                 auto_accept=self._auto_accept,
-                rate_limit=self._rate_limit,
+                rate_limit=settings.rate_limit if self._rate_limit is None else self._rate_limit,
                 on_event=self._on_transfer_event,
                 new_id=self._new_conn_id,
                 set_hold=self._transfer_hold,
+                ask_before_receive=self._asks_before_receive,
             )
+            if settings.temp_retention_days is not None:
+                transfers.set_temp_retention(settings.temp_retention_days * 86400.0)
             self._transfers = transfers
             transfers.start()
             # Khôi phục lượt nhận dở, bia mộ, lượt đã xong trước khi mở cổng (lời gọi engine đầu tiên).
@@ -665,6 +729,7 @@ class Node:
                 await self._abort_start(listener)
             finally:
                 self._identity = self._store = self._hello = None
+                self._settings = None
                 self._pairing = self._listener = None
                 self._links = self._registry = None
                 self._transfers = self._disk = None
@@ -717,6 +782,35 @@ class Node:
             self._mdns_closing.clear()
             self._discovery_active = False
 
+    async def _start_receive_dir(self, disk: DiskExecutor) -> storage.ReceiveDir | None:
+        """Thư mục nhận lúc `start` (đường dẫn, `SAVED` hay không có); xem docstring constructor."""
+        assert self._settings is not None
+        if self._receive_path is None and not self._receive_saved:
+            return None
+        if self._receive_path is not None:
+            receive_dir = await self._open_receive_dir(disk, self._receive_path)
+        else:
+            saved = self._settings.receive_dir
+            path = paths.default_receive_dir() if saved is None else Path(saved)
+            try:
+                receive_dir = await self._open_receive_dir(disk, path)
+            except ReceiveDirUnavailable as e:
+                # Vẫn chạy (gửi được), không nhận; không tự chuyển sang thư mục khác.
+                log.warning("thư mục nhận đã lưu không mở được: node chạy mà không nhận file")
+                self._receive_dir_error = e
+                return None
+        if self._close_done is not None:
+            receive_dir.close()
+            raise RuntimeError("Node đã bị đóng trong lúc khởi động")
+        root = str(receive_dir.root)
+        if self._save_args and self._receive_path is not None and self._settings.receive_dir != root:
+            try:
+                self._save_settings(dataclasses.replace(self._settings, receive_dir=root))
+            except BaseException:
+                receive_dir.close()  # chưa giao cho TransferManager: không ai khác đóng nó
+                raise
+        return receive_dir
+
     async def _open_receive_dir(self, disk: DiskExecutor, path: Path) -> storage.ReceiveDir:
         """`ReceiveDir.open` qua executor, hạn `DISK_OP_TIMEOUT`; lỗi → ReceiveDirUnavailable."""
         job = disk.submit(storage.ReceiveDir.open, path)
@@ -747,8 +841,8 @@ class Node:
         if self._port_arg is not None:
             await listener.start(self._host, self._port_arg)
             return
-        settings = Settings.load(self._config_dir)
-        preferred = settings.port or DEFAULT_PORT
+        assert self._settings is not None
+        preferred = self._settings.port or DEFAULT_PORT
         try:
             await listener.start(self._host, preferred)
             return
@@ -759,11 +853,13 @@ class Node:
             )
         await listener.start(self._host, 0)
         try:
-            dataclasses.replace(settings, port=listener.port).save(self._config_dir)
-        except (OSError, ValueError, TypeError, RecursionError) as e:
+            # Dựng từ `self._settings` lúc này (không phải bản chụp trước `await`).
+            self._save_settings(dataclasses.replace(self._settings, port=listener.port))
+        except SettingsSaveError as e:
             # ValueError/TypeError/RecursionError: trường lạ giữ lại từ file (ví dụ JSON lồng
             # quá sâu, đọc được nhưng không ghi lại được) — node vẫn chạy, chỉ không lưu cổng.
-            log.warning("không lưu được cổng dự phòng vào settings.json (%s)", type(e).__name__)
+            cause = e.__cause__
+            log.warning("không lưu được cổng dự phòng vào settings.json (%s)", type(cause).__name__)
 
     async def close(self) -> None:
         """Tạm dừng lượt đang nhận, hủy các lượt truyền khác và phiên ghép đôi, gửi goodbye mDNS,
@@ -967,6 +1063,237 @@ class Node:
         self._need(self._registry)
         return self._discovery_error
 
+    # ---- Cài đặt ---------------------------------------------------------------------------
+    # Mọi setter: chạy trên loop của node, đồng bộ (trừ `set_receive_dir`); node chưa chạy hay
+    # đang đóng → RuntimeError. Ghi `settings.json` trước, đổi RAM sau; ghi lỗi → SettingsSaveError,
+    # không đổi gì (docs/architecture.md mục 4, 5).
+
+    @property
+    def settings(self) -> Settings:
+        """Ảnh chụp cài đặt hiện tại (bất biến). Chưa `start()` → RuntimeError."""
+        settings: Settings = self._need(self._settings)
+        return settings
+
+    @property
+    def receive_dir_error(self) -> ReceiveDirUnavailable | None:
+        """Thư mục nhận đã lưu (`ReceiveDirChoice.SAVED`) không mở được lúc `start`: node chạy mà
+        không nhận file. None khi không có lỗi, hay sau khi `set_receive_dir` thành công."""
+        return self._receive_dir_error
+
+    def device_settings(self, device_id: str) -> DeviceSettings:
+        """Cài đặt của thiết bị; thiết bị không tin cậy (hay chưa có mục) → mặc định.
+
+        `device_id` sai → MessageError; chưa `start()` → RuntimeError.
+        """
+        settings: Settings = self._need(self._settings)
+        validate_device_id(device_id)
+        if self._store is None or self._store.get(device_id) is None:
+            return DeviceSettings()
+        return settings.device(device_id)
+
+    def _check_running(self) -> None:
+        if not self._running or self._closing or self._settings is None:
+            raise RuntimeError("node chưa chạy")
+
+    def _save_settings(self, new: Settings) -> None:
+        """Ghi `new` (bỏ mục của thiết bị không tin cậy) rồi mới gán `self._settings` (đồng bộ).
+
+        Lỗi ghi (OSError, ValueError, TypeError, RecursionError) → SettingsSaveError, không đổi gì.
+        Chỉ tiến trình giữ `node.lock` gọi (`start`, setter, `unpair`, ghép đôi).
+        """
+        assert self._store is not None
+        pruned = new.pruned(self._trusted_ids())
+        try:
+            pruned.save(self._config_dir)
+        except (OSError, ValueError, TypeError, RecursionError) as e:
+            raise SettingsSaveError("không ghi được settings.json") from e
+        # Đã ghi: file giờ là bản này (lần ghi sau không chép `.bak` nữa dù lần nạp đầu lỗi đọc).
+        self._settings = dataclasses.replace(pruned, load_failed=False) if pruned.load_failed else pruned
+
+    def set_name(self, name: str) -> str:
+        """Đổi và lưu tên máy này; trả tên đang dùng. Sai → MessageError.
+
+        Trùng tên đang dùng thì chỉ lưu (nếu chưa lưu). Tên mới: lưu, rồi trong cùng khối đồng bộ
+        dùng `hello` mới cho ghép đôi, kết nối điều khiển và dữ liệu mở từ giờ và cổng; đang quảng
+        bá thì quảng bá lại (nền). Kết nối đang mở giữ `hello` cũ (không nối lại).
+        """
+        self._check_running()
+        assert self._settings is not None and self._hello is not None
+        name = validate_device_name(name)
+        if name == self._hello.name:
+            if self._settings.name != name:
+                self._save_settings(dataclasses.replace(self._settings, name=name))
+            return name
+        self._save_settings(dataclasses.replace(self._settings, name=name))
+        hello = dataclasses.replace(self._hello, name=name)
+        self._hello = hello
+        self.pairing.set_hello(hello)
+        self.transfers.set_hello(hello)
+        if self._listener is not None:
+            self._listener.set_hello(hello)
+        if self._mdns_opts is not None and self._mdns_opts.advertise:
+            self._spawn(self._readvertise(), f"{_TASK_NAME}.readvertise")
+        log.info("đã đổi tên máy này")
+        return name
+
+    async def set_receive_dir(self, path: str | os.PathLike[str]) -> Path:
+        """Đổi thư mục nhận (chung cho mọi thiết bị) và lưu; trả gốc thật (`ReceiveDir.root`).
+
+        Các lời gọi chạy lần lượt. Lỗi: không phải đường dẫn dạng chuỗi → TypeError; node không
+        tự nhận và không có `on_transfer_event` → ValueError; còn lượt nhận, hàng đĩa hay việc dọn
+        của khôi phục (`TransferManager.receive_dir_busy`) → `ReceiveDirBusy`; không mở được →
+        `ReceiveDirUnavailable`; ghi lỗi → `SettingsSaveError`; node chưa chạy hay đóng trong lúc
+        mở → RuntimeError. Lỗi thì thư mục nhận và cài đặt không đổi.
+
+        `await` duy nhất là lúc mở thư mục (qua `DiskExecutor`); sau đó, trong một khối đồng bộ:
+        kiểm lại đóng/bận, lưu (dựng từ cài đặt lúc này), thay thư mục (`replace_receive_dir`,
+        thư mục cũ đóng khi không còn ai dùng), dọn tạm ngay một lần ở thư mục mới. Node chưa có
+        thư mục nhận thì từ giờ nhận file (theo tạm dừng nhận). Lượt dở có sẵn trong thư mục mới
+        không được khôi phục lúc chạy (chỉ ở lần `start` sau).
+        """
+        raw = os.fspath(path)  # không phải đường dẫn → TypeError
+        if not isinstance(raw, str):
+            raise TypeError("path phải là đường dẫn dạng chuỗi")
+        async with self._receive_dir_lock:
+            self._check_running()
+            if not self._auto_accept and self._on_transfer_event is None:
+                raise ValueError("nhận file cần auto_accept=True hoặc on_transfer_event để hỏi người dùng")
+            transfers = self.transfers
+            disk = self._disk
+            assert disk is not None
+            if transfers.receive_dir_busy():
+                raise ReceiveDirBusy()
+            try:
+                rd = await self._open_receive_dir(disk, Path(raw))
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if (task is None or task.cancelling() == 0) and (self._closing or not self._running):
+                    # Không ai hủy task này: việc mở còn xếp hàng bị `DiskExecutor.shutdown()` bỏ (node đóng).
+                    raise RuntimeError("node đang đóng") from None
+                raise
+            # Từ đây tới hết: một khối đồng bộ.
+            if not self._running or self._closing:
+                rd.close()
+                raise RuntimeError("node đang đóng")
+            if transfers.receive_dir_busy():
+                rd.close()
+                raise ReceiveDirBusy()
+            assert self._settings is not None
+            root = str(rd.root)
+            if transfers.receive_dir == rd.root:
+                rd.close()
+                if self._settings.receive_dir != root:
+                    self._save_settings(dataclasses.replace(self._settings, receive_dir=root))
+                return rd.root
+            try:
+                # ValueError nếu gốc thật không lưu được (ví dụ quá dài), SettingsSaveError nếu ghi lỗi.
+                self._save_settings(dataclasses.replace(self._settings, receive_dir=root))
+            except BaseException:
+                rd.close()
+                raise
+            transfers.replace_receive_dir(rd)
+            self._receive_dir_error = None
+            self._restart_cleanup()
+            log.info("đã đổi thư mục nhận")
+            return rd.root
+
+    def set_ask_before_receive(self, device_id: str, ask: bool) -> None:
+        """Hỏi (True) hay tự nhận (False, "Luôn nhận") `offer` từ thiết bị tin cậy `device_id`; lưu.
+
+        Áp cho lần hỏi kế tiếp; `offer` đang chờ không tự được nhận (giao diện gọi `decide`).
+        `device_id` sai → MessageError; không tin cậy → KeyError; `ask` không phải bool → TypeError.
+        """
+        self._check_running()
+        assert self._settings is not None and self._store is not None
+        validate_device_id(device_id)
+        if type(ask) is not bool:
+            raise TypeError("ask phải là bool")
+        if self._store.get(device_id) is None:
+            raise KeyError(device_id)
+        current = self._settings.device(device_id)
+        value = dataclasses.replace(current, ask_before_receive=ask)
+        self._save_settings(self._settings.with_device(device_id, value))
+
+    def set_rate_limit(self, value: int | None) -> None:
+        """Lưu và áp giới hạn tốc độ gửi (byte/giây; None: không giới hạn). Sai → ValueError."""
+        self._check_running()
+        assert self._settings is not None
+        minimum = app_transfers.MIN_RATE_LIMIT
+        if value is not None and (type(value) is not int or value < minimum):
+            raise ValueError(f"rate_limit phải là None hoặc số nguyên ≥ {minimum} (byte/giây)")
+        self._save_settings(dataclasses.replace(self._settings, rate_limit=value))
+        self.transfers.rate_limit = value
+
+    def set_temp_retention_days(self, days: int | None) -> None:
+        """Lưu ngưỡng dọn tạm (1–365 ngày; None: mặc định) rồi dọn ngay một lần với ngưỡng mới.
+
+        Ngoài 1–365 → ValueError; không phải số nguyên → TypeError.
+        """
+        self._check_running()
+        assert self._settings is not None
+        self._save_settings(dataclasses.replace(self._settings, temp_retention_days=days))
+        self.transfers.set_temp_retention(None if days is None else days * 86400.0)
+        self._restart_cleanup()
+
+    def set_ui_preferences(
+        self,
+        *,
+        language: str | _Unset | None = _UNSET,
+        autostart: bool | _Unset = _UNSET,
+        first_run_done: bool | _Unset = _UNSET,
+        radar_view: str | _Unset | None = _UNSET,
+    ) -> None:
+        """Lưu cài đặt của giao diện (chỉ lưu; app không làm gì thêm). Trường không truyền giữ nguyên.
+
+        Sai theo luật của `Settings` → ValueError / TypeError.
+        """
+        self._check_running()
+        assert self._settings is not None
+        changes: dict[str, Any] = {
+            key: value
+            for key, value in (
+                ("language", language),
+                ("autostart", autostart),
+                ("first_run_done", first_run_done),
+                ("radar_view", radar_view),
+            )
+            if value is not _UNSET
+        }
+        if changes:
+            self._save_settings(dataclasses.replace(self._settings, **changes))
+
+    def _asks_before_receive(self, device_id: str) -> bool:
+        """`TransferManager`: hỏi trước khi nhận từ `device_id` không (đọc lúc có `offer`).
+
+        Thiết bị không tin cậy luôn hỏi (cài đặt theo thiết bị không có hiệu lực, A5).
+        """
+        if self._settings is None or self._store is None or self._store.get(device_id) is None:
+            return True
+        return self._settings.device(device_id).ask_before_receive
+
+    def _before_pair_save(self, device_id: str) -> None:
+        """`PairingService` ngay trước `store.add`: ghép đôi (kể cả lại) đặt lại cài đặt theo thiết bị.
+
+        Chỉ ghi khi file có mục của thiết bị; ghi lỗi → SettingsSaveError (ghép đôi `SAVE_FAILED`).
+        """
+        if self._settings is not None and device_id in self._settings.devices:
+            self._save_settings(self._settings.with_device(device_id, None))
+
+    def _restart_cleanup(self) -> None:
+        """Hẹn giờ dọn tạm lại từ đầu (đồng bộ): dọn ngay một lần (sau khi lần trước xong), rồi theo nhịp.
+
+        Node không có thư mục nhận thì không làm gì.
+        """
+        transfers = self._transfers
+        if transfers is None or transfers.receive_dir is None:
+            return
+        old = self._cleanup_task
+        if old is not None:
+            old.cancel()
+        self._cleanup_task = asyncio.create_task(
+            self._cleanup_temps(transfers, after_previous=True), name=f"{_TASK_NAME}.cleanup-temps"
+        )
+
     def connected_devices(self) -> frozenset[str]:
         """`device_id` của các thiết bị đang có kết nối điều khiển."""
         return frozenset() if self._links is None else frozenset(self._links.connected())
@@ -1025,13 +1352,23 @@ class Node:
         Không có `device_id` → KeyError; không ghi được → TrustStoreError (không đổi gì).
         Khi trả về, máy đó không còn trong `connected_devices()`, lần thử kết nối tới nó
         đã bị hủy, mọi lượt truyền với nó đã bị hủy (kết quả `UNPAIRED`; máy kia không nhận
-        `cancel` vì kết nối đã mất, nó kết thúc lượt bằng `EXPIRED`), và kết nối của nó đã
-        bắt đầu đóng (chờ tối đa UNPAIR_CLOSE_TIMEOUT). Node chưa chạy → RuntimeError.
+        `cancel` vì kết nối đã mất, nó kết thúc lượt bằng `EXPIRED`), mục cài đặt theo thiết bị
+        của nó đã bị xóa khỏi `settings.json` (ghi lỗi thì chỉ WARNING: mục đó không có hiệu lực
+        và bị bỏ ở lần ghi sau), và kết nối của nó đã bắt đầu đóng (chờ tối đa
+        UNPAIR_CLOSE_TIMEOUT). Node chưa chạy → RuntimeError.
         """
         if not self._running:
             raise RuntimeError("node chưa chạy")
         # Đồng bộ từ đây tới lúc lấy kết nối ra khỏi bảng và hủy các lượt: không có await xen giữa.
         device = self.store.remove(device_id)
+        if self._settings is not None and device.device_id in self._settings.devices:
+            try:
+                self._save_settings(self._settings.with_device(device.device_id, None))
+            except SettingsSaveError as e:
+                log.warning(
+                    "không xóa được cài đặt theo thiết bị trong settings.json (%s)",
+                    type(e.__cause__).__name__,
+                )
         closes = self._trust_changed()
         if self._transfers is not None:
             self._transfers.forget_device(device.device_id)
@@ -1326,8 +1663,13 @@ class Node:
             self._apply(links.tick(self._now()))
 
     @staticmethod
-    async def _cleanup_temps(transfers: TransferManager) -> None:
-        """Hẹn giờ dọn tạm: lần đầu ngay sau khi mở cổng, rồi mỗi `CLEANUP_INTERVAL` (đọc lúc dùng)."""
+    async def _cleanup_temps(transfers: TransferManager, *, after_previous: bool = False) -> None:
+        """Hẹn giờ dọn tạm: lần đầu ngay sau khi mở cổng, rồi mỗi `CLEANUP_INTERVAL` (đọc lúc dùng).
+
+        `after_previous` (`_restart_cleanup`): chờ lần dọn trước thật sự xong rồi mới dọn lần đầu.
+        """
+        if after_previous:
+            await transfers.cleanup_settled()
         while True:
             try:
                 await transfers.cleanup_temps()
