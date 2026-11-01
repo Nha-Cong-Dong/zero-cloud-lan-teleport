@@ -6,7 +6,8 @@ bản exe; mọi icon dựng từ pixmap của module này.
 
 **Tài sản**: `teleport/ui/assets/icons/<tên>_<cỡ>_regular.svg`, đọc qua `importlib.resources`
 (chạy được cả từ wheel lẫn bản PyInstaller), giấy phép MIT ở `assets/icons/LICENSE`. Không tải gì từ
-mạng. Bộ tên lấy theo spec A2 (42 tên, 47 file): mọi tên có cỡ 20; `desktop`, `laptop`,
+mạng. Bộ tên lấy theo spec A2 (42 tên, 47 file) cộng `color` (bảng màu, mục Giao diện của Cài đặt,
+spec D6): mọi tên có cỡ 20; `desktop`, `laptop`,
 `cloud_off`, `shield_checkmark`, `arrow_sync` có thêm cỡ 24. Tên nào cũng có đúng tên trong bộ
 Fluent ở commit đã ghim (`packaging/pyinstaller/third_party.py`, `SOURCE_ASSETS`), không phải đổi
 sang tên gần nhất.
@@ -80,6 +81,7 @@ _SIZES_20 = (
     "lock_closed",
     "arrow_swap",
     "wrench",
+    "color",
 )
 _SIZES_20_24 = ("desktop", "laptop", "cloud_off", "shield_checkmark", "arrow_sync")
 

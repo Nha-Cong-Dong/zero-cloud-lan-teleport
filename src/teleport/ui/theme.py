@@ -91,8 +91,15 @@ font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
   `text_muted`, `accent` → `accent_text`).
 - `QFrame[surface="sidebar|raised|card"]`: nền `sidebar` (viền phải `border`, không bo) / nền
   `surface_raised`, viền `border`, bo `RADIUS_CARD` / như `raised` nhưng bo `RADIUS_BLOCK`.
+- `QFrame[segmented="true"]` và `QRadioButton[segment="first|middle|last"]` — **nhóm chọn một**
+  (`widgets.SegmentedControl`, spec D6): khung nền `surface_raised`, viền 1 px `border_strong`, bo
+  `RADIUS_CONTROL`; nút nền trong suốt, viền 2 px trong suốt, chữ `text`, ô tròn radio rộng 0;
+  `:hover` nền `selected`; `:checked` nền `accent`, chữ `accent_text`, viền `accent_strong`; `:focus`
+  viền `focus_ring_color` và chữ gạch chân; `:disabled` chữ `text_muted`, nút đang chọn nền
+  `selected` viền `border`.
 
-Property (`PRIMARY_PROPERTY`, `TONE_PROPERTY`, `SURFACE_PROPERTY`, `ICON_BUTTON_PROPERTY`) đặt
+Property (`PRIMARY_PROPERTY`, `TONE_PROPERTY`, `SURFACE_PROPERTY`, `ICON_BUTTON_PROPERTY`,
+`SEGMENTED_PROPERTY`, `SEGMENT_PROPERTY`) đặt
 **trước khi hiện** (stylesheet đọc property lúc polish); đặt sau khi widget đã hiện thì gọi
 `style().unpolish(w)` rồi `style().polish(w)`.
 
@@ -114,6 +121,9 @@ PRIMARY_PROPERTY = "primary"  # dynamic property của nút chính (xem docstrin
 TONE_PROPERTY = "tone"  # QLabel[tone="muted|success|warning|danger|accent"]
 SURFACE_PROPERTY = "surface"  # QFrame[surface="sidebar|raised|card"]
 ICON_BUTTON_PROPERTY = "iconButton"  # QToolButton[iconButton="true"] (widgets.IconButton)
+SEGMENTED_PROPERTY = "segmented"  # QFrame[segmented="true"] (khung của widgets.SegmentedControl)
+SEGMENT_PROPERTY = "segment"  # QRadioButton[segment="first|middle|last"] (nút của SegmentedControl)
+_SEGMENT_POSITIONS = ("first", "middle", "last")
 _PRIMARY_FRAME = 8  # px: padding dọc 2·2 + viền 2·2 của nút chính (`stylesheet`)
 DIALOG_MIN_WIDTH = 420  # px, hộp nhận file và hộp ghép đôi
 SPACING = (4, 8, 12, 16, 24, 32)  # px
@@ -504,6 +514,23 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f" border: 1px solid {border}; border-radius: {RADIUS_CARD}px; }}",
         f'{surface}"card"] {{ background-color: {t.surface_raised.name()};'
         f" border: 1px solid {border}; border-radius: {RADIUS_BLOCK}px; }}",
+    ]
+
+    def segment(state: str = "") -> str:
+        return ", ".join(f'QRadioButton[{SEGMENT_PROPERTY}="{p}"]{state}' for p in _SEGMENT_POSITIONS)
+
+    lines += [
+        f'QFrame[{SEGMENTED_PROPERTY}="true"] {{ background-color: {t.surface_raised.name()};'
+        f" border: 1px solid {t.border_strong.name()}; border-radius: {RADIUS_CONTROL}px; }}",
+        f"{segment()} {{ background: transparent; color: {t.text.name()}; border: 2px solid transparent;"
+        f" border-radius: {RADIUS_CONTROL - 2}px; padding: 2px 12px; spacing: 0px; }}",
+        f"{segment('::indicator')} {{ width: 0px; height: 0px; border: none; image: none; }}",
+        f"{segment(':hover')} {{ background: {t.selected.name()}; }}",
+        f"{segment(':checked')} {{ background: {t.accent.name()}; color: {t.accent_text.name()};"
+        f" border-color: {edge}; }}",
+        f"{segment(':focus')} {{ border-color: {ring}; text-decoration: underline; }}",
+        f"{segment(':disabled')} {{ color: {t.text_muted.name()}; }}",
+        f"{segment(':checked:disabled')} {{ background: {t.selected.name()}; border-color: {border}; }}",
     ]
     return "\n".join(lines)
 

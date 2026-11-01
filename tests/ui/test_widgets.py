@@ -1693,3 +1693,83 @@ def test_icon_button_failed_construction_leaves_no_orphan_in_parent(qtbot, icon_
         IconButton(icon_name, label, parent)
     QApplication.processEvents()
     assert _tool_buttons(parent) == before
+
+
+# =================================================================================================
+# SegmentedControl, RovingGroup (spec D6 mục 2.5; tương phản theo mọi màu nhấn, mục 12 ý 14)
+# =================================================================================================
+
+
+def _accent_ids() -> tuple[str, ...]:
+    from teleport.ui import theme
+
+    return theme.ACCENTS
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+@pytest.mark.parametrize("accent", ("mint", "ocean", "violet", "rose", "amber", "graphite"))
+def test_segment_and_toggle_contrast_every_accent(accent, dark):
+    from teleport.ui import theme, widgets
+
+    assert accent in _accent_ids()
+    t = theme.tokens(dark, accent)
+    for fg, bg, minimum in widgets.SEGMENT_CONTRAST_PAIRS:
+        ratio = theme.contrast_ratio(getattr(t, fg), getattr(t, bg))
+        assert ratio >= minimum, (accent, dark, fg, bg, round(ratio, 2))
+    for fg, bg in widgets.TOGGLE_CONTRAST_PAIRS:
+        ratio = theme.contrast_ratio(getattr(t, fg), getattr(t, bg))
+        assert ratio >= 3.0, (accent, dark, fg, bg, round(ratio, 2))
+
+
+def test_segmented_control_arrows_select_and_tab_stops_on_checked(qtbot):
+    from teleport.ui import widgets
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    layout = QVBoxLayout(host)
+    before = QPushButton("trước", host)
+    seg = widgets.SegmentedControl(("a", "b", "c"), host)
+    seg.set_texts(("A", "B", "C"))
+    after = QPushButton("sau", host)
+    for w in (before, seg, after):
+        layout.addWidget(w)
+    seen: list = []
+    seg.value_selected.connect(seen.append)
+    seg.set_value("b")
+    assert seen == [], "set_value không phát"
+    buttons = seg.buttons()
+    assert [b.property("segment") for b in buttons] == ["first", "middle", "last"]
+    assert [b.accessibleName() for b in buttons] == ["A", "B", "C"]
+    host.show()
+    qtbot.waitExposed(host)
+    host.activateWindow()
+    host.raise_()
+    qtbot.waitUntil(host.isActiveWindow, timeout=3000)
+    before.setFocus(Qt.FocusReason.TabFocusReason)
+    QTest.keyClick(before, Qt.Key.Key_Tab)
+    assert QApplication.focusWidget() is buttons[1], "Tab vào nút đang chọn"
+    QTest.keyClick(buttons[1], Qt.Key.Key_Right)
+    assert seg.value() == "c" and buttons[2].isChecked() and QApplication.focusWidget() is buttons[2]
+    QTest.keyClick(buttons[2], Qt.Key.Key_Right)
+    assert seg.value() == "a", "vòng quanh"
+    QTest.keyClick(buttons[0], Qt.Key.Key_Left)
+    assert seg.value() == "c"
+    QTest.keyClick(buttons[2], Qt.Key.Key_Home)
+    assert seg.value() == "a"
+    assert seen == ["c", "a", "c", "a"]
+    QTest.keyClick(buttons[0], Qt.Key.Key_Tab)
+    assert QApplication.focusWidget() is after, "Tab rời nhóm, không dừng ở nút chưa chọn"
+    buttons[0].click()
+    assert seen == ["c", "a", "c", "a"], "bấm lại nút đang chọn không phát"
+
+
+def test_segmented_control_stylesheet_rules_are_narrow():
+    from teleport.ui import theme
+
+    css = theme.stylesheet(False, accent="ocean")
+    t = theme.tokens(False, "ocean")
+    assert 'QFrame[segmented="true"]' in css
+    for position in ("first", "middle", "last"):
+        assert f'QRadioButton[segment="{position}"]:checked' in css
+    assert t.accent.name() in css and t.accent_text.name() in css
+    assert "QRadioButton {" not in css and "QRadioButton:" not in css
