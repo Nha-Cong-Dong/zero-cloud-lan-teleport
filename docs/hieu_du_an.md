@@ -63,3 +63,41 @@ File lớn được chia nhỏ ra gửi từng phần (khối), kiểm tra từn
   - `Nhận đủ tất cả các phần` → `đọc lại và kiểm lại toàn bộ` → đúng → đổi về tên gốc (ví dụ `tung.mp4`).
   - Trong lúc nhận, file nằm trong thư mục tạm ẩn `.teleport/`, nên người dùng không thấy file dở dang.
   - Nếu đã có sẵn `tung.mp4` thì tự đặt tên `tung (1).mp4`, không bao giờ ghi đè file cũ.
+
+
+## Tầng trust
+Lần đầu ghép đôi: A và B chưa quen nhau
+- A gửi yêu cầu cho B, 2 máy giới thiệu bản thân
+- 2 máy tạo số ngẫu nhiên gửi cho máy còn lại và kèm chữ ký riêng để xác thực. Chữ ký xác thực để xác thực chứng chỉ 2 máy, số của A và phong bì của B trong phiên đó.
+- Nguyên tắc khi gửi là: máy B sẽ bọc trong 1 phong bì thư gửi cho A, sau đó A gửi số ngẫu nhiên được mã hoá cho B, B thấy mã của A sau đó đọc số trong phong bì, lúc này A sẽ băm số ra để kiểm tra. Nhờ vậy mà A và B không thể biết trước và thay đổi số được
+- Sau đó 2 máy sẽ tạo mã 6 số từ chứng chỉ và số ngẫu nhiên. Kẻ thứ 3 chỉ có 1/1000000 khả năng để trùng mã nên đảm bảo an toàn.
+- Sau đó thông tin ghép đôi sẽ được lưu trong file trusted.json: mã máy, tên, fingerprint, chứng chỉ và thời gian kết nối
+Lần sau khi đã ghép đôi: A muốn kết nối với B đã quen
+- A kiểm tra chứng chỉ của B có trong trusted.json không
+- Và B phải có thể ký được chữ ký riêng lên chứng chỉ
+
+## Tầng net
+- Tầng net đóng vai trò là đường đi an toàn để các máy tìm thấy nhau và truyền dữ liệu trong mạng
+### 1. Cách để 2 máy A và B thấy nhau
+- Để máy A và B thấy nhau mà không cần nhập IP, tầng net dùng giao thức mDNS. Mỗi máy sẽ tự động phát sóng trong mạng để thông báo sự hiện diện.
+- Nếu bị chặn mDNS thì vẫn có thể nhập IP để kết nối.
+### 2. Đường truyền bảo mật
+- Sau khi máy A có được địa chỉ máy B, thì sẽ thiết lập kết nối TCP trực tiếp giữa 2 máy
+- Đường truyền được bọc lớp mã hoá TLS 1.3 bảo mật cho mọi dữ liệu
+- Dữ liệu được truyền thẳng từ ổ đĩa máy A sang máy B
+### 3. Đọc ghi dữ liệu
+- Chỉ nhận các gói byte từ core nhét vào socket và đọc các byte từ socket trả lời ngược lại, chỉ quản lý phần mở đóng kết nối mạng không can thiệp phần dữ liệu.
+
+## Tầng core
+Tầng core là bộ não logic của ứng dụng, luật ghép đôi, truyền file, kết nối lại. Theo thiết kế sans-IO
+- Chỉ nhận đầu vào và tính toán đưa quyết định cho tầng khác làm
+- Chịu trách nhiệm kiểm duyệt đảm bảo an toàn tuyệt đối
+- Xử lý phần chia khối và đảm bảo toàn vẹn của dữ liệu: chia các file lớn thành các khối có kích thước 1mib, theo dõi tiến độ, xử lý thuật toán băm
+- Độc lập với giao diện không phụ thuộc tầng nào cả.
+
+
+## Tầng app
+Tầng app đóng vai trò là quản lý của toàn bộ hệ thống là người thực thi tất cả các quyết định.
+- Tầng app kết nối các tầng lại với nhau: lấy quyết định từ core bảo tầng net truyền dữ liệu đi và nhờ tầng trust kiểm tra bảo mật. Tầng giao diện người dùng ui/cli chỉ được nói chuyện với app
+- Chịu trách nhiệm đọc/ghi ổ đĩa: tầng app đọc từng khối của file ở máy gửi và ghi từng khối nhận được xuống ổ đĩa ở máy nhận.
+- Tầng app quản lý thư mục và lưu trữ thư mục ẩn, đảm bảo dữ liệu an toàn không bị mất, không làm hỏng dữ liệu, không ghi đè làm mất dữ liệu.
