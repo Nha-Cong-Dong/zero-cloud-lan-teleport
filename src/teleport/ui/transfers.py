@@ -2,8 +2,9 @@
 hộp hỏi, node.
 
 `TransfersController` sống trên thread Qt, dựng trong `ui.app.GuiApp` (thuộc tính `transfers`). Nó
-giữ luồng chat `ui.chat.ChatView` (`view`, đặt vào `MainWindow.transfers_area` với lề 0) và
-`OfferPrompts` (`offers`), và chỉ chạm node qua `NodeHost.call` / `submit` (không bao giờ gọi `Node`
+giữ luồng chat `ui.chat.ChatView` (`view`, đặt vào `MainWindow.transfers_area` với lề 0), sổ lời mời
+`ui.offer.OfferBook` (`offer_book`) và hộp hỏi `OfferPrompts` (`offers`), và chỉ chạm node qua
+`NodeHost.call` / `submit` (không bao giờ gọi `Node`
 từ thread Qt). Nối dây (spec B3 mục 5): `conversations.current_changed` → `view.set_device` (gọi một
 lần lúc dựng với máy đang chọn), `conversations.open_requested` → `view.focus_composer`; nút “Gửi
 file” / Ctrl+O của luồng → `pick_and_send`, thả vào luồng → `request_send`, thả khi chưa chọn máy →
@@ -17,6 +18,29 @@ lúc gọi và bị bỏ nếu host đã đổi; `on_node_event` / `on_transfer`
 kiện của host hiện tại. Lúc `started` (`on_started`): một `call` đọc `(devices(),
 transfers.transfers())` → tên máy, trạng thái kết nối, ảnh chụp các lượt (gộp với `TransferResumed`
 tới trước, spec hackathon mục 9.7).
+
+**Lời mời nhận file** (spec B4 mục 3.3): `offer_book` là nguồn sự thật duy nhất; hộp hỏi và bong bóng
+chỉ phát ý định (`offers.decided`, `view.offer_answer_requested` → `answer` → `book.answer`; ô “Luôn
+nhận” của cả hai → `book.set_always`), nên mỗi offer có đúng một quyết định (lần đầu thắng). `on_transfer`
+theo thứ tự: đọc `app_active()`; `TransferFinished` → `book.finish` (hộp và panel đóng trước khi bong
+bóng vẽ kết quả); `OfferReceived` chưa tự nhận → đọc `offer_in_view(id)` **trước** khi chèn bong bóng,
+`view.handle`, `book.add(connected=…)` (theo `window.devices`), thêm được mà không `in_view` thì
+`offers.show_prompt`. `offer_in_view(id)` đúng khi cửa sổ chính đang active
+(`default_window_active()` cấp module, đọc lúc gọi), đang hiện và không thu nhỏ, RUNNING, ở trang HOME,
+đang mở luồng của `id` và luồng đó ở cuối: chỉ khi người dùng thật sự thấy lời mời thì bong bóng mới
+đủ, còn lại bật hộp. Cửa sổ thu nhỏ hay bị ẩn (`eventFilter` trên cửa sổ: `WindowStateChange` sang thu
+nhỏ, `Hide`) → `on_window_hidden()`: mở hộp cho mọi lời mời PENDING chưa có hộp, theo thứ tự tới.
+`book.answered(key, accept, always)` → **một** `host.call(_apply_answer)`: trong cùng khối đồng bộ
+trên thread node, lượt không còn (`transfers.get` None) thì thôi; `decide(key, accept)`; `accept`,
+`always` và lượt còn ở pha hỏi lúc đọc `get` (status WAITING) thì `set_ask_before_receive(id, False)`
+(`KeyError` / `RuntimeError` im lặng). Kết quả về
+(host cũ thì bỏ): `decide` lỗi → WARNING (tên loại); lưu “Luôn nhận” lỗi → câu mvp mục 8
+`offer.always_save_error_text` ở thanh thông báo (WARNING); lưu được → `always_accept_saved(id)`.
+`cancel(key)` của lời mời PENDING là `book.answer(key, False)` (✕ của bong bóng vốn đã ẩn khi có panel).
+“Đổi…” của hộp và panel → `change_receive_dir_requested` (`ui.app` mở hộp chọn thư mục);
+`set_receive_dir_pending` / `show_receive_dir_error` cập nhật cả hai chỗ. `DeviceConnected` /
+`DeviceDisconnected` và ảnh chụp lúc `started` → `book.set_connected`. Host mới và Thoát:
+`book.clear()` trước `view.clear()` / `offers.close_all()`, không quyết định (node tự từ chối khi đóng).
 
 **Hoạt động theo máy** (spec B2 mục 2.3; danh sách cuộc trò chuyện ở cột trái): `activity`
 (`ui.activity.ActivityTracker`) theo dõi lượt đang chạy và lượt đã kết thúc gần nhất của mỗi máy, rồi
@@ -74,8 +98,8 @@ file người dùng (D7); việc kiểm file do `transfers.send` làm trên `Dis
 
 **Thông báo**: lỗi chọn gửi hiện ở thanh thông báo của luồng chat (`view.show_notice`, mức ERROR),
 không hộp chặn. Khay: có `offer` chờ trả lời → `texts.offer_waiting()`, **chỉ khi app không được dùng**
-(`app_active()` False: không cửa sổ nào của app đang active; đọc trước `offers.handle`, vì hộp hỏi
-mới mở có thể giành active); nhận xong một lượt → câu mvp mục 8 “Đã nhận *n* file từ *X*.” (luôn
+(`app_active()` False: không cửa sổ nào của app đang active; đọc trước khi mở hộp hỏi, vì hộp mới
+mở có thể giành active); nhận xong một lượt → câu mvp mục 8 “Đã nhận *n* file từ *X*.” (luôn
 hiện; một file: tên file thật đã lưu, lấy từ `FileDone.path.name` cuối, có thể là `ten (1).ext`;
 chưa có thì tên trong `offer`), kèm `folder` để bấm bóng thoại mở thư mục: thư mục cha của file đã
 lưu cuối, không có thì thư mục nhận hiện tại (`set_receive_dir`). Tên máy kia qua
@@ -102,7 +126,7 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QCoreApplication, QMetaMethod, QObject, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QMetaMethod, QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget
 
 from teleport.app.devices import DeviceView
@@ -112,6 +136,7 @@ from teleport.app.node import (
     DeviceDisconnected,
     DeviceOffline,
     DeviceOnline,
+    Node,
     NodeEvent,
 )
 from teleport.app.transfers import (
@@ -122,6 +147,7 @@ from teleport.app.transfers import (
     TransferInfo,
     TransferKey,
     TransferResult,
+    TransferStatus,
     TransferUpdate,
 )
 from teleport.core import pairing
@@ -130,8 +156,8 @@ from teleport.ui import send, texts
 from teleport.ui.activity import ActivityTracker, FinishedTransfer, latest_by_device
 from teleport.ui.bridge import NodeHost
 from teleport.ui.chat import ChatView
-from teleport.ui.main_window import MainWindow
-from teleport.ui.offer import OfferPrompts
+from teleport.ui.main_window import MainWindow, Page, ViewState
+from teleport.ui.offer import OfferBook, OfferPhase, OfferPrompts, always_save_error_text
 from teleport.ui.tray import Tray
 from teleport.ui.widgets import InfoLevel
 
@@ -163,6 +189,53 @@ _NO_RESEND = (TransferResult.DONE, TransferResult.UNPAIRED)
 def default_app_active() -> bool:
     """App đang được dùng: một cửa sổ của app (cửa sổ chính hay một hộp) đang active."""
     return QApplication.activeWindow() is not None
+
+
+def default_window_active() -> bool:
+    """Cửa sổ chính của app đang active (không phải một hộp); seam cho test, đọc lúc gọi."""
+    return isinstance(QApplication.activeWindow(), MainWindow)
+
+
+class _AlwaysFailed:
+    """Kết quả của `_apply_answer`: đã `decide` nhưng không lưu được “Luôn nhận” (`error`)."""
+
+    __slots__ = ("error",)
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+
+_ALWAYS_SAVED = "always_saved"  # kết quả của `_apply_answer`: đã lưu “Luôn nhận”
+
+
+def _apply_answer(node: Node, key: TransferKey, accept: bool, always: bool) -> object:
+    """Chạy trên thread node (một khối đồng bộ): gửi quyết định, rồi lưu “Luôn nhận” khi cần.
+
+    Lượt không còn → None. Lỗi của `decide` ném ra (host trả về làm kết quả). “Luôn nhận” chỉ lưu khi
+    lượt còn ở pha hỏi người dùng lúc `decide`. Với lượt nhận, WAITING của engine là pha CHECKING hay
+    ASKING; CHECKING không xảy ra với key đã có hộp hay bong bóng (engine chỉ phát `OfferReceived`
+    khi vào ASKING, và kiểm lại chỗ trống lúc đổi thư mục giữ nguyên ASKING), nên WAITING ở đây là
+    ASKING; nhận rồi là TRANSFERRING trở đi. ASKING mà đang kiểm lại chỗ trống (`rechecking`): engine
+    chỉ ghi nhận Nhận và có thể từ chối sau nếu thiếu chỗ, nhưng vẫn lưu “Luôn nhận” — chấp nhận,
+    vì đó đúng là ý người dùng với máy này. Lượt đã qua pha hỏi (đã trả lời ở chỗ khác) → `decide`
+    bị engine bỏ qua và không lưu gì. Lỗi lưu
+    cài đặt: `KeyError` (máy vừa bị hủy ghép đôi) / `RuntimeError` (node đang đóng) → None, im lặng;
+    lỗi khác → `_AlwaysFailed`. Lưu được → `_ALWAYS_SAVED`.
+    """
+    info = node.transfers.get(key)
+    if info is None:
+        return None
+    asking = key.direction is Direction.RECEIVE and info.status is TransferStatus.WAITING
+    node.transfers.decide(key, accept)
+    if not (accept and always and asking):
+        return None
+    try:
+        node.set_ask_before_receive(key.device_id, False)
+    except (KeyError, RuntimeError):
+        return None
+    except Exception as e:
+        return _AlwaysFailed(e)
+    return _ALWAYS_SAVED
 
 
 def pair_wait_text(peer: str) -> str:
@@ -209,6 +282,8 @@ class TransfersController(QObject):
 
     pair_needed = Signal(object)  # DeviceView: chưa ghép đôi, cần ghép trước khi gửi
     repair_requested = Signal(object)  # DeviceView: nút “Ghép đôi lại” (máy kia từ chối máy này)
+    always_accept_saved = Signal(str)  # device_id: đã lưu “Luôn nhận” (trang Cài đặt đọc lại)
+    change_receive_dir_requested = Signal()  # “Đổi…” của hộp hỏi hay panel lời mời
 
     def __init__(
         self,
@@ -245,12 +320,14 @@ class TransfersController(QObject):
         self.activity = ActivityTracker()
         self._receive_dir: Path | None = None
 
+        self.offer_book = OfferBook(self)
         self.view = ChatView(window.devices, window.transfers_area)
         area_layout = window.transfers_area.layout()
         if area_layout is not None:
             area_layout.setContentsMargins(0, 0, 0, 0)  # luồng chat tự lo lề
             area_layout.addWidget(self.view)
-        self.offers = OfferPrompts(parent=self)
+        self.offers = OfferPrompts(self.offer_book, parent=self)
+        self.view.set_offer_book(self.offer_book)
 
         conversations = window.conversations
         conversations.send_files_requested.connect(self.request_send)
@@ -267,7 +344,14 @@ class TransfersController(QObject):
         current = conversations.current_device()
         self.view.set_device(None if current is None else current.device_id)
         self.view.content_changed.connect(self._update_summary)
-        self.offers.decided.connect(self.decide)
+        self.offers.decided.connect(self.answer)
+        self.view.offer_answer_requested.connect(self.answer)
+        self.offers.always_toggled.connect(self.offer_book.set_always)
+        self.view.offer_always_toggled.connect(self.offer_book.set_always)
+        self.offers.change_dir_requested.connect(self.change_receive_dir_requested)
+        self.view.change_receive_dir_requested.connect(self.change_receive_dir_requested)
+        self.offer_book.answered.connect(self._send_answer)
+        window.installEventFilter(self)
         self._update_summary()
 
     # ---- Vòng đời host -----------------------------------------------------------------------
@@ -282,8 +366,10 @@ class TransfersController(QObject):
         return self._pending
 
     def attach(self, host: NodeHost | None) -> None:
-        """Dùng `host` mới: xóa lượt, hoạt động và thông báo, đóng hộp hỏi, bỏ việc chờ, đặt thư mục nhận."""
+        """Dùng `host` mới: xóa lời mời, lượt, hoạt động và thông báo, đóng hộp hỏi, bỏ việc chờ, đặt thư
+        mục nhận."""
         self._host = host
+        self.offer_book.clear()  # trước `view.clear()` và `offers.close_all()` (spec B4 mục 11.2)
         self.view.clear()
         self.activity.clear()
         self._window.conversations.model.clear_activity()
@@ -312,6 +398,16 @@ class TransfersController(QObject):
         self.offers.set_receive_dir(path)
         self.view.set_receive_dir(path)
 
+    def set_receive_dir_pending(self, path: Path | None) -> None:
+        """Thư mục nhận đang đổi sang (None: không đổi): hộp hỏi và panel lời mời tắt “Nhận”."""
+        self.offers.set_receive_dir_pending(path)
+        self.view.set_receive_dir_pending(path)
+
+    def show_receive_dir_error(self, text: texts.Text | None) -> None:
+        """Lỗi đổi thư mục nhận ở các hộp hỏi **đang mở** (hộp mở sau không có); None → gỡ. Hàm dựng
+        câu thì đổi ngôn ngữ dịch lại."""
+        self.offers.set_dir_error(text)
+
     def on_started(self, host: NodeHost) -> None:
         """Node của `host` đã chạy: đọc một ảnh chụp thiết bị và lượt truyền, và lượt gần nhất của mỗi máy
         trong lịch sử."""
@@ -334,6 +430,7 @@ class TransfersController(QObject):
     def close_all(self) -> None:
         """App đang thoát: đóng hộp hỏi và hộp chọn file, bỏ việc chờ."""
         self._closing = True
+        self.offer_book.clear()  # trước `offers.close_all()`: không quyết định gì
         self.offers.close_all()
         self._drop_pending()
         dialog, self._dialog = self._dialog, None
@@ -351,9 +448,11 @@ class TransfersController(QObject):
             return
         if isinstance(event, DeviceConnected):
             self.view.set_connected(view.device_id, True)
+            self.offer_book.set_connected(view.device_id, True)
             self._unoffered = {k for k in self._unoffered if k.device_id != view.device_id}
         elif isinstance(event, DeviceDisconnected):
             self.view.set_connected(view.device_id, False)
+            self.offer_book.set_connected(view.device_id, False)
         if self._names.get(view.device_id) != view.name:
             self._names[view.device_id] = view.name
             self.view.set_device_names(self._names)
@@ -395,10 +494,19 @@ class TransfersController(QObject):
             device = self._window.devices.device(key.device_id)
             if device is None or not device.connected:
                 self._unoffered.add(key)
-        # Đọc trước `offers.handle`: hộp hỏi mới mở có thể giành active.
+        # Đọc trước khi mở hộp hỏi: hộp mới mở có thể giành active.
         active = isinstance(update, OfferReceived) and self._app_active()
-        self.offers.handle(update)
+        if isinstance(update, TransferFinished):
+            self.offer_book.finish(update.info.key)  # hộp và panel đóng trước khi bong bóng vẽ kết quả
+        asking = isinstance(update, OfferReceived) and not update.auto_accepted
+        # Đọc trước khi chèn bong bóng: luồng còn đang ở cuối.
+        in_view = asking and isinstance(update, OfferReceived) and self.offer_in_view(update.key.device_id)
         self.view.handle(update)
+        if asking and isinstance(update, OfferReceived):
+            device = self._window.devices.device(update.key.device_id)
+            connected = True if device is None else device.connected
+            if self.offer_book.add(update, connected=connected) and not in_view:
+                self.offers.show_prompt(update.key)
         self._track(update)
         if isinstance(update, OfferReceived):
             self._offer_names[update.key] = update.device_name
@@ -509,17 +617,74 @@ class TransfersController(QObject):
     # ---- Hủy, trả lời lời mời ------------------------------------------------------------------
 
     def cancel(self, key: TransferKey) -> None:
+        """Hủy lượt `key`; lời mời đang chờ trả lời thì là “Từ chối” qua book (một quyết định)."""
+        entry = self.offer_book.entry(key)
+        if entry is not None and entry.phase is OfferPhase.PENDING:
+            self.offer_book.answer(key, False)
+            return
         host = self._host
         if host is not None:
             host.call(lambda node: node.transfers.cancel(key), functools.partial(self._log_error, "hủy lượt"))
 
+    def answer(self, key: TransferKey, accept: bool) -> None:
+        """Ý định trả lời lời mời `key` (hộp, bong bóng): chỉ lần đầu với lời mời PENDING có hiệu lực."""
+        self.offer_book.answer(key, accept)
+
     def decide(self, key: TransferKey, accept: bool) -> None:
+        """Bí danh cũ của `answer` (đi qua book)."""
+        self.answer(key, accept)
+
+    def offer_in_view(self, device_id: str) -> bool:
+        """Người dùng đang thấy cuối luồng của `device_id` (lời mời từ máy đó chỉ cần bong bóng)."""
+        window = self._window
+        return bool(
+            default_window_active()
+            and window.isVisible()
+            and not window.isMinimized()
+            and window.view_state is ViewState.RUNNING
+            and window.current_page is Page.HOME
+            and self.view.device_id() == device_id
+            and self.view.is_pinned(device_id)
+        )
+
+    def on_window_hidden(self) -> None:
+        """Cửa sổ bị ẩn hay thu nhỏ: mở hộp cho mọi lời mời PENDING chưa có hộp, theo thứ tự tới."""
+        if self._closing:
+            return
+        for key in self.offer_book.pending_keys():
+            self.offers.show_prompt(key)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self._window:
+            kind = event.type()
+            if kind == QEvent.Type.Hide or (
+                kind == QEvent.Type.WindowStateChange
+                and self._window.windowState() & Qt.WindowState.WindowMinimized
+            ):
+                self.on_window_hidden()
+        return super().eventFilter(watched, event)
+
+    def _send_answer(self, key: TransferKey, accept: bool, always: bool) -> None:
+        """`book.answered`: một `host.call` gửi quyết định (và lưu “Luôn nhận” khi cần)."""
         host = self._host
-        if host is not None:
-            host.call(
-                lambda node: node.transfers.decide(key, accept),
-                functools.partial(self._log_error, "trả lời lời mời nhận file"),
-            )
+        if host is None:
+            return
+        host.call(
+            functools.partial(_apply_answer, key=key, accept=bool(accept), always=bool(always)),
+            functools.partial(self._on_answer_done, host, key),
+        )
+
+    def _on_answer_done(self, host: NodeHost, key: TransferKey, result: object) -> None:
+        if host is not self._host:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không trả lời được lời mời nhận file: %s", type(result).__name__)
+        elif isinstance(result, _AlwaysFailed):
+            log.warning("không lưu được “Luôn nhận”: %s", type(result.error).__name__)
+            peer = self._peer(key.device_id, self._window.devices.device(key.device_id))
+            self.view.show_notice(functools.partial(always_save_error_text, peer), level=InfoLevel.WARNING)
+        elif result == _ALWAYS_SAVED:
+            self.always_accept_saved.emit(key.device_id)
 
     # ---- Bên trong ---------------------------------------------------------------------------
 
@@ -674,6 +839,7 @@ class TransfersController(QObject):
             if isinstance(device, DeviceView):
                 self._names[device.device_id] = device.name
                 self.view.set_connected(device.device_id, device.connected)
+                self.offer_book.set_connected(device.device_id, device.connected)
         self.view.set_device_names(self._names)
         self.view.load_snapshot(infos)
         self._push_activity(sorted(self.activity.load_snapshot(infos, _wall_now())))

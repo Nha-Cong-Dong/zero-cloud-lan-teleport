@@ -71,14 +71,20 @@ chỉ đọc, lỗi gì cũng về mặc định: theo hệ điều hành, màu 
 
 **Gửi/nhận file**: `ui.transfers.TransfersController` (`GuiApp.transfers`) giữ luồng chat, hộp
 hỏi nhận file và việc gửi; `GuiApp` chỉ báo host mới (`attach`), `started`, `NodeEvent` và
-`TransferUpdate` của host hiện tại cho nó.
+`TransferUpdate` của host hiện tại cho nó. Lời mời nhận file (spec B4 mục 3.6): “Đổi…” của hộp hỏi
+và bong bóng (`change_receive_dir_requested`) → `receive_dir_controller.choose(cửa sổ khi đang hiện và
+không thu nhỏ, không thì None)` (không lấy hộp hỏi làm cha: hộp `WA_DeleteOnClose` có thể bị xóa khi
+hộp chọn còn mở); `always_accept_saved` khi đang ở trang Cài đặt → `settings.refresh()`.
 
 **Thư mục nhận** (`ui.receive_dir.ReceiveDirController`, `GuiApp.receive_dir_controller`; spec B1b):
 node chạy với thư mục nhận đã lưu (`ReceiveDirChoice.SAVED`). Host mới → `attach`; `started` →
 `on_started` rồi `show_running(tên, thư mục nhận, thư mục đã lưu hỏng)`. `state_changed` → cửa sổ
-(`set_receive_dir`, `set_receive_dir_pending`) và `TransfersController.set_receive_dir`. “Đổi…” ở
+(`set_receive_dir`, `set_receive_dir_pending`) và `TransfersController.set_receive_dir`,
+`set_receive_dir_pending` (hộp hỏi, panel lời mời tắt “Nhận” khi đang đổi); đã ổn thì
+`show_receive_dir_error(None)`. “Đổi…” ở
 chân “Lưu vào” (`change_receive_dir_requested`) → `choose(cửa sổ)`. `failed` → thanh thông báo của
-luồng chat (`ChatView`); UNAVAILABLE và RESERVED kèm nút “Chọn thư mục khác”. Thư mục đã lưu hỏng lúc
+luồng chat (`ChatView`) và `TransfersController.show_receive_dir_error` (các hộp hỏi đang mở);
+UNAVAILABLE và RESERVED kèm nút “Chọn thư mục khác”. Thư mục đã lưu hỏng lúc
 `started`: node vẫn chạy (không màn lỗi), dải `unavailable_text` kèm nút “Chọn thư mục nhận”, và
 cửa sổ không hiện (chạy nền) thì thêm bóng thoại khay `unavailable_tray_text`. App nhớ câu cuối nó
 hiện ở dải (`_receive_dir_notice`); `state_changed` mà thư mục nhận đã ổn (có thư mục nhận, hết
@@ -163,7 +169,8 @@ mạng; thêm kiểm tài sản đóng gói: lỗi (mã 1) khi thiếu file font
 nền `offscreen` khác nhau giữa các hệ điều hành), khi icon `checkmark_circle` vẽ ra rỗng và khi một
 bản dịch có trong `i18n.available_languages()` (khác chuỗi nguồn) không nạp được. Selftest còn dựng
 mục “Giao diện” (`ui.appearance.AppearanceSection`) và đổi chủ đề một vòng (tối rồi theo hệ điều
-hành) bằng `theme.set_preference`. Khi
+hành) bằng `theme.set_preference`, dựng `OfferBook`, một `OfferPanel` và một hộp hỏi nhận file có
+`offerAlways` (`OfferPrompts.preview`: dựng, không hiện; không quyết định). Khi
 chạy từ bản đóng gói (`sys.frozen`) thì kiểm thêm `QFontInfo(font_for(SECTION)).styleName()` là
 “Medium” và của TITLE là “Bold” (instance thật của font variable, không đậm giả).
 
@@ -206,7 +213,7 @@ from typing import cast
 from PySide6.QtCore import QBuffer, QCoreApplication, QEventLoop, QIODevice, QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontInfo
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
 
 from teleport import paths
 from teleport.app import autostart
@@ -214,7 +221,7 @@ from teleport.app import node as app_node
 from teleport.app.devices import DeviceView
 from teleport.app.node import NodeEvent
 from teleport.app.settings import Settings
-from teleport.app.transfers import TransferUpdate
+from teleport.app.transfers import Direction, FileEntry, OfferReceived, TransferKey, TransferUpdate
 from teleport.atomic import write_atomic
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
@@ -222,9 +229,11 @@ from teleport.ui import errorlog, first_run, fonts, i18n, icons, logo, receive_d
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.appearance import AppearanceSection
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
+from teleport.ui.chat_bubbles import OfferPanel
 from teleport.ui.first_run import FirstRunChoice, TextSource
 from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, Page, ViewState
+from teleport.ui.offer import OfferBook, OfferPrompts
 from teleport.ui.pairing import PairingController, repair_offline_text
 from teleport.ui.radar import DeviceListModel
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
@@ -549,6 +558,8 @@ class GuiApp(QObject):
         self.pairing.devices_changed.connect(self._on_devices_changed)
         self.transfers.pair_needed.connect(self._on_pair_needed)
         self.transfers.repair_requested.connect(self._on_repair_requested)
+        self.transfers.change_receive_dir_requested.connect(self._choose_receive_dir_for_offer)
+        self.transfers.always_accept_saved.connect(self._on_always_accept_saved)
         self.pairing.job_done.connect(self._on_pair_job_done)
         self.pairing.paired.connect(self._on_paired)
         self.pairing.notice.connect(self.transfers.view.show_notice)
@@ -835,6 +846,20 @@ class GuiApp(QObject):
         if not self._quitting:
             self.receive_dir_controller.choose(self.window)
 
+    def _choose_receive_dir_for_offer(self) -> None:
+        """“Đổi…” của hộp hỏi nhận file hay bong bóng lời mời: hộp chọn thư mục, cha là cửa sổ chính
+        khi đang hiện và không thu nhỏ (không lấy hộp hỏi làm cha: nó có thể bị xóa khi hộp chọn còn mở)."""
+        if self._quitting:
+            return
+        window = self.window
+        parent = window if window.isVisible() and not window.isMinimized() else None
+        self.receive_dir_controller.choose(parent)
+
+    def _on_always_accept_saved(self, _device_id: str) -> None:
+        """Đã lưu “Luôn nhận” cho một máy: trang Cài đặt đang mở thì đọc lại cài đặt theo thiết bị."""
+        if self.window.current_page is Page.SETTINGS:
+            self.settings.refresh()
+
     def _on_receive_dir_state(self) -> None:
         """Thư mục nhận / thư mục hỏng / thư mục đang đổi sang đổi: cập nhật cửa sổ và gửi/nhận."""
         c = self.receive_dir_controller
@@ -842,8 +867,10 @@ class GuiApp(QObject):
         self.settings.page.set_receive_dir(c.receive_dir, c.unavailable, c.pending)
         self.window.set_receive_dir_pending(c.pending)
         self.transfers.set_receive_dir(c.receive_dir)
+        self.transfers.set_receive_dir_pending(c.pending)
         if c.unavailable is not None or c.receive_dir is None or c.changing:
             return
+        self.transfers.show_receive_dir_error(None)  # đã ổn: gỡ lỗi đổi thư mục ở các hộp hỏi
         # Đã ổn: gỡ câu lỗi thư mục nhận ở trang Cài đặt nếu trang còn hiện đúng câu đó.
         settings_notice, self._settings_dir_notice = self._settings_dir_notice, None
         if settings_notice is not None and self.settings.notice_text() == settings_notice:
@@ -865,6 +892,9 @@ class GuiApp(QObject):
         if self.window.view_state is ViewState.WELCOME:
             self.window.first_run.set_dir_error(text)
             return
+        # Hộp hỏi giữ nguồn chữ (mã + thư mục) để đổi ngôn ngữ thì dịch lại câu lỗi.
+        path = self.receive_dir_controller.failed_path
+        self.transfers.show_receive_dir_error(functools.partial(receive_dir.change_error_text, code, path))
         if code in (ChangeError.UNAVAILABLE, ChangeError.RESERVED):
             self.transfers.view.show_notice(text, receive_dir.choose_other_text(), self._choose_receive_dir)
         else:
@@ -1385,6 +1415,34 @@ def _assets_ok() -> bool:
     return True
 
 
+def _offer_selftest() -> bool:
+    """Phần lời mời nhận file của `--selftest`: `OfferBook`, `OfferPanel`, một hộp hỏi có ô “Luôn
+    nhận”; đóng hết, không quyết định."""
+    key = TransferKey("0" * 64, Direction.RECEIVE, "0" * 32)
+    item = OfferReceived(key, "Teleport", (FileEntry("a.txt", 1, 0),), ("a.txt",), 1, False)
+    book = OfferBook()
+    prompts = OfferPrompts(book, Path("Teleport"))
+    answered: list[object] = []
+    book.answered.connect(lambda *args: answered.append(args))
+    if not book.add(item):
+        return False
+    entry = book.entry(key)
+    panel = OfferPanel()
+    if entry is None:
+        return False
+    panel.set_entry(entry, Path("Teleport"), None)
+    box = prompts.preview(key)  # dựng, không hiện
+    ok = box is not None and box.findChild(QWidget, "offerAlways") is not None
+    ok = ok and len(panel.focus_widgets()) == 4
+    book.clear()
+    if box is not None:
+        box.deleteLater()
+    panel.deleteLater()
+    prompts.deleteLater()
+    book.deleteLater()
+    return ok and not answered and not prompts.keys()
+
+
 def _selftest(app: QApplication) -> int:
     """Kiểm tài sản, dựng i18n, theme, cửa sổ, khay, luồng chat mà không hiện; không khóa, không mạng."""
     try:
@@ -1419,6 +1477,7 @@ def _selftest(app: QApplication) -> int:
             or transfers.offers.keys()
             or transfers.view.rows()
             or controller.choose(window)
+            or not _offer_selftest()
         ):
             return EXIT_ERROR
         app.processEvents()

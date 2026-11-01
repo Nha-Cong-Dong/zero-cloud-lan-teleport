@@ -834,6 +834,7 @@ def _session_bubble(ctl, direction: str):
 
 
 @pytest.mark.integration
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_w5_gui_send_and_receive_show_sent_and_saved(
     gui, gui_wait, config_dir, trust_each_other, peer_b, tmp_path, ui_helpers
 ):
@@ -911,3 +912,12 @@ def test_hw3_finished_session_transfer_then_switch_back_gives_one_bubble(
 
     gui(["--config-dir", str(a)], script)
     assert seen["count"] == 1
+
+
+@pytest.fixture
+def offers_as_boxes(monkeypatch):
+    """spec-b4 11.3: đang nhìn đúng luồng của máy gửi thì lời mời chỉ ở bong bóng; test chờ hộp hỏi
+    vá `ui.transfers.default_window_active` thành False để hộp luôn bật."""
+    from teleport.ui import transfers
+
+    monkeypatch.setattr(transfers, "default_window_active", lambda: False)

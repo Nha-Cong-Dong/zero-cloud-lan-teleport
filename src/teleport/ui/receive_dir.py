@@ -184,6 +184,7 @@ class ReceiveDirController(QObject):
         self._job: SubmitJob | None = None
         self._token: object | None = None  # việc đổi đang chạy; kết quả mang token khác thì bỏ
         self._dialog: QFileDialog | None = None
+        self._failed_path: Path | None = None  # thư mục của lần `failed` gần nhất
 
     # ---- Trạng thái ----------------------------------------------------------------------------
 
@@ -195,6 +196,12 @@ class ReceiveDirController(QObject):
     def receive_dir(self) -> Path | None:
         """Thư mục nhận đang dùng (gốc thật); None khi chưa biết hay node không nhận file."""
         return self._receive_dir
+
+    @property
+    def failed_path(self) -> Path | None:
+        """Thư mục người dùng chọn ở lần `failed` gần nhất (đặt trước khi phát), để bên nhận dựng lại
+        câu lỗi theo ngôn ngữ mới bằng `change_error_text(mã, failed_path)`."""
+        return self._failed_path
 
     @property
     def unavailable(self) -> Path | None:
@@ -293,6 +300,7 @@ class ReceiveDirController(QObject):
             return False
         path = Path(path)
         if is_reserved(path, host.options.config_dir):
+            self._failed_path = path
             self.failed.emit(ChangeError.RESERVED.value, change_error_text(ChangeError.RESERVED, path))
             return False
         if self._receive_dir is not None and path == self._receive_dir:
@@ -320,6 +328,7 @@ class ReceiveDirController(QObject):
             return  # hộp cũ (đã bị `attach` / `close_all` đóng) phát muộn, hay không chọn gì
         path = Path(selected)
         if is_reserved(path, config_dir):
+            self._failed_path = path
             self.failed.emit(ChangeError.RESERVED.value, change_error_text(ChangeError.RESERVED, path))
             return
         self.initial_selected.emit(path)
@@ -349,6 +358,7 @@ class ReceiveDirController(QObject):
         code = self._classify(host, result)
         self.state_changed.emit()
         if code is not None:
+            self._failed_path = path
             self.failed.emit(code.value, change_error_text(code, path))
 
     @staticmethod

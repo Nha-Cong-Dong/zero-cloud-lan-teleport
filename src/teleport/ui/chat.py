@@ -38,6 +38,17 @@ gọi ngoài cùng có thay đổi cấu trúc: thêm/gỡ bong bóng kể cả 
 thông báo, đổi máy). Chữ của `show_notice` là `texts.Text`: đổi ngôn ngữ thì câu dựng bằng hàm được dịch
 lại, câu dịch sẵn thì thông báo bị ẩn (không còn câu của ngôn ngữ cũ).
 
+**Lời mời nhận file** (spec B4 mục 3.5): `set_offer_book(book)` nối `ui.offer.OfferBook`. `added` →
+`_ensure` bong bóng của key rồi `TransferBubble.set_offer` (panel Nhận / Từ chối, viền ATTENTION, ẩn
+✕); `changed` / `removed` chỉ cập nhật bong bóng đã có (không có thì bỏ qua, nên `book.clear()` trước
+`clear()` không dựng lại bong bóng). Thêm/gỡ panel phát `content_changed`. Panel phát ý định qua
+`offer_answer_requested(key, accept)`, `offer_always_toggled(key, on)` và
+`change_receive_dir_requested()`; quyết định do book chốt. `cancel_requested` không bao giờ phát cho
+bong bóng đang có panel. Lời mời mới ở luồng đang mở (khi `ChatView` đang hiện) phát `QAccessible`
+Alert trên bong bóng, không cướp tiêu điểm. Luồng không được mở vẫn có panel. `set_receive_dir` /
+`set_receive_dir_pending` cập nhật dòng “Lưu vào” của các panel. `is_pinned(id)`: luồng của máy đó
+đang ở cuối (chưa dựng → True), cho `ui.transfers` quyết định có bật hộp hỏi không.
+
 **Gửi**: nút “Gửi file” và Ctrl+O (`QAction` `WindowShortcut` trên `ChatView`, chỉ bật khi có máy được
 chọn; widget ẩn thì không chạy) phát `pick_files_requested(id)`. Thả file vào bất cứ đâu trong
 `ChatView` (luồng, màn rỗng, thanh dưới): chỉ URL file cục bộ (`send.local_paths`, không `stat`), đang
@@ -86,6 +97,7 @@ Seam cho test (biến cấp module, đọc lúc gọi): `open_url`, `_wall_now`.
 from __future__ import annotations
 
 import bisect
+import contextlib
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -106,6 +118,8 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
+    QAccessible,
+    QAccessibleEvent,
     QAction,
     QDesktopServices,
     QDragEnterEvent,
@@ -158,6 +172,7 @@ from teleport.ui.chat_bubbles import (
     separator_text,
 )
 from teleport.ui.conversations import failure_text
+from teleport.ui.offer import OfferBook
 from teleport.ui.radar import DeviceListModel, drop_hint_text
 from teleport.ui.send import printable
 from teleport.ui.widgets import (
@@ -783,6 +798,9 @@ class ChatView(QWidget):
     drop_hint_requested = Signal(str)  # thả khi chưa chọn máy
     history_needed = Signal(str)  # mở luồng mà chưa có lịch sử (sau HISTORY_DEBOUNCE_MS)
     content_changed = Signal()
+    offer_answer_requested = Signal(object, bool)  # TransferKey, accept: Nhận / Từ chối ở panel
+    offer_always_toggled = Signal(object, bool)  # TransferKey, on: ô “Luôn nhận” ở panel
+    change_receive_dir_requested = Signal()  # “Đổi…” ở panel
 
     def __init__(self, devices: DeviceListModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -798,6 +816,8 @@ class ChatView(QWidget):
         self._names: dict[str, str | None] = {}
         self._connected: dict[str, bool] = {}
         self._receive_dir: Path | None = None
+        self._receive_dir_pending: Path | None = None
+        self._offer_book: OfferBook | None = None
         self._notice_callback: Callable[[], None] | None = None
         self._notice_sources: tuple[texts.Text, texts.Text | None] = ("", None)  # câu đang hiện
         self._notice_language = ""  # ngôn ngữ lúc hiện câu đang có
@@ -961,11 +981,83 @@ class ChatView(QWidget):
                 bubble.render_status()
 
     def set_receive_dir(self, receive_dir: Path | None) -> None:
-        """Thư mục nhận: câu lỗi của bên nhận, luật “Mở thư mục” UNC của mục lịch sử."""
+        """Thư mục nhận: câu lỗi của bên nhận, luật “Mở thư mục” UNC của mục lịch sử, dòng “Lưu vào”
+        của panel lời mời."""
         self._receive_dir = receive_dir
         for thread in self._threads.values():
             for bubble in thread.history_bubbles():
                 bubble.set_receive_dir(receive_dir)
+        self._update_offer_dirs()
+
+    def set_receive_dir_pending(self, path: Path | None) -> None:
+        """Thư mục nhận đang đổi sang (None: không đổi): panel lời mời tắt “Nhận” và “Đổi…”."""
+        self._receive_dir_pending = path
+        self._update_offer_dirs()
+
+    def _update_offer_dirs(self) -> None:
+        for bubble in self._bubbles.values():
+            bubble.set_offer_dir(self._receive_dir, self._receive_dir_pending)
+
+    def is_pinned(self, device_id: str) -> bool:
+        """Luồng của `device_id` đang ở cuối (chưa dựng → True)."""
+        thread = self._threads.get(device_id)
+        return True if thread is None else thread.is_pinned()
+
+    # ---- Lời mời nhận file ----------------------------------------------------------------------
+
+    def set_offer_book(self, book: OfferBook) -> None:
+        """Nối các lời mời của `book` vào bong bóng (xem docstring module, “Lời mời nhận file”)."""
+        old = self._offer_book
+        if old is book:
+            return
+        if old is not None:
+            for signal, slot in (
+                (old.added, self._on_offer_added),
+                (old.changed, self._on_offer_changed),
+                (old.removed, self._on_offer_removed),
+            ):
+                with contextlib.suppress(RuntimeError, TypeError):
+                    signal.disconnect(slot)
+        self._offer_book = book
+        book.added.connect(self._on_offer_added)
+        book.changed.connect(self._on_offer_changed)
+        book.removed.connect(self._on_offer_removed)
+
+    def _apply_offer(self, bubble: TransferBubble, key: TransferKey) -> None:
+        book = self._offer_book
+        entry = None if book is None else book.entry(key)
+        if bubble.set_offer(entry, self._receive_dir, self._receive_dir_pending):
+            self._mark_changed()
+
+    def _on_offer_added(self, key: TransferKey) -> None:
+        with self._changes():
+            bubble = self._ensure(key)
+            self._apply_offer(bubble, key)
+        if bubble.offer_panel is not None and key.device_id == self._device_id and self.isVisible():
+            # Trình đọc màn hình báo có lời mời mới, không cướp tiêu điểm.
+            with contextlib.suppress(Exception):
+                QAccessible.updateAccessibility(QAccessibleEvent(bubble, QAccessible.Event.Alert))
+
+    def _on_offer_changed(self, key: TransferKey) -> None:
+        bubble = self._bubbles.get(key)
+        if bubble is not None:
+            with self._changes():
+                self._apply_offer(bubble, key)
+
+    def _on_offer_removed(self, key: TransferKey) -> None:
+        bubble = self._bubbles.get(key)
+        if bubble is not None:
+            with self._changes():
+                if bubble.set_offer(None):
+                    self._mark_changed()
+
+    def _offer_answer(self, bubble: TransferBubble, accept: bool) -> None:
+        if self._bubbles.get(bubble.key) is bubble:
+            self.offer_answer_requested.emit(bubble.key, bool(accept))
+
+    def _offer_always(self, bubble: TransferBubble, on: bool) -> None:
+        if self._bubbles.get(bubble.key) is bubble:
+            self.offer_always_toggled.emit(bubble.key, bool(on))
 
     def load_snapshot(self, infos: Iterable[TransferInfo]) -> None:
         """Ảnh chụp `transfers()`: thêm bong bóng cho lượt chưa có, bong bóng đã có giữ nguyên."""
@@ -1357,6 +1449,9 @@ class ChatView(QWidget):
         bubble.cancel_clicked.connect(lambda b=bubble: self._cancel_clicked(b))
         bubble.open_clicked.connect(lambda b=bubble: self._open_transfer(b))
         bubble.resend_clicked.connect(lambda b=bubble: self._resend_clicked(b))
+        bubble.offer_answer.connect(lambda accept, b=bubble: self._offer_answer(b, accept))
+        bubble.offer_always.connect(lambda on, b=bubble: self._offer_always(b, on))
+        bubble.offer_change.connect(self.change_receive_dir_requested)
         self._bubbles[key] = bubble
         thread.add(bubble, seq, new=True)
         self._mark_changed()
@@ -1387,7 +1482,7 @@ class ChatView(QWidget):
         return texts.peer_label(name, device_id)
 
     def _cancel_clicked(self, bubble: TransferBubble) -> None:
-        if not bubble.finished and self._bubbles.get(bubble.key) is bubble:
+        if not bubble.finished and bubble.offer_panel is None and self._bubbles.get(bubble.key) is bubble:
             self.cancel_requested.emit(bubble.key)
 
     def _resend_clicked(self, bubble: TransferBubble) -> None:
