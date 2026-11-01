@@ -44,6 +44,7 @@ viết dở chỉ làm đỏ các test dùng tới nó.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import io
 import json
@@ -83,6 +84,8 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         f"{REAL_LIMITS_MARKER}: không nới tốc độ/burst bắt tay của teleport.core.admission (mặc định thật)",
     )
+    # Hook trong conftest phải tên `pytest_*`, mà tên đó đã dùng cho hook `tryfirst` bên dưới.
+    config.pluginmanager.register(_Shard(), "teleport-shard")
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -97,6 +100,36 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         item.add_marker(pytest.mark.xdist_group("mdns"))
         if skip:
             item.add_marker(pytest.mark.skip(reason="TELEPORT_SKIP_MDNS=1"))
+
+
+class _Shard:
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(self, config: pytest.Config, items: list[pytest.Item]) -> None:
+        """`TELEPORT_SHARD=i/n` (1 ≤ i ≤ n): chỉ chạy phần thứ i trong n phần, chia theo file để mọi test
+        của một file ở cùng một phần. Chia tham lam theo số test (file nhiều test trước, vào phần đang ít
+        nhất; hòa thì theo đường dẫn), nên cùng bộ test thì cùng cách chia trên mọi máy. `trylast` để chia
+        sau khi `-m`/`-k` đã lọc. CI dùng để chạy song song các phần tuần tự (architecture.md mục 6)."""
+        spec = os.environ.get("TELEPORT_SHARD", "")
+        if not spec:
+            return
+        try:
+            index, total = (int(x) for x in spec.split("/"))
+        except ValueError:
+            raise pytest.UsageError(f"TELEPORT_SHARD phải có dạng i/n, nhận {spec!r}") from None
+        if not 1 <= index <= total:
+            raise pytest.UsageError(f"TELEPORT_SHARD phải có 1 ≤ i ≤ n, nhận {spec!r}")
+        files = [item.nodeid.split("::")[0] for item in items]
+        counts = collections.Counter(files)
+        load = [0] * total
+        owner: dict[str, int] = {}
+        for path in sorted(counts, key=lambda p: (-counts[p], p)):
+            owner[path] = load.index(min(load))
+            load[owner[path]] += counts[path]
+        keep = [item for item, f in zip(items, files, strict=True) if owner[f] == index - 1]
+        dropped = [item for item, f in zip(items, files, strict=True) if owner[f] != index - 1]
+        if dropped:
+            config.hook.pytest_deselected(items=dropped)
+            items[:] = keep
 
 
 MiB = 1024 * 1024
