@@ -52,9 +52,11 @@ và hủy mọi lượt truyền với nó (không có `await` xen giữa), rồ
 
 Cài đặt (`app.settings`, đọc một lần lúc `start`): tên, thư mục nhận (`ReceiveDirChoice.SAVED`),
 giới hạn tốc độ, ngưỡng dọn tạm, cài đặt theo thiết bị ("Hỏi trước khi nhận") và cài đặt của
-giao diện; đổi lúc chạy bằng các setter (`set_name`, `set_receive_dir`…), ghi file trước rồi mới
-đổi RAM. Cài đặt theo thiết bị chỉ có hiệu lực với thiết bị đang tin cậy; `unpair`,
-`unpair_offline` và ghép đôi (kể cả ghép đôi lại) xóa mục của thiết bị đó.
+giao diện (gồm nhớ trạng thái cửa sổ: `window`, `last_conversation`, `tray_hint_shown`); đổi lúc
+chạy bằng các setter (`set_name`, `set_receive_dir`…), ghi file trước rồi mới đổi RAM;
+`set_ui_preferences` không ghi khi không có gì đổi. Cài đặt theo thiết bị và `last_conversation`
+chỉ có hiệu lực với thiết bị đang tin cậy; `unpair`, `unpair_offline` xóa cả hai của thiết bị đó,
+ghép đôi (kể cả ghép đôi lại) xóa mục cài đặt theo thiết bị của nó.
 """
 
 from __future__ import annotations
@@ -87,7 +89,7 @@ from teleport.app import transfers as app_transfers
 from teleport.app.devices import DeviceNotFound, DeviceRegistry, DeviceView, resolve_trusted
 from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt, PairingService
-from teleport.app.settings import DeviceSettings, Settings, SettingsSaveError
+from teleport.app.settings import DeviceSettings, Settings, SettingsSaveError, WindowGeometry
 from teleport.app.transfers import ReceiveDirBusy, TransferManager, TransferUpdate
 from teleport.core.discovery import (
     PROBE_INTERVAL,
@@ -416,6 +418,11 @@ def find_trusted(config_dir: Path, query: str) -> TrustedDevice:
     return resolve_trusted(query, store.devices())
 
 
+def _mentions_device(settings: Settings, device_id: str) -> bool:
+    """`settings` có gì của `device_id` phải bỏ khi hủy ghép đôi: mục `devices` hay `last_conversation`."""
+    return device_id in settings.devices or settings.last_conversation == device_id
+
+
 def unpair_offline(config_dir: Path, query: str, *, lock_timeout: float | None = None) -> TrustedDevice:
     """Hủy ghép đôi khi không có node nào chạy: giữ `node.lock`, xóa khỏi `trusted.json`.
 
@@ -423,8 +430,9 @@ def unpair_offline(config_dir: Path, query: str, *, lock_timeout: float | None =
     có → DeviceNotFound ngay, không tạo gì. Lỗi bay ra nguyên trạng: NodeLockedError
     (đang có node chạy), TrustStoreError, DeviceNotFound, AmbiguousDevice, OSError
     (không tạo/khóa được, ví dụ đường dẫn là một file). Xóa xong, vẫn giữ khóa, bỏ mục cài
-    đặt theo thiết bị của máy đó trong `settings.json` (nếu có); không ghi được thì chỉ WARNING
-    (mục đó không có hiệu lực vì máy không còn tin cậy, và bị bỏ ở lần ghi sau).
+    đặt theo thiết bị của máy đó và `last_conversation` nếu là máy đó trong `settings.json` (chỉ
+    ghi khi có một trong hai); không ghi được thì chỉ WARNING (chúng không có hiệu lực vì máy
+    không còn tin cậy, và bị bỏ ở lần ghi sau).
     """
     config_dir = Path(config_dir)
     if not config_dir.exists():
@@ -436,7 +444,7 @@ def unpair_offline(config_dir: Path, query: str, *, lock_timeout: float | None =
         device = resolve_trusted(query, store.devices())
         removed = store.remove(device.device_id)
         settings = Settings.load(config_dir)
-        if removed.device_id in settings.devices:
+        if _mentions_device(settings, removed.device_id):
             ids = [d.device_id for d in store.devices()]
             try:
                 settings.with_device(removed.device_id, None).pruned(ids).save(config_dir)
@@ -1359,10 +1367,16 @@ class Node:
         radar_view: str | _Unset | None = _UNSET,
         theme: str | _Unset | None = _UNSET,
         accent: str | _Unset | None = _UNSET,
-    ) -> None:
+        window: WindowGeometry | _Unset | None = _UNSET,
+        last_conversation: str | _Unset | None = _UNSET,
+        tray_hint_shown: bool | _Unset = _UNSET,
+    ) -> bool:
         """Lưu cài đặt của giao diện (chỉ lưu; app không làm gì thêm). Trường không truyền giữ nguyên.
 
-        Sai theo luật của `Settings` → ValueError / TypeError.
+        Trả True khi đã ghi file. Bản mới (đã bỏ mục của thiết bị không tin cậy, `Settings.pruned`)
+        bằng bản đang có thì không ghi, trả False: giao diện gọi lặp lúc ẩn xuống khay hay thoát mà
+        không gây ghi dồn dập. `last_conversation` của thiết bị không tin cậy bị bỏ như vậy, không
+        báo lỗi. Sai theo luật của `Settings` → ValueError / TypeError; ghi lỗi → SettingsSaveError.
         """
         self._check_running()
         assert self._settings is not None
@@ -1375,11 +1389,17 @@ class Node:
                 ("radar_view", radar_view),
                 ("theme", theme),
                 ("accent", accent),
+                ("window", window),
+                ("last_conversation", last_conversation),
+                ("tray_hint_shown", tray_hint_shown),
             )
             if value is not _UNSET
         }
-        if changes:
-            self._save_settings(dataclasses.replace(self._settings, **changes))
+        new = dataclasses.replace(self._settings, **changes).pruned(self._trusted_ids())
+        if new == self._settings:  # so sánh bỏ qua `extra`, `load_failed`
+            return False
+        self._save_settings(new)
+        return True
 
     def _asks_before_receive(self, device_id: str) -> bool:
         """`TransferManager`: hỏi trước khi nhận từ `device_id` không (đọc lúc có `offer`).
@@ -1571,9 +1591,9 @@ class Node:
         Khi trả về, máy đó không còn trong `connected_devices()`, lần thử kết nối tới nó
         đã bị hủy, mọi lượt truyền với nó đã bị hủy (kết quả `UNPAIRED`; máy kia không nhận
         `cancel` vì kết nối đã mất, nó kết thúc lượt bằng `EXPIRED`), mục cài đặt theo thiết bị
-        của nó đã bị xóa khỏi `settings.json` (ghi lỗi thì chỉ WARNING: mục đó không có hiệu lực
-        và bị bỏ ở lần ghi sau), và kết nối của nó đã bắt đầu đóng (chờ tối đa
-        UNPAIR_CLOSE_TIMEOUT). Node chưa chạy → RuntimeError.
+        của nó và `last_conversation` nếu là nó đã bị xóa khỏi `settings.json` (ghi lỗi thì chỉ
+        WARNING: chúng không có hiệu lực và bị bỏ ở lần ghi sau), và kết nối của nó đã bắt đầu
+        đóng (chờ tối đa UNPAIR_CLOSE_TIMEOUT). Node chưa chạy → RuntimeError.
 
         `clear_history`: xóa luôn lịch sử với máy đó (mvp F5), gồm cả các mục `UNPAIRED` vừa
         sinh; mặc định giữ (mục của máy đã hủy ghép đôi còn tới khi xóa toàn bộ lịch sử).
@@ -1582,8 +1602,9 @@ class Node:
             raise RuntimeError("node chưa chạy")
         # Đồng bộ từ đây tới lúc lấy kết nối ra khỏi bảng và hủy các lượt: không có await xen giữa.
         device = self.store.remove(device_id)
-        if self._settings is not None and device.device_id in self._settings.devices:
+        if self._settings is not None and _mentions_device(self._settings, device.device_id):
             try:
+                # `_save_settings` bỏ cả `last_conversation` (máy đó đã ra khỏi kho: `pruned`).
                 self._save_settings(self._settings.with_device(device.device_id, None))
             except SettingsSaveError as e:
                 log.warning(

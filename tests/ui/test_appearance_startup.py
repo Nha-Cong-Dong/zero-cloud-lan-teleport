@@ -2,8 +2,8 @@
 
 Viết từ spec, không từ code.
 
-- `ui/app.py::_saved_ui_preferences(config_dir) -> (language, theme, accent)` thay `_saved_language`:
-  `Settings.load` một lần, chỉ đọc; mọi `Exception` → `(None, None, None)`.
+- `ui/app.py::_saved_settings(config_dir) -> Settings` (spec-f1 R1, thay `_saved_ui_preferences`):
+  `Settings.load` một lần, chỉ đọc; mọi `Exception` → `Settings()`. `_run` lấy language/theme/accent từ đó.
 - `_run`: `i18n.install(app, language)` → `fonts.install()` → `theme.set_preference(app,
   theme.mode_from_setting(t), a)` → `SingleInstance.acquire` → cửa sổ. Tức chủ đề đã lưu được áp
   **trước** khi tạo cửa sổ đầu tiên (không nháy màu).
@@ -30,7 +30,7 @@ integration = pytest.mark.integration
 
 
 # =================================================================================================
-# _saved_ui_preferences
+# _saved_settings
 # =================================================================================================
 
 
@@ -49,7 +49,8 @@ integration = pytest.mark.integration
     ],
     ids=["du-ba", "chi-theme", "accent-la", "theme-system", "sai-kieu", "rong", "khong-file", "hong", "mang"],
 )
-def test_saved_ui_preferences_reads_three_fields_read_only(tmp_path, content, want):
+def test_saved_settings_reads_three_fields_read_only(tmp_path, content, want):
+    from teleport.app.settings import Settings
     from teleport.ui import app as ui_app
 
     d = tmp_path / "cfg"
@@ -61,21 +62,24 @@ def test_saved_ui_preferences_reads_three_fields_read_only(tmp_path, content, wa
         path.write_text(content, encoding="utf-8")
     before = sorted(p.name for p in d.iterdir())
     raw = path.read_bytes() if path.exists() else None
-    assert ui_app._saved_ui_preferences(d) == want
+    saved = ui_app._saved_settings(d)
+    assert isinstance(saved, Settings)
+    assert (saved.language, saved.theme, saved.accent) == want
     assert sorted(p.name for p in d.iterdir()) == before, "chỉ đọc: không tạo file nào"
     assert (path.read_bytes() if path.exists() else None) == raw, "chỉ đọc: không sửa settings.json"
 
 
-def test_saved_ui_preferences_config_dir_is_file(tmp_path):
+def test_saved_settings_config_dir_is_file(tmp_path):
+    from teleport.app.settings import Settings
     from teleport.ui import app as ui_app
 
     f = tmp_path / "la-file"
     f.write_text("x", encoding="utf-8")
-    assert ui_app._saved_ui_preferences(f) == (None, None, None)
+    assert ui_app._saved_settings(f) == Settings()
 
 
 @pytest.mark.parametrize("error", [RuntimeError("x"), ValueError("x"), OSError(5, "x"), RecursionError()])
-def test_saved_ui_preferences_any_exception_defaults(tmp_path, monkeypatch, error):
+def test_saved_settings_any_exception_defaults(tmp_path, monkeypatch, error):
     from teleport.app.settings import Settings
     from teleport.ui import app as ui_app
 
@@ -83,10 +87,10 @@ def test_saved_ui_preferences_any_exception_defaults(tmp_path, monkeypatch, erro
         raise error
 
     monkeypatch.setattr(Settings, "load", classmethod(boom))
-    assert ui_app._saved_ui_preferences(tmp_path) == (None, None, None)
+    assert ui_app._saved_settings(tmp_path) == Settings()
 
 
-def test_saved_ui_preferences_loads_settings_once(tmp_path, monkeypatch):
+def test_saved_settings_loads_settings_once(tmp_path, monkeypatch):
     from teleport.app.settings import Settings
     from teleport.ui import app as ui_app
 
@@ -99,7 +103,7 @@ def test_saved_ui_preferences_loads_settings_once(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Settings, "load", classmethod(counting))
     (tmp_path / "settings.json").write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
-    ui_app._saved_ui_preferences(tmp_path)
+    assert ui_app._saved_settings(tmp_path).theme == "dark"
     assert len(calls) == 1
 
 
