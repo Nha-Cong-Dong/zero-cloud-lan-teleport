@@ -81,7 +81,7 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 
 **Có:** giao diện tối thiểu trên Windows: radar (danh sách thiết bị, nút nhập IP), ghép đôi bằng mã 6 số, kéo thả hoặc “Gửi file…”, hộp thoại Nhận / Từ chối, danh sách lượt truyền có tiến độ, tốc độ, trạng thái “Đang nối lại…” và nút hủy; tự nối lại và kiểm tra toàn vẹn như F6, F7; bản zip chạy không cần cài Python. CLI giữ như F12.
 
-**Để sau hackathon:** màn hình “Chờ ghép đôi” (F3), lần chạy đầu (F1), English (F11), trợ năng (N12), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; hệ điều hành bằng chữ và trạng thái “đang bận” (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP và “Đổi thư mục nhận” (mục 8).
+**Để sau hackathon:** màn hình “Chờ ghép đôi” (F3), English (F11), trợ năng (N12), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; hệ điều hành bằng chữ và trạng thái “đang bận” (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP và “Đổi thư mục nhận” (mục 8).
 
 **Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](benchmark.md).
 
@@ -107,7 +107,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **US-01:** Là người dùng mới, tôi muốn cài app và dùng được ngay mà không phải cấu hình gì.
 - **AC:**
   - Bộ cài Windows ≤ 80MB, cài xong không cần khởi động lại máy; bộ cài tự tạo rule tường lửa cho mạng Private.
-  - Lần chạy đầu chỉ hỏi 2 thứ: **tên thiết bị** (mặc định = tên máy) và **thư mục nhận** (mặc định = `Downloads/Teleport`), kèm câu hỏi có khởi động cùng hệ điều hành không.
+  - Lần chạy đầu chỉ hỏi 2 thứ: **tên thiết bị** (mặc định = tên máy) và **thư mục nhận** (mặc định = `Downloads/Teleport`), kèm câu hỏi có khởi động cùng hệ điều hành không (chỉ trên hệ điều hành hỗ trợ khởi động cùng máy, mặc định bật; ghi khi Teleport đã chạy được). Màn hình: mục 7.6.
   - Ngay dưới ô tên thiết bị có dòng: “Tên này hiện với mọi máy trong cùng mạng, kể cả máy lạ chưa ghép đôi. Nếu không muốn lộ tên mình, hãy đặt tên khác.” Muốn ẩn máy này khỏi máy chưa ghép đôi thì dùng công tắc ở F10; những gì máy này để lộ: mục 11.
   - Từ lúc mở bộ cài tới lúc gửi xong file đầu tiên mất < 2 phút với người chưa từng dùng.
 
@@ -459,6 +459,48 @@ Trên terminal, dòng tiến độ được vẽ lại tại chỗ, cắt vừa 
 - Hai dòng “Máy này đang ẩn…” chỉ hiện khi máy này đang ẩn (F10).
 - Có yêu cầu ghép đôi thì lời hỏi hiện theo mục 7.2.
 
+### 7.6. Lần chạy đầu
+```
+┌─ ZCL Teleport ────────────────────────────────────┐
+│                                                   │
+│               (logo) ZCL Teleport                 │
+│                                                   │
+│  Gửi file lớn giữa các máy trong cùng mạng.       │
+│  Không qua cloud.                                 │
+│                                                   │
+│  (i) Không tài khoản, không máy chủ trung gian    │
+│  (i) Mã hóa đầu cuối giữa hai máy                 │
+│  (i) Tự nối lại khi rớt mạng, không phải gửi      │
+│      lại từ đầu                                   │
+│                                                   │
+│  Tên thiết bị                                     │
+│  [ Laptop-Minh                               ]    │
+│  (dòng ngay dưới ô tên thiết bị ở F1)             │
+│                                                   │
+│  Thư mục nhận file                                │
+│  C:\Users\Minh\Downloads\Teleport     [ Đổi… ]    │
+│                                                   │
+│  Khởi động cùng Windows             [ Bật ━● ]    │
+│  Teleport chạy ẩn ở khay hệ thống từ khi bạn      │
+│  đăng nhập Windows, để luôn sẵn sàng nhận file.   │
+│                                                   │
+│  Bấm Bắt đầu để Teleport chạy và hiện máy này     │
+│  với các máy khác trong mạng.                     │
+│                                                   │
+│                 [   Bắt đầu   ]                   │
+│                                                   │
+└───────────────────────────────────────────────────┘
+```
+- Hiện khi mở giao diện mà máy chưa có danh tính, kể cả khi mở bằng `--background` (cửa sổ vẫn hiện). Máy đã có danh tính (từ CLI hay từ bản trước) không bao giờ hiện màn này.
+- Chưa bấm “Bắt đầu” thì Teleport không chạy, không quảng bá và chưa tạo danh tính.
+- “(i)” là biểu tượng trang trí của từng ý; mọi trạng thái và lỗi trên màn đều có chữ, không chỉ dùng màu (N12).
+- **Tên thiết bị:** điền sẵn tên đã lưu, chưa có thì tên máy (F1). Tên máy không dùng được làm tên thiết bị (rỗng, quá dài, có ký tự điều khiển) thì ô để trống, có chữ mờ “Ví dụ: Laptop-Minh”, và người dùng phải gõ tên. Tên được kiểm khi bấm “Bắt đầu”, khi nhấn Enter trong ô (Enter trong ô làm như bấm “Bắt đầu”) và khi rời ô đã sửa; lỗi “rỗng” chỉ hiện khi bấm “Bắt đầu” hay nhấn Enter. Lỗi hiện ngay dưới ô (mục 8), tiêu điểm về ô, gõ tiếp thì lỗi ẩn. Tên để nguyên như gợi ý thì không ghi vào cài đặt; tên đã sửa được lưu trước khi máy này quảng bá.
+- **Thư mục nhận:** hiện thư mục đã lưu, chưa có thì thư mục mặc định (F1); đường dẫn dài thì cắt ở giữa, đầy đủ ở chú thích. “Đổi…” mở hộp chọn thư mục. Thư mục riêng của Teleport bị từ chối ngay lúc chọn; thư mục đã chọn mà lúc bấm “Bắt đầu” không dùng được thì màn quay lại đây, giữ tên đã gõ, tiêu điểm ở “Đổi…”. Cả hai lỗi hiện ngay dưới hàng thư mục (mục 8).
+- **Khởi động cùng Windows:** hàng chỉ hiện trên hệ điều hành hỗ trợ (F10). Công tắc bật sẵn, trừ khi Teleport đang được đặt khởi động từ bản khác hay Windows đang tắt Teleport trong danh sách ứng dụng khởi động: khi đó công tắc tắt sẵn và dưới hàng có câu tương ứng của dòng “Giao diện, Cài đặt: khởi động cùng Windows” (mục 8). Lựa chọn chỉ được ghi khi Teleport đã chạy được, không ghi lúc bấm. Công tắc tắt thì chỉ gỡ khởi động cùng Windows đang bật cho chính bản này; bản khác và lựa chọn tắt trong danh sách ứng dụng khởi động của Windows giữ nguyên. Bật không được thì Teleport vẫn chạy và báo (mục 8); đổi lại trong Cài đặt.
+- Bấm “Bắt đầu” (tên hợp lệ) thì màn chuyển sang “Đang khởi động…”. Khởi động lỗi (trừ lỗi thư mục đã chọn ở trên) thì hiện câu của dòng “Giao diện: … khi khởi động” tương ứng ở mục 8 với nút “Thử lại”; “Thử lại” dùng lại đúng tên, thư mục và lựa chọn đã chọn.
+- Lỗi khởi động đến sau khi danh tính đã được tạo (ví dụ thư mục đã chọn không dùng được): tên đã sửa đã được lưu, thư mục không dùng được thì không lưu. Người dùng thoát app thay vì sửa rồi bấm lại thì lần mở sau không hiện màn này nữa: Teleport dùng thư mục đã lưu hay mặc định, lựa chọn khởi động cùng Windows bị bỏ; đổi lại trong Cài đặt.
+- Bàn phím: tiêu điểm đầu ở ô tên (có lỗi thư mục thì ở “Đổi…”); Tab theo thứ tự ô tên → “Đổi…” → công tắc (khi hiện) → “Bắt đầu”; Space bật/tắt công tắc.
+
 ---
 
 ## 8. Thông báo lỗi & tình huống đặc biệt
@@ -549,7 +591,10 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: đổi thư mục nhận gặp lỗi khác | “Chưa đổi được thư mục nhận vì một lỗi không mong đợi. Hãy thử lại.” | Thư mục nhận giữ nguyên |
 | Giao diện: không mở được cổng khi khởi động | “Không mở được cổng để nhận kết nối (*lỗi*).” kèm dòng “Hãy đóng ứng dụng đang dùng cổng đó rồi bấm Thử lại.” | Nút “Thử lại” |
 | Giao diện: lỗi khác khi khởi động | “Teleport không khởi động được vì một lỗi không mong đợi.” kèm dòng “Hãy bấm Thử lại; nếu vẫn lỗi, hãy chạy “teleport receive” trong cửa sổ dòng lệnh để xem chi tiết.” | Nút “Thử lại” |
-| Giao diện: mở app khi máy chưa có danh tính (tạm, tới khi có màn hình lần chạy đầu của F1) | “Bắt đầu dùng Teleport”, rồi “Tên của máy này trong mạng: *X*” (tên mặc định của F1), câu đầu của dòng ngay dưới ô tên thiết bị ở F1, và “Bấm Bắt đầu để Teleport chạy và hiện máy này với các máy khác trong mạng.” Chưa bấm thì Teleport không chạy, không quảng bá | Nút “Bắt đầu” |
+| Giao diện: mở app khi máy chưa có danh tính (lần chạy đầu, F1, mục 7.6) | Màn lần chạy đầu với nội dung theo mục 7.6. Chưa bấm thì Teleport không chạy, không quảng bá | Nút “Bắt đầu” |
+| Giao diện, lần chạy đầu: tên thiết bị rỗng / sai | Câu của dòng “Giao diện, Cài đặt: tên thiết bị rỗng / sai” (ngay dưới ô tên) | Sửa tên rồi bấm “Bắt đầu” |
+| Giao diện, lần chạy đầu: thư mục vừa chọn không dùng được / là thư mục riêng của Teleport | Câu của dòng “Giao diện: thư mục vừa chọn để nhận file không dùng được” / “Giao diện: thư mục vừa chọn là thư mục riêng của Teleport”, hiện ngay dưới hàng thư mục (thư mục không dùng được chỉ biết khi bấm “Bắt đầu”: màn quay lại lần chạy đầu, giữ tên đã gõ) | Nút “Đổi…” |
+| Giao diện, lần chạy đầu: không bật được khởi động cùng Windows | “Chưa bật được khởi động cùng Windows vì Windows không cho ghi cài đặt khởi động. Bạn có thể bật lại trong Cài đặt.” ở dải thông báo của cửa sổ chính; Teleport vẫn chạy. Đang có dải báo thư mục nhận không mở được (dòng “Giao diện: thư mục nhận đã lưu không mở được khi khởi động”) thì chỉ hiện dải đó | Nút “Mở Cài đặt” |
 | Giao diện: trạng thái của một thiết bị trên màn “Tìm máy mới” (dạng danh sách) | Sau tên và “(đã ghép)” / “(chưa ghép)” (mục 7.1): “đã kết nối”, “đang trong mạng” hoặc “không thấy trong mạng”. Thiết bị đã ghép đôi mà lần kết nối gần nhất lỗi thì thêm câu của dòng “Thấy nhưng không kết nối được” (chỉ khi còn thấy trong mạng), “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức”, tới khi kết nối lại được | — |
 | Giao diện: trạng thái của một máy ở danh sách cuộc trò chuyện | “Trực tuyến”, “Ngoại tuyến” hoặc lượt đang chạy (“Đang gửi · 62%”…), rồi hoạt động gần nhất. Lần kết nối gần nhất lỗi thì nhãn ngắn “Bị từ chối kết nối”, “Danh tính đã đổi”, “Khác phiên bản” hoặc “Không kết nối được”, kèm câu đầy đủ ở chú thích. Đang kéo file qua hàng: “Thả để gửi *n* file” | — |
 | Giao diện: đang ghép đôi (máy này gửi yêu cầu, máy kia chưa hiện mã) | Hộp “Ghép đôi” có thanh chờ và câu “Đang ghép đôi với “*PC-Nha*”…” (ghép bằng IP: “*192.168.1.5:47474*” thay cho tên) | Nút “Hủy” |

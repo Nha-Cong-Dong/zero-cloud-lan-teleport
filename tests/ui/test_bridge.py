@@ -544,3 +544,70 @@ def test_receive_dir_props_are_snapshot_at_started(qtbot, config_dir, node_optio
     assert isinstance(got[0], Path) and _same_dir(got[0], new), got
     assert _same_dir(host.receive_dir, old)
     assert host.receive_dir_error is None
+
+
+# --- `name`, `save_args` cho lần chạy đầu (spec D1 mục 5.3; 14.15) ------------------------------------
+
+
+def test_node_options_defaults_name_none_save_args_false(tmp_path):
+    from teleport.ui.bridge import NodeOptions
+
+    opts = NodeOptions(config_dir=tmp_path)
+    assert opts.name is None
+    assert opts.save_args is False
+
+
+class _NodeCapture:
+    """Thay `teleport.ui.bridge.Node`: ghi tham số rồi ném `RuntimeError` (không node, không socket)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple, dict]] = []
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        raise RuntimeError("Node giả của test")
+
+
+def _start_with_fake_node(qtbot, monkeypatch, node_hosts, options) -> tuple[_NodeCapture, Probe]:
+    from teleport.ui import bridge
+
+    capture = _NodeCapture()
+    monkeypatch.setattr(bridge, "Node", capture)
+    host = node_hosts(options)
+    probe = Probe(host)
+    host.start()
+    qtbot.waitUntil(lambda: "start_failed" in probe.names() or "started" in probe.names(), timeout=10_000)
+    return capture, probe
+
+
+@pytest.mark.parametrize(
+    ("name", "save_args"),
+    [("PC Nhà", True), ("Laptop-Minh", False), (None, True)],
+    ids=["name_and_save", "name_no_save", "save_only"],
+)
+def test_node_options_name_and_save_args_reach_node(
+    qtbot, monkeypatch, config_dir, node_options, node_hosts, name, save_args
+):
+    d = config_dir("A", identity=False)
+    capture, probe = _start_with_fake_node(
+        qtbot, monkeypatch, node_hosts, node_options(d, name=name, save_args=save_args)
+    )
+    [(_, (code, _detail), _)] = [e for e in probe.log if e[0] == "start_failed"]
+    assert code == "other", "Node() ném RuntimeError → start_failed(OTHER)"
+    assert len(capture.calls) == 1
+    args, kwargs = capture.calls[0]
+    assert "name" in kwargs and kwargs["name"] == name, kwargs
+    assert "save_args" in kwargs and kwargs["save_args"] is save_args, kwargs
+    assert (args[0] if args else kwargs.get("config_dir")) == d
+
+
+def test_node_options_defaults_reach_node_as_no_name_no_save(
+    qtbot, monkeypatch, config_dir, node_options, node_hosts
+):
+    """Mặc định (`name=None`, `save_args=False`): `Node` nhận đúng như trước D1 (tên tạm không lưu)."""
+    d = config_dir("A")
+    capture, probe = _start_with_fake_node(qtbot, monkeypatch, node_hosts, node_options(d))
+    assert "start_failed" in probe.names()
+    [(_, kwargs)] = capture.calls
+    assert kwargs.get("name") is None
+    assert kwargs.get("save_args", False) is False

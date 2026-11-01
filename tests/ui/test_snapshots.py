@@ -15,8 +15,11 @@ nên biến môi trường thắng)::
 
 Ảnh không commit vào repo: đính vào PR. Các PR của đợt B thêm cảnh của mình vào `SCENES`.
 
-Cảnh: `welcome`, `starting`, `running` (một địa chỉ, chưa có máy đã ghép đôi → “Ghép đôi máy đầu
-tiên”), `running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo),
+Cảnh: `welcome` (màn lần chạy đầu, có công tắc khởi động cùng Windows; spec D1),
+`welcome_no_autostart` (hệ điều hành không hỗ trợ: không có hàng công tắc), `welcome_name_error` (gợi
+ý rỗng, bấm “Bắt đầu”: lỗi dưới ô tên), `welcome_dir_error` (thư mục đã chọn không dùng được),
+`starting`, `running` (một địa chỉ, chưa có máy đã ghép đôi → “Ghép đôi máy đầu tiên”),
+`running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo),
 `running_unavailable` (thư mục nhận đã lưu không mở được, spec B1b), `error`, `widgets` (trang
 mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`, kể cả `SegmentedControl` của spec D6),
 `page` (RUNNING, mở một trang mẫu có
@@ -41,7 +44,7 @@ tuyến: lượt chờ kết nối, câu ngoại tuyến ở thanh dưới), `ch
 qua và lượt của phiên hôm nay), `chat_empty` (máy chưa có lượt nào: màn rỗng “Kéo file vào đây…”).
 
 Giờ cố định bằng seam `_wall_now` của `ui.conversations`, `ui.transfers` (`NOW`) và `ui.chat` (cảnh
-luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 24 cảnh × 2 chế độ × 2 cỡ = 96 ảnh.
+luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 27 cảnh × 2 chế độ × 2 cỡ = 108 ảnh.
 """
 
 from __future__ import annotations
@@ -105,8 +108,44 @@ def _main_window(qtbot):
 
 def scene_welcome(qtbot) -> QWidget:
     window = _main_window(qtbot)
-    window.show_welcome("Laptop-Minh")
+    window.show_welcome("Laptop-Minh", RECEIVE_DIR, autostart=True)
     return window
+
+
+def scene_welcome_no_autostart(qtbot) -> QWidget:
+    window = _main_window(qtbot)
+    window.show_welcome("Laptop-Minh", RECEIVE_DIR, autostart=None)
+    return window
+
+
+def scene_welcome_name_error(qtbot) -> QWidget:
+    window = _main_window(qtbot)
+    window.show_welcome("", RECEIVE_DIR, autostart=True)
+    assert window.first_run.validate() is None  # gợi ý rỗng: “Hãy nhập tên thiết bị.” dưới ô
+    return window
+
+
+def scene_welcome_dir_error(qtbot) -> QWidget:
+    from teleport.ui.receive_dir import ChangeError, change_error_text
+
+    chosen = Path("E:/Ổ-USB/Teleport-nhận-file-từ-máy-khác")
+    window = _main_window(qtbot)
+    window.show_welcome(
+        "Laptop-Minh",
+        RECEIVE_DIR,
+        autostart=True,
+        choice=_first_run_choice(chosen),
+        dir_error=change_error_text(ChangeError.UNAVAILABLE, chosen),
+    )
+    return window
+
+
+def _first_run_choice(receive_dir: Path):
+    from teleport.ui.first_run import FirstRunChoice
+
+    return FirstRunChoice(
+        name_text="Laptop-Minh", name=None, receive_dir=receive_dir, receive_dir_chosen=True, autostart=True
+    )
 
 
 def scene_starting(qtbot) -> QWidget:
@@ -813,6 +852,9 @@ def scene_chat_empty(qtbot) -> QWidget:
 SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     # tên cảnh: (hàm dựng, là cửa sổ chính, token mà điểm (4,4) phải bằng; None: không kiểm góc)
     "welcome": (scene_welcome, True, "surface"),
+    "welcome_no_autostart": (scene_welcome_no_autostart, True, "surface"),
+    "welcome_name_error": (scene_welcome_name_error, True, "surface"),
+    "welcome_dir_error": (scene_welcome_dir_error, True, "surface"),
     "starting": (scene_starting, True, "surface"),
     "running": (scene_running, True, "sidebar"),
     "running_full": (scene_running_full, True, "sidebar"),

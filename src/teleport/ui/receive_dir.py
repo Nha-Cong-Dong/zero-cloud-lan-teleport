@@ -15,6 +15,12 @@ không tự rơi về thư mục mặc định.
   hệ điều hành, không `DontUseNativeDialog`), dựng qua seam cấp module `dialog_factory` (đọc lúc
   gọi). Bắt đầu ở thư mục nhận hiện tại, không có thì thư mục đã lưu hỏng, không nữa thì để Qt chọn.
   Đang mở thì chỉ đưa hộp lên trước.
+- `choose_initial(parent, current, config_dir)` (lần chạy đầu, `ui.first_run`; spec D1): cùng hộp
+  chọn (cùng `dialog_factory`, cùng tiêu đề) khi **chưa có** node; bắt đầu ở `current`. Có host đang
+  chạy hay đang đổi → False, không làm gì; hộp đang mở → đưa lên trước. Chọn xong: thư mục dành riêng
+  (`is_reserved`) → `failed(RESERVED, câu)`; còn lại → `initial_selected(Path)`. Không gọi node,
+  không I/O, không lưu: `ui.app` truyền thư mục đó cho node lần đầu (`NodeOptions.save_args`). Kết
+  quả chỉ phát khi hộp vẫn là hộp hiện tại (hộp đã bị `attach` / `close_all` đóng thì bỏ).
 - `change(path)`: kiểm thư mục dành riêng (thư mục cấu hình hay nằm trong nó, hoặc có một phần tên
   `.teleport`; so bằng `os.path.normcase(os.path.abspath(...))`, không I/O) thì từ chối ngay với
   `failed(RESERVED)`, không gọi node. Trùng thư mục nhận hiện tại (so `Path`) thì trả True, không
@@ -167,6 +173,7 @@ class ReceiveDirController(QObject):
 
     state_changed = Signal()  # receive_dir / unavailable / pending đổi
     failed = Signal(str, str)  # (mã ChangeError, câu đã dịch)
+    initial_selected = Signal(object)  # Path: thư mục chọn ở lần chạy đầu (`choose_initial`)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -240,23 +247,42 @@ class ReceiveDirController(QObject):
         host = self._host
         if host is None or not host.running or self.changing:
             return False
+        self._open_dialog(parent, self._receive_dir or self._unavailable, self._on_selected)
+        return True
+
+    def choose_initial(self, parent: QWidget | None, current: Path | None, config_dir: Path) -> bool:
+        """Lần chạy đầu: mở hộp chọn thư mục khi chưa có node (không chặn, không I/O, không lưu).
+
+        False khi đã có host đang chạy hay đang đổi. Chọn xong phát `initial_selected(Path)`, hay
+        `failed(RESERVED)` khi là thư mục dành riêng của `config_dir`."""
+        host = self._host
+        if (host is not None and host.running) or self.changing:
+            return False
+        self._open_dialog(parent, current, functools.partial(self._on_initial_selected, Path(config_dir)))
+        return True
+
+    def _open_dialog(
+        self,
+        parent: QWidget | None,
+        start: Path | None,
+        on_selected: Callable[[QFileDialog, str], None],
+    ) -> None:
+        """Dựng và mở hộp chọn thư mục (`open()`); đang mở thì chỉ đưa hộp lên trước."""
         dialog = self._dialog
         if dialog is not None:
             dialog.raise_()
             dialog.activateWindow()
-            return True
+            return
         dialog = dialog_factory(parent)
         dialog.setFileMode(QFileDialog.FileMode.Directory)
         dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
         dialog.setWindowTitle(choose_title())
-        start = self._receive_dir or self._unavailable
         if start is not None:
             dialog.setDirectory(str(start))
-        dialog.fileSelected.connect(functools.partial(self._on_selected, dialog))
+        dialog.fileSelected.connect(functools.partial(on_selected, dialog))
         dialog.finished.connect(functools.partial(self._on_dialog_finished, dialog))
         self._dialog = dialog
         dialog.open()
-        return True
 
     def change(self, path: Path) -> bool:
         """Đổi thư mục nhận sang `path` (không chặn); False khi không có host đang chạy, đang đổi,
@@ -288,6 +314,15 @@ class ReceiveDirController(QObject):
             return  # hộp cũ (đã bị `attach` / `close_all` đóng) phát muộn: không đổi trên host mới
         if selected:
             self.change(Path(selected))
+
+    def _on_initial_selected(self, config_dir: Path, dialog: QFileDialog, selected: str) -> None:
+        if dialog is not self._dialog or not selected:
+            return  # hộp cũ (đã bị `attach` / `close_all` đóng) phát muộn, hay không chọn gì
+        path = Path(selected)
+        if is_reserved(path, config_dir):
+            self.failed.emit(ChangeError.RESERVED.value, change_error_text(ChangeError.RESERVED, path))
+            return
+        self.initial_selected.emit(path)
 
     def _on_dialog_finished(self, dialog: QFileDialog, _result: int) -> None:
         if self._dialog is dialog:

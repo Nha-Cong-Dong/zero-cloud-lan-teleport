@@ -569,10 +569,12 @@ def test_l5_start_card_is_centered_and_capped(window, qtbot, width, height, chec
     window.show_welcome("Laptop-Minh")
     show_window(window, qtbot, width, height)
     card, view = window.start_view.card, window.start_view
-    available = window.start_view.start_scroll.viewport().width()
+    viewport = window.start_view.start_scroll.viewport()
+    available = viewport.width()
     assert card.width() == min(START_PANEL_MAX_WIDTH, available)
+    # Bề ngang: căn giữa vùng thấy (form lần chạy đầu cao hơn 460 px nên có thanh cuộn dọc, spec D1).
+    assert abs(card.mapTo(viewport, card.rect().center()).x() - viewport.rect().center().x()) <= 2
     center = card.mapTo(view, card.rect().center())
-    assert abs(center.x() - view.rect().center().x()) <= 2
     if check_vertical:
         assert abs(center.y() - view.rect().center().y()) <= 2
 
@@ -609,7 +611,7 @@ def test_l5_starting_state_has_bar_and_no_buttons(window, tmp_path):
 def test_l5_state_sequence_switches_stack_and_focus(window, qtbot, tmp_path):
     show_window(window, qtbot, 980, 660, active=True)
     steps = [
-        ("welcome", lambda: window.start_view, lambda: window.start_button),
+        ("welcome", lambda: window.start_view, lambda: window.first_run.name_edit),  # spec D1 mục 4
         ("starting", lambda: window.start_view, lambda: window.status_label),
         ("running", lambda: window.shell, lambda: window.conversations.add_button),  # chưa có máy
         ("error", lambda: window.start_view, lambda: window.retry_button),
@@ -1112,17 +1114,21 @@ def test_l12_new_button_sits_between_thread_and_send_button(window, qtbot, make_
 
 @pytest.mark.parametrize("state", ["welcome", "error"])
 def test_l12_tab_order_on_start_screens(window, qtbot, state):
-    """Spec 2.7: WELCOME / ERROR đi `status_label` → `detail_label` → `hint_label` → nút."""
+    """Spec 2.7: ERROR đi `status_label` → `detail_label` → `hint_label` → nút. WELCOME (spec D1 mục 4):
+    ô tên → “Đổi…” → “Bắt đầu”, dòng trạng thái ẩn."""
     if state == "welcome":
         window.show_welcome("Laptop-Minh")
         button = window.start_button
+        first = window.first_run.name_edit
+        labels: tuple = (first, window.first_run.dir_button)
     else:
         window.show_error("port", "[WinError 10048]")
         button = window.retry_button
+        first = window.status_label
+        labels = (window.status_label, window.detail_label, window.hint_label)
     show_window(window, qtbot, 980, 660, active=True)
-    order, closed = tab_cycle(window, window.status_label)
+    order, closed = tab_cycle(window, first)
     assert closed
-    labels = (window.status_label, window.detail_label, window.hint_label)
     shown = [w for w in labels if visible(w, window)]
     indexes = [index_of(order, w) for w in (*shown, button)]
     assert indexes == sorted(indexes), [w.objectName() for w in order]

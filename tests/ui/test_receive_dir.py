@@ -729,3 +729,159 @@ def test_change_texts_are_written_in_mvp_section_8(template):
         part = part.strip()
         if part:
             assert part in section, f"mvp mục 8 thiếu: {part!r}"
+
+
+# =================================================================================================
+# choose_initial: hộp chọn ở lần chạy đầu, chưa có node (spec D1 mục 5.2, Q6; 14.8)
+# =================================================================================================
+
+
+def _initial(env) -> list:
+    got: list = []
+    env.ctl.initial_selected.connect(got.append)
+    return got
+
+
+def test_choose_initial_opens_dialog_without_host(env):
+    from PySide6.QtWidgets import QFileDialog
+
+    assert env.ctl.host is None
+    assert env.ctl.choose_initial(env.parent, env.old, env.cfg) is True
+    assert len(env.dialogs.made) == 1, "choose_initial phải lấy hộp qua seam dialog_factory"
+    dlg = env.dialogs.made[0]
+    assert env.dialogs.parents == [env.parent]
+    assert dlg.calls.count("open") == 1
+    assert "exec" not in dlg.calls, "không exec() (chặn vòng sự kiện)"
+    assert dlg.fileMode() == QFileDialog.FileMode.Directory
+    assert dlg.testOption(QFileDialog.Option.ShowDirsOnly)
+    assert not dlg.testOption(QFileDialog.Option.DontUseNativeDialog), "giữ hộp chọn của hệ điều hành"
+    assert dlg.windowTitle() == CHOOSE_TITLE
+    assert env.ctl.dialog is dlg
+    assert norm(dlg.directory()) == norm(env.old), "hộp bắt đầu ở `current`"
+
+
+def test_choose_initial_with_stopped_host_still_opens(env):
+    """Chỉ host **đang chạy** mới chặn `choose_initial` (spec 5.2): host đã lỗi/dừng thì vẫn mở."""
+    stopped = FakeHost(env.cfg, receive_dir=None, running=False)
+    env.ctl.attach(stopped)
+    assert env.ctl.choose_initial(env.parent, env.new, env.cfg) is True
+    assert len(env.dialogs.made) == 1
+    assert norm(env.dialogs.made[0].directory()) == norm(env.new)
+    assert stopped.submits == [] and stopped.calls == [], "không gọi node"
+
+
+def test_choose_initial_twice_raises_existing_dialog(env):
+    assert env.ctl.choose_initial(env.parent, env.old, env.cfg) is True
+    assert env.ctl.choose_initial(env.parent, env.new, env.cfg) is True
+    assert len(env.dialogs.made) == 1, "lần hai không dựng hộp mới"
+    dlg = env.dialogs.made[0]
+    assert "raise_" in dlg.calls and "activateWindow" in dlg.calls
+    assert dlg.calls.count("open") == 1
+
+
+def test_choose_initial_emits_initial_selected_without_node(env):
+    got = _initial(env)
+    stopped = FakeHost(env.cfg, receive_dir=None, running=False)
+    env.ctl.attach(stopped)
+    assert env.ctl.choose_initial(env.parent, env.old, env.cfg) is True
+    env.dialogs.made[0].fileSelected.emit(str(env.new))
+    assert len(got) == 1
+    assert isinstance(got[0], Path), f"initial_selected mang Path, không phải {type(got[0]).__name__}"
+    assert got[0] == env.new
+    assert env.failures == []
+    assert stopped.submits == [] and stopped.calls == [], "choose_initial không gọi node"
+    assert env.ctl.pending is None and not env.ctl.changing, "không phải một lần đổi của node"
+    assert env.ctl.receive_dir is None, "không lưu, không đổi thư mục nhận của controller"
+
+
+def test_choose_initial_does_not_touch_disk(env):
+    """Không I/O (spec 5.2): thư mục chưa có vẫn được phát lại nguyên, không bị tạo."""
+    got = _initial(env)
+    missing = env.tmp / "chua-co" / "con"
+    env.ctl.choose_initial(env.parent, None, env.cfg)
+    env.dialogs.made[0].fileSelected.emit(str(missing))
+    assert got == [missing]
+    assert not missing.exists() and not missing.parent.exists()
+
+
+def test_choose_initial_empty_selection_does_nothing(env):
+    got = _initial(env)
+    env.ctl.choose_initial(env.parent, env.old, env.cfg)
+    env.dialogs.made[0].fileSelected.emit("")
+    assert got == [] and env.failures == []
+
+
+@pytest.mark.parametrize(
+    "make_path",
+    [
+        pytest.param(lambda e: e.cfg, id="config_dir"),
+        pytest.param(lambda e: e.cfg / "con", id="inside_config_dir"),
+        pytest.param(lambda e: e.tmp / ".teleport", id="dot_teleport"),
+        pytest.param(lambda e: e.tmp / "x" / ".teleport" / "y", id="inside_dot_teleport"),
+    ],
+)
+def test_choose_initial_reserved_emits_failed_reserved(env, make_path):
+    got = _initial(env)
+    path = make_path(env)
+    env.ctl.choose_initial(env.parent, env.old, env.cfg)
+    env.dialogs.made[0].fileSelected.emit(str(path))
+    assert got == [], "thư mục dành riêng: không phát initial_selected"
+    [(code, text)] = env.failures
+    assert code == "reserved"
+    assert text == fill(RESERVED_TEXT, path)
+
+
+def test_choose_initial_reserved_uses_given_config_dir(env):
+    """`config_dir` là tham số của `choose_initial` (chưa có host để đọc `options.config_dir`)."""
+    other_cfg = env.tmp / "cfg-khac"
+    got = _initial(env)
+    env.ctl.choose_initial(env.parent, env.old, other_cfg)
+    env.dialogs.made[0].fileSelected.emit(str(env.cfg))
+    assert got == [env.cfg], "env.cfg không phải thư mục cấu hình của lần gọi này"
+    assert env.failures == []
+
+
+def test_choose_initial_refused_when_host_running(env):
+    host = env.running_host()
+    got = _initial(env)
+    assert env.ctl.choose_initial(env.parent, env.old, env.cfg) is False
+    assert env.dialogs.made == [], "host đang chạy: không mở hộp"
+    assert got == [] and env.failures == []
+    assert host.submits == []
+
+
+def test_choose_initial_refused_while_changing(env):
+    start_change(env)
+    assert env.ctl.changing
+    assert env.ctl.choose_initial(env.parent, env.old, env.cfg) is False
+    assert env.dialogs.made == []
+
+
+def test_choose_initial_dialog_closed_by_attach(env):
+    got = _initial(env)
+    assert env.ctl.choose_initial(env.parent, env.old, env.cfg) is True
+    dlg = env.dialogs.made[0]
+    env.ctl.attach(FakeHost(env.cfg, receive_dir=None, running=False))
+    assert "close" in dlg.calls, "attach phải đóng hộp chọn của lần chạy đầu"
+    assert env.ctl.dialog is None
+    dlg.fileSelected.emit(str(env.new))  # hộp đã đóng phát muộn
+    assert got == [] and env.failures == [], "hộp cũ phát muộn: bỏ (spec 14.8)"
+
+
+def test_choose_initial_dialog_closed_by_close_all(env):
+    got = _initial(env)
+    env.ctl.choose_initial(env.parent, env.old, env.cfg)
+    dlg = env.dialogs.made[0]
+    env.ctl.close_all()
+    assert "close" in dlg.calls
+    assert env.ctl.dialog is None
+    dlg.fileSelected.emit(str(env.cfg))
+    assert got == [] and env.failures == []
+
+
+def test_choose_initial_dialog_finished_clears_reference(env):
+    env.ctl.choose_initial(env.parent, env.old, env.cfg)
+    env.dialogs.made[0].finished.emit(0)
+    assert env.ctl.dialog is None
+    assert env.ctl.choose_initial(env.parent, env.old, env.cfg) is True
+    assert len(env.dialogs.made) == 2, "hộp đã đóng: lần sau dựng hộp mới"

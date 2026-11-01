@@ -1,19 +1,22 @@
 """Thành phần riêng của trang HOME trong cửa sổ chính (spec B1): `StartPanel`, `MachineCard`, `SaveBar`.
 
-Chỉ ghép từ `ui/widgets.py` và `ui/theme.py` (cùng `icons`, `texts`, `send`, `tray`,
+Chỉ ghép từ `ui/widgets.py` và `ui/theme.py` (cùng `icons`, `texts`, `send`, `tray`, `first_run`,
 `core.display`); không import `main_window`. Mỗi lớp **tạo** mọi nhãn và nút của mình; `MainWindow`
 gán tên tắt (`status_label`, `address_label`, `copy_button`…), nối signal và giữ trạng thái. Chữ đặt
 sẵn đi qua `QCoreApplication.translate("Home", …)` gọi lúc dùng; chỉ `MainWindow.retranslate()` gọi
 `retranslate()` của các lớp này (chúng không tự bắt `LanguageChange`).
 
 **Bố cục**
-- `StartPanel` (`startView`, màn Bắt đầu / Đang khởi động / Lỗi): `start_scroll` (không khung, không
+- `StartPanel` (`startView`, màn lần chạy đầu / Đang khởi động / Lỗi): `start_scroll` (không khung, không
   nhận tiêu điểm, thanh cuộn ngang khi cần cho đường dẫn dài không dấu cách) bọc một widget căn giữa
   hai chiều bằng stretch; trong đó `card` (`startCard`, `QFrame[surface="card"]`, rộng tối đa
   `START_PANEL_MAX_WIDTH`, lề trong 32, khoảng cách 12). Từ trên xuống: hàng logo 40 px +
   `title_label`; hàng `status_icon` 20 px + `status_label` (SECTION); `detail_label`; `hint_label`;
-  `starting_bar` (bận, 160x4, căn trái); hàng nút căn phải `retry_button`, `start_button` (cả hai là
-  nút chính, mỗi lúc chỉ hiện một). Không có chữ đặt sẵn ngoài tên của `starting_bar`.
+  `first_run` (`ui.first_run.FirstRunForm`, form lần chạy đầu: chỉ hiện ở WELCOME, khi đó dòng trạng
+  thái, chi tiết, gợi ý ẩn); `starting_bar` (bận, 160x4, căn trái); hàng nút căn phải `retry_button`,
+  `start_button` (cả hai là nút chính, mỗi lúc chỉ hiện một). Tab: `status_label` → `detail_label` →
+  `hint_label` → form (ô tên → “Đổi…” → công tắc) → `retry_button` → `start_button`. Không có chữ
+  đặt sẵn ngoài tên của `starting_bar` (chữ của form do chính form đặt).
 - `MachineCard` (`machineCard`, chân cột trái): avatar máy này | cột chữ: “Máy này” (CAPTION, muted),
   `name_label` (SECTION), hàng `address_label` (CAPTION, muted) + `copy_button`, `badge`. Lề
   16/12/12/12.
@@ -80,6 +83,7 @@ from PySide6.QtWidgets import (
 
 from teleport.core.display import display_name
 from teleport.ui import icons, texts, theme
+from teleport.ui.first_run import FirstRunForm
 from teleport.ui.send import printable
 from teleport.ui.tray import make_icon
 from teleport.ui.widgets import (
@@ -168,6 +172,8 @@ class StartPanel(QWidget):
         self.status_label.setFont(theme.font_for(theme.TextStyle.SECTION, self.status_label.font()))
         self.detail_label = _label("detailLabel")
         self.hint_label = _label("hintLabel")
+        self.first_run = FirstRunForm(self.card)
+        self.first_run.setVisible(False)
 
         self.starting_bar = QProgressBar(self.card)
         self.starting_bar.setObjectName("startingBar")
@@ -199,6 +205,7 @@ class StartPanel(QWidget):
         column.addLayout(status_row)
         column.addWidget(self.detail_label)
         column.addWidget(self.hint_label)
+        column.addWidget(self.first_run)
         column.addWidget(self.starting_bar, 0, Qt.AlignmentFlag.AlignLeft)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
@@ -226,7 +233,8 @@ class StartPanel(QWidget):
 
         QWidget.setTabOrder(self.status_label, self.detail_label)
         QWidget.setTabOrder(self.detail_label, self.hint_label)
-        QWidget.setTabOrder(self.hint_label, self.retry_button)
+        QWidget.setTabOrder(self.hint_label, self.first_run.name_edit)
+        QWidget.setTabOrder(self.first_run.autostart_switch, self.retry_button)
         QWidget.setTabOrder(self.retry_button, self.start_button)
         self.refresh_icon()
         self.status_icon.setVisible(False)
@@ -246,6 +254,7 @@ class StartPanel(QWidget):
 
     def retranslate(self) -> None:
         self.starting_bar.setAccessibleName(QCoreApplication.translate("Home", "Đang khởi động"))
+        self.first_run.retranslate()
 
 
 # ---- MachineCard -------------------------------------------------------------------------------
