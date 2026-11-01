@@ -5,10 +5,39 @@ Luồng khởi động (spec P4-3 mục 4): phân tích tham số (`--config-dir
 đối; dựng `QApplication` (`setQuitOnLastWindowClosed(False)`); i18n, font điểm nhấn
 (`ui.fonts.install`, lỗi thì dùng font hệ thống), theme; `SingleInstance.acquire`;
 log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node trong `bridge.NodeHost` nếu máy
-đã có `device.crt`. Chưa có thì cửa sổ hiện màn “Bắt đầu” (spec hackathon mục 10 A1): chưa bấm
-“Bắt đầu” thì không chạy node, không lấy `node.lock`, không quảng bá gì; bấm thì chạy node và
-`Node.start` tự tạo danh tính (tên mặc định `app.node.default_device_name`). Hiện cửa sổ trừ khi
-`--background` và có khay; `app.exec()`.
+đã có `device.crt`. Hiện cửa sổ trừ khi `--background`, có khay và node đang khởi động; `app.exec()`.
+
+**Lần chạy đầu** (mvp F1, spec D1; form ở `ui.first_run`):
+- Màn lần chạy đầu (WELCOME) chỉ hiện khi `<config_dir>/device.crt` chưa có (`_setup_done`), không
+  đọc `first_run_done`: máy đã có danh tính (từ CLI hay bản trước) không bao giờ đi lại màn này. Chưa
+  bấm “Bắt đầu” thì không chạy node, không lấy `node.lock`, không quảng bá gì; `--background` khi chưa
+  có danh tính vẫn hiện cửa sổ (và khay).
+- Giá trị gợi ý (`_show_first_run`, đọc trên thread Qt, chỉ đọc): tên `suggested_device_name` (tên
+  đã lưu, không thì hostname, tên dự phòng `Teleport-????` thì rỗng); thư mục nhận đã lưu, không thì
+  `paths.default_receive_dir()`; công tắc tự khởi động chỉ khi `autostart.supported()`, bật sẵn trừ
+  khi registry ở OTHER/BLOCKED (tắt sẵn, kèm câu `ui.settings.autostart_state_hint`); đọc registry
+  lỗi thì bật sẵn, không câu thêm.
+- “Đổi…” → `ReceiveDirController.choose_initial` (không node, không lưu); `initial_selected` →
+  `first_run.set_receive_dir`; `failed` khi đang WELCOME → lỗi dưới hàng thư mục (không dải thông báo).
+- “Bắt đầu” hợp lệ (`start_requested(FirstRunChoice)`, chỉ khi WELCOME) → `_first_run = choice` rồi
+  `start_node()`: `NodeOptions` có `name` (None khi trùng gợi ý), `save_args=True`, và thư mục đã chọn
+  (khi khác gợi ý; không thì giữ `make_options`). `Node.start` tạo danh tính, lưu tên trước khi quảng
+  bá và lưu gốc thật của thư mục khi mở được. “Thử lại”, F5 hay lệnh `show` khi đang ERROR dùng lại
+  `_first_run` (lần trước có thể chưa lưu gì).
+- `start_failed(RECEIVE_DIR)` khi thư mục do người dùng chọn: về WELCOME (giữ chữ đã gõ, gợi ý tính
+  lại), câu UNAVAILABLE dưới hàng thư mục, tiêu điểm ở “Đổi…”; lỗi khác → màn ERROR như cũ.
+- `started`: áp tự khởi động trên thread Qt **trước** `SettingsController.on_started` (rồi
+  `_reconcile_autostart` của Cài đặt sửa `settings.autostart` theo registry): bật mà registry khác ON
+  → `autostart.enable`; tắt mà registry đang ON → `autostart.disable` (BLOCKED để nguyên); đọc registry
+  lỗi coi như OFF. Bật lỗi (và không có dải thư mục nhận hỏng) → dải `first_run.autostart_failed_text`
+  kèm nút “Mở Cài đặt” (trang SETTINGS); tắt lỗi chỉ ghi log. Rồi xóa `_first_run`. Mỗi lần
+  `started` (cả máy cũ) ghi `first_run_done=True` qua `host.call(_mark_first_run_done)` khi còn
+  False: chỉ ghi nhận giao diện đã chạy node được một lần, không quyết định việc hiện màn.
+- **Chỗ hở chấp nhận được**: lần bấm đầu thất bại sau khi `Node.start` đã tạo danh tính (cổng bận,
+  thư mục hỏng…) rồi người dùng thoát thay vì sửa và bấm lại → lần mở sau không còn màn lần chạy đầu
+  (đã có `device.crt`). Tên khác gợi ý thì đã được lưu (cả khi lỗi là RECEIVE_DIR: tên đã lưu, danh
+  tính đã tạo); thư mục không mở được thì không lưu (lần sau dùng thư mục mặc định); lựa chọn tự khởi
+  động mất (đổi lại được trong Cài đặt).
 
 **Thiết bị** (`MainWindow.devices`, `ui.radar.DeviceListModel`): `NodeHost.node_event` →
 `devices.apply`; lúc `started` lấy ảnh chụp `Node.devices()` qua `NodeHost.call` rồi `devices.reset`.
@@ -156,6 +185,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import FrameType
 from typing import cast
@@ -166,6 +196,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from teleport import paths
+from teleport.app import autostart
 from teleport.app import node as app_node
 from teleport.app.devices import DeviceView
 from teleport.app.node import NodeEvent
@@ -173,15 +204,16 @@ from teleport.app.settings import Settings
 from teleport.app.transfers import TransferUpdate
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
-from teleport.ui import errorlog, fonts, i18n, icons, receive_dir, send, texts, theme
+from teleport.ui import errorlog, first_run, fonts, i18n, icons, receive_dir, send, texts, theme
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
+from teleport.ui.first_run import FirstRunChoice, TextSource
 from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, Page, ViewState
 from teleport.ui.pairing import PairingController, repair_offline_text
 from teleport.ui.radar import DeviceListModel
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
-from teleport.ui.settings import SettingsController, SettingsPage
+from teleport.ui.settings import SettingsController, SettingsPage, autostart_state_hint
 from teleport.ui.transfers import TransfersController
 from teleport.ui.tray import Tray, make_icon
 from teleport.ui.widgets import InfoLevel
@@ -430,6 +462,9 @@ class GuiApp(QObject):
 
     `make_options` (test) dựng `NodeOptions` cho mỗi lần chạy node; mặc định: thư mục nhận đã lưu
     (`ReceiveDirChoice.SAVED`; chưa lưu thì `paths.default_receive_dir()`), mọi địa chỉ, mDNS quảng bá.
+    Ở lần chạy đầu (`_first_run`), `start_node` thêm `name`, `save_args=True` và thư mục người dùng
+    chọn; `make_options` trả `Path` tường minh mà người dùng không đổi thư mục thì đường dẫn đó cũng
+    được lưu (vì `save_args`).
     """
 
     def __init__(
@@ -449,7 +484,8 @@ class GuiApp(QObject):
         self._make_options = make_options or _default_options
         self._quitting = False
         self._told_tray = False
-        self._start_confirmed = False  # người dùng đã bấm “Bắt đầu” trong phiên này
+        # Lựa chọn ở màn lần chạy đầu, giữ tới `started` (“Thử lại” dùng lại); None: chưa bấm “Bắt đầu”.
+        self._first_run: FirstRunChoice | None = None
         self._session_ending = False  # hệ điều hành đang tắt máy / đăng xuất (`commitDataRequest`)
         self._quit_box: QMessageBox | None = None
         self._address_job: SubmitJob | None = None
@@ -485,8 +521,10 @@ class GuiApp(QObject):
         self.window.hidden_to_tray.connect(self._on_hidden_to_tray)
         self.window.open_receive_dir_requested.connect(self._on_open_receive_dir)
         self.window.change_receive_dir_requested.connect(self._choose_receive_dir)
+        self.window.change_first_run_dir_requested.connect(self._choose_first_run_dir)
         self.receive_dir_controller.state_changed.connect(self._on_receive_dir_state)
         self.receive_dir_controller.failed.connect(self._on_receive_dir_failed)
+        self.receive_dir_controller.initial_selected.connect(self._on_first_run_dir_selected)
         self.tray.open_requested.connect(self.window.bring_to_front)
         self.tray.quit_requested.connect(self.request_quit)
         self.tray.message_clicked.connect(self._on_message_clicked)
@@ -539,7 +577,8 @@ class GuiApp(QObject):
         return self._quit_box
 
     def start(self) -> None:
-        """Hiện khay, chạy node (hoặc hiện màn “Bắt đầu”), hiện cửa sổ trừ khi `--background` và có khay."""
+        """Hiện khay, chạy node (hoặc hiện màn lần chạy đầu), hiện cửa sổ trừ khi `--background`, có
+        khay và node đang khởi động."""
         self.tray.show()
         self.start_node()
         if (
@@ -552,7 +591,8 @@ class GuiApp(QObject):
     def start_node(self) -> None:
         """Dựng một `NodeHost` mới (lần đầu, “Bắt đầu” và “Thử lại”).
 
-        Chưa có `device.crt` và người dùng chưa bấm “Bắt đầu” → màn “Bắt đầu”, không chạy node.
+        Chưa có `device.crt` và người dùng chưa bấm “Bắt đầu” → màn lần chạy đầu, không chạy node.
+        Có `_first_run` thì node chạy với lựa chọn đó (docstring module, “Lần chạy đầu”).
         """
         if self._quitting:
             return
@@ -561,12 +601,20 @@ class GuiApp(QObject):
                 return  # node đang chạy hay đang khởi động
             self._old_hosts.append(self.host)  # đã lỗi; thread có thể chưa xong, `shutdown` chờ
             self.host = None
-        if not self._start_confirmed and not self._setup_done():
-            self.window.show_welcome(planned_device_name())
+        choice = self._first_run
+        if choice is None and not self._setup_done():
+            self._show_first_run()
             return
         self._stop_addresses()
         self.window.devices.clear()
         options = self._make_options(self._config_dir)
+        if choice is not None:
+            options = replace(
+                options,
+                name=choice.name,
+                save_args=True,
+                receive_dir=choice.receive_dir if choice.receive_dir_chosen else options.receive_dir,
+            )
         host = NodeHost(options, self)
         host.started.connect(functools.partial(self._on_started, host))
         host.start_failed.connect(functools.partial(self._on_start_failed, host))
@@ -791,8 +839,13 @@ class GuiApp(QObject):
             self.transfers.view.hide_notice()
 
     def _on_receive_dir_failed(self, code: str, text: str) -> None:
-        """Đổi thư mục nhận không được: câu ở dải thông báo (thư mục không dùng được → nút chọn lại)."""
+        """Đổi thư mục nhận không được: câu ở dải thông báo (thư mục không dùng được → nút chọn lại).
+
+        Đang ở màn lần chạy đầu (chọn thư mục dành riêng) thì câu hiện ngay dưới hàng thư mục."""
         if self._quitting:
+            return
+        if self.window.view_state is ViewState.WELCOME:
+            self.window.first_run.set_dir_error(text)
             return
         if code in (ChangeError.UNAVAILABLE, ChangeError.RESERVED):
             self.transfers.view.show_notice(text, receive_dir.choose_other_text(), self._choose_receive_dir)
@@ -816,6 +869,85 @@ class GuiApp(QObject):
         if not self.window.isVisible():
             self.tray.show_message(receive_dir.unavailable_tray_text())
 
+    # ---- Lần chạy đầu --------------------------------------------------------------------------
+
+    def _show_first_run(self, choice: FirstRunChoice | None = None, dir_error: TextSource = "") -> None:
+        """Màn lần chạy đầu với giá trị gợi ý tính lại (docstring module); `choice`: lựa chọn trước."""
+        config_dir = self._config_dir
+        switch, hint = _first_run_autostart(config_dir)
+        self.window.show_welcome(
+            suggested_device_name(config_dir),
+            _suggested_receive_dir(config_dir),
+            autostart=switch,
+            autostart_hint=hint,
+            choice=choice,
+            dir_error=dir_error,
+        )
+
+    def _on_start_requested(self, choice: object) -> None:
+        """“Bắt đầu” hợp lệ ở màn lần chạy đầu: người dùng đồng ý chạy Teleport với lựa chọn này."""
+        if not isinstance(choice, FirstRunChoice) or self._quitting:
+            return
+        if self.window.view_state is ViewState.WELCOME:
+            self._first_run = choice
+            self.start_node()
+
+    def _choose_first_run_dir(self) -> None:
+        """“Đổi…” ở màn lần chạy đầu: hộp chọn thư mục khi chưa có node."""
+        if self._quitting or self.window.view_state is not ViewState.WELCOME:
+            return
+        self.receive_dir_controller.choose_initial(
+            self.window, self.window.first_run.receive_dir, self._config_dir
+        )
+
+    def _on_first_run_dir_selected(self, path: object) -> None:
+        if isinstance(path, Path) and self.window.view_state is ViewState.WELCOME and not self._quitting:
+            self.window.first_run.set_receive_dir(path)
+
+    def _apply_first_run_autostart(self, enabled: bool) -> bool:
+        """Áp lựa chọn tự khởi động của lần chạy đầu (thread Qt); True khi **bật** không được.
+
+        Lỗi chỉ ghi tên loại lỗi (mvp N9) và không chặn gì: node đã chạy."""
+        config_dir = self._config_dir
+        try:
+            current = autostart.state(config_dir)
+        except Exception as e:  # `autostart` đã ghi WARNING
+            log.debug("không đọc được trạng thái khởi động cùng Windows: %s", type(e).__name__)
+            current = autostart.AutostartState.OFF
+        if enabled:
+            if current is autostart.AutostartState.ON:
+                return False
+            try:
+                autostart.enable(config_dir)
+            except Exception as e:
+                log.warning("không bật được khởi động cùng Windows: %s", type(e).__name__)
+                return True
+            return False
+        if current is autostart.AutostartState.ON:
+            try:
+                autostart.disable(config_dir)
+            except Exception as e:
+                log.warning("không tắt được khởi động cùng Windows: %s", type(e).__name__)
+        return False
+
+    def _show_autostart_failed(self) -> None:
+        if self._quitting:
+            return
+        self.transfers.view.show_notice(
+            first_run.autostart_failed_text(),
+            first_run.open_settings_text(),
+            self._open_settings_page,
+        )
+
+    def _open_settings_page(self) -> None:
+        self.window.open_page(Page.SETTINGS)
+
+    def _on_first_run_marked(self, result: object) -> None:
+        if self._quitting:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không ghi được đánh dấu lần chạy đầu: %s", type(result).__name__)
+
     def _setup_done(self) -> bool:
         try:
             return (self._config_dir / CERT_FILE).is_file()
@@ -832,6 +964,11 @@ class GuiApp(QObject):
     def _on_started(self, host: NodeHost) -> None:
         if host is not self.host:
             return
+        choice, self._first_run = self._first_run, None
+        autostart_failed = False
+        if choice is not None and choice.autostart is not None and not self._quitting:
+            # Trước `settings.on_started`: Cài đặt đối chiếu `settings.autostart` theo registry mới.
+            autostart_failed = self._apply_first_run_autostart(choice.autostart)
         controller = self.receive_dir_controller
         controller.on_started(host)
         self.window.show_running(host.node_name, controller.receive_dir, controller.unavailable)
@@ -841,7 +978,10 @@ class GuiApp(QObject):
         self.transfers.on_started(host)
         if controller.unavailable is not None:
             self._show_receive_dir_unavailable(controller.unavailable)
+        elif autostart_failed:
+            self._show_autostart_failed()
         self.settings.on_started(host)
+        host.call(_mark_first_run_done, self._on_first_run_marked)
         host.call(lambda node: node.visible, functools.partial(self._on_visible_read, host))
         if not self._quitting:
             self._stop_addresses()
@@ -954,6 +1094,16 @@ class GuiApp(QObject):
         self._stop_addresses()
         if code != StartError.LOCKED:
             log.warning("node không khởi động được: %s", code)
+        choice = self._first_run
+        if code == StartError.RECEIVE_DIR and choice is not None and choice.receive_dir_chosen:
+            # Lần chạy đầu, thư mục người dùng vừa chọn không mở được: sửa ngay trên màn đó.
+            self._show_first_run(
+                choice,
+                functools.partial(receive_dir.change_error_text, ChangeError.UNAVAILABLE, choice.receive_dir),
+            )
+            if not self._quitting:
+                self.window.bring_to_front()
+            return
         self.window.show_error(code, detail)
         if not self._quitting:
             self.window.bring_to_front()  # kể cả khi `--background`: người dùng phải biết
@@ -966,14 +1116,8 @@ class GuiApp(QObject):
         if self.window.view_state is ViewState.ERROR:
             self.start_node()
 
-    def _on_start_requested(self) -> None:
-        """Nút “Bắt đầu”: người dùng đồng ý chạy Teleport; `Node.start` tự tạo danh tính."""
-        if self.window.view_state is ViewState.WELCOME:
-            self._start_confirmed = True
-            self.start_node()
-
     def _on_show_requested(self) -> None:
-        """Mở Teleport lần nữa: hiện cửa sổ; đang lỗi thì thử chạy lại (màn “Bắt đầu” vẫn chờ bấm)."""
+        """Mở Teleport lần nữa: hiện cửa sổ; đang lỗi thì thử chạy lại (màn lần chạy đầu vẫn chờ bấm)."""
         if self._quitting:
             return
         self.window.bring_to_front()
@@ -1012,6 +1156,10 @@ class _NoIdentityYet:
     device_id = "????"
 
 
+# Tên `app.node.default_device_name` trả khi hostname không dùng được và chưa có mã máy.
+_FALLBACK_NAME = f"Teleport-{_NoIdentityYet.device_id[:4]}"
+
+
 def planned_device_name() -> str:
     """Tên node sẽ dùng khi `Node.start` tạo danh tính: `app.node.default_device_name`.
 
@@ -1022,6 +1170,56 @@ def planned_device_name() -> str:
     `platform.uname()` (truy vấn WMI qua COM trên Windows, docstring của `_hostname`).
     """
     return app_node.default_device_name(cast(Identity, _NoIdentityYet()))
+
+
+def suggested_device_name(config_dir: Path) -> str:
+    """Tên gợi ý ở màn lần chạy đầu: tên đã lưu (`settings.json`, chỉ đọc), không thì
+    `planned_device_name()`; tên dự phòng `Teleport-????` thì "" (người dùng phải gõ tên)."""
+    try:
+        saved = Settings.load(config_dir).name
+    except Exception as e:
+        log.debug("không đọc được tên đã lưu: %s", type(e).__name__)
+        saved = None
+    if saved:
+        return saved
+    name = planned_device_name()
+    return "" if name == _FALLBACK_NAME else name
+
+
+def _suggested_receive_dir(config_dir: Path) -> Path:
+    """Thư mục nhận gợi ý: thư mục đã lưu (chỉ đọc), không thì `paths.default_receive_dir()` (không tạo)."""
+    try:
+        saved = Settings.load(config_dir).receive_dir
+    except Exception as e:
+        log.debug("không đọc được thư mục nhận đã lưu: %s", type(e).__name__)
+        saved = None
+    return Path(saved) if saved else paths.default_receive_dir()
+
+
+def _first_run_autostart(config_dir: Path) -> tuple[bool | None, TextSource]:
+    """(trạng thái ban đầu của công tắc, câu trạng thái) ở màn lần chạy đầu; None: ẩn hàng (spec D1 Q7)."""
+    try:
+        if not autostart.supported():
+            return None, ""
+        state = autostart.state(config_dir)
+    except autostart.AutostartUnsupported:
+        return None, ""
+    except Exception as e:  # đọc lỗi: bật sẵn, không câu thêm (Cài đặt sẽ báo)
+        log.debug("không đọc được trạng thái khởi động cùng Windows: %s", type(e).__name__)
+        return True, ""
+    if state is autostart.AutostartState.UNSUPPORTED:
+        return None, ""
+    if state in (autostart.AutostartState.OTHER, autostart.AutostartState.BLOCKED):
+        return False, functools.partial(autostart_state_hint, state)
+    return True, ""
+
+
+def _mark_first_run_done(node: app_node.Node) -> bool:
+    """Thread node: ghi `first_run_done=True` khi còn False; True nếu vừa ghi."""
+    if node.settings.first_run_done:
+        return False
+    node.set_ui_preferences(first_run_done=True)
+    return True
 
 
 # ---- main ----------------------------------------------------------------------------------
@@ -1134,6 +1332,7 @@ def _selftest(app: QApplication) -> int:
         window = MainWindow()
         tray = Tray()
         window.show_welcome(planned_device_name())
+        window.show_welcome("Teleport", Path("Teleport"), autostart=True)  # form có công tắc
         window.show_starting()
         window.show_running("Teleport", Path("Teleport"))
         window.show_running("Teleport", None, Path("Teleport"))
