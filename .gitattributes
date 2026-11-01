@@ -1,1 +1,3 @@
 src/teleport/ui/assets/** -text
+src/teleport/ui/i18n/*.ts text eol=lf
+src/teleport/ui/i18n/*.qm binary

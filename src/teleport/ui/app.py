@@ -457,9 +457,7 @@ def quit_confirm_text(names: Sequence[str]) -> str:
         return texts.fill(
             t("GuiApp", "Đang gửi file tới {name}. Thoát bây giờ sẽ hủy lượt gửi."), name=names[0]
         )
-    return texts.fill(
-        t("GuiApp", "Đang gửi file tới {n} máy. Thoát bây giờ sẽ hủy các lượt gửi."), n=str(len(names))
-    )
+    return t("GuiApp", "Đang gửi file tới %n máy. Thoát bây giờ sẽ hủy các lượt gửi.", None, len(names))
 
 
 def quit_cancel_text() -> str:
@@ -504,7 +502,7 @@ class GuiApp(QObject):
         self._session_ending = False  # hệ điều hành đang tắt máy / đăng xuất (`commitDataRequest`)
         self._quit_box: QMessageBox | None = None
         self._address_job: SubmitJob | None = None
-        self._receive_dir_notice: str | None = None  # câu cuối app hiện ở dải về thư mục nhận
+        self._receive_dir_notice: texts.Text | None = None  # câu cuối app hiện ở dải về thư mục nhận
         self._settings_dir_notice: str | None = None  # câu lỗi thư mục nhận đang ở trang Cài đặt
         self._view_chosen = False  # người dùng đã bấm đổi dạng hiển thị kể từ lần `started` gần nhất
         self.host: NodeHost | None = None
@@ -850,7 +848,7 @@ class GuiApp(QObject):
             return
         # Đã ổn: gỡ câu về thư mục nhận mà app đã hiện, nếu dải chưa bị thông báo khác đè.
         self._receive_dir_notice = None
-        if self.transfers.view.notice_text() == notice:
+        if self.transfers.view.notice_text() == texts.resolve(notice):
             self.transfers.view.hide_notice()
 
     def _on_receive_dir_failed(self, code: str, text: str) -> None:
@@ -878,8 +876,12 @@ class GuiApp(QObject):
         """Lúc `started`, thư mục nhận đã lưu không mở được: dải thông báo, và bóng thoại khi chạy nền."""
         if self._quitting:
             return
-        text = receive_dir.unavailable_text(path)
-        self.transfers.view.show_notice(text, receive_dir.choose_action_text(), self._choose_receive_dir)
+
+        # Trạng thái kéo dài (tới khi chọn được thư mục): câu dựng bằng hàm để đổi ngôn ngữ thì dịch lại.
+        def text() -> str:
+            return receive_dir.unavailable_text(path)
+
+        self.transfers.view.show_notice(text, receive_dir.choose_action_text, self._choose_receive_dir)
         self._receive_dir_notice = text
         if not self.window.isVisible():
             self.tray.show_message(receive_dir.unavailable_tray_text())
@@ -1084,7 +1086,8 @@ class GuiApp(QObject):
         busy = self.pairing.busy
         if self.pairing.pair_device(view) or busy or self.host is None or self._quitting:
             return
-        self.window.open_address_entry(repair_offline_text(texts.peer_label(view.name, view.device_id)))
+        peer = texts.peer_label(view.name, view.device_id)
+        self.window.open_address_entry(functools.partial(repair_offline_text, peer))
 
     def _on_pair_job_done(self, device_id: str | None, paired: bool) -> None:
         """Việc ghép chủ động kết thúc; PAIRED thì chờ `paired` (sau khi đã đọc lại `devices()`)."""

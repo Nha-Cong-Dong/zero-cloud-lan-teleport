@@ -85,6 +85,7 @@ Câu chữ ở ngữ cảnh `"Discover"`, gọi `QCoreApplication.translate` lú
 
 from __future__ import annotations
 
+import functools
 import itertools
 import math
 import time
@@ -230,7 +231,7 @@ def _status_text(view: DeviceView) -> str:
 def _mode_reason_text(reason: ListReason, count: int) -> str:
     t = QCoreApplication.translate
     if reason is ListReason.TOO_MANY:
-        return texts.fill(t("Discover", "Có {n} máy trong mạng nên hiện dạng danh sách."), n=str(count))
+        return t("Discover", "Có %n máy trong mạng nên hiện dạng danh sách.", None, count)
     if reason is ListReason.NO_ROOM:
         return t("Discover", "Cửa sổ chưa đủ rộng cho dạng vòng tròn nên hiện dạng danh sách.")
     return ""
@@ -702,10 +703,7 @@ class RadarCanvas(QWidget):
         self.center_label.setText(t("Discover", "Bạn"))
         self.setAccessibleName(t("Discover", "Máy trong mạng"))
         self.setAccessibleDescription(
-            texts.fill(
-                t("Discover", "{n} máy. Tab hoặc phím mũi tên để chọn, Enter để ghép đôi."),
-                n=str(self._count),
-            )
+            t("Discover", "%n máy. Tab hoặc phím mũi tên để chọn, Enter để ghép đôi.", None, self._count)
         )
         self._place_core()
 
@@ -1052,10 +1050,16 @@ class DiscoverPage(QWidget):
         self.wait_button.setVisible(bool(available))
         self._update_tab_order()
 
-    def show_notice(self, text: str) -> None:
+    def show_notice(self, text: texts.Text) -> None:
         """Thông báo thành công (ví dụ “Đã ghép đôi với …”); gõ chữ vào ô nhập không ẩn nó."""
+        self.show_info(text, InfoLevel.SUCCESS)
+
+    def show_info(self, text: texts.Text, level: InfoLevel = InfoLevel.INFO) -> None:
+        """Hiện `text` ở thanh thông báo của trang (thay lỗi địa chỉ nếu đang có: gõ chữ không ẩn nó).
+
+        `text` là hàm thì câu được dịch lại khi đổi ngôn ngữ; chuỗi thì bị ẩn (`widgets.InfoBar`)."""
         self._address_error = None
-        self.info_bar.show_message(InfoLevel.SUCCESS, text)
+        self.info_bar.show_message(level, text)
 
     def submit_address(self) -> bool:
         """Đọc ô nhập; đúng → phát `manual_address_entered`, xóa ô, True; sai → thanh lỗi, False."""
@@ -1066,7 +1070,8 @@ class DiscoverPage(QWidget):
             ip, port = parse_manual_address(text)
         except ValueError:
             self._address_error = text
-            self.info_bar.show_message(InfoLevel.ERROR, invalid_address_text(text))
+            # Hàm: `InfoBar` tự dịch lại câu lỗi khi đổi ngôn ngữ.
+            self.info_bar.show_message(InfoLevel.ERROR, functools.partial(invalid_address_text, text))
             self.address_edit.setFocus(Qt.FocusReason.OtherFocusReason)
             self.address_edit.selectAll()
             return False
@@ -1104,8 +1109,6 @@ class DiscoverPage(QWidget):
         self.empty_label.setText(empty)
         self.empty_label.setAccessibleName(empty)
         self._update_mode_widgets()
-        if self._address_error is not None and self.info_bar.isVisibleTo(self):
-            self.info_bar.show_message(InfoLevel.ERROR, invalid_address_text(self._address_error))
 
     # ---- Đồng bộ với model ---------------------------------------------------------------------
 

@@ -60,7 +60,9 @@ hàng trên biểu tượng thông tin 16 px của style + câu chiếm hết b�
 dài; hàng dưới các nút căn phải. Thứ tự Tab: câu → nút hành động → “Đóng”. Thông báo mới thay thông
 báo cũ (kể cả nút), không hộp thoại chặn. Dùng cho lỗi khi chọn gửi (mvp mục 8, các dòng “Chọn
 gửi…”, “Giao diện: gửi tới…”) và gợi ý kéo thả. Chữ có thể chứa tên máy kia (đã qua `peer_label`):
-chỉ vào nhãn PlainText và accessibleDescription, không vào tooltip. Seam test: `notice_text()`,
+chỉ vào nhãn PlainText và accessibleDescription, không vào tooltip. `text`, `action_text` là
+`texts.Text`: đổi ngôn ngữ thì câu dựng bằng hàm được dịch lại, câu dịch sẵn thì dải bị ẩn (không
+còn câu của ngôn ngữ cũ). Seam test: `notice_text()`,
 `notice_action_text()`. Mỗi câu mới phát sự kiện trợ năng `Alert` trên dải (trình đọc màn hình đọc
 ngay). Câu thông báo nhận tiêu điểm bằng Tab (trình đọc màn hình đọc được) nhưng không có con trỏ
 chữ (chọn bằng chuột được). Kết quả ghép đôi thành công cũng hiện ở đây (`ui.app` nối
@@ -109,8 +111,7 @@ from teleport.app.transfers import (
     TransferStatusChanged,
     TransferUpdate,
 )
-from teleport.core.display import format_duration, format_size
-from teleport.ui import texts
+from teleport.ui import i18n, texts
 from teleport.ui.send import printable
 from teleport.ui.texts import fill as _fill
 
@@ -151,8 +152,7 @@ def bar_value(done: int, total: int) -> int:
 
 def percent_text(shown: int, total: int) -> str:
     """“42,0%”: một chữ số thập phân, làm tròn xuống, tối đa 99,9% (chỉ thẻ đã xong mới đầy)."""
-    tenths = min(bar_value(shown, total), BAR_MAX - 1)
-    return f"{tenths // 10},{tenths % 10}%"
+    return texts.percent(min(bar_value(shown, total), BAR_MAX - 1))
 
 
 def _file_at(info: TransferInfo, index: int | None) -> str:
@@ -364,8 +364,8 @@ def _send_result(finished: TransferFinished, p: str) -> str:
                 "{name} không đủ chỗ trống để nhận: cần {needed}, ổ lưu file trên máy đó còn {available}.",
             ),
             name=p,
-            needed=format_size(reject.needed),
-            available=format_size(reject.available),
+            needed=texts.format_size(reject.needed),
+            available=texts.format_size(reject.available),
         )
     if result is TransferResult.REJECTED_FILE_TOO_LARGE and reject is not None:
         index, max_size = reject.file_index, reject.max_size
@@ -378,8 +378,8 @@ def _send_result(finished: TransferFinished, p: str) -> str:
                 ),
                 name=p,
                 file=_file_at(info, index),
-                size=format_size(info.files[index].size),
-                limit=format_size(max_size + 1, trim=True),
+                size=texts.format_size(info.files[index].size),
+                limit=texts.format_size(max_size + 1, trim=True),
             )
     if result is TransferResult.REJECTED_NOT_RECEIVING:
         return _fill(
@@ -476,9 +476,9 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
                 n,
             ),
             name=s,
-            needed=format_size(reject.needed),
+            needed=texts.format_size(reject.needed),
             drive=_drive_label(receive_dir),
-            available=format_size(reject.available),
+            available=texts.format_size(reject.available),
         )
     if result is TransferResult.REJECTED_FILE_TOO_LARGE and reject is not None:
         index, max_size = reject.file_index, reject.max_size
@@ -493,9 +493,9 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
                 ),
                 name=s,
                 drive=_drive_label(receive_dir),
-                limit=format_size(max_size + 1, trim=True),
+                limit=texts.format_size(max_size + 1, trim=True),
                 file=_file_at(info, index),
-                size=format_size(info.files[index].size),
+                size=texts.format_size(info.files[index].size),
             )
     if result is TransferResult.CANCELLED_USER:
         if not finished.by_peer:
@@ -598,10 +598,12 @@ def progress_text(update: TransferProgress, shown: int | None = None) -> str:
     if eta is None or not math.isfinite(eta) or speed_bytes == 0:
         remaining = QCoreApplication.translate("Transfers", "đang tính thời gian còn lại")
     else:
-        remaining = _fill(QCoreApplication.translate("Transfers", "còn {time}"), time=format_duration(eta))
+        remaining = _fill(
+            QCoreApplication.translate("Transfers", "còn {time}"), time=texts.format_duration(eta)
+        )
     if speed_bytes == 0:
         return " · ".join((percent, remaining))
-    return " · ".join((percent, f"{format_size(speed_bytes)}/s", remaining))
+    return " · ".join((percent, f"{texts.format_size(speed_bytes)}/s", remaining))
 
 
 _ICONS: dict[Kind, QStyle.StandardPixmap | None] = {
@@ -771,6 +773,8 @@ class TransfersView(QWidget):
         self.notice_action.setVisible(False)
         self.notice_action.clicked.connect(self._notice_action_clicked)
         self._notice_callback: Callable[[], None] | None = None
+        self._notice_sources: tuple[texts.Text, texts.Text | None] = ("", None)
+        self._notice_language = ""  # ngôn ngữ lúc hiện câu đang có
         self.notice_close = QPushButton()
         self.notice_close.setObjectName("transfersNoticeClose")
         self.notice_close.setAutoDefault(False)
@@ -841,8 +845,8 @@ class TransfersView(QWidget):
 
     def show_notice(
         self,
-        text: str,
-        action_text: str | None = None,
+        text: texts.Text,
+        action_text: texts.Text | None = None,
         on_action: Callable[[], None] | None = None,
     ) -> None:
         """Hiện `text` (chữ thuần) ở dải thông báo, thay thông báo cũ; chuỗi rỗng → ẩn.
@@ -852,27 +856,49 @@ class TransfersView(QWidget):
         """
         with self._changes():
             self._mark_changed()
-            if not text:
+            if not texts.resolve(text):
                 self.hide_notice()
                 return
             self._show_notice(text, action_text, on_action)
 
-    def _show_notice(self, text: str, action_text: str | None, on_action: Callable[[], None] | None) -> None:
-        self.notice_label.setText(text)
-        self.notice_label.setAccessibleDescription(text)
-        self.notice_frame.setAccessibleDescription(text)
+    def _show_notice(
+        self, text: texts.Text, action_text: texts.Text | None, on_action: Callable[[], None] | None
+    ) -> None:
+        self._notice_sources = (text, action_text)
+        self._notice_language = i18n.current_language()
         if action_text and on_action is not None:
             self._notice_callback = on_action
-            self.notice_action.setText(action_text)
-            self.notice_action.setAccessibleName(action_text)
-            self.notice_action.setAccessibleDescription(text)
             self.notice_action.setVisible(True)
         else:
             self._clear_notice_action()
+        self._apply_notice_text()
         self.notice_frame.setVisible(True)
         # Trình đọc màn hình đọc câu mới ngay (không cần Tab tới): sự kiện Alert của dải, mang tên
         # “Thông báo” và mô tả là câu.
         QAccessible.updateAccessibility(QAccessibleEvent(self.notice_frame, QAccessible.Event.Alert))
+
+    def _apply_notice_text(self) -> None:
+        source, action_source = self._notice_sources
+        text = texts.resolve(source)
+        self.notice_label.setText(text)
+        self.notice_label.setAccessibleDescription(text)
+        self.notice_frame.setAccessibleDescription(text)
+        if self._notice_callback is not None and action_source:
+            action_text = texts.resolve(action_source)
+            self.notice_action.setText(action_text)
+            self.notice_action.setAccessibleName(action_text)
+            self.notice_action.setAccessibleDescription(text)
+
+    def _retranslate_notice(self) -> None:
+        """Sau `LanguageChange`: câu dựng bằng hàm thì dịch lại; câu dịch sẵn của ngôn ngữ cũ thì ẩn."""
+        language = i18n.current_language()
+        if self.notice_frame.isHidden() or self._notice_language == language:
+            return
+        if all(callable(source) or not source for source in self._notice_sources):
+            self._notice_language = language
+            self._apply_notice_text()
+        else:
+            self.hide_notice()
 
     def hide_notice(self) -> None:
         """Ẩn dải thông báo (nút “Đóng”). Đang có tiêu điểm thì Qt tự chuyển sang widget kế tiếp."""
@@ -1143,7 +1169,7 @@ class TransfersView(QWidget):
         """Dòng 1: “video.mp4 (8,0 GB) · tới PC-Nha” / “3 file (8,4 GB) · từ Laptop-Minh”."""
         t = QCoreApplication.translate
         peer = self._peer(row)
-        size = format_size(max(0, row.total_bytes))
+        size = texts.format_size(max(0, row.total_bytes))
         if row.file_count == 1 and row.first_name is not None:
             what = f"{texts.file_label(row.first_name)} ({size})"
         else:
@@ -1249,6 +1275,7 @@ class TransfersView(QWidget):
         super().changeEvent(event)
         if event.type() == QEvent.Type.LanguageChange:
             self.retranslate()
+            self._retranslate_notice()
         elif event.type() in (QEvent.Type.StyleChange, QEvent.Type.PaletteChange):
             self._set_notice_icon()
             for row in self._rows.values():  # biểu tượng của style mới (sáng/tối)

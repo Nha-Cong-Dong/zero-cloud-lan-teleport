@@ -153,7 +153,7 @@ def test_apply_preference_bad_code_uses_source(qapp, monkeypatch, bad):
 def test_apply_preference_real_switch_keeps_source_when_no_qm(qapp):
     from teleport.ui import i18n
 
-    i18n.apply_preference("en")  # chưa có teleport_en.qm: dùng chuỗi nguồn, không lỗi
+    i18n.apply_preference("zz")  # không có teleport_zz.qm: dùng chuỗi nguồn, không lỗi
     assert i18n.current_language() == "vi"
     i18n.apply_preference(None)
     assert i18n.current_language() in i18n.available_languages() or i18n.current_language() == "vi"
@@ -211,9 +211,13 @@ def test_saved_language_used_at_startup(gui, gui_wait, config_dir, ui_helpers, m
     monkeypatch.setattr(i18n, "install", install)
 
     def script(run):
+        from teleport.ui import texts
+
         yield gui_wait(lambda: run.windows and run.hosts and run.hosts[-1].running, 15, "node chạy")
+        # Đang chạy bằng English nên so với câu đã dịch, không ghim chữ Việt.
+        quit_text = ui_helpers.plain(texts.menu_quit())
         [action] = [
-            a for a in run.tray.actions() if not a.isSeparator() and ui_helpers.plain(a.text()) == "Thoát"
+            a for a in run.tray.actions() if not a.isSeparator() and ui_helpers.plain(a.text()) == quit_text
         ]
         action.trigger()
 

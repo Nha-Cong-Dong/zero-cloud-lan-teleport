@@ -30,7 +30,6 @@ from PySide6.QtCore import QCoreApplication, QUrl
 
 from teleport.app import sources as app_sources
 from teleport.app.sources import SourceError, SourceErrorKind
-from teleport.core.display import format_size
 from teleport.core.filenames import INVISIBLE_CHARS
 from teleport.core.links import ConnectResult
 from teleport.core.messages import MAX_OFFER_FILES
@@ -97,8 +96,8 @@ def source_error_message(error: SourceError) -> str:
     if kind is SourceErrorKind.PERMISSION:
         return _fill(t("Send", "Không mở được {name}: máy này không có quyền đọc file đó."), name=name)
     if kind is SourceErrorKind.TOO_LARGE:
-        size = "?" if error.size is None else format_size(error.size)
-        limit = format_size(app_sources.MAX_FILE_SIZE, trim=True)
+        size = "?" if error.size is None else texts.format_size(error.size)
+        limit = texts.format_size(app_sources.MAX_FILE_SIZE, trim=True)
         return _fill(
             t(
                 "Send",

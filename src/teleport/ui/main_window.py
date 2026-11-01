@@ -178,7 +178,6 @@ from teleport.ui.widgets import (
     AvatarKind,
     EmptyState,
     IconButton,
-    InfoLevel,
     Presence,
     paint_avatar,
     safe_tooltip,
@@ -492,11 +491,16 @@ class MainWindow(QMainWindow):
         self.brand_label.setTextFormat(Qt.TextFormat.PlainText)
         self.brand_label.setFont(theme.font_for(theme.TextStyle.TITLE, self.brand_label.font()))
         self.brand_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.discover_button = IconButton("search", self.tr("Tìm máy mới"), self.sidebar_header)
+        self.discover_button = IconButton(
+            "search", QCoreApplication.translate("MainWindow", "Tìm máy mới"), self.sidebar_header
+        )
         self.discover_button.setObjectName("discoverButton")
         self.discover_button.clicked.connect(self._open_discover)
         self.settings_button = IconButton(
-            "settings", self.tr("Cài đặt"), self.sidebar_header, shortcut=QKeySequence(SETTINGS_SHORTCUT)
+            "settings",
+            QCoreApplication.translate("MainWindow", "Cài đặt"),
+            self.sidebar_header,
+            shortcut=QKeySequence(SETTINGS_SHORTCUT),
         )
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.clicked.connect(self._open_settings)
@@ -821,7 +825,7 @@ class MainWindow(QMainWindow):
         self.conversations.list_view.setFocus(Qt.FocusReason.OtherFocusReason)
         return True
 
-    def open_address_entry(self, notice: str | None = None) -> bool:
+    def open_address_entry(self, notice: texts.Text | None = None) -> bool:
         """Mở trang “Tìm máy mới”, hiện `notice` (mức INFO) ở thanh thông báo của trang và đặt tiêu điểm
         vào ô “Nhập IP…” (chọn hết chữ). Không ở RUNNING → False.
 
@@ -829,7 +833,7 @@ class MainWindow(QMainWindow):
         if not self.open_page(Page.DISCOVER):
             return False
         if notice:
-            self.discover.info_bar.show_message(InfoLevel.INFO, notice)
+            self.discover.show_info(notice)
         self.discover.address_edit.setFocus(Qt.FocusReason.OtherFocusReason)
         self.discover.address_edit.selectAll()
         return True
@@ -913,27 +917,27 @@ class MainWindow(QMainWindow):
         """Đặt lại mọi chữ theo ngôn ngữ hiện tại và trạng thái hiện tại."""
         self.setWindowTitle(texts.APP_NAME)
         self.title_label.setText(texts.APP_NAME)
-        self.title_label.setAccessibleName(self.tr("Tên ứng dụng"))
+        self.title_label.setAccessibleName(QCoreApplication.translate("MainWindow", "Tên ứng dụng"))
         self.brand_label.setText(texts.APP_NAME)
         self.brand_label.setAccessibleName(texts.APP_NAME)
         self.retry_button.setText(texts.retry())
         self.retry_button.setAccessibleName(texts.retry())
-        self.retry_button.setToolTip(self.tr("Khởi động lại Teleport (F5)"))
-        start = self.tr("Bắt đầu")
+        self.retry_button.setToolTip(QCoreApplication.translate("MainWindow", "Khởi động lại Teleport (F5)"))
+        start = QCoreApplication.translate("MainWindow", "Bắt đầu")
         self.start_button.setText(start)
         self.start_button.setAccessibleName(start)
         self.start_button.setAccessibleDescription(first_run.consent_text())
-        self.discover_button.set_label(self.tr("Tìm máy mới"))
-        self.settings_button.set_label(self.tr("Cài đặt"))
-        self.sidebar.setAccessibleName(self.tr("Thiết bị"))
-        transfers = self.tr("Lượt truyền")
+        self.discover_button.set_label(QCoreApplication.translate("MainWindow", "Tìm máy mới"))
+        self.settings_button.set_label(QCoreApplication.translate("MainWindow", "Cài đặt"))
+        self.sidebar.setAccessibleName(QCoreApplication.translate("MainWindow", "Thiết bị"))
+        transfers = QCoreApplication.translate("MainWindow", "Lượt truyền")
         self.stream_pane.setAccessibleName(transfers)
         self.transfers_area.setAccessibleName(transfers)
         self._retry_action.setText(texts.retry())
-        self._close_action.setText(self.tr("Đóng cửa sổ"))
+        self._close_action.setText(QCoreApplication.translate("MainWindow", "Đóng cửa sổ"))
         self._quit_action.setText(texts.menu_quit())
-        self._back_action.setText(self.tr("Quay lại"))
-        self._settings_action.setText(self.tr("Cài đặt"))
+        self._back_action.setText(QCoreApplication.translate("MainWindow", "Quay lại"))
+        self._settings_action.setText(QCoreApplication.translate("MainWindow", "Cài đặt"))
         self.start_view.retranslate()
         self.machine_card.retranslate()
         self.save_bar.retranslate()
@@ -941,10 +945,12 @@ class MainWindow(QMainWindow):
         status, detail, hints = self._content()
         self.status_label.setText(status)
         self.status_label.setVisible(bool(status))  # WELCOME: form lần chạy đầu thay dòng trạng thái
-        self.status_label.setAccessibleName(self.tr("Trạng thái"))
+        self.status_label.setAccessibleName(QCoreApplication.translate("MainWindow", "Trạng thái"))
         self.status_label.setAccessibleDescription(status)
-        self._set_optional(self.detail_label, detail, self.tr("Chi tiết"))
-        self._set_optional(self.hint_label, "\n".join(hints), self.tr("Gợi ý"))
+        self._set_optional(self.detail_label, detail, QCoreApplication.translate("MainWindow", "Chi tiết"))
+        self._set_optional(
+            self.hint_label, "\n".join(hints), QCoreApplication.translate("MainWindow", "Gợi ý")
+        )
         self._update_address()
         running = self._state is ViewState.RUNNING
         self.home_stack.setCurrentWidget(self.shell if running else self.start_view)
@@ -973,13 +979,13 @@ class MainWindow(QMainWindow):
         """(dòng trạng thái, dòng chi tiết, các dòng gợi ý) của khối căn giữa; WELCOME (form lần chạy
         đầu thay chỗ) và RUNNING thì rỗng."""
         if self._state is ViewState.STARTING:
-            return self.tr("Đang khởi động…"), "", []
+            return QCoreApplication.translate("MainWindow", "Đang khởi động…"), "", []
         if self._state is ViewState.WELCOME:
             return "", "", []
         if self._state is ViewState.RUNNING:
             return "", "", []  # tên, địa chỉ, huy hiệu ở `machine_card`; thư mục nhận ở `save_bar`
         head, hints = texts.start_error(self._error_code, self._error_detail)
-        return self.tr("Không khởi động được"), head, hints
+        return QCoreApplication.translate("MainWindow", "Không khởi động được"), head, hints
 
     def _update_address(self) -> None:
         """Dựng dòng “Địa chỉ: …”, tooltip các địa chỉ khác và chuỗi để chép từ giá trị đã nhớ."""
@@ -987,12 +993,17 @@ class MainWindow(QMainWindow):
         shown = [f"{address}{suffix}" for address in self._addresses]
         text = ""
         if self._state is ViewState.RUNNING and shown:
-            text = texts.fill(self.tr("Địa chỉ: {address}"), address=shown[0])
+            text = texts.fill(
+                QCoreApplication.translate("MainWindow", "Địa chỉ: {address}"), address=shown[0]
+            )
         others = ""
         if text and len(shown) > 1:
-            others = texts.fill(self.tr("Các địa chỉ khác của máy này: {list}"), list=", ".join(shown[1:]))
+            others = texts.fill(
+                QCoreApplication.translate("MainWindow", "Các địa chỉ khác của máy này: {list}"),
+                list=", ".join(shown[1:]),
+            )
         self.address_label.setText(text)
-        self.address_label.setAccessibleName(self.tr("Địa chỉ của máy này"))
+        self.address_label.setAccessibleName(QCoreApplication.translate("MainWindow", "Địa chỉ của máy này"))
         self.address_label.setAccessibleDescription(others)
         self.address_label.setToolTip(others)
         self.address_label.setVisible(bool(text))
@@ -1001,14 +1012,17 @@ class MainWindow(QMainWindow):
 
     def _update_empty_content(self) -> None:
         """Chữ và nút của màn rỗng ở khung phải; nút “Tìm máy mới” chỉ khi đã có trang DISCOVER."""
-        title = self.tr("Ghép đôi máy đầu tiên")
+        title = QCoreApplication.translate("MainWindow", "Ghép đôi máy đầu tiên")
         if self.pages.has_page(Page.DISCOVER):
-            text = self.tr("Mở Teleport trên máy kia, trong cùng mạng với máy này, rồi bấm Tìm máy mới.")
-            action: str | None = self.tr("Tìm máy mới")
+            text = QCoreApplication.translate(
+                "MainWindow", "Mở Teleport trên máy kia, trong cùng mạng với máy này, rồi bấm Tìm máy mới."
+            )
+            action: str | None = QCoreApplication.translate("MainWindow", "Tìm máy mới")
         else:
-            text = self.tr(
+            text = QCoreApplication.translate(
+                "MainWindow",
                 "Mở Teleport trên máy kia, trong cùng mạng với máy này. Máy đó sẽ hiện ở cột bên trái; "
-                "bấm vào tên máy để ghép đôi."
+                "bấm vào tên máy để ghép đôi.",
             )
             action = None
         empty = self.empty_state

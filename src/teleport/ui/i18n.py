@@ -113,12 +113,8 @@ def set_language(code: str) -> None:
 
 def loadable(code: str) -> bool:
     """`teleport_<code>.qm` có thật và `QTranslator` nạp được (cho `--selftest`); không cài gì."""
-    resource = resources.files("teleport.ui").joinpath("i18n", f"teleport_{code}.qm")
-    try:
-        data = resource.read_bytes()
-    except OSError:
-        return False
-    return QTranslator().load(data)
+    data = _read_qm(code)
+    return data is not None and QTranslator().load(data)
 
 
 def _candidates(code: str) -> list[str]:
@@ -127,14 +123,21 @@ def _candidates(code: str) -> list[str]:
     return [code] if base == code else [code, base]
 
 
-def _load(code: str) -> QTranslator | None:
+def _read_qm(code: str) -> bytes | None:
+    """Nội dung `teleport_<code>.qm` trong gói; không có file hay lỗi đọc → None (DEBUG khi lỗi)."""
     resource = resources.files("teleport.ui").joinpath("i18n", f"teleport_{code}.qm")
     try:
         if not resource.is_file():
             return None
-        data = resource.read_bytes()
+        return resource.read_bytes()
     except OSError as e:
         log.debug("không đọc được bản dịch %s (%s)", code, type(e).__name__)
+        return None
+
+
+def _load(code: str) -> QTranslator | None:
+    data = _read_qm(code)
+    if data is None:
         return None
     translator = QTranslator(QCoreApplication.instance())
     if not translator.load(data):
