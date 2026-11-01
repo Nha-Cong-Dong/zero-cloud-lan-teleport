@@ -2,8 +2,9 @@
 
 Luồng khởi động (spec P4-3 mục 4): phân tích tham số (`--config-dir D`, `--background`,
 `--selftest`); thư mục cấu hình = `--config-dir` › `TELEPORT_HOME` › `paths.config_dir()`, tuyệt
-đối; dựng `QApplication` (`setQuitOnLastWindowClosed(False)`); i18n, font điểm nhấn
-(`ui.fonts.install`, lỗi thì dùng font hệ thống), theme; `SingleInstance.acquire`;
+đối; dựng `QApplication` (`setQuitOnLastWindowClosed(False)`); i18n theo ngôn ngữ đã lưu, font điểm
+nhấn (`ui.fonts.install`, lỗi thì dùng font hệ thống), chế độ màu và màu nhấn đã lưu
+(`theme.set_preference`, trước khi dựng cửa sổ nào nên không nháy màu); `SingleInstance.acquire`;
 log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node trong `bridge.NodeHost` nếu máy
 đã có `device.crt`. Chưa có thì cửa sổ hiện màn “Bắt đầu” (spec hackathon mục 10 A1): chưa bấm
 “Bắt đầu” thì không chạy node, không lấy `node.lock`, không quảng bá gì; bấm thì chạy node và
@@ -31,8 +32,10 @@ danh sách cuộc trò chuyện; “Tìm máy mới” → trang DISCOVER; hàng
 `page.set_receive_dir(thư mục, thư mục hỏng, đang đổi sang)`, “Mở” như chân “Lưu vào”, “Đổi…” →
 `choose(cửa sổ)`, `failed` khi trang Cài đặt đang mở thì thêm câu lỗi ở thanh thông báo của trang);
 `name_changed` → `MainWindow.set_device_name` và `NodeHost.set_node_name`; huy hiệu “Đang ẩn” của thẻ
-máy này theo `Node.visible` đọc lúc `started` và `visibility_changed`. Ngôn ngữ đã lưu
-(`settings.json`) được áp lúc khởi động (`_saved_language`, chỉ đọc, lỗi gì cũng về theo hệ điều hành).
+máy này theo `Node.visible` đọc lúc `started` và `visibility_changed`. Ngôn ngữ, chế độ màu và màu
+nhấn đã lưu (`settings.json`) được áp lúc khởi động (`_saved_ui_preferences`: `Settings.load` một lần,
+chỉ đọc, lỗi gì cũng về mặc định: theo hệ điều hành, màu nhấn mặc định); màn “Bắt đầu” cũng dùng chủ
+đề đọc lúc này.
 
 **Gửi/nhận file**: `ui.transfers.TransfersController` (`GuiApp.transfers`) giữ danh sách lượt, hộp
 hỏi nhận file và việc gửi; `GuiApp` chỉ báo host mới (`attach`), `started`, `NodeEvent` và
@@ -125,7 +128,10 @@ chừng một slot Qt); một `QTimer` rỗng 200 ms cho Python có dịp chạy
 **`--selftest`** (cho CI và bản exe): dựng mọi thứ ở trên mà không hiện, không lấy khóa, không mở
 mạng; thêm kiểm tài sản đóng gói: lỗi (mã 1) khi thiếu file font điểm nhấn hay Qt từ chối nó
 (`fonts.last_error()` là `MISSING`/`REJECTED`; nạp được mà không thấy tên family thì vẫn qua, vì
-nền `offscreen` khác nhau giữa các hệ điều hành) và khi icon `checkmark_circle` vẽ ra rỗng. Khi
+nền `offscreen` khác nhau giữa các hệ điều hành), khi icon `checkmark_circle` vẽ ra rỗng và khi một
+bản dịch có trong `i18n.available_languages()` (khác chuỗi nguồn) không nạp được. Selftest còn dựng
+mục “Giao diện” (`ui.appearance.AppearanceSection`) và đổi chủ đề một vòng (tối rồi theo hệ điều
+hành) bằng `theme.set_preference`. Khi
 chạy từ bản đóng gói (`sys.frozen`) thì kiểm thêm `QFontInfo(font_for(SECTION)).styleName()` là
 “Medium” và của TITLE là “Bold” (instance thật của font variable, không đậm giả).
 
@@ -175,6 +181,7 @@ from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
 from teleport.ui import errorlog, fonts, i18n, icons, receive_dir, send, texts, theme
 from teleport.ui import transfers as ui_transfers
+from teleport.ui.appearance import AppearanceSection
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, Page, ViewState
@@ -992,13 +999,15 @@ def log_files(config_dir: Path) -> list[Path]:
     return [directory / f"{LOG_FILE}.{n}" for n in range(LOG_BACKUPS, 0, -1)] + [directory / LOG_FILE]
 
 
-def _saved_language(config_dir: Path) -> str | None:
-    """Ngôn ngữ đã lưu ở `settings.json` (chỉ đọc); lỗi gì cũng None (theo hệ điều hành)."""
+def _saved_ui_preferences(config_dir: Path) -> tuple[str | None, str | None, str | None]:
+    """(ngôn ngữ, chế độ màu, màu nhấn) đã lưu ở `settings.json`: đọc một lần, chỉ đọc; lỗi gì cũng
+    `(None, None, None)` (theo hệ điều hành, màu nhấn mặc định)."""
     try:
-        return Settings.load(config_dir).language
+        saved = Settings.load(config_dir)
+        return saved.language, saved.theme, saved.accent
     except Exception as e:
-        log.debug("không đọc được ngôn ngữ đã lưu: %s", type(e).__name__)
-        return None
+        log.debug("không đọc được cài đặt giao diện đã lưu: %s", type(e).__name__)
+        return None, None, None
 
 
 def _default_options(config_dir: Path) -> NodeOptions:
@@ -1121,6 +1130,10 @@ def _assets_ok() -> bool:
     if icons.pixmap("checkmark_circle", 20, theme.tokens(False).success).isNull():
         log.error("selftest: không vẽ được icon")
         return False
+    for code in i18n.available_languages():
+        if code != i18n.SOURCE_LANGUAGE and not i18n.loadable(code):
+            log.error("selftest: không nạp được bản dịch %s", code)
+            return False
     return True
 
 
@@ -1131,6 +1144,9 @@ def _selftest(app: QApplication) -> int:
         if not _assets_ok():
             return EXIT_ERROR
         theme.apply(app)
+        AppearanceSection().deleteLater()
+        theme.set_preference(app, theme.Mode.DARK, None)
+        theme.set_preference(app, theme.Mode.SYSTEM, None)
         window = MainWindow()
         tray = Tray()
         window.show_welcome(planned_device_name())
@@ -1228,9 +1244,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
     """Phần của `main` sau khi có `QApplication` (ngoài `--selftest`), chạy trong `GcGuard`."""
-    i18n.install(app, _saved_language(config_dir))
+    language, saved_theme, accent = _saved_ui_preferences(config_dir)
+    i18n.install(app, language)
     fonts.install()  # lỗi thì `theme.font_for` rơi về font hệ thống
-    theme.apply(app)
+    theme.set_preference(app, theme.mode_from_setting(saved_theme), accent)
     try:
         instance = SingleInstance.acquire(config_dir)
     except TimeoutError:  # trước OSError: TimeoutError là lớp con của OSError

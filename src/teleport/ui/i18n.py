@@ -111,6 +111,16 @@ def set_language(code: str) -> None:
     log.debug("không có bản dịch cho %s, dùng chuỗi nguồn", code)
 
 
+def loadable(code: str) -> bool:
+    """`teleport_<code>.qm` có thật và `QTranslator` nạp được (cho `--selftest`); không cài gì."""
+    resource = resources.files("teleport.ui").joinpath("i18n", f"teleport_{code}.qm")
+    try:
+        data = resource.read_bytes()
+    except OSError:
+        return False
+    return QTranslator().load(data)
+
+
 def _candidates(code: str) -> list[str]:
     """`en_US` → [`en_US`, `en`]; `vi` → [`vi`]."""
     base = code.split("_", 1)[0]

@@ -1015,7 +1015,7 @@ def test_source_assets_pin_a_commit() -> None:
 
 def test_every_real_asset_file_matches_exactly_one_source_asset() -> None:
     rels = _real_asset_rels()
-    assert len([r for r in rels if r.endswith(".svg")]) == 47
+    assert len([r for r in rels if r.endswith(".svg")]) == 48  # 47 của A2 + `color` của D6
     for rel in rels:
         owners = [a.key for a in tp.SOURCE_ASSETS if any(_matches(p, rel) for p in a.patterns)]
         assert len(owners) == 1, (rel, owners)
@@ -1041,7 +1041,7 @@ def test_collect_components_puts_real_assets_into_asset_components(repo: Path, b
     icons, font = components[_ICON_KEY], components[_FONT_KEY]
     assert icons.license == "MIT"
     assert font.license == "OFL-1.1"
-    assert len(icons.files) == 48  # 47 SVG + LICENSE
+    assert len(icons.files) == 49  # 48 SVG (47 của A2 + `color` của D6) + LICENSE
     assert len(font.files) == 2  # .ttf + OFL.txt
     assert icons.license_path is not None
     assert font.license_path is not None

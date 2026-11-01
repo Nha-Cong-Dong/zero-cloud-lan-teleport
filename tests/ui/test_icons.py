@@ -2,7 +2,8 @@
 
 Viết theo đặc tả, không theo code:
 
-- 42 tên Fluent UI System Icons (`_20_regular`; năm tên có thêm `_24_regular`), 47 file
+- 43 tên Fluent UI System Icons (42 của A2 + `color` của D6; `_20_regular`; năm tên có thêm
+  `_24_regular`), 48 file
   `assets/icons/<tên>_<cỡ>_regular.svg` đọc qua `importlib.resources.files("teleport.ui")`.
 - `pixmap(name, size, color, dpr=1.0)`: cỡ vật lý `round(size*dpr)`, `devicePixelRatio() == dpr`, tô bằng
   `CompositionMode_SourceIn` (mọi điểm ảnh alpha ≥ 128 có RGB = màu truyền, lệch ≤ 2 mỗi kênh); cache theo
@@ -34,7 +35,7 @@ from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
 
 UI_SRC = Path(__file__).resolve().parents[2] / "src" / "teleport" / "ui"
 
-# Danh sách tên trong spec (mục A2, “Icon”), 42 tên theo bản sửa của hoi-lai.
+# Danh sách tên trong spec (mục A2, “Icon”), 42 tên theo bản sửa của hoi-lai, cộng `color` (spec D6).
 SPEC_NAMES = frozenset(
     {
         "search", "settings", "add", "chevron_left", "more_horizontal",
@@ -47,6 +48,7 @@ SPEC_NAMES = frozenset(
         "document", "document_pdf", "image", "video", "music_note_2", "folder_zip",
         "cloud_off", "shield_checkmark", "arrow_sync",
         "globe", "lock_closed", "arrow_swap", "wrench",
+        "color",  # spec D6: icon mục “Giao diện” của Cài đặt
     }
 )  # fmt: skip
 # Tên có dấu † trong spec: thêm bản 24 px.
@@ -116,10 +118,10 @@ def assert_tinted(pixmap: QPixmap, color: QColor, label: str = "") -> None:
 # =================================================================================================
 
 
-def test_spec_lists_42_names_and_47_files():
-    """Tự kiểm bảng của test: spec (hoi-lai 30/10) chốt 42 tên, 47 file."""
-    assert len(SPEC_NAMES) == 42
-    assert len(ALL_PAIRS) == 47
+def test_spec_lists_43_names_and_48_files():
+    """Tự kiểm bảng của test: spec (hoi-lai 30/10) chốt 42 tên, 47 file; spec D6 thêm `color`."""
+    assert len(SPEC_NAMES) == 43
+    assert len(ALL_PAIRS) == 48
 
 
 @pytest.mark.parametrize(("name", "size"), ALL_PAIRS, ids=[f"{n}-{s}" for n, s in ALL_PAIRS])
