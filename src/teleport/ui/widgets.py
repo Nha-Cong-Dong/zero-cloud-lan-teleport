@@ -1,8 +1,8 @@
 """Thành phần dùng chung của giao diện (spec A3): nút icon, badge trạng thái, avatar, bong bóng chat,
-thanh thông báo, màn rỗng, đầu trang, công tắc bật/tắt (spec D2) và `safe_tooltip`.
+thanh thông báo, màn rỗng, đầu trang, công tắc bật/tắt và hàng cài đặt (spec D2), nhóm chọn một
+(spec D6) và `safe_tooltip`.
 
-Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame[surface="card"]` của `ui/theme.py`);
-hàng cài đặt (`SettingsRow`) nằm ở `ui/settings.py`.
+Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame[surface="card"]` của `ui/theme.py`).
 
 **Quy ước chung**
 - Chữ của widget là `Qt.PlainText`; tooltip dựng từ chữ của bên gọi luôn qua `safe_tooltip`. Chữ của
@@ -52,15 +52,35 @@ hàng cài đặt (`SettingsRow`) nằm ở `ui/settings.py`.
   thái; không hoạt ảnh. `border_strong` (viền khi tắt) và `accent_strong` (nền khi bật) ≥ 3:1 với
   `surface` ở cả hai chế độ (`TOGGLE_CONTRAST_PAIRS`). Tên và mô tả trợ năng do bên gọi đặt (nhãn
   và gợi ý của hàng); trạng thái bật/tắt tới trình đọc màn hình qua trạng thái “checked” của nút.
+- `SettingsRow` (spec D2; dùng ở `ui/settings.py` và `ui/appearance.py`): `QFrame[surface="raised"]`,
+  nhãn đậm vừa, gợi ý `tone=muted` xuống dòng, các dòng phụ (`add_line`), control bên phải; hàng hẹp
+  tới mức cột chữ còn dưới `LABEL_MIN_WIDTH` thì control xuống hàng dưới (cửa sổ nhỏ nhất không cuộn
+  ngang). Control mang tên trợ năng = nhãn hàng và mô tả = gợi ý, trừ khi control có property
+  `keepAccessible` (bên gọi tự đặt tên cho từng phần).
+- `RovingGroup` (spec D6, mvp N12): nhóm nút chọn một kiểu nút radio. Tab chỉ dừng ở nút đang chọn
+  (nút khác `ClickFocus`; chưa nút nào chọn thì nút đầu nhận Tab); mũi tên trái/phải (lên/xuống) đi
+  tới nút kế và chọn luôn (`click()`, nên bên dùng nhận `clicked` như khi bấm chuột), Home/End tới
+  đầu/cuối, vòng quanh hai đầu; bố cục phải-sang-trái thì đảo trái/phải.
+- `SegmentedControl` (spec D6 mục 2.5): khung `QFrame[segmented="true"]` (nền `surface_raised`, viền
+  1 px `border_strong`, bo `RADIUS_CONTROL`) chứa các `QRadioButton` mang `segment="first|middle|last"`
+  trong một `RovingGroup`. Luật `theme.stylesheet`: nút chưa chọn nền trong suốt (lộ `surface_raised`),
+  chữ `text`, hover nền `selected`; đã chọn nền `accent`, chữ `accent_text`, viền 2 px `accent_strong`;
+  tiêu điểm viền `focus_ring_color` và chữ gạch chân (như nút chính: ở chế độ tối viền tiêu điểm chỉ
+  khác viền nhấn ≈ 1,7:1); ô tròn của radio rộng 0. Viền 2 px luôn có (trong suốt khi thường) nên nút
+  không đổi cỡ. Lựa chọn đọc được bằng nền và chữ, không chỉ bằng màu viền; trình đọc màn hình đọc vai
+  trò radio và trạng thái “checked”. `value_selected` chỉ phát khi người dùng chọn giá trị khác giá
+  trị đang có; `set_value` không phát. Cặp tương phản phải đạt với mọi màu nhấn × sáng/tối:
+  `SEGMENT_CONTRAST_PAIRS`.
 """
 
 from __future__ import annotations
 
 import contextlib
 import html
+from collections.abc import Sequence
 from enum import StrEnum
 
-from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
@@ -79,11 +99,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
+    QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -1141,3 +1163,273 @@ class ToggleSwitch(QAbstractButton):
             self.retranslate()
         elif event.type() == QEvent.Type.FontChange:
             self.updateGeometry()
+
+
+# ---- SettingsRow -------------------------------------------------------------------------------
+
+LABEL_MIN_WIDTH = 240  # px: cột chữ của hàng hẹp hơn thì control xuống hàng dưới
+
+
+def _row_label(parent: QWidget, object_name: str) -> QLabel:
+    label = _plain_label(parent)
+    if object_name:
+        label.setObjectName(object_name)
+    label.setWordWrap(True)
+    label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    return label
+
+
+class SettingsRow(QFrame):
+    """Một hàng cài đặt: nhãn, gợi ý, các dòng phụ, control bên phải (hẹp thì xuống dưới)."""
+
+    def __init__(self, parent: QWidget | None = None, *, object_name: str = "") -> None:
+        super().__init__(parent)
+        if object_name:
+            self.setObjectName(object_name)
+        self.setProperty(theme.SURFACE_PROPERTY, "raised")
+        # Không cao hơn cần: QBoxLayout chia chỗ thừa cho hàng có nhãn xuống dòng (heightForWidth).
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.label = _row_label(self, f"{object_name}Label" if object_name else "")
+        self.label.setFont(_demibold(self.label.font()))
+        self.hint_label = _row_label(self, f"{object_name}Hint" if object_name else "")
+        self.hint_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.hint_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.hint_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._control: QWidget | None = None
+        self._narrow: bool | None = None
+
+        self._text_column = QVBoxLayout()
+        self._text_column.setContentsMargins(0, 0, 0, 0)
+        self._text_column.setSpacing(2)
+        self._text_column.addWidget(self.label)
+        self._text_column.addWidget(self.hint_label)
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(theme.SPACING[3], theme.SPACING[2], theme.SPACING[3], theme.SPACING[2])
+        self._grid.setHorizontalSpacing(theme.SPACING[3])
+        self._grid.setVerticalSpacing(theme.SPACING[1])
+        self._grid.addLayout(self._text_column, 0, 0)
+        self._grid.setColumnStretch(0, 1)
+        self.hint_label.setVisible(False)
+
+    @property
+    def control(self) -> QWidget | None:
+        return self._control
+
+    @property
+    def narrow(self) -> bool:
+        """Control đang nằm dưới cột chữ."""
+        return bool(self._narrow)
+
+    def set_text(self, label: str, hint: str = "") -> None:
+        """Nhãn và gợi ý; control (nếu có) mang tên trợ năng = nhãn, mô tả = gợi ý."""
+        self.label.setText(label)
+        self.hint_label.setText(hint)
+        self.hint_label.setVisible(bool(hint))
+        self.setAccessibleName(label)
+        control = self._control
+        if control is not None and not control.property("keepAccessible"):
+            control.setAccessibleName(label)
+            control.setAccessibleDescription(hint)
+
+    def add_line(self, widget: QWidget) -> None:
+        """Thêm một dòng dưới gợi ý (dòng phụ, lỗi), trong cột chữ."""
+        self._text_column.addWidget(widget)
+
+    def set_control(self, widget: QWidget) -> None:
+        self._control = widget
+        self._narrow = None
+        self._place_control()
+
+    def _control_width(self) -> int:
+        control = self._control
+        if control is None:
+            return 0
+        hint = control.sizeHint().width()
+        return max(hint, control.minimumWidth())
+
+    def _place_control(self) -> None:
+        control = self._control
+        if control is None:
+            return
+        margins = self._grid.contentsMargins()
+        inner = self.width() - margins.left() - margins.right()
+        narrow = inner - self._control_width() - self._grid.horizontalSpacing() < LABEL_MIN_WIDTH
+        if narrow == self._narrow:
+            return
+        self._narrow = narrow
+        self._grid.removeWidget(control)
+        if narrow:
+            self._grid.addWidget(control, 1, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        else:
+            self._grid.addWidget(control, 0, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._place_control()
+
+
+# ---- RovingGroup, SegmentedControl -------------------------------------------------------------
+
+_PREV_KEYS = (Qt.Key.Key_Left, Qt.Key.Key_Up)
+_NEXT_KEYS = (Qt.Key.Key_Right, Qt.Key.Key_Down)
+# (token chữ/viền, token nền, ngưỡng) của `SegmentedControl`, phải đạt với mọi màu nhấn × sáng/tối:
+# chữ nút thường trên nền khung và nền hover; chữ nút chọn trên nền nhấn; viền khung trên nền cửa sổ và
+# nền nổi (WCAG 1.4.11); viền tiêu điểm (`text` = `focus_ring_color`) trên nền nhấn.
+SEGMENT_CONTRAST_PAIRS: tuple[tuple[str, str, float], ...] = (
+    ("text", "surface_raised", theme.MIN_CONTRAST),
+    ("text", "selected", theme.MIN_CONTRAST),
+    ("accent_text", "accent", theme.MIN_CONTRAST),
+    ("border_strong", "surface", 3.0),
+    ("border_strong", "surface_raised", 3.0),
+    ("text", "accent", 3.0),
+)
+
+
+class RovingGroup(QObject):
+    """Nhóm nút chọn một: Tab vào nút đang chọn, mũi tên đi và chọn (xem docstring module)."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._buttons: list[QAbstractButton] = []
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+
+    @property
+    def group(self) -> QButtonGroup:
+        return self._group
+
+    def buttons(self) -> list[QAbstractButton]:
+        return list(self._buttons)
+
+    def add(self, button: QAbstractButton) -> None:
+        button.setCheckable(True)
+        self._group.addButton(button, len(self._buttons))
+        self._buttons.append(button)
+        button.installEventFilter(self)
+        button.toggled.connect(lambda _checked: self.sync_focus())
+        self.sync_focus()
+
+    def checked_index(self) -> int:
+        """Vị trí nút đang chọn, -1 khi chưa nút nào."""
+        return self._group.checkedId()
+
+    def set_checked(self, index: int) -> None:
+        """Chọn nút `index` (không phát `clicked`); ngoài khoảng thì bỏ chọn cả nhóm."""
+        if 0 <= index < len(self._buttons):
+            self._buttons[index].setChecked(True)
+        else:
+            self._group.setExclusive(False)
+            for button in self._buttons:
+                button.setChecked(False)
+            self._group.setExclusive(True)
+        self.sync_focus()
+
+    def sync_focus(self) -> None:
+        """Chỉ nút đang chọn (không có thì nút đầu) nhận Tab."""
+        current = max(0, self.checked_index())
+        for index, button in enumerate(self._buttons):
+            policy = Qt.FocusPolicy.StrongFocus if index == current else Qt.FocusPolicy.ClickFocus
+            if button.focusPolicy() != policy:
+                button.setFocusPolicy(policy)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            event.type() == QEvent.Type.KeyPress
+            and isinstance(event, QKeyEvent)
+            and isinstance(watched, QAbstractButton)
+            and watched in self._buttons
+            and event.modifiers() in _PLAIN_KEYS
+        ):
+            target = self._target(self._buttons.index(watched), event.key(), watched)
+            if target is not None:
+                self._move_to(target, event.key())
+                return True
+        return False
+
+    def _target(self, index: int, key: int, button: QAbstractButton) -> int | None:
+        count = len(self._buttons)
+        if key == Qt.Key.Key_Home:
+            return 0
+        if key == Qt.Key.Key_End:
+            return count - 1
+        step = -1 if key in _PREV_KEYS else 1 if key in _NEXT_KEYS else 0
+        if step == 0:
+            return None
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right) and button.isRightToLeft():
+            step = -step
+        return (index + step) % count
+
+    def _move_to(self, index: int, key: int) -> None:
+        button = self._buttons[index]
+        if not button.isEnabled():
+            return
+        backwards = key in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Home)
+        reason = Qt.FocusReason.BacktabFocusReason if backwards else Qt.FocusReason.TabFocusReason
+        if not button.isChecked():
+            button.click()
+        button.setFocus(reason)
+
+
+class SegmentedControl(QFrame):
+    """Nhóm nút chọn một nằm liền nhau (xem docstring module). Chữ do bên gọi đặt (`set_texts`)."""
+
+    value_selected = Signal(object)
+
+    def __init__(self, values: Sequence[object], parent: QWidget | None = None) -> None:
+        if not values:
+            raise ValueError("SegmentedControl cần ít nhất một giá trị")
+        super().__init__(parent)
+        self.setProperty(theme.SEGMENTED_PROPERTY, True)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._values = tuple(values)
+        self._value: object = self._values[0]
+        self._roving = RovingGroup(self)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
+        last = len(self._values) - 1
+        for index in range(len(self._values)):
+            button = QRadioButton(self)
+            position = "first" if index == 0 else "last" if index == last else "middle"
+            button.setProperty(theme.SEGMENT_PROPERTY, position)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            layout.addWidget(button)
+            self._roving.add(button)
+        self._roving.group.idClicked.connect(self._on_clicked)
+        self.set_value(self._values[0])
+
+    def values(self) -> tuple[object, ...]:
+        return self._values
+
+    def buttons(self) -> list[QRadioButton]:
+        return [b for b in self._roving.buttons() if isinstance(b, QRadioButton)]
+
+    def button(self, value: object) -> QRadioButton:
+        """Nút của `value`; giá trị lạ → `ValueError`."""
+        return self.buttons()[self._values.index(value)]
+
+    def value(self) -> object:
+        return self._value
+
+    def checked_button(self) -> QRadioButton | None:
+        index = self._roving.checked_index()
+        return self.buttons()[index] if index >= 0 else None
+
+    def set_value(self, value: object) -> None:
+        """Chọn `value` (không phát `value_selected`); giá trị lạ → nút đầu."""
+        index = self._values.index(value) if value in self._values else 0
+        self._value = self._values[index]
+        self._roving.set_checked(index)
+
+    def set_texts(self, texts: Sequence[str]) -> None:
+        """Chữ của từng nút theo thứ tự giá trị; tên trợ năng của nút = chữ."""
+        for button, text in zip(self.buttons(), texts, strict=True):
+            button.setText(text)
+            button.setAccessibleName(text)
+
+    def _on_clicked(self, index: int) -> None:
+        value = self._values[index]
+        if value == self._value:
+            return
+        self._value = value
+        self.value_selected.emit(value)

@@ -205,7 +205,8 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 
 ### F10. Cài đặt
 - **AC:** có đủ các mục sau, đổi xong có hiệu lực ngay:
-  - Tên thiết bị · Thư mục nhận · Ngôn ngữ · Khởi động cùng hệ điều hành
+  - Tên thiết bị · Thư mục nhận · Khởi động cùng hệ điều hành
+  - Giao diện: chế độ màu (theo hệ điều hành / sáng / tối) · màu nhấn (chọn trong các màu đặt sẵn) · ngôn ngữ (F11)
   - Cho máy chưa ghép đôi thấy máy này (**mặc định bật**)
   - Theo từng thiết bị tin cậy: Hỏi trước khi nhận · Đồng bộ clipboard · Hủy ghép đôi
   - Giới hạn tốc độ gửi · Dọn file tạm sau N ngày (mặc định 7)

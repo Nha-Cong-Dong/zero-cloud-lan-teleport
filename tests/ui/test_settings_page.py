@@ -44,8 +44,9 @@ _DOCS = Path(__file__).resolve().parents[2] / "docs"
 
 # ---- Câu chữ (spec D2 1.9; OTHER theo 9.7) -----------------------------------------------------
 TITLE = "Cài đặt"
-NAV = ("Chung", "Quyền riêng tư", "Thiết bị tin cậy", "Truyền file", "Nâng cao")
-NAV_ICONS = ("settings", "eye_off", "shield_checkmark", "arrow_swap", "wrench")
+# Spec D6 thêm “Giao diện” (icon `color`) ở vị trí thứ 2.
+NAV = ("Chung", "Giao diện", "Quyền riêng tư", "Thiết bị tin cậy", "Truyền file", "Nâng cao")
+NAV_ICONS = ("settings", "color", "eye_off", "shield_checkmark", "arrow_swap", "wrench")
 NAME_LABEL = "Tên thiết bị"
 NAME_HIDDEN = "Máy này đang ẩn nên chỉ máy đã ghép đôi thấy tên này."
 NAME_EMPTY = "Hãy nhập tên thiết bị."
@@ -379,7 +380,7 @@ def open_settings(qtbot, w) -> None:
 # =================================================================================================
 
 
-def test_nav_five_sections_order_icons_names(qtbot, monkeypatch):
+def test_nav_six_sections_order_icons_names(qtbot, monkeypatch):
     from teleport.ui import icons
     from teleport.ui.radar import DeviceListModel
     from teleport.ui.settings import Section, SettingsPage
@@ -406,13 +407,14 @@ def test_nav_five_sections_order_icons_names(qtbot, monkeypatch):
 
     assert page.objectName() == "settingsPage"
     assert page.nav.objectName() == "settingsNav"
-    assert [s.name for s in Section] == ["GENERAL", "PRIVACY", "DEVICES", "TRANSFER", "ADVANCED"]
-    assert page.nav.count() == 5
-    assert [page.nav.item(i).text() for i in range(5)] == list(NAV)
-    assert all(not page.nav.item(i).icon().isNull() for i in range(5))
+    names = ["GENERAL", "APPEARANCE", "PRIVACY", "DEVICES", "TRANSFER", "ADVANCED"]
+    assert [s.name for s in Section] == names
+    assert page.nav.count() == 6
+    assert [page.nav.item(i).text() for i in range(6)] == list(NAV)
+    assert all(not page.nav.item(i).icon().isNull() for i in range(6))
     for name in NAV_ICONS:
         assert (name, 20) in requested, f"icon {name!r} cỡ 20 của nav (9.2)"
-    assert page.sections.count() == 5
+    assert page.sections.count() == 6
     assert page.nav.width() == 184 or page.nav.maximumWidth() == 184 or page.nav.minimumWidth() == 184
     assert TITLE in joined(page)
 
@@ -422,12 +424,12 @@ def test_nav_arrow_keys_switch_section(ui):
     activate(ui.qtbot, page)
     page.nav.setCurrentRow(0)
     page.nav.setFocus(Qt.FocusReason.TabFocusReason)
-    for want in (1, 2, 3, 4, 4):
+    for want in (1, 2, 3, 4, 5, 5):
         QTest.keyClick(page.nav, Qt.Key.Key_Down)
         assert page.nav.currentRow() == want
         assert page.sections.currentIndex() == want
     QTest.keyClick(page.nav, Qt.Key.Key_Up)
-    assert page.sections.currentIndex() == 3
+    assert page.sections.currentIndex() == 4
 
 
 def test_show_section_selects_nav_row(ui):
@@ -1274,7 +1276,7 @@ def test_fits_720x460_without_horizontal_scroll(ui):
     page.set_change_available(True)
     page.resize(720, 460)
     settle(ui.qtbot, 60)
-    for name in ("GENERAL", "PRIVACY", "DEVICES", "TRANSFER", "ADVANCED"):
+    for name in ("GENERAL", "APPEARANCE", "PRIVACY", "DEVICES", "TRANSFER", "ADVANCED"):
         w = open_section(page, name)
         settle(ui.qtbot, 30)
         areas = [w] if isinstance(w, QScrollArea) else w.findChildren(QScrollArea)
