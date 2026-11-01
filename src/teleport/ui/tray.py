@@ -102,7 +102,7 @@ class Tray(QObject):
         self._send.setText(texts.menu_send())
         self._pause.setText(texts.menu_pause())
         self._quit.setText(texts.menu_quit())
-        self._icon.setToolTip(self.tr("Teleport"))
+        self._icon.setToolTip(texts.APP_NAME)
         self._menu.setAccessibleName(self.tr("Menu của Teleport"))
 
     def show(self) -> None:
@@ -124,7 +124,7 @@ class Tray(QObject):
         """
         if Tray.is_available() and self._icon.isVisible():
             self._message_folder = folder
-            self._icon.showMessage(self.tr("Teleport"), text, self._icon.icon())  # logo, không icon “i”
+            self._icon.showMessage(texts.APP_NAME, text, self._icon.icon())  # logo, không icon “i”
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self._menu and event.type() == QEvent.Type.LanguageChange:
