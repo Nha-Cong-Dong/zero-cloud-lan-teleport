@@ -233,7 +233,7 @@ class FakeNode:
     def connect_hint(self, device_id, addresses, port) -> None:
         pass
 
-    async def unpair(self, device_id):
+    async def unpair(self, device_id, *, clear_history=False):  # D2: hộp hủy ghép đôi truyền clear_history
         if self.unpair_error is not None:
             raise self.unpair_error
         return make_trusted(device_id=device_id)

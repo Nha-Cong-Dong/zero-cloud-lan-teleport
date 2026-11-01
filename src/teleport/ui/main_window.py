@@ -68,7 +68,8 @@ chi tiết → gợi ý → nút. Tiêu điểm ban đầu (`_place_focus`): nú
 RUNNING thì danh sách cuộc trò chuyện khi có máy đã ghép đôi (`conversations.model.rowCount()`), không
 thì nút “Ghép đôi máy mới”; STARTING thì
 dòng trạng thái. Trạng thái luôn nói bằng chữ, không chỉ bằng màu. Phím tắt: F5 = Thử lại (khi nút
-đang hiện), Ctrl+W = đóng cửa sổ, Ctrl+Q = Thoát.
+đang hiện), Ctrl+W = đóng cửa sổ, Ctrl+Q = Thoát, Ctrl+, = Cài đặt (khi đã có trang SETTINGS và đang
+RUNNING, như nút ⚙; tooltip của nút có phím tắt).
 
 Cỡ cửa sổ lúc mở: `default_size(vùng dùng được của màn hình chính)` = `DEFAULT_SIZE` kẹp theo màn
 hình; cỡ tối thiểu `MIN_SIZE`. Không lưu cỡ giữa các lần chạy.
@@ -101,6 +102,9 @@ các thuộc tính công khai (`conversations`, `transfers_area`, `body`, `statu
   trong danh sách → False. `open_address_entry(notice)`: mở DISCOVER (chỉ ở RUNNING), rồi mới hiện
   `notice` ở thanh thông báo của trang (mức INFO; `DiscoverPage.showEvent` xóa thanh khi trang hiện) và
   đặt tiêu điểm vào ô “Nhập IP…”.
+- Trang SETTINGS (`ui.settings.SettingsPage`) do `ui.app.GuiApp` đăng ký (`add_page`), không phải cửa
+  sổ: `MainWindow` trần (test) không có nút ⚙. `set_device_name(name)` đổi tên ở thẻ máy này sau khi
+  đổi tên trong Cài đặt.
 - Không có hoạt ảnh chuyển trang: đổi tức thì.
 """
 
@@ -177,6 +181,7 @@ MIN_SIZE = QSize(720, 460)
 SIDEBAR_WIDTH = 288  # px, cột trái (kể cả viền phải 1 px)
 SIDEBAR_COMPACT_WIDTH = 80  # px, cột trái thu gọn (chỉ còn avatar) khi cửa sổ hẹp
 COMPACT_BELOW = 820  # px: cửa sổ hẹp hơn thì cột trái thu gọn
+SETTINGS_SHORTCUT = "Ctrl+,"  # mở trang Cài đặt
 _BRAND_LOGO = 32  # px
 _LAYOUT_PASSES = 5  # tối đa số lượt chạy layout trước khi cuộn tới widget có tiêu điểm
 _COMPACT_MACHINE = 48  # px, nút “Máy này” khi cột trái thu gọn
@@ -479,7 +484,9 @@ class MainWindow(QMainWindow):
         self.discover_button = IconButton("search", self.tr("Tìm máy mới"), self.sidebar_header)
         self.discover_button.setObjectName("discoverButton")
         self.discover_button.clicked.connect(self._open_discover)
-        self.settings_button = IconButton("settings", self.tr("Cài đặt"), self.sidebar_header)
+        self.settings_button = IconButton(
+            "settings", self.tr("Cài đặt"), self.sidebar_header, shortcut=QKeySequence(SETTINGS_SHORTCUT)
+        )
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.clicked.connect(self._open_settings)
         # Thu gọn thì cả hai hàng xếp dọc (`setDirection`) và căn giữa (`_apply_compact`).
@@ -620,7 +627,16 @@ class MainWindow(QMainWindow):
         self._back_action.setShortcut(QKeySequence(Qt.Key.Key_Escape))
         self._back_action.setEnabled(False)
         self._back_action.triggered.connect(self.go_back)
-        for action in (self._retry_action, self._close_action, self._quit_action, self._back_action):
+        self._settings_action = QAction(self)
+        self._settings_action.setShortcut(QKeySequence(SETTINGS_SHORTCUT))
+        self._settings_action.triggered.connect(self._open_settings)
+        for action in (
+            self._retry_action,
+            self._close_action,
+            self._quit_action,
+            self._back_action,
+            self._settings_action,
+        ):
             action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             self.addAction(action)
 
@@ -700,6 +716,18 @@ class MainWindow(QMainWindow):
         self.pages.reset()
         self.retranslate()
         self._place_focus()
+
+    def set_device_name(self, name: str) -> None:
+        """Tên mới của máy này (đổi trong Cài đặt; chưa qua `display_name`): cập nhật thẻ máy này."""
+        self._name = name
+        if self._state is ViewState.RUNNING:
+            self.machine_card.set_name(name)
+            self.compact_machine.update_info()
+
+    def set_machine_hidden(self, hidden: bool) -> None:
+        """Máy này đang ẩn (Cài đặt): huy hiệu “Đang ẩn” ở thẻ máy này và ở avatar khi cột thu gọn."""
+        self.machine_card.set_hidden(hidden)
+        self.compact_machine.update_info()
 
     def set_transfer_summary(self, has_content: bool, active: int) -> None:
         """Danh sách lượt có gì không (thẻ hay dải thông báo) và số lượt chưa kết thúc (≥ 0).
@@ -789,7 +817,8 @@ class MainWindow(QMainWindow):
         self.open_page(Page.DISCOVER)
 
     def _open_settings(self) -> None:
-        self.open_page(Page.SETTINGS)
+        if self.pages.has_page(Page.SETTINGS):
+            self.open_page(Page.SETTINGS)
 
     def _on_page_changed(self, page: str) -> None:
         self._back_action.setEnabled(page != Page.HOME)
@@ -864,6 +893,7 @@ class MainWindow(QMainWindow):
         self._close_action.setText(self.tr("Đóng cửa sổ"))
         self._quit_action.setText(texts.menu_quit())
         self._back_action.setText(self.tr("Quay lại"))
+        self._settings_action.setText(self.tr("Cài đặt"))
         self.start_view.retranslate()
         self.machine_card.retranslate()
         self.save_bar.retranslate()

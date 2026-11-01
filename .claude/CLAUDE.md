@@ -66,6 +66,7 @@ CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the a
 - **Transfer disk I/O:** every file-system call of a transfer goes through the node's `DiskExecutor` with `submit`, and a timed-out job still runs: wait for `DiskJob.settled()` before closing what it uses (`architecture.md` §5, `app/diskio.py`).
 - **Never call `TransferEngine` re-entrantly:** while an action list is being executed (including from `on_transfer_event`), engine calls go to the `_deferred` queue; read `now` when the call really happens (`core/transfer.py` docstring, `architecture.md` §5).
 - **Never touch `Node` from the Qt thread:** the UI's node lives on its own thread and loop; the UI reaches it only through `NodeHost.call` / `submit`, and node callbacks only emit Qt signals. Only `ui` imports PySide6 (`architecture.md` §1, §5; `ui/bridge.py` docstring).
+- **Tests never write the real registry:** `app.autostart.registry` is replaced by a fake for every test (autouse fixture in `tests/conftest.py`); a test that needs the registry asks for that fake (`architecture.md` §6).
 - **Tests run from 127.0.0.1:** `tests/conftest.py` relaxes the handshake rate limits for every test, so a test of the real limits needs `@pytest.mark.real_admission_limits` (`architecture.md` §6).
 
 ## Team of subagents

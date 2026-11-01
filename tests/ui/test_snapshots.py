@@ -23,9 +23,12 @@ mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`), `page` (RU
 chưa ghép đôi, một tên dài bị cắt “…”, 2 máy đã ghép đôi), `discover_list` (9 máy: tự sang dạng danh
 sách), `conversations` (spec B2 mục 7: 4 máy đã ghép đôi ở cột trái — đang gửi 62% và đang chọn,
 trực tuyến đã nhận một file, ngoại tuyến đã gửi hôm qua, trực tuyến bị từ chối kết nối — và thẻ đang
-gửi ở khung phải), `conversations_drop` (như trên, đang kéo 3 file qua hàng đang chọn). Giờ cố định
-bằng seam `_wall_now` của `ui.conversations` và `ui.transfers` (`NOW`). Tổng 12 cảnh × 2 chế độ × 2
-cỡ = 48 ảnh.
+gửi ở khung phải), `conversations_drop` (như trên, đang kéo 3 file qua hàng đang chọn),
+`settings_general`, `settings_privacy_hidden` (máy đang ẩn), `settings_devices` (bốn máy đã ghép đôi:
+đã kết nối, trong mạng, ngoại tuyến, tên lạ dài; một máy chưa ghép đôi không hiện), `settings_advanced`
+(kèm thông báo xuất log xong), `settings_receive_dir_unavailable` (thư mục nhận đã lưu không mở được)
+của trang “Cài đặt” (spec D2). Giờ cố định bằng seam `_wall_now` của `ui.conversations` và
+`ui.transfers` (`NOW`). Tổng 17 cảnh × 2 chế độ × 2 cỡ = 68 ảnh.
 """
 
 from __future__ import annotations
@@ -499,6 +502,95 @@ def scene_conversations_drop(qtbot) -> QWidget:
     return window
 
 
+def _settings_window(
+    qtbot, section, *, visible: bool = True, views=(), notice: str | None = None, unavailable: bool = False
+):
+    """RUNNING, trang “Cài đặt” (spec D2) đã có ảnh chụp cài đặt, mở ở mục `section`."""
+    from teleport.app import autostart
+    from teleport.app.settings import DeviceSettings
+    from teleport.ui.main_window import Page
+    from teleport.ui.settings import SettingsPage, SettingsSnapshot
+    from teleport.ui.widgets import InfoLevel
+
+    window = scene_running(qtbot)
+    window.devices.reset(list(views))
+    page = SettingsPage(window.devices, window.pages)
+    window.add_page(Page.SETTINGS, page)
+    page.header.back_requested.connect(window.go_back)
+    devices = {v.device_id: DeviceSettings(ask_before_receive=i % 2 == 0) for i, v in enumerate(views)}
+    page.set_values(
+        SettingsSnapshot(
+            name="Laptop-Minh",
+            visible=visible,
+            rate_limit=20 * 1024 * 1024,
+            temp_retention_days=None,
+            language=None,
+            autostart=True,
+            devices=devices,
+        )
+    )
+    page.set_autostart(autostart.AutostartState.ON)
+    if unavailable:
+        page.set_receive_dir(None, Path("E:/Teleport-USB"))
+    else:
+        page.set_receive_dir(Path("C:/Users/Minh/Downloads/Teleport"))
+    page.set_change_available(True)
+    page.set_loaded(True)
+    assert window.open_page(Page.SETTINGS)
+    page.show_section(section)
+    if notice is not None:
+        page.show_notice(InfoLevel.SUCCESS, notice, action="Mở thư mục")
+    return window
+
+
+def scene_settings_general(qtbot) -> QWidget:
+    from teleport.ui.settings import Section
+
+    return _settings_window(qtbot, Section.GENERAL)
+
+
+def scene_settings_privacy_hidden(qtbot) -> QWidget:
+    from teleport.ui.settings import Section
+
+    return _settings_window(qtbot, Section.PRIVACY, visible=False)
+
+
+def scene_settings_devices(qtbot) -> QWidget:
+    from dataclasses import replace
+
+    from teleport.ui.settings import Section
+
+    views = [
+        _peer("PC-Nha", paired=True, connected=True),
+        _peer("MacBook của Hà", paired=True, os_name="macos"),
+        replace(_peer("Ubuntu-Lab", paired=True, os_name="linux"), online=False, addresses=()),
+        _peer("<b>May-Ke-Toan-Tang-3-Phong-Hop-Lon</b>", paired=True),  # tên lạ: chữ thuần, cắt “…”
+        _peer("Laptop-Lan"),  # chưa ghép đôi: không hiện
+    ]
+    return _settings_window(qtbot, Section.DEVICES, views=views)
+
+
+def scene_settings_advanced(qtbot) -> QWidget:
+    from teleport.ui.settings import Section
+
+    return _settings_window(
+        qtbot,
+        Section.ADVANCED,
+        notice="Đã lưu log vào C:\\Users\\Minh\\Documents\\teleport-log-20261031-101500.zip.",
+    )
+
+
+def scene_settings_receive_dir_unavailable(qtbot) -> QWidget:
+    from teleport.ui.receive_dir import ChangeError, change_error_text
+    from teleport.ui.settings import Section
+    from teleport.ui.widgets import InfoLevel
+
+    window = _settings_window(qtbot, Section.GENERAL, unavailable=True)
+    text = change_error_text(ChangeError.UNAVAILABLE, Path("E:/Teleport-USB"))
+    window.pages.currentWidget().show_notice(InfoLevel.ERROR, text)
+    return window
+
+
 SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     # tên cảnh: (hàm dựng, là cửa sổ chính, token mà điểm (4,4) phải bằng; None: không kiểm góc)
     "welcome": (scene_welcome, True, "surface"),
@@ -513,6 +605,11 @@ SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     "discover_list": (scene_discover_list, True, "surface"),
     "conversations": (scene_conversations, True, "sidebar"),
     "conversations_drop": (scene_conversations_drop, True, "sidebar"),
+    "settings_general": (scene_settings_general, True, "surface"),
+    "settings_privacy_hidden": (scene_settings_privacy_hidden, True, "surface"),
+    "settings_devices": (scene_settings_devices, True, "surface"),
+    "settings_advanced": (scene_settings_advanced, True, "surface"),
+    "settings_receive_dir_unavailable": (scene_settings_receive_dir_unavailable, True, "surface"),
 }
 
 
@@ -523,7 +620,8 @@ def _grab(widget: QWidget, width: int, height: int) -> QImage:
     widget.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
     widget.resize(width, height)
     widget.show()
-    QApplication.processEvents()
+    for _ in range(3):  # hàng đổi bố cục theo bề ngang (trang Cài đặt) cần thêm một lượt layout
+        QApplication.processEvents()
     image = widget.grab().toImage()
     widget.hide()
     return image

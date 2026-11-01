@@ -172,3 +172,22 @@ def retry() -> str:
 def offer_waiting() -> str:
     """Bóng thoại của khay khi có `offer` đang chờ trả lời."""
     return QCoreApplication.translate("Texts", "Có file đang chờ bạn nhận.")
+
+
+# ---- Máy này, thiết bị ---------------------------------------------------------------------
+
+_OS_LABELS = {"windows": "Windows", "macos": "macOS", "linux": "Linux"}  # tên riêng: không dịch
+
+
+def device_name_notice() -> str:
+    """Câu mvp F1 về tên thiết bị (nguyên văn): tên máy này hiện với mọi máy trong mạng."""
+    return QCoreApplication.translate(
+        "Texts",
+        "Tên này hiện với mọi máy trong cùng mạng, kể cả máy lạ chưa ghép đôi. "
+        "Nếu không muốn lộ tên mình, hãy đặt tên khác.",
+    )
+
+
+def os_label(code: str | None) -> str | None:
+    """Tên hệ điều hành để hiện (`windows` → “Windows”); mã lạ hay None → None (không hiện)."""
+    return _OS_LABELS.get(code or "")
