@@ -45,6 +45,22 @@ Hành vi chính của `PairingController`:
 - Kết quả **lỗi**: một hộp kết quả dùng lại, câu mới thay câu cũ (`setText`), không mở hộp thứ hai,
   nên máy lạ dội yêu cầu không làm dội hộp. Phiên ở vai trả lời dừng trước khi hiện mã thì không báo
   gì.
+- **Thử lại** (spec D4 mục 5.1, 14.4, 14.9; mvp mục 8): hộp kết quả có [Thử lại] (objectName
+  `pairingRetryButton`, `AcceptRole`, nút chính tô màu nhấn) và [Đóng] (`RejectRole`, Esc) khi câu
+  thuộc **việc ghép do máy này chủ động** và outcome là “chưa xong” (`_UNFINISHED`), PEER_BUSY,
+  REJECTED, UNREACHABLE hay PROMPT_FAILED. Việc ghép chủ động là: câu hiện từ kết quả `pair_with`
+  (`_on_pair_done`, nhánh phiên thay thế), hay `pairing_finished` khớp việc đang chạy (`matched`), hay
+  `pairing_finished` ở vai INITIATOR. Vai trả lời không qua hai đường đầu, IDENTITY_*, VERSION_MISMATCH,
+  SELF, BUSY, SAVE_FAILED, CANCELLED, “không thấy … nữa” và tham số sai (`ValueError`) thì chỉ có OK.
+  Đích thử lại (`_RetryTarget`) lấy từ việc đang chạy nếu khớp, không thì `result.address` /
+  `result.port`. Nút mặc định là “Thử lại”, riêng khi đã hiện mã (`code_shown`) là “Đóng” (lần thử mới
+  lại hiện mã, người dùng phải so lại). Hộp dùng lại thì hàng nút dựng lại theo câu mới nhất
+  (`result_retry_available`). Bấm “Thử lại” chỉ ghi lại nút đã bấm; việc thử lại chạy trong
+  `_result_finished` sau khi `_result_box` đã về None, chỉ khi hộp đó là hộp hiện tại lúc bấm và còn
+  host, luôn với host hiện tại: có `ip`/`port` → `pair_address`; không thì `device_lookup(device_id)`
+  (`ui.app` truyền `MainWindow.devices.device`) rồi `pair_device`; không thấy máy hay `pair_device`
+  không bắt đầu được mà không vì bận → `device_gone_text` (không nút); đang bận → câu “đang bận” sẵn
+  có. Lần thử mới vẫn so mã đầy đủ và vẫn chịu giới hạn bắt tay của node.
 - `set_host` / `close_all`: đóng mọi hộp mà không quyết định; sự kiện và `on_done` của host cũ
   tới sau bị bỏ (mỗi lần đổi host tăng một số thế hệ, các callback mang theo số thế hệ cũ).
 
@@ -76,6 +92,7 @@ from typing import Any, Protocol
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QCheckBox,
     QDialog,
     QFrame,
@@ -115,6 +132,15 @@ _UNFINISHED = frozenset(
         PairingOutcome.CONNECTION_LOST,
     }
 )
+# Outcome có nút “Thử lại” khi thuộc việc ghép do máy này chủ động (spec D4 mục 5.1).
+_RETRYABLE = _UNFINISHED | {
+    PairingOutcome.PEER_BUSY,
+    PairingOutcome.REJECTED,
+    PairingOutcome.UNREACHABLE,
+    PairingOutcome.PROMPT_FAILED,
+}
+RETRY_BUTTON_NAME = "pairingRetryButton"
+_CLOSE_BUTTON_NAME = "pairingCloseButton"
 
 
 # =================================================================================================
@@ -373,6 +399,11 @@ def repair_offline_text(name: str) -> str:
         ),
         name=_quoted(name),
     )
+
+
+def close_button_text() -> str:
+    """Nút “Đóng” của hộp kết quả khi có “Thử lại”."""
+    return QCoreApplication.translate("Pairing", "Đóng")
 
 
 def reject_button_text() -> str:
@@ -663,6 +694,66 @@ class _Pairing:
         return result.address in self.addresses
 
 
+@dataclass(frozen=True)
+class _RetryTarget:
+    """Đích của nút “Thử lại”: ghép lại theo IP (`ip`, `port`) hay theo máy (`device_id`)."""
+
+    device_id: str | None
+    label: str  # tên đã qua peer_label, hoặc “ip:port”
+    ip: str | None
+    port: int | None
+    code_shown: bool  # lần trước đã hiện mã: nút mặc định là “Đóng”
+
+
+def _retry_from_pairing(pairing: _Pairing, code_shown: bool) -> _RetryTarget:
+    return _RetryTarget(pairing.device_id, pairing.label, pairing.ip, pairing.port, code_shown)
+
+
+def _retry_button(box: QMessageBox) -> QAbstractButton | None:
+    for button in box.buttons():
+        if button.objectName() == RETRY_BUTTON_NAME:
+            return button
+    return None
+
+
+def _translate_result_buttons(box: QMessageBox) -> None:
+    """Chữ (và tên trợ năng) của [Thử lại] [Đóng] theo ngôn ngữ hiện tại."""
+    for button in box.buttons():
+        name = button.objectName()
+        if name == RETRY_BUTTON_NAME:
+            text = texts.retry()
+        elif name == _CLOSE_BUTTON_NAME:
+            text = close_button_text()
+        else:
+            continue
+        button.setText(text)
+        button.setAccessibleName(text)
+
+
+def _set_result_buttons(box: QMessageBox, retry: _RetryTarget | None) -> None:
+    """Dựng lại hàng nút của hộp kết quả: [Thử lại] [Đóng] khi có `retry`, không thì OK."""
+    for button in box.buttons():
+        if button.objectName() in (RETRY_BUTTON_NAME, _CLOSE_BUTTON_NAME):
+            box.removeButton(button)
+            button.deleteLater()
+    if retry is None:
+        if box.button(QMessageBox.StandardButton.Ok) is not None:
+            return  # đã là OK: giữ nguyên nút (không giật tiêu điểm)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.setDefaultButton(QMessageBox.StandardButton.Ok)
+        box.setEscapeButton(QMessageBox.StandardButton.Ok)
+        return
+    box.setStandardButtons(QMessageBox.StandardButton.NoButton)
+    retry_button = box.addButton(texts.retry(), QMessageBox.ButtonRole.AcceptRole)
+    retry_button.setObjectName(RETRY_BUTTON_NAME)
+    retry_button.setProperty(theme.PRIMARY_PROPERTY, True)
+    close_button = box.addButton(close_button_text(), QMessageBox.ButtonRole.RejectRole)
+    close_button.setObjectName(_CLOSE_BUTTON_NAME)
+    _translate_result_buttons(box)
+    box.setDefaultButton(close_button if retry.code_shown else retry_button)
+    box.setEscapeButton(close_button)
+
+
 def _new_box(parent: QWidget | None, on_finished: Callable[[QMessageBox], None]) -> QMessageBox:
     """`QMessageBox` không chặn, chữ thuần, tự xóa khi đóng."""
     box = QMessageBox(parent)
@@ -703,9 +794,12 @@ class PairingController(QObject):
         notify: Callable[[str, str], None] | None = None,
         window_visible: Callable[[], bool] = lambda: True,
         message_parent: Callable[[], QWidget | None] = lambda: None,
+        device_lookup: Callable[[str], DeviceView | None] = lambda _id: None,
     ) -> None:
+        """`device_lookup`: tra máy theo `device_id` cho nút “Thử lại” khi ghép theo máy."""
         super().__init__(parent)
         self._clock = clock
+        self._device_lookup = device_lookup
         self._notify = notify
         self._window_visible = window_visible
         self._message_parent = message_parent
@@ -717,6 +811,8 @@ class PairingController(QObject):
         self._progress_box: PairingProgressDialog | None = None
         self._progress_closing = False  # đóng hộp tiến độ bằng code, không phải người dùng hủy
         self._result_box: QMessageBox | None = None
+        self._result_retry: _RetryTarget | None = None  # đích “Thử lại” của câu đang ở hộp kết quả
+        self._retry_clicked: tuple[QMessageBox, _RetryTarget] | None = None  # đã bấm, chờ hộp đóng
         self._unpair_box: QMessageBox | None = None
         self._unpair_names: dict[str, str] = {}  # device_id → tên đã qua peer_label
 
@@ -734,6 +830,12 @@ class PairingController(QObject):
     @property
     def result_box(self) -> QMessageBox | None:
         return self._result_box
+
+    @property
+    def result_retry_available(self) -> bool:
+        """Hộp kết quả đang mở có nút “Thử lại”."""
+        box = self._result_box
+        return box is not None and self._result_retry is not None and _retry_button(box) is not None
 
     @property
     def unpair_box(self) -> QMessageBox | None:
@@ -769,8 +871,10 @@ class PairingController(QObject):
     def close_all(self) -> None:
         """Thoát: đóng mọi hộp, không quyết định; bỏ host, nên sự kiện và `on_done` tới sau bị bỏ."""
         self.set_host(None)
+        self._retry_clicked = None
         if self._result_box is not None:
             box, self._result_box = self._result_box, None
+            self._result_retry = None
             box.close()
 
     def _current(self, generation: int) -> bool:
@@ -870,7 +974,8 @@ class PairingController(QObject):
             # `pair_with` trả kết quả của phiên thay thế (hai bên cùng chủ động) mà phiên đó dừng
             # trước khi hiện mã: người dùng đã bấm ghép đôi nên vẫn báo, bằng câu của vai khởi xướng.
             replaced = dataclasses.replace(result, role=Role.INITIATOR)
-            self._show_result(outcome_text(replaced, target=pairing.target) or "")
+            retry = _retry_from_pairing(pairing, result.code_shown) if result.outcome in _RETRYABLE else None
+            self._show_result(outcome_text(replaced, target=pairing.target) or "", retry=retry)
         # Còn lại (PairingFinished): đã báo qua `pairing_finished` (tới trước on_done).
 
     def _connect_hint(self, generation: int, device_id: str, hint: tuple[str, int]) -> None:
@@ -966,7 +1071,11 @@ class PairingController(QObject):
         target = pairing.target if (pairing is not None and matched) else None
         text = outcome_text(result, target=target)
         if text is not None:
-            self._show_result(text, ok=result.outcome is PairingOutcome.PAIRED)
+            self._show_result(
+                text,
+                ok=result.outcome is PairingOutcome.PAIRED,
+                retry=self._retry_for(result, pairing if matched else None),
+            )
         if result.outcome is PairingOutcome.PAIRED:
             device_id = result.device.device_id if result.device is not None else result.peer_device_id
             if device_id is not None:
@@ -975,6 +1084,26 @@ class PairingController(QObject):
                     hint = (pairing.ip, pairing.port)
                     pairing.hinted = True
                 self._after_paired(generation, device_id, hint)
+
+    @staticmethod
+    def _retry_for(result: PairingFinished, pairing: _Pairing | None) -> _RetryTarget | None:
+        """Đích “Thử lại” cho một kết quả của `pairing_finished` (spec D4 mục 14.4); None: không nút.
+
+        `pairing`: việc chủ động đang chạy khi nó khớp kết quả, không thì None."""
+        if result.outcome not in _RETRYABLE:
+            return None
+        if pairing is not None:
+            return _retry_from_pairing(pairing, result.code_shown)
+        if result.role is not Role.INITIATOR:
+            return None
+        device_id = result.peer_device_id
+        if result.port is not None:
+            label = f"{result.address}:{result.port}"
+            return _RetryTarget(device_id, label, result.address, result.port, result.code_shown)
+        if device_id is None:
+            return None
+        label = texts.peer_label(result.peer_name or result.known_name, device_id)
+        return _RetryTarget(device_id, label, None, None, result.code_shown)
 
     def _after_paired(self, generation: int, device_id: str, hint: tuple[str, int] | None) -> None:
         """MỘT `call`: `connect_hint` (ghép bằng IP) rồi đọc lại `devices()`; xong phát `paired`."""
@@ -1087,16 +1216,18 @@ class PairingController(QObject):
 
     # ---- Hộp kết quả và dọn dẹp --------------------------------------------------------------
 
-    def _show_result(self, text: str, *, ok: bool = False) -> None:
+    def _show_result(self, text: str, *, ok: bool = False, retry: _RetryTarget | None = None) -> None:
         """Báo một câu kết quả và phát `message`.
 
         `ok` (thành công): không mở hộp; đóng hộp lỗi đang mở (câu cũ không còn đúng) rồi phát
         `notice`; không có cửa sổ Teleport nào đang được dùng (`window_visible`) thì báo thêm bằng
         bóng thoại khay (`notify`), vì dải thông báo nằm trong cửa sổ. Lỗi: hiện trong hộp kết quả
-        dùng lại (câu mới thay câu cũ).
+        dùng lại (câu mới thay câu cũ; hàng nút dựng lại theo `retry`: có thì [Thử lại] [Đóng], không
+        thì OK).
         """
         if ok:
             old, self._result_box = self._result_box, None
+            self._result_retry = None
             if old is not None:
                 old.close()
             if self._notify is not None and not self._window_visible():
@@ -1113,17 +1244,60 @@ class PairingController(QObject):
             box = _new_box(self._message_parent(), self._result_finished)
             box.setWindowTitle(title())
             box.setAccessibleName(title())
-            box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            box.buttonClicked.connect(functools.partial(self._result_clicked, box))
+            box.installEventFilter(self)
             self._result_box = box
         box.setIcon(QMessageBox.Icon.Warning)
         box.setText(text)
+        self._result_retry = retry
+        _set_result_buttons(box, retry)
         if fresh:
             _show(box)  # hộp đang mở thì chỉ thay chữ, không giành focus lại (máy lạ dội kết quả)
         self.message.emit(text)
 
+    def _result_clicked(self, box: QMessageBox, button: object) -> None:
+        """Một nút của hộp kết quả được bấm: chỉ ghi lại “Thử lại” của hộp hiện tại (chạy khi hộp đóng)."""
+        retry = self._result_retry
+        if (
+            box is self._result_box
+            and retry is not None
+            and isinstance(button, QAbstractButton)
+            and button.objectName() == RETRY_BUTTON_NAME
+        ):
+            self._retry_clicked = (box, retry)
+
     def _result_finished(self, box: QMessageBox) -> None:
+        clicked, self._retry_clicked = self._retry_clicked, None
         if box is self._result_box:
             self._result_box = None
+            self._result_retry = None
+        if clicked is not None and clicked[0] is box:
+            self._retry(clicked[1])
+
+    def _retry(self, target: _RetryTarget) -> None:
+        """Chạy lại việc ghép của `target` với host hiện tại (docstring module, “Thử lại”)."""
+        if self._host is None or not self._host.running:
+            return  # host mới còn đang khởi động (hộp của host cũ): bỏ qua, như bấm “Đóng”
+        if target.ip is not None and target.port is not None:
+            self.pair_address(target.ip, target.port)  # bận thì tự báo câu “đang bận”
+            return
+        busy = self.busy
+        if busy:
+            self._show_result(busy_text())
+            return
+        view = None if target.device_id is None else self._device_lookup(target.device_id)
+        if view is None or not self.pair_device(view):
+            self._show_result(device_gone_text(target.label))
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """Đổi ngôn ngữ: dịch lại chữ các nút “Thử lại” / “Đóng” của hộp kết quả."""
+        if (
+            event.type() == QEvent.Type.LanguageChange
+            and isinstance(watched, QMessageBox)
+            and watched is self._result_box
+        ):
+            _translate_result_buttons(watched)
+        return super().eventFilter(watched, event)
 
     def _close_boxes(self, *, include_result: bool) -> None:
         for dialog in list(self._dialogs.values()):
@@ -1133,6 +1307,7 @@ class PairingController(QObject):
         self._close_unpair_box()
         if include_result and self._result_box is not None:
             box, self._result_box = self._result_box, None
+            self._result_retry = None
             box.close()
 
     @staticmethod

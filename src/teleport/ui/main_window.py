@@ -52,7 +52,9 @@ không hiện.
   đang đổi sang được nhớ (`show_running`, `set_receive_dir`, `set_receive_dir_pending`) và chỉ áp vào
   `save_bar` và huy hiệu của `machine_card` ở RUNNING (ngoài RUNNING thanh ẩn, huy hiệu không báo
   “Không nhận file”). Node chạy mà không có thư mục nhận vì thư mục đã lưu hỏng → huy hiệu “Không
-  nhận file” (`machine_card.set_receiving_unavailable`).
+  nhận file” (`machine_card.set_receiving_unavailable`). Người dùng tạm dừng nhận ở menu khay
+  (`set_receiving_paused`, `ui.app` gọi khi node xác nhận) → huy hiệu “Đã tạm dừng nhận”, cũng chỉ ở
+  RUNNING (thứ tự ưu tiên ở docstring `ui.home`).
 - Nút đầu cột chỉ hiện khi đã có trang tương ứng (`add_page`): không có nút bấm mà không làm gì.
 - Không phần nào làm cửa sổ to hơn `MIN_SIZE`: cột trái cuộn bằng `sidebar_scroll`, khối căn giữa
   bằng `start_scroll`. Tiêu điểm đặt bằng code vào widget trong hai vùng cuộn đó thì vùng cuộn tự cuộn
@@ -422,6 +424,7 @@ class MainWindow(QMainWindow):
         self._receive_dir: Path | None = None
         self._receive_dir_unavailable: Path | None = None
         self._receive_dir_pending: Path | None = None
+        self._receiving_paused = False  # người dùng tạm dừng nhận (menu khay, spec D4)
         self._error_code = ""
         self._error_detail = ""
         self._addresses: tuple[str, ...] = ()
@@ -767,6 +770,13 @@ class MainWindow(QMainWindow):
             self.machine_card.set_name(name)
             self.compact_machine.update_info()
 
+    def set_receiving_paused(self, paused: bool) -> None:
+        """Người dùng tạm dừng nhận file (menu khay, đã được node xác nhận): huy hiệu “Đã tạm dừng
+        nhận” ở thẻ máy này và ở avatar khi cột thu gọn; chỉ hiện ở RUNNING."""
+        self._receiving_paused = bool(paused)
+        self._apply_receive_dir()
+        self.compact_machine.update_info()
+
     def set_machine_hidden(self, hidden: bool) -> None:
         """Máy này đang ẩn (Cài đặt): huy hiệu “Đang ẩn” ở thẻ máy này và ở avatar khi cột thu gọn."""
         self.machine_card.set_hidden(hidden)
@@ -977,6 +987,7 @@ class MainWindow(QMainWindow):
         self.machine_card.set_receiving_unavailable(
             running and receive_dir is None and unavailable is not None
         )
+        self.machine_card.set_receiving_paused(running and self._receiving_paused)
 
     def _content(self) -> tuple[str, str, list[str]]:
         """(dòng trạng thái, dòng chi tiết, các dòng gợi ý) của khối căn giữa; WELCOME (form lần chạy

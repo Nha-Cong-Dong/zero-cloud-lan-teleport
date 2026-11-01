@@ -32,8 +32,8 @@ khi node của host hiện tại đã `started`; chưa thì nhớ máy đó và 
 (nếu vẫn là máy đang mở). Kết quả → `view.load_history` (luồng tự bỏ kết quả tới muộn); host cũ hay
 sau `close_all` → bỏ; lỗi → WARNING (tên loại lỗi) và `view.history_failed`.
 
-**Gửi** (`request_send(device_id, paths)`, từ kéo thả, nút “Gửi file” / Ctrl+O của luồng hay menu
-“Gửi file…”): thread Qt không `stat`
+**Gửi** (`request_send(device_id, paths)`, từ kéo thả, nút “Gửi file” / Ctrl+O của luồng, menu
+“Gửi file…” của cột trái, hay menu con “Gửi file…” của khay qua `pick_and_send`): thread Qt không `stat`
 file người dùng (D7); việc kiểm file do `transfers.send` làm trên `DiskExecutor` của node.
 1. Danh sách rỗng → bỏ qua; `send.selection_error` (quá `MAX_OFFER_FILES` file, trùng) → thông báo.
 2. Thiết bị chưa ghép đôi → “ghép rồi gửi” (từ B2 giao diện không còn đường nào gửi tới máy chưa ghép
@@ -81,9 +81,10 @@ chưa có thì tên trong `offer`), kèm `folder` để bấm bóng thoại mở
 lưu cuối, không có thì thư mục nhận hiện tại (`set_receive_dir`). Tên máy kia qua
 `texts.peer_label`, tên file qua `texts.file_label`; bóng thoại khay là chữ thuần.
 
-**Tóm tắt cho cửa sổ chính**: mỗi `view.content_changed` (và một lần lúc dựng) gọi
-`MainWindow.set_transfer_summary(has_content(), active_count())`: huy hiệu “Đang truyền n lượt”, màn
-rỗng của khung phải, nút “Mở thư mục” cuối chuỗi Tab.
+**Tóm tắt cho cửa sổ chính và khay**: mỗi `view.content_changed` (và một lần lúc dựng) gọi
+`MainWindow.set_transfer_summary(has_content(), active_count())` (huy hiệu “Đang truyền n lượt”, màn
+rỗng của khung phải, nút “Mở thư mục” cuối chuỗi Tab) và `Tray.set_activity(active_count())` (dấu
+biểu tượng và tooltip khay, spec D4).
 
 **Lượt gửi dở** (`active_sends()`): tên hiển thị các máy đang có lượt gửi chưa kết thúc, theo các
 bong bóng của phiên trong luồng chat (`view.rows()`, không gọi node); `ui.app` dùng để hỏi lại trước
@@ -535,8 +536,11 @@ class TransfersController(QObject):
             model.set_activity(device_id, self.activity.get(device_id))
 
     def _update_summary(self) -> None:
-        """Báo cửa sổ chính luồng chat có gì không và số lượt chưa kết thúc (huy hiệu, màn rỗng)."""
-        self._window.set_transfer_summary(self.view.has_content(), self.view.active_count())
+        """Báo cửa sổ chính luồng chat có gì không và số lượt chưa kết thúc (huy hiệu, màn rỗng), và
+        số lượt đó cho khay (dấu và tooltip “Đang truyền n lượt”)."""
+        active = self.view.active_count()
+        self._window.set_transfer_summary(self.view.has_content(), active)
+        self._tray.set_activity(active)
 
     def _peer(self, device_id: str, view: DeviceView | None) -> str:
         name = view.name if view is not None else self._names.get(device_id)
