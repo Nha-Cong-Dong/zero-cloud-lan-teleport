@@ -9,7 +9,8 @@ chưa đo được thì “đang tính thời gian còn lại”), khi chờ (`w
 (`stalled_text`, sau `STALL_TEXT_AFTER` giây không có byte mới), khi nối lại (`reconnecting_text`),
 khi kiểm tra (`verifying_text`), lượt khôi phục (`resumed_text`), tường lửa (`unreachable_text`), khi
 xong (`done_text`, `saved_as_text`) và câu mvp mục 8 khi kết thúc (`result_message`, port từ
-`cli.transfer_result_message`; máy này tự từ chối thì chuỗi rỗng). Luật dùng các câu này (tiến độ
+`cli.transfer_result_message`; máy này tự từ chối thì chuỗi rỗng; riêng câu máy gửi khi máy nhận trả
+`not_receiving` là câu của giao diện, khác CLI: spec D4 mục 5.3). Luật dùng các câu này (tiến độ
 không lùi, khi nào đổi câu) nằm ở docstring `ui.chat_bubbles`.
 
 Chữ do máy kia đặt (tên máy, tên file) do bên gọi đưa qua `texts.peer_label` / `texts.file_label`
@@ -303,10 +304,13 @@ def _send_result(finished: TransferFinished, p: str) -> str:
                 limit=texts.format_size(max_size + 1, trim=True),
             )
     if result is TransferResult.REJECTED_NOT_RECEIVING:
+        # Câu của giao diện (spec D4 mục 5.3, 14.14): máy kia có thể đang tạm dừng nhận ở menu khay hay
+        # có thư mục nhận hỏng, không chỉ là chưa chạy “teleport receive” (câu đó còn ở CLI).
         return _fill(
             t(
                 "Transfers",
-                "{name} chưa bật nhận file. Trên máy đó hãy chạy “teleport receive” rồi gửi lại.",
+                "{name} đang không nhận file mới (có thể đã tạm dừng nhận, hoặc chưa mở được thư mục "
+                "nhận). Hãy nhờ bật lại việc nhận file trên máy đó rồi gửi lại.",
             ),
             name=p,
         )

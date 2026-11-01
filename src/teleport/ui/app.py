@@ -153,6 +153,15 @@ ghép đôi” (qua `PairingController(window_visible=...)`) và “có file đa
 `TransfersController(app_active=...)`) chỉ hiện khi app không được dùng (`GuiApp._app_active()`:
 không cửa sổ nào của app đang active).
 
+**Khay** (`ui.tray.Tray`, mvp F9): `set_running(True)` lúc `started`, False khi dựng host mới,
+`start_failed` và Thoát (kèm bỏ tạm dừng: tạm dừng nhận chỉ trong phiên). “Gửi file…” → máy chọn
+trong menu con (danh sách từ `ConversationModel`, đọc lúc menu sắp hiện) → `bring_to_front`,
+`open_conversation`, rồi `TransfersController.pick_and_send` (đường gửi của luồng chat); máy vừa mất
+thì chỉ hiện cửa sổ. “Tạm dừng nhận” → `host.call` chạy `pause_receiving` trên thread node; mỗi yêu
+cầu có số thứ tự `_pause_seq`: chỉ kết quả của yêu cầu mới nhất được áp lên khay và huy hiệu thẻ
+máy này, kết quả cũ chỉ cập nhật `_paused_confirmed`; lỗi thì áp lại giá trị đã xác nhận và ghi
+một WARNING. Đang tạm dừng thì bóng thoại M4 dùng `texts.still_running_paused()`.
+
 Ctrl+C ở cửa sổ dòng lệnh (khi chạy `python -m teleport.ui`): handler SIGINT hẹn luồng Thoát không
 hỏi lại (`request_quit(confirm=False)`) bằng `QTimer.singleShot(0, …)` (không gọi thẳng giữa
 chừng một slot Qt); một `QTimer` rỗng 200 ms cho Python có dịp chạy handler trong lúc Qt giữ vòng lặp.
@@ -163,7 +172,8 @@ mạng; thêm kiểm tài sản đóng gói: lỗi (mã 1) khi thiếu file font
 nền `offscreen` khác nhau giữa các hệ điều hành), khi icon `checkmark_circle` vẽ ra rỗng và khi một
 bản dịch có trong `i18n.available_languages()` (khác chuỗi nguồn) không nạp được. Selftest còn dựng
 mục “Giao diện” (`ui.appearance.AppearanceSection`) và đổi chủ đề một vòng (tối rồi theo hệ điều
-hành) bằng `theme.set_preference`. Khi
+hành) bằng `theme.set_preference`, và chạy khay một vòng (`_tray_ok`: các setter trạng thái,
+mỗi `TrayBadge` vẽ ra pixmap 32 px không rỗng, menu con với một máy giả, đủ bốn mục). Khi
 chạy từ bản đóng gói (`sys.frozen`) thì kiểm thêm `QFontInfo(font_for(SECTION)).styleName()` là
 “Medium” và của TITLE là “Bold” (instance thật của font variable, không đậm giả).
 
@@ -222,6 +232,7 @@ from teleport.ui import errorlog, first_run, fonts, i18n, icons, logo, receive_d
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.appearance import AppearanceSection
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
+from teleport.ui.conversations import is_online
 from teleport.ui.first_run import FirstRunChoice, TextSource
 from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, Page, ViewState
@@ -230,7 +241,7 @@ from teleport.ui.radar import DeviceListModel
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
 from teleport.ui.settings import SettingsController, SettingsPage, autostart_state_hint
 from teleport.ui.transfers import TransfersController
-from teleport.ui.tray import Tray, make_icon
+from teleport.ui.tray import SendTarget, Tray, TrayBadge, make_icon
 from teleport.ui.widgets import InfoLevel
 
 EXIT_OK = 0
@@ -521,7 +532,11 @@ class GuiApp(QObject):
             notify=lambda _title, text: self.tray.show_message(text),
             window_visible=lambda: self._app_active(),
             message_parent=lambda: self.window,
+            device_lookup=lambda device_id: self.window.devices.device(device_id),
         )
+        # Tạm dừng nhận (spec D4 mục 4.3, 14.10): số thứ tự yêu cầu gần nhất và giá trị node đã xác nhận.
+        self._pause_seq = 0
+        self._paused_confirmed = False
         self._quit_timer = QTimer(self)  # dự phòng: `quit()` dù node chưa báo `stopped`
         self._quit_timer.setSingleShot(True)
         self._quit_timer.timeout.connect(self._app.quit)
@@ -544,6 +559,11 @@ class GuiApp(QObject):
         self.tray.open_requested.connect(self.window.bring_to_front)
         self.tray.quit_requested.connect(self.request_quit)
         self.tray.message_clicked.connect(self._on_message_clicked)
+        self.tray.set_send_targets_provider(self._send_targets)
+        self.tray.send_to_requested.connect(self._on_tray_send)
+        self.tray.discover_requested.connect(self._on_tray_discover)
+        self.tray.pause_toggled.connect(self._on_pause_toggled)
+        self.transfers.view.change_receive_dir_requested.connect(self._choose_receive_dir)
         app.commitDataRequest.connect(self._on_commit_data)
         self.window.conversations.unpair_requested.connect(self._on_unpair_requested)
         self.pairing.devices_changed.connect(self._on_devices_changed)
@@ -646,6 +666,7 @@ class GuiApp(QObject):
         self.pairing.set_host(host)
         self.settings.attach(host)
         self.window.set_machine_hidden(False)
+        self._reset_pause()
         self.window.show_starting()
         host.start()
 
@@ -669,6 +690,7 @@ class GuiApp(QObject):
             return
         self._quitting = True
         self._stop_addresses()
+        self._reset_pause()
         self._close_quit_box()
         if self._instance is not None:
             self._instance.stop_listening()  # bản mở sau không “show” vào app đang tắt
@@ -842,6 +864,8 @@ class GuiApp(QObject):
         self.settings.page.set_receive_dir(c.receive_dir, c.unavailable, c.pending)
         self.window.set_receive_dir_pending(c.pending)
         self.transfers.set_receive_dir(c.receive_dir)
+        # Cùng điều kiện huy hiệu “Không nhận file” của thẻ máy này (`MainWindow._apply_receive_dir`).
+        self.tray.set_receiving_unavailable(c.receive_dir is None and c.unavailable is not None)
         if c.unavailable is not None or c.receive_dir is None or c.changing:
             return
         # Đã ổn: gỡ câu lỗi thư mục nhận ở trang Cài đặt nếu trang còn hiện đúng câu đó.
@@ -994,6 +1018,10 @@ class GuiApp(QObject):
         controller = self.receive_dir_controller
         controller.on_started(host)
         self.window.show_running(host.node_name, controller.receive_dir, controller.unavailable)
+        self.tray.set_receiving_unavailable(
+            controller.receive_dir is None and controller.unavailable is not None
+        )
+        self.tray.set_running(not self._quitting)
         host.call(lambda node: node.devices(), functools.partial(self._on_devices, host))
         self._view_chosen = False
         host.call(lambda node: node.settings.radar_view, functools.partial(self._on_radar_view, host))
@@ -1115,6 +1143,7 @@ class GuiApp(QObject):
         if host is not self.host:
             return
         self._stop_addresses()
+        self._reset_pause()
         if code != StartError.LOCKED:
             log.warning("node không khởi động được: %s", code)
         choice = self._first_run
@@ -1148,9 +1177,76 @@ class GuiApp(QObject):
             self.start_node()
 
     def _on_hidden_to_tray(self) -> None:
+        """Thu cửa sổ xuống khay lần đầu trong phiên: bóng thoại M4 (đang tạm dừng nhận thì câu riêng)."""
         if not self._told_tray:
             self._told_tray = True
-            self.tray.show_message(texts.still_running())
+            if self._paused_confirmed:
+                self.tray.show_message(texts.still_running_paused())
+            else:
+                self.tray.show_message(texts.still_running())
+
+    # ---- Khay: Gửi file…, Tạm dừng nhận ---------------------------------------------------------
+
+    def _send_targets(self) -> list[SendTarget]:
+        """Máy cho menu con “Gửi file…” của khay: thứ tự danh sách cuộc trò chuyện (chỉ máy đã ghép đôi)."""
+        return [
+            SendTarget(view.device_id, texts.peer_label(view.name, view.device_id), is_online(view))
+            for view in self.window.conversations.model.devices()
+        ]
+
+    def _on_tray_send(self, device_id: str) -> None:
+        """Chọn một máy ở “Gửi file…” của khay: hiện cửa sổ, mở cuộc trò chuyện, mở hộp chọn file."""
+        if self._quitting:
+            return
+        self.window.bring_to_front()
+        if self.window.open_conversation(device_id):  # False: máy vừa bị hủy ghép đôi
+            self.transfers.pick_and_send(device_id)
+
+    def _on_tray_discover(self) -> None:
+        """“Tìm máy mới…” của khay (chưa ghép đôi máy nào): hiện cửa sổ, mở trang DISCOVER."""
+        if self._quitting:
+            return
+        self.window.bring_to_front()
+        self.window.open_page(Page.DISCOVER)
+
+    def _on_pause_toggled(self, paused: bool) -> None:
+        """Người dùng bấm “Tạm dừng nhận”: đổi qua node; chưa có node đang chạy thì trả dấu chọn về cũ."""
+        host = self.host
+        if host is None or self._quitting or not host.running:
+            self.tray.set_receiving_paused(self._paused_confirmed)
+            return
+        self._pause_seq += 1
+        seq = self._pause_seq
+        host.call(
+            lambda node: _set_receiving_paused(node, paused),
+            functools.partial(self._on_pause_done, host, seq),
+        )
+
+    def _on_pause_done(self, host: NodeHost, seq: int, result: object) -> None:
+        """Node trả việc tạm dừng nhận: chỉ yêu cầu mới nhất được áp vào khay và huy hiệu."""
+        if host is not self.host or self._quitting:
+            return
+        latest = seq == self._pause_seq
+        if isinstance(result, bool):
+            self._paused_confirmed = result
+            if latest:
+                self._apply_paused(result)
+            return
+        if isinstance(result, BaseException):
+            log.warning("không đổi được việc tạm dừng nhận: %s", type(result).__name__)
+        if latest:
+            self._apply_paused(self._paused_confirmed)
+
+    def _apply_paused(self, paused: bool) -> None:
+        self.tray.set_receiving_paused(paused)
+        self.window.set_receiving_paused(paused)
+
+    def _reset_pause(self) -> None:
+        """Host mới, `start_failed`, Thoát: node mới nhận lại (tạm dừng chỉ trong phiên); khay chưa chạy."""
+        self._pause_seq += 1  # bỏ kết quả của yêu cầu đang chờ
+        self._paused_confirmed = False
+        self._apply_paused(False)
+        self.tray.set_running(False)
 
 
 def log_files(config_dir: Path) -> list[Path]:
@@ -1237,6 +1333,12 @@ def _first_run_autostart(config_dir: Path) -> tuple[bool | None, TextSource]:
     if state in (autostart.AutostartState.OTHER, autostart.AutostartState.BLOCKED):
         return False, functools.partial(autostart_state_hint, state)
     return True, ""
+
+
+def _set_receiving_paused(node: app_node.Node, paused: bool) -> bool:
+    """Thread node: tạm dừng (True) hay nhận lại (False) `offer` mới; trả giá trị node đang giữ."""
+    node.transfers.pause_receiving(paused)
+    return node.transfers.receiving_paused
 
 
 def _mark_first_run_done(node: app_node.Node) -> bool:
@@ -1385,6 +1487,28 @@ def _assets_ok() -> bool:
     return True
 
 
+def _tray_ok(tray: Tray) -> bool:
+    """Phần khay của `--selftest` (spec D4 mục 14.17): một vòng setter, mỗi dấu vẽ ra được, menu con."""
+    tray.set_running(True)
+    tray.set_activity(2)
+    tray.set_receiving_paused(True)
+    tray.set_receiving_unavailable(True)
+    tray.set_receiving_unavailable(False)
+    tray.set_receiving_paused(False)
+    tray.set_activity(0)
+    tray.set_running(False)
+    for badge in TrayBadge:
+        if make_icon(badge).pixmap(32).isNull():
+            log.error("selftest: không vẽ được biểu tượng khay %s", badge.value)
+            return False
+    tray.set_send_targets_provider(lambda: [SendTarget("selftest", "Teleport", False)])
+    tray.menu.aboutToShow.emit()
+    if len(tray.send_menu.actions()) != 1 or len(tray.actions()) != 4:
+        log.error("selftest: menu khay sai")
+        return False
+    return True
+
+
 def _selftest(app: QApplication) -> int:
     """Kiểm tài sản, dựng i18n, theme, cửa sổ, khay, luồng chat mà không hiện; không khóa, không mạng."""
     try:
@@ -1414,6 +1538,8 @@ def _selftest(app: QApplication) -> int:
         controller.attach(None)
         transfers.view.show_notice(receive_dir.unavailable_text(Path("Teleport")))
         transfers.view.hide_notice()
+        if not _tray_ok(tray):
+            return EXIT_ERROR
         if (
             len(tray.actions()) != 4
             or transfers.offers.keys()
