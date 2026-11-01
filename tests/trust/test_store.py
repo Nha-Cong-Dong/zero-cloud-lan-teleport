@@ -4,6 +4,7 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import logging
 import os
 import re
 
@@ -850,3 +851,371 @@ def test_rename_write_failure_raises_and_keeps_ram(cfg, peer, monkeypatch):
     assert store.find_by_name("Moi") == []
     assert (cfg / TRUSTED_FILE).read_bytes() == before_bytes
     assert no_tmp_left(cfg)
+
+
+# =================================================================================================
+# F3a (specs/spec-f3a.md mục 2.2, 6.2, 10.4): trường tùy chọn `last_address` — S1–S9
+# =================================================================================================
+
+STORE_LOGGER = "teleport.trust.store"
+IP = "192.168.1.5"
+PORT = 47474
+
+
+def _entries(cfg) -> list[dict]:
+    return json.loads((cfg / TRUSTED_FILE).read_text(encoding="utf-8"))["devices"]
+
+
+def _entry_of(cfg, device_id: str) -> dict:
+    return next(e for e in _entries(cfg) if e["device_id"] == device_id)
+
+
+def _replace_spy(monkeypatch) -> list[str]:
+    """Ghi lại mọi lần `os.replace` vào `trusted.json` (mỗi lần ghi nguyên tử kết thúc bằng một lần)."""
+    writes: list[str] = []
+    real_replace = os.replace
+
+    def spy_replace(src, dst, *args, **kwargs):
+        writes.append(os.path.basename(os.fspath(dst)))
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", spy_replace)
+    return writes
+
+
+def test_s_trusted_device_last_address_is_last_field_with_default_none():
+    fields = dataclasses.fields(TrustedDevice)
+    assert fields[-1].name == "last_address"
+    assert fields[-1].default is None
+    assert [f.name for f in fields[:5]] == ["device_id", "name", "fingerprint", "cert_pem", "paired_at"]
+
+
+# --- S1: file cũ ------------------------------------------------------------------------------------
+
+
+def test_s1_old_file_without_last_address_loads_none_and_rewrite_has_no_key(cfg, peer, make_peer, caplog):
+    other = make_peer()
+    write_store(cfg, {"version": 1, "devices": [entry(peer, "A"), entry(other, "B")]})
+    with caplog.at_level(logging.WARNING, logger=STORE_LOGGER):
+        store = TrustStore.load(cfg)
+    assert [d.last_address for d in store.devices()] == [None, None]
+    assert caplog.records == [], "thiếu trường là bình thường, không WARNING"
+    store.rename(peer.device_id, "A2")  # buộc ghi lại
+    for e in _entries(cfg):
+        assert "last_address" not in e, e
+    assert all(d.last_address is None for d in TrustStore.load(cfg).devices())
+
+
+def test_s1_add_writes_no_last_address_key(cfg, peer):
+    device = TrustStore.load(cfg).add(peer, "PC", now=NOW)
+    assert device.last_address is None
+    assert "last_address" not in _entry_of(cfg, peer.device_id)
+
+
+# --- S2: set_last_address -----------------------------------------------------------------------------
+
+
+def test_s2_set_last_address_writes_object_after_paired_at_and_reloads(cfg, peer, make_peer):
+    other = make_peer()
+    store = TrustStore.load(cfg)
+    store.add(peer, "A", now=NOW)
+    store.add(other, "B", now=NOW)
+    updated = store.set_last_address(peer.device_id, IP, PORT)
+    assert isinstance(updated, TrustedDevice)
+    assert updated.last_address == (IP, PORT)
+    assert store.get(peer.device_id) == updated
+    e = _entry_of(cfg, peer.device_id)
+    assert e["last_address"] == {"ip": IP, "port": PORT}
+    assert list(e) == ["device_id", "name", "fingerprint", "cert", "paired_at", "last_address"]
+    assert type(e["last_address"]["port"]) is int
+    assert "last_address" not in _entry_of(cfg, other.device_id), "mục khác không đổi"
+    reloaded = TrustStore.load(cfg)
+    assert reloaded.get(peer.device_id) == updated
+    assert reloaded.get(other.device_id).last_address is None
+    assert no_tmp_left(cfg)
+
+
+def test_s2_same_value_does_not_write(cfg, peer, monkeypatch):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    first = store.set_last_address(peer.device_id, IP, PORT)
+    before = (cfg / TRUSTED_FILE).read_bytes()
+    mtime = (cfg / TRUSTED_FILE).stat().st_mtime_ns
+    writes = _replace_spy(monkeypatch)
+    again = store.set_last_address(peer.device_id, IP, PORT)
+    assert again == first
+    assert TRUSTED_FILE not in writes
+    assert (cfg / TRUSTED_FILE).read_bytes() == before
+    assert (cfg / TRUSTED_FILE).stat().st_mtime_ns == mtime
+
+
+def test_s2_new_value_replaces_old_one(cfg, peer, monkeypatch):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    store.set_last_address(peer.device_id, IP, PORT)
+    writes = _replace_spy(monkeypatch)
+    store.set_last_address(peer.device_id, IP, 50123)
+    assert writes.count(TRUSTED_FILE) == 1
+    assert _entry_of(cfg, peer.device_id)["last_address"] == {"ip": IP, "port": 50123}
+    store.set_last_address(peer.device_id, "10.0.0.7", 50123)
+    assert writes.count(TRUSTED_FILE) == 2
+    assert TrustStore.load(cfg).get(peer.device_id).last_address == ("10.0.0.7", 50123)
+
+
+# --- S3: last_address hỏng: chỉ bỏ riêng trường đó ----------------------------------------------------
+
+_HUGE_IP = "x" * 1_000_000
+# (giá trị JSON của `last_address`, chuỗi không được xuất hiện trong log, id)
+_S3_BAD = [
+    ("1.2.3.4:5", "1.2.3.4", "chuoi"),
+    (["1.2.3.4", 47474], "1.2.3.4", "mang"),
+    ({"ip": 1, "port": 2}, None, "ip-so"),
+    ({"ip": "1.2.3.4"}, "1.2.3.4", "thieu-port"),
+    ({"port": 47474}, None, "thieu-ip"),
+    ({"ip": "1.2.3.4", "port": 0}, "1.2.3.4", "port-0"),
+    ({"ip": "1.2.3.4", "port": 70000}, "70000", "port-70000"),
+    ({"ip": "1.2.3.4", "port": -1}, "1.2.3.4", "port-am"),
+    (True, None, "true"),
+    (47474, "47474", "so"),
+    ({"ip": "1.2.3.4", "port": "47474"}, "47474", "port-chuoi"),
+    ({"ip": "1.2.3.4", "port": True}, "1.2.3.4", "port-true"),
+    ({"ip": "1.2.3.4", "port": 47474.0}, "47474", "port-float"),
+    ({"ip": "::1", "port": 47474}, "::1", "ipv6"),
+    ({"ip": "224.0.0.1", "port": 47474}, "224.0.0.1", "multicast"),
+    ({"ip": "0.0.0.0", "port": 47474}, "0.0.0.0", "unspecified"),
+    ({"ip": "255.255.255.255", "port": 47474}, "255.255.255.255", "broadcast"),
+    ({"ip": "192.168.001.5", "port": 47474}, "192.168.001.5", "so-0-dau"),
+    ({"ip": " 192.168.1.5", "port": 47474}, "192.168.1.5", "khoang-trang"),
+    ({"ip": _HUGE_IP, "port": 47474}, "x" * 64, "chuoi-1MB"),
+]
+
+
+@pytest.mark.parametrize("bad, secret", [(b, s) for b, s, _ in _S3_BAD], ids=[i for _, _, i in _S3_BAD])
+def test_s3_invalid_last_address_drops_only_that_field_and_warns_without_value(
+    cfg, peer, make_peer, caplog, bad, secret
+):
+    good, broken = make_peer(), peer
+    entries = [
+        entry(good, "A", last_address={"ip": "10.0.0.7", "port": 50123}),
+        entry(broken, "B", last_address=bad),
+    ]
+    write_store(cfg, {"version": 1, "devices": entries})
+    with caplog.at_level(logging.WARNING, logger=STORE_LOGGER):
+        store = TrustStore.load(cfg)
+    a, b = store.get(good.device_id), store.get(broken.device_id)
+    assert a is not None and b is not None, "cả hai mục vẫn nạp"
+    assert a.last_address == ("10.0.0.7", 50123), "mục khác giữ nguyên"
+    assert b.last_address is None
+    assert (b.name, b.fingerprint, b.cert_pem, b.paired_at) == (
+        "B",
+        broken.fingerprint,
+        broken.pem,
+        NOW_TRUNC,
+    )
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1, [r.getMessage()[:200] for r in caplog.records]
+    text = warnings[0].getMessage()
+    assert "mục 1" in text and "last_address" in text, text[:200]
+    if secret is not None:
+        assert secret not in text, f"WARNING không được chứa giá trị: {text[:200]!r}"
+    assert len(text) < 200
+
+
+def test_s3_next_write_cleans_invalid_field(cfg, peer, make_peer):
+    good = make_peer()
+    write_store(
+        cfg,
+        {
+            "version": 1,
+            "devices": [
+                entry(good, "A", last_address={"ip": "10.0.0.7", "port": 50123}),
+                entry(peer, "B", last_address="rác"),
+            ],
+        },
+    )
+    store = TrustStore.load(cfg)
+    store.rename(peer.device_id, "B2")
+    assert "last_address" not in _entry_of(cfg, peer.device_id)
+    assert _entry_of(cfg, good.device_id)["last_address"] == {"ip": "10.0.0.7", "port": 50123}
+
+
+def test_s3_invalid_last_address_with_otherwise_corrupt_entry_still_rejects_file(cfg, peer):
+    """Khoan dung chỉ riêng `last_address`: mục sai ở trường khác vẫn làm cả file bị từ chối như cũ."""
+    write_store(cfg, {"version": 1, "devices": [entry(peer, name="", last_address="rác")]})
+    with pytest.raises(TrustStoreError):
+        TrustStore.load(cfg)
+
+
+# --- S4: rename / remove / add ----------------------------------------------------------------------
+
+
+def test_s4_rename_keeps_last_address(cfg, peer):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    store.set_last_address(peer.device_id, IP, PORT)
+    renamed = store.rename(peer.device_id, "Moi")
+    assert renamed.last_address == (IP, PORT)
+    assert TrustStore.load(cfg).get(peer.device_id).last_address == (IP, PORT)
+
+
+def test_s4_remove_drops_last_address_and_readd_starts_from_none(cfg, peer):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    store.set_last_address(peer.device_id, IP, PORT)
+    store.remove(peer.device_id)
+    assert all(e["device_id"] != peer.device_id for e in _entries(cfg))
+    again = store.add(peer, "PC", now=NOW)
+    assert again.last_address is None, "hủy rồi ghép lại: bắt đầu từ None"
+    assert "last_address" not in _entry_of(cfg, peer.device_id)
+
+
+def test_s4_add_same_device_id_and_fingerprint_keeps_last_address(cfg, peer):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    store.set_last_address(peer.device_id, IP, PORT)
+    later = NOW + datetime.timedelta(days=1)
+    again = store.add(peer, "Ten-Moi", now=later)
+    assert again.last_address == (IP, PORT)
+    assert again.name == "Ten-Moi" and again.paired_at == later.replace(microsecond=0)
+    assert TrustStore.load(cfg).get(peer.device_id).last_address == (IP, PORT)
+
+
+def test_s4_add_same_device_id_new_fingerprint_drops_last_address(cfg, make_cert):
+    device_id = "cd" * 16
+    old = peer_cert_from_pem(_pem(make_cert(cn="teleport-" + device_id)))
+    new = peer_cert_from_pem(_pem(make_cert(cn="teleport-" + device_id)))
+    store = TrustStore.load(cfg)
+    store.add(old, "PC", now=NOW)
+    store.set_last_address(device_id, IP, PORT)
+    replaced = store.add(new, "PC", now=NOW)
+    assert replaced.last_address is None
+    assert "last_address" not in _entry_of(cfg, device_id)
+
+
+def test_s4_add_new_device_has_no_address_and_keeps_others(cfg, peer, make_peer):
+    store = TrustStore.load(cfg)
+    store.add(peer, "A", now=NOW)
+    store.set_last_address(peer.device_id, IP, PORT)
+    other = make_peer()
+    added = store.add(other, "B", now=NOW)
+    assert added.last_address is None
+    assert store.get(peer.device_id).last_address == (IP, PORT)
+
+
+# --- S5: lỗi của set_last_address ---------------------------------------------------------------------
+
+
+def test_s5_set_last_address_unknown_device_raises_key_error(cfg, peer, make_peer):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    before = (cfg / TRUSTED_FILE).read_bytes()
+    with pytest.raises(KeyError):
+        store.set_last_address(make_peer().device_id, IP, PORT)
+    assert (cfg / TRUSTED_FILE).read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "ip, port",
+    [
+        ("::1", PORT),
+        ("0.0.0.0", PORT),
+        ("224.0.0.251", PORT),
+        ("255.255.255.255", PORT),
+        ("192.168.001.5", PORT),
+        ("1.2.3", PORT),
+        (None, PORT),
+        (b"1.2.3.4", PORT),
+        (IP, 0),
+        (IP, 65536),
+        (IP, True),
+        (IP, 47474.0),
+        (IP, "47474"),
+    ],
+    ids=[
+        "ipv6",
+        "unspecified",
+        "multicast",
+        "broadcast",
+        "so-0-dau",
+        "thieu-o",
+        "ip-none",
+        "ip-bytes",
+        "port-0",
+        "port-65536",
+        "port-true",
+        "port-float",
+        "port-chuoi",
+    ],
+)
+def test_s5_set_last_address_invalid_value_raises_value_error(cfg, peer, ip, port):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    store.set_last_address(peer.device_id, "10.0.0.7", 50123)
+    before = (cfg / TRUSTED_FILE).read_bytes()
+    with pytest.raises(ValueError):
+        store.set_last_address(peer.device_id, ip, port)
+    assert (cfg / TRUSTED_FILE).read_bytes() == before
+    assert store.get(peer.device_id).last_address == ("10.0.0.7", 50123)
+
+
+def test_s5_set_last_address_write_failure_raises_and_keeps_ram(cfg, peer, monkeypatch):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    store.set_last_address(peer.device_id, "10.0.0.7", 50123)
+    before_bytes = (cfg / TRUSTED_FILE).read_bytes()
+    before = store.get(peer.device_id)
+    real_replace = os.replace
+
+    def failing_replace(src, dst, *args, **kwargs):
+        if os.path.basename(os.fspath(dst)) == TRUSTED_FILE:
+            raise PermissionError(13, "giả lập file đang bị khóa")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    with pytest.raises(TrustStoreError):
+        store.set_last_address(peer.device_id, IP, PORT)
+    monkeypatch.undo()
+    assert store.get(peer.device_id) == before, "RAM không đổi khi ghi lỗi"
+    assert (cfg / TRUSTED_FILE).read_bytes() == before_bytes
+    assert no_tmp_left(cfg)
+
+
+# --- S6, S7, S8, S9 -----------------------------------------------------------------------------------
+
+
+def test_s6_null_last_address_is_none_without_warning(cfg, peer, caplog):
+    write_store(cfg, {"version": 1, "devices": [entry(peer, last_address=None)]})
+    with caplog.at_level(logging.WARNING, logger=STORE_LOGGER):
+        store = TrustStore.load(cfg)
+    assert store.get(peer.device_id).last_address is None
+    assert caplog.records == []
+
+
+def test_s7_unknown_keys_inside_last_address_are_ignored(cfg, peer):
+    value = {"ip": IP, "port": PORT, "via": "mdns", "seen": 3}
+    write_store(cfg, {"version": 1, "devices": [entry(peer, last_address=value)]})
+    store = TrustStore.load(cfg)
+    assert store.get(peer.device_id).last_address == (IP, PORT)
+    store.rename(peer.device_id, "Moi")
+    assert _entry_of(cfg, peer.device_id)["last_address"] == {"ip": IP, "port": PORT}
+
+
+def test_s8_version_stays_1_after_set_last_address(cfg, peer):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    store.set_last_address(peer.device_id, IP, PORT)
+    assert json.loads((cfg / TRUSTED_FILE).read_text(encoding="utf-8"))["version"] == 1
+    assert STORE_VERSION == 1
+
+
+@pytest.mark.parametrize("ip", ["8.8.8.8", "127.0.0.1", "169.254.1.1"])
+def test_s9_store_accepts_global_loopback_and_link_local_addresses(cfg, peer, ip, caplog):
+    """10.4: `trusted.json` đọc theo `check_endpoint`: địa chỉ global hợp lệ về dạng vẫn nạp (chỉ không
+    dùng)."""
+    write_store(cfg, {"version": 1, "devices": [entry(peer, last_address={"ip": ip, "port": PORT})]})
+    with caplog.at_level(logging.WARNING, logger=STORE_LOGGER):
+        store = TrustStore.load(cfg)
+    assert store.get(peer.device_id).last_address == (ip, PORT)
+    assert caplog.records == []
+    store.set_last_address(peer.device_id, ip, 50123)
+    assert TrustStore.load(cfg).get(peer.device_id).last_address == (ip, 50123)

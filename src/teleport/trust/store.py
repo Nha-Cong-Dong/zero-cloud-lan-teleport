@@ -6,8 +6,10 @@ kia; listener mTLS nạp các chứng chỉ này làm trust anchor (`cert_pems()
 File được ghi nguyên tử bằng `teleport.atomic.write_atomic` (`trusted.json.tmp` →
 fsync → `os.replace`), nên người đọc không bao giờ thấy file ghi dở. Khi đọc, mọi
 mục được kiểm tra lại từ đầu; chỉ một chỗ sai là cả file bị từ chối
-(`TrustStoreError`). File hỏng **không bao giờ** bị tự xóa hay tạo lại: người dùng
-phải tự quyết định.
+(`TrustStoreError`). Ngoại lệ duy nhất: trường tùy chọn `last_address` (địa chỉ của kết nối
+điều khiển ra gần nhất, chỉ là gợi ý để nối lại) sai thì chỉ bỏ riêng trường đó (WARNING có
+chỉ số mục, không in giá trị); lần ghi sau ghi lại theo RAM nên tự làm sạch. File hỏng
+**không bao giờ** bị tự xóa hay tạo lại: người dùng phải tự quyết định.
 """
 
 from __future__ import annotations
@@ -15,15 +17,19 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from teleport.atomic import write_atomic
+from teleport.core.links import check_endpoint
 from teleport.core.messages import MessageError, validate_device_id, validate_device_name
 from teleport.paths import TRUSTED_FILE
 from teleport.trust.identity import InvalidCertificate, PeerCert, peer_cert_from_pem
 
 STORE_VERSION = 1
+
+log = logging.getLogger(__name__)
 
 
 class TrustStoreError(Exception):
@@ -37,13 +43,14 @@ class TrustedDevice:
     fingerprint: str  # 64 ký tự hex thường
     cert_pem: str  # PEM đã chuẩn hóa
     paired_at: datetime.datetime  # UTC, làm tròn xuống giây
+    last_address: tuple[str, int] | None = None  # (IPv4, cổng) của kết nối điều khiển ra gần nhất
 
 
 class TrustStore:
     """Danh sách thiết bị đã ghép đôi, đồng bộ với `trusted.json`.
 
-    Tạo bằng `TrustStore.load(config_dir)`. `add`/`rename`/`remove` ghi xuống đĩa ngay; trạng
-    thái trong bộ nhớ chỉ đổi khi ghi thành công.
+    Tạo bằng `TrustStore.load(config_dir)`. `add`/`rename`/`remove`/`set_last_address` ghi xuống
+    đĩa ngay; trạng thái trong bộ nhớ chỉ đổi khi ghi thành công.
     """
 
     def __init__(self, path: Path, *, _devices: dict[str, TrustedDevice]) -> None:
@@ -103,8 +110,9 @@ class TrustStore:
     def add(self, peer: PeerCert, name: str, *, now: datetime.datetime | None = None) -> TrustedDevice:
         """Lưu thiết bị vừa ghép đôi, thay mục cũ trùng `device_id` hoặc `fingerprint`.
 
-        Tên sai hoặc `peer` không khớp chứng chỉ của nó → ValueError. Không ghi được
-        → TrustStoreError.
+        Mục cũ cùng `device_id` và cùng `fingerprint` (ghép đôi lại cùng danh tính) thì giữ
+        `last_address` của nó; còn lại `last_address` là None. Tên sai hoặc `peer` không khớp
+        chứng chỉ của nó → ValueError. Không ghi được → TrustStoreError.
         """
         validate_device_name(name)
         # PeerCert có thể được tạo bằng tay: kiểm lại để không ghi ra một file mà
@@ -115,12 +123,15 @@ class TrustStore:
             now = datetime.datetime.now(datetime.UTC)
         elif now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("now phải có múi giờ")
+        old = self._devices.get(peer.device_id)
+        keep_address = old is not None and old.fingerprint == peer.fingerprint
         device = TrustedDevice(
             device_id=peer.device_id,
             name=name,
             fingerprint=peer.fingerprint,
             cert_pem=peer.pem,
             paired_at=now.astimezone(datetime.UTC).replace(microsecond=0),
+            last_address=old.last_address if old is not None and keep_address else None,
         )
         devices = {
             k: d
@@ -150,6 +161,24 @@ class TrustStore:
         self._save(devices)
         return renamed
 
+    def set_last_address(self, device_id: str, ip: str, port: int) -> TrustedDevice:
+        """Ghi địa chỉ (đã quan sát, đã xác thực) của thiết bị; giữ mọi trường khác.
+
+        Sai (`check_endpoint`) → ValueError; không có `device_id` → KeyError; không ghi được →
+        TrustStoreError (RAM không đổi). Trùng giá trị đang lưu → trả mục cũ, không ghi.
+        """
+        address = check_endpoint(ip, port)
+        device = self.get(device_id)
+        if device is None:
+            raise KeyError(device_id)
+        if device.last_address == address:
+            return device
+        updated = dataclasses.replace(device, last_address=address)
+        devices = dict(self._devices)
+        devices[device.device_id] = updated
+        self._save(devices)
+        return updated
+
     def remove(self, device_id: str) -> TrustedDevice:
         """Xóa một thiết bị và ghi xuống đĩa. Không có → KeyError."""
         device = self.get(device_id)
@@ -161,25 +190,27 @@ class TrustStore:
 
     def _save(self, devices: dict[str, TrustedDevice]) -> None:
         ordered = sorted(devices.values(), key=lambda d: (d.name.casefold(), d.device_id))
-        data = {
-            "version": STORE_VERSION,
-            "devices": [
-                {
-                    "device_id": d.device_id,
-                    "name": d.name,
-                    "fingerprint": d.fingerprint,
-                    "cert": d.cert_pem,
-                    "paired_at": _format_time(d.paired_at),
-                }
-                for d in ordered
-            ],
-        }
+        data = {"version": STORE_VERSION, "devices": [_device_entry(d) for d in ordered]}
         text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
         try:
             write_atomic(self.path, text.encode("utf-8"))
         except OSError as e:
             raise TrustStoreError(f"không ghi được {self.path}: {e}") from e
         self._devices = dict(devices)
+
+
+def _device_entry(d: TrustedDevice) -> dict[str, object]:
+    """Một mục của `trusted.json`; `last_address` chỉ có khóa khi khác None (không ghi `null`)."""
+    entry: dict[str, object] = {
+        "device_id": d.device_id,
+        "name": d.name,
+        "fingerprint": d.fingerprint,
+        "cert": d.cert_pem,
+        "paired_at": _format_time(d.paired_at),
+    }
+    if d.last_address is not None:
+        entry["last_address"] = {"ip": d.last_address[0], "port": d.last_address[1]}
+    return entry
 
 
 def _format_time(moment: datetime.datetime) -> str:
@@ -203,7 +234,7 @@ def _parse_store(data: object) -> dict[str, TrustedDevice]:
     fingerprints: set[str] = set()
     for index, entry in enumerate(entries):
         try:
-            device = _parse_device(entry)
+            device = _parse_device(entry, index)
         except TrustStoreError as e:
             raise TrustStoreError(f"mục {index}: {e}") from e
         if device.device_id in devices:
@@ -215,7 +246,24 @@ def _parse_store(data: object) -> dict[str, TrustedDevice]:
     return devices
 
 
-def _parse_device(entry: object) -> TrustedDevice:
+def _parse_last_address(value: object, index: int) -> tuple[str, int] | None:
+    """Trường tùy chọn `last_address`: thiếu / `null` → None; sai → None kèm WARNING (không in giá trị).
+
+    Khoan dung riêng cho trường này: nó chỉ là gợi ý để nối lại, nên một giá trị hỏng không làm cả
+    file bị từ chối. Khóa lạ bên trong object bị bỏ qua.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        try:
+            return check_endpoint(value.get("ip"), value.get("port"))
+        except ValueError:
+            pass
+    log.warning("trusted.json: mục %d: bỏ last_address không hợp lệ", index)
+    return None
+
+
+def _parse_device(entry: object, index: int) -> TrustedDevice:
     if not isinstance(entry, dict):
         raise TrustStoreError("mỗi mục phải là một JSON object")
     values = {}
@@ -250,4 +298,5 @@ def _parse_device(entry: object) -> TrustedDevice:
         fingerprint=peer.fingerprint,
         cert_pem=peer.pem,
         paired_at=paired_at,
+        last_address=_parse_last_address(entry.get("last_address"), index),
     )

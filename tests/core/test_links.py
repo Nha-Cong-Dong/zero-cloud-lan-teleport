@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import heapq
+import ipaddress
 import itertools
 import math
 from collections.abc import Callable
@@ -79,6 +80,12 @@ def the_connect(actions: list) -> Connect:
 
 def notifies(actions: list) -> list:
     return [a.event for a in actions if isinstance(a, Notify)]
+
+
+def hint_failed(result: ConnectResult, addrs, port: int, dev: str = PEER) -> LinkFailed:
+    """spec-f3a 10.6 B1/B3: `LinkFailed` của lần thử do `hint()` gây ra mang `from_hint=True` cùng đích
+    (`addresses`, `port`) của chính lần thử đó; mọi `LinkFailed` khác giữ mặc định (False, (), None)."""
+    return LinkFailed(dev, result, from_hint=True, addresses=tuple(addrs), port=port)
 
 
 def start_attempt(t: LinkTracker, dev: str = PEER, now: float = 0.0, addrs=ADDR, port: int = PORT) -> Connect:
@@ -1733,7 +1740,9 @@ def test_l2_hint_unblocks_and_counts_as_user_action(result):
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.2))
     assert (c.addresses, c.port) == (ADDR2, PORT2)
     # Đã gỡ chặn và xóa danh sách đã báo: lỗi cùng loại được báo lại.
-    assert notifies(t.connect_finished(PEER, c.attempt_id, result, None, 0.3)) == [LinkFailed(PEER, result)]
+    assert notifies(t.connect_finished(PEER, c.attempt_id, result, None, 0.3)) == [
+        hint_failed(result, ADDR2, PORT2)
+    ]
 
 
 def test_l2_hint_clears_unreachable_counter():
@@ -1743,7 +1752,7 @@ def test_l2_hint_clears_unreachable_counter():
     fail_n_unreachable(t, PEER, 2)
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 1.5))
     assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.6)) == [
-        LinkFailed(PEER, UNREACHABLE)
+        hint_failed(UNREACHABLE, ADDR2, PORT2)
     ]
     assert t.next_wakeup() == pytest.approx(1.6 + delay(1))
 
@@ -1784,7 +1793,7 @@ def test_l2_hint_survives_device_gone_for_network_event_after_failure():
     acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.4)
     # spec-p2-7 A1: lần thử do `hint()` gây ra thất bại lúc không có lịch (mDNS đã báo biến mất,
     # không held) → báo `LinkFailed(UNREACHABLE)` một lần (trước P2-7: không báo).
-    assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)] and only(acts, Connect) == []
+    assert notifies(acts) == [hint_failed(UNREACHABLE, ADDR2, PORT2)] and only(acts, Connect) == []
     assert t.next_wakeup() is None
     c = the_connect(t.network_changed(0.2 + links.EVENT_RETRY_GAP))
     assert (c.addresses, c.port) == (ADDR2, PORT2)
@@ -1823,7 +1832,7 @@ def test_c1_hint_only_failure_has_no_schedule_and_reports_unreachable_once():
     t = tracker(PEER)
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
     acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
-    assert acts == [Notify(LinkFailed(PEER, UNREACHABLE))]
+    assert acts == [Notify(hint_failed(UNREACHABLE, ADDR2, PORT2))]
     assert t.next_wakeup() is None
     assert t.tick(3600.0) == []
 
@@ -1864,14 +1873,14 @@ def test_c1_hint_only_failures_while_held_follow_schedule_and_report_once():
         acts = notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now))
         if i == 0:
             # spec-p2-7 E2: lần thử đầu do hint gây ra → báo ngay, dù đang held (có lịch).
-            assert acts == [LinkFailed(PEER, UNREACHABLE)]
+            assert acts == [hint_failed(UNREACHABLE, ADDR2, PORT2)]
         reports += acts
         nw = t.next_wakeup()
         assert nw is not None, "đang held: phải có lịch"
         c = the_connect(t.tick(nw))
         now = nw
     # Đã báo rồi thì các lần thất bại theo lịch không báo lại (mỗi loại lỗi một lần).
-    assert reports == [LinkFailed(PEER, UNREACHABLE)]
+    assert reports == [hint_failed(UNREACHABLE, ADDR2, PORT2)]
 
 
 def test_c1_fresh_mdns_keeps_schedule_when_hint_also_present():
@@ -1970,7 +1979,7 @@ def test_c2_pending_hint_runs_once_after_release_then_no_schedule():
     assert (c.addresses, c.port) == (ADDR3, PORT2)
     # Lần thử này do `hint()` thứ hai gây ra, thất bại lúc không còn lịch → spec-p2-7 A1: báo một lần.
     acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, nw + 0.1)
-    assert acts == [Notify(LinkFailed(PEER, UNREACHABLE))]
+    assert acts == [Notify(hint_failed(UNREACHABLE, ADDR3, PORT2))]
     assert t.next_wakeup() is None
     assert t.tick(nw + 3600.0) == []
 
@@ -2633,7 +2642,7 @@ def test_a1_each_hint_call_reports_unreachable_again():
         start = 10.0 * k
         c = the_connect(t.hint(PEER, ADDR2, PORT2, start))
         acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, start + 0.1)
-        assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)], f"lần gọi hint thứ {k + 1}"
+        assert notifies(acts) == [hint_failed(UNREACHABLE, ADDR2, PORT2)], f"lần gọi hint thứ {k + 1}"
         assert only(acts, Connect) == [] and t.next_wakeup() is None
 
 
@@ -2643,7 +2652,7 @@ def test_a1_event_attempt_after_hint_failure_is_not_reported_again():
     t = tracker(PEER)
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
     assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)) == [
-        LinkFailed(PEER, UNREACHABLE)
+        hint_failed(UNREACHABLE, ADDR2, PORT2)
     ]
     now = 0.0
     for _ in range(3):
@@ -2659,7 +2668,7 @@ def test_a1_blocking_result_of_hint_attempt_is_reported_as_itself_only(result):
     t = tracker(PEER)
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.0))
     acts = t.connect_finished(PEER, c.attempt_id, result, None, 0.1)
-    assert notifies(acts) == [LinkFailed(PEER, result)], "không kèm thêm LinkFailed(UNREACHABLE)"
+    assert notifies(acts) == [hint_failed(result, ADDR2, PORT2)], "không kèm thêm LinkFailed(UNREACHABLE)"
     assert t.next_wakeup() is None
 
 
@@ -2671,7 +2680,7 @@ def test_a1_hint_attempt_that_connects_reports_nothing():
     assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 2.0))
     assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 2.1)) == [
-        LinkFailed(PEER, UNREACHABLE)
+        hint_failed(UNREACHABLE, ADDR2, PORT2)
     ]
 
 
@@ -2684,7 +2693,8 @@ def test_a1_hint_attempt_fails_after_device_gone_is_reported():
     c = the_connect(t.hint(PEER, ADDR2, PORT, 0.2))
     assert t.device_gone(PEER, 0.3) == []
     acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.4)
-    assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)]
+    # Cùng cổng: đích của lần thử là địa chỉ hint gộp với mDNS tươi lúc gọi (B1: `addresses` = đích đó).
+    assert notifies(acts) == [hint_failed(UNREACHABLE, c.addresses, PORT)]
     assert t.next_wakeup() is None
 
 
@@ -2704,7 +2714,7 @@ def test_a1_two_hint_calls_during_one_attempt_report_for_each_attempt_they_cause
     [c2] = found
     assert (c2.addresses, c2.port) == (ADDR3, PORT2)
     reports += notifies(t.connect_finished(PEER, c2.attempt_id, UNREACHABLE, None, 5.0))
-    assert reports == [LinkFailed(PEER, UNREACHABLE)] * 2
+    assert reports == [hint_failed(UNREACHABLE, ADDR2, PORT2), hint_failed(UNREACHABLE, ADDR3, PORT2)]
     assert t.next_wakeup() is None
 
 
@@ -2730,7 +2740,7 @@ def test_a1_unreachable_reports_equal_failed_hint_calls_without_schedule(ops):
         after = t.connect_finished(PEER, found[0].attempt_id, UNREACHABLE, None, now + 0.1)
         reports += notifies(after)
         assert only(after, Connect) == [] and t.next_wakeup() is None
-    assert reports == [LinkFailed(PEER, UNREACHABLE)] * hint_failures
+    assert reports == [hint_failed(UNREACHABLE, ADDR2, PORT2)] * hint_failures
 
 
 def test_e2_seen_then_failed_then_hint_failed_reports_now_and_device_gone_does_not_hang():
@@ -2741,7 +2751,7 @@ def test_e2_seen_then_failed_then_hint_failed_reports_now_and_device_gone_does_n
     assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)) == []
     c = the_connect(t.hint(PEER, ADDR2, PORT2, 0.2))
     acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.3)
-    assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)]
+    assert notifies(acts) == [hint_failed(UNREACHABLE, ADDR2, PORT2)]
     assert t.next_wakeup() is not None, "mDNS tươi: lịch §6.2 vẫn chạy"
     assert t.device_gone(PEER, 0.4) == []
     assert t.attempting() == {} and t.connected() == {}
@@ -2758,7 +2768,7 @@ def test_e2_each_hint_reports_once_even_with_fresh_mdns_and_schedule_does_not_re
         now += 10.0
         c = the_connect(t.hint(PEER, ADDR2, PORT2, now))
         acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1)
-        assert notifies(acts) == [LinkFailed(PEER, UNREACHABLE)], f"hint thứ {k + 1}"
+        assert notifies(acts) == [hint_failed(UNREACHABLE, ADDR2, PORT2)], f"hint thứ {k + 1}"
     # Lịch §6.2 chạy tiếp; UNREACHABLE đã báo nên ≥ 3 lần thất bại theo lịch không báo lại.
     reports = []
     for _ in range(4):
@@ -2777,7 +2787,7 @@ def test_e2_hint_merged_with_fresh_mdns_same_port_reports_once():
     c = the_connect(t.hint(PEER, ADDR2, PORT, 1.2))
     assert c.addresses[: len(ADDR2)] == ADDR2
     assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.3)) == [
-        LinkFailed(PEER, UNREACHABLE)
+        hint_failed(UNREACHABLE, c.addresses, PORT)
     ]
 
 
@@ -2966,3 +2976,944 @@ def test_t8_untrust_while_scheduled_cancels_retry():
     assert only(t.tick(at), Connect) == []
     assert only(t.tick(3600.0), Connect) == []
     assert t.attempting() == {}
+
+
+# =========================================================================================================
+# F3a (specs/spec-f3a.md mục 2.3, 2.5, 6.1; mục 10 thắng khi khác): địa chỉ đã lưu (`remember`),
+# `check_endpoint`, `is_saveable`, `LinkFailed.from_hint/addresses/port` — L1–L20.
+# Số trong đặc tả (5, 10, 20, 40, 80 rồi 300 s; 6 lần mỗi đợt; chờ 15 s) tính với hằng mặc định, nên các
+# test dưới đây không vá hằng, trừ test kiểm hằng được đọc lúc dùng và L3 (vá EVENT_RETRY_GAP để tách
+# “bị chặn” khỏi “không bị chặn”).
+# =========================================================================================================
+
+IDENTITY = ConnectResult.IDENTITY_MISMATCH
+VERSION = ConnectResult.VERSION_MISMATCH
+SIP = "192.168.1.5"  # địa chỉ đã lưu (riêng, `is_saveable`)
+SIP2 = "10.0.0.7"
+SPORT = 47474
+HINT_ADDR = ("192.168.1.77",)  # địa chỉ người dùng nhập (`hint`), khác địa chỉ đã lưu
+HPORT = 50123
+SAVED_WAVE = [5.0, 10.0, 20.0, 40.0, 80.0]  # spec 10.3: lịch sau thất bại thứ 1..5 của một đợt
+SAVED_AFTER_WAVE = 300.0  # spec 10.3: hết đợt thì “+300 mãi”
+
+
+def remembered(
+    t: LinkTracker, now: float = 0.0, ip: str = SIP, port: int = SPORT, dev: str = PEER
+) -> Connect:
+    """Thiết bị tin cậy, không mDNS, chưa kết nối: `remember` → đúng một `Connect` tới địa chỉ đã lưu (L1)."""
+    c = the_connect(t.remember(dev, ip, port, now))
+    assert (c.device_id, c.addresses, c.port) == (dev, (ip,), port)
+    return c
+
+
+def is_saved(c: Connect, ip: str = SIP, port: int = SPORT) -> bool:
+    return (c.addresses, c.port) == ((ip,), port)
+
+
+def exhaust_saved_wave(t: LinkTracker, c: Connect, finish: float) -> tuple[Connect, float]:
+    """`c` là lần thử đầu của một đợt tới địa chỉ đã lưu. Cho nó và các lần theo lịch thất bại UNREACHABLE
+    đủ `SAVED_MAX_ATTEMPTS` lần; trả `(lần thử cuối, thời điểm nó thất bại)`. Sau đó lần thử kế (nếu
+    đúng 10.3) đã hẹn ở `thời điểm đó + 300`."""
+    for i in range(links.SAVED_MAX_ATTEMPTS):
+        acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, finish)
+        assert notifies(acts) == [], f"thất bại thứ {i + 1} của đợt saved không được báo"
+        if i == links.SAVED_MAX_ATTEMPTS - 1:
+            break
+        acts, at = tick_to_wakeup(t)
+        c = the_connect(acts)
+        assert is_saved(c)
+        finish = at + 0.1
+    return c, finish
+
+
+# --- Hằng, kiểu ------------------------------------------------------------------------------------------
+
+
+def test_f3a_saved_constants_match_spec():
+    assert links.SAVED_RETRY_BASE == 5.0
+    assert links.SAVED_RETRY_MAX == 300.0
+    assert links.SAVED_MAX_ATTEMPTS == 6
+    assert links.SAVED_GONE_GRACE == 15.0
+
+
+def test_f3a_link_failed_new_fields_have_defaults_and_take_part_in_equality():
+    """B1/B3: `LinkFailed(..., from_hint=False, addresses=(), port=None)`; ba trường tham gia so sánh."""
+    ev = LinkFailed(PEER, UNREACHABLE)
+    assert [f.name for f in dataclasses.fields(ev)] == [
+        "device_id",
+        "result",
+        "from_hint",
+        "addresses",
+        "port",
+    ]
+    assert ev.from_hint is False and ev.addresses == () and ev.port is None
+    assert ev != LinkFailed(PEER, UNREACHABLE, from_hint=True)
+    assert hint_failed(UNREACHABLE, ADDR, PORT) != hint_failed(UNREACHABLE, ADDR, PORT2)
+    assert hint_failed(UNREACHABLE, ADDR, PORT) != hint_failed(UNREACHABLE, ADDR2, PORT)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ev.from_hint = True  # type: ignore[misc]
+
+
+def test_f3a_saved_constants_are_read_at_use(monkeypatch):
+    monkeypatch.setattr(links, "SAVED_RETRY_BASE", 1.5)
+    monkeypatch.setattr(links, "SAVED_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(links, "SAVED_RETRY_MAX", 50.0)
+    monkeypatch.setattr(links, "SAVED_GONE_GRACE", 3.0)
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    assert t.next_wakeup() == pytest.approx(0.1 + 1.5)
+    c = the_connect(t.tick(1.6))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.7)
+    assert t.next_wakeup() == pytest.approx(1.7 + 50.0), "hết SAVED_MAX_ATTEMPTS (vá = 2) → SAVED_RETRY_MAX"
+    # SAVED_GONE_GRACE cũng đọc lúc dùng.
+    t2 = tracker(PEER)
+    c = start_attempt(t2, PEER, 0.0, ADDR, PORT)
+    t2.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    assert t2.remember(PEER, SIP, SPORT, 0.2) == []
+    assert t2.device_gone(PEER, 10.0) == []
+    assert t2.next_wakeup() == pytest.approx(13.0)
+
+
+# --- L1: remember ---------------------------------------------------------------------------------------
+
+
+def test_l1_remember_trusted_device_without_mdns_connects_now():
+    t = tracker(PEER)
+    assert t.remember(PEER, SIP, SPORT, 0.0) == [Connect(PEER, 1, (SIP,), SPORT)]
+    assert t.attempting() == {PEER: 1}
+
+
+def test_l1_remember_untrusted_device_returns_nothing_and_is_not_kept():
+    t = LinkTracker(OWN)
+    assert t.remember(PEER, SIP, SPORT, 0.0) == []
+    assert only(t.trusted_changed([PEER], 1.0), Connect) == [], (
+        "địa chỉ của thiết bị chưa tin cậy không được nhớ"
+    )
+    assert t.network_changed(10.0) == [] and t.retry_now(PEER, 11.0) == [] and t.tick(10_000.0) == []
+
+
+def test_l1_remember_own_device_is_ignored():
+    t = tracker(PEER)
+    assert t.remember(OWN, SIP, SPORT, 0.0) == []
+    assert t.attempting() == {} and t.connected() == {}
+
+
+def test_l1_remember_while_connected_only_remembers():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, HINT_ADDR, HPORT, 0.0))
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    assert t.remember(PEER, SIP, SPORT, 0.2) == []
+    assert t.connected() == {PEER: 1} and t.attempting() == {}
+
+
+def test_l1_remember_while_attempting_only_remembers_without_marking_dirty():
+    """2.5: “Đang có lần thử chạy thì chỉ nhớ, không đặt dirty”: lần thử mDNS đang chạy thất bại thì lịch
+    §6.2 bình thường (+delay(1)), không bị kéo sớm như khi có sự kiện trong lúc thử."""
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    assert t.remember(PEER, SIP, SPORT, 0.5) == []
+    assert t.attempting() == {PEER: c.attempt_id}
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 5.0)
+    assert only(acts, Connect) == []
+    assert t.next_wakeup() == pytest.approx(5.0 + delay(1))
+
+
+# --- L2: lịch của địa chỉ đã lưu -----------------------------------------------------------------------
+
+
+def test_l2_saved_unreachable_backs_off_5_10_20_40_80_then_300_forever_without_notify():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    finish = 0.1
+    expected = SAVED_WAVE + [SAVED_AFTER_WAVE] * 5
+    for i, gap in enumerate(expected, start=1):
+        acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, finish)
+        assert notifies(acts) == [], f"thất bại thứ {i}: không báo"
+        assert only(acts, Connect) == []
+        assert t.next_wakeup() == pytest.approx(finish + gap), f"sau thất bại thứ {i}"
+        assert t.tick(finish + gap - 0.01) == []
+        c = the_connect(t.tick(finish + gap))
+        assert is_saved(c)
+        finish += gap + 0.1
+
+
+def test_l2_saved_wave_has_six_attempts_then_one_per_300s():
+    """D6/10.3: đúng `SAVED_MAX_ATTEMPTS` lần trong đợt đầu, sau đó 1 lần mỗi `SAVED_RETRY_MAX`, không báo."""
+    sim = Sim(tracker(PEER), lambda dev, aid: UNREACHABLE, latency=lambda aid: 0.05)
+    sim.call("remember", PEER, SIP, SPORT, at=0.0)
+    sim.advance(3600.0)
+    times = sim.connect_times()
+    first_wave_end = sum(SAVED_WAVE) + 6 * 0.05
+    assert len([x for x in times if x <= first_wave_end + 1e-6]) == links.SAVED_MAX_ATTEMPTS, times
+    later = [x for x in times if x > first_wave_end + 1e-6]
+    assert later, "10.3: hết đợt vẫn phải thử tiếp mỗi SAVED_RETRY_MAX"
+    gaps = [b - a for a, b in itertools.pairwise(later)]
+    assert all(g >= links.SAVED_RETRY_MAX - 1e-6 for g in gaps), gaps
+    assert len(times) <= links.SAVED_MAX_ATTEMPTS + 3600 / links.SAVED_RETRY_MAX + 1
+    assert sim.failed() == []
+
+
+# --- L3: IDENTITY_MISMATCH tại địa chỉ đã lưu ---------------------------------------------------------
+
+
+def test_l3_identity_mismatch_at_saved_is_silent_not_blocking_and_forgotten(monkeypatch):
+    """Q4/2.5: không Notify, không chặn, quên địa chỉ trong phiên.
+
+    EVENT_RETRY_GAP vá 0,5 s (< RETRY_BASE = 1 s): thiết bị bị chặn chỉ được thử do sự kiện sau
+    `max(GAP, delay)` ≥ 1 s, còn không bị chặn thì sau GAP; `device_seen` ở 0,6 s tách hai trường hợp."""
+    monkeypatch.setattr(links, "EVENT_RETRY_GAP", 0.5)
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    acts = t.connect_finished(PEER, c.attempt_id, IDENTITY, None, 0.1)
+    assert acts == [], "IDENTITY_MISMATCH tại địa chỉ đã lưu: im lặng, không còn đích nào để thử"
+    assert t.next_wakeup() is None
+    assert t.network_changed(0.3) == []
+    assert t.next_wakeup() is None, "địa chỉ cũ đã bị quên: sự kiện mạng không hẹn lần thử nào"
+    assert t.tick(0.5) == []
+    c = the_connect(t.device_seen(PEER, ADDR, PORT, 0.6))
+    assert (c.addresses, c.port) == (ADDR, PORT), "không bị chặn: mDNS thử ngay khi đủ EVENT_RETRY_GAP"
+    # Lần “danh tính không khớp” tại địa chỉ đã lưu không bị tính là đã báo: lần mDNS cùng lỗi được báo.
+    assert notifies(t.connect_finished(PEER, c.attempt_id, IDENTITY, None, 0.7)) == [
+        LinkFailed(PEER, IDENTITY)
+    ]
+
+
+def test_l3_identity_mismatch_at_saved_never_retries_that_address_in_session():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    t.connect_finished(PEER, c.attempt_id, IDENTITY, None, 0.1)
+    for now in (10.0, 400.0, 4000.0):
+        assert t.network_changed(now) == []
+        assert t.retry_now(PEER, now + 1) == []
+        assert t.tick(now + 2) == []
+    assert t.hold(PEER, True, 5000.0) == []
+    assert t.tick(9000.0) == []
+
+
+def test_l3_identity_mismatch_at_saved_does_not_count_toward_unreachable_report():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    t.connect_finished(PEER, c.attempt_id, IDENTITY, None, 0.1)
+    c = the_connect(t.device_seen(PEER, ADDR, PORT, 10.0))
+    reports = []
+    now = 10.0
+    for _ in range(2):
+        reports += notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1))
+        acts, now = tick_to_wakeup(t)
+        c = the_connect(acts)
+    assert reports == [], "IDENTITY_MISMATCH tại saved không tăng `failures`"
+
+
+# --- L4: REJECTED / VERSION_MISMATCH tại địa chỉ đã lưu -------------------------------------------------
+
+
+@pytest.mark.parametrize("result", [REJECTED, VERSION], ids=["rejected", "version"])
+def test_l4_blocking_result_at_saved_reports_once_blocks_and_stops(result):
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    acts = t.connect_finished(PEER, c.attempt_id, result, None, 0.1)
+    assert acts == [Notify(LinkFailed(PEER, result))]
+    assert t.next_wakeup() is None
+    assert t.tick(3600.0) == []
+    # Bị chặn: `remember` lại cùng địa chỉ không thử.
+    assert only(t.remember(PEER, SIP, SPORT, 3600.0), Connect) == []
+    assert t.tick(7200.0) == []
+
+
+# --- L5: thứ tự đích -------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mdns_port", [PORT2, SPORT], ids=["khac-cong", "cung-cong"])
+def test_l5_fresh_mdns_goes_before_saved_and_is_never_merged(mdns_port):
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, mdns_port)
+    assert t.remember(PEER, SIP, SPORT, 0.1) == []
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.2)
+    for _ in range(4):
+        acts, at = tick_to_wakeup(t)
+        c = the_connect(acts)
+        assert (c.addresses, c.port) == (ADDR, mdns_port), "mDNS tươi đứng trước, không gộp địa chỉ đã lưu"
+        t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, at + 0.1)
+
+
+def test_l5_device_seen_during_saved_attempt_tries_mdns_after_event_gap():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    assert t.device_seen(PEER, ADDR, PORT, 0.5) == []
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.6)
+    assert notifies(acts) == [] and only(acts, Connect) == []
+    gap = links.EVENT_RETRY_GAP
+    assert t.next_wakeup() == pytest.approx(gap), "dirty: max(now, last_start + EVENT_RETRY_GAP)"
+    assert t.tick(gap - 0.01) == []
+    c = the_connect(t.tick(gap))
+    assert (c.addresses, c.port) == (ADDR, PORT)
+
+
+def test_l5_saved_comes_after_stale_mdns_of_held_device():
+    """C1: `held` + mDNS cũ đứng trước địa chỉ đã lưu (giới hạn đã biết, giữ nguyên)."""
+    t = tracker(PEER)
+    _connected_out(t, PEER, 1, 0.0, ADDR, PORT)
+    assert t.remember(PEER, SIP, SPORT, 0.2) == []
+    assert t.hold(PEER, True, 0.3) == []
+    assert t.device_gone(PEER, 0.4) == []
+    t.connection_lost(PEER, 1, 1.0)
+    c = the_connect(t.tick(t.next_wakeup()))
+    assert (c.addresses, c.port) == (ADDR, PORT)
+
+
+# --- L6: device_gone --------------------------------------------------------------------------------------
+
+
+def test_l6_device_gone_schedules_saved_after_grace():
+    t = tracker(PEER)
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    assert t.remember(PEER, SIP, SPORT, 0.2) == [], "đích vẫn là mDNS tươi: không thử địa chỉ đã lưu"
+    assert t.device_gone(PEER, 0.5) == []
+    assert t.next_wakeup() == pytest.approx(0.5 + links.SAVED_GONE_GRACE)
+    assert t.tick(0.5 + links.SAVED_GONE_GRACE - 0.01) == []
+    c = the_connect(t.tick(0.5 + links.SAVED_GONE_GRACE))
+    assert is_saved(c)
+
+
+def test_l6_device_gone_while_connected_schedules_nothing():
+    t = tracker(PEER)
+    _connected_out(t, PEER, 1, 0.0, ADDR, PORT)
+    assert t.remember(PEER, SIP, SPORT, 0.2) == []
+    assert t.device_gone(PEER, 0.5) == []
+    assert t.next_wakeup() is None
+    assert t.connected() == {PEER: 1}
+
+
+def test_l6_hold_release_starts_saved_schedule():
+    """Sau soat-code: `hold(False)` dừng lịch §6.2 thì lịch địa chỉ đã lưu chạy tiếp (+SAVED_RETRY_BASE)."""
+    t = tracker(PEER)
+    _connected_out(t, PEER, 1, 0.0, ADDR, PORT)
+    assert t.remember(PEER, SIP, SPORT, 0.2) == []
+    assert t.hold(PEER, True, 0.3) == []
+    assert t.device_gone(PEER, 0.4) == []  # held: địa chỉ mDNS chỉ thành cũ
+    t.connection_lost(PEER, 1, 1.0)  # held: lịch §6.2, không phải lịch saved
+    assert t.hold(PEER, False, 1.5) == []
+    nw = t.next_wakeup()
+    assert nw == pytest.approx(1.5 + links.SAVED_RETRY_BASE), "hold(False): lịch saved chạy tiếp"
+    assert t.tick(nw - 0.01) == []
+    assert is_saved(the_connect(t.tick(nw)))
+
+
+def _exhaust_saved_wave(t: LinkTracker) -> float:
+    """Địa chỉ đã lưu thất bại đủ một đợt rồi thêm một lần; trả `now` của lần thử saved cuối."""
+    c = remembered(t, 0.0)
+    now = 0.0
+    for _ in range(links.SAVED_MAX_ATTEMPTS):
+        t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1)
+        now = t.next_wakeup()
+        c = the_connect(t.tick(now))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1)
+    assert t.next_wakeup() == pytest.approx(now + 0.1 + links.SAVED_RETRY_MAX)
+    return now
+
+
+def test_l6_hold_after_wave_connects_to_saved_now():
+    """Hết đợt: `hold(True)` (lượt truyền mới, do app) thử địa chỉ đã lưu ngay, không chờ nhịp 300 s."""
+    t = tracker(PEER)
+    last = _exhaust_saved_wave(t)
+    at = last + links.EVENT_RETRY_GAP + 1.0
+    assert is_saved(the_connect(t.hold(PEER, True, at)))
+
+
+def test_l6_hold_after_wave_respects_event_gap():
+    t = tracker(PEER)
+    last = _exhaust_saved_wave(t)
+    assert t.hold(PEER, True, last + 0.5) == [], "chưa đủ EVENT_RETRY_GAP"
+    nw = t.next_wakeup()
+    assert nw == pytest.approx(last + links.EVENT_RETRY_GAP)
+    assert is_saved(the_connect(t.tick(nw)))
+
+
+def test_l6_hold_flapping_after_wave_gap_then_saved_cadence():
+    """Đảo `hold`: lần thử cách nhau ≥ EVENT_RETRY_GAP; thả hẳn thì lịch saved theo nhịp SAVED_RETRY_MAX."""
+    t = tracker(PEER)
+    last = _exhaust_saved_wave(t)
+    starts: list[float] = []
+    for k in range(1, 60):
+        at = last + k
+        acts = t.hold(PEER, True, at) + t.hold(PEER, False, at) + t.tick(at)
+        for c in only(acts, Connect):
+            assert is_saved(c)
+            starts.append(at)
+            t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, at + 0.05)
+    assert starts, "hold(True) phải thử được"
+    assert all(b - a >= links.EVENT_RETRY_GAP for a, b in itertools.pairwise(starts))
+    final = starts[-1]
+    end = last + 60
+    for k in range(1, int(final + links.SAVED_RETRY_MAX - end)):
+        assert only(t.tick(end + k), Connect) == [], (
+            "thả hold hẳn: không sớm hơn lần thử saved cuối + SAVED_RETRY_MAX"
+        )
+    nw = t.next_wakeup()
+    assert nw is not None and nw >= final + links.SAVED_RETRY_MAX
+    assert is_saved(the_connect(t.tick(nw)))
+
+
+# --- L7: mDNS lật liên tục không vượt trần của địa chỉ đã lưu -------------------------------------------
+
+
+@pytest.mark.parametrize("period", [3.0, 17.0], ids=["3s", "17s"])
+def test_l7_mdns_flapping_cannot_exceed_saved_wave_or_cadence(period):
+    sim = Sim(tracker(PEER), lambda dev, aid: UNREACHABLE, latency=lambda aid: 0.05)
+    sim.call("remember", PEER, SIP, SPORT, at=0.0)
+    for i in range(100):
+        sim.call("device_seen", PEER, ADDR, PORT, at=1.0 + i * period)
+        sim.call("device_gone", PEER, at=1.0 + i * period + period / 2)
+    horizon = 1.0 + 100 * period + 1000.0
+    sim.advance(horizon)
+    log = [(round(when, 3), a) for when, a in sim.log if isinstance(a, Connect)]
+    saved = [when for when, a in log if a.addresses == (SIP,)]
+    assert all(a.addresses in ((SIP,), ADDR) for _, a in log)
+    # Đợt đầu ≤ SAVED_MAX_ATTEMPTS; sau đó hai lần liền nhau tới địa chỉ đã lưu cách ≥ SAVED_RETRY_MAX.
+    after = saved[links.SAVED_MAX_ATTEMPTS :]
+    gaps = [b - a for a, b in itertools.pairwise(saved[links.SAVED_MAX_ATTEMPTS - 1 :])]
+    assert all(g >= links.SAVED_RETRY_MAX - 1e-6 for g in gaps), (saved, gaps)
+    assert len(after) <= horizon / links.SAVED_RETRY_MAX + 1, saved
+    # Mọi lần thử tới địa chỉ đã lưu cách lần thử trước (bất kỳ địa chỉ) ≥ EVENT_RETRY_GAP.
+    times = [when for when, _ in log]
+    for when in saved[1:]:
+        prev = max(x for x in times if x < when)
+        assert when - prev >= links.EVENT_RETRY_GAP - 1e-6, (when, prev)
+    # Thất bại tới địa chỉ đã lưu không bao giờ được báo; chỉ lịch §6.2 của mDNS có thể báo (một lần).
+    assert len(sim.failed()) <= 1 and all(ev == LinkFailed(PEER, UNREACHABLE) for ev in sim.failed())
+
+
+# --- L8: connection_lost ----------------------------------------------------------------------------------
+
+
+def test_l8_connection_lost_schedules_saved_and_restarts_full_wave():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    c, finish = exhaust_saved_wave(t, c, 0.1)
+    assert t.next_wakeup() == pytest.approx(finish + SAVED_AFTER_WAVE)
+    c = the_connect(t.tick(finish + SAVED_AFTER_WAVE))
+    assert is_saved(c)
+    up = finish + SAVED_AFTER_WAVE + 0.1
+    assert notifies(t.connect_finished(PEER, c.attempt_id, OK, 7, up)) == [LinkUp(PEER, 7, True)]
+    assert t.next_wakeup() is None
+    lost = up + 100.0
+    assert t.connection_lost(PEER, 7, lost) == [Notify(LinkDown(PEER, 7))]
+    assert t.next_wakeup() == pytest.approx(lost + links.SAVED_RETRY_BASE)
+    c = the_connect(t.tick(lost + links.SAVED_RETRY_BASE))
+    assert is_saved(c)
+    finish = lost + links.SAVED_RETRY_BASE + 0.1
+    # Đợt mới đủ 6 lượt: lần vừa rồi + 5 lần theo lịch 5, 10, 20, 40, 80, rồi mới tới +300.
+    for i, gap in enumerate([*SAVED_WAVE, SAVED_AFTER_WAVE], start=1):
+        assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, finish)) == []
+        assert t.next_wakeup() == pytest.approx(finish + gap), f"đợt sau mất kết nối, thất bại thứ {i}"
+        c = the_connect(t.tick(finish + gap))
+        finish += gap + 0.1
+
+
+def test_l8_connection_lost_of_replaced_connection_schedules_nothing():
+    t = tracker(PEER)
+    t.incoming_control(PEER, 1, 0.0)
+    t.incoming_control(PEER, 2, 0.1)  # cùng một bên mở: giữ kết nối mới
+    assert t.remember(PEER, SIP, SPORT, 0.2) == []
+    assert t.connection_lost(PEER, 1, 0.3) == []
+    assert t.next_wakeup() is None
+
+
+# --- L9: sự kiện đưa saved_failures về 0 ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("trigger", ["network_changed", "retry_now", "hint"])
+def test_l9_user_and_network_events_restart_saved_wave(trigger):
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    _, finish = exhaust_saved_wave(t, c, 0.1)
+    assert t.next_wakeup() == pytest.approx(finish + SAVED_AFTER_WAVE)
+    now = finish + 10.0
+    if trigger == "network_changed":
+        c = the_connect(t.network_changed(now))
+    elif trigger == "retry_now":
+        c = the_connect(t.retry_now(PEER, now))
+    else:
+        c = the_connect(t.hint(PEER, HINT_ADDR, HPORT, now))
+        assert (c.addresses, c.port) == (HINT_ADDR, HPORT)
+        acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1)
+        assert notifies(acts) == [hint_failed(UNREACHABLE, HINT_ADDR, HPORT)]
+        nw = t.next_wakeup()
+        assert nw is not None and nw <= now + 0.1 + links.SAVED_RETRY_BASE + 1e-6
+        c = the_connect(t.tick(nw))
+        now = nw
+    assert is_saved(c)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1)
+    assert t.next_wakeup() == pytest.approx(now + 0.1 + links.SAVED_RETRY_BASE), "đợt phải bắt đầu lại từ 5 s"
+
+
+def test_l9_remember_other_address_restarts_wave_and_tries_it():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    _, finish = exhaust_saved_wave(t, c, 0.1)
+    c = the_connect(t.remember(PEER, SIP2, SPORT, finish + 10.0))
+    assert is_saved(c, SIP2)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, finish + 10.1)
+    assert t.next_wakeup() == pytest.approx(finish + 10.1 + links.SAVED_RETRY_BASE)
+
+
+def test_l9_remember_same_address_after_wave_does_not_try_now():
+    """2.5: `remember` chỉ thử khi `saved_failures < SAVED_MAX_ATTEMPTS` (hoặc held); cùng địa chỉ không xóa
+    bộ đếm."""
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    _, finish = exhaust_saved_wave(t, c, 0.1)
+    assert only(t.remember(PEER, SIP, SPORT, finish + 10.0), Connect) == []
+    assert t.next_wakeup() == pytest.approx(finish + SAVED_AFTER_WAVE)
+
+
+@pytest.mark.parametrize("event", ["device_seen", "device_gone", "hold"])
+def test_l9_mdns_and_hold_do_not_restart_saved_wave(event):
+    """2.5: `device_seen`, `device_gone`, `hold` không đưa saved_failures về 0 (mDNS do người khác
+    điều khiển được)."""
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    _, finish = exhaust_saved_wave(t, c, 0.1)
+    now = finish + 10.0
+    if event == "device_seen":
+        c = the_connect(t.device_seen(PEER, ADDR, PORT, now))
+        t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1)
+        assert t.device_gone(PEER, now + 0.2) == []
+    elif event == "device_gone":
+        assert t.device_gone(PEER, now) == []
+    else:
+        t.hold(PEER, True, now)
+        t.hold(PEER, False, now + 0.1)
+    # Không có đợt mới: không lần thử nào tới địa chỉ đã lưu sớm hơn nhịp 300 s tính từ lần cuối.
+    saved_starts = []
+    at = now + 0.3
+    for _ in range(10):
+        nw = t.next_wakeup()
+        if nw is None or nw > finish + 2 * SAVED_AFTER_WAVE:
+            break
+        at = max(at, nw)
+        for a in only(t.tick(at), Connect):
+            if is_saved(a):
+                saved_starts.append(at)
+            t.connect_finished(PEER, a.attempt_id, UNREACHABLE, None, at + 0.1)
+            at += 0.1
+    # Nhịp “≤ 1 lần mỗi SAVED_RETRY_MAX” tính giữa hai lần bắt đầu thử (lần cuối của đợt bắt đầu ở
+    # finish - 0.1).
+    last_start = finish - 0.1
+    assert all(s >= last_start + SAVED_AFTER_WAVE - 1e-6 for s in saved_starts), saved_starts
+
+
+# --- L10: hint đứng trước saved; remember trùng hint thì nâng hint thành saved ----------------------------
+
+
+def test_l10_hint_goes_before_saved():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, HINT_ADDR, HPORT, 0.0))
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    assert t.remember(PEER, SIP, SPORT, 0.2) == []
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    assert t.next_wakeup() is None, "đích là hint (không lịch), không phải địa chỉ đã lưu"
+    c = the_connect(t.network_changed(5.0))
+    assert (c.addresses, c.port) == (HINT_ADDR, HPORT)
+
+
+def test_l10_remember_equal_to_hint_promotes_it_to_saved():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, (SIP,), SPORT, 0.0))
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    assert t.remember(PEER, SIP, SPORT, 0.2) == []
+    assert t.connection_lost(PEER, 1, 1.0) == [Notify(LinkDown(PEER, 1))]
+    assert t.next_wakeup() == pytest.approx(1.0 + links.SAVED_RETRY_BASE), "hint đã thành saved: lịch saved"
+    c = the_connect(t.tick(1.0 + links.SAVED_RETRY_BASE))
+    assert is_saved(c)
+
+
+def test_l10_remember_with_other_address_keeps_hint():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, (SIP2,), SPORT, 0.0))
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    assert t.remember(PEER, SIP, SPORT, 0.2) == []
+    t.connection_lost(PEER, 1, 1.0)
+    assert t.next_wakeup() is None
+    c = the_connect(t.retry_now(PEER, 2.0))
+    assert is_saved(c, SIP2), "hint khác địa chỉ đã lưu vẫn được giữ và đứng trước"
+
+
+# --- L11: from_hint -----------------------------------------------------------------------------------------
+
+
+def test_l11_unreachable_of_hint_attempt_carries_from_hint_and_target():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, HINT_ADDR, HPORT, 0.0))
+    [ev] = notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1))
+    assert isinstance(ev, LinkFailed)
+    assert (ev.result, ev.from_hint, ev.addresses, ev.port) == (UNREACHABLE, True, HINT_ADDR, HPORT)
+
+
+@pytest.mark.parametrize("result", BLOCKING)
+def test_l11_blocking_failure_of_hint_attempt_is_reported_even_if_already_reported(result):
+    """Lỗi chặn của lần thử do `hint()` vẫn được báo dù cùng loại vừa được báo bởi lần thử đang chạy lúc
+    gọi `hint` (nhánh chặn báo khi `from_hint or result not in reported`)."""
+    t = tracker(PEER)
+    c1 = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    assert only(t.hint(PEER, HINT_ADDR, HPORT, 0.05), Connect) == []
+    acts = t.connect_finished(PEER, c1.attempt_id, result, None, 0.1)
+    assert notifies(acts) == [LinkFailed(PEER, result)]
+    found = only(acts, Connect)
+    if not found:
+        nw = t.next_wakeup()
+        assert nw is not None, "lần thử do hint phải còn được hẹn"
+        found = only(t.tick(nw), Connect)
+    [c2] = found
+    assert (c2.addresses, c2.port) == (HINT_ADDR, HPORT)
+    assert notifies(t.connect_finished(PEER, c2.attempt_id, result, None, 10.0)) == [
+        hint_failed(result, HINT_ADDR, HPORT)
+    ]
+
+
+def test_l11_scheduled_failures_keep_default_fields():
+    t = tracker(PEER)
+    reports = []
+    c = start_attempt(t, PEER, 0.0, ADDR, PORT)
+    now = 0.0
+    for _ in range(3):
+        reports += notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1))
+        acts, now = tick_to_wakeup(t)
+        c = the_connect(acts)
+    [ev] = reports
+    assert (ev.from_hint, ev.addresses, ev.port) == (False, (), None)
+
+
+# --- L12: held + đích saved: lịch §6.2 ----------------------------------------------------------------------
+
+
+def test_l12_held_saved_follows_section_6_2_schedule_reports_and_has_no_cap():
+    t = tracker(PEER)
+    assert t.hold(PEER, True, 0.0) == []
+    c = remembered(t, 0.0)
+    finish = 0.1
+    for n in range(1, 11):
+        acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, finish)
+        expected = [LinkFailed(PEER, UNREACHABLE)] if n == links.UNREACHABLE_REPORT_AFTER else []
+        assert notifies(acts) == expected, f"thất bại thứ {n}"
+        assert t.next_wakeup() == pytest.approx(finish + delay(n)), f"lịch §6.2 sau thất bại thứ {n}"
+        c = the_connect(t.tick(finish + delay(n)))
+        assert is_saved(c)
+        finish += delay(n) + 0.1
+
+
+# --- L13: thất bại tới saved không tính vào bộ đếm §6.2 ----------------------------------------------------
+
+
+def test_l13_saved_failures_do_not_count_toward_unreachable_report():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)) == []
+    acts, at = tick_to_wakeup(t)
+    c = the_connect(acts)
+    assert is_saved(c)
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, at + 0.1)) == []
+    now = at + 0.2
+    found = only(t.device_seen(PEER, ADDR, PORT, now), Connect)
+    if not found:
+        acts, now = tick_to_wakeup(t)
+        found = only(acts, Connect)
+    [c] = found
+    assert (c.addresses, c.port) == (ADDR, PORT)
+    reports = []
+    for _ in range(2):
+        reports += notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1))
+        acts, now = tick_to_wakeup(t)
+        c = the_connect(acts)
+        assert (c.addresses, c.port) == (ADDR, PORT)
+    assert reports == [], "2 lần saved + 2 lần mDNS: chưa đủ UNREACHABLE_REPORT_AFTER lần §6.2"
+    assert notifies(t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, now + 0.1)) == [
+        LinkFailed(PEER, UNREACHABLE)
+    ]
+
+
+# --- L14: thôi tin cậy quên saved ---------------------------------------------------------------------------
+
+
+def test_l14_untrust_then_trust_again_forgets_saved_address():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    assert t.trusted_changed([], 0.5) == [CancelConnect(PEER, c.attempt_id)]
+    assert t.trusted_changed([PEER], 1.0) == []
+    assert t.network_changed(10.0) == [] and t.retry_now(PEER, 11.0) == [] and t.tick(10_000.0) == []
+    assert t.hold(PEER, True, 10_001.0) == []
+
+
+def test_l14_connection_lost_after_retrust_does_not_use_old_saved():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    t.connect_finished(PEER, c.attempt_id, OK, 1, 0.1)
+    t.trusted_changed([], 0.5)
+    t.trusted_changed([PEER], 1.0)
+    t.incoming_control(PEER, 2, 1.5)
+    t.connection_lost(PEER, 2, 2.0)
+    assert t.next_wakeup() is None
+
+
+# --- L15: remember sai tham số --------------------------------------------------------------------------
+
+
+def _l15_bad_remember_calls() -> list[tuple[str, Callable[[LinkTracker], object], type | tuple]]:
+    big = 1000.0
+    either = (TypeError, ValueError)
+    return [
+        ("id_sai", lambda t: t.remember("abc", SIP, SPORT, big), MessageError),
+        ("id_hoa", lambda t: t.remember("A" * 32, SIP, SPORT, big), MessageError),
+        ("id_none", lambda t: t.remember(None, SIP, SPORT, big), MessageError),
+        ("ip_ipv6", lambda t: t.remember(Q, "::1", SPORT, big), ValueError),
+        ("ip_0", lambda t: t.remember(Q, "0.0.0.0", SPORT, big), ValueError),
+        ("ip_multicast", lambda t: t.remember(Q, "224.0.0.251", SPORT, big), ValueError),
+        ("ip_list", lambda t: t.remember(Q, [SIP], SPORT, big), ValueError),
+        ("ip_so_0_dau", lambda t: t.remember(Q, "192.168.001.5", SPORT, big), ValueError),
+        ("ip_bytes", lambda t: t.remember(Q, b"192.168.1.5", SPORT, big), ValueError),
+        ("cong_0", lambda t: t.remember(Q, SIP, 0, big), ValueError),
+        ("cong_65536", lambda t: t.remember(Q, SIP, 65536, big), ValueError),
+        ("cong_true", lambda t: t.remember(Q, SIP, True, big), ValueError),
+        ("cong_float", lambda t: t.remember(Q, SIP, 47474.0, big), ValueError),
+        ("cong_chuoi", lambda t: t.remember(Q, SIP, "47474", big), ValueError),
+        ("now_giam", lambda t: t.remember(Q, SIP, SPORT, 0.5), ValueError),
+        ("now_nan", lambda t: t.remember(Q, SIP, SPORT, math.nan), ValueError),
+        ("now_chuoi", lambda t: t.remember(Q, SIP, SPORT, "5"), either),
+        ("now_bool", lambda t: t.remember(Q, SIP, SPORT, True), either),
+    ]
+
+
+@pytest.mark.parametrize("case", [name for name, _, _ in _l15_bad_remember_calls()])
+def test_l15_bad_remember_arguments_raise_and_leave_state_unchanged(case):
+    t, _ar = _lk1_state()  # Q đang chờ lịch (2.0), R đang thử, PEER đang kết nối; `now` cuối 1.0
+    call, exc = next((fn, e) for name, fn, e in _l15_bad_remember_calls() if name == case)
+    before = (t.connected(), t.attempting(), t.next_wakeup())
+    with pytest.raises(exc):
+        call(t)
+    assert (t.connected(), t.attempting(), t.next_wakeup()) == before
+    assert t.tick(1.5) == [], "`now` không được nhích lên"
+    c = the_connect(t.tick(2.0))
+    assert (c.device_id, c.addresses, c.port) == (Q, ADDR, PORT)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [("192.168.001.5", SPORT, 1.0), (SIP, 0, 1.0), (SIP, SPORT, math.inf)],
+    ids=["ip", "cong", "now"],
+)
+def test_l15_bad_remember_is_not_kept(args):
+    t = tracker(PEER)
+    with pytest.raises((TypeError, ValueError)):
+        t.remember(PEER, *args)
+    assert t.network_changed(10.0) == [] and t.retry_now(PEER, 11.0) == [] and t.tick(1000.0) == []
+
+
+# --- L16: check_endpoint ------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "ip, port", [("192.168.1.5", 47474), ("127.0.0.1", 1), ("169.254.1.1", 65535), ("8.8.8.8", 47474)]
+)
+def test_l16_check_endpoint_accepts_host_addresses(ip, port):
+    assert links.check_endpoint(ip, port) == (ip, port)
+
+
+_L16_BAD_IPS = [
+    ("0.0.0.0", "unspecified"),
+    ("224.0.0.251", "multicast"),
+    ("255.255.255.255", "broadcast"),
+    ("::1", "ipv6"),
+    ("192.168.001.5", "so-0-dau"),
+    (" 192.168.1.5", "khoang-trang"),
+    ("192.168.1.5 ", "khoang-trang-cuoi"),
+    ("1.2.3", "thieu-o"),
+    ("a" * 100_000, "chuoi-rat-dai"),
+    (b"1.2.3.4", "bytes"),
+    (None, "none"),
+    (5, "so-nguyen"),
+    ("localhost", "ten-mien"),
+    ("", "rong"),
+]
+
+
+@pytest.mark.parametrize("ip", [v for v, _ in _L16_BAD_IPS], ids=[i for _, i in _L16_BAD_IPS])
+def test_l16_check_endpoint_rejects_bad_ip(ip):
+    with pytest.raises(ValueError):
+        links.check_endpoint(ip, 47474)
+
+
+@pytest.mark.parametrize(
+    "port",
+    [0, 65536, -1, True, False, 47474.0, "47474", None],
+    ids=["0", "65536", "-1", "true", "false", "float", "chuoi", "none"],
+)
+def test_l16_check_endpoint_rejects_bad_port(port):
+    with pytest.raises(ValueError):
+        links.check_endpoint("192.168.1.5", port)
+
+
+def test_l16_check_endpoint_error_message_does_not_contain_value():
+    """B6: thông điệp `ValueError` của `check_endpoint` không chứa giá trị (để log không lộ địa chỉ)."""
+    for ip, port, needle in [
+        ("10.123.045.67", 47474, "10.123.045.67"),
+        ("172.31.9.9x", 47474, "172.31.9.9"),
+        ("192.168.7.7", 99999, "99999"),
+    ]:
+        with pytest.raises(ValueError) as info:
+            links.check_endpoint(ip, port)
+        assert needle not in str(info.value), str(info.value)
+
+
+@HYPO
+@given(
+    ip=st.one_of(
+        st.ip_addresses(v=4).map(str),
+        st.text(alphabet="0123456789. :x", max_size=20),
+        st.sampled_from(["0.0.0.0", "255.255.255.255", "224.0.0.1", "239.255.255.250", "01.2.3.4"]),
+    ),
+    port=st.one_of(st.integers(-2, 70_000), st.sampled_from([True, False, 1.0, "1", None])),
+)
+def test_l16_check_endpoint_matches_hint_rule(ip, port):
+    """2.3: luật “giống hệt” `LinkTracker.hint`: giá trị lưu được thì đưa vào tracker được, và ngược lại."""
+    try:
+        links.check_endpoint(ip, port)
+        ok_endpoint = True
+    except ValueError:
+        ok_endpoint = False
+    t = tracker(PEER)
+    try:
+        t.hint(Q, [ip], port, 0.0)
+        ok_hint = True
+    except ValueError:
+        ok_hint = False
+    assert ok_endpoint == ok_hint, (ip, port)
+
+
+# --- L17–L19: lần thử do hint thất bại khi có địa chỉ đã lưu (spec 10.2) ------------------------------------
+
+
+def _saved_then_hint(t: LinkTracker) -> Connect:
+    """Địa chỉ đã lưu thất bại một lần (lịch +5 s); người dùng đưa `hint` khác ở 1.0 → lần thử tới hint."""
+    c = remembered(t, 0.0)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, HINT_ADDR, HPORT, 1.0))
+    assert (c.addresses, c.port) == (HINT_ADDR, HPORT)
+    return c
+
+
+def test_l17_unreachable_hint_with_saved_drops_hint_and_resumes_saved():
+    t = tracker(PEER)
+    c = _saved_then_hint(t)
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.1)
+    assert notifies(acts) == [hint_failed(UNREACHABLE, HINT_ADDR, HPORT)]
+    assert only(acts, Connect) == []
+    nw = t.next_wakeup()
+    assert nw == pytest.approx(1.1 + links.SAVED_RETRY_BASE), "_saved_followup(SAVED_RETRY_BASE)"
+    c = the_connect(t.tick(nw))
+    assert is_saved(c)
+    # hint đã bị xóa: sự kiện mạng sau đó cũng chỉ nhắm địa chỉ đã lưu.
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, nw + 0.1)
+    c = the_connect(t.network_changed(nw + 30.0))
+    assert is_saved(c)
+
+
+def test_l18_identity_mismatch_hint_with_saved_reports_does_not_block_and_resumes_saved():
+    t = tracker(PEER)
+    c = _saved_then_hint(t)
+    acts = t.connect_finished(PEER, c.attempt_id, IDENTITY, None, 1.1)
+    assert notifies(acts) == [hint_failed(IDENTITY, HINT_ADDR, HPORT)]
+    nw = t.next_wakeup()
+    assert nw == pytest.approx(1.1 + links.SAVED_RETRY_BASE), "không bị chặn: lịch saved vẫn chạy"
+    c = the_connect(t.tick(nw))
+    assert is_saved(c)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, nw + 0.1)
+    c = the_connect(t.network_changed(nw + 30.0))
+    assert is_saved(c), "hint sai đã bị xóa"
+
+
+def test_l18_hint_equal_to_saved_failing_identity_forgets_saved_without_blocking():
+    """Sau soat-code: hint trùng saved mà danh tính sai → báo `from_hint`, quên hint lẫn saved, không chặn."""
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, (SIP,), SPORT, 1.0))
+    acts = t.connect_finished(PEER, c.attempt_id, IDENTITY, None, 1.1)
+    assert notifies(acts) == [hint_failed(IDENTITY, (SIP,), SPORT)]
+    assert t.next_wakeup() is None, "không còn đích nào"
+    assert t.network_changed(60.0) == [], "saved đã bị quên: không thử lại địa chỉ đó"
+    c = the_connect(t.device_seen(PEER, ADDR, PORT, 61.0))
+    assert (c.addresses, c.port) == (tuple(ADDR), PORT), "không bị chặn: mDNS thử ngay"
+
+
+def test_l18_hint_equal_to_saved_unreachable_drops_hint_and_resumes_saved():
+    """Sau soat-code: hint trùng saved mà không tới được → hint bị quên, đợt saved mới chạy."""
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    c = the_connect(t.hint(PEER, (SIP,), SPORT, 1.0))
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 1.1)
+    assert notifies(acts) == [hint_failed(UNREACHABLE, (SIP,), SPORT)]
+    nw = t.next_wakeup()
+    assert nw == pytest.approx(1.1 + links.SAVED_RETRY_BASE)
+    c = the_connect(t.tick(nw))
+    assert is_saved(c)
+    acts = t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, nw + 0.1)
+    assert notifies(acts) == [], "lần thử theo lịch saved: không báo"
+    # `hint()` đã mở đợt mới; lần thử hint không tính vào đợt: đây là thất bại thứ nhất (+SAVED_RETRY_BASE).
+    assert t.next_wakeup() == pytest.approx(nw + 0.1 + links.SAVED_RETRY_BASE), "đợt mới"
+
+
+def test_l19_identity_mismatch_hint_without_saved_still_blocks():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, HINT_ADDR, HPORT, 0.0))
+    acts = t.connect_finished(PEER, c.attempt_id, IDENTITY, None, 0.1)
+    assert notifies(acts) == [hint_failed(IDENTITY, HINT_ADDR, HPORT)]
+    assert t.next_wakeup() is None
+    assert t.hold(PEER, True, 60.0) == [], "bị chặn: hold(True) không thử (C4)"
+
+
+def test_l19_unreachable_hint_without_saved_keeps_hint():
+    t = tracker(PEER)
+    c = the_connect(t.hint(PEER, HINT_ADDR, HPORT, 0.0))
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    assert t.next_wakeup() is None
+    c = the_connect(t.retry_now(PEER, 10.0))
+    assert (c.addresses, c.port) == (HINT_ADDR, HPORT)
+
+
+# --- L20: is_saveable ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "ip, expected",
+    [
+        ("8.8.8.8", False),
+        ("1.1.1.1", False),
+        ("192.168.1.5", True),
+        ("10.0.0.1", True),
+        ("172.16.0.1", True),
+        ("169.254.1.1", True),
+        ("127.0.0.1", True),
+        ("100.64.0.1", True),
+    ],
+)
+def test_l20_is_saveable(ip, expected):
+    assert links.is_saveable(ip) is expected
+    assert expected is (not ipaddress.IPv4Address(ip).is_global), "bảng tự kiểm với định nghĩa ở 10.4"
+
+
+def test_l20_remember_global_address_is_refused_and_not_kept():
+    t = tracker(PEER)
+    assert t.remember(PEER, "8.8.8.8", SPORT, 0.0) == []
+    assert t.network_changed(10.0) == [] and t.retry_now(PEER, 11.0) == [] and t.tick(1000.0) == []
+
+
+def test_l20_remember_global_does_not_replace_local_saved_address():
+    t = tracker(PEER)
+    c = remembered(t, 0.0)
+    t.connect_finished(PEER, c.attempt_id, UNREACHABLE, None, 0.1)
+    assert t.remember(PEER, "8.8.8.8", SPORT, 1.0) == []
+    c = the_connect(t.tick(0.1 + links.SAVED_RETRY_BASE))
+    assert is_saved(c), "địa chỉ global bị từ chối, không thay địa chỉ đã lưu"
