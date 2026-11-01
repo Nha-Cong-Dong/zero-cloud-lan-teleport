@@ -30,8 +30,11 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog
+
+from teleport.ui.main_window import SETTINGS_SHORTCUT
 
 pytestmark = pytest.mark.integration
 
@@ -304,7 +307,8 @@ def test_settings_button_and_ctrl_comma_open_page_esc_back(gui, gui_wait, config
 
     run = gui(["--config-dir", str(d)], script)
     assert seen["visible"], "⚙ hiện khi chạy qua GuiApp"
-    assert "Ctrl+," in seen["tip"], f"tooltip ⚙ có phím tắt: {seen['tip']!r}"
+    native = QKeySequence(SETTINGS_SHORTCUT).toString(QKeySequence.SequenceFormat.NativeText)
+    assert native in seen["tip"], f"tooltip ⚙ có phím tắt: {seen['tip']!r}"
     assert seen["focus_nav"], "trang hiện thì tiêu điểm ở nav"
     assert run.code == 0
 

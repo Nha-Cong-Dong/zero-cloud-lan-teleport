@@ -338,6 +338,18 @@ def device_status_text(view: DeviceView) -> str:
     return t("Settings", "không thấy trong mạng")
 
 
+def default_export_dir() -> str:
+    """Thư mục mở sẵn của hộp “Xuất log…”: Documents nếu có thật, không thì thư mục nhà.
+
+    Qt vẫn trả đường dẫn Documents khi thư mục đó chưa được tạo (máy Linux mới), và
+    `QFileDialog.setDirectory` bỏ qua thư mục không tồn tại.
+    """
+    docs = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+    if docs and Path(docs).is_dir():
+        return docs
+    return str(Path.home())
+
+
 def default_export_name(now: float | None = None) -> str:
     """`teleport-log-YYYYMMDD-HHMMSS.zip` theo giờ máy."""
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time() if now is None else now))
@@ -2026,9 +2038,7 @@ class SettingsController(QObject):
         dialog.setWindowTitle(QCoreApplication.translate("Settings", "Lưu file log"))
         dialog.setNameFilter(QCoreApplication.translate("Settings", "File zip (*.zip)"))
         dialog.setDefaultSuffix("zip")
-        folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
-        if folder:
-            dialog.setDirectory(folder)
+        dialog.setDirectory(default_export_dir())
         dialog.selectFile(default_export_name())
         generation = self._generation
         dialog.fileSelected.connect(lambda path: self._on_export_path(generation, path))

@@ -979,8 +979,8 @@ def test_export_dialog_open_not_exec_save_mode_default_name(env, no_exec, export
     [selected] = dlg.selectedFiles()
     assert re.fullmatch(r"teleport-log-\d{8}-\d{6}\.zip", Path(selected).name), selected
     docs = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
-    if docs:
-        assert Path(selected).parent == Path(docs)
+    expected = Path(docs) if docs and Path(docs).is_dir() else Path.home()
+    assert Path(selected).parent == expected
     env.page.export_logs_requested.emit()  # bấm lần nữa khi hộp đang mở: không dựng hộp thứ hai
     settle(env.qtbot)
     assert len(SaveDialog.made) == 1
@@ -1116,3 +1116,14 @@ def test_logs_never_contain_paths_or_names(env, export_spy, tmp_path, caplog):
     text = caplog.text
     for needle in (SECRET, "Nguyễn", "Tên-Bí-Mật", "Máy-Riêng-Tư", str(tmp_path), "May-B"):
         assert needle not in text, f"log lộ {needle!r}"
+
+
+def test_default_export_dir_falls_back_to_home_when_documents_missing(monkeypatch, tmp_path):
+    """Documents chưa được tạo (máy Linux mới): hộp xuất log mở ở thư mục nhà."""
+    from teleport.ui import settings as settings_mod
+
+    missing = tmp_path / "Documents"
+    monkeypatch.setattr(settings_mod.QStandardPaths, "writableLocation", lambda _loc: str(missing))
+    assert settings_mod.default_export_dir() == str(Path.home())
+    missing.mkdir()
+    assert settings_mod.default_export_dir() == str(missing)
