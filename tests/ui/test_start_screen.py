@@ -466,7 +466,7 @@ def test_first_run_change_dir_reserved_shows_error_under_row(
     gui(["--config-dir", str(d)], script)
     assert seen["error"] == RESERVED_TEXT.format(path=shown(reserved))
     assert seen["after"] == seen["before"], "thư mục dành riêng không được nhận vào form"
-    assert seen["notice"] is None, "ở WELCOME không dùng dải thông báo của TransfersView"
+    assert not seen["notice"], "ở WELCOME không dùng thanh thông báo của luồng chat"
     assert seen["hosts"] == 0 and seen["welcome"]
     assert not (d / "device.crt").exists()
 
@@ -895,7 +895,7 @@ def test_first_run_autostart_write_error_shows_notice(
         start.click()
         yield gui_wait(lambda: host_started(run), 20, "node vẫn chạy dù bật tự khởi động lỗi")
         view = app_of(run).transfers.view
-        yield gui_wait(lambda: view.notice_text() is not None, 5, "dải thông báo tự khởi động lỗi")
+        yield gui_wait(lambda: bool(view.notice_text()), 5, "dải thông báo tự khởi động lỗi")
         seen["notice"] = view.notice_text()
         seen["action"] = view.notice_action_text()
         view.notice_action.click()
@@ -926,7 +926,7 @@ def test_first_run_autostart_write_error_logs_only_error_type(
         *_rest, start = widgets(run)
         start.click()
         yield gui_wait(lambda: host_started(run), 20, "node chạy")
-        yield gui_wait(lambda: app_of(run).transfers.view.notice_text() is not None, 5, "dải thông báo")
+        yield gui_wait(lambda: bool(app_of(run).transfers.view.notice_text()), 5, "dải thông báo")
         quit_via_tray(run, ui_helpers.plain)
 
     with caplog.at_level(logging.DEBUG, logger="teleport.ui"):
