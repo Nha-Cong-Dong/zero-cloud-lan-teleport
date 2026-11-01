@@ -424,7 +424,7 @@ def unpair_failed_text(name: str) -> str:
 def prompt_notification() -> tuple[str, str]:
     """(tiêu đề, chữ) bóng thoại khay khi có lời hỏi ghép đôi mà cửa sổ chính đang ẩn."""
     return (
-        QCoreApplication.translate("Pairing", "Teleport"),
+        texts.APP_NAME,
         QCoreApplication.translate("Pairing", "Có yêu cầu ghép đôi"),
     )
 

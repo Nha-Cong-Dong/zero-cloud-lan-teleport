@@ -61,7 +61,7 @@ UNPAIR_CONFIRM = (
 )
 UNPAIRED = "Đã hủy ghép đôi với “{name}”."
 UNPAIR_FAILED = "Không hủy ghép đôi được với “{name}”. Hãy thử lại."
-NOTIFICATION = ("Teleport", "Có yêu cầu ghép đôi")
+NOTIFICATION = ("ZCL Teleport", "Có yêu cầu ghép đôi")
 
 # Câu kết quả (hợp đồng mục 3, mvp mục 8). {x}: tên máy kia; {k}: tên đã lưu; {t}: ip:port.
 OUT_PAIRED = "Đã ghép đôi với “{x}”."

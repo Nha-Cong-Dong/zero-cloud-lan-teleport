@@ -120,10 +120,14 @@ chạy từ bản đóng gói (`sys.frozen`) thì kiểm thêm `QFontInfo(font_f
 **Danh tính trên Windows** (`APP_USER_MODEL_ID`): chạy từ mã nguồn (`python`/`pythonw`, không
 `sys.frozen`), `main` gọi `SetCurrentProcessExplicitAppUserModelID` trước khi dựng `QApplication`;
 không có thì Windows gộp cửa sổ và bóng thoại khay vào `python.exe` (icon Python ở taskbar, toast ghi
-“Python”). Đặt rồi thì taskbar dùng icon cửa sổ (logo), còn đầu toast hiện nguyên chuỗi định danh (không
-lối tắt nào đăng ký tên cho nó). Bản exe không đặt: Windows nhận danh tính theo `Teleport.exe` (icon,
-FileDescription nhúng trong exe; lối tắt của bộ cài trỏ đúng exe đó), nên bản zip không hiện chuỗi
-định danh. Gọi lỗi → DEBUG, app vẫn chạy.
+“Python”). Đặt rồi thì taskbar dùng icon cửa sổ (logo). Không lối tắt nào mang định danh này, nên
+đầu toast sẽ hiện nguyên chuỗi định danh; vì vậy `_register_app_user_model_id` (sau khi giữ được
+`gui.lock`) ghi `DisplayName` = `texts.APP_NAME` và `IconUri` = `aumid-icon.png` (logo 256 px trong thư mục
+cấu hình, ghi nguyên tử khi nội dung khác) vào khóa `AUMID_REGISTRY_KEY` của HKCU, cách
+Windows dùng cho app không đóng gói; không cần quyền admin, giá trị đã đúng thì không ghi lại. Bản exe
+không đặt và không đăng ký: Windows nhận danh tính theo `Teleport.exe` (icon, FileDescription nhúng
+trong exe; lối tắt của bộ cài trỏ đúng exe đó), nên đầu toast là FileDescription. Lỗi → DEBUG, app
+vẫn chạy.
 
 Khi `sys.stderr is None` (exe windowed) thì không in gì và không lỗi: argparse tự bỏ qua, log
 không có handler ra stderr.
@@ -148,7 +152,7 @@ from pathlib import Path
 from types import FrameType
 from typing import cast
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QBuffer, QCoreApplication, QEventLoop, QIODevice, QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontInfo
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
@@ -158,9 +162,10 @@ from teleport.app import node as app_node
 from teleport.app.devices import DeviceView
 from teleport.app.node import NodeEvent
 from teleport.app.transfers import TransferUpdate
+from teleport.atomic import write_atomic
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
-from teleport.ui import errorlog, fonts, i18n, icons, receive_dir, send, texts, theme
+from teleport.ui import errorlog, fonts, i18n, icons, logo, receive_dir, send, texts, theme
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.gcguard import GcGuard
@@ -177,6 +182,9 @@ EXIT_USAGE = 2
 # AppUserModelID khi chạy từ mã nguồn trên Windows (docstring module). Giữ cố định: đổi là ghim taskbar và
 # cài đặt thông báo của Windows cho bản chạy từ nguồn mất theo.
 APP_USER_MODEL_ID = "NhaCongDong.Teleport"
+AUMID_REGISTRY_KEY = rf"Software\Classes\AppUserModelId\{APP_USER_MODEL_ID}"  # trong HKCU
+AUMID_ICON_FILE = "aumid-icon.png"
+AUMID_ICON_SIZE = 256
 
 GUI_LOCK_FILE = "gui.lock"
 SHOW_COMMAND = b"show\n"
@@ -1003,6 +1011,40 @@ def _set_app_user_model_id() -> None:
         log.debug("SetCurrentProcessExplicitAppUserModelID trả 0x%08x", result & 0xFFFFFFFF)
 
 
+def _register_app_user_model_id(config_dir: Path) -> None:
+    """Đăng ký tên hiển thị và icon cho `APP_USER_MODEL_ID` ở HKCU (docstring module). Không ném lỗi."""
+    if sys.platform != "win32":
+        return
+    if getattr(sys, "frozen", False):
+        return
+    import winreg
+
+    icon = config_dir / AUMID_ICON_FILE
+    try:
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        if not logo.pixmap(AUMID_ICON_SIZE).save(buffer, "PNG"):
+            raise OSError(f"không vẽ được {AUMID_ICON_FILE}")
+        png = bytes(buffer.data().data())
+        try:
+            same = icon.read_bytes() == png
+        except FileNotFoundError:
+            same = False
+        if not same:
+            write_atomic(icon, png)  # Windows có thể đọc icon bất cứ lúc nào
+        access = winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, AUMID_REGISTRY_KEY, 0, access) as key:
+            for name, value in (("DisplayName", texts.APP_NAME), ("IconUri", str(icon))):
+                try:
+                    current = winreg.QueryValueEx(key, name)
+                except FileNotFoundError:
+                    current = None
+                if current != (value, winreg.REG_SZ):
+                    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+    except OSError as e:
+        log.debug("không đăng ký được tên cho AppUserModelID: %s", type(e).__name__)
+
+
 def _application() -> QApplication:
     existing = QApplication.instance()
     if existing is not None:
@@ -1071,7 +1113,7 @@ def _selftest(app: QApplication) -> int:
 
 def _error_box(head: str, hints: list[str]) -> None:
     """Hộp báo lỗi lúc khởi động (trước khi có cửa sổ chính): không cha, chữ thuần."""
-    box = QMessageBox(QMessageBox.Icon.Critical, "Teleport", "\n\n".join([head, *hints]))
+    box = QMessageBox(QMessageBox.Icon.Critical, texts.APP_NAME, "\n\n".join([head, *hints]))
     box.setTextFormat(Qt.TextFormat.PlainText)
     box.exec()
 
@@ -1113,7 +1155,8 @@ def main(argv: list[str] | None = None) -> int:
 
     _set_app_user_model_id()  # trước khi có cửa sổ nào (taskbar đọc lúc cửa sổ hiện)
     app = _application()
-    app.setApplicationName("Teleport")
+    # Không đặt applicationDisplayName: Qt sẽ nối “ - ZCL Teleport” vào tiêu đề mọi hộp thoại.
+    app.setApplicationName(texts.APP_NAME)
     app.setWindowIcon(make_icon())
     app.setQuitOnLastWindowClosed(False)
     if args.selftest:
@@ -1147,6 +1190,7 @@ def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
         return EXIT_OK  # bản đang chạy đã hiện cửa sổ
 
     file_log = _attach_file_log(config_dir)  # sau `acquire`: chỉ bản duy nhất ghi và xoay file
+    _register_app_user_model_id(config_dir)  # cũng chỉ bản duy nhất, trước bóng thoại đầu tiên
     restore_excepthooks = errorlog.install_excepthooks()
     try:
         controller = GuiApp(app, config_dir, instance, background=args.background)
