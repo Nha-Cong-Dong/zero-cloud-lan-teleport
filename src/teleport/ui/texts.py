@@ -1,8 +1,9 @@
 """Câu chữ dùng chung của giao diện: lỗi khởi động (E1–E6, M2), M4, M5 trong spec P4-3.
 
-M3 (máy chưa có danh tính) đã bỏ: thay bằng màn “Bắt đầu” của `ui.main_window` (spec hackathon
-mục 10 A1). M6 (hộp hỏi nhận file) nằm ở `ui.offer`. Câu chữ riêng của một màn hình nằm ở module
-của màn hình đó (ví dụ `ui.radar`, `ui.transfers_view`).
+M3 (máy chưa có danh tính) đã bỏ: thay bằng màn lần chạy đầu (mvp F1, spec D1; form ở
+`ui.first_run`, hiện ở trạng thái WELCOME của `ui.main_window`). M6 (hộp hỏi nhận file) nằm ở
+`ui.offer`. Câu chữ riêng của một màn hình nằm ở module của màn hình đó (ví dụ `ui.radar`,
+`ui.transfers_view`).
 
 Chuỗi nguồn tiếng Việt, mọi chuỗi qua `QCoreApplication.translate` với ngữ cảnh `Texts`, gọi lúc
 dùng (không lúc import) để đổi ngôn ngữ có hiệu lực ngay. Chuỗi nguồn luôn là literal để bộ trích

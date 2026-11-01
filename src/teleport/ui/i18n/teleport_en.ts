@@ -386,6 +386,89 @@
     </message>
 </context>
 <context>
+    <name>FirstRun</name>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Bấm Bắt đầu để Teleport chạy và hiện máy này với các máy khác trong mạng.</source>
+        <translation>Click Start to run Teleport and make this device visible to other devices on the network.</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Chưa bật được khởi động cùng Windows vì Windows không cho ghi cài đặt khởi động. Bạn có thể bật lại trong Cài đặt.</source>
+        <translation>Couldn't turn on Start with Windows because Windows didn't allow the startup setting to be saved. You can turn it on again in Settings.</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Gửi file lớn giữa các máy trong cùng mạng. Không qua cloud.</source>
+        <translation>Send large files between devices on the same network. No cloud.</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Không tài khoản, không máy chủ trung gian</source>
+        <translation>No accounts, no relay servers</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Khởi động cùng Windows</source>
+        <translation>Start with Windows</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Mã hóa đầu cuối giữa hai máy</source>
+        <translation>End-to-end encryption between the two devices</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Mở Cài đặt</source>
+        <translation>Open Settings</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Teleport chạy ẩn ở khay hệ thống từ khi bạn đăng nhập Windows, để luôn sẵn sàng nhận file.</source>
+        <translation>Teleport runs in the system tray when you sign in to Windows, so it's always ready to receive files.</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Thiết lập {app}</source>
+        <translation>Set up {app}</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Thư mục nhận file</source>
+        <translation>Receive folder</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Thư mục nhận: {path}</source>
+        <translation>Receive folder: {path}</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Tên thiết bị</source>
+        <translation>Device name</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Tự nối lại khi rớt mạng, không phải gửi lại từ đầu</source>
+        <translation>Reconnects after a network drop, without starting over</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Ví dụ: Laptop-Minh</source>
+        <translation>For example: Laptop-Minh</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Đổi thư mục nhận</source>
+        <translation>Change receive folder</translation>
+    </message>
+    <message>
+        <location filename="../first_run.py"/>
+        <source>Đổi…</source>
+        <translation>Change…</translation>
+    </message>
+</context>
+<context>
     <name>GuiApp</name>
     <message>
         <location filename="../app.py"/>
@@ -503,11 +586,6 @@
     <name>MainWindow</name>
     <message>
         <location filename="../main_window.py"/>
-        <source>Bấm Bắt đầu để Teleport chạy và hiện máy này với các máy khác trong mạng.</source>
-        <translation>Click Start to run Teleport and show this device to other devices on the network.</translation>
-    </message>
-    <message>
-        <location filename="../main_window.py"/>
         <source>Bấm để chép địa chỉ.</source>
         <translation>Click to copy the address.</translation>
     </message>
@@ -515,11 +593,6 @@
         <location filename="../main_window.py"/>
         <source>Bắt đầu</source>
         <translation>Start</translation>
-    </message>
-    <message>
-        <location filename="../main_window.py"/>
-        <source>Bắt đầu dùng Teleport</source>
-        <translation>Get started with Teleport</translation>
     </message>
     <message>
         <location filename="../main_window.py"/>
@@ -585,16 +658,6 @@
         <location filename="../main_window.py"/>
         <source>Trạng thái</source>
         <translation>Status</translation>
-    </message>
-    <message>
-        <location filename="../main_window.py"/>
-        <source>Tên của máy này trong mạng: {name}</source>
-        <translation>This device's name on the network: {name}</translation>
-    </message>
-    <message>
-        <location filename="../main_window.py"/>
-        <source>Tên này hiện với mọi máy trong cùng mạng, kể cả máy lạ chưa ghép đôi.</source>
-        <translation>This name is visible to every device on the same network, including unpaired strangers.</translation>
     </message>
     <message>
         <location filename="../main_window.py"/>

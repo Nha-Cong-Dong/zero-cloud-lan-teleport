@@ -1,12 +1,17 @@
-"""Cửa sổ chính: trạng thái của node, màn “Bắt đầu”, khung hai cột (spec B1) và khung trang (spec A3).
+"""Cửa sổ chính: trạng thái của node, màn lần chạy đầu, khung hai cột (spec B1) và khung trang (spec A3).
 
 Bốn trạng thái (`ViewState`); trang HOME có `home_stack` chọn giữa khối căn giữa `start_view`
 (`home.StartPanel`: WELCOME, STARTING, ERROR) và khung hai cột `shell` (RUNNING). Mọi đường vào
 trạng thái đi qua `retranslate()`, nơi chọn `home_stack` và ẩn/hiện từng phần.
 
-- WELCOME: màn “Bắt đầu” khi máy chưa có danh tính (spec hackathon mục 10 A1): tên máy này sẽ dùng
-  trong mạng, câu mvp F1 “Tên này hiện với mọi máy…”, nút chính “Bắt đầu” (phát `start_requested`).
-  Chưa bấm thì `ui.app` không chạy node, không quảng bá gì. F1 đầy đủ để D1.
+- WELCOME: màn lần chạy đầu khi máy chưa có danh tính (mvp F1, spec D1): form `first_run`
+  (`ui.first_run.FirstRunForm`, trong `start_view`: tên thiết bị kèm câu F1, thư mục nhận, khởi động
+  cùng Windows, câu đồng ý) và nút chính “Bắt đầu”; dòng trạng thái, chi tiết, gợi ý ẩn. “Bắt đầu” hay
+  Enter trong ô tên → `first_run.validate()`; hợp lệ thì phát `start_requested(FirstRunChoice)`, sai
+  thì lỗi hiện dưới ô và không phát gì. “Đổi…” → `change_first_run_dir_requested`. Chưa bấm thì
+  `ui.app` không chạy node, không quảng bá gì. `show_welcome(tên gợi ý, thư mục gợi ý, autostart=…,
+  autostart_hint=…, choice=…, dir_error=…)` đặt giá trị gợi ý (`receive_dir=None` → thư mục mặc
+  định), hiện lại lựa chọn trước (`choice`) và lỗi thư mục (`dir_error`).
 - STARTING: “Đang khởi động…” kèm thanh bận mảnh (`starting_bar`), không có nút.
 - RUNNING: khung hai cột (dưới đây). Không còn dòng chữ trạng thái: tên máy, địa chỉ, huy hiệu nằm ở
   `machine_card`, thư mục nhận ở `save_bar`.
@@ -15,7 +20,8 @@ trạng thái đi qua `retranslate()`, nơi chọn `home_stack` và ẩn/hiện 
 
 Trong khối căn giữa: logo + `texts.APP_NAME` (`title_label`, bậc chữ `theme.TextStyle.TITLE`, font điểm
 nhấn nếu `ui.fonts.install()` đã nạp trước khi dựng cửa sổ), dòng trạng thái (SECTION), chi tiết, gợi
-ý, nút căn phải. `title_label` nằm trong `start_view` nên ở RUNNING không hiện.
+ý, form lần chạy đầu (chỉ WELCOME), nút căn phải. `title_label` nằm trong `start_view` nên ở RUNNING
+không hiện.
 
 **Bố cục hai cột** (RUNNING; cây widget ở spec B1 mục 2.3):
 - `body` (`runningBody`): cột trái `sidebar` (`QFrame[surface="sidebar"]`, nền `sidebar`, viền phải
@@ -63,13 +69,14 @@ Thứ tự Tab ở RUNNING: “Tìm máy mới” → “Cài đặt” → từ
 đôi máy mới” → tên máy này → địa chỉ → “Chép địa chỉ” → `compact_machine` → khung phải → “Mở thư
 mục” → “Đổi…” (luôn cuối: widget tạo sau như thẻ lượt truyền hay trang mới rơi vào cuối chuỗi, nên
 `set_transfer_summary` và `add_page` dời hai nút về cuối bằng `_keep_footer_last`; “Mở thư mục” ẩn
-thì Tab bỏ qua nó, “Đổi…” vẫn cuối). WELCOME / ERROR: dòng trạng thái →
-chi tiết → gợi ý → nút. Tiêu điểm ban đầu (`_place_focus`): nút đang hiện (“Bắt đầu” / “Thử lại”);
-RUNNING thì danh sách cuộc trò chuyện khi có máy đã ghép đôi (`conversations.model.rowCount()`), không
-thì nút “Ghép đôi máy mới”; STARTING thì
-dòng trạng thái. Trạng thái luôn nói bằng chữ, không chỉ bằng màu. Phím tắt: F5 = Thử lại (khi nút
-đang hiện), Ctrl+W = đóng cửa sổ, Ctrl+Q = Thoát, Ctrl+, = Cài đặt (khi đã có trang SETTINGS và đang
-RUNNING, như nút ⚙; tooltip của nút có phím tắt).
+thì Tab bỏ qua nó, “Đổi…” vẫn cuối). WELCOME: ô tên → “Đổi…” → công tắc (khi hiện) → “Bắt đầu”
+(nhãn của form không nhận Tab). ERROR: dòng trạng thái → chi tiết → gợi ý → “Thử lại”. Tiêu điểm ban
+đầu (`_place_focus`): WELCOME thì `first_run.focus_target()` (ô tên, con trỏ cuối chữ; có lỗi tên thì
+chọn hết chữ; có lỗi thư mục thì “Đổi…”); ERROR thì “Thử lại”; RUNNING thì danh sách cuộc trò
+chuyện khi có máy đã ghép đôi (`conversations.model.rowCount()`), không thì nút “Ghép đôi máy mới”;
+STARTING thì dòng trạng thái. Trạng thái luôn nói bằng chữ, không chỉ bằng màu. Phím tắt: F5 = Thử
+lại (khi nút đang hiện), Ctrl+W = đóng cửa sổ, Ctrl+Q = Thoát, Ctrl+, = Cài đặt (khi đã có trang
+SETTINGS và đang RUNNING, như nút ⚙; tooltip của nút có phím tắt).
 
 Cỡ cửa sổ lúc mở: `default_size(vùng dùng được của màn hình chính)` = `DEFAULT_SIZE` kẹp theo màn
 hình; cỡ tối thiểu `MIN_SIZE`. Không lưu cỡ giữa các lần chạy.
@@ -157,11 +164,12 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from teleport.core.display import display_name
+from teleport import paths
 from teleport.net.connection import DEFAULT_PORT
-from teleport.ui import texts, theme
+from teleport.ui import first_run, texts, theme
 from teleport.ui.conversations import ConversationList
 from teleport.ui.discover import DiscoverPage
+from teleport.ui.first_run import FirstRunChoice, TextSource
 from teleport.ui.home import START_PANEL_MAX_WIDTH as START_PANEL_MAX_WIDTH  # hằng của bảng spec B1 mục 2.3
 from teleport.ui.home import MachineCard, SaveBar, StartPanel
 from teleport.ui.radar import DeviceListModel
@@ -392,7 +400,8 @@ class MainWindow(QMainWindow):
     """Cửa sổ chính; trạng thái đổi bằng các hàm `show_*`."""
 
     retry_requested = Signal()
-    start_requested = Signal()
+    start_requested = Signal(object)  # FirstRunChoice; chỉ `ui.app.GuiApp` nối
+    change_first_run_dir_requested = Signal()  # nối thẳng từ `first_run.change_dir_requested`
     quit_requested = Signal()
     hidden_to_tray = Signal()
     page_changed = Signal(str)  # giá trị `Page`; nối thẳng từ `PageStack.page_changed`
@@ -410,7 +419,6 @@ class MainWindow(QMainWindow):
         self._receive_dir: Path | None = None
         self._receive_dir_unavailable: Path | None = None
         self._receive_dir_pending: Path | None = None
-        self._planned_name = ""
         self._error_code = ""
         self._error_detail = ""
         self._addresses: tuple[str, ...] = ()
@@ -444,8 +452,11 @@ class MainWindow(QMainWindow):
         self.starting_bar = self.start_view.starting_bar
         self.retry_button = self.start_view.retry_button
         self.start_button = self.start_view.start_button
+        self.first_run = self.start_view.first_run
         self.retry_button.clicked.connect(self.retry_requested)
-        self.start_button.clicked.connect(self.start_requested)
+        self.start_button.clicked.connect(self._submit_first_run)
+        self.first_run.submitted.connect(self._submit_first_run)
+        self.first_run.change_dir_requested.connect(self.change_first_run_dir_requested)
 
         self.shell = QWidget(self.home_stack)
         self.shell.setObjectName("runningShell")
@@ -585,6 +596,9 @@ class MainWindow(QMainWindow):
             self.status_label,
             self.detail_label,
             self.hint_label,
+            self.first_run.name_edit,
+            self.first_run.dir_button,
+            self.first_run.autostart_switch,
             self.retry_button,
             self.start_button,
             self.discover_button,
@@ -674,10 +688,32 @@ class MainWindow(QMainWindow):
         """Cột trái đang thu gọn (cửa sổ hẹp hơn `COMPACT_BELOW`)."""
         return self.width() < COMPACT_BELOW
 
-    def show_welcome(self, planned_name: str) -> None:
-        """Màn “Bắt đầu”: `planned_name` là tên node sẽ dùng (chưa qua `display_name`)."""
+    def show_welcome(
+        self,
+        planned_name: str,
+        receive_dir: Path | None = None,
+        *,
+        autostart: bool | None = None,
+        autostart_hint: TextSource = "",
+        choice: FirstRunChoice | None = None,
+        dir_error: TextSource = "",
+    ) -> None:
+        """Màn lần chạy đầu: `planned_name` là tên gợi ý (rỗng → ô trống có placeholder),
+        `receive_dir` thư mục gợi ý (None → `paths.default_receive_dir()`, không tạo thư mục),
+        `autostart` trạng thái ban đầu của công tắc (None → ẩn hàng), `autostart_hint` câu trạng thái
+        registry; `choice` hiện lại lựa chọn trước, `dir_error` lỗi dưới hàng thư mục."""
         self._state = ViewState.WELCOME
-        self._planned_name = planned_name
+        form = self.first_run
+        form.set_defaults(
+            planned_name,
+            paths.default_receive_dir() if receive_dir is None else receive_dir,
+            autostart,
+            autostart_hint,
+        )
+        if choice is not None:
+            form.restore(choice)
+        if dir_error:
+            form.set_dir_error(dir_error)
         self._forget_addresses()
         self.pages.reset()
         self.retranslate()
@@ -844,16 +880,19 @@ class MainWindow(QMainWindow):
         self._addresses, self._port = (), None
 
     def _place_focus(self) -> None:
-        """Đặt tiêu điểm bàn phím: nút đang hiện (Bắt đầu / Thử lại); RUNNING thì danh sách cuộc trò
-        chuyện (có máy đã ghép đôi) hay nút “Ghép đôi máy mới”; còn lại (STARTING) dòng trạng thái.
+        """Đặt tiêu điểm bàn phím: WELCOME thì `first_run.focus_target()`; ERROR thì “Thử lại”; RUNNING
+        thì danh sách cuộc trò chuyện (có máy đã ghép đôi) hay nút “Ghép đôi máy mới”; còn lại
+        (STARTING) dòng trạng thái.
 
         Đang ở trang khác HOME thì thôi (`show_running` không đưa về HOME; trang đó tự giữ tiêu điểm)."""
         if self.pages.current_page is not Page.HOME:
             return
-        for button in (self.start_button, self.retry_button):
-            if button.isVisibleTo(self):
-                button.setFocus(Qt.FocusReason.OtherFocusReason)
-                return
+        if self._state is ViewState.WELCOME:
+            self.first_run.focus_target().setFocus(Qt.FocusReason.OtherFocusReason)
+            return
+        if self.retry_button.isVisibleTo(self):
+            self.retry_button.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
         if self._state is ViewState.RUNNING:
             conversations = self.conversations
             target: QWidget = (
@@ -887,6 +926,7 @@ class MainWindow(QMainWindow):
         start = QCoreApplication.translate("MainWindow", "Bắt đầu")
         self.start_button.setText(start)
         self.start_button.setAccessibleName(start)
+        self.start_button.setAccessibleDescription(first_run.consent_text())
         self.discover_button.set_label(QCoreApplication.translate("MainWindow", "Tìm máy mới"))
         self.settings_button.set_label(QCoreApplication.translate("MainWindow", "Cài đặt"))
         self.sidebar.setAccessibleName(QCoreApplication.translate("MainWindow", "Thiết bị"))
@@ -904,6 +944,7 @@ class MainWindow(QMainWindow):
 
         status, detail, hints = self._content()
         self.status_label.setText(status)
+        self.status_label.setVisible(bool(status))  # WELCOME: form lần chạy đầu thay dòng trạng thái
         self.status_label.setAccessibleName(QCoreApplication.translate("MainWindow", "Trạng thái"))
         self.status_label.setAccessibleDescription(status)
         self._set_optional(self.detail_label, detail, QCoreApplication.translate("MainWindow", "Chi tiết"))
@@ -917,6 +958,7 @@ class MainWindow(QMainWindow):
         self.starting_bar.setVisible(self._state is ViewState.STARTING)
         self.retry_button.setVisible(self._state is ViewState.ERROR)
         self.start_button.setVisible(self._state is ViewState.WELCOME)
+        self.first_run.setVisible(self._state is ViewState.WELCOME)
         self.machine_card.set_name(self._name if running else None)
         self.compact_machine.update_info()
         self._apply_receive_dir()
@@ -934,32 +976,12 @@ class MainWindow(QMainWindow):
         )
 
     def _content(self) -> tuple[str, str, list[str]]:
-        """(dòng trạng thái, dòng chi tiết, các dòng gợi ý) của khối căn giữa; RUNNING thì rỗng."""
+        """(dòng trạng thái, dòng chi tiết, các dòng gợi ý) của khối căn giữa; WELCOME (form lần chạy
+        đầu thay chỗ) và RUNNING thì rỗng."""
         if self._state is ViewState.STARTING:
             return QCoreApplication.translate("MainWindow", "Đang khởi động…"), "", []
         if self._state is ViewState.WELCOME:
-            name_line = texts.fill(
-                QCoreApplication.translate("MainWindow", "Tên của máy này trong mạng: {name}"),
-                name=display_name(self._planned_name),
-            )
-            return (
-                QCoreApplication.translate("MainWindow", "Bắt đầu dùng Teleport"),
-                "\n".join(
-                    [
-                        name_line,
-                        QCoreApplication.translate(
-                            "MainWindow",
-                            "Tên này hiện với mọi máy trong cùng mạng, kể cả máy lạ chưa ghép đôi.",
-                        ),
-                    ]
-                ),
-                [
-                    QCoreApplication.translate(
-                        "MainWindow",
-                        "Bấm Bắt đầu để Teleport chạy và hiện máy này với các máy khác trong mạng.",
-                    )
-                ],
-            )
+            return "", "", []
         if self._state is ViewState.RUNNING:
             return "", "", []  # tên, địa chỉ, huy hiệu ở `machine_card`; thư mục nhận ở `save_bar`
         head, hints = texts.start_error(self._error_code, self._error_detail)
@@ -1185,6 +1207,14 @@ class MainWindow(QMainWindow):
             self.hidden_to_tray.emit()
         else:
             self.quit_requested.emit()
+
+    def _submit_first_run(self) -> None:
+        """“Bắt đầu” hay Enter trong ô tên: kiểm form; hợp lệ thì phát `start_requested(choice)`."""
+        if self._state is not ViewState.WELCOME:
+            return
+        choice = self.first_run.validate()
+        if choice is not None:
+            self.start_requested.emit(choice)
 
     def _retry_shortcut(self) -> None:
         if self.retry_button.isVisibleTo(self):
