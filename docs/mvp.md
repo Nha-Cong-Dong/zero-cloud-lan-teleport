@@ -118,6 +118,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Thiết bị mới xuất hiện trên radar trong < 3 giây; thiết bị thoát app biến mất trong < 10 giây; thiết bị mất mạng đột ngột hoặc ngủ biến mất trong < 2 phút.
   - Mỗi thiết bị hiển thị tên, biểu tượng loại máy chung (không dùng logo hệ điều hành), hệ điều hành bằng chữ và trạng thái. Trạng thái trên màn “Tìm máy mới”: đã ghép đôi / chưa ghép đôi. Ở danh sách cuộc trò chuyện: trực tuyến / ngoại tuyến / đang bận (còn lượt chưa xong với máy đó, hiện cụ thể như “Đang gửi · 62%”); hệ điều hành hiện ở dòng phụ khi chưa có hoạt động nào với máy đó, và luôn có ở chú thích. Trạng thái luôn có chữ, không chỉ màu.
   - Ô nhập IP luôn có trên màn hình radar (“Tìm máy mới”).
+  - Máy đã ghép đôi tự nối lại tới địa chỉ kết nối được gần nhất khi mạng chặn mDNS (sau khởi động lại hay mất kết nối), không phải nhập lại IP, nếu địa chỉ của máy đó không đổi.
   - Thấy thiết bị qua mDNS mà không kết nối được → báo lỗi “Wi-Fi chặn thiết bị” (mục 8).
 
 ### F3. Ghép đôi
@@ -212,8 +213,8 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Kiểm tra cập nhật (**mặc định tắt**) · Xuất log
 - **AC của “Cho máy chưa ghép đôi thấy máy này”** (bật: máy này đang *hiện*; tắt: đang *ẩn*):
   - Tắt thì máy này ngừng quảng bá trên mạng và biến mất khỏi radar của máy khác như khi thoát app (N1). Bật lại thì máy này quảng bá lại ngay.
-  - Đang ẩn, máy này vẫn thấy máy khác trên radar, vẫn tự kết nối tới thiết bị tin cậy đang hiện, và gửi/nhận file, clipboard như thường.
-  - Ngay dưới công tắc có dòng: “Máy đã ghép đôi chỉ tự kết nối được khi ít nhất một trong hai máy đang hiện.”
+  - Đang ẩn, máy này vẫn thấy máy khác trên radar, vẫn tự kết nối tới thiết bị tin cậy đang hiện (và tới địa chỉ đã kết nối được gần nhất của thiết bị tin cậy, F2), và gửi/nhận file, clipboard như thường.
+  - Ngay dưới công tắc có dòng: “Máy đã ghép đôi tự kết nối được khi ít nhất một trong hai máy đang hiện, hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.”
   - Đang ẩn và không ở chế độ chờ ghép đôi (F3): máy chưa ghép đôi kết nối tới cổng của Teleport bị cắt ngay sau bắt tay, trước khi máy này gửi tên, phiên bản app hay hệ điều hành, trừ máy mà máy này đang chủ động ghép đôi tới ([protocol.md](protocol.md) mục 2, 8).
   - Đang ẩn vẫn ghép đôi được: máy này chủ động ghép đôi tới máy kia, hoặc mở màn hình “Chờ ghép đôi” (F3, mục 7.5) để máy kia nhập IP thủ công. Khi đang ẩn, màn hình đó có dòng: “Máy này đang ẩn nên máy kia không tự thấy. Hãy nhập IP của máy này ở máy kia.”
 
@@ -565,7 +566,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | CLI: `receive --yes` | “Cảnh báo: đang tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi trước (`--yes`).” | — |
 | CLI: `receive` khi chưa ghép đôi với thiết bị nào | “Máy này chưa ghép đôi với thiết bị nào nên chưa nhận được file. Hãy ghép đôi trước: `teleport listen` trên một máy, `teleport pair` trên máy kia.” | — |
 | CLI: `receive` không quảng bá được qua mDNS | “Cảnh báo: chưa quảng bá được qua mDNS (*lý do*); máy khác vẫn gửi được bằng `teleport send … --address <IP của máy này>`.” | — |
-| CLI: `receive` / `send` khi máy này đang ẩn (F10; đổi ở giao diện) | “Cảnh báo: máy này đang ẩn (đã tắt “Cho máy chưa ghép đôi thấy máy này” trong cài đặt) nên không quảng bá trong mạng; máy đã ghép đôi chỉ tự kết nối được với máy này khi máy kia đang hiện.” (`listen` khi ẩn in câu của màn hình “Chờ ghép đôi”, F10) | Bật lại ở cài đặt của giao diện |
+| CLI: `receive` / `send` khi máy này đang ẩn (F10; đổi ở giao diện) | “Cảnh báo: máy này đang ẩn (đã tắt “Cho máy chưa ghép đôi thấy máy này” trong cài đặt) nên không quảng bá trong mạng; máy đã ghép đôi tự kết nối được với máy này khi máy kia đang hiện, hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.” (`listen` khi ẩn in câu của màn hình “Chờ ghép đôi”, F10) | Bật lại ở cài đặt của giao diện |
 | CLI: `receive` không đọc được câu trả lời `[c/k]` (đầu vào đã đóng) | “Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận.” (in một lần); mỗi lượt bị từ chối khi chưa hiện lời hỏi (đang xếp hàng, hay tới sau khi đầu vào đóng) thêm: “Đã từ chối *3* file từ *Laptop-Minh* vì không đọc được câu trả lời (đầu vào đã đóng).” | — |
 | CLI: `receive` dừng (Ctrl+C) khi còn lượt chưa hiện lời hỏi | Mỗi lượt đó: “Đã từ chối *3* file từ *Laptop-Minh* vì đang dừng nhận.” (lượt đang hỏi thì không in “Đã từ chối.”); lượt đang nhận thì tạm dừng (dòng “CLI: `receive` dừng (Ctrl+C) khi đang nhận”) | — |
 | CLI: `receive` dừng (Ctrl+C) khi đang nhận | Máy nhận, mỗi lượt: “Đã tạm dừng nhận *video.mp4* từ *Laptop-Minh*. Chạy lại `teleport receive` (cùng thư mục nhận) để nhận tiếp phần còn thiếu, miễn là máy gửi vẫn đang chờ; quá 24 giờ kể từ lúc mất kết nối thì lần chạy sau sẽ xóa phần nhận dở.” (lượt nhiều file: “*3* file” thay cho tên file). Máy gửi: “Đang nối lại…” (dòng “Mất mạng”); chưa nối lại được thì thêm câu ở dòng “CLI: `send` chưa nối lại được trong lúc chờ nối lại” | — |

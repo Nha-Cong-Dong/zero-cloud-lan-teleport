@@ -146,7 +146,7 @@ from teleport.app.transfers import (
 from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc lúc dùng
 from teleport.core.display import display_filename, display_name, format_duration, format_size, text_width
 from teleport.core.filenames import INVISIBLE_CHARS
-from teleport.core.links import ConnectResult
+from teleport.core.links import ConnectResult, is_saveable
 from teleport.core.messages import MAX_OFFER_FILES, MessageError, validate_device_name
 from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
@@ -830,7 +830,8 @@ _IP_HINT = "teleport pair <ip[:cổng]>"
 _HIDDEN_LISTEN = "Máy này đang ẩn nên máy kia không tự thấy. Hãy nhập IP của máy này ở máy kia."
 _HIDDEN_WARNING = (
     "Cảnh báo: máy này đang ẩn (đã tắt “Cho máy chưa ghép đôi thấy máy này” trong cài đặt) nên không "
-    "quảng bá trong mạng; máy đã ghép đôi chỉ tự kết nối được với máy này khi máy kia đang hiện."
+    "quảng bá trong mạng; máy đã ghép đôi tự kết nối được với máy này khi máy kia đang hiện, hoặc khi hai "
+    "máy đã từng kết nối và địa chỉ không đổi."
 )
 _PAIR_USAGE = "teleport pair <tên | tiền tố mã | ip[:cổng]>"
 
@@ -2252,7 +2253,8 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
     total = sum(f.entry.size for f in files)
     name = _name_label(device.name)
     mdns = _mdns_options(args, advertise=False)
-    if mdns is None and endpoint is None:
+    # Địa chỉ đã kết nối lần trước (`last_address`): node tự thử nó, kể cả khi không có mDNS.
+    if mdns is None and endpoint is None and not _has_saved_address(device):
         output.error("discovery_error", _no_discovery_message(name, "đang tắt"))
         return 1
     session.device_id = device.device_id
@@ -2287,6 +2289,8 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
     if endpoint is not None:
         node.connect_hint(current.device_id, [endpoint[0]], endpoint[1])
         output.text(f"Đang kết nối tới “{name}” tại {endpoint[0]}:{endpoint[1]}…")
+    elif not node.discovery_active and _has_saved_address(current):
+        output.text(f"Đang kết nối tới “{name}” ở địa chỉ đã kết nối lần trước…")
     elif not node.discovery_active:
         reason = node.discovery_error
         output.error(
@@ -2332,6 +2336,11 @@ def _no_discovery_message(name: str, reason: str) -> str:
     return (
         f"Không tìm được {name} vì không bật được khám phá mDNS ({reason}). Hãy thêm `--address <ip[:cổng]>`."
     )
+
+
+def _has_saved_address(device: TrustedDevice) -> bool:
+    """Thiết bị có địa chỉ đã lưu mà node tự thử được (không phải địa chỉ Internet công khai)."""
+    return device.last_address is not None and is_saveable(device.last_address[0])
 
 
 async def _wait_connected(
