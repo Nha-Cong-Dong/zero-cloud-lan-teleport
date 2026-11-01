@@ -1207,8 +1207,8 @@
     </message>
     <message>
         <location filename="../settings.py"/>
-        <source>Máy đã ghép đôi chỉ tự kết nối được khi ít nhất một trong hai máy đang hiện.</source>
-        <translation>Paired devices can only connect on their own when at least one of them is visible.</translation>
+        <source>Máy đã ghép đôi tự kết nối được khi ít nhất một trong hai máy đang hiện, hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.</source>
+        <translation>Paired devices connect automatically when at least one of them is visible, or when they have connected before and the address hasn't changed.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
