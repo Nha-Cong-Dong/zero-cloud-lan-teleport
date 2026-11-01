@@ -1,8 +1,8 @@
 """Thành phần dùng chung của giao diện (spec A3): nút icon, badge trạng thái, avatar, bong bóng chat,
-thanh thông báo, màn rỗng, đầu trang, và `safe_tooltip`.
+thanh thông báo, màn rỗng, đầu trang, công tắc bật/tắt (spec D2) và `safe_tooltip`.
 
-Chỉ có những gì đợt B của kế hoạch nâng cấp giao diện dùng tới. Không có `Card` (đã có
-`QFrame[surface="card"]` của `ui/theme.py`), không có thành phần riêng của màn Cài đặt.
+Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame[surface="card"]` của `ui/theme.py`);
+hàng cài đặt (`SettingsRow`) nằm ở `ui/settings.py`.
 
 **Quy ước chung**
 - Chữ của widget là `Qt.PlainText`; tooltip dựng từ chữ của bên gọi luôn qua `safe_tooltip`. Chữ của
@@ -44,6 +44,14 @@ Chỉ có những gì đợt B của kế hoạch nâng cấp giao diện dùng 
   nhấn), mô tả `tone=muted`, nút chính (`PRIMARY_PROPERTY`). Khối rộng tối đa 360 px, căn giữa.
 - `PageHeader`: nút “Quay lại” (có chữ, tooltip kèm Esc), tiêu đề SECTION, đường kẻ dưới 1 px
   `border`. Phím Esc do cửa sổ chính bắt (`main_window`), không nằm ở đây.
+- `ToggleSwitch` (spec D2 mục 1.5): `QAbstractButton` checkable, `StrongFocus`, rãnh 40×20 tự vẽ và chữ
+  “Bật”/“Tắt” bên phải (trạng thái không chỉ nói bằng màu hay vị trí núm, mvp N12). Tắt: nền
+  `surface_raised`, viền 1 px `border_strong`, núm `text_muted`. Bật: nền `accent_strong`, núm
+  `surface_raised`. Tiêu điểm: vòng 2 px `theme.focus_ring_color` quanh rãnh. Tắt hẳn (disabled): rãnh
+  và núm mờ 0,5, chữ màu chữ bị tắt của bảng màu. Space (của `QAbstractButton`) và Enter đảo trạng
+  thái; không hoạt ảnh. `border_strong` (viền khi tắt) và `accent_strong` (nền khi bật) ≥ 3:1 với
+  `surface` ở cả hai chế độ (`TOGGLE_CONTRAST_PAIRS`). Tên và mô tả trợ năng do bên gọi đặt (nhãn
+  và gợi ý của hàng); trạng thái bật/tắt tới trình đọc màn hình qua trạng thái “checked” của nút.
 """
 
 from __future__ import annotations
@@ -52,20 +60,25 @@ import contextlib
 import html
 from enum import StrEnum
 
-from PySide6.QtCore import QCoreApplication, QEvent, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
     QColor,
     QFont,
+    QFontMetrics,
+    QKeyEvent,
     QKeySequence,
     QPainter,
     QPainterPath,
     QPaintEvent,
+    QPalette,
     QPen,
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -995,3 +1008,136 @@ class PageHeader(QWidget):
             self.update()
         elif event.type() == QEvent.Type.LanguageChange:
             self.retranslate()
+
+
+# ---- ToggleSwitch ------------------------------------------------------------------------------
+
+TOGGLE_TRACK = QSize(40, 20)  # px, rãnh của công tắc
+_TOGGLE_KNOB_MARGIN = 3  # px, từ mép rãnh tới núm
+_TOGGLE_TEXT_GAP = 8  # px, từ rãnh tới chữ “Bật”/“Tắt”
+_TOGGLE_RING = 2  # px, vòng tiêu điểm (ngoài rãnh, trong vùng của widget)
+_TOGGLE_DISABLED_OPACITY = 0.5
+# (token, token nền) phải ≥ 3:1 (WCAG 1.4.11) ở cả hai chế độ.
+TOGGLE_CONTRAST_PAIRS = (("border_strong", "surface"), ("accent_strong", "surface"))
+_PLAIN_KEYS = (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier)
+
+
+def toggle_state_text(checked: bool) -> str:
+    """Chữ trạng thái cạnh công tắc (“Bật” / “Tắt”)."""
+    if checked:
+        return QCoreApplication.translate("Widgets", "Bật")
+    return QCoreApplication.translate("Widgets", "Tắt")
+
+
+class ToggleSwitch(QAbstractButton):
+    """Công tắc bật/tắt tự vẽ có chữ trạng thái (xem docstring module)."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.toggled.connect(self._on_toggled)
+        self.retranslate()
+
+    def state_text(self) -> str:
+        """Chữ đang hiện cạnh rãnh."""
+        return toggle_state_text(self.isChecked())
+
+    def _text_width(self) -> int:
+        metrics = QFontMetrics(self.font())
+        return max(
+            metrics.horizontalAdvance(toggle_state_text(True)),
+            metrics.horizontalAdvance(toggle_state_text(False)),
+        )
+
+    def sizeHint(self) -> QSize:
+        height = max(TOGGLE_TRACK.height() + 2 * _TOGGLE_RING, QFontMetrics(self.font()).height())
+        width = 2 * _TOGGLE_RING + TOGGLE_TRACK.width() + _TOGGLE_TEXT_GAP + self._text_width()
+        return QSize(width, height)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def hitButton(self, pos: QPoint) -> bool:
+        return self.rect().contains(pos)
+
+    def track_rect(self) -> QRectF:
+        """Rãnh trong widget: sát trái (chừa vòng tiêu điểm), căn giữa theo chiều dọc."""
+        top = (self.height() - TOGGLE_TRACK.height()) / 2
+        return QRectF(_TOGGLE_RING, top, TOGGLE_TRACK.width(), TOGGLE_TRACK.height())
+
+    def retranslate(self) -> None:
+        """Chữ trạng thái đổi theo ngôn ngữ; tên và mô tả trợ năng do bên gọi đặt."""
+        self.updateGeometry()
+        self.update()
+
+    def _on_toggled(self, _checked: bool) -> None:
+        self.update()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if (
+            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            and event.modifiers() in _PLAIN_KEYS
+            and not event.isAutoRepeat()
+        ):
+            self.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        t = theme.tokens_for(self)
+        dark = theme.is_dark_palette(QApplication.palette())
+        track = self.track_rect()
+        radius = track.height() / 2
+        checked = self.isChecked()
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            if self.hasFocus():
+                half = _TOGGLE_RING / 2
+                ring = track.adjusted(-half, -half, half, half)
+                painter.setPen(QPen(theme.focus_ring_color(dark), _TOGGLE_RING))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(ring, radius + half, radius + half)
+            painter.save()
+            if not self.isEnabled():
+                painter.setOpacity(_TOGGLE_DISABLED_OPACITY)
+            if checked:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(t.accent_strong)
+                painter.drawRoundedRect(track, radius, radius)
+                knob_color = t.surface_raised
+            else:
+                painter.setPen(QPen(t.border_strong, 1))
+                painter.setBrush(t.surface_raised)
+                painter.drawRoundedRect(track.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5)
+                knob_color = t.text_muted
+            d = track.height() - 2 * _TOGGLE_KNOB_MARGIN
+            x = track.right() - _TOGGLE_KNOB_MARGIN - d if checked else track.left() + _TOGGLE_KNOB_MARGIN
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(knob_color)
+            painter.drawEllipse(QRectF(x, track.top() + _TOGGLE_KNOB_MARGIN, d, d))
+            painter.restore()
+            group = QPalette.ColorGroup.Active if self.isEnabled() else QPalette.ColorGroup.Disabled
+            painter.setPen(QApplication.palette().color(group, QPalette.ColorRole.WindowText))
+            left = track.right() + _TOGGLE_TEXT_GAP
+            text_rect = QRectF(left, 0, max(0.0, self.width() - left), self.height())
+            painter.drawText(
+                text_rect,
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                self.state_text(),
+            )
+        finally:
+            painter.end()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in _PALETTE_EVENTS:
+            self.update()
+        elif event.type() == QEvent.Type.LanguageChange:
+            self.retranslate()
+        elif event.type() == QEvent.Type.FontChange:
+            self.updateGeometry()

@@ -61,7 +61,7 @@ UNPAIR_CONFIRM = (
 )
 UNPAIRED = "Đã hủy ghép đôi với “{name}”."
 UNPAIR_FAILED = "Không hủy ghép đôi được với “{name}”. Hãy thử lại."
-NOTIFICATION = ("Teleport", "Có yêu cầu ghép đôi")
+NOTIFICATION = ("ZCL Teleport", "Có yêu cầu ghép đôi")
 
 # Câu kết quả (hợp đồng mục 3, mvp mục 8). {x}: tên máy kia; {k}: tên đã lưu; {t}: ip:port.
 OUT_PAIRED = "Đã ghép đôi với “{x}”."
@@ -316,6 +316,7 @@ class FakeNode:
         self.pairing = FakePairing(self)
         self.hint_error: BaseException | None = None
         self.unpair_error: BaseException | None = None
+        self.unpair_clear_history: list[bool] = []  # spec D2 1.7: cờ `clear_history` của mỗi lần unpair
 
     def devices(self):
         self.log.append(("devices",))
@@ -326,8 +327,9 @@ class FakeNode:
         if self.hint_error is not None:
             raise self.hint_error
 
-    async def unpair(self, device_id):
+    async def unpair(self, device_id, *, clear_history=False):
         self.log.append(("unpair", device_id))
+        self.unpair_clear_history.append(clear_history)
         if self.unpair_error is not None:
             raise self.unpair_error
         return make_device(device_id=device_id)
@@ -1362,6 +1364,74 @@ def test_unpair_direct_runs_one_submit(qtbot, ctl):
     qtbot.wait(20)
     assert ns.node.log == [("unpair", PEER_ID), ("devices",)]
     assert len(ns.rec.devices) == 1
+
+
+UNPAIR_CLEAR_HISTORY = "Xóa cả lịch sử truyền file với máy này"  # spec D2 1.9
+
+
+def test_unpair_box_has_clear_history_checkbox_checked(qtbot, ctl):
+    """Spec D2 1.7, 1.9: hộp hủy ghép đôi có ô “Xóa cả lịch sử…” (QMessageBox.setCheckBox), bật sẵn."""
+    ns = ctl()
+    ns.c.request_unpair(PEER_ID, "May-B")
+    qtbot.wait(20)
+    box = ns.c.unpair_box
+    check = box.checkBox()
+    assert check is not None, "hộp hủy ghép đôi phải có ô xóa lịch sử"
+    assert check.isChecked()
+    assert check.text().replace("&", "") == UNPAIR_CLEAR_HISTORY
+    assert check.isVisibleTo(box)
+
+
+@pytest.mark.parametrize("clear", [True, False])
+def test_unpair_passes_clear_history_flag(qtbot, ctl, clear):
+    ns = ctl()
+    cleared: list = []
+    ns.c.history_cleared.connect(cleared.append)
+    ns.node.views = (make_view(paired=False),)
+    ns.c.request_unpair(PEER_ID, "May-B")
+    qtbot.wait(20)
+    box = ns.c.unpair_box
+    box.checkBox().setChecked(clear)
+    button_with_text(box, UNPAIR_YES).click()
+    qtbot.wait(20)
+    [pending] = ns.host.submits
+    ns.host.run_submit(pending)
+    qtbot.wait(20)
+    assert ns.node.unpair_clear_history == [clear]
+    assert cleared == ([PEER_ID] if clear else []), "history_cleared(device_id) chỉ khi có xóa (9.9)"
+
+
+def test_unpair_failure_does_not_emit_history_cleared(qtbot, ctl):
+    from teleport.trust.store import TrustStoreError
+
+    ns = ctl()
+    cleared: list = []
+    ns.c.history_cleared.connect(cleared.append)
+    ns.node.unpair_error = TrustStoreError("không ghi được")
+    ns.c.unpair(PEER_ID, clear_history=True)
+    qtbot.wait(20)
+    ns.host.run_submit(ns.host.submits[0])
+    qtbot.wait(20)
+    assert cleared == []
+
+
+def test_unpair_direct_defaults_to_keep_history(qtbot, ctl):
+    ns = ctl()
+    ns.c.unpair(PEER_ID)
+    qtbot.wait(20)
+    ns.host.run_submit(ns.host.submits[0])
+    assert ns.node.unpair_clear_history == [False], "`unpair(device_id)` mặc định clear_history=False (1.7)"
+
+
+def test_unpair_box_default_button_still_no(qtbot, ctl):
+    ns = ctl()
+    ns.c.request_unpair(PEER_ID, "May-B")
+    qtbot.wait(20)
+    box = ns.c.unpair_box
+    no = button_with_text(box, UNPAIR_NO)
+    assert box.defaultButton() is no
+    assert box.escapeButton() is no
+    assert not ns.host.submits and not ns.host.calls, "chưa bấm gì thì không hủy ghép đôi"
 
 
 # =================================================================================================

@@ -81,7 +81,7 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 
 **Có:** giao diện tối thiểu trên Windows: radar (danh sách thiết bị, nút nhập IP), ghép đôi bằng mã 6 số, kéo thả hoặc “Gửi file…”, hộp thoại Nhận / Từ chối, danh sách lượt truyền có tiến độ, tốc độ, trạng thái “Đang nối lại…” và nút hủy; tự nối lại và kiểm tra toàn vẹn như F6, F7; bản zip chạy không cần cài Python. CLI giữ như F12.
 
-**Để sau hackathon:** chế độ ẩn và màn hình “Chờ ghép đôi” (F3, F10), màn hình cài đặt (F10), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; hệ điều hành bằng chữ và trạng thái “đang bận” (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP, nút “Gửi lại” và “Đổi thư mục nhận” (mục 8).
+**Để sau hackathon:** màn hình “Chờ ghép đôi” (F3), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; hệ điều hành bằng chữ và trạng thái “đang bận” (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP, nút “Gửi lại” và “Đổi thư mục nhận” (mục 8).
 
 **Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](benchmark.md).
 
@@ -93,7 +93,7 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 | H4 | Đóng hẳn app nhận giữa lượt truyền rồi mở lại: lượt truyền tự chạy tiếp và hoàn tất, SHA-256 trùng (F6) | Như H3 |
 | H5 | Gửi lại đúng file ở H2: máy nhận lưu thành `ten (1).ext`, file cũ không đổi; máy thứ ba chưa ghép đôi (hoặc máy B sau khi máy A hủy ghép đôi với B) không gửi được file tới máy A: máy B thấy câu của dòng “Máy kia từ chối máy này” (mục 8), máy A không hiện hộp thoại nhận và không có file mới | Xem thư mục nhận; `Get-FileHash` file cũ. Với máy B: hủy ghép đôi ở máy A, giữ nguyên ở máy B, rồi B gửi file tới A; kiểm xong hủy nốt ở máy B để **cả hai** máy về chưa ghép đôi |
 
-Đạt đủ H1–H5 thì **dừng thêm tính năng** tới hết buổi demo, chỉ sửa lỗi. Không đạt kịp thì demo bằng CLI cho phần giao diện còn thiếu; H2–H5 vẫn phải đạt bằng CLI.
+Không dừng thêm tính năng trước buổi demo ([ke_hoach.md](ke_hoach.md) mục 5.5): bản zip đã kiểm H1–H5 được chốt theo commit, còn `main` tiếp tục nhận thay đổi. Không đạt kịp thì demo bằng CLI cho phần giao diện còn thiếu; H2–H5 vẫn phải đạt bằng CLI.
 
 Kịch bản demo hackathon (5 phút): các dòng 0:00–3:00 của mục 13, thêm H4 (đóng app nhận rồi mở lại) và dòng 4:00 (tắt Internet của router). Bỏ clipboard và so sánh với Google Drive.
 
@@ -210,7 +210,8 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Cho máy chưa ghép đôi thấy máy này (**mặc định bật**)
   - Theo từng thiết bị tin cậy: Hỏi trước khi nhận · Đồng bộ clipboard · Hủy ghép đôi
   - Giới hạn tốc độ gửi · Dọn file tạm sau N ngày (mặc định 7)
-  - Kiểm tra cập nhật (**mặc định tắt**) · Xuất log
+  - Kiểm tra cập nhật (**mặc định tắt**; có từ giai đoạn 6) · Xuất log
+  - “Khởi động cùng hệ điều hành” hiện có trên Windows (ẩn trên hệ điều hành chưa hỗ trợ)
 - **AC của “Cho máy chưa ghép đôi thấy máy này”** (bật: máy này đang *hiện*; tắt: đang *ẩn*):
   - Tắt thì máy này ngừng quảng bá trên mạng và biến mất khỏi radar của máy khác như khi thoát app (N1). Bật lại thì máy này quảng bá lại ngay.
   - Đang ẩn, máy này vẫn thấy máy khác trên radar, vẫn tự kết nối tới thiết bị tin cậy đang hiện (và tới địa chỉ đã kết nối được gần nhất của thiết bị tin cậy, F2), và gửi/nhận file, clipboard như thường.
@@ -267,8 +268,8 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 
 ### 7.1. Cửa sổ chính — khung chat theo từng máy
 ```
-┌─ Teleport ──────────────────────────────────────────────────────────────┐
-│ [▶] Teleport      [⌕] [⚙] │ (PC) PC-Nha                       [📂] [⋯]  │
+┌─ ZCL Teleport ──────────────────────────────────────────────────────────┐
+│ [▶] ZCL Teleport  [⌕] [⚙] │ (PC) PC-Nha                       [📂] [⋯]  │
 │ ┌────────────────────────┐ │ ● Trực tuyến · Windows · 192.168.1.20       │
 │ │(PC)● PC-Nha            │ ├─────────────────────────────────────────────┤
 │ │      Đang gửi · 62%    │ │            — Đã ghép đôi · 28/10 —          │
@@ -300,7 +301,7 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 
 Màn “Tìm máy mới”:
 ```
-┌─ Teleport ───────────────────────────────────────────────────────┐
+┌─ ZCL Teleport ───────────────────────────────────────────────────┐
 │ [← Quay lại]  Tìm máy mới                 [ Nhập IP thủ công… ]  │
 │                ·          ·          ·                           │
 │   (PC) PC-Khách         ╭───╮        (PC) PC-Nha · đã ghép       │
@@ -555,7 +556,14 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: danh tính thiết bị thay đổi khi máy này gửi yêu cầu ghép đôi | Câu của dòng “Danh tính thiết bị thay đổi”, kèm dòng “Muốn ghép đôi lại thì hãy hủy ghép đôi mục cũ trước (chuột phải vào thiết bị → Hủy ghép đôi…).” | — |
 | Giao diện: phiên ghép đôi do máy khác gửi tới dừng trước khi hiện mã | Không hiện gì (máy lạ không làm phiền được bằng cách mở rồi bỏ phiên). Ngoại lệ: máy này cũng vừa bấm ghép đôi với máy đó và phiên của máy này nhường cho phiên kia (hai máy cùng chủ động): hiện câu của máy gửi yêu cầu ở dòng “Phiên ghép đôi dừng trước khi hiện mã” | — |
 | Giao diện: có yêu cầu ghép đôi khi không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) | Bóng thoại ở khay: “Có yêu cầu ghép đôi” | Hộp mã (mục 7.2) vẫn mở. Bấm vào bóng thoại: hiện cửa sổ chính và đưa hộp mã lên trước |
-| Giao diện: hủy ghép đôi (chuột phải vào thiết bị đã ghép → “Hủy ghép đôi…”) | Hộp “Hủy ghép đôi”: “Hủy ghép đôi với “*PC-Nha*”? Hai máy sẽ không gửi file cho nhau được nữa cho tới khi ghép đôi lại.” Xong: “Đã hủy ghép đôi với “*PC-Nha*”.” ở dải thông báo như dòng “Giao diện: ghép đôi xong”. Lỗi (hộp): “Không hủy ghép đôi được với “*PC-Nha*”. Hãy thử lại.” | Nút “Hủy ghép đôi”, “Không” (mặc định) |
+| Giao diện: hủy ghép đôi (chuột phải vào thiết bị đã ghép → “Hủy ghép đôi…”, hay nút “Hủy ghép đôi…” ở Cài đặt → Thiết bị tin cậy) | Hộp “Hủy ghép đôi”: “Hủy ghép đôi với “*PC-Nha*”? Hai máy sẽ không gửi file cho nhau được nữa cho tới khi ghép đôi lại.”, có ô “Xóa cả lịch sử truyền file với máy này” (bật sẵn). Xong: “Đã hủy ghép đôi với “*PC-Nha*”.” ở dải thông báo như dòng “Giao diện: ghép đôi xong”. Lỗi (hộp): “Không hủy ghép đôi được với “*PC-Nha*”. Hãy thử lại.” | Nút “Hủy ghép đôi”, “Không” (mặc định) |
+| Giao diện, Cài đặt: tên thiết bị rỗng / sai | “Hãy nhập tên thiết bị.” / “Tên thiết bị cần từ 1 đến 64 ký tự và không có ký tự điều khiển.” (ngay dưới ô tên) | Sửa tên; Esc trả tên cũ |
+| Giao diện, Cài đặt: không lưu được cài đặt | “Chưa lưu được cài đặt vì không ghi được vào thư mục cấu hình của Teleport. Hãy kiểm tra quyền ghi rồi thử lại.” Lỗi khác: “Chưa lưu được cài đặt vì một lỗi không mong đợi. Hãy thử lại.” (control trở về giá trị cũ) | Thử lại |
+| Giao diện, Cài đặt: không đọc được cài đặt hiện tại | “Không đọc được cài đặt hiện tại.” | Nút “Thử lại” |
+| Giao diện, Cài đặt: khởi động cùng Windows | Đọc registry lỗi: “Không đọc được cài đặt khởi động của Windows.” Ghi lỗi: “Chưa đổi được việc khởi động cùng Windows vì Windows không cho ghi cài đặt khởi động. Hãy thử lại.” Windows đang tắt Teleport ở danh sách ứng dụng khởi động: “Windows đang tắt Teleport trong danh sách ứng dụng khởi động. Bật công tắc này để cho phép lại.” Bản khác đang được đặt: “Teleport đang được đặt khởi động cùng Windows từ một thư mục cài hoặc thư mục cấu hình khác. Bật công tắc để dùng bản này.” | Bật lại công tắc |
+| Giao diện, Cài đặt: máy này đang ẩn | Dưới công tắc: “Đang ẩn: máy chưa ghép đôi không thấy máy này và không gửi được yêu cầu ghép đôi tới. Muốn ghép đôi với máy mới, hãy mở Tìm máy mới trên máy này rồi bấm vào máy kia.”; dưới ô tên: “Máy này đang ẩn nên chỉ máy đã ghép đôi thấy tên này.” | — |
+| Giao diện, Cài đặt: xóa toàn bộ lịch sử | Hộp “Xóa toàn bộ lịch sử”: “Xóa lịch sử truyền file với mọi máy, kể cả máy đã hủy ghép đôi? File đã nhận vẫn còn nguyên trong thư mục nhận.” Xong: “Đã xóa toàn bộ lịch sử truyền file.” Lỗi: “Chưa xóa được lịch sử truyền file. Hãy thử lại.” | Nút “Xóa lịch sử”, “Không” (mặc định) |
+| Giao diện, Cài đặt: xuất log | Xong: “Đã lưu log vào *D:\Logs\teleport-log-20261031-101500.zip*.” Không ghi được: “Không lưu được file log vào *đường dẫn*. Hãy chọn thư mục khác mà bạn có quyền ghi.” Lỗi khác: “Không xuất được log vì một lỗi không mong đợi. Hãy thử lại.” | Nút “Mở thư mục” (khi xong) |
 | Giao diện: nhập IP thủ công sai | Câu của dòng “CLI: `--address` của `send` sai” (*x* là chữ đã nhập) | Sửa lại trong ô nhập |
 | CLI: `--limit-rate` sai | “Tốc độ không hợp lệ: “*x*”. Hãy nhập ví dụ 20M (20 MB/s) hoặc 512K; tối thiểu 64K.” | — |
 | CLI: `--address` của `send` sai | “*x* không phải địa chỉ IPv4 hợp lệ. Hãy nhập ví dụ 192.168.1.5 hoặc 192.168.1.5:47474.” | — |

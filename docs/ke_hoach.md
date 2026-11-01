@@ -22,6 +22,7 @@
 | Nguồn lực | Làm một mình |
 | Thời hạn | Không có hạn cố định → kiểm soát bằng các bản phát hành (mục 5), mốc tham khảo ~15 tuần tới v1.0 |
 | Ngôn ngữ giao diện | Tiếng Việt và English |
+| Tên sản phẩm | **Zero-Cloud LAN Teleport** (dạng viết liền `zero-cloud-lan-teleport`, đã dùng cho repo và tên gói phân phối); tên ngắn hiển thị trong app và bộ cài là **ZCL Teleport** (`APP_NAME` ở `src/teleport/ui/texts.py`), còn định danh kỹ thuật (gói `teleport`, lệnh `teleport`, `Teleport.exe`, thư mục cấu hình và thư mục nhận) giữ “Teleport” để không mất dữ liệu cũ; biểu tượng là logo vẽ ở `src/teleport/ui/logo.py`. Chốt 01/11/2026 |
 
 ---
 
@@ -358,7 +359,7 @@ Máy chính có thêm một máy ảo Ubuntu bridged ([benchmark.md](benchmark.m
 
 ### 5.5. Lịch tới buổi demo hackathon
 
-Phạm vi và tiêu chí H1–H5: [mvp.md](mvp.md) mục 4.1. Buổi demo hết tuần 4 của hackathon, khoảng 08/11/2026. Tới lúc đó lịch này đi trước mục 5.2: chỉ làm phần Giai đoạn 4 mà mvp mục 4.1 cần, mọi việc khác của Giai đoạn 4–5 làm sau buổi demo.
+Phạm vi và tiêu chí H1–H5: [mvp.md](mvp.md) mục 4.1. Buổi demo hết tuần 4 của hackathon, khoảng 08/11/2026. Từ 01/11 không còn mốc đóng băng: việc hoàn thiện sản phẩm theo mục 5.2 (Giai đoạn 4–5) tiếp tục trên `main` cả trước buổi demo; lịch này chỉ giữ các ngày cần hai máy thật và các bản zip dùng để kiểm H1–H5.
 
 Máy thật thứ hai (máy mượn) chỉ có mặt các ngày 02, 06, 07 và 08/11, nên mọi việc cần hai máy thật dồn vào các ngày đó.
 
@@ -366,13 +367,13 @@ Máy thật thứ hai (máy mượn) chỉ có mặt các ngày 02, 06, 07 và 0
 |---|---|---|
 | 30/10–01/11 | Sửa những lỗi giao diện người xem sẽ thấy (thẻ lượt truyền, tiến độ, bấm vào thiết bị), ghi lỗi không bắt được vào log; build zip thử từ `main` bằng CI; kiểm tay hai node trên một máy bằng mã nguồn | Bản sửa đã merge vào `main`; có zip thử từ CI; kiểm tay hai node trên một máy đạt |
 | 02/11 | **Kiểm sớm** trên hai máy thật bằng zip thử, đúng mạng sẽ dùng ngày 08/11: mDNS (H1), sơ bộ H2–H5, đo tốc độ để chọn cỡ file | Lần chạy đầu của zip trên máy mượn chưa cài Python chạy được; có danh sách lỗi trên máy thật |
-| 03/11–04/11 | Đánh bóng giao diện, đóng gói, sửa lỗi tìm được ngày 02/11 | **23:59 04/11 đóng băng**: sau mốc này chỉ sửa lỗi |
+| 03/11–04/11 | Sửa lỗi tìm được ngày 02/11, tiếp tục hoàn thiện sản phẩm | Lỗi của ngày 02/11 đã sửa và merge vào `main` |
 | 05/11 | Build zip ứng viên RC1 từ `main` bằng CI, `pytest -m frozen`; kiểm tay trên exe của RC1; chạy `soat-tai-lieu`; chuẩn bị hai máy và mạng | Có zip ứng viên |
 | 06/11 | **Kiểm H1–H5 chính thức** trên RC1 | H1–H5 có kết quả trong [benchmark.md](benchmark.md) mục 6 |
 | 07/11 | Có sửa thì build RC2 và kiểm lại các H bị ảnh hưởng; **18:00 chốt zip**; quay video dự phòng; tập lại, có một lần đi đường CLI và một lần không có mDNS (nhập IP) | Zip chốt, commit của zip ghi ở [benchmark.md](benchmark.md) mục 6 |
 | 08/11 | Chuẩn bị lại hai máy và mạng như 05/11; không build, không sửa | — |
 
-- Kiểm sớm ngày 02/11 **không tính là đạt**, kể cả khi đủ H1–H5: không ghi kết quả H vào [benchmark.md](benchmark.md) mục 6 và không dời mốc đóng băng.
+- Kiểm sớm ngày 02/11 **không tính là đạt**, kể cả khi đủ H1–H5: không ghi kết quả H vào [benchmark.md](benchmark.md) mục 6.
 - Zip đổi commit sau 06/11 (RC2 hay bản sửa khác) thì kiểm lại các H mà thay đổi đó có thể ảnh hưởng, trên đúng zip mới, trước khi chốt.
 
 Các ngày kiểm chính thức 06–07/11 đo luôn được D1, D3, D5 (mục 5.4) nếu kịp; không kịp thì để lại cho đợt đo.
@@ -442,8 +443,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 
 Đây là danh sách câu hỏi mở duy nhất của dự án.
 
-1. **Tên thương mại** và biểu tượng app (hiện dùng tên tạm “Teleport”). Đã có sản phẩm mã nguồn mở nổi tiếng tên Teleport (Gravitational, goteleport.com) và gói `teleport` trên PyPI; repo đã public nên cần chốt trước `v1.0.0`.
-2. **Ngân sách ký mã** cho Windows/macOS.
-3. **Chế độ khách cho điện thoại** (qua trình duyệt) có làm ngay sau v1.0, trước app Android, hay không.
-4. **App iOS và CLA** (sau v1.0): điều khoản App Store xung đột với GPL. Muốn đưa app lên App Store thì chủ bản quyền phải cấp thêm giấy phép riêng, nên cần người đóng góp ký thỏa thuận chuyển quyền (CLA) **trước khi** nhận code của họ. Chưa có người đóng góp ngoài nên chưa cần; cần quyết trước khi nhận Pull Request đầu tiên từ bên ngoài.
-5. **Tự ẩn khi Windows ở mạng Public:** có tự ngừng quảng bá mDNS (như tắt công tắc ẩn ở mvp F10) khi Windows đang đặt mạng hiện tại là Public hay không. Lợi: ở quán cà phê, khách sạn, người lạ không đọc được `device_id` và tên máy (mục 3.7). Hại: Windows hay đặt nhầm mạng nhà là Public, và khi đó máy này biến mất khỏi radar của máy khác. Chỉ áp cho Windows. Chốt ở Giai đoạn 6.
+1. **Ngân sách ký mã** cho Windows/macOS.
+2. **Chế độ khách cho điện thoại** (qua trình duyệt) có làm ngay sau v1.0, trước app Android, hay không.
+3. **App iOS và CLA** (sau v1.0): điều khoản App Store xung đột với GPL. Muốn đưa app lên App Store thì chủ bản quyền phải cấp thêm giấy phép riêng, nên cần người đóng góp ký thỏa thuận chuyển quyền (CLA) **trước khi** nhận code của họ. Chưa có người đóng góp ngoài nên chưa cần; cần quyết trước khi nhận Pull Request đầu tiên từ bên ngoài.
+4. **Tự ẩn khi Windows ở mạng Public:** có tự ngừng quảng bá mDNS (như tắt công tắc ẩn ở mvp F10) khi Windows đang đặt mạng hiện tại là Public hay không. Lợi: ở quán cà phê, khách sạn, người lạ không đọc được `device_id` và tên máy (mục 3.7). Hại: Windows hay đặt nhầm mạng nhà là Public, và khi đó máy này biến mất khỏi radar của máy khác. Chỉ áp cho Windows. Chốt ở Giai đoạn 6.

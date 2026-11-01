@@ -140,7 +140,6 @@ from teleport.core.links import ConnectResult
 from teleport.ui import icons, send, texts, theme
 from teleport.ui.activity import EMPTY_ACTIVITY, ActiveTransfer, DeviceActivity, FinishedTransfer
 from teleport.ui.radar import (
-    _OS_LABELS,
     DEVICE_ID_ROLE,
     DEVICE_ROLE,
     FAILURE_ROLE,
@@ -323,7 +322,7 @@ def status_line(
     if activity.last is not None:
         tail: str | None = activity_text(activity.last)
     else:
-        tail = _OS_LABELS.get(view.os or "")
+        tail = texts.os_label(view.os)
     return presence, tone, f"{head} · {tail}" if tail else head
 
 
@@ -532,7 +531,7 @@ class ConversationModel(QSortFilterProxyModel):
     def _details(view: DeviceView, activity: DeviceActivity, failure: ConnectResult | None) -> list[str]:
         """Các dòng của mô tả trợ năng: hệ điều hành, câu lỗi kết nối đầy đủ, số lượt (khi > 1)."""
         lines: list[str] = []
-        os_label = _OS_LABELS.get(view.os or "")
+        os_label = texts.os_label(view.os)
         if os_label:
             lines.append(os_label)
         if failure is not None and failure is not ConnectResult.OK:

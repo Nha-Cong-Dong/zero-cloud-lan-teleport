@@ -54,7 +54,6 @@ DEVICE_ID_ROLE = Qt.ItemDataRole.UserRole + 2  # device_id (str)
 FAILURE_ROLE = Qt.ItemDataRole.UserRole + 3  # ConnectResult đang hiện trên hàng, hoặc None
 
 _NODE_EVENTS = (DeviceOnline, DeviceOffline, DeviceConnected, DeviceDisconnected, ConnectFailed)
-_OS_LABELS = {"windows": "Windows", "macos": "macOS", "linux": "Linux"}
 _Index = QModelIndex | QPersistentModelIndex
 
 
@@ -269,7 +268,7 @@ class DeviceListModel(QAbstractListModel):
         """Các dòng chữ của một hàng: tên + (đã ghép/chưa ghép); hệ điều hành · trạng thái; lỗi."""
         lines = [f"{texts.peer_label(view.name, view.device_id)} {_paired_tag(view.paired)}"]
         parts = []
-        os_label = _OS_LABELS.get(view.os or "")
+        os_label = texts.os_label(view.os)
         if os_label:
             parts.append(os_label)
         parts.append(_status_text(view))

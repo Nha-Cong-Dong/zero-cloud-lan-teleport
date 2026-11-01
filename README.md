@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛰️ Teleport
+# 🛰️ ZCL Teleport
 
 ### Zero-Cloud LAN Teleport
 

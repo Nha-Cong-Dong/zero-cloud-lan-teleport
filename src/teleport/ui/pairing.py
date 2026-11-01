@@ -76,6 +76,7 @@ from typing import Any, Protocol
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -398,6 +399,11 @@ def unpair_confirm_text(name: str) -> str:
     )
 
 
+def unpair_clear_history_text() -> str:
+    """Ô trong hộp hủy ghép đôi (bật sẵn): xóa luôn lịch sử truyền file với máy đó (mvp F5)."""
+    return QCoreApplication.translate("Pairing", "Xóa cả lịch sử truyền file với máy này")
+
+
 def unpair_accept_text() -> str:
     """Nút đồng ý hủy ghép đôi."""
     return QCoreApplication.translate("Pairing", "Hủy ghép đôi")
@@ -424,7 +430,7 @@ def unpair_failed_text(name: str) -> str:
 def prompt_notification() -> tuple[str, str]:
     """(tiêu đề, chữ) bóng thoại khay khi có lời hỏi ghép đôi mà cửa sổ chính đang ẩn."""
     return (
-        QCoreApplication.translate("Pairing", "Teleport"),
+        texts.APP_NAME,
         QCoreApplication.translate("Pairing", "Có yêu cầu ghép đôi"),
     )
 
@@ -685,6 +691,9 @@ class PairingController(QObject):
     # Việc ghép chủ động (`pair_device` / `pair_address`) kết thúc, mọi đường (kể cả lỗi, hủy):
     # device_id của thiết bị trên radar (None nếu ghép bằng IP), PAIRED hay không.
     job_done = Signal(object, bool)
+    # Hủy ghép đôi xong mà có xóa lịch sử (`unpair(..., clear_history=True)`): device_id của máy đó.
+    # Trang Cài đặt phát signal cùng tên với None (= toàn bộ). B2/B3 nối để dọn luồng chat.
+    history_cleared = Signal(object)
 
     def __init__(
         self,
@@ -992,7 +1001,11 @@ class PairingController(QObject):
     # ---- Hủy ghép đôi ------------------------------------------------------------------------
 
     def request_unpair(self, device_id: str, name: str | None) -> None:
-        """Mở hộp xác nhận hủy ghép đôi (nút mặc định là “Không”)."""
+        """Mở hộp xác nhận hủy ghép đôi (nút mặc định là “Không”).
+
+        Hộp có ô “Xóa cả lịch sử truyền file với máy này” bật sẵn (`QMessageBox.setCheckBox`); trạng
+        thái ô lúc bấm “Hủy ghép đôi” đi vào `unpair(..., clear_history=...)`.
+        """
         label = texts.peer_label(name, device_id)
         self._unpair_names[device_id] = label
         self._close_unpair_box()
@@ -1001,6 +1014,11 @@ class PairingController(QObject):
         box.setWindowTitle(unpair_title())
         box.setAccessibleName(unpair_title())
         box.setText(unpair_confirm_text(label))
+        check = QCheckBox(unpair_clear_history_text())
+        check.setObjectName("unpairClearHistory")
+        check.setChecked(True)
+        check.setAccessibleName(unpair_clear_history_text())
+        box.setCheckBox(check)
         accept = box.addButton(unpair_accept_text(), QMessageBox.ButtonRole.DestructiveRole)
         decline = box.addButton(unpair_decline_text(), QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(decline)
@@ -1009,14 +1027,18 @@ class PairingController(QObject):
 
         def clicked(button: object) -> None:
             if button is accept and self._current(generation):
-                self.unpair(device_id)
+                self.unpair(device_id, clear_history=check.isChecked())
 
         box.buttonClicked.connect(clicked)
         self._unpair_box = box
         _show(box)
 
-    def unpair(self, device_id: str) -> None:
-        """Hủy ghép đôi ngay, không hỏi; xong thì đọc lại danh sách thiết bị."""
+    def unpair(self, device_id: str, *, clear_history: bool = False) -> None:
+        """Hủy ghép đôi ngay, không hỏi; xong thì đọc lại danh sách thiết bị.
+
+        `clear_history`: xóa luôn lịch sử với máy đó (`Node.unpair(clear_history=True)`); xong thì
+        phát `history_cleared(device_id)`.
+        """
         host = self._host
         if host is None:
             return
@@ -1024,7 +1046,7 @@ class PairingController(QObject):
         label = self._unpair_names.get(device_id) or texts.peer_label(None, device_id)
 
         async def run(node: Node) -> object:
-            await node.unpair(device_id)
+            await node.unpair(device_id, clear_history=clear_history)
             return node.devices()
 
         def done(result: object) -> None:
@@ -1032,6 +1054,8 @@ class PairingController(QObject):
                 return
             if isinstance(result, tuple):
                 self.devices_changed.emit(result)
+                if clear_history:
+                    self.history_cleared.emit(device_id)
                 self._show_result(unpaired_text(label), ok=True)
             elif isinstance(result, KeyError):
                 # Đã bị hủy trước đó: vẫn đọc lại danh sách để radar đúng.

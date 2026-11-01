@@ -190,7 +190,8 @@ version_info = vi.VSVersionInfo(
                 vi.StringTable(
                     "040904B0",
                     [
-                        vi.StringStruct("FileDescription", "Teleport - chuyển file trong mạng LAN"),
+                        # Windows hiện FileDescription làm tên app (đầu toast, Task Manager, “Mở bằng”).
+                        vi.StringStruct("FileDescription", "ZCL Teleport"),
                         vi.StringStruct("FileVersion", APP_VERSION),
                         vi.StringStruct("InternalName", EXE_NAME),
                         vi.StringStruct("LegalCopyright", "GPL-3.0-or-later"),
