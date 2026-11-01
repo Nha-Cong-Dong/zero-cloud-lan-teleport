@@ -1212,7 +1212,11 @@ class SettingsPage(QWidget):
         )
         self.visible_row.set_text(
             t("Settings", "Cho máy chưa ghép đôi thấy máy này"),
-            t("Settings", "Máy đã ghép đôi chỉ tự kết nối được khi ít nhất một trong hai máy đang hiện."),
+            t(
+                "Settings",
+                "Máy đã ghép đôi tự kết nối được khi ít nhất một trong hai máy đang hiện, "
+                "hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.",
+            ),
         )
         self.history_row.set_text(
             t("Settings", "Lịch sử truyền file"),
@@ -1289,7 +1293,9 @@ class SettingsPage(QWidget):
         self.hidden_label.setText(hidden)
         self.hidden_label.setVisible(not self._visible)
         base = QCoreApplication.translate(
-            "Settings", "Máy đã ghép đôi chỉ tự kết nối được khi ít nhất một trong hai máy đang hiện."
+            "Settings",
+            "Máy đã ghép đôi tự kết nối được khi ít nhất một trong hai máy đang hiện, "
+            "hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.",
         )
         self.visible_switch.setAccessibleDescription(base if self._visible else f"{base} {hidden}")
 
