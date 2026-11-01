@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.suite }}
+    name: ${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -26,6 +26,17 @@ jobs:
         # Hai job chạy cùng lúc: test giao diện tách riêng (vì sao: architecture.md mục 6), nên thời
         # gian chờ một PR là job dài hơn chứ không phải tổng hai bộ.
         suite: [core, gui]
+        # Test giao diện trên Windows chạy tuần tự (dưới đây), nên chia làm ba phần chạy cùng lúc.
+        exclude:
+          - os: windows-latest
+            suite: gui
+        include:
+          - {os: windows-latest, python: "3.12", suite: gui, shard: 1/3}
+          - {os: windows-latest, python: "3.12", suite: gui, shard: 2/3}
+          - {os: windows-latest, python: "3.12", suite: gui, shard: 3/3}
+          - {os: windows-latest, python: "3.14", suite: gui, shard: 1/3}
+          - {os: windows-latest, python: "3.14", suite: gui, shard: 2/3}
+          - {os: windows-latest, python: "3.14", suite: gui, shard: 3/3}
     env:
       # Test tầng ui chạy Qt không cần màn hình.
       QT_QPA_PLATFORM: offscreen
@@ -59,3 +70,5 @@ jobs:
         run: pytest -q -n auto --dist loadgroup --max-worker-restart=0 -m gui
       - if: matrix.suite == 'gui' && runner.os == 'Windows'
         run: pytest -q -m gui
+        env:
+          TELEPORT_SHARD: ${{ matrix.shard }}
