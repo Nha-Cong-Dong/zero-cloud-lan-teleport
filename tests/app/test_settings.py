@@ -8,6 +8,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -430,6 +431,9 @@ def _normalized(s) -> dict:
         "autostart": s.autostart,
         "first_run_done": s.first_run_done,
         "radar_view": s.radar_view,
+        # D6: `getattr` để các test cũ vẫn chạy khi trường chưa có; test D6 ở cuối file kiểm trường có thật.
+        "theme": getattr(s, "theme", None),
+        "accent": getattr(s, "accent", None),
         "devices": devices,
     }
 
@@ -582,6 +586,17 @@ BAD_FIELDS = [
     ("radar_view", '"grid"'),
     ("radar_view", '"Radar"'),
     ("radar_view", "1"),
+    # D6 (spec-d6 mục 2.1, 12 ý 9): `"system"` không phải giá trị lưu được (vắng = theo hệ điều hành).
+    ("theme", '"system"'),
+    ("theme", '"Dark"'),
+    ("theme", '""'),
+    ("theme", "1"),
+    ("theme", "true"),
+    ("accent", '"Ocean"'),
+    ("accent", '"1ocean"'),
+    ("accent", '""'),
+    ("accent", json.dumps("a" * 33)),
+    ("accent", "5"),
     ("devices", "[]"),
     ("devices", '"x"'),
     ("devices", "5"),
@@ -768,6 +783,8 @@ def test_warning_never_contains_values(cfg, caplog):
         "autostart": SECRET,
         "first_run_done": SECRET,
         "radar_view": SECRET,
+        "theme": SECRET,
+        "accent": SECRET,
         "devices": {
             SECRET: {"ask_before_receive": False},
             DEV_A: {"ask_before_receive": SECRET, "clipboard": SECRET},
@@ -814,6 +831,8 @@ def _settings(draw):
         autostart=draw(st.booleans()),
         first_run_done=draw(st.booleans()),
         radar_view=draw(st.sampled_from([None, "radar", "list"])),
+        theme=draw(st.sampled_from([None, "light", "dark"])),
+        accent=draw(st.none() | st.from_regex(r"[a-z][a-z0-9_]{0,31}", fullmatch=True)),
         devices=devices,
     )
 
@@ -867,3 +886,164 @@ def test_load_failed_not_written_and_not_compared(cfg):
 
 def test_missing_file_is_not_load_failed(tmp_path):
     assert not Settings.load(tmp_path / "chua-co").load_failed
+
+
+# =================================================================================================
+# D6: chế độ màu `theme` và màu nhấn `accent` (spec-d6 mục 2.1, 5.1; mục 12 ý 9 thắng)
+#
+# `theme`: None = theo hệ điều hành; hợp lệ ∈ `THEMES = ("light", "dark")`; `"system"` không hợp lệ.
+# `accent`: None = mặc định; `app` chỉ kiểm **dạng** `[a-z][a-z0-9_]{0,31}` (ASCII), mã đúng dạng nhưng
+# lạ được giữ nguyên. Sai kiểu → TypeError, sai giá trị → ValueError (như `language`).
+# =================================================================================================
+
+ACCENT_OK = ["mint", "ocean", "a", "a" + "b" * 31, "teal_2", "x_", "z9"]
+ACCENT_BAD_VALUE = [
+    "",  # rỗng
+    "Ocean",  # chữ hoa
+    "1ocean",  # không bắt đầu bằng chữ
+    "_ocean",
+    "ocean-blue",  # gạch ngang
+    "ocean blue",
+    "a" * 33,  # vượt giới hạn 1 ký tự
+    "a" + "b" * 32,
+    "đại_dương",  # không phải ASCII
+    "ｏcean",  # chữ “o” toàn khổ: `\w`/`str.isalpha` nhận nhầm
+    "ocean\n",  # `$` của `re.match` nhận dòng mới cuối chuỗi
+    "ocean\x00",
+    "../ocean",
+]
+
+
+def test_theme_and_accent_constants_match_spec():
+    assert settings_mod.THEMES == ("light", "dark")
+    pattern = settings_mod.ACCENT_RE
+    for ok in ACCENT_OK:
+        assert re.fullmatch(pattern, ok), ok
+    for bad in ACCENT_BAD_VALUE:
+        assert not re.fullmatch(pattern, bad), repr(bad)
+
+
+def test_theme_default_none_not_written(cfg):
+    s = Settings()
+    assert s.theme is None
+    s.save(cfg)
+    assert on_disk(cfg) == {"version": 1}
+    Settings(theme=None, accent=None).save(cfg)
+    assert "theme" not in on_disk(cfg)
+
+
+@pytest.mark.parametrize("value", ["light", "dark"])
+def test_theme_light_dark_roundtrip(cfg, caplog, value):
+    caplog.set_level(logging.DEBUG)
+    Settings(theme=value).save(cfg)
+    assert on_disk(cfg) == {"version": 1, "theme": value}
+    loaded = Settings.load(cfg)
+    assert loaded.theme == value
+    assert warnings_of(caplog) == []
+    # Đọc rồi ghi lại ra đúng byte (không đổi gì khi không có gì đổi).
+    first = (cfg / SETTINGS_FILE).read_bytes()
+    loaded.save(cfg)
+    assert (cfg / SETTINGS_FILE).read_bytes() == first
+    assert not (cfg / BACKUP_FILE).exists()
+
+
+@pytest.mark.parametrize(
+    "bad", ['"system"', '"Light"', '"DARK"', '""', '" dark"', "1", "true", "[]", '{"a": 1}']
+)
+def test_theme_system_string_or_other_value_dropped_with_warning(cfg, caplog, bad):
+    """`"system"` hay giá trị lạ trong file: bỏ trường (về None = theo HĐH) + WARNING nêu tên trường,
+    không nêu giá trị; trường khác giữ; lần ghi sau sinh `.bak` (spec-d6 mục 12 ý 9)."""
+    caplog.set_level(logging.DEBUG)
+    raw = write(cfg, f'{{"version": 1, "language": "vi", "accent": "ocean", "theme": {bad}}}')
+    s = Settings.load(cfg)
+    assert s.theme is None
+    assert "theme" not in s.extra
+    assert (s.language, s.accent) == ("vi", "ocean")
+    warns = warnings_of(caplog)
+    assert any("theme" in r.getMessage() for r in warns), [r.getMessage() for r in warns]
+    s.save(cfg)
+    assert (cfg / BACKUP_FILE).read_bytes() == raw
+    assert on_disk(cfg) == {"version": 1, "language": "vi", "accent": "ocean"}
+
+
+def test_theme_null_in_file_is_none_without_warning(cfg, caplog):
+    caplog.set_level(logging.DEBUG)
+    write(cfg, '{"version": 1, "theme": null, "accent": null}')
+    s = Settings.load(cfg)
+    assert (s.theme, s.accent) == (None, None)
+    assert warnings_of(caplog) == []
+
+
+def test_theme_constructor_rejects_bad_type_and_value():
+    for bad_type in (1, True, b"dark", ["dark"], 0.0):
+        with pytest.raises(TypeError):
+            Settings(theme=bad_type)
+    for bad_value in ("system", "System", "Light", "DARK", "", " dark", "dark ", "auto"):
+        with pytest.raises(ValueError):
+            Settings(theme=bad_value)
+    assert Settings(theme="light").theme == "light"
+    assert Settings(theme="dark").theme == "dark"
+
+
+def test_accent_default_none_not_written(cfg):
+    s = Settings()
+    assert s.accent is None
+    s.save(cfg)
+    assert "accent" not in on_disk(cfg)
+
+
+@pytest.mark.parametrize("accent", ["ocean", "tuong_lai_9", "a" + "b" * 31])
+def test_accent_unknown_well_formed_id_kept_on_save(cfg, caplog, accent):
+    """Mã đúng dạng (kể cả mã bản này không biết, ví dụ của bản sau) giữ nguyên khi đọc và ghi lại;
+    không WARNING, không `.bak`."""
+    caplog.set_level(logging.DEBUG)
+    write(cfg, json.dumps({"version": 1, "accent": accent}))
+    s = Settings.load(cfg)
+    assert s.accent == accent
+    assert "accent" not in s.extra
+    assert warnings_of(caplog) == []
+    dataclasses.replace(s, theme="dark").save(cfg)
+    assert on_disk(cfg) == {"version": 1, "theme": "dark", "accent": accent}
+    assert not (cfg / BACKUP_FILE).exists()
+    assert Settings(accent=accent).accent == accent
+
+
+@pytest.mark.parametrize("bad", ACCENT_BAD_VALUE, ids=[repr(b)[:20] for b in ACCENT_BAD_VALUE])
+def test_accent_rejects_bad_form(cfg, caplog, bad):
+    with pytest.raises(ValueError):
+        Settings(accent=bad)
+    caplog.set_level(logging.DEBUG)
+    raw = write(cfg, json.dumps({"version": 1, "theme": "light", "accent": bad}))
+    s = Settings.load(cfg)
+    assert s.accent is None and s.theme == "light"
+    assert any("accent" in r.getMessage() for r in warnings_of(caplog))
+    s.save(cfg)
+    assert (cfg / BACKUP_FILE).read_bytes() == raw
+    assert on_disk(cfg) == {"version": 1, "theme": "light"}
+
+
+@pytest.mark.parametrize("bad", [5, True, b"ocean", ["ocean"], 1.5])
+def test_accent_rejects_bad_type(bad):
+    with pytest.raises(TypeError):
+        Settings(accent=bad)
+
+
+def test_old_file_without_theme_accent_defaults(cfg, caplog):
+    """File của bản trước D6 (có trường C1, không `theme`/`accent`): đọc ra None, không WARNING, ghi lại
+    không thêm khóa nào."""
+    caplog.set_level(logging.DEBUG)
+    original = {"version": 1, "port": 5000, "language": "vi", "radar_view": "list", "first_run_done": True}
+    write(cfg, json.dumps(original))
+    s = Settings.load(cfg)
+    assert (s.theme, s.accent) == (None, None)
+    assert warnings_of(caplog) == []
+    s.save(cfg)
+    assert on_disk(cfg) == original
+    assert not (cfg / BACKUP_FILE).exists()
+
+
+def test_theme_and_accent_not_left_in_extra(cfg):
+    write(cfg, '{"version": 1, "theme": "dark", "accent": "rose"}')
+    s = Settings.load(cfg)
+    assert (s.theme, s.accent) == ("dark", "rose")
+    assert set(s.extra) <= {"version"}

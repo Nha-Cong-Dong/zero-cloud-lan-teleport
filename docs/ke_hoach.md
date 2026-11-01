@@ -190,6 +190,7 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 | Kiểm thử | `pytest`, `pytest-asyncio`, `hypothesis`, `pytest-qt`, `pytest-xdist` | MIT / Apache / MPL / MIT / MIT |
 | Lint & format | `ruff` | MIT |
 | Kiểm tra kiểu | `mypy` (từ Giai đoạn 2) | MIT |
+| Biên dịch bản dịch `.ts` → `.qm` (chỉ khi phát triển, gọi từ `packaging/i18n/update.py`; không đóng vào bản build; chỉ `.qm` sinh ra và nguồn `.ts` của nó được đóng, mang giấy phép của dự án) | `lrelease` đi kèm `PySide6-Essentials` | như `PySide6-Essentials` |
 | CI / phát hành | GitHub Actions | — |
 | Đóng gói | `PyInstaller` chế độ `--onedir` → Inno Setup (Windows; script `packaging/inno/teleport.iss`, bản dịch tiếng Việt `Vietnamese.isl` của `jrsoftware/issrc`), `.dmg` (macOS), AppImage (Linux) | GPL kèm bootloader exception / giấy phép Inno Setup, kiểu zlib (mục 1) / tùy công cụ |
 
