@@ -318,14 +318,14 @@ def test_n4_name_of_64_chars_is_valid(tmp_path):
 )
 def test_default_device_name_uses_hostname(tmp_path, monkeypatch, hostname, expected):
     identity = load_or_create_identity(tmp_path / "id")
-    monkeypatch.setattr(platform, "node", lambda: hostname)
+    monkeypatch.setattr(node_mod, "_hostname", lambda: hostname)
     assert default_device_name(identity) == expected
 
 
 @pytest.mark.parametrize("hostname", ["", "   ", "x" * 100, "a\x00b", ".local", "a‮b"])
 def test_default_device_name_falls_back_to_stable_name(tmp_path, monkeypatch, hostname):
     identity = load_or_create_identity(tmp_path / "id")
-    monkeypatch.setattr(platform, "node", lambda: hostname)
+    monkeypatch.setattr(node_mod, "_hostname", lambda: hostname)
     expected = "Teleport-" + identity.device_id[:4]
     assert default_device_name(identity) == expected
     assert default_device_name(identity) == expected  # ổn định, không ngẫu nhiên
@@ -333,14 +333,14 @@ def test_default_device_name_falls_back_to_stable_name(tmp_path, monkeypatch, ho
 
 @integration
 async def test_n4_node_without_name_uses_hostname(node_factory, monkeypatch):
-    monkeypatch.setattr(platform, "node", lambda: "MacBook-Pro.local")
+    monkeypatch.setattr(node_mod, "_hostname", lambda: "MacBook-Pro.local")
     A = await node_factory("A", hostname=True)
     assert A.hello.name == "MacBook-Pro"
 
 
 @integration
 async def test_n4_node_with_bad_hostname_uses_fallback(node_factory, monkeypatch):
-    monkeypatch.setattr(platform, "node", lambda: "x" * 100)
+    monkeypatch.setattr(node_mod, "_hostname", lambda: "x" * 100)
     A = await node_factory("A", hostname=True)
     assert A.hello.name == "Teleport-" + A.id[:4]
 

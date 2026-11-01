@@ -372,7 +372,9 @@ def test_p384_key_rejected(make_cert, hash_alg):
         peer_cert_from_pem(pem_of(cert))
 
 
-@pytest.mark.parametrize("hash_alg", [hashes.SHA384(), hashes.SHA512(), hashes.SHA224()], ids=repr)
+@pytest.mark.parametrize(
+    "hash_alg", [hashes.SHA384(), hashes.SHA512(), hashes.SHA224()], ids=["sha384", "sha512", "sha224"]
+)
 def test_p256_with_non_sha256_signature_rejected(make_cert, hash_alg):
     cert = make_cert(hash_alg=hash_alg)
     with pytest.raises(InvalidCertificate):

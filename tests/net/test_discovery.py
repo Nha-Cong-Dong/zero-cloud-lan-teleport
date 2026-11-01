@@ -45,7 +45,7 @@ E = "\U0001f600"  # 😀, 4 byte UTF-8
 LOOPBACK = ["127.0.0.1"]
 WAIT = 10.0  # giây chờ tối đa một sự kiện (kế hoạch mục 4)
 
-mdns = pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
+mdns = pytest.mark.mdns
 
 
 def new_id() -> str:
@@ -1220,7 +1220,11 @@ async def test_set_priority_after_close_does_nothing():
     assert d.set_priority([new_id()]) is None
 
 
-@pytest.mark.parametrize("bad", [["bad"], [new_id(), "bad"], ["A" * 32], [None]], ids=repr)
+@pytest.mark.parametrize(
+    "bad",
+    [["bad"], [new_id(), "bad"], ["A" * 32], [None]],
+    ids=["bad", "id-hop-le+bad", "A*32", "None"],
+)
 async def test_set_priority_after_close_still_rejects_invalid_id(bad):
     # Đặc tả 2c: id sai → MessageError, kể cả khi đã close (kiểm tham số trước trạng thái).
     d = MdnsDiscovery(interfaces=LOOPBACK)

@@ -85,6 +85,20 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Test marker `mdns` (mDNS thật trên 127.0.0.1): bỏ qua khi `TELEPORT_SKIP_MDNS=1`; khi chạy song
+    song (`-n … --dist loadgroup`) dồn vào cùng một worker, vì mọi socket zeroconf cùng bind
+    127.0.0.1:5353. `tryfirst` để nhóm có trước khi pytest-xdist đọc `xdist_group`."""
+    skip = os.environ.get("TELEPORT_SKIP_MDNS") == "1"
+    for item in items:
+        if item.get_closest_marker("mdns") is None:
+            continue
+        item.add_marker(pytest.mark.xdist_group("mdns"))
+        if skip:
+            item.add_marker(pytest.mark.skip(reason="TELEPORT_SKIP_MDNS=1"))
+
+
 MiB = 1024 * 1024
 _MVP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "mvp.md")
 

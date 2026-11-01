@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import random
 import time
 from pathlib import Path
@@ -142,7 +141,7 @@ def real_opts(n: int) -> MdnsOptions:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
+@pytest.mark.mdns
 async def test_hide_goodbye_disappears_from_list_within_10s(node_factory):
     A = await node_factory("A", mdns=real_opts(61))
     B = await node_factory("B", mdns=real_opts(62))

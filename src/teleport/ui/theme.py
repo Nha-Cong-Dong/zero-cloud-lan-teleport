@@ -3,7 +3,7 @@
 `ui/theme.py` là nguồn duy nhất của màu, cỡ chữ, khoảng cách và góc bo. Màn nào cũng lấy từ đây,
 không ghi mã màu cứng.
 
-**Token** (`tokens(dark)` → `Tokens`): giá trị theo mockup khung chat của kế hoạch nâng cấp giao diện
+**Token** (`tokens(dark, accent)` → `Tokens`): giá trị theo mockup khung chat của kế hoạch nâng cấp giao diện
 (spec A1). Chỗ lệch mockup để đạt tương phản: `border_strong` sáng `#8C7B62` (mockup `#9C8C72` chỉ
 ≈ 2,8:1 trên sidebar); `accent_hover`/`accent_pressed`, `success_bg`, `warning`, `warning_bg` là token
 mới (nút chính nền nhạt chữ đậm nên hover/pressed là màu riêng, không `darker()`). `offline` chỉ dùng
@@ -21,7 +21,7 @@ của widget: QStyleSheetStyle ghi màu nền trong suốt vào bảng màu củ
 `background: transparent`, làm phép so độ sáng sai. Widget tự vẽ bắt `PaletteChange` và
 `ApplicationPaletteChange` để vẽ lại khi đổi chế độ.
 
-**Bảng màu** (`palette(dark)`, style Fusion): Window = surface; Base = surface_raised; AlternateBase =
+**Bảng màu** (`palette(dark, accent)`, style Fusion): Window = surface; Base = surface_raised; AlternateBase =
 sidebar; Button = sidebar (sáng) / selected (tối: nền sidebar gần như trùng nền cửa sổ, nút Fusion
 mất cạnh); chữ (Text, WindowText, ButtonText, ToolTipText) = text; ToolTipBase =
 surface_raised; Highlight = accent_strong; HighlightedText = surface_raised (sáng) / surface (tối);
@@ -31,9 +31,37 @@ surface_raised; Midlight = selected; Mid = border_strong; Dark = border_strong �
 / surface (tối). Highlight là `accent_strong` chứ không phải bạc hà nhạt `accent`, vì Highlight còn tô
 thanh tiến độ, viền thả, hàng chọn, mục menu khay và viền tiêu điểm Fusion (`highlightedOutline`;
 sáng là `highlight().darker(125)`, tối Fusion vẽ sáng hơn): bạc hà nhạt chỉ ≈ 1,3:1 trên nền (WCAG
-1.4.11). `apply(app)` đặt style Fusion và bảng màu theo
-`QStyleHints.colorScheme()` (`Unknown` → sáng), rồi theo `colorSchemeChanged` để đổi theo hệ điều
-hành. Không dùng màu để mang thông tin: trạng thái luôn có chữ đi kèm.
+1.4.11). Không dùng màu để mang thông tin: trạng thái luôn có chữ đi kèm.
+
+**Lựa chọn của người dùng** (spec D6): chế độ màu `Mode` (`SYSTEM` theo hệ điều hành, `LIGHT`, `DARK`;
+`Mode.setting_value` là giá trị trường `theme` của `settings.json`: None / `"light"` / `"dark"`) và
+màu nhấn (mã trong `ACCENTS`, trường `accent`; None = `DEFAULT_ACCENT`). `mode_from_setting` /
+`accent_from_setting` đổi giá trị đã lưu ra lựa chọn, giá trị lạ về mặc định. Lựa chọn đang dùng là
+trạng thái cấp module (`current_mode()`, `current_accent()`), chỉ đổi qua `set_preference(app, mode,
+accent)`: gán lựa chọn, ép `QStyleHints.setColorScheme(Light|Dark)` (thanh tiêu đề Windows đổi theo)
+hoặc `unsetColorScheme()` với `SYSTEM`, rồi **áp ngay** (`_reapply`), không chờ tín hiệu
+`colorSchemeChanged` (có nền tảng không phát). `_reapply` tính chế độ từ lựa chọn (`SYSTEM`: tối khi
+`colorScheme()` là `Dark`, `Unknown` → sáng), dựng bảng màu và stylesheet, chỉ đặt cái nào khác
+`app.palette()` / `app.styleSheet()` hiện có (không nhớ lần trước trong module, nên test hay code khác
+đặt lại bảng màu từ ngoài cũng không làm lệch); thứ tự đặt: bảng màu rồi stylesheet, vì widget tự vẽ
+đọc `tokens_for` lúc nhận `ApplicationPaletteChange`. Tín hiệu `colorSchemeChanged` nối một lần (cờ
+property `_CONNECTED_PROPERTY` trên `app`), handler chỉ gọi `_reapply` và không dùng giá trị tín hiệu:
+khi đang ép sáng/tối, đổi của hệ điều hành không có tác dụng. Style Fusion cũng đặt một lần (cờ
+`_STYLE_PROPERTY`): `style().name()` rỗng khi ứng dụng có stylesheet, dựa vào nó thì mỗi lần áp lại
+`setStyle` và polish lại mọi widget (nháy). `apply(app)` giữ chữ ký cũ: không có `scheme` thì như
+`_reapply`; có `scheme` thì luôn áp đúng chế độ đó với màu nhấn đang chọn, không đổi lựa chọn (test và
+ảnh chụp dùng). `_reset_for_tests()` đưa lựa chọn về `SYSTEM` + mặc định, không chạm ứng dụng.
+
+**Màu nhấn** (`ACCENTS`, `_ACCENTS`): mỗi bộ chỉ thay bảy token `ACCENT_TOKENS` (accent, hover,
+pressed, chữ nhấn, nhấn đậm, nền nhấn nhạt = bong bóng gửi đi), các token trung tính ở `_TOKENS` dùng
+chung. `mint` là bộ gốc của spec A1. Bộ khác giữ cấu trúc độ sáng của bạc hà (sáng: accent/hover/
+pressed nền nhạt đậm dần, `accent_text` đậm, `accent_strong` vừa-đậm, `accent_subtle` rất nhạt; tối
+đảo lại), giá trị theo bảng spec D6 mục 2.3, mọi bộ × sáng/tối đạt đủ các cặp của
+`tests/ui/test_tokens.py` (kể cả khung tiêu điểm Fusion `Highlight.darker(125)`) mà không phải chỉnh.
+`tokens(dark, accent)`: `accent` None là bộ đang chọn, mã lạ về `DEFAULT_ACCENT`. `accent_name` dịch
+tên lúc gọi (ngữ cảnh `Theme`); `accent_swatch` là màu ô chọn (= `accent_strong`, ≥ 3:1 trên nền).
+Đã biết, chấp nhận vì màu không mang thông tin: `accent_subtle` của amber gần `warning_bg`,
+`accent_strong` của graphite gần `text_muted`.
 
 **Thang chữ** (`font_for(style, base)`): TITLE +6 pt đậm (Bold), SECTION +2 pt Medium, cả hai dùng font
 điểm nhấn `ACCENT_FAMILY` nếu đã nạp (`accent_family()`), không thì font của `base`; BODY là `base`;
@@ -41,7 +69,7 @@ CAPTION −1 pt, font của `base`, màu qua `TONE_PROPERTY`. `base` mặc đị
 đặt cỡ theo pixel thì cộng TITLE +8 px, SECTION +3 px, CAPTION −1 px. Không ghi cứng font thân: dùng
 font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
 
-**Stylesheet ứng dụng** (`stylesheet(dark, button_height)`, `apply` đặt): mọi luật có bộ chọn hẹp
+**Stylesheet ứng dụng** (`stylesheet(dark, button_height, accent)`, `_reapply` đặt): mọi luật có bộ chọn hẹp
 (`[property]` hoặc `#objectName`), nên widget không mang property thì Fusion vẽ như cũ.
 - `QPushButton[primary="true"]` — **nút chính** (hành động chính của mỗi màn / hộp: “Bắt đầu”, “Ghép
   đôi” của khung nhập IP, “Nhận”, “Trùng khớp”, “Thử lại”): nền `accent`, chữ `accent_text`, viền 2 px
@@ -75,9 +103,9 @@ khoảng cách (px). `RADIUS_*`: góc bo (px) của control, thẻ, khối, bong
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPalette
 from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
@@ -91,7 +119,8 @@ DIALOG_MIN_WIDTH = 420  # px, hộp nhận file và hộp ghép đôi
 SPACING = (4, 8, 12, 16, 24, 32)  # px
 RADIUS_CONTROL, RADIUS_CARD, RADIUS_BLOCK, RADIUS_BUBBLE, RADIUS_BUBBLE_TAIL = 6, 8, 12, 14, 4
 ACCENT_FAMILY = "Bricolage Grotesque"
-_CONNECTED_PROPERTY = "teleport_theme_connected"
+_CONNECTED_PROPERTY = "teleport_theme_connected"  # đã nối `colorSchemeChanged`
+_STYLE_PROPERTY = "teleport_theme_fusion"  # đã đặt style Fusion
 
 _Role = QPalette.ColorRole
 _Group = QPalette.ColorGroup
@@ -127,7 +156,8 @@ class Tokens:
     danger_bg: QColor
 
 
-# (sáng, tối) cho từng token; thiếu hay thừa tên so với `Tokens` thì `tokens()` ném TypeError.
+# (sáng, tối) cho từng token trung tính; cùng `_ACCENTS[mã]`, thiếu hay thừa tên so với `Tokens` thì
+# `tokens()` ném TypeError.
 _TOKENS: dict[str, tuple[str, str]] = {
     "surface": ("#FBF6EC", "#1E1A16"),
     "surface_raised": ("#FFFDF8", "#2D2721"),
@@ -137,13 +167,6 @@ _TOKENS: dict[str, tuple[str, str]] = {
     "border_strong": ("#8C7B62", "#857761"),
     "text": ("#2A251E", "#F2EBDF"),
     "text_muted": ("#665B4D", "#B8AC9A"),
-    "accent": ("#BFEBD9", "#2B5A4A"),
-    "accent_hover": ("#AEE3CD", "#25503F"),
-    "accent_pressed": ("#9DDBC1", "#204636"),
-    "accent_text": ("#0B5E47", "#A3E6CB"),
-    "accent_strong": ("#1E7F61", "#5CC9A0"),
-    "accent_subtle": ("#D9F2E6", "#21443A"),
-    "bubble_out": ("#D9F2E6", "#21443A"),
     "bubble_in": ("#FFFDF8", "#2D2721"),
     "track": ("#E7DECD", "#3D352C"),
     "offline": ("#897E6F", "#9A8E7D"),
@@ -154,6 +177,94 @@ _TOKENS: dict[str, tuple[str, str]] = {
     "danger": ("#A8361F", "#F2A38C"),
     "danger_bg": ("#FBE6DD", "#4A2A22"),
 }
+
+# Bảy token nhấn (sáng, tối) của từng bộ màu nhấn, theo bảng spec D6 mục 2.3; `bubble_out` =
+# `accent_subtle`. `mint` là bộ gốc của spec A1.
+_ACCENTS: dict[str, dict[str, tuple[str, str]]] = {
+    "mint": {
+        "accent": ("#BFEBD9", "#2B5A4A"),
+        "accent_hover": ("#AEE3CD", "#25503F"),
+        "accent_pressed": ("#9DDBC1", "#204636"),
+        "accent_text": ("#0B5E47", "#A3E6CB"),
+        "accent_strong": ("#1E7F61", "#5CC9A0"),
+        "accent_subtle": ("#D9F2E6", "#21443A"),
+        "bubble_out": ("#D9F2E6", "#21443A"),
+    },
+    "ocean": {
+        "accent": ("#C7DFF7", "#24476A"),
+        "accent_hover": ("#B5D3F2", "#1F3E5D"),
+        "accent_pressed": ("#A3C7ED", "#1A3550"),
+        "accent_text": ("#0B4F86", "#A9CFF5"),
+        "accent_strong": ("#1F6FB2", "#6AAEEB"),
+        "accent_subtle": ("#DDEBF9", "#1F3A55"),
+        "bubble_out": ("#DDEBF9", "#1F3A55"),
+    },
+    "violet": {
+        "accent": ("#DCD3F5", "#43356E"),
+        "accent_hover": ("#CFC3F0", "#3B2F61"),
+        "accent_pressed": ("#C2B3EB", "#332854"),
+        "accent_text": ("#4B2E91", "#CFC0F7"),
+        "accent_strong": ("#6A4BC4", "#A68CF0"),
+        "accent_subtle": ("#EAE4F9", "#352A55"),
+        "bubble_out": ("#EAE4F9", "#352A55"),
+    },
+    "rose": {
+        "accent": ("#F6CFD8", "#6A2A3D"),
+        "accent_hover": ("#F1BDCA", "#5E2536"),
+        "accent_pressed": ("#ECABBC", "#52202F"),
+        "accent_text": ("#8A1F43", "#F7B9CA"),
+        "accent_strong": ("#B23A62", "#EE7D9E"),
+        "accent_subtle": ("#FAE1E7", "#4F2330"),
+        "bubble_out": ("#FAE1E7", "#4F2330"),
+    },
+    "amber": {
+        "accent": ("#F6DFB0", "#5C4417"),
+        "accent_hover": ("#F1D398", "#503B14"),
+        "accent_pressed": ("#ECC780", "#443211"),
+        "accent_text": ("#6B4300", "#F5D08A"),
+        "accent_strong": ("#9A6200", "#E0A845"),
+        "accent_subtle": ("#FAEBCB", "#45361A"),
+        "bubble_out": ("#FAEBCB", "#45361A"),
+    },
+    "graphite": {
+        "accent": ("#DED8CE", "#4A433A"),
+        "accent_hover": ("#D3CCC0", "#413B33"),
+        "accent_pressed": ("#C8C0B2", "#38332C"),
+        "accent_text": ("#3A342C", "#E6DED1"),
+        "accent_strong": ("#5E564B", "#B5AA98"),
+        "accent_subtle": ("#ECE7DF", "#3A342D"),
+        "bubble_out": ("#ECE7DF", "#3A342D"),
+    },
+}
+
+DEFAULT_ACCENT = "mint"
+ACCENTS: tuple[str, ...] = tuple(_ACCENTS)  # thứ tự hiển thị trong Cài đặt
+ACCENT_TOKENS = (
+    "accent",
+    "accent_hover",
+    "accent_pressed",
+    "accent_text",
+    "accent_strong",
+    "accent_subtle",
+    "bubble_out",
+)
+
+
+class Mode(StrEnum):
+    """Chế độ màu người dùng chọn (xem “Lựa chọn của người dùng” ở docstring module)."""
+
+    SYSTEM = "system"
+    LIGHT = "light"
+    DARK = "dark"
+
+    @property
+    def setting_value(self) -> str | None:
+        """Giá trị trường `theme` của `settings.json`: None khi theo hệ điều hành."""
+        return None if self is Mode.SYSTEM else self.value
+
+
+_mode: Mode = Mode.SYSTEM
+_accent: str = DEFAULT_ACCENT
 
 
 class TextStyle(Enum):
@@ -174,10 +285,55 @@ _SIZE_DELTA: dict[TextStyle, tuple[float, int]] = {
 }
 
 
-def tokens(dark: bool) -> Tokens:
-    """Token màu của chế độ sáng (`dark=False`) hay tối."""
+def mode_from_setting(value: str | None) -> Mode:
+    """Chế độ từ trường `theme` đã lưu; None hay giá trị lạ → `Mode.SYSTEM`."""
+    try:
+        return Mode(value) if value is not None else Mode.SYSTEM
+    except ValueError:
+        return Mode.SYSTEM
+
+
+def accent_from_setting(value: str | None) -> str:
+    """Mã màu nhấn từ trường `accent` đã lưu; None hay mã lạ → `DEFAULT_ACCENT`."""
+    return value if value is not None and value in _ACCENTS else DEFAULT_ACCENT
+
+
+def current_mode() -> Mode:
+    """Chế độ màu đang chọn (mặc định `Mode.SYSTEM`)."""
+    return _mode
+
+
+def current_accent() -> str:
+    """Mã màu nhấn đang chọn (mặc định `DEFAULT_ACCENT`)."""
+    return _accent
+
+
+def accent_name(accent: str) -> str:
+    """Tên hiển thị của màu nhấn, dịch lúc gọi (ngữ cảnh `Theme`); mã lạ → tên của bộ mặc định."""
+    # Mỗi tên một lời gọi literal để công cụ trích chuỗi thấy.
+    names = {
+        "mint": QCoreApplication.translate("Theme", "Bạc hà"),
+        "ocean": QCoreApplication.translate("Theme", "Đại dương"),
+        "violet": QCoreApplication.translate("Theme", "Tím"),
+        "rose": QCoreApplication.translate("Theme", "Hồng"),
+        "amber": QCoreApplication.translate("Theme", "Hổ phách"),
+        "graphite": QCoreApplication.translate("Theme", "Than chì"),
+    }
+    return names.get(accent, names[DEFAULT_ACCENT])
+
+
+def tokens(dark: bool, accent: str | None = None) -> Tokens:
+    """Token màu của chế độ sáng (`dark=False`) hay tối với màu nhấn `accent` (None: bộ đang chọn;
+    mã lạ: `DEFAULT_ACCENT`)."""
     index = 1 if dark else 0
-    return Tokens(**{name: QColor(pair[index]) for name, pair in _TOKENS.items()})
+    chosen = _ACCENTS[accent_from_setting(current_accent() if accent is None else accent)]
+    merged = {**_TOKENS, **chosen}
+    return Tokens(**{name: QColor(pair[index]) for name, pair in merged.items()})
+
+
+def accent_swatch(accent: str, dark: bool) -> QColor:
+    """Màu ô chọn của màu nhấn `accent` (= `accent_strong` của bộ đó)."""
+    return tokens(dark, accent).accent_strong
 
 
 def _linear(channel: float) -> float:
@@ -214,9 +370,10 @@ def tokens_for(widget: QWidget) -> Tokens:
     return tokens(is_dark_palette(QApplication.palette()))
 
 
-def palette(dark: bool) -> QPalette:
-    """Bảng màu sáng hay tối của Teleport, sinh từ token (ánh xạ ở docstring module)."""
-    t = tokens(dark)
+def palette(dark: bool, accent: str | None = None) -> QPalette:
+    """Bảng màu sáng hay tối của Teleport với màu nhấn `accent` (như `tokens`), sinh từ token (ánh xạ
+    ở docstring module)."""
+    t = tokens(dark, accent)
     on_highlight = t.surface if dark else t.surface_raised
     roles: dict[QPalette.ColorRole, QColor] = {
         _Role.Window: t.surface,
@@ -249,10 +406,10 @@ def palette(dark: bool) -> QPalette:
     return pal
 
 
-def primary_colors(dark: bool) -> dict[str, tuple[QColor, QColor]]:
+def primary_colors(dark: bool, accent: str | None = None) -> dict[str, tuple[QColor, QColor]]:
     """(chữ, nền) của nút chính theo trạng thái: `normal`, `hover`, `pressed`, `disabled`."""
-    t = tokens(dark)
-    pal = palette(dark)
+    t = tokens(dark, accent)
+    pal = palette(dark, accent)
     return {
         "normal": (t.accent_text, t.accent),
         "hover": (t.accent_text, t.accent_hover),
@@ -287,15 +444,16 @@ def font_for(style: TextStyle, base: QFont | None = None) -> QFont:
     return font
 
 
-def stylesheet(dark: bool, button_height: int | None = None) -> str:
+def stylesheet(dark: bool, button_height: int | None = None, accent: str | None = None) -> str:
     """Stylesheet ứng dụng, chỉ bộ chọn hẹp (xem docstring module).
 
-    `button_height`: chiều cao `sizeHint` của nút Fusion thường trên máy này (`apply` đo); có thì nút
-    chính cao đúng bằng nó, vì cỡ chữ và lề của Fusion khác nhau giữa các hệ điều hành.
+    `button_height`: chiều cao `sizeHint` của nút Fusion thường trên máy này (`_reapply` đo); có thì
+    nút chính cao đúng bằng nó, vì cỡ chữ và lề của Fusion khác nhau giữa các hệ điều hành. `accent`:
+    như `tokens`.
     """
-    t = tokens(dark)
-    pal = palette(dark)
-    colors = primary_colors(dark)
+    t = tokens(dark, accent)
+    pal = palette(dark, accent)
+    colors = primary_colors(dark, accent)
     ring = focus_ring_color(dark).name()
     edge = t.accent_strong.name()
     primary = f'QPushButton[{PRIMARY_PROPERTY}="true"]'
@@ -350,19 +508,73 @@ def stylesheet(dark: bool, button_height: int | None = None) -> str:
     return "\n".join(lines)
 
 
+def set_preference(app: QGuiApplication, mode: Mode, accent: str | None) -> None:
+    """Đổi lựa chọn chế độ màu và màu nhấn (None hay mã lạ: `DEFAULT_ACCENT`) rồi áp ngay (xem “Lựa
+    chọn của người dùng” ở docstring module)."""
+    global _mode, _accent
+    new_mode = Mode(mode)  # sai → ValueError trước khi đổi trạng thái
+    _ensure_setup(app)
+    _accent = accent_from_setting(accent)
+    _mode = new_mode
+    hints = app.styleHints()
+    if _mode is Mode.LIGHT:
+        hints.setColorScheme(Qt.ColorScheme.Light)
+    elif _mode is Mode.DARK:
+        hints.setColorScheme(Qt.ColorScheme.Dark)
+    else:
+        hints.unsetColorScheme()
+    _reapply(app)
+
+
 def apply(app: QGuiApplication, scheme: Qt.ColorScheme | None = None) -> None:
-    """Đặt style Fusion, bảng màu và stylesheet ứng dụng theo `scheme` (None: theo hệ điều hành);
-    theo dõi đổi chế độ."""
+    """Đặt style Fusion, bảng màu và stylesheet ứng dụng; theo dõi đổi chế độ của hệ điều hành.
+
+    `scheme` None: theo lựa chọn đang dùng (`_reapply`). Có `scheme`: luôn áp đúng chế độ đó với màu
+    nhấn đang chọn, không đổi lựa chọn.
+    """
+    _ensure_setup(app)
     if scheme is None:
-        scheme = app.styleHints().colorScheme()
-    _set_style(app)
+        _reapply(app)
+        return
     dark = is_dark(scheme)
     app.setPalette(palette(dark))
     if isinstance(app, QApplication):
         app.setStyleSheet(stylesheet(dark, _plain_button_height()))
+
+
+def _reset_for_tests() -> None:
+    """Đưa lựa chọn về `Mode.SYSTEM` + `DEFAULT_ACCENT` (không chạm ứng dụng); chỉ cho test."""
+    global _mode, _accent
+    _mode = Mode.SYSTEM
+    _accent = DEFAULT_ACCENT
+
+
+def _current_dark(app: QGuiApplication) -> bool:
+    """Chế độ tối theo lựa chọn; `SYSTEM` đọc `QStyleHints.colorScheme()` (`Unknown` → sáng)."""
+    if _mode is Mode.SYSTEM:
+        return is_dark(app.styleHints().colorScheme())
+    return _mode is Mode.DARK
+
+
+def _reapply(app: QGuiApplication) -> None:
+    """Áp bảng màu rồi stylesheet theo lựa chọn; chỉ đặt cái khác giá trị ứng dụng đang có."""
+    dark = _current_dark(app)
+    pal = palette(dark)
+    if app.palette() != pal:
+        app.setPalette(pal)
+    if isinstance(app, QApplication):
+        css = stylesheet(dark, _plain_button_height())
+        if app.styleSheet() != css:
+            app.setStyleSheet(css)
+
+
+def _ensure_setup(app: QGuiApplication) -> None:
+    """Đặt style Fusion và nối `colorSchemeChanged` (mỗi việc một lần cho mỗi `app`)."""
+    _set_style(app)
     if not app.property(_CONNECTED_PROPERTY):
         app.setProperty(_CONNECTED_PROPERTY, True)
-        app.styleHints().colorSchemeChanged.connect(lambda new: apply(app, new))
+        # Không dùng giá trị tín hiệu: khi đang ép sáng/tối, đổi của hệ điều hành không có tác dụng.
+        app.styleHints().colorSchemeChanged.connect(lambda _scheme: _reapply(app))
 
 
 def _plain_button_height() -> int:
@@ -375,5 +587,7 @@ def _plain_button_height() -> int:
 
 
 def _set_style(app: QGuiApplication) -> None:
-    if isinstance(app, QApplication) and app.style().name().lower() != "fusion":
+    """Đặt style Fusion một lần (cờ `_STYLE_PROPERTY`; `style().name()` rỗng khi có stylesheet)."""
+    if isinstance(app, QApplication) and not app.property(_STYLE_PROPERTY):
+        app.setProperty(_STYLE_PROPERTY, True)
         app.setStyle("Fusion")

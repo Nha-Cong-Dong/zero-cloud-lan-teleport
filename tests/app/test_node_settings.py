@@ -432,7 +432,7 @@ async def test_set_name_readvertises_with_new_name(node_factory, fake_mdns):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
+@pytest.mark.mdns
 async def test_set_name_txt_updated_within_3s(node_factory):
     """mDNS thật trên loopback: máy kia thấy tên mới (TXT) trong 3 s sau `set_name`."""
 
@@ -1205,20 +1205,33 @@ async def test_restore_late_handle_closed_on_old_dir_after_change(
 
     gate = Gate()
     returned: dict[str, object] = {}
+    failed: dict[str, BaseException] = {}  # lỗi trong thread đĩa: báo thẳng thay vì chờ hết hạn
     real_open = storage.ReceiveDir.open_for_resume
 
     def open_for_resume(rd, scan, *, stop=None):
         if scan.transfer_id != tid:
             return real_open(rd, scan, stop=stop)
-        gate.wait()
         try:
+            gate.wait()
             handle = real_open(rd, scan, stop=None)  # bỏ qua `stop`: trả handle thật, tới muộn
             returned[tid] = handle
             return handle
+        except BaseException as e:
+            failed[tid] = e
+            raise
         finally:
             rd_spy.add("open_done", tid)
 
     monkeypatch.setattr(storage.ReceiveDir, "open_for_resume", open_for_resume)
+    # `cleanup` đánh dấu từng lượt `_busy` trong lúc xét; chạy trùng lúc với việc mở lại tới muộn trên
+    # thư mục cũ thì việc đó gặp NotResumableError “đang được dùng” (đã thấy trên CI chạy song song).
+    # Ca này kiểm handle tới muộn *mở được* thì được đóng đúng chỗ, nên dọn tạm bỏ qua lượt này.
+    real_cleanup = storage.ReceiveDir.cleanup
+
+    def cleanup(rd, wall_now, *, own_device_id, skip, retention):
+        return real_cleanup(rd, wall_now, own_device_id=own_device_id, skip=skip | {tid}, retention=retention)
+
+    monkeypatch.setattr(storage.ReceiveDir, "cleanup", cleanup)
     new = tmp_path / "nhan-moi"
     try:
         A = await receiver("A", receive_dir=old, auto_accept=True)
@@ -1229,7 +1242,9 @@ async def test_restore_late_handle_closed_on_old_dir_after_change(
         assert same_path(root, new)
     finally:
         gate.release.set()
-    await wait_until(lambda: tid in returned, 10, "việc mở lại treo chưa trả handle")
+    # Hạn bằng hạn của `Gate`: trên CI chạy song song (xdist) 10 s từng không đủ.
+    await wait_until(lambda: tid in returned or tid in failed, 30, "việc mở lại treo chưa trả handle")
+    assert tid not in failed, f"open_for_resume tới muộn lỗi: {failed[tid]!r}"
     handle = returned[tid]
     try:
         await wait_until(lambda: handle.temp.closed, 10, "handle tới muộn không được đóng")
@@ -1690,3 +1705,92 @@ async def test_setters_do_not_touch_port_and_extra(node_factory, tmp_path):
     A.set_ui_preferences(first_run_done=True)
     data = on_disk(A.dir)
     assert data["port"] == 47999 and data["tuong_lai"] == {"giu": 1} and data["first_run_done"] is True
+
+
+# =================================================================================================
+# D6: `set_ui_preferences(..., theme=, accent=)` (spec-d6 mục 2.1, 5.1; mục 12 ý 9)
+# =================================================================================================
+
+
+async def test_set_ui_preferences_theme_accent_saved(node_factory):
+    A = await node_factory("A")
+    assert (A.settings.theme, A.settings.accent) == (None, None)
+    assert A.set_ui_preferences(theme="dark", accent="ocean") is None
+    assert (A.settings.theme, A.settings.accent) == ("dark", "ocean")
+    data = on_disk(A.dir)
+    assert (data["theme"], data["accent"]) == ("dark", "ocean")
+
+    A.set_ui_preferences(theme="light")  # chỉ đổi khóa được truyền
+    data = on_disk(A.dir)
+    assert (data["theme"], data["accent"]) == ("light", "ocean")
+    assert A.settings.accent == "ocean"
+
+    A.set_ui_preferences(language="vi", theme=None)  # None = theo hệ điều hành: không ghi khóa
+    data = on_disk(A.dir)
+    assert "theme" not in data and data["accent"] == "ocean" and data["language"] == "vi"
+    A.set_ui_preferences(accent=None)
+    data = on_disk(A.dir)
+    assert "accent" not in data and "theme" not in data
+    assert (A.settings.theme, A.settings.accent) == (None, None)
+
+
+async def test_set_ui_preferences_theme_keeps_unknown_accent(node_factory, tmp_path):
+    """Mã màu nhấn đúng dạng nhưng bản này không biết (ví dụ do bản sau ghi): node giữ nguyên khi đổi
+    trường khác, và cũng lưu được nếu được truyền vào (`app` chỉ kiểm dạng)."""
+    write_settings(tmp_path / "A", {"version": 1, "accent": "tuong_lai_9"})
+    A = await node_factory("A")
+    assert A.settings.accent == "tuong_lai_9"
+    A.set_ui_preferences(theme="light")
+    data = on_disk(A.dir)
+    assert (data["theme"], data["accent"]) == ("light", "tuong_lai_9")
+    assert not (A.dir / "settings.json.bak").exists()
+    A.set_ui_preferences(accent="khac_nua")
+    assert on_disk(A.dir)["accent"] == "khac_nua"
+    assert A.settings.accent == "khac_nua"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"theme": "system"}, ValueError),
+        ({"theme": "Dark"}, ValueError),
+        ({"theme": ""}, ValueError),
+        ({"theme": 1}, TypeError),
+        ({"theme": True}, TypeError),
+        ({"accent": "Ocean"}, ValueError),
+        ({"accent": "ocean-blue"}, ValueError),
+        ({"accent": "a" * 33}, ValueError),
+        ({"accent": "ocean\n"}, ValueError),
+        ({"accent": 5}, TypeError),
+        ({"language": "en", "theme": "system"}, ValueError),  # một sai thì không lưu gì
+        ({"theme": "dark", "accent": "Rose"}, ValueError),
+        ({"autostart": True, "accent": 7}, TypeError),
+    ],
+    ids=lambda v: repr(v)[:30],
+)
+async def test_set_ui_preferences_invalid_theme_raises_no_write(node_factory, kwargs, error):
+    A = await node_factory("A")
+    A.set_ui_preferences(theme="light", accent="mint")
+    before_disk = on_disk(A.dir)
+    before = A.settings
+    with pytest.raises(error):
+        A.set_ui_preferences(**kwargs)
+    assert on_disk(A.dir) == before_disk
+    assert A.settings == before
+    assert (A.settings.theme, A.settings.accent, A.settings.language) == ("light", "mint", None)
+
+
+async def test_set_ui_preferences_save_error_no_change(node_factory, monkeypatch):
+    A = await node_factory("A")
+    A.set_ui_preferences(theme="dark", accent="violet")
+    before_disk = on_disk(A.dir)
+    state = failing_save(monkeypatch)
+    with pytest.raises(node_mod.SettingsSaveError) as info:
+        A.set_ui_preferences(theme="light", accent="rose")
+    assert isinstance(info.value.__cause__, OSError)
+    assert state.calls >= 1
+    assert (A.settings.theme, A.settings.accent) == ("dark", "violet")
+    assert on_disk(A.dir) == before_disk
+    state.fail = False
+    A.set_ui_preferences(theme="light", accent="rose")
+    assert (A.settings.theme, A.settings.accent) == ("light", "rose")

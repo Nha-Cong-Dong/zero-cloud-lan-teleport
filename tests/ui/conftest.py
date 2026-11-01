@@ -2,7 +2,10 @@
 
 - Qt chạy `offscreen` (đặt bằng `os.environ.setdefault` ở mức module, trước khi có `QApplication`): test
   chạy được trên CI không có màn hình. Không cài PySide6 (extra `gui`) thì cả thư mục bị bỏ qua.
-- Mọi test trong thư mục này được gắn marker `gui`; test mở socket gắn thêm `integration`.
+- Mọi test trong thư mục này được gắn marker `gui`; test mở socket gắn thêm `integration`. Khi chạy song
+  song (`-n … --dist loadgroup`) chúng cùng nhóm `xdist_group("gui")`, tức chạy lần lượt trong một
+  worker. CI vẫn chạy chúng riêng (`pytest -m gui`, tuần tự): trộn với test tầng khác trong một worker
+  thì vòng sự kiện Qt từng abort (docs/architecture.md mục 6).
 - Module `teleport.ui.*` chỉ được import **bên trong** fixture/test, để `ui` đang viết dở chỉ làm đỏ các
   test dùng tới nó (giống `tests/conftest.py`).
 
@@ -75,6 +78,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         except ValueError:
             continue
         item.add_marker("gui")
+        item.add_marker(pytest.mark.xdist_group("gui"))
 
 
 # =================================================================================================
@@ -240,6 +244,41 @@ def qt_thread_gc(qapp):
     guard.start()
     yield guard
     guard.stop()
+
+
+@pytest.fixture(autouse=True)
+def theme_state_reset(qapp):
+    """Mọi test ui: lựa chọn chế độ màu/màu nhấn của `ui/theme.py` không rò sang test sau (spec-d6 mục
+    12 ý 5).
+
+    Chụp palette + stylesheet của `qapp` trước test. Sau test: đặt lại `_mode`/`_accent` bằng
+    `theme._reset_for_tests()` (về SYSTEM + màu nhấn mặc định), gọi `unsetColorScheme()` (bỏ ép sáng/tối
+    của `set_preference`), rồi khôi phục palette + stylesheet (chỉ khi khác, để không polish lại mọi
+    widget vô ích). Không gọi `set_preference` lúc dọn. Autouse nên dọn sau các fixture thường
+    (`ui_theme`, `themed`, `restore_palette`, `monkeypatch`), tức sau khi bản vá `QStyleHints` đã gỡ.
+    `theme` chưa có `_reset_for_tests` (code đang viết dở) thì bỏ bước đó; test
+    `test_autouse_reset_restores_system_and_default` sẽ đỏ thay vì mọi test ui.
+    """
+    from PySide6.QtGui import QPalette
+
+    old_palette = QPalette(qapp.palette())
+    old_css = qapp.styleSheet()
+    yield
+    try:
+        from teleport.ui import theme
+    except Exception:  # module đang hỏng: test của nó tự đỏ, không làm đỏ teardown mọi test ui
+        theme = None
+    reset = getattr(theme, "_reset_for_tests", None)
+    if reset is not None:
+        reset()
+    hints = qapp.styleHints()
+    if hasattr(hints, "unsetColorScheme"):
+        hints.unsetColorScheme()
+    qapp.processEvents()
+    if qapp.styleSheet() != old_css:
+        qapp.setStyleSheet(old_css)
+    if qapp.palette() != old_palette:
+        qapp.setPalette(old_palette)
 
 
 @pytest.fixture(autouse=True)
@@ -758,5 +797,6 @@ def ui_theme(qapp):
     qapp.setStyleSheet("")
     if old_style:
         qapp.setStyle(old_style)
+        qapp.setProperty(theme._STYLE_PROPERTY, None)  # để `theme` đặt lại Fusion ở lần áp sau
     qapp.setPalette(old_palette)
     qapp.setStyleSheet(old_css)
