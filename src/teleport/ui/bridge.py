@@ -116,7 +116,11 @@ class StartError(StrEnum):
 class NodeOptions:
     """Tham số dựng `Node` của giao diện. Test dùng `host="127.0.0.1"`, `port=0`, `mdns=None`.
 
-    `receive_dir`: mặc định thư mục đã lưu (`ReceiveDirChoice.SAVED`); Path tường minh vẫn được (test).
+    `receive_dir`: mặc định thư mục đã lưu (`ReceiveDirChoice.SAVED`); Path tường minh vẫn được (test,
+    và thư mục người dùng chọn ở lần chạy đầu).
+    `name`: tên thiết bị cho `Node(name=…)`; None thì node dùng tên đã lưu, chưa có thì hostname.
+    `save_args` (lần chạy đầu, `ui.first_run`): `Node.start` lưu `name` (nếu có) trước khi quảng bá và
+    lưu `receive_dir` (nếu là Path) ngay khi mở được; mặc định False (không lưu gì).
     """
 
     config_dir: Path
@@ -124,6 +128,8 @@ class NodeOptions:
     mdns: MdnsOptions | None = field(default_factory=lambda: MdnsOptions(advertise=True))
     host: str = "0.0.0.0"
     port: int | None = None
+    name: str | None = None
+    save_args: bool = False
 
 
 def _clean(text: str) -> str:
@@ -487,6 +493,7 @@ class NodeHost(QObject):
         try:
             node = Node(
                 opts.config_dir,
+                name=opts.name,
                 host=opts.host,
                 port=opts.port,
                 mdns=opts.mdns,
@@ -498,6 +505,7 @@ class NodeHost(QObject):
                 receive_dir=opts.receive_dir,
                 auto_accept=False,
                 on_transfer_event=self._transfer_callback,
+                save_args=opts.save_args,
             )
         except Exception as e:
             self._fail(e)
