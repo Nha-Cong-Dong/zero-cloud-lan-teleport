@@ -34,9 +34,9 @@ mypy src
 pytest
 ```
 
-Muốn nhanh hơn thì chạy `pytest -n 4 --dist loadgroup -m "not gui"` rồi `pytest -m gui` (song song, test giao diện tách riêng; vì sao không dùng `-n auto` trên máy nhiều lõi: [architecture.md](architecture.md) mục 6).
+Muốn nhanh hơn thì chạy `pytest -n 4 --dist loadgroup -m "not gui"` và `pytest -n 4 --dist loadgroup -m gui` (song song, test giao diện là một lần chạy riêng; hai lệnh chạy cùng lúc ở hai terminal được; vì sao không dùng `-n auto` trên máy nhiều lõi: [architecture.md](architecture.md) mục 6).
 
-CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check .`, `ruff format --check .`, `mypy src`, `pytest -n auto --dist loadgroup -m "not gui"` và `pytest -m gui` trên Windows, macOS, Linux × Python 3.12 và 3.14. Push commit mới vào một PR thì lần chạy CI cũ của PR đó bị hủy. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
+CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check .`, `ruff format --check .`, `mypy src`, `pytest -n auto --dist loadgroup -m "not gui"` trên Windows, macOS, Linux × Python 3.12 và 3.14; test giao diện (`pytest -n auto --dist loadgroup -m gui`) chạy ở job riêng song song với job đó. Push commit mới vào một PR thì lần chạy CI cũ của PR đó bị hủy. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
 
 PR đổi giao diện: đính kèm ảnh sáng/tối do `tests/ui/test_snapshots.py` sinh (lệnh: [architecture.md](architecture.md) mục 6), không commit ảnh vào repo.
 
