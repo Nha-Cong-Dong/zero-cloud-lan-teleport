@@ -53,7 +53,9 @@ jobs:
       # timeout-minutes.
       - if: matrix.suite == 'core'
         run: pytest -q -n auto --dist loadgroup --max-worker-restart=0 -m "not gui"
-      # Test tests/ui không chạy chung tiến trình với test tầng khác: vòng sự kiện Qt từng abort
-      # (Windows, chưa rõ nguyên nhân; architecture.md mục 6). Chạy riêng thì song song được.
-      - if: matrix.suite == 'gui'
+      # Test tests/ui không chạy chung lần chạy với test tầng khác, và trên Windows chạy tuần tự: trong
+      # worker xdist, vòng sự kiện Qt từng abort (chưa rõ nguyên nhân; architecture.md mục 6).
+      - if: matrix.suite == 'gui' && runner.os != 'Windows'
         run: pytest -q -n auto --dist loadgroup --max-worker-restart=0 -m gui
+      - if: matrix.suite == 'gui' && runner.os == 'Windows'
+        run: pytest -q -m gui

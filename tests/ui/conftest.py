@@ -3,8 +3,8 @@
 - Qt chạy `offscreen` (đặt bằng `os.environ.setdefault` ở mức module, trước khi có `QApplication`): test
   chạy được trên CI không có màn hình. Không cài PySide6 (extra `gui`) thì cả thư mục bị bỏ qua.
 - Mọi test trong thư mục này được gắn marker `gui`; test mở socket gắn thêm `integration`. Chạy chúng
-  riêng (`-m gui`, tuần tự hay song song), không chung lần chạy với test tầng khác: trộn trong một worker
-  xdist thì vòng sự kiện Qt từng abort (docs/architecture.md mục 6).
+  riêng (`-m gui`), không chung lần chạy với test tầng khác; CI Windows chạy tuần tự: trong worker
+  xdist vòng sự kiện Qt từng abort (docs/architecture.md mục 6).
 - Module `teleport.ui.*` chỉ được import **bên trong** fixture/test, để `ui` đang viết dở chỉ làm đỏ các
   test dùng tới nó (giống `tests/conftest.py`).
 
