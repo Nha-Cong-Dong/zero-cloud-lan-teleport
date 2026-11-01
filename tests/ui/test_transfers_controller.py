@@ -2,8 +2,8 @@
 
 Viết từ spec, không từ code. Không socket: `NodeHost` giả ghi lại mọi `call(fn, on_done)` /
 `submit(fn, on_done)`; test tự chạy `fn` trên một node giả để biết controller định gọi gì, rồi tự gọi
-`on_done` (như `NodeHost` làm trên thread Qt). Cửa sổ, khay, radar, `TransfersView`, `OfferPrompts` là
-widget thật (offscreen).
+`on_done` (như `NodeHost` làm trên thread Qt). Cửa sổ, khay, radar, `ChatView` (spec B3: thay danh sách
+lượt cũ), `OfferPrompts` là widget thật (offscreen).
 
 Câu chữ: câu lỗi đã có ở `ui/send.py` (pha 1, mvp mục 8) so bằng chính hàm của pha 1 kèm một mẩu câu
 mvp để chắc câu đúng loại; câu “đang chờ ghép đôi để gửi” và “chưa ghép đôi” đọc lại từ `docs/mvp.md`
@@ -265,7 +265,8 @@ def label(name: str | None, device_id: str = PEER_ID) -> str:
 
 
 def notice(env) -> str | None:
-    return env.ctl.view.notice_text()
+    """Chữ thông báo đang hiện, None khi không có (spec B3 9.7: `notice_text()` trả “” khi ẩn)."""
+    return env.ctl.view.notice_text() or None
 
 
 def files(env, n: int = 2) -> list[Path]:
@@ -278,25 +279,29 @@ def files(env, n: int = 2) -> list[Path]:
 # =================================================================================================
 
 
-def test_controller_places_transfers_view_in_window_area_and_owns_offer_prompts(env):
+def test_controller_places_chat_view_in_window_area_and_owns_offer_prompts(env):
+    from teleport.ui.chat import ChatView
     from teleport.ui.offer import OfferPrompts
-    from teleport.ui.transfers_view import TransfersView
 
-    assert isinstance(env.ctl.view, TransfersView)
+    assert isinstance(env.ctl.view, ChatView)  # spec B3 mục 2: `TransfersController.view` là `ChatView`
     assert env.window.transfers_area.isAncestorOf(env.ctl.view), "view phải nằm trong window.transfers_area"
     assert isinstance(env.ctl.offers, OfferPrompts)
 
 
-def test_notice_strip_replaces_old_notice_and_close_button_hides_it(env, ui_helpers):
+def test_notice_strip_replaces_old_notice_and_close_button_hides_it(env):
+    # Spec B3 9.7: thông báo ở `info_bar` (`InfoBar`), `notice_text()` trả “” khi ẩn.
+    from PySide6.QtCore import Qt
+
     view = env.ctl.view
-    assert view.notice_text() is None
+    assert view.notice_text() == ""
     view.show_notice("Câu một.")
     view.show_notice("Câu hai <b>không HTML</b>.")
     assert view.notice_text() == "Câu hai <b>không HTML</b>."
-    buttons = ui_helpers.buttons_with_text(view, CLOSE)
-    assert len(buttons) == 1, f"dải thông báo cần đúng một nút “{CLOSE}”"
-    buttons[0].click()
-    assert view.notice_text() is None
+    assert view.notice_label.textFormat() == Qt.TextFormat.PlainText
+    close = view.info_bar.close_button
+    assert close.accessibleName().replace("&", "").startswith(CLOSE)  # InfoBar: “Đóng thông báo”
+    close.click()
+    assert view.notice_text() == ""
 
 
 # =================================================================================================
@@ -797,7 +802,8 @@ def test_on_started_loads_snapshot_with_device_names(env):
     env.host.run_calls(FakeNode(devices=[dview()], infos=[tinfo(key, status="transferring", done=500)]))
     rows = env.ctl.view.rows()
     assert [r.key for r in rows] == [key]
-    assert PEER in rows[0].title_label.text()
+    # Spec B3 9.8 (i): tên máy rời tiêu đề, còn ở accessibleName “Gửi tới X”.
+    assert f"Gửi tới {PEER}" in rows[0].accessibleName()
 
 
 def test_snapshot_merges_with_transfer_resumed_that_came_first(env):
@@ -841,9 +847,10 @@ def test_device_online_with_new_name_renames_rows(env):
     env.host.run_calls(FakeNode(devices=[dview()], infos=[]))
     env.ctl.on_transfer(tinfo_changed(key, "waiting"))
     [row] = env.ctl.view.rows()
-    assert PEER in row.title_label.text()
+    # Spec B3 9.8 (i): tên máy ở accessibleName (“Gửi tới X”), không ở tiêu đề.
+    assert f"Gửi tới {PEER}" in row.accessibleName()
     env.ctl.on_node_event(DeviceOnline(dview(name="PC-Moi")))
-    assert "PC-Moi" in row.title_label.text()
+    assert "Gửi tới PC-Moi" in row.accessibleName()
 
 
 # =================================================================================================
@@ -1389,6 +1396,9 @@ def test_v2_badge_follows_transfer_updates(env):
     from teleport.ui.widgets import BadgeTone
 
     env.window.show_running("May-A", env.tmp / "nhan")
+    # Spec B3 9.15: `has_content()` = thông báo hay đang chọn một máy; cần một máy đã ghép đôi (tự được
+    # chọn, mục 6) để khung phải là `transfers_area` thay vì “Ghép đôi máy đầu tiên”.
+    env.model.reset([dview()])
     key = tkey("send")
     env.ctl.on_transfer(tinfo_changed(key, "transferring"))
     assert env.window.badge.text == BUSY_ONE

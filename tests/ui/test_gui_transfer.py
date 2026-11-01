@@ -35,7 +35,8 @@ LOCAL = "127.0.0.1"
 KiB = 1024
 MiB = 1024 * 1024
 
-SHORT_DONE = "Xong"  # nhãn ngắn “Xong ✓” (kiểm theo ý nghĩa)
+SHORT_SAVED = "Đã lưu"  # spec B3 9.8 (ii): nhãn DONE bên nhận (thay “Xong ✓”)
+SHORT_SENT = "Đã gửi"  # spec B3 9.8 (ii): nhãn DONE bên gửi
 # Dòng phụ khi xong (mvp mục 7.3 GUI, dòng 3: “khi xong “Đã kiểm tra toàn vẹn””). Kiểm “chứa”, không
 # “bằng”: câu xong có thể thêm phần đầu (ví dụ tên file đã lưu khác tên gốc).
 VERIFIED = "Đã kiểm tra toàn vẹn"
@@ -348,7 +349,7 @@ def test_a_gui_receives_64_mib_after_accept_and_row_shows_done(
     assert run.exec_calls == [], f"không exec() hộp nào: {run.exec_calls}"
     assert seen["a"] == "done" and seen["b"] == "done"
     assert sha256_of(receive_dir / "video.bin") == want
-    assert SHORT_DONE in seen["status"], seen["status"]
+    assert SHORT_SAVED in seen["status"], seen["status"]
     assert VERIFIED in seen["detail"], seen["detail"]
     assert seen["bar"][0] == seen["bar"][1]
     assert RECEIVED_ONE.format(name="video.bin", peer="May-B") in seen["messages"], seen["messages"]
@@ -474,7 +475,7 @@ def test_d_gui_sends_to_peer_with_progress_on_row_then_done(
         tid = row.key.transfer_id
         seen["status"] = row.status_label.text()
         seen["detail"] = row.detail_label.text()
-        seen["notice"] = ctl.view.notice_text()
+        seen["notice"] = ctl.view.notice_text() or None
         yield gui_wait(lambda: a_finished(updates, tid), 5, "A thấy TransferFinished")
         seen["a"] = str(a_finished(updates, tid).result)
         yield gui_wait(lambda: p.finished(tid), 15, "B thấy lượt kết thúc")
@@ -488,7 +489,7 @@ def test_d_gui_sends_to_peer_with_progress_on_row_then_done(
     assert any(0 < v < 1000 for v in seen["bars"]), (
         f"thanh tiến độ phải có giá trị giữa chừng: {set(seen['bars'])}"
     )
-    assert SHORT_DONE in seen["status"], seen["status"]
+    assert SHORT_SENT in seen["status"], seen["status"]
     assert VERIFIED in seen["detail"], seen["detail"]
     assert sha256_of(tmp_path / "nhan-B" / f.name) == want
 
@@ -643,7 +644,7 @@ def test_f_network_cut_shows_reconnecting_then_finishes_without_going_back(
     assert all(x <= y for x, y in itertools.pairwise(bars)), f"thanh tiến độ bị lùi: {bars}"
     db = seen["done_bytes"]
     assert db and all(x <= y for x, y in itertools.pairwise(db)), f"done_bytes giảm: {db}"
-    assert SHORT_DONE in seen["status"], seen["status"]
+    assert SHORT_SAVED in seen["status"], seen["status"]
     assert VERIFIED in seen["detail"], seen["detail"]
     assert sha256_of(tmp_path / "nhan-gui" / f.name) == want
 
@@ -695,10 +696,11 @@ def test_g_restart_gui_mid_transfer_resumes_row_and_finishes(
         yield gui_wait(
             lambda: find_row(ctl, tid) is not None, 10, "thẻ của lượt dở (TransferResumed/ảnh chụp)"
         )
-        from teleport.ui.transfers_view import TransferRow
+        from teleport.ui.chat_bubbles import TransferBubble
 
         # Đếm widget thẻ thật (không qua `rows()`): ảnh chụp và `TransferResumed` không được dựng hai thẻ.
-        seen["rows_after_start"] = [r.key.transfer_id for r in ctl.view.findChildren(TransferRow)]
+        # Spec B3 9.11: đếm `TransferBubble` (bong bóng thay thẻ cũ).
+        seen["rows_after_start"] = [r.key.transfer_id for r in ctl.view.findChildren(TransferBubble)]
         port = yield from a_port(run, gui_wait)
         yield from connect_b(p, gui_wait, a_id, port)
         yield gui_wait(lambda: find_row(ctl, tid).finished, 40, "thẻ kết thúc sau khi khôi phục")
@@ -713,7 +715,7 @@ def test_g_restart_gui_mid_transfer_resumes_row_and_finishes(
     gui(["--config-dir", str(a)], second)
     assert seen["rows_after_start"].count(tid) == 1, "một lượt một thẻ (không nhân đôi)"
     assert seen["a"] == "done" and seen["b"] == "done", seen
-    assert SHORT_DONE in seen["status"], seen["status"]
+    assert SHORT_SAVED in seen["status"], seen["status"]
     assert VERIFIED in seen["detail"], seen["detail"]
     assert sha256_of(tmp_path / "nhan-gui" / f.name) == want
 
@@ -861,7 +863,7 @@ def test_j_gui_sender_rejected_by_peer_shows_notice_with_repair_button(
         yield from setup_b_unpairs_gui(run, gui_wait, p, a_id, b_id)
         ctl.request_send(b_id, [f])
         yield gui_wait(lambda: notice_buttons(ctl, REPAIR), 15, "dải thông báo có nút “Ghép đôi lại”")
-        seen["notice"] = ctl.view.notice_text()
+        seen["notice"] = ctl.view.notice_text() or None
         yield gui_wait(lambda: not rows_of(ctl, "send"), 5, "thẻ lượt mới bị gỡ")
         seen["sending"] = ctl.active_sends()
         run.tray.quit_requested.emit()
@@ -893,7 +895,7 @@ def test_j2_gui_resend_after_peer_refused_shows_notice_repair_button_and_no_new_
         seen["rows_before"] = len(rows_of(ctl, "send"))
         ctl.request_send(b_id, [f])
         yield gui_wait(lambda: notice_buttons(ctl, REPAIR), 5, "dải thông báo có nút “Ghép đôi lại”")
-        seen["notice"] = ctl.view.notice_text()
+        seen["notice"] = ctl.view.notice_text() or None
         seen["rows_after"] = len(rows_of(ctl, "send"))
         repaired: list = []
         ctl.repair_requested.connect(lambda v: repaired.append(v.device_id))

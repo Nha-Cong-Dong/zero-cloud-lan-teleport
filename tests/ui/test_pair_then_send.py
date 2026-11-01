@@ -714,7 +714,7 @@ def test_a_drop_on_unpaired_peer_pairs_then_sends_automatically(
         )
         seen["b"] = [str(u.result) for u in p.kinds("TransferFinished") if u.info.key.transfer_id == tid]
         seen["paired_on_radar"] = run.window.devices.device(p.device_id).paired
-        seen["notice"] = app.transfers.view.notice_text()
+        seen["notice"] = app.transfers.view.notice_text() or None
         seen["elapsed"] = time.monotonic() - started
         run.tray.quit_requested.emit()
 
@@ -771,7 +771,7 @@ def test_b_code_mismatch_drops_pending_no_offer_and_next_drop_pairs_again(
         retry_until = time.monotonic() + 10
         while True:
             assert _drop(run, p.device_id, f)
-            seen["notices_after"].append(app.transfers.view.notice_text())
+            seen["notices_after"].append(app.transfers.view.notice_text() or None)
             seen["pendings_after"].append(app.transfers.pending)
             yield gui_wait(
                 lambda: app.pairing.dialogs() or not app.pairing.busy, 10, "lần thả sau: hộp mã hay kết quả"
@@ -886,7 +886,7 @@ def test_d_unpaired_right_after_paired_before_send_shows_not_paired(
         yield gui_wait(lambda: unpaired, 15, "A ghép xong rồi bị hủy ghép đôi")
         seen["unpaired"] = unpaired[0]
         yield gui_wait(lambda: app.transfers.view.notice_text(), 10, "câu báo lỗi gửi")
-        seen["notice"] = app.transfers.view.notice_text()
+        seen["notice"] = app.transfers.view.notice_text() or None
         seen["b_offers"] = p.kinds("OfferReceived")
         run.tray.quit_requested.emit()
 

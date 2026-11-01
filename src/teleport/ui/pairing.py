@@ -38,7 +38,7 @@ Hành vi chính của `PairingController`:
   lời (`port` None). PAIRED thì MỘT `call` vừa `connect_hint(device_id, [ip], port)` vừa đọc lại
   `devices()` (không có NodeEvent khi kho tin cậy đổi).
 - Kết quả **thành công** (PAIRED ở cả hai vai, hủy ghép đôi xong) không mở hộp nào: phát
-  `notice(câu)` (`ui.app` nối vào dải thông báo của danh sách lượt truyền) và `message(câu)`;
+  `notice(câu)` (`ui.app` nối vào thanh thông báo của luồng chat) và `message(câu)`;
   không có cửa sổ Teleport nào đang được dùng (`window_visible` trả False) thì thêm bóng thoại khay
   (`notify`). Máy vừa được ghép đôi rồi nhận file ngay thì chỉ còn hộp nhận file. Hộp kết quả lỗi
   đang mở khi đó bị đóng (câu cũ không còn đúng).

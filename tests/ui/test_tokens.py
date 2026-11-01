@@ -686,6 +686,69 @@ def test_b2_drop_border_on_selected_row_is_distinct_from_selected_background(dar
     assert wcag_ratio(tok.text, tok.selected) >= NON_TEXT_MIN
 
 
+# spec B3, T-C (mục 7 “Tương phản”, 9.4): luồng chat. Chữ ≥ 4,5: `text`, `text_muted`, `accent_text` trên
+# `bubble_out`/`bubble_in`. Không phải chữ ≥ 3: `success`, `danger`, `accent_strong` trên `bubble_*`,
+# `danger` trên `surface`, `accent_strong` trên `track` (thanh `BubbleBar`, 9.3), `focus_ring_color` trên
+# `bubble_*`. Chỉ thêm cặp chưa có (9.4); các cặp còn lại được kiểm là vẫn còn trong bảng cũ (với ngưỡng
+# bằng hay cao hơn), để bảng cũ bị sửa bớt thì test này đỏ.
+B3_TEXT_PAIRS: dict[str, tuple[str, ...]] = {
+    "text": ("bubble_out", "bubble_in"),
+    "text_muted": ("bubble_out", "bubble_in"),
+    "accent_text": ("bubble_out", "bubble_in"),
+}
+B3_NON_TEXT_PAIRS: dict[str, tuple[str, ...]] = {
+    "success": ("bubble_out", "bubble_in"),
+    "danger": ("bubble_out", "bubble_in", "surface"),
+    "accent_strong": ("bubble_out", "bubble_in", "track"),
+}
+B3_NEW_NON_TEXT_PAIRS: dict[str, tuple[str, ...]] = {"accent_strong": ("bubble_out",)}  # 9.4
+
+
+def test_b3_pairs_already_covered_except_new_ones():
+    for fg, backgrounds in B3_TEXT_PAIRS.items():
+        for bg in backgrounds:
+            assert any(bg in t.get(fg, ()) for t in (TEXT_PAIRS, A3_TEXT_PAIRS)), f"cặp B3 chữ {fg}/{bg}"
+    for fg, backgrounds in B3_NON_TEXT_PAIRS.items():
+        for bg in backgrounds:
+            if bg in B3_NEW_NON_TEXT_PAIRS.get(fg, ()):
+                continue
+            covered = any(
+                bg in t.get(fg, ()) for t in (NON_TEXT_PAIRS, A3_NON_TEXT_PAIRS, TEXT_PAIRS, A3_TEXT_PAIRS)
+            )
+            assert covered, f"cặp B3 {fg}/{bg} không còn được kiểm"
+
+
+@MODES
+@ACCENTS
+@pytest.mark.parametrize("fg_name", list(B3_NEW_NON_TEXT_PAIRS))
+def test_b3_new_non_text_pairs_reach_3(dark, accent, fg_name):
+    """`accent_strong` trên `bubble_out`: phần đã chạy của `BubbleBar` hay viền nhấn của bong bóng gửi đi."""
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark, accent)
+    fg = getattr(tok, fg_name)
+    low = [
+        f"{fg_name} {_hex(fg)} / {bg} {_hex(getattr(tok, bg))}: {wcag_ratio(fg, getattr(tok, bg)):.2f}"
+        for bg in B3_NEW_NON_TEXT_PAIRS[fg_name]
+        if wcag_ratio(fg, getattr(tok, bg)) < NON_TEXT_MIN
+    ]
+    assert not low, f"viền/icon < {NON_TEXT_MIN}:1: {low}"
+
+
+@MODES
+@ACCENTS
+@pytest.mark.parametrize("bg_name", ["bubble_in", "bubble_out"])
+def test_b3_focus_ring_color_reaches_3_on_bubbles(dark, accent, bg_name):
+    """9.5: bong bóng có tiêu điểm vẽ vòng 2 px `focus_ring_color(dark)` trên nền của chính nó."""
+    from teleport.ui import theme
+
+    tok = theme.tokens(dark, accent)
+    ring = theme.focus_ring_color(dark)
+    bg = getattr(tok, bg_name)
+    ratio = wcag_ratio(ring, bg)
+    assert ratio >= NON_TEXT_MIN, f"{_hex(ring)} trên {bg_name} {_hex(bg)}: {ratio:.2f}"
+
+
 @ACCENTS
 @MODES
 def test_fusion_focus_frame_reaches_3_on_surfaces(dark, accent):

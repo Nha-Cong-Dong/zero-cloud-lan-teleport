@@ -239,7 +239,7 @@ def test_finished_suspended_keeps_transfer_active(tracker):
     tracker.handle(status_changed(key(direction="receive")), 100.0)
     assert tracker.handle(finished(key(direction="receive"), result="suspended"), 200.0) is None
     act = tracker.get(DEV_A)
-    assert act.busy, "SUSPENDED giữ lượt như TransfersView"
+    assert act.busy, "SUSPENDED giữ lượt như khung chat"
     assert act.last is None
     assert DEV_A in tracker.busy_devices()
 

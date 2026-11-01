@@ -1,18 +1,22 @@
-"""Điều phối gửi/nhận file của giao diện (mvp F4, F5): nối danh sách cuộc trò chuyện, danh sách lượt,
+"""Điều phối gửi/nhận file của giao diện (mvp F4, F5): nối danh sách cuộc trò chuyện, luồng chat,
 hộp hỏi, node.
 
 `TransfersController` sống trên thread Qt, dựng trong `ui.app.GuiApp` (thuộc tính `transfers`). Nó
-giữ `TransfersView` (`view`, đặt vào `MainWindow.transfers_area`) và `OfferPrompts` (`offers`), và
-chỉ chạm node qua `NodeHost.call` / `submit` (không bao giờ gọi `Node` từ thread Qt).
+giữ luồng chat `ui.chat.ChatView` (`view`, đặt vào `MainWindow.transfers_area` với lề 0) và
+`OfferPrompts` (`offers`), và chỉ chạm node qua `NodeHost.call` / `submit` (không bao giờ gọi `Node`
+từ thread Qt). Nối dây (spec B3 mục 5): `conversations.current_changed` → `view.set_device` (gọi một
+lần lúc dựng với máy đang chọn), `conversations.open_requested` → `view.focus_composer`; nút “Gửi
+file” / Ctrl+O của luồng → `pick_and_send`, thả vào luồng → `request_send`, thả khi chưa chọn máy →
+thông báo; “Gửi lại” → `resend`; `view.history_needed` → đọc lịch sử.
 
-**Host** (`attach`): mỗi `NodeHost` mới (lần đầu, “Bắt đầu”, “Thử lại”) → xóa danh sách lượt và
-thông báo, đóng hộp hỏi, bỏ việc “ghép rồi gửi” đang chờ, đặt thư mục nhận (`options.receive_dir`
-khi là Path tường minh, không thì None tới khi `ui.app` gọi `set_receive_dir` theo
-`ReceiveDirController`). Mọi kết quả `call` /
-`submit` mang theo host lúc gọi và bị bỏ nếu host đã đổi; `on_node_event` / `on_transfer` chỉ được
-`ui.app` gọi với sự kiện của host hiện tại. Lúc `started` (`on_started`): một `call` đọc
-`(devices(), transfers.transfers())` → tên máy, trạng thái kết nối, ảnh chụp các lượt (gộp với
-`TransferResumed` tới trước, spec hackathon mục 9.7).
+**Host** (`attach`): mỗi `NodeHost` mới (lần đầu, “Bắt đầu”, “Thử lại”) → xóa mọi luồng, bong bóng
+(kể cả tạm), đường dẫn nhớ cho “Gửi lại” và thông báo, đóng hộp hỏi, bỏ việc “ghép rồi gửi” đang
+chờ, đặt thư mục nhận (`options.receive_dir` khi là Path tường minh, không thì None tới khi `ui.app`
+gọi `set_receive_dir` theo `ReceiveDirController`). Mọi kết quả `call` / `submit` mang theo host
+lúc gọi và bị bỏ nếu host đã đổi; `on_node_event` / `on_transfer` chỉ được `ui.app` gọi với sự
+kiện của host hiện tại. Lúc `started` (`on_started`): một `call` đọc `(devices(),
+transfers.transfers())` → tên máy, trạng thái kết nối, ảnh chụp các lượt (gộp với `TransferResumed`
+tới trước, spec hackathon mục 9.7).
 
 **Hoạt động theo máy** (spec B2 mục 2.3; danh sách cuộc trò chuyện ở cột trái): `activity`
 (`ui.activity.ActivityTracker`) theo dõi lượt đang chạy và lượt đã kết thúc gần nhất của mỗi máy, rồi
@@ -21,9 +25,15 @@ của `on_transfer` (sau `view.handle`; mốc là giờ tường `_wall_now()` l
 lúc gọi), ảnh chụp `transfers()` lúc `started`, và một `call` thứ hai lúc `started` đọc
 `latest_by_device(node.transfers.history())` (rút gọn trên thread node). Kết quả của host cũ hay về
 sau `close_all` bị bỏ; lỗi → WARNING (tên loại lỗi). Host mới (`attach`) → xóa hết. Không polling node.
-Lượt bị gỡ thẻ (bước 3 dưới đây) vẫn báo `TransferFinished` cho `activity` để máy hết “đang bận”.
+Lượt bị gỡ bong bóng (bước 3 dưới đây) vẫn báo `TransferFinished` cho `activity` để máy hết “đang bận”.
 
-**Gửi** (`request_send(device_id, paths)`, từ kéo thả hay “Gửi file…”): thread Qt không `stat`
+**Lịch sử theo máy** (F5, spec B3 mục 5): `view.history_needed(id)` → `host.call(transfers.history(id))`
+khi node của host hiện tại đã `started`; chưa thì nhớ máy đó và gọi đúng một lần trong `on_started`
+(nếu vẫn là máy đang mở). Kết quả → `view.load_history` (luồng tự bỏ kết quả tới muộn); host cũ hay
+sau `close_all` → bỏ; lỗi → WARNING (tên loại lỗi) và `view.history_failed`.
+
+**Gửi** (`request_send(device_id, paths)`, từ kéo thả, nút “Gửi file” / Ctrl+O của luồng hay menu
+“Gửi file…”): thread Qt không `stat`
 file người dùng (D7); việc kiểm file do `transfers.send` làm trên `DiskExecutor` của node.
 1. Danh sách rỗng → bỏ qua; `send.selection_error` (quá `MAX_OFFER_FILES` file, trùng) → thông báo.
 2. Thiết bị chưa ghép đôi → “ghép rồi gửi” (từ B2 giao diện không còn đường nào gửi tới máy chưa ghép
@@ -37,27 +47,33 @@ file người dùng (D7); việc kiểm file do `transfers.send` làm trên `Dis
    ghép đôi không báo lại thì việc chờ tự bỏ, im lặng, sau `PENDING_PAIR_TIMEOUT` giây (`QTimer` một
    lần; `attach`, `close_all` và lúc việc chờ kết thúc thì dừng hẹn).
 3. Kết nối đang bị chặn (`ConnectFailed` gần nhất trong `window.devices` là REJECTED,
-   IDENTITY_MISMATCH, VERSION_MISMATCH; spec mục 10 A2) → câu mvp mục 8, không tạo lượt. Dải thông
-   báo kèm nút:
+   IDENTITY_MISMATCH, VERSION_MISMATCH; spec mục 10 A2) → câu mvp mục 8 (mức WARNING), không tạo
+   lượt. Thanh thông báo kèm nút:
    REJECTED → “Ghép đôi lại” (phát `repair_requested(DeviceView)`, luồng ghép đôi nối);
    IDENTITY_MISMATCH → “Hủy ghép đôi” (phát `conversations.unpair_requested(device_id)`, luồng ghép
-   đôi hỏi xác nhận). Chỉ chưa kết nối thì vẫn gửi: thẻ hiện “Đang chờ kết nối tới X…”.
+   đôi hỏi xác nhận). Chỉ chưa kết nối thì vẫn gửi: bong bóng hiện “Đang chờ kết nối tới X…”.
    Lần mở kết nối do chính lượt đó gây ra mà bị chặn (`on_node_event` nhận `ConnectFailed` chặn,
-   lần đầu `window.devices` biết) → mọi **lượt mới** gửi tới máy đó bị gỡ thẻ và hủy (không treo
-   “Đang nối lại…” tới hạn nối lại), rồi hiện câu và nút như trên. Lượt mới: lượt gửi mà lúc thẻ xuất
+   lần đầu `window.devices` biết) → mọi **lượt mới** gửi tới máy đó bị gỡ bong bóng và hủy (không treo
+   “Đang nối lại…” tới hạn nối lại), rồi hiện câu và nút như trên. Lượt mới: lượt gửi mà lúc bong bóng xuất
    hiện `window.devices` báo chưa kết nối, và chưa có `DeviceConnected` nào của máy đó từ đó tới giờ,
    tức `offer` chưa từng đi. Lượt đã gửi `offer` (lượt dở) giữ nguyên: bị từ chối khi còn lượt dở thì
    `core.links` vẫn hẹn thử lại (docstring `core/links.py`), lỗi tạm trông giống bị từ chối.
    Đánh đổi: lỗi tạm đó (máy kia đang thoát hay khởi động lại) cũng gỡ lượt mới, người dùng gửi lại;
    lượt bị gỡ vào lịch sử là `CANCELLED_USER` (như bấm “Hủy”).
-4. `host.submit(transfers.send)`; lỗi → `send.send_error_message` (None thì im lặng). Thẻ của lượt
-   tự hiện qua `TransferStatusChanged`.
+4. `view.add_pending` (bong bóng tạm “Đang chuẩn bị…”) rồi `host.submit(transfers.send)`; kết quả về
+   thì luôn `view.remove_pending` trước. Lỗi → `send.send_error_message` (None thì im lặng; mức
+   ERROR). Thành công (`TransferKey`): bong bóng của lượt tự hiện qua `TransferStatusChanged`; lượt
+   không bị gỡ và còn bong bóng thì nhớ đường dẫn cho “Gửi lại” (`_sources`, chỉ trong phiên, trần
+   `SOURCES_MAX_TRANSFERS` lượt và `SOURCES_MAX_PATHS` đường dẫn, bỏ mục cũ nhất; bỏ khi lượt xong
+   DONE / UNPAIRED hay bị gỡ vì bị chặn; không nhớ khi `send` trả về sau lúc lượt đã xong như vậy) và
+   `view.set_resendable(key, True)`. Bấm “Gửi lại”
+   (`resend`): quên đường dẫn của lượt đó, tắt nút, rồi `request_send` lại đúng các đường dẫn.
 
 “Gửi file…” (`pick_and_send`): `QFileDialog` cha là cửa sổ chính, `ExistingFiles`, mở bằng `open()`
 (không `exec()`), dựng qua seam cấp module `file_dialog_factory` (đọc lúc gọi).
 
-**Thông báo**: lỗi chọn gửi hiện ở dải thông báo của `TransfersView` (`show_notice`), không hộp
-chặn. Khay: có `offer` chờ trả lời → `texts.offer_waiting()`, **chỉ khi app không được dùng**
+**Thông báo**: lỗi chọn gửi hiện ở thanh thông báo của luồng chat (`view.show_notice`, mức ERROR),
+không hộp chặn. Khay: có `offer` chờ trả lời → `texts.offer_waiting()`, **chỉ khi app không được dùng**
 (`app_active()` False: không cửa sổ nào của app đang active; đọc trước `offers.handle`, vì hộp hỏi
 mới mở có thể giành active); nhận xong một lượt → câu mvp mục 8 “Đã nhận *n* file từ *X*.” (luôn
 hiện; một file: tên file thật đã lưu, lấy từ `FileDone.path.name` cuối, có thể là `ten (1).ext`;
@@ -65,12 +81,13 @@ chưa có thì tên trong `offer`), kèm `folder` để bấm bóng thoại mở
 lưu cuối, không có thì thư mục nhận hiện tại (`set_receive_dir`). Tên máy kia qua
 `texts.peer_label`, tên file qua `texts.file_label`; bóng thoại khay là chữ thuần.
 
-**Tóm tắt cho cửa sổ chính**: mỗi `TransfersView.content_changed` (và một lần lúc dựng) gọi
+**Tóm tắt cho cửa sổ chính**: mỗi `view.content_changed` (và một lần lúc dựng) gọi
 `MainWindow.set_transfer_summary(has_content(), active_count())`: huy hiệu “Đang truyền n lượt”, màn
 rỗng của khung phải, nút “Mở thư mục” cuối chuỗi Tab.
 
 **Lượt gửi dở** (`active_sends()`): tên hiển thị các máy đang có lượt gửi chưa kết thúc, theo các
-hàng của `TransfersView` (không gọi node); `ui.app` dùng để hỏi lại trước khi Thoát.
+bong bóng của phiên trong luồng chat (`view.rows()`, không gọi node); `ui.app` dùng để hỏi lại trước
+khi Thoát.
 
 Chuỗi qua `QCoreApplication.translate("Transfers", ...)` lúc dùng.
 """
@@ -80,6 +97,7 @@ from __future__ import annotations
 import functools
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import cast
@@ -111,10 +129,11 @@ from teleport.core.links import ConnectResult
 from teleport.ui import send, texts
 from teleport.ui.activity import ActivityTracker, FinishedTransfer, latest_by_device
 from teleport.ui.bridge import NodeHost
+from teleport.ui.chat import ChatView
 from teleport.ui.main_window import MainWindow
 from teleport.ui.offer import OfferPrompts
-from teleport.ui.transfers_view import TransfersView
 from teleport.ui.tray import Tray
+from teleport.ui.widgets import InfoLevel
 
 # Seam: dựng hộp chọn file (test thay bằng hàm trả hộp giả). Nhận cha (cửa sổ chính).
 file_dialog_factory: Callable[[QWidget | None], QFileDialog] = QFileDialog
@@ -134,6 +153,11 @@ _PENDING_PAIR_MARGIN = 60.0
 PENDING_PAIR_TIMEOUT = (
     2 * pairing.MESSAGE_TIMEOUT + pairing.CONFIRM_TIMEOUT + pairing.CONFIRM_GRACE + _PENDING_PAIR_MARGIN
 )
+# Trần bộ nhớ đường dẫn nguồn cho “Gửi lại” (chỉ trong phiên, spec B3 mục 9.1).
+SOURCES_MAX_TRANSFERS = 256
+SOURCES_MAX_PATHS = 4096
+# Kết quả không bao giờ có “Gửi lại”: đường dẫn nguồn của lượt đó không cần nhớ.
+_NO_RESEND = (TransferResult.DONE, TransferResult.UNPAIRED)
 
 
 def default_app_active() -> bool:
@@ -180,7 +204,7 @@ def pick_title(peer: str) -> str:
 
 
 class TransfersController(QObject):
-    """Gửi/nhận file trên thread Qt: cột trái → node, sự kiện lượt → danh sách lượt, hoạt động theo
+    """Gửi/nhận file trên thread Qt: cột trái → node, sự kiện lượt → luồng chat, hoạt động theo
     máy, hộp hỏi, khay."""
 
     pair_needed = Signal(object)  # DeviceView: chưa ghép đôi, cần ghép trước khi gửi
@@ -208,7 +232,11 @@ class TransfersController(QObject):
         self._saved_paths: dict[TransferKey, Path] = {}  # file thật đã lưu cuối (`FileDone.path`)
         self._pending: tuple[str, list[Path]] | None = None  # “ghép rồi gửi” đang chờ
         self._unoffered: set[TransferKey] = set()  # lượt gửi mới: `offer` chưa từng đi (bước 3)
-        self._dropped: set[TransferKey] = set()  # thẻ đã gỡ, đang chờ `TransferFinished` của lần hủy
+        self._dropped: set[TransferKey] = set()  # bong bóng đã gỡ, đang chờ `TransferFinished` của lần hủy
+        # Đường dẫn nguồn của lượt gửi trong phiên, cho “Gửi lại” (cũ nhất trước; trần `SOURCES_*`).
+        self._sources: OrderedDict[TransferKey, tuple[Path, ...]] = OrderedDict()
+        self._started: NodeHost | None = None  # host đã `started` (đọc lịch sử được)
+        self._history_waiting: str | None = None  # máy chờ đọc lịch sử tới lúc `started`
         self._pending_timer = QTimer(self)
         self._pending_timer.setSingleShot(True)
         self._pending_timer.timeout.connect(self._drop_pending)
@@ -217,9 +245,10 @@ class TransfersController(QObject):
         self.activity = ActivityTracker()
         self._receive_dir: Path | None = None
 
-        self.view = TransfersView(window.transfers_area)
+        self.view = ChatView(window.devices, window.transfers_area)
         area_layout = window.transfers_area.layout()
         if area_layout is not None:
+            area_layout.setContentsMargins(0, 0, 0, 0)  # luồng chat tự lo lề
             area_layout.addWidget(self.view)
         self.offers = OfferPrompts(parent=self)
 
@@ -227,7 +256,16 @@ class TransfersController(QObject):
         conversations.send_files_requested.connect(self.request_send)
         conversations.pick_files_requested.connect(self.pick_and_send)
         conversations.drop_hint_requested.connect(self.view.show_notice)
+        conversations.current_changed.connect(self.view.set_device)
+        conversations.open_requested.connect(self.view.focus_composer)
         self.view.cancel_requested.connect(self.cancel)
+        self.view.resend_requested.connect(self.resend)
+        self.view.pick_files_requested.connect(self.pick_and_send)
+        self.view.send_files_requested.connect(self.request_send)
+        self.view.drop_hint_requested.connect(self.view.show_notice)
+        self.view.history_needed.connect(self._on_history_needed)
+        current = conversations.current_device()
+        self.view.set_device(None if current is None else current.device_id)
         self.view.content_changed.connect(self._update_summary)
         self.offers.decided.connect(self.decide)
         self._update_summary()
@@ -256,6 +294,9 @@ class TransfersController(QObject):
         self._saved_paths = {}
         self._unoffered = set()
         self._dropped = set()
+        self._sources = OrderedDict()
+        self._started = None
+        self._history_waiting = None
         self.view.set_device_names(self._names)
         receive_dir = None if host is None else host.options.receive_dir
         self.set_receive_dir(receive_dir if isinstance(receive_dir, Path) else None)
@@ -266,7 +307,7 @@ class TransfersController(QObject):
         return self._receive_dir
 
     def set_receive_dir(self, path: Path | None) -> None:
-        """Đặt thư mục nhận cho hộp hỏi (kể cả hộp đang mở), danh sách lượt và bóng thoại khay."""
+        """Đặt thư mục nhận cho hộp hỏi (kể cả hộp đang mở), luồng chat và bóng thoại khay."""
         self._receive_dir = path
         self.offers.set_receive_dir(path)
         self.view.set_receive_dir(path)
@@ -276,6 +317,7 @@ class TransfersController(QObject):
         trong lịch sử."""
         if host is not self._host:
             return
+        self._started = host
         host.call(
             lambda node: (node.devices(), node.transfers.transfers()),
             functools.partial(self._on_snapshot, host),
@@ -284,6 +326,10 @@ class TransfersController(QObject):
             lambda node: latest_by_device(node.transfers.history()),
             functools.partial(self._on_history, host),
         )
+        # Lịch sử của luồng đang mở mà `history_needed` tới trước `started` (gọi đúng một lần).
+        waiting, self._history_waiting = self._history_waiting, None
+        if waiting is not None and waiting == self.view.device_id():
+            self._load_thread_history(host, waiting)
 
     def close_all(self) -> None:
         """App đang thoát: đóng hộp hỏi và hộp chọn file, bỏ việc chờ."""
@@ -317,7 +363,7 @@ class TransfersController(QObject):
     def active_sends(self) -> list[str]:
         """Tên hiển thị (`texts.peer_label`) các máy đang có lượt gửi chưa kết thúc, theo thứ tự hàng.
 
-        Mỗi máy một lần (theo `device_id`). Chỉ đọc các hàng của `TransfersView`, không gọi node.
+        Mỗi máy một lần (theo `device_id`). Chỉ đọc bong bóng của phiên (`view.rows()`), không gọi node.
         """
         model = self._window.devices
         seen: set[str] = set()
@@ -364,6 +410,8 @@ class TransfersController(QObject):
         elif isinstance(update, TransferFinished):
             key = update.info.key
             self._unoffered.discard(key)
+            if update.result in _NO_RESEND:
+                self._sources.pop(key, None)
             offer_name = self._offer_names.pop(key, None)
             saved_path = self._saved_paths.pop(key, None)
             if update.result is TransferResult.DONE and key.direction is Direction.RECEIVE:
@@ -390,7 +438,7 @@ class TransfersController(QObject):
             return
         error = send.selection_error(paths)
         if error is not None:
-            self.view.show_notice(error)
+            self.view.show_notice(error, level=InfoLevel.ERROR)
             return
         model = self._window.devices
         view = model.device(device_id)
@@ -451,6 +499,13 @@ class TransfersController(QObject):
         self._dialog = dialog
         dialog.open()
 
+    def resend(self, key: TransferKey) -> None:
+        """“Gửi lại” của bong bóng `key`: gửi lại đúng các đường dẫn đã nhớ, một lần."""
+        paths = self._sources.pop(key, None)
+        self.view.set_resendable(key, False)
+        if paths is not None:
+            self.request_send(key.device_id, list(paths))
+
     # ---- Hủy, trả lời lời mời ------------------------------------------------------------------
 
     def cancel(self, key: TransferKey) -> None:
@@ -480,7 +535,7 @@ class TransfersController(QObject):
             model.set_activity(device_id, self.activity.get(device_id))
 
     def _update_summary(self) -> None:
-        """Báo cửa sổ chính danh sách lượt có gì không và số lượt chưa kết thúc (huy hiệu, màn rỗng)."""
+        """Báo cửa sổ chính luồng chat có gì không và số lượt chưa kết thúc (huy hiệu, màn rỗng)."""
         self._window.set_transfer_summary(self.view.has_content(), self.view.active_count())
 
     def _peer(self, device_id: str, view: DeviceView | None) -> str:
@@ -497,16 +552,15 @@ class TransfersController(QObject):
     ) -> None:
         """Thông báo thiết bị bị chặn (mục 10 A2), kèm nút hành động của mvp mục 8 khi có."""
         value = str(failure)
+        level = InfoLevel.WARNING
         if value == ConnectResult.REJECTED.value and view is not None:
-            self.view.show_notice(
-                message, repair_action_text(), functools.partial(self._request_repair, device_id)
-            )
+            repair = functools.partial(self._request_repair, device_id)
+            self.view.show_notice(message, repair_action_text(), repair, level=level)
         elif value == ConnectResult.IDENTITY_MISMATCH.value:
-            self.view.show_notice(
-                message, unpair_action_text(), functools.partial(self._request_unpair, device_id)
-            )
+            unpair = functools.partial(self._request_unpair, device_id)
+            self.view.show_notice(message, unpair_action_text(), unpair, level=level)
         else:
-            self.view.show_notice(message)
+            self.view.show_notice(message, level=level)
 
     def _on_connect_failed(self, view: DeviceView, result: ConnectResult) -> None:
         """`ConnectFailed` chặn khi còn lượt mới tới máy đó: gỡ thẻ, hủy lượt, hiện câu (bước 3)."""
@@ -520,6 +574,7 @@ class TransfersController(QObject):
         host = self._host
         for key in keys:
             self.view.remove(key)
+            self._sources.pop(key, None)
             if host is not None:
                 self._dropped.add(key)
                 self.cancel(key)
@@ -539,17 +594,73 @@ class TransfersController(QObject):
         host = self._host
         if host is None:
             return
+        token = self.view.add_pending(device_id, paths)  # “Đang chuẩn bị…” tới khi `send` trả về
         host.submit(
             lambda node: node.transfers.send(device_id, paths),
-            functools.partial(self._on_send_done, host, peer),
+            functools.partial(self._on_send_done, host, peer, tuple(paths), token),
         )
 
-    def _on_send_done(self, host: NodeHost, peer: str, result: object) -> None:
-        if host is not self._host or not isinstance(result, BaseException):
+    def _on_send_done(
+        self, host: NodeHost, peer: str, paths: tuple[Path, ...], token: int, result: object
+    ) -> None:
+        self.view.remove_pending(token)
+        if host is not self._host:
+            return
+        if isinstance(result, TransferKey):
+            # Lượt đã có: nhớ đường dẫn cho “Gửi lại” (bỏ lượt đã gỡ vì bị chặn, không còn bong bóng,
+            # hay đã xong DONE / UNPAIRED: lượt đó không bao giờ có nút “Gửi lại”).
+            bubble = self.view.row(result)
+            if result in self._dropped or bubble is None:
+                return
+            if bubble.result is not None and bubble.result.result in _NO_RESEND:
+                return
+            self._remember_sources(result, paths)
+            self.view.set_resendable(result, True)
+            return
+        if not isinstance(result, BaseException):
             return
         message = send.send_error_message(result, peer)
         if message is not None:
-            self.view.show_notice(message)
+            self.view.show_notice(message, level=InfoLevel.ERROR)
+
+    def _remember_sources(self, key: TransferKey, paths: tuple[Path, ...]) -> None:
+        """Nhớ đường dẫn của `key`; quá `SOURCES_MAX_TRANSFERS` lượt hay `SOURCES_MAX_PATHS` đường dẫn
+        thì bỏ mục cũ nhất."""
+        sources = self._sources
+        sources.pop(key, None)
+        sources[key] = paths
+        total = sum(len(p) for p in sources.values())
+        while len(sources) > 1 and (len(sources) > SOURCES_MAX_TRANSFERS or total > SOURCES_MAX_PATHS):
+            old_key, old_paths = sources.popitem(last=False)
+            total -= len(old_paths)
+            self.view.set_resendable(old_key, False)
+
+    def _on_history_needed(self, device_id: str) -> None:
+        """Luồng của `device_id` cần lịch sử: đọc qua `call` khi node đã chạy, không thì chờ `started`."""
+        host = self._host
+        if host is None:
+            return
+        if self._started is not host:
+            self._history_waiting = device_id
+            return
+        self._load_thread_history(host, device_id)
+
+    def _load_thread_history(self, host: NodeHost, device_id: str) -> None:
+        host.call(
+            lambda node: node.transfers.history(device_id),
+            functools.partial(self._on_thread_history, host, device_id),
+        )
+
+    def _on_thread_history(self, host: NodeHost, device_id: str, result: object) -> None:
+        """Lịch sử với một máy cho luồng của nó; host cũ hay sau `close_all` thì bỏ."""
+        if host is not self._host or self._closing:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không đọc được lịch sử với một máy: %s", type(result).__name__)
+            self.view.history_failed(device_id)
+            return
+        entries = result if isinstance(result, tuple) else ()
+        self.view.load_history(device_id, entries)
 
     def _on_snapshot(self, host: NodeHost, result: object) -> None:
         """Ảnh chụp lúc `started`: tên máy, trạng thái kết nối, các lượt chưa kết thúc."""

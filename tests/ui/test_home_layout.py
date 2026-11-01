@@ -187,7 +187,7 @@ def tray(monkeypatch):
 
 @pytest.fixture
 def make_ctl(tray):
-    """`make_ctl(window) -> TransfersController` (spec 12.6: không dựng `TransfersView` bằng tay)."""
+    """`make_ctl(window) -> TransfersController` (spec 12.6: không dựng view lượt truyền bằng tay)."""
     made: list = []
 
     def make(window):
@@ -1042,18 +1042,72 @@ def test_l12_shift_tab_is_reverse_order(window, qtbot, make_ctl, tmp_path):
     assert [fwd[0], *reversed(fwd[1:])] == back
 
 
-def test_l12_new_card_stays_before_open_button(window, qtbot, make_ctl, tmp_path):
+def _chat_thread_order(window, ctl, forward: list, current) -> None:
+    """Spec B3 mục 7 + 9.10: … `info_bar` → luồng (một điểm dừng: bong bóng hiện hành) → nút của nó →
+    `new_button` (khi hiện) → `composer.send_button` → “Mở thư mục” → “Đổi…”."""
+    view = ctl.view
+    i_action = index_of(forward, view.info_bar.action_button)
+    i_bubble = index_of(forward, current)
+    i_cancel = index_of(forward, current.cancel_button)
+    i_send = index_of(forward, view.composer.send_button)
+    i_open = index_of(forward, window.save_bar.open_button)
+    i_change = index_of(forward, window.save_bar.change_button)
+    assert i_action < i_bubble < i_cancel < i_send < i_open < i_change, [
+        w.objectName() or type(w).__name__ for w in forward
+    ]
+    if view.new_button.isVisibleTo(window):
+        assert i_cancel < index_of(forward, view.new_button) < i_send
+    else:
+        assert all(w is not view.new_button for w in forward)
+
+
+def test_l12_chat_thread_is_one_tab_stop_before_send_and_open_button(window, qtbot, make_ctl, tmp_path):
+    """Spec B3 mục 7, 9.10 (thay “thẻ mới đứng trước Mở thư mục” của danh sách cũ): luồng của máy đang chọn
+    là một điểm dừng Tab (bong bóng hiện hành, mặc định mới nhất), Tab đi qua nút của bong bóng đó rồi
+    tới `send_button`, “Mở thư mục”, “Đổi…”; bong bóng khác và nút của chúng không nằm trong chuỗi Tab."""
     ctl = make_ctl(window)
     fill_l12(window, ctl, tmp_path)
+    selected = device_id("PC-Nha")
     show_window(window, qtbot, 980, 660, active=True)
-    new_key = tkey("send", "f" * 32)
+    assert ctl.view.device_id() == selected, "tiền đề: máy đã ghép đôi duy nhất tự được chọn (mục 6)"
+    old_key = tkey("receive", "e" * 32, dev=selected)
+    new_key = tkey("send", "f" * 32, dev=selected)
+    ctl.view.handle(status_changed(old_key))
     ctl.view.handle(status_changed(new_key))
     settle()
     forward, closed = tab_cycle(window, window.discover_button)
     assert closed
     check_running_order(window, forward)
-    new_row = ctl.view.row(new_key)
-    assert index_of(forward, new_row.cancel_button) < index_of(forward, window.save_bar.open_button)
+    newest, older = ctl.view.row(new_key), ctl.view.row(old_key)
+    _chat_thread_order(window, ctl, forward, newest)
+    assert all(w is not older and w is not older.cancel_button for w in forward), "luồng chỉ một điểm dừng"
+    check_change_last(window, forward)
+
+
+def test_l12_new_button_sits_between_thread_and_send_button(window, qtbot, make_ctl, tmp_path):
+    """Spec B3 9.10: “↓ Mới” (của `ChatView`) nằm sau luồng, trước `send_button`, khi hiện."""
+    ctl = make_ctl(window)
+    fill_l12(window, ctl, tmp_path)
+    selected = device_id("PC-Nha")
+    show_window(window, qtbot, 980, 660, active=True)
+    for i in range(30):
+        ctl.view.handle(status_changed(tkey("send", f"{i:032x}", dev=selected)))
+    settle()
+    thread = ctl.view.thread_for(selected)
+    bar = thread.scroll_area.verticalScrollBar()
+    qtbot.waitUntil(lambda: bar.maximum() > 0, timeout=2000)
+    bar.setValue(0)
+    settle()
+    newest_key = tkey("send", "f" * 32, dev=selected)
+    ctl.view.handle(status_changed(newest_key))
+    settle()
+    assert ctl.view.new_button.isVisibleTo(window), "tiền đề: cuộn lên rồi có lượt mới → “↓ Mới” hiện"
+    ctl.view.row(newest_key).setFocus(Qt.FocusReason.OtherFocusReason)  # bong bóng hiện hành
+    settle()
+    current = ctl.view.row(newest_key)
+    forward, closed = tab_cycle(window, window.discover_button)
+    assert closed
+    _chat_thread_order(window, ctl, forward, current)
 
 
 @pytest.mark.parametrize("state", ["welcome", "error"])
@@ -1609,17 +1663,16 @@ def test_l12_change_button_is_last_in_tab_order(window, qtbot, make_ctl, tmp_pat
     check_running_order(window, forward)
     check_change_last(window, forward)
 
-    # Thêm thẻ lượt mới (widget tạo sau cửa sổ): “Đổi…” vẫn cuối.
-    new_key = tkey("send", "f" * 32)
+    # Thêm bong bóng lượt mới vào luồng đang mở (widget tạo sau cửa sổ): “Đổi…” vẫn cuối. Spec B3 9.10:
+    # nút trong bong bóng chỉ tới được qua bong bóng hiện hành, nên so `send_button` thay nút “Hủy”.
+    new_key = tkey("send", "f" * 32, dev=device_id("PC-Nha"))
     ctl.view.handle(status_changed(new_key))
     settle()
     forward, closed = tab_cycle(window, window.discover_button)
     assert closed
     check_running_order(window, forward)
     check_change_last(window, forward)
-    assert index_of(forward, ctl.view.row(new_key).cancel_button) < index_of(
-        forward, window.save_bar.change_button
-    )
+    assert index_of(forward, ctl.view.composer.send_button) < index_of(forward, window.save_bar.change_button)
 
     # `open_button` ẩn (thư mục hỏng): “Đổi…” vẫn cuối, sau khung phải.
     window.show_running("May-A", None, tmp_path / "hong")

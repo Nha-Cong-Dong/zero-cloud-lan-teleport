@@ -210,9 +210,9 @@ def find_row(ctl, transfer_id: str):
 
 def row_widgets_of(ctl, transfer_id: str) -> int:
     """Số widget thẻ thật của lượt (không qua `rows()`), để bắt thẻ bị dựng hai lần."""
-    from teleport.ui.transfers_view import TransferRow
+    from teleport.ui.chat_bubbles import TransferBubble  # spec B3 9.11: bong bóng thay thẻ cũ
 
-    return sum(1 for r in ctl.view.findChildren(TransferRow) if r.key.transfer_id == transfer_id)
+    return sum(1 for r in ctl.view.findChildren(TransferBubble) if r.key.transfer_id == transfer_id)
 
 
 def a_finished(updates: list, transfer_id: str):
@@ -245,7 +245,6 @@ def test_h_restart_gui_peer_reconnects_by_itself_through_proxy(
 ):
     from teleport.app.transfers import TransferResult
     from teleport.core.links import RETRY_MAX
-    from teleport.ui.transfers_view import result_status
 
     a, b, a_id, _, src = pair()
     p = peer(b)
@@ -306,7 +305,7 @@ def test_h_restart_gui_peer_reconnects_by_itself_through_proxy(
         seen["a"] = str(a_finished(updates, tid).result)
         yield gui_wait(lambda: p.finished(tid), 15, "B thấy lượt kết thúc")
         seen["b"] = str(p.finished(tid).result)
-        seen["done_label"] = result_status(TransferResult.DONE)
+        seen["done_label"] = "Đã lưu"  # spec B3 9.8 (ii): nhãn DONE bên nhận (không còn `result_status`)
         run.tray.quit_requested.emit()
 
     gui(["--config-dir", str(a)], second, timeout=150)

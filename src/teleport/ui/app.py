@@ -31,10 +31,13 @@ danh sách cuộc trò chuyện; “Tìm máy mới” → trang DISCOVER; hàng
 `page.set_receive_dir(thư mục, thư mục hỏng, đang đổi sang)`, “Mở” như chân “Lưu vào”, “Đổi…” →
 `choose(cửa sổ)`, `failed` khi trang Cài đặt đang mở thì thêm câu lỗi ở thanh thông báo của trang);
 `name_changed` → `MainWindow.set_device_name` và `NodeHost.set_node_name`; huy hiệu “Đang ẩn” của thẻ
-máy này theo `Node.visible` đọc lúc `started` và `visibility_changed`. Ngôn ngữ đã lưu
+máy này theo `Node.visible` đọc lúc `started` và `visibility_changed`. `history_cleared` (None: xóa
+toàn bộ) của trang và của `PairingController` (theo `device_id`, khi hủy ghép đôi có xóa lịch sử) →
+`TransfersController.view.invalidate_history` (gỡ lịch sử đang hiện, nạp lại luồng đang mở; spec B3
+mục 9.14). Ngôn ngữ đã lưu
 (`settings.json`) được áp lúc khởi động (`_saved_language`, chỉ đọc, lỗi gì cũng về theo hệ điều hành).
 
-**Gửi/nhận file**: `ui.transfers.TransfersController` (`GuiApp.transfers`) giữ danh sách lượt, hộp
+**Gửi/nhận file**: `ui.transfers.TransfersController` (`GuiApp.transfers`) giữ luồng chat, hộp
 hỏi nhận file và việc gửi; `GuiApp` chỉ báo host mới (`attach`), `started`, `NodeEvent` và
 `TransferUpdate` của host hiện tại cho nó.
 
@@ -42,8 +45,8 @@ hỏi nhận file và việc gửi; `GuiApp` chỉ báo host mới (`attach`), `
 node chạy với thư mục nhận đã lưu (`ReceiveDirChoice.SAVED`). Host mới → `attach`; `started` →
 `on_started` rồi `show_running(tên, thư mục nhận, thư mục đã lưu hỏng)`. `state_changed` → cửa sổ
 (`set_receive_dir`, `set_receive_dir_pending`) và `TransfersController.set_receive_dir`. “Đổi…” ở
-chân “Lưu vào” (`change_receive_dir_requested`) → `choose(cửa sổ)`. `failed` → dải thông báo của
-`TransfersView`; UNAVAILABLE và RESERVED kèm nút “Chọn thư mục khác”. Thư mục đã lưu hỏng lúc
+chân “Lưu vào” (`change_receive_dir_requested`) → `choose(cửa sổ)`. `failed` → thanh thông báo của
+luồng chat (`ChatView`); UNAVAILABLE và RESERVED kèm nút “Chọn thư mục khác”. Thư mục đã lưu hỏng lúc
 `started`: node vẫn chạy (không màn lỗi), dải `unavailable_text` kèm nút “Chọn thư mục nhận”, và
 cửa sổ không hiện (chạy nền) thì thêm bóng thoại khay `unavailable_tray_text`. App nhớ câu cuối nó
 hiện ở dải (`_receive_dir_notice`); `state_changed` mà thư mục nhận đã ổn (có thư mục nhận, hết
@@ -524,6 +527,8 @@ class GuiApp(QObject):
         settings_page.set_change_available(True)
         self.settings.name_changed.connect(self._on_name_changed)
         self.settings.visibility_changed.connect(self._on_visibility_changed)
+        self.settings.history_cleared.connect(self.transfers.view.invalidate_history)
+        self.pairing.history_cleared.connect(self.transfers.view.invalidate_history)
         discover = self.window.discover
         discover.pair_requested.connect(self.pairing.pair_device)
         discover.manual_address_entered.connect(self.pairing.pair_address)
@@ -1167,7 +1172,7 @@ def _assets_ok() -> bool:
 
 
 def _selftest(app: QApplication) -> int:
-    """Kiểm tài sản, dựng i18n, theme, cửa sổ, khay, danh sách lượt mà không hiện; không khóa, không mạng."""
+    """Kiểm tài sản, dựng i18n, theme, cửa sổ, khay, luồng chat mà không hiện; không khóa, không mạng."""
     try:
         i18n.install(app)
         if not _assets_ok():

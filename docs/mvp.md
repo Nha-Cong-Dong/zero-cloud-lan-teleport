@@ -81,7 +81,7 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 
 **Có:** giao diện tối thiểu trên Windows: radar (danh sách thiết bị, nút nhập IP), ghép đôi bằng mã 6 số, kéo thả hoặc “Gửi file…”, hộp thoại Nhận / Từ chối, danh sách lượt truyền có tiến độ, tốc độ, trạng thái “Đang nối lại…” và nút hủy; tự nối lại và kiểm tra toàn vẹn như F6, F7; bản zip chạy không cần cài Python. CLI giữ như F12.
 
-**Để sau hackathon:** màn hình “Chờ ghép đôi” (F3), lần chạy đầu (F1), English (F11), trợ năng (N12), lịch sử lượt truyền trên giao diện (F5), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; hệ điều hành bằng chữ và trạng thái “đang bận” (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP, nút “Gửi lại” và “Đổi thư mục nhận” (mục 8).
+**Để sau hackathon:** màn hình “Chờ ghép đôi” (F3), lần chạy đầu (F1), English (F11), trợ năng (N12), clipboard (F8), bộ cài (N11), macOS và Linux có giao diện; hệ điều hành bằng chữ và trạng thái “đang bận” (F2); luồng máy đã ghép đôi cài lại Teleport (F3, mục 8); trên giao diện, nút “Thử lại” của các lỗi ghép đôi và nhập IP và “Đổi thư mục nhận” (mục 8).
 
 **Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](benchmark.md).
 
@@ -149,7 +149,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **US-06:** Tôi muốn kéo một hoặc nhiều file thả lên máy ở cột trái để gửi.
 - **US-07:** Là người nhận, tôi muốn biết ai gửi gì và được quyền từ chối.
 - **AC:**
-  - Kéo thả, hoặc “Gửi file…” (chuột phải vào thiết bị, hay chọn thiết bị đã ghép đôi rồi bấm nút “Gửi file…” / bấm đúp / Enter), đều được; hỗ trợ chọn nhiều file.
+  - Kéo thả (lên một máy ở cột trái, hay vào luồng của máy đang mở), hoặc “Gửi file” (nút ở thanh dưới luồng của máy đang chọn, phím Ctrl+O, hay chuột phải vào thiết bị → “Gửi file…”), đều được; hỗ trợ chọn nhiều file. Enter hay bấm đúp một máy ở cột trái mở cuộc trò chuyện với máy đó (tiêu điểm tới nút “Gửi file”).
   - Mỗi file tối đa 4 TB (2⁴² byte, [protocol.md](protocol.md) mục 3.3). File lớn hơn bị chặn ngay lúc chọn, trước khi gửi gì cho máy kia (mục 8).
   - Máy nhận hiện hộp thoại: tên người gửi, danh sách file, tổng dung lượng, nút **Nhận** / **Từ chối**. Có tùy chọn “Luôn nhận từ thiết bị này” (tương đương tắt “Hỏi trước khi nhận” của thiết bị đó trong cài đặt).
   - Không đủ dung lượng trống → máy nhận tự từ chối ngay, máy gửi được báo cần bao nhiêu và còn bao nhiêu.
@@ -276,13 +276,13 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 │ (Lap)● MacBook-Lan         │ │ ✓ Đã lưu · Mở thư mục │                   │
 │        Đã nhận bao-cao.pdf │ └───────────────────────┘                   │
 │ (Lap)○ Ubuntu-Lab          │              ┌ phim-4k.mkv · 18 GB      ┐  │
-│        Ngoại tuyến·hôm qua │              │███████░░░░ 62%     ⏸ ✕   │  │
+│        Ngoại tuyến·hôm qua │              │███████░░░░ 62%       ✕   │  │
 │ ＋ Ghép đôi máy mới         │              │94 MB/s · còn 1 phút      │  │
 │                            │              └──────────────────────────┘  │
 │                            │ ┌ PC-Nha muốn gửi 2 file (340 MB) ┐        │
 │ (◆) Máy này            [⧉] │ │ [Từ chối] [Nhận]                │        │
 │     Laptop-Minh            │ └─────────────────────────────────┘        │
-│     Địa chỉ: 192.168.1.15  │ [Gửi file] [Thư mục] [Gửi clipboard]       │
+│     Địa chỉ: 192.168.1.15  │ [Gửi file] [Gửi clipboard]                 │
 │     ● Sẵn sàng nhận        │                     hoặc kéo file vào đây  │
 ├────────────────────────────┴─────────────────────────────────────────────┤
 │ ↓ Lưu vào: Downloads\Teleport                      [Mở thư mục] [Đổi…]   │
@@ -294,7 +294,7 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 - ⌕ mở màn “Tìm máy mới” (radar, có “Nhập IP thủ công” và “Chờ ghép đôi”).
 - Chưa ghép đôi máy nào thì bên phải là “Ghép đôi máy đầu tiên”.
 - Cửa sổ hẹp thì cột trái thu gọn, chỉ còn avatar (tên và trạng thái ở chú thích khi trỏ chuột).
-- Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái.
+- Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái (câu chữ của từng lượt: mục 7.3). Thanh dưới luồng có “Gửi file” (Ctrl+O) và câu “hoặc kéo file vào đây”; không gửi được cả thư mục (mục 4). “[Gửi clipboard]” thuộc F8 (D5). Mốc sự kiện trong luồng (“Đã ghép đôi · 28/10”, “Mất kết nối”) để sau; luồng chỉ có mốc thời gian.
 - “Đổi…” ở chân cửa sổ đổi thư mục nhận chung cho mọi thiết bị; thư mục mới được lưu và dùng cho các lần mở app sau. Thư mục nhận đã lưu không mở được lúc mở app thì app vẫn chạy nhưng không nhận file: thẻ máy này ghi “Không nhận file”, chân cửa sổ nói thư mục nào hỏng và vẫn có “Đổi…” (câu chữ ở mục 8).
 - Không hiện tên Wi-Fi.
 
@@ -389,11 +389,12 @@ Tên file do máy gửi đặt (đã làm sạch, [ke_hoach.md](ke_hoach.md) m�
 
 Bản giao diện của MVP hackathon (mục 4.1): dòng đầu là ““*Laptop-Minh*” muốn gửi *3* file (*8,4 GB*) tới máy này.” (chữ lớn, đậm), rồi các dòng file như bản CLI dưới đây, “Lưu vào: …” và hai nút. Nút “Đổi…” và ô “Luôn nhận từ thiết bị này” (F4) để sau hackathon. Mỗi lượt một hộp, không chặn cửa sổ chính; Enter, Esc và nút đóng hộp đều là **Từ chối**; máy gửi hủy khi hộp còn mở thì hộp tự đóng.
 
-Danh sách lượt truyền của giao diện (khung bên phải của cửa sổ chính, mục 7.1) có một thẻ cho mỗi lượt trong lần mở app này:
-- Dòng 1: “*video.mp4* (*8,0 GB*) · tới *PC-Nha*” (bên nhận “· từ *Laptop-Minh*”; nhiều file: “*3* file (*8,4 GB*)”) và nút “Hủy”; bên nhận xong thì nút “Mở thư mục”.
-- Dòng 2: thanh tiến độ.
-- Dòng 3: nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang kiểm tra”, “Đang nối lại…”, “Xong ✓”, “Đã từ chối”, “Đã hủy”, “Lỗi”) và một dòng phụ: khi đang truyền “*45,0*% · *120 MB/s* · còn *2 phút*” (phần trăm làm tròn xuống, chưa xong thì không hiện 100%; chưa đo được tốc độ thì bỏ phần tốc độ và thay “còn …” bằng “đang tính thời gian còn lại”; đang nối lại hay chờ dữ liệu thì câu ở mục 8); khi chờ thì câu chờ như bản CLI ở bảng dưới (máy nhận: “Đang chờ bạn trả lời” hoặc “Đang xếp hàng”); khi xong “Đã kiểm tra toàn vẹn” (bên nhận mà file phải lưu tên khác vì đã có file trùng tên: “Đã lưu thành *video-demo (1).mp4* · Đã kiểm tra toàn vẹn”; từ hai file đổi tên: “Đã lưu *2* file với tên mới · Đã kiểm tra toàn vẹn”); khi dừng vì lỗi thì câu của mục 8. Lượt dừng mà không xong (hủy, từ chối, lỗi) thì ẩn thanh tiến độ.
-- Thẻ mới nằm trên cùng.
+Luồng của mỗi máy (khung bên phải của cửa sổ chính, mục 7.1) có một bong bóng cho mỗi lượt với máy đó: gửi đi bên phải, nhận vào bên trái, cũ ở trên, mới ở dưới; giữa hai bong bóng cách nhau từ 60 phút hay khác ngày có dòng mốc giờ (“Hôm nay 10:40”, “Hôm qua 21:03”, “28/10 21:03”). Luồng gồm các lượt trong lần mở app này và lịch sử với máy đó (F5, đọc lại mỗi lần mở cuộc trò chuyện). Đang cuộn lên mà có lượt mới thì hiện nút “↓ Mới”. Máy chưa có lượt nào thì luồng ghi “Kéo file vào đây để gửi cho *PC-Nha*”. Mỗi bong bóng:
+- Dòng 1: biểu tượng loại file, “*video.mp4*” (nhiều file: “*3* file”), cỡ (“*8,0 GB*”; mục lịch sử thêm giờ: “*8,0 GB* · 21:03”) và nút “Hủy” khi chưa xong. Không ghi tên máy kia (luồng đã thuộc một máy).
+- Dòng 2: thanh tiến độ, chỉ khi lượt chưa kết thúc.
+- Dòng 3: nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang kiểm tra”, “Đang nối lại…”, “Đã lưu” (nhận xong), “Đã gửi” (gửi xong), “Đã từ chối”, “Đã hủy”, “Lỗi”) và một dòng phụ: khi đang truyền “*45,0*% · *120 MB/s* · còn *2 phút*” (phần trăm làm tròn xuống, chưa xong thì không hiện 100%; chưa đo được tốc độ thì bỏ phần tốc độ và thay “còn …” bằng “đang tính thời gian còn lại”; đang nối lại hay chờ dữ liệu thì câu ở mục 8); khi chờ thì câu chờ như bản CLI ở bảng dưới (máy nhận: “Đang chờ bạn trả lời” hoặc “Đang xếp hàng”); khi xong “Đã kiểm tra toàn vẹn” (bên nhận mà file phải lưu tên khác vì đã có file trùng tên: “Đã lưu thành *video-demo (1).mp4* · Đã kiểm tra toàn vẹn”; từ hai file đổi tên: “Đã lưu *2* file với tên mới · Đã kiểm tra toàn vẹn”); khi dừng vì lỗi thì câu của mục 8. Lỗi có viền màu nhấn đỏ kèm biểu tượng cảnh báo (không chỉ bằng màu); xong có dấu ✓.
+- Dòng 4: “Mở thư mục” (bên nhận đã xong); “Gửi lại” (bên gửi kết thúc không thành, trừ khi hủy ghép đôi; chỉ trong lần mở app này, bấm được một lần).
+- Vừa chọn file xong mà lượt chưa bắt đầu: bong bóng tạm “Đang chuẩn bị…”.
 
 Bản CLI (`teleport receive`), mỗi lần một lời hỏi; lượt tới sau xếp hàng tới khi lời hỏi trước được trả lời. Tối đa 10 dòng file, còn lại gộp thành một dòng; cột dung lượng thẳng hàng:
 ```
@@ -462,6 +463,8 @@ Trên terminal, dòng tiến độ được vẽ lại tại chỗ, cắt vừa 
 
 Nguyên tắc: nói **chuyện gì xảy ra** và **người dùng nên làm gì**, không dùng thuật ngữ kỹ thuật.
 
+Nút “Gửi lại” ở cột cuối (giao diện: trong phiên): chỉ có trên bong bóng của lượt gửi trong lần mở app này, không có trên mục lịch sử.
+
 Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như Windows Explorer: 1 KB = 1024 byte, 1 MB = 1024 KB, 1 GB = 1024 MB, 1 TB = 1024 GB. Mọi con số trong app (thông báo, tiến độ, giới hạn) dùng cùng cách tính này.
 
 | Tình huống | Thông báo | Hành động gợi ý |
@@ -526,7 +529,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: gửi tiếp khi đang chờ ghép đôi để gửi một lượt khác | “Đang chờ ghép đôi với *PC-Nha* để gửi file. Hãy chờ xong rồi gửi tiếp.” (*PC-Nha* là máy đang chờ ghép đôi, không phải máy vừa được chọn gửi) | Chờ lần ghép đôi đang chạy xong rồi gửi lại |
 | Giao diện: gửi tới thiết bị mà lần kết nối gần nhất bị chặn, hoặc lần kết nối mở cho chính lượt gửi đó bị chặn | Câu của dòng “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức” | Lượt gửi không bắt đầu; lượt đã hiện trên danh sách mà chưa gửi được lời mời thì bị gỡ, không chờ nối lại. Kèm nút trên dải thông báo: bị từ chối → “Ghép đôi lại”; danh tính thay đổi → “Hủy ghép đôi” (hỏi xác nhận kèm cảnh báo); khác phiên bản → không có nút |
 | Giao diện: bấm “Ghép đôi lại” khi máy kia không có trong mạng (ví dụ đã ghép bằng IP vì mạng chặn mDNS) | “Không thấy “*PC-Nha*” trong mạng. Nếu mạng chặn việc tìm thiết bị, hãy nhập địa chỉ IP của máy đó để ghép đôi lại.” | Không bắt đầu ghép đôi; mở màn “Tìm máy mới”, câu hiện ở thanh thông báo của màn đó, đặt tiêu điểm vào ô nhập IP |
-| Giao diện: gửi tới thiết bị đã ghép đôi nhưng chưa kết nối | Trạng thái “Đang chờ kết nối tới *PC-Nha*…” (không phải lỗi) | Tự xử lý |
+| Giao diện: gửi tới thiết bị đã ghép đôi nhưng chưa kết nối | Trạng thái “Đang chờ kết nối tới *PC-Nha*…” (không phải lỗi). Máy đó ngoại tuyến thì thanh dưới luồng ghi: “*PC-Nha* đang ngoại tuyến. File gửi lúc này sẽ chờ và tự gửi khi máy đó mở Teleport trong cùng mạng, nếu Teleport trên máy này vẫn chạy (kể cả khi chỉ còn ở khay).” | Tự xử lý |
 | Giao diện: gửi tới thiết bị không (còn) ghép đôi | “Chưa ghép đôi với *PC-Nha* nên chưa gửi được. Hãy ghép đôi rồi gửi lại.” | Lượt gửi không bắt đầu |
 | Giao diện: không gửi được vì lỗi khác lúc bắt đầu lượt | “Không gửi được file tới *PC-Nha*. Hãy thử lại.” | Lượt gửi không bắt đầu |
 | Giao diện: lượt nhận dở được khôi phục khi mở lại app | Trạng thái “Đang chờ *Laptop-Minh* nối lại…” | Tự xử lý |
@@ -548,7 +551,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: trạng thái của một thiết bị trên màn “Tìm máy mới” (dạng danh sách) | Sau tên và “(đã ghép)” / “(chưa ghép)” (mục 7.1): “đã kết nối”, “đang trong mạng” hoặc “không thấy trong mạng”. Thiết bị đã ghép đôi mà lần kết nối gần nhất lỗi thì thêm câu của dòng “Thấy nhưng không kết nối được” (chỉ khi còn thấy trong mạng), “Máy kia từ chối máy này”, “Danh tính thiết bị thay đổi” hoặc “Khác phiên bản giao thức”, tới khi kết nối lại được | — |
 | Giao diện: trạng thái của một máy ở danh sách cuộc trò chuyện | “Trực tuyến”, “Ngoại tuyến” hoặc lượt đang chạy (“Đang gửi · 62%”…), rồi hoạt động gần nhất. Lần kết nối gần nhất lỗi thì nhãn ngắn “Bị từ chối kết nối”, “Danh tính đã đổi”, “Khác phiên bản” hoặc “Không kết nối được”, kèm câu đầy đủ ở chú thích. Đang kéo file qua hàng: “Thả để gửi *n* file” | — |
 | Giao diện: đang ghép đôi (máy này gửi yêu cầu, máy kia chưa hiện mã) | Hộp “Ghép đôi” có thanh chờ và câu “Đang ghép đôi với “*PC-Nha*”…” (ghép bằng IP: “*192.168.1.5:47474*” thay cho tên) | Nút “Hủy” |
-| Giao diện: ghép đôi xong | “Đã ghép đôi với “*PC-Nha*”.” ở dải thông báo trên danh sách lượt truyền, không mở hộp (cả hai máy); không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) thì thêm bóng thoại ở khay. Ghép đôi lỗi vẫn hiện hộp | Nút “Đóng” của dải thông báo |
+| Giao diện: ghép đôi xong | “Đã ghép đôi với “*PC-Nha*”.” ở thanh thông báo của luồng chat, không mở hộp (cả hai máy); không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) thì thêm bóng thoại ở khay. Ghép đôi lỗi vẫn hiện hộp | Nút “Đóng” của dải thông báo |
 | Giao diện: bấm ghép đôi một thiết bị vừa rời mạng | “Không thấy “*PC-Nha*” trong mạng nữa. Hãy thử lại.” | — |
 | Giao diện: ghép đôi khi máy này đang có phiên ghép đôi khác | “Máy này đang có một phiên ghép đôi khác. Hãy thử lại sau.” | — |
 | Giao diện: đã xác nhận ghép đôi nhưng không lưu được | “Đã xác nhận ghép đôi với “*PC-Nha*” nhưng không lưu được danh sách thiết bị đã ghép đôi. Hãy kiểm tra quyền ghi thư mục cấu hình rồi ghép đôi lại.” | — |

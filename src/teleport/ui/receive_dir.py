@@ -31,7 +31,7 @@ không tự rơi về thư mục mặc định.
 
 Log chỉ ghi tên loại lỗi, không bao giờ ghi đường dẫn (mvp N9).
 
-Câu lỗi hiện ở **một** dải thông báo của `TransfersView` (`ui.app`); thông báo khác tới sau có thể
+Câu lỗi hiện ở **một** thanh thông báo của luồng chat (`ui.chat`, qua `ui.app`); thông báo khác tới sau có thể
 đè lên nó: chấp nhận được vì chân “Lưu vào” vẫn nói trạng thái và còn nút “Đổi…”. Mọi `{path}` qua
 `send.printable` rồi `texts.fill`. Chuỗi qua `QCoreApplication.translate("ReceiveDir", ...)` lúc dùng.
 """

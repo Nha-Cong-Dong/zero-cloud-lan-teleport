@@ -37,7 +37,10 @@ from PySide6.QtWidgets import (
 
 # ---- Chữ của spec (2.4, 2.9, 2.10) ------------------------------------------------------------------
 LIST_NAME = "Máy đã ghép đôi"
-LIST_DESCRIPTION = "Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để gửi file, phím Menu để mở thao tác."
+# Spec B3 mục 6: Enter mở cuộc trò chuyện (thay “Enter để gửi file” của B2).
+LIST_DESCRIPTION = (
+    "Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để mở cuộc trò chuyện, phím Menu để mở thao tác."
+)
 ADD_DEVICE = "Ghép đôi máy mới"
 SEND_FILES = "Gửi file…"
 UNPAIR = "Hủy ghép đôi…"
@@ -195,6 +198,7 @@ class Conv:
         QWidget.setTabOrder(self.widget.last_focus_widget(), self.after)
         self.host.resize(320, 700)
         self.picks: list[str] = []
+        self.opens: list[str] = []
         self.sends: list[tuple[str, list[Path]]] = []
         self.unpairs: list[str] = []
         self.currents: list = []
@@ -202,6 +206,7 @@ class Conv:
         self.hints: list[str] = []
         w = self.widget
         w.pick_files_requested.connect(self.picks.append)
+        w.open_requested.connect(self.opens.append)  # spec B3 mục 6
         w.send_files_requested.connect(lambda i, p: self.sends.append((i, [Path(x) for x in p])))
         w.unpair_requested.connect(self.unpairs.append)
         w.current_changed.connect(self.currents.append)
@@ -845,19 +850,23 @@ def test_single_click_selects_and_reports_current_once(conv, qtbot):
 
 
 @pytest.mark.parametrize("way", DCLICK_WAYS)
-def test_double_click_requests_file_pick_exactly_once(conv, qtbot, way):
+def test_double_click_opens_conversation_exactly_once(conv, qtbot, way):
+    # Spec B3 mục 6: bấm đúp phát `open_requested` thay `pick_files_requested`.
     a, b = dview("May-A"), dview("May-B", online=False)
     conv.devices.reset([a, b])
     conv.show(qtbot)
     _double_click(conv.lst, conv.row_pos(conv.model.row_of(b.device_id)), way)
-    qtbot.waitUntil(lambda: bool(conv.picks), timeout=2000)
+    qtbot.waitUntil(lambda: bool(conv.opens), timeout=2000)
     settle(qtbot, 40)
-    assert conv.picks == [b.device_id], f"{way}: {conv.picks}"
+    assert conv.opens == [b.device_id], f"{way}: {conv.opens}"
+    assert conv.picks == []
+    assert conv.selected_ids() == [b.device_id]
     assert conv.unpairs == [] and conv.sends == []
 
 
 @pytest.mark.parametrize("key", [Qt.Key.Key_Return, Qt.Key.Key_Enter])
-def test_enter_requests_file_pick_once(conv, qtbot, key):
+def test_enter_opens_conversation_once(conv, qtbot, key):
+    # Spec B3 mục 6: Enter phát `open_requested` thay `pick_files_requested`.
     a, b = dview("May-A"), dview("May-B")
     conv.devices.reset([a, b])
     conv.show(qtbot)
@@ -865,10 +874,11 @@ def test_enter_requests_file_pick_once(conv, qtbot, key):
     conv.lst.setFocus(Qt.FocusReason.OtherFocusReason)
     QTest.keyClick(conv.lst, key)
     settle(qtbot, 30)
-    assert conv.picks == [b.device_id]
+    assert conv.opens == [b.device_id]
     QTest.keyClick(conv.lst, key)
     settle(qtbot, 30)
-    assert conv.picks == [b.device_id] * 2, "mỗi lần nhấn thật một lần"
+    assert conv.opens == [b.device_id] * 2, "mỗi lần nhấn thật một lần"
+    assert conv.picks == []
 
 
 def test_enter_auto_repeat_does_not_emit_again(conv, qtbot):
@@ -887,7 +897,8 @@ def test_enter_auto_repeat_does_not_emit_again(conv, qtbot):
     QApplication.sendEvent(lst, QKeyEvent(press, ret, nomod, "", True))
     QApplication.sendEvent(lst, QKeyEvent(release, ret, nomod, "\r", False))
     settle(qtbot, 30)
-    assert conv.picks == [d.device_id]
+    assert conv.opens == [d.device_id]  # spec B3 mục 6: Enter → `open_requested`
+    assert conv.picks == []
 
 
 # =================================================================================================
@@ -1050,52 +1061,59 @@ def test_rename_keeps_selected_device(conv):
     assert conv.selected_ids() == [m.device_id]
 
 
-def test_removing_selected_row_selects_nothing(conv):
+# Spec B3 mục 6 (đổi luật B2 V4 / mục 2.6): luôn có một cuộc trò chuyện được chọn khi danh sách có hàng.
+
+
+def test_removing_selected_row_selects_another(conv):
     a, b, c = dview("May-A"), dview("May-B"), dview("May-C")
     conv.devices.reset([a, b, c])
     conv.widget.select_device(b.device_id)
     conv.currents.clear()
     conv.devices.reset([a, c])
-    assert conv.selected_ids() == []
-    assert conv.widget.current_device() is None
-    assert conv.currents == [None]
+    selected = conv.selected_ids()
+    assert len(selected) == 1 and selected[0] in (a.device_id, c.device_id)
+    assert conv.widget.current_device().device_id == selected[0]
+    assert conv.currents and conv.currents[-1] == selected[0]
 
 
-def test_unpaired_selected_row_selects_nothing(conv):
+def test_unpaired_selected_row_selects_remaining_row(conv):
     a, b = dview("May-A"), dview("May-B")
     conv.devices.reset([a, b])
     conv.widget.select_device(b.device_id)
     conv.currents.clear()
     conv.devices.reset([a, dview("May-B", paired=False)])
-    assert conv.selected_ids() == []
-    assert conv.currents == [None]
+    assert conv.selected_ids() == [a.device_id]
+    assert conv.currents and conv.currents[-1] == a.device_id
 
 
-def test_rows_without_current_get_row_zero_as_current_but_not_selected(conv):
+def test_rows_without_selection_select_row_zero(conv):
     conv.devices.reset([dview("May-A"), dview("May-B")])
     settle()
     assert conv.lst.currentIndex().row() == 0
-    assert conv.lst.selectionModel().selectedIndexes() == []
-    assert conv.widget.current_device() is None
-    assert conv.currents == []
+    first = conv.model.index(0, 0).data(Qt.ItemDataRole.DisplayRole)
+    assert conv.selected_ids() == [device_id(first)]
+    assert conv.widget.current_device().device_id == device_id(first)
+    assert conv.currents == [device_id(first)]
 
 
 def test_select_device_unknown_returns_false(conv):
     conv.devices.reset([dview("May-A"), dview("May-U", paired=False)])
     assert not conv.widget.select_device("f" * 32)
     assert not conv.widget.select_device(device_id("May-U"))
-    assert conv.widget.current_device() is None
+    # Máy lạ / chưa ghép đôi không đổi lựa chọn; hàng duy nhất đã tự được chọn.
+    assert conv.widget.current_device().device_id == device_id("May-A")
 
 
 def test_current_device_is_the_selected_one_not_just_current_row(conv):
     a, b = dview("May-A"), dview("May-B")
     conv.devices.reset([a, b])
+    assert conv.widget.current_device() == a  # hàng 0 tự được chọn
     conv.lst.selectionModel().setCurrentIndex(
         conv.model.index(1, 0), QItemSelectionModel.SelectionFlag.NoUpdate
     )
-    assert conv.widget.current_device() is None
-    conv.widget.select_device(a.device_id)
-    assert conv.widget.current_device() == a
+    assert conv.widget.current_device() == a, "dời hàng hiện hành (Tab) không đổi máy được chọn"
+    conv.widget.select_device(b.device_id)
+    assert conv.widget.current_device() == b
 
 
 # =================================================================================================

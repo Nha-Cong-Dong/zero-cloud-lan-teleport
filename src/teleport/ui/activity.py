@@ -9,8 +9,9 @@ Module thuần, **không import PySide6** (test kiểm): `ui.transfers` gọi tr
   chụp `Node.transfers.transfers()` lúc node `started` (`load_snapshot`). “Đang bận” (`busy`,
   `busy_devices`) là máy còn ít nhất một lượt chưa kết thúc ở đây; cùng nguồn với
   `TransferManager.busy_devices()` nên **tương đương** trong điều kiện thường, có thể lệch trong cửa
-  sổ ngắn: lượt `TransferFinished(SUSPENDED)` vẫn được giữ (như `TransfersView`: lượt nhận tạm dừng
-  sẽ tiếp ở lần chạy sau), và lượt bị gỡ thẻ của `ui.transfers` chỉ hết khi `TransferFinished` tới.
+  sổ ngắn: lượt `TransferFinished(SUSPENDED)` vẫn được giữ (như luồng chat `ui.chat`: lượt nhận tạm
+  dừng sẽ tiếp ở lần chạy sau), và lượt bị gỡ bong bóng của `ui.transfers` chỉ hết khi
+  `TransferFinished` tới.
   Không polling node (mvp N3).
 - Lượt đã kết thúc gần nhất (`DeviceActivity.last`): trong phiên là `TransferFinished` (khác
   SUSPENDED), mốc là giờ tường lúc nhận (`wall_now` do bên gọi đưa, giây epoch). Lúc `started` bên
