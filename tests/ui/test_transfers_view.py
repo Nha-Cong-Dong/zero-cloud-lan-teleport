@@ -75,7 +75,13 @@ R_SOURCE_CHANGED_RECEIVE = (
     "{f} đã bị thay đổi trên {p} nên không nhận tiếp được. Các file đã nhận xong vẫn giữ nguyên; "
     "hãy nhờ gửi lại."
 )
-R_NOT_RECEIVING_SEND = "{p} chưa bật nhận file. Trên máy đó hãy chạy “teleport receive” rồi gửi lại."
+# Câu giao diện (spec D4 mục 5.3, 14.14): máy nhận có thể đang tạm dừng nhận hay có thư mục nhận hỏng.
+R_NOT_RECEIVING_SEND = (
+    "{p} đang không nhận file mới (có thể đã tạm dừng nhận, hoặc chưa mở được thư mục nhận). "
+    "Hãy nhờ bật lại việc nhận file trên máy đó rồi gửi lại."
+)
+# Câu CLI (mvp mục 8, “Máy nhận chưa bật nhận file”): giao diện không còn dùng, vẫn phải có trong mvp.
+R_NOT_RECEIVING_CLI = "{p} chưa bật nhận file. Trên máy đó hãy chạy `teleport receive` rồi gửi lại."
 DATA_UNREACHABLE = (
     "Không mở được kết nối truyền dữ liệu tới {p}; tường lửa trên máy đó có thể đang chặn Teleport. "
     "Teleport vẫn đang thử lại."
@@ -883,7 +889,7 @@ def test_section8_sentences_match_mvp_doc():
         fill(R_EXPIRED_RECEIVE, p="*Laptop-Minh*"),
         fill(R_SOURCE_CHANGED_SEND, **p),
         fill(R_SOURCE_CHANGED_RECEIVE, p="*Laptop-Minh*", f="*video.mp4*"),
-        fill(R_NOT_RECEIVING_SEND, **p).replace("“teleport receive”", "`teleport receive`"),
+        fill(R_NOT_RECEIVING_CLI, **p),
         fill(DATA_UNREACHABLE, **p),
         SHORT_RECONNECTING,
         ETA_UNKNOWN,

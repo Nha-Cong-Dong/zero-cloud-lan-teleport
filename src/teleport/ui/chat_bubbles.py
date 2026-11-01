@@ -17,9 +17,10 @@ tạm dừng). Dòng 2 thanh tiến độ mảnh `BubbleBar` (rãnh `track`, ph�
 `BAR_MAX`), chỉ khi lượt chưa kết thúc. Dòng 3 icon trạng thái (`status_icon`, chỉ khi đã kết thúc:
 `checkmark` màu `success` khi xong, `warning` màu `danger` khi lỗi, `dismiss` màu `text_muted` khi hủy
 hay từ chối) và nhãn trạng thái ngắn (`status_label`); dưới đó dòng phụ (`detail_label`, xuống
-dòng). Dòng 4 các nút “Mở thư mục” (bên nhận đã xong, mở thư mục cha của `FileDone.path`) và “Gửi
-lại”. Cuối cùng là `extension_slot`: lời mời nhận file đang chờ (spec B4 mục 3.5) cắm ở đây một
-`OfferPanel`.
+dòng). Dòng 4 các nút “Mở thư mục” (bên nhận đã xong, mở thư mục cha của `FileDone.path`), “Gửi
+lại” và “Đổi thư mục nhận” (bên dưới). Cuối cùng là `extension_slot`: lời mời nhận file đang chờ
+(spec B4 mục 3.5) cắm ở đây một `OfferPanel`.
+
 
 **Lời mời nhận file** (`TransferBubble.set_offer(entry, receive_dir, pending)`, `ui.chat` gọi theo
 `ui.offer.OfferBook`): entry PENDING → dựng `OfferPanel` một lần trong `extension_slot`, **ẩn ✕
@@ -60,6 +61,15 @@ lưu khác tên gốc (`FileDone.path.name` ≠ tên trong `TransferInfo.names`)
 quả khác `DONE` và `UNPAIRED`, và bên điều phối đã nhớ đường dẫn nguồn (`set_resendable(True)`). Xét
 cả lúc `set_resendable` lẫn lúc kết thúc, nên thứ tự nào cũng đúng. Bấm được một lần (`resend_clicked`
 rồi ẩn).
+
+**“Đổi thư mục nhận”** (`change_dir_button`, spec D4 mục 5.2, 14.5, 14.13; mvp mục 8): chỉ hiện khi
+chiều `RECEIVE`, đã kết thúc với `REJECTED_NO_SPACE`, `REJECTED_FILE_TOO_LARGE`, `DISK_FAILED` hay
+`RECEIVE_DIR_MISSING`, và thư mục nhận hiện tại (`set_current_receive_dir`, `ui.chat` gọi cho mọi bong
+bóng mỗi khi thư mục nhận đổi) vẫn là thư mục lúc lượt kết thúc (`finished_receive_dir`, lấy từ
+`BubbleContext.receive_dir` lúc `finish`; None thì không hiện). Đổi sang thư mục khác thì nút ẩn.
+Câu kết quả của bong bóng đã kết thúc nêu `finished_receive_dir`, không nêu thư mục hiện tại. Bấm →
+`change_dir_clicked` (không giới hạn số lần; bên điều phối chỉ mở một hộp chọn). `HistoryBubble` không
+có nút này.
 
 **Trình đọc màn hình**: câu tóm tắt qua `ChatBubble.set_summary` (accessibleName): “Gửi tới X” /
 “Nhận từ X”, tên file, cỡ, trạng thái, % nguyên (đang chạy) hay dòng phụ (chờ, kết thúc), giờ. Chỉ
@@ -162,6 +172,15 @@ _IMAGE = frozenset(
 )
 _AUDIO = frozenset({"mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "wma", "aiff"})
 _ARCHIVE = frozenset({"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz", "zst", "cab"})
+# Kết quả bên nhận có nút “Đổi thư mục nhận” (mvp mục 8; spec D4 mục 5.2, 14.13).
+_CHANGE_DIR_RESULTS = frozenset(
+    {
+        TransferResult.REJECTED_NO_SPACE,
+        TransferResult.REJECTED_FILE_TOO_LARGE,
+        TransferResult.DISK_FAILED,
+        TransferResult.RECEIVE_DIR_MISSING,
+    }
+)
 
 
 # ---- Hàm thuần --------------------------------------------------------------------------------
@@ -226,6 +245,11 @@ def clock_text(at: float) -> str:
     except (OverflowError, OSError, ValueError):
         return ""
     return QTime(moment.hour, moment.minute).toString(QCoreApplication.translate("Chat", "HH:mm"))
+
+
+def change_dir_text() -> str:
+    """Nút “Đổi thư mục nhận” của bong bóng nhận bị từ chối / lỗi vì ổ đĩa (spec D4 mục 5.2)."""
+    return QCoreApplication.translate("Chat", "Đổi thư mục nhận")
 
 
 def files_text(file_count: int) -> str:
@@ -727,6 +751,7 @@ class TransferBubble(_Bubble):
     offer_answer = Signal(bool)  # Nhận / Từ chối trong panel lời mời
     offer_always = Signal(bool)  # ô “Luôn nhận” trong panel
     offer_change = Signal()  # “Đổi…” trong panel
+    change_dir_clicked = Signal()  # “Đổi thư mục nhận” (spec D4 mục 5.2)
 
     def __init__(
         self,
@@ -757,6 +782,8 @@ class TransferBubble(_Bubble):
         self.renamed: dict[int, str] = {}
         self._resend_known = False
         self._resend_used = False
+        self.finished_receive_dir: Path | None = None  # thư mục nhận lúc lượt kết thúc
+        self._current_receive_dir: Path | None = None
         self._summary_key: tuple[object, ...] | None = None
         self._context = context
         self.offer_panel: OfferPanel | None = None
@@ -770,11 +797,15 @@ class TransferBubble(_Bubble):
         self.open_button.clicked.connect(self.open_clicked)
         self.resend_button = _button(self)
         self.resend_button.clicked.connect(self._on_resend)
+        self.change_dir_button = _button(self)
+        self.change_dir_button.setObjectName("changeReceiveDirBubbleButton")
+        self.change_dir_button.clicked.connect(self.change_dir_clicked)
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, theme.SPACING[0], 0, 0)
         buttons.setSpacing(theme.SPACING[1])
         buttons.addWidget(self.open_button)
         buttons.addWidget(self.resend_button)
+        buttons.addWidget(self.change_dir_button)
         buttons.addStretch(1)
         self.extension_slot = QVBoxLayout()
         self.extension_slot.setContentsMargins(0, 0, 0, 0)
@@ -829,8 +860,29 @@ class TransferBubble(_Bubble):
             and not self._resend_used
         )
 
+    def set_current_receive_dir(self, path: Path | None) -> None:
+        """Thư mục nhận hiện tại: quyết định nút “Đổi thư mục nhận” (xem docstring module)."""
+        self._current_receive_dir = path
+        self._update_change_dir()
+
+    def change_dir_available(self) -> bool:
+        """Nút “Đổi thư mục nhận” đang được phép hiện."""
+        return (
+            self.key.direction is Direction.RECEIVE
+            and self.finished
+            and self.result is not None
+            and self.result.result in _CHANGE_DIR_RESULTS
+            and self.finished_receive_dir is not None
+            and self.finished_receive_dir == self._current_receive_dir
+        )
+
     def focus_buttons(self) -> list[QWidget]:
-        candidates: list[QWidget] = [self.cancel_button, self.open_button, self.resend_button]
+        candidates: list[QWidget] = [
+            self.cancel_button,
+            self.open_button,
+            self.resend_button,
+            self.change_dir_button,
+        ]
         for i in range(self.extension_slot.count()):
             item = self.extension_slot.itemAt(i)
             widget = item.widget() if item is not None else None
@@ -972,6 +1024,9 @@ class TransferBubble(_Bubble):
         self.set_info(update.info)
         self.finished = True
         self.result = update
+        receive_dir = self.context().receive_dir
+        self.finished_receive_dir = receive_dir
+        self._current_receive_dir = receive_dir
         if update.result is TransferResult.DONE:
             self.progress_bar.setValue(BAR_MAX)
         self.progress_bar.setVisible(False)
@@ -1012,7 +1067,7 @@ class TransferBubble(_Bubble):
             return (
                 result_kind(result),
                 result_status(result),
-                result_message(self.result, peer, ctx.receive_dir),
+                result_message(self.result, peer, self.finished_receive_dir),
             )
         if self.unreachable:
             return (
@@ -1140,6 +1195,7 @@ class TransferBubble(_Bubble):
         for button, text in (
             (self.open_button, t("Chat", "Mở thư mục")),
             (self.resend_button, t("Chat", "Gửi lại")),
+            (self.change_dir_button, change_dir_text()),
         ):
             button.setText(text)
             button.setAccessibleName(text)
@@ -1147,9 +1203,13 @@ class TransferBubble(_Bubble):
         self._summary_key = None
         self.render_status()
         self._update_resend()
+        self._update_change_dir()
 
     def _update_resend(self) -> None:
         self.resend_button.setVisible(self.resendable())
+
+    def _update_change_dir(self) -> None:
+        self.change_dir_button.setVisible(self.change_dir_available())
 
     def _on_cancel(self) -> None:
         if not self.finished and self.offer_panel is None:  # lời mời chỉ trả lời bằng Nhận / Từ chối

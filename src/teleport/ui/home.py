@@ -29,8 +29,12 @@ sẵn đi qua `QCoreApplication.translate("Home", …)` gọi lúc dùng; chỉ 
   mục” chỉ hiện khi có thư mục nhận; “Đổi…” luôn hiện và không bị tắt khi đang đổi (bấm lúc đó
   không làm gì: `ReceiveDirController.choose` trả False).
 - `MachineCard` huy hiệu, ưu tiên: “Đang truyền n lượt” (BUSY) > “Không nhận file” (WARNING,
-  `set_receiving_unavailable`) > “Đang ẩn” (MUTED, `set_hidden`, spec D2 mục 1.8; mô tả trợ năng “Máy
-  chưa ghép đôi không thấy máy này. Vẫn nhận file từ máy đã ghép đôi.”) > “Sẵn sàng nhận” (SUCCESS).
+  `set_receiving_unavailable`) > “Đã tạm dừng nhận” (WARNING, `set_receiving_paused`, spec D4 mục 4.3:
+  người dùng chọn “Tạm dừng nhận” ở menu khay; mô tả trợ năng `paused_badge_description()`) > “Đang ẩn”
+  (MUTED, `set_hidden`, spec D2 mục 1.8; mô tả trợ năng “Máy chưa ghép đôi không thấy máy này. Vẫn nhận
+  file từ máy đã ghép đôi.”) > “Sẵn sàng nhận” (SUCCESS). Bảng này khác có chủ ý với dấu của biểu tượng
+  khay (`ui.tray`, ở đó “không nhận file” và “tạm dừng” đứng trước “đang truyền”): thẻ nói việc đang
+  diễn ra, khay cảnh báo việc người dùng dễ quên.
 
 **Token**: `MachineCard` trong suốt (thấy nền `sidebar` của cột trái), đường kẻ trên 1 px `border`
 tự vẽ; avatar nền `accent`, icon `accent_text`, vành `sidebar`. `SaveBar` tự vẽ nền `sidebar` và
@@ -43,7 +47,7 @@ icon theo trạng thái. Không thêm luật stylesheet, không `setPalette`.
 **Trợ năng (mvp N12)**: mọi nhãn là `Qt.PlainText`, không `TextSelectableByKeyboard`. `name_label` và
 `address_label` nhận tiêu điểm bằng Tab (chọn bằng chuột được); `name_label` tên “Máy này”, mô tả là
 tên + chữ huy hiệu. Huy hiệu luôn có chữ (“Sẵn sàng nhận”, “Đang truyền n lượt”, “Không nhận
-file”). Tooltip dựng từ địa chỉ hay đường dẫn đi qua `widgets.safe_tooltip`. Chép địa chỉ:
+file”, “Đã tạm dừng nhận”). Tooltip dựng từ địa chỉ hay đường dẫn đi qua `widgets.safe_tooltip`. Chép địa chỉ:
 clipboard, tooltip “Đã chép địa chỉ …” 2 giây và sự kiện trợ năng Alert (cố gắng tốt nhất). Nút
 “Đổi…” có tên và tooltip “Đổi thư mục nhận”, mô tả là chữ đầy đủ của thanh; Tab: “Mở thư mục” →
 “Đổi…”. Chữ `save_label` chuyển giữa ba trạng thái thì phát Alert trên `SaveBar` (tên “Thư mục
@@ -260,6 +264,18 @@ class StartPanel(QWidget):
 # ---- MachineCard -------------------------------------------------------------------------------
 
 
+def paused_badge_description() -> str:
+    """Mô tả trợ năng của huy hiệu “Đã tạm dừng nhận” (spec D4 mục 14.6)."""
+    return texts.fill(
+        QCoreApplication.translate(
+            "Home",
+            "File mới gửi tới sẽ bị từ chối; lượt đang nhận vẫn tiếp tục. "
+            "Bỏ chọn “{menu}” trong menu khay để nhận lại.",
+        ),
+        menu=texts.menu_pause(),
+    )
+
+
 def hidden_badge_description() -> str:
     """Mô tả trợ năng của huy hiệu “Đang ẩn”."""
     return QCoreApplication.translate(
@@ -281,6 +297,7 @@ class MachineCard(QFrame):
         self._name: str | None = None
         self._active = 0
         self._receiving_unavailable = False
+        self._receiving_paused = False
         self._hidden = False
         self._copy_value: str | None = None
 
@@ -364,6 +381,16 @@ class MachineCard(QFrame):
         self._update_badge()
 
     @property
+    def receiving_paused(self) -> bool:
+        """Người dùng đang tạm dừng nhận file (menu khay)."""
+        return self._receiving_paused
+
+    def set_receiving_paused(self, paused: bool) -> None:
+        """Đang tạm dừng nhận: huy hiệu “Đã tạm dừng nhận” khi không có lượt nào và thư mục nhận ổn."""
+        self._receiving_paused = bool(paused)
+        self._update_badge()
+
+    @property
     def machine_hidden(self) -> bool:
         """Máy này đang ẩn với máy chưa ghép đôi (cài đặt “Cho máy chưa ghép đôi thấy máy này” tắt)."""
         return self._hidden
@@ -401,6 +428,9 @@ class MachineCard(QFrame):
             self.badge.set_status(BadgeTone.BUSY, t("Home", "Đang truyền %n lượt", None, self._active))
         elif self._receiving_unavailable:
             self.badge.set_status(BadgeTone.WARNING, t("Home", "Không nhận file"))
+        elif self._receiving_paused:
+            self.badge.set_status(BadgeTone.WARNING, t("Home", "Đã tạm dừng nhận"))
+            description = paused_badge_description()
         elif self._hidden:
             self.badge.set_status(BadgeTone.MUTED, t("Home", "Đang ẩn"))
             description = hidden_badge_description()

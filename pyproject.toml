@@ -8,6 +8,7 @@ name = "zero-cloud-lan-teleport"
 dynamic = ["version"]
 description = "Zero-Cloud LAN Teleport — chuyển file và clipboard trực tiếp trong mạng LAN"
 readme = "README.md"
+authors = [{ name = "Nguyễn Hoàng Tùng" }]
 # PEP 639: wheel chứa cả icon Fluent UI System Icons (MIT) và font Bricolage Grotesque (OFL-1.1, đóng
 # nguyên dạng file dữ liệu riêng) trong teleport/ui/assets/; docs/ke_hoach.md mục 1 (Giấy phép).
 license = "GPL-3.0-or-later AND MIT AND OFL-1.1"

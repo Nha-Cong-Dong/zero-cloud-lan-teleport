@@ -300,7 +300,8 @@ def failure_text(failure: ConnectResult) -> str:
     return t("Conversations", "Không kết nối được")
 
 
-def _is_online(view: DeviceView) -> bool:
+def is_online(view: DeviceView) -> bool:
+    """Máy đang trực tuyến: có kết nối điều khiển hay mDNS đang thấy (dùng chung với menu khay)."""
     return view.connected or view.online
 
 
@@ -316,10 +317,10 @@ def status_line(
             text = t("Conversations", "Đang truyền %n lượt", None, len(activity.active))
         return Presence.BUSY, StatusTone.BUSY, text
     if failure is not None and failure is not ConnectResult.OK:
-        presence = Presence.ONLINE if _is_online(view) else Presence.OFFLINE
+        presence = Presence.ONLINE if is_online(view) else Presence.OFFLINE
         tone = StatusTone.DANGER if failure in _BLOCKING else StatusTone.WARNING
         head = failure_text(failure)
-    elif _is_online(view):
+    elif is_online(view):
         presence, tone, head = Presence.ONLINE, StatusTone.NORMAL, t("Conversations", "Trực tuyến")
     else:
         presence, tone, head = Presence.OFFLINE, StatusTone.NORMAL, t("Conversations", "Ngoại tuyến")
@@ -360,7 +361,7 @@ def drop_text(count: int) -> str:
 
 def conversation_sort_key(view: DeviceView, activity: DeviceActivity) -> tuple[int, float, str, str]:
     """Đang truyền → trực tuyến → còn lại; trong nhóm hoạt động gần nhất trước; rồi tên, mã máy."""
-    group = 0 if activity.busy else (1 if _is_online(view) else 2)
+    group = 0 if activity.busy else (1 if is_online(view) else 2)
     at = activity.at
     return (
         group,

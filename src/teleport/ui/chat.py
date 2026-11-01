@@ -33,10 +33,11 @@ nguyên: `handle`, `load_snapshot`, `remove`, `clear`, `rows` (bong bóng của 
 trước), `row` (chỉ bong bóng của phiên: `ui.transfers` dựa vào `row(key) is None`), `has_content`
 (thông báo đang hiện hay đang chọn một máy), `active_count` (mọi luồng), `show_notice` (kèm `level`),
 `hide_notice`, `notice_text` (“” khi không có), `notice_action_text`, `set_device_names`,
-`set_connected`, `set_receive_dir`, `cancel_requested`, `content_changed` (gộp: phát một lần mỗi lời
-gọi ngoài cùng có thay đổi cấu trúc: thêm/gỡ bong bóng kể cả lịch sử và bong bóng tạm, lượt kết thúc,
-thông báo, đổi máy). Chữ của `show_notice` là `texts.Text`: đổi ngôn ngữ thì câu dựng bằng hàm được dịch
-lại, câu dịch sẵn thì thông báo bị ẩn (không còn câu của ngôn ngữ cũ).
+`set_connected`, `set_receive_dir`, `cancel_requested`, `change_receive_dir_requested` (nút “Đổi thư
+mục nhận” của bong bóng nhận, spec D4 mục 5.2; `ui.app` mở hộp chọn như “Đổi…”), `content_changed`
+(gộp: phát một lần mỗi lời gọi ngoài cùng có thay đổi cấu trúc: thêm/gỡ bong bóng kể cả lịch sử và
+bong bóng tạm, lượt kết thúc, thông báo, đổi máy). Chữ của `show_notice` là `texts.Text`: đổi ngôn ngữ
+thì câu dựng bằng hàm được dịch lại, câu dịch sẵn thì thông báo bị ẩn (không còn câu của ngôn ngữ cũ).
 
 **Lời mời nhận file** (spec B4 mục 3.5): `set_offer_book(book)` nối `ui.offer.OfferBook`. `added` →
 `_ensure` bong bóng của key rồi `TransferBubble.set_offer` (panel Nhận / Từ chối, viền ATTENTION, ẩn
@@ -797,6 +798,7 @@ class ChatView(QWidget):
     send_files_requested = Signal(str, list)  # thả vào luồng: device_id, list[Path]
     drop_hint_requested = Signal(str)  # thả khi chưa chọn máy
     history_needed = Signal(str)  # mở luồng mà chưa có lịch sử (sau HISTORY_DEBOUNCE_MS)
+    change_receive_dir_requested = Signal()  # nút “Đổi thư mục nhận” của bong bóng nhận (spec D4)
     content_changed = Signal()
     offer_answer_requested = Signal(object, bool)  # TransferKey, accept: Nhận / Từ chối ở panel
     offer_always_toggled = Signal(object, bool)  # TransferKey, on: ô “Luôn nhận” ở panel
@@ -981,9 +983,11 @@ class ChatView(QWidget):
                 bubble.render_status()
 
     def set_receive_dir(self, receive_dir: Path | None) -> None:
-        """Thư mục nhận: câu lỗi của bên nhận, luật “Mở thư mục” UNC của mục lịch sử, dòng “Lưu vào”
-        của panel lời mời."""
+        """Thư mục nhận: câu lỗi của bên nhận đang chạy, nút “Đổi thư mục nhận” của bong bóng đã kết
+        thúc, luật “Mở thư mục” UNC của mục lịch sử, dòng “Lưu vào” của panel lời mời."""
         self._receive_dir = receive_dir
+        for transfer in self._bubbles.values():
+            transfer.set_current_receive_dir(receive_dir)
         for thread in self._threads.values():
             for bubble in thread.history_bubbles():
                 bubble.set_receive_dir(receive_dir)
@@ -1452,6 +1456,7 @@ class ChatView(QWidget):
         bubble.offer_answer.connect(lambda accept, b=bubble: self._offer_answer(b, accept))
         bubble.offer_always.connect(lambda on, b=bubble: self._offer_always(b, on))
         bubble.offer_change.connect(self.change_receive_dir_requested)
+        bubble.change_dir_clicked.connect(self.change_receive_dir_requested)
         self._bubbles[key] = bubble
         thread.add(bubble, seq, new=True)
         self._mark_changed()

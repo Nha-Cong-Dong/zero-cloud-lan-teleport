@@ -15,7 +15,11 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - `docs/benchmark.md` mục 7: mvp N4, phần gửi lại sau khi mất kết nối hay tắt app nhận, đo bằng `teleport send` / `receive` thật trên loopback Windows: đạt ở mọi lần đo. Chưa đo: Linux, card mạng thật và macOS (`docs/ke_hoach.md` mục 5.4, D5).
 - Cài đặt lưu trong `settings.json` và đổi được ngay khi Teleport đang chạy, không cần khởi động lại: tên máy, thư mục nhận, giới hạn tốc độ gửi, số ngày giữ phần nhận dở, cùng các tùy chọn của giao diện (ngôn ngữ, chế độ màu sáng/tối, màu nhấn, khởi động cùng máy, dạng xem). Giao diện đổi chúng ở trang Cài đặt. Đổi tên máy thì quảng bá trong mạng cập nhật ngay.
 - “Hỏi trước khi nhận” theo từng thiết bị đã ghép đôi, để chọn “Luôn nhận” cho riêng một máy.
-- Tạm dừng nhận file trong phiên chạy: máy gửi nhận câu “chưa bật nhận file”, lượt đang nhận vẫn chạy xong; mở lại Teleport là nhận như thường.
+- Tạm dừng nhận file trong phiên chạy, bằng mục “Tạm dừng nhận” có dấu chọn trong menu khay: file mới gửi tới bị từ chối và máy gửi được báo máy kia đang không nhận file mới (CLI: “chưa bật nhận file”), lượt đang nhận vẫn chạy xong; thẻ máy này có huy hiệu “Đã tạm dừng nhận”; mở lại Teleport là nhận như thường. Máy không có khay hệ thống thì không có mục này.
+- Menu khay đủ bốn mục: “Gửi file…” mở danh sách máy đã ghép đôi (máy ngoại tuyến có ghi chú), chọn một máy thì cửa sổ mở đúng cuộc trò chuyện đó kèm hộp chọn file; chưa ghép đôi máy nào thì có lối tắt “Tìm máy mới…”.
+- Biểu tượng khay có dấu nhỏ khi đang truyền, khi tạm dừng nhận và khi không nhận được file (thư mục nhận không mở được); trỏ chuột vào biểu tượng thấy số lượt đang truyền hoặc trạng thái nhận.
+- Nút “Thử lại” trong hộp báo ghép đôi không thành (máy kia đang bận, không kết nối được tới IP đã nhập, mã không trùng hay hết giờ, phiên dừng trước khi hiện mã, không hiện được mã ghép đôi): bấm là ghép đôi lại đúng máy hay đúng địa chỉ đó. Khi mã đã hiện trên hai máy, nút được chọn sẵn là “Đóng”.
+- Nút “Đổi thư mục nhận” trên lượt nhận bị từ chối vì thiếu chỗ hay vì ổ không chứa được file lớn, và trên lượt nhận dừng vì lỗi ghi đĩa hay vì thư mục nhận không còn.
 - Đổi thư mục nhận khi đang chạy, khi chưa có lượt nhận nào đã được chấp nhận. File đang chờ bạn bấm Nhận vẫn để nguyên hộp hỏi và được kiểm lại chỗ trống trên thư mục mới: không đủ chỗ thì bị từ chối như thường, còn nếu bạn đã bấm Nhận trong lúc kiểm thì file được nhận vào thư mục mới ngay khi kiểm xong. Thư mục đã lưu không mở được (ví dụ USB đã rút) thì Teleport vẫn chạy và gửi được, chỉ tạm không nhận cho tới khi chọn lại thư mục.
 - Xuất log thành một file zip để gửi khi báo lỗi; file không có tên máy, mã máy hay danh sách máy đã ghép đôi, nhưng log có thể chứa địa chỉ IP và đường dẫn có tên người dùng.
 - `settings.json` tạm thời không đọc được (ví dụ đang bị phần mềm khác khóa) thì lần ghi sau chép bản cũ sang `settings.json.bak` trước, không làm mất cài đặt.
@@ -189,6 +193,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ### Fixed
 - Giao diện: mỗi lời mời nhận file chỉ gửi đúng một quyết định; trả lời gần như cùng lúc ở hai chỗ (hộp hỏi, bong bóng, nút Hủy) không còn biến “Nhận” thành từ chối khi đang kiểm lại chỗ trống sau khi đổi thư mục nhận.
+- Giao diện: câu báo lỗi của lượt nhận (lỗi ghi đĩa, thư mục nhận không còn) nêu đúng thư mục lúc lượt dừng, kể cả sau khi đã đổi thư mục nhận.
 - Windows: lấy tên máy (màn “Bắt đầu”, tên mặc định khi tạo danh tính) không còn đi qua truy vấn WMI của Windows, vốn mất 50–265 ms và chạy ngay trên thread giao diện.
 - Giao diện: thông báo từ khay mang logo Teleport thay vì biểu tượng chữ “i” của hệ thống. Trên Windows, chạy từ mã nguồn (`python -m teleport.ui`, `teleport-gui`) thì taskbar hiện logo Teleport và thông báo không còn ghi “Python”.
 - Giao diện: khi kéo file qua máy đang được chọn, viền “thả vào đây” không còn trùng màu nền của hàng nên vẫn thấy rõ (cả nền sáng lẫn tối).

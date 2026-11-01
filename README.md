@@ -344,3 +344,4 @@ Teleport tập trung vào **file cực lớn và đường truyền chập chờ
 - **Đóng góp:** quy trình nhánh, commit (Conventional Commits) và phát hành ở [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 - **Bảo mật:** báo lỗ hổng theo [docs/SECURITY.md](docs/SECURITY.md), **không** mở issue công khai.
 - **Giấy phép:** [GPL-3.0-or-later](LICENSE). Bạn được dùng, sửa và phân phối lại Teleport; bản phân phối đã sửa đổi phải mở mã theo cùng giấy phép.
+- **Bản quyền:** Copyright (C) 2026 Nguyễn Hoàng Tùng. Teleport là phần mềm tự do: bạn được phân phối lại và/hoặc sửa đổi theo các điều khoản của Giấy phép Công cộng GNU (GPL) phiên bản 3 hoặc (tùy chọn của bạn) bất kỳ phiên bản nào mới hơn, do Free Software Foundation công bố. Teleport được phân phối với hy vọng hữu ích nhưng **không kèm bất kỳ bảo đảm nào**; chi tiết ở [LICENSE](LICENSE).

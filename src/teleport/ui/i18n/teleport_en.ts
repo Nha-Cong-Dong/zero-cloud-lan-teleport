@@ -235,6 +235,11 @@
         <source>Đã lưu</source>
         <translation>Saved</translation>
     </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Đổi thư mục nhận</source>
+        <translation>Change receive folder</translation>
+    </message>
 </context>
 <context>
     <name>Conversations</name>
@@ -680,6 +685,11 @@
     </message>
     <message>
         <location filename="../home.py"/>
+        <source>File mới gửi tới sẽ bị từ chối; lượt đang nhận vẫn tiếp tục. Bỏ chọn “{menu}” trong menu khay để nhận lại.</source>
+        <translation>New files sent to this device will be declined; transfers in progress continue. Uncheck “{menu}” in the tray menu to receive again.</translation>
+    </message>
+    <message>
+        <location filename="../home.py"/>
         <source>Không nhận file</source>
         <translation>Not receiving files</translation>
     </message>
@@ -747,6 +757,11 @@
         <location filename="../main_window.py"/>
         <source>Đã chép địa chỉ {address}</source>
         <translation>Copied address {address}</translation>
+    </message>
+    <message>
+        <location filename="../home.py"/>
+        <source>Đã tạm dừng nhận</source>
+        <translation>Receiving paused</translation>
     </message>
     <message>
         <location filename="../home.py"/>
@@ -1133,6 +1148,11 @@
         <location filename="../pairing.py"/>
         <source>Đó là chính máy này. Hãy nhập địa chỉ của máy kia.</source>
         <translation>That's this device. Enter the other device's address.</translation>
+    </message>
+    <message>
+        <location filename="../pairing.py"/>
+        <source>Đóng</source>
+        <translation>Close</translation>
     </message>
     <message>
         <location filename="../pairing.py"/>
@@ -1833,6 +1853,11 @@
     </message>
     <message>
         <location filename="../texts.py"/>
+        <source>Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới. Chọn Thoát trong menu khay để tắt hẳn.</source>
+        <translation>Teleport is still running in the system tray but has paused receiving new files. Choose Exit in the tray menu to close it completely.</translation>
+    </message>
+    <message>
+        <location filename="../texts.py"/>
         <source>Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn.</source>
         <translation>Teleport is still running in the system tray and still receives files. Choose Exit in the tray menu to close it completely.</translation>
     </message>
@@ -2006,11 +2031,6 @@
     </message>
     <message>
         <location filename="../transfers_view.py"/>
-        <source>{name} chưa bật nhận file. Trên máy đó hãy chạy “teleport receive” rồi gửi lại.</source>
-        <translation>{name} isn't receiving files. Run “teleport receive” on that device, then send again.</translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
         <source>{name} gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại.</source>
         <translation>{name} had an error while receiving, so the transfer stopped. Check the message on that device, then send again.</translation>
     </message>
@@ -2023,6 +2043,11 @@
         <location filename="../transfers_view.py"/>
         <source>{name} không đủ chỗ trống để nhận: cần {needed}, ổ lưu file trên máy đó còn {available}.</source>
         <translation>{name} doesn't have enough free space to receive: {needed} needed, the drive that stores files on that device has {available} left.</translation>
+    </message>
+    <message>
+        <location filename="../transfers_view.py"/>
+        <source>{name} đang không nhận file mới (có thể đã tạm dừng nhận, hoặc chưa mở được thư mục nhận). Hãy nhờ bật lại việc nhận file trên máy đó rồi gửi lại.</source>
+        <translation>{name} isn't accepting new files right now (receiving may be paused, or its receive folder can't be opened). Ask them to turn receiving back on, then send again.</translation>
     </message>
     <message>
         <location filename="../transfers_view.py"/>
@@ -2236,8 +2261,46 @@
     <name>Tray</name>
     <message>
         <location filename="../tray.py"/>
+        <source>Chưa ghép đôi với máy nào</source>
+        <translation>No paired devices</translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
+        <source>Không nhận file: không mở được thư mục nhận</source>
+        <translation>Not receiving files: can't open the receive folder</translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
         <source>Menu của Teleport</source>
         <translation>Teleport menu</translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
+        <source>Sẵn sàng nhận</source>
+        <translation>Ready to receive</translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
+        <source>Tìm máy mới…</source>
+        <translation>Find devices…</translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
+        <source>{name} (ngoại tuyến)</source>
+        <translation>{name} (offline)</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../tray.py"/>
+        <source>Đang truyền %n lượt</source>
+        <translation>
+            <numerusform>%n transfer in progress</numerusform>
+            <numerusform>%n transfers in progress</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
+        <source>Đã tạm dừng nhận file mới</source>
+        <translation>Paused receiving new files</translation>
     </message>
 </context>
 <context>
