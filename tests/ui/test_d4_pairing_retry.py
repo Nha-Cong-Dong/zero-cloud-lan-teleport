@@ -503,8 +503,8 @@ def test_escape_closes_without_retry(qtbot, ctl):
     fail_by_ip(qtbot, ns, "unreachable")
     box = ns.c.result_box
     qtbot.keyClick(box, Qt.Key.Key_Escape)
+    qtbot.waitUntil(lambda: closed(box), timeout=2_000)  # macOS đóng hộp chậm hơn
     qtbot.wait(30)
-    assert closed(box)
     assert len(ns.host.submits) == 1, "Esc = Đóng: không thử lại"
 
 
