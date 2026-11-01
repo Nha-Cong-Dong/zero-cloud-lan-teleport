@@ -21,6 +21,14 @@ lên/xuống, kết nối được/mất/lỗi, máy đã ghép đôi đổi tê
 `trusted.json` (`_refresh_peer`, protocol §5.5; tối đa một lần ghi mỗi
 `PEER_RENAME_MIN_INTERVAL` cho mỗi thiết bị, tên bị trần chặn được hẹn áp khi hết trần).
 
+Địa chỉ đã lưu (protocol §6.2, gạch “Địa chỉ đã lưu”): mỗi kết nối điều khiển RA mở xong tới
+đúng thiết bị (fingerprint khớp) cho node địa chỉ IP:cổng đã chứng minh tới được máy đó;
+`_learn_address` ghi nó vào `trusted.json` (`last_address`, chỉ khi đổi, tối đa một lần mỗi
+`ADDRESS_SAVE_MIN_INTERVAL` cho mỗi thiết bị, không lưu địa chỉ Internet công khai) và đưa vào
+tracker (`LinkTracker.remember`). Lúc khởi động, địa chỉ đã lưu của thiết bị `_auto_target` được
+đưa vào tracker, nên máy đã ghép đôi tự nối lại khi mạng chặn mDNS, kể cả khi máy này đang ẩn.
+`connect_address` (“Kết nối bằng IP…”) thử một địa chỉ cho máy đã ghép đôi và trả `ConnectResult`.
+
 mDNS là tùy chọn (`mdns=None`: tắt) và chỉ là gợi ý địa chỉ: kết nối luôn kiểm chứng
 chỉ server với chứng chỉ đã lưu ngay trong bắt tay. Kết nối ra mở xong thì node báo
 `Listener.note_outgoing_control`, để kết nối vào từ IP đó được ưu tiên khi cổng bị lũ
@@ -100,10 +108,13 @@ from teleport.core.links import (
     LinkAction,
     LinkDown,
     LinkEvent,
+    LinkFailed,
     LinkSwitched,
     LinkTracker,
     LinkUp,
     Notify,
+    check_endpoint,
+    is_saveable,
 )
 from teleport.core.messages import (
     PROTOCOL_VERSION,
@@ -142,6 +153,7 @@ SCAN_TIMEOUT = 3.0  # mặc định của scan_devices / teleport list
 MAX_SCAN_TIMEOUT = 60.0
 MDNS_CLOSE_ALLOWANCE = 2.0  # close(): chờ đóng mỗi instance mDNS (goodbye, socket) tối đa; còn lại chạy nền
 PEER_RENAME_MIN_INTERVAL = 30.0  # giây tối thiểu giữa hai lần ghi tên mới của cùng một máy đã ghép đôi
+ADDRESS_SAVE_MIN_INTERVAL = 30.0  # giây tối thiểu giữa hai lần ghi địa chỉ mới của cùng một máy đã ghép đôi
 _wall_clock = time.time  # test patch để giả máy thức dậy
 _mono_clock = time.monotonic
 # DEFAULT_PORT import từ teleport.net.connection; Node đọc qua biến toàn cục của module này
@@ -330,6 +342,9 @@ class ConnectFailed:
 
     device: DeviceView
     result: ConnectResult  # không bao giờ OK
+    # Lỗi của lần thử tới địa chỉ người dùng vừa đưa (`connect_hint` / `connect_address`). Có thể tới
+    # sau khi `connect_address` đã trả UNREACHABLE vì hết giờ: bên gọi bỏ qua nếu không còn chờ.
+    from_hint: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -649,6 +664,13 @@ class Node:
         self._renamed_at: dict[str, float] = {}
         self._pending_names: dict[str, str] = {}
         self._rename_timers: dict[str, asyncio.TimerHandle] = {}
+        # Địa chỉ đã quan sát của máy đã ghép đôi (`_learn_address`): lần thử ghi gần nhất (giờ loop),
+        # địa chỉ chờ hết trần ADDRESS_SAVE_MIN_INTERVAL (kèm fingerprint lúc học) và hẹn giờ áp nó.
+        self._address_saved_at: dict[str, float] = {}
+        self._pending_addresses: dict[str, tuple[str, int, str]] = {}
+        self._address_timers: dict[str, asyncio.TimerHandle] = {}
+        # `connect_address` đang chờ: device_id → [(ip, cổng, future)], mỗi lời gọi một future.
+        self._address_waiters: dict[str, list[tuple[str, int, asyncio.Future[ConnectResult]]]] = {}
 
     # ---- Vòng đời --------------------------------------------------------------------------
 
@@ -762,6 +784,8 @@ class Node:
                 if self._close_done is not None:
                     raise RuntimeError("Node đã bị đóng trong lúc khởi động")
             self._timer_task = asyncio.create_task(self._links_timer(), name=f"{_TASK_NAME}.links-timer")
+            # Sau `transfers.restore()` (lời gọi engine đầu tiên) và khi cổng, mDNS đã sẵn sàng.
+            self._remember_saved_addresses()
             if self._mdns_opts is not None and self._mdns_opts.advertise:
                 self._netwatch_task = asyncio.create_task(self._netwatch(), name=f"{_TASK_NAME}.netwatch")
             if receive_dir is not None:
@@ -771,6 +795,7 @@ class Node:
         except BaseException:
             self._closing = True  # _apply không tạo task mới nữa
             self._cancel_rename_timers()
+            self._cancel_address_timers()
             try:
                 await self._abort_start(listener)
             finally:
@@ -936,6 +961,8 @@ class Node:
             return
         self._closing = True
         self._cancel_rename_timers()
+        self._cancel_address_timers()
+        self._fail_address_waiters()  # cùng khối đồng bộ với `_closing`, trước `await` đầu tiên
         assert self._pairing is not None and self._listener is not None
         listener_closing = False
         transfers = self._transfers
@@ -1420,15 +1447,17 @@ class Node:
 
         Tracker nhớ địa chỉ này (`LinkTracker.hint`): gỡ chặn, thử ngay nếu chưa có kết nối
         (đang thử thì thử lại tới địa chỉ này khi lần đó thất bại). Lần thử đó không kết nối
-        được thì phát `ConnectFailed(UNREACHABLE)` ngay, một lần cho mỗi lần gọi, kể cả khi
-        đang có lịch nối lại (không chờ đủ số lần thất bại). Còn lượt truyền dở với
-        thiết bị thì nối lại theo lịch (`hold`). Không có mDNS tươi và không còn lượt dở thì
-        không nối lại theo lịch: chỉ thử khi người dùng thao tác (`connect_hint` lần nữa), khi
-        có lượt truyền mới, hoặc khi mạng đổi; riêng “mạng đổi” chỉ được theo dõi khi
-        `auto_connect=True` và node quảng bá mDNS (`core.links`). Chạy được cả khi
-        `auto_connect=False`. Node chưa chạy hoặc đang đóng → RuntimeError; thiết bị không
-        tin cậy → KeyError; máy này, `device_id`, địa chỉ hay cổng sai → ValueError
-        (`device_id` sai → MessageError, lớp con của ValueError).
+        được thì phát `ConnectFailed(UNREACHABLE, from_hint=True)` ngay, một lần cho mỗi lần
+        gọi, kể cả khi đang có lịch nối lại (không chờ đủ số lần thất bại). Còn lượt truyền dở
+        với thiết bị thì nối lại theo lịch (`hold`). Không có mDNS tươi và không còn lượt dở thì
+        không nối lại theo lịch tới địa chỉ này: chỉ thử khi người dùng thao tác (`connect_hint`
+        lần nữa), khi có lượt truyền mới, hoặc khi mạng đổi; riêng “mạng đổi” chỉ được theo dõi
+        khi `auto_connect=True` và node quảng bá mDNS (`core.links`). Lần thử đó thất bại (không
+        tới được, hay là máy khác) mà thiết bị có địa chỉ đã lưu khác thì tracker quên địa chỉ
+        này và nối lại tới địa chỉ đã lưu; kết nối được thì địa chỉ này thành địa chỉ đã lưu
+        (`_learn_address`). Chạy được cả khi `auto_connect=False`. Node chưa chạy hoặc đang đóng
+        → RuntimeError; thiết bị không tin cậy → KeyError; máy này, `device_id`, địa chỉ hay cổng
+        sai → ValueError (`device_id` sai → MessageError, lớp con của ValueError).
         """
         if not self._running or self._closing or self._links is None or self._store is None:
             raise RuntimeError("node chưa chạy")
@@ -1439,6 +1468,99 @@ class Node:
         if self._store.get(device_id) is None:
             raise KeyError(device_id)
         self._apply(self._links.hint(device_id, addresses, port, self._now()))
+
+    async def connect_address(self, device_id: str, ip: str, port: int | None = None) -> ConnectResult:
+        """“Kết nối bằng IP…” cho một máy đã ghép đôi: thử `ip:port` và trả kết quả.
+
+        `port=None`: cổng trong địa chỉ đã lưu của thiết bị, không có thì cổng mDNS đang thấy,
+        cuối cùng `DEFAULT_PORT` (đọc lúc gọi). Lỗi tham số như `connect_hint`: node chưa chạy
+        hay đang đóng → RuntimeError; không tin cậy → KeyError; máy này, địa chỉ, cổng sai
+        (`core.links.check_endpoint`) → ValueError; `device_id` sai → MessageError.
+
+        Đã có kết nối điều khiển → `OK` ngay, không mở kết nối, không đổi `hint`. Chưa có thì gọi
+        `connect_hint(device_id, [ip], port)` rồi chờ tối đa `2 * OPENING_TIMEOUT + 1` giây (đọc
+        lúc gọi): kết nối được (có thể qua đường khác, ví dụ máy kia gọi tới) → `OK`; lần thử tới
+        đúng địa chỉ này thất bại → kết quả của nó (`IDENTITY_MISMATCH` khi địa chỉ là của máy
+        khác: không lưu gì); hết giờ → `UNREACHABLE`. Trong lúc chờ: thiết bị thôi tin cậy →
+        KeyError; `close()` → RuntimeError. Bị hủy thì chỉ thôi chờ, lần thử vẫn chạy. Kết nối
+        được thì địa chỉ được lưu như mọi kết nối ra (`_learn_address`; không lưu địa chỉ
+        Internet công khai).
+        """
+        if not self._running or self._closing or self._links is None or self._store is None:
+            raise RuntimeError("node chưa chạy")
+        assert self._identity is not None and self._registry is not None
+        validate_device_id(device_id)
+        if device_id == self._identity.device_id:
+            raise ValueError("không thể kết nối tới chính máy này")
+        device = self._store.get(device_id)
+        if device is None:
+            raise KeyError(device_id)
+        if port is None:
+            view = self._registry.get(device_id)
+            if device.last_address is not None:
+                port = device.last_address[1]
+            elif view is not None and view.port is not None:
+                port = view.port
+            else:
+                port = DEFAULT_PORT
+        ip, port = check_endpoint(ip, port)
+        if device_id in self._links.connected():
+            return ConnectResult.OK
+        future: asyncio.Future[ConnectResult] = asyncio.get_running_loop().create_future()
+        waiter = (ip, port, future)
+        # Đăng ký trước khi gọi `connect_hint`: kết quả chỉ tới qua `_notify`, sau lời gọi này.
+        self._address_waiters.setdefault(device_id, []).append(waiter)
+        try:
+            self.connect_hint(device_id, [ip], port)
+            try:
+                async with asyncio.timeout(2 * net_connection.OPENING_TIMEOUT + 1):
+                    return await future
+            except TimeoutError:
+                return ConnectResult.UNREACHABLE
+        finally:
+            self._remove_address_waiter(device_id, waiter)
+
+    def _remove_address_waiter(
+        self, device_id: str, waiter: tuple[str, int, asyncio.Future[ConnectResult]]
+    ) -> None:
+        waiters = self._address_waiters.get(device_id)
+        if waiters is None:
+            return
+        with contextlib.suppress(ValueError):
+            waiters.remove(waiter)
+        if not waiters:
+            del self._address_waiters[device_id]
+
+    def _settle_address_waiters(self, event: LinkEvent) -> None:
+        """Hoàn tất các `connect_address` đang chờ theo một sự kiện của tracker (đồng bộ).
+
+        `LinkUp` / `LinkSwitched` → `OK` cho mọi lời gọi của thiết bị; `LinkFailed` của lần thử do
+        `hint` → kết quả của nó cho lời gọi có `ip` nằm trong đích của lần thử đó và cùng cổng.
+        """
+        waiters = self._address_waiters.get(event.device_id)
+        if not waiters:
+            return
+        for ip, port, future in list(waiters):
+            if future.done():
+                continue
+            if isinstance(event, LinkUp | LinkSwitched):
+                future.set_result(ConnectResult.OK)
+            elif (
+                isinstance(event, LinkFailed)
+                and event.from_hint
+                and ip in event.addresses
+                and port == event.port
+            ):
+                future.set_result(event.result)
+
+    def _fail_address_waiters(self, device_ids: Iterable[str] | None = None) -> None:
+        """`connect_address` đang chờ: thiết bị thôi tin cậy → KeyError; node đóng (`None`) → RuntimeError."""
+        ids = list(self._address_waiters) if device_ids is None else list(device_ids)
+        for device_id in ids:
+            for _, _, future in self._address_waiters.pop(device_id, []):
+                if not future.done():
+                    error = RuntimeError("node đang đóng") if device_ids is None else KeyError(device_id)
+                    future.set_exception(error)
 
     # ---- Hủy ghép đôi ----------------------------------------------------------------------
 
@@ -1503,6 +1625,8 @@ class Node:
         ids = self._trusted_ids()
         self._registry.set_trusted(self._store.devices())
         self._forget_peer_names()
+        self._forget_addresses()
+        self._fail_address_waiters([d for d in self._address_waiters if self._store.get(d) is None])
         closes = self._apply(self._links.trusted_changed(ids, self._now()))
         if self._mdns is not None:
             try:
@@ -1624,6 +1748,8 @@ class Node:
             self._attempts.pop(attempt_id, None)
             if self._closing or self._links is None:
                 return
+            # Trước `connect_finished`: `DeviceConnected` (phát trong đó) đã thấy địa chỉ mới.
+            self._learn_address(device_id, conn)
             conn_id = self._new_conn_id()
             self._conns[conn_id] = conn
             self._apply(
@@ -1686,6 +1812,11 @@ class Node:
         return closes
 
     def _notify(self, event: LinkEvent) -> None:
+        # `connect_address` đang chờ: trước và độc lập với registry / `_emit`.
+        try:
+            self._settle_address_waiters(event)
+        except Exception:
+            log.exception("không hoàn tất được lời gọi connect_address của %s", event.device_id[:8])
         assert self._registry is not None
         registry = self._registry
         if isinstance(event, LinkSwitched):
@@ -1721,7 +1852,7 @@ class Node:
             log.info("không kết nối được tới %s: %s", event.device_id[:8], event.result.value)
             view = registry.get(event.device_id)
             if view is not None:
-                self._emit(ConnectFailed(view, event.result))
+                self._emit(ConnectFailed(view, event.result, event.from_hint))
 
     def _refresh_peer(self, device_id: str, conn: Connection | None) -> None:
         """Kết nối điều khiển hiện tại của máy đã ghép đôi vừa có hay vừa đổi (đồng bộ): nhớ
@@ -1819,6 +1950,117 @@ class Node:
             timer.cancel()
         self._rename_timers.clear()
         self._pending_names.clear()
+
+    # ---- Địa chỉ đã lưu (protocol §6.2, gạch “Địa chỉ đã lưu”) ---------------------------------
+
+    def _remember_saved_addresses(self) -> None:
+        """Lúc khởi động: đưa địa chỉ đã lưu (`trusted.json`) của thiết bị `_auto_target` vào tracker.
+
+        Bỏ qua địa chỉ Internet công khai (`is_saveable`). Lỗi của một thiết bị chỉ ghi log.
+        """
+        if self._store is None or self._links is None:
+            return
+        for device in self._store.devices():
+            address = device.last_address
+            if address is None or not self._auto_target(device.device_id) or not is_saveable(address[0]):
+                continue
+            try:
+                self._apply(self._links.remember(device.device_id, address[0], address[1], self._now()))
+            except Exception:
+                log.exception("không nạp được địa chỉ đã lưu của %s", device.device_id[:8])
+
+    def _learn_address(self, device_id: str, conn: Connection) -> None:
+        """Kết nối điều khiển RA vừa mở xong tới thiết bị tin cậy (đồng bộ, không bao giờ raise).
+
+        Chỉ học khi node không đang đóng, thiết bị còn trong kho và fingerprint của `conn` khớp
+        chứng chỉ đã lưu (kiểm ngay trước khi ghi, không có `await` xen giữa), và địa chỉ không
+        phải Internet công khai. Địa chỉ là IP thắng cuộc đua mở kết nối và cổng ta đã gọi tới,
+        tức cổng nghe thật (kết nối vào chỉ có cổng nguồn tạm nên không học). Thiết bị
+        `_auto_target` thì đưa vào tracker (`remember`); mọi node đều ghi `trusted.json`
+        (`_save_address`). IP chỉ ở log DEBUG.
+        """
+        try:
+            if self._closing or self._store is None or self._links is None:
+                return
+            device = self._store.get(device_id)
+            if device is None or conn.peer.fingerprint != device.fingerprint:
+                return
+            ip, port = conn.peer.address, conn.peer.port
+            if not is_saveable(ip):
+                return
+            if self._auto_target(device_id):
+                self._apply(self._links.remember(device_id, ip, port, self._now()))
+            self._save_address(device, ip, port)
+        except Exception:
+            log.exception("không ghi nhận được địa chỉ của %s", device_id[:8])
+
+    def _save_address(self, device: TrustedDevice, ip: str, port: int) -> None:
+        """Ghi địa chỉ mới của `device`, tối đa một lần mỗi ADDRESS_SAVE_MIN_INTERVAL.
+
+        Không đổi thì không ghi. Bị trần chặn thì nhớ địa chỉ (kèm fingerprint) và hẹn áp khi hết
+        trần (`_apply_pending_address`). Lỗi ghi chỉ WARNING (không có IP); lần thử vẫn tính vào
+        trần. Đổi địa chỉ không phát `NodeEvent`.
+        """
+        assert self._store is not None and self._registry is not None
+        device_id = device.device_id
+        if device.last_address == (ip, port):
+            self._drop_pending_address(device_id)
+            return
+        now = self._now()
+        interval = ADDRESS_SAVE_MIN_INTERVAL
+        last = self._address_saved_at.get(device_id)
+        if last is not None and now - last < interval:
+            self._pending_addresses[device_id] = (ip, port, device.fingerprint)
+            if device_id not in self._address_timers:
+                self._address_timers[device_id] = asyncio.get_running_loop().call_later(
+                    last + interval - now, self._apply_pending_address, device_id
+                )
+            return
+        self._drop_pending_address(device_id)
+        self._address_saved_at[device_id] = now
+        try:
+            self._store.set_last_address(device_id, ip, port)
+        except (ValueError, KeyError, TrustStoreError) as e:
+            log.warning("không lưu được địa chỉ của %s (%s)", device_id[:8], type(e).__name__)
+            return
+        self._registry.set_trusted(self._store.devices())
+        log.debug("đã lưu địa chỉ %s:%d của %s", ip, port, device_id[:8])
+
+    def _drop_pending_address(self, device_id: str) -> None:
+        self._pending_addresses.pop(device_id, None)
+        timer = self._address_timers.pop(device_id, None)
+        if timer is not None:
+            timer.cancel()
+
+    def _apply_pending_address(self, device_id: str) -> None:
+        """Hẹn giờ của địa chỉ bị trần chặn: áp nếu node chưa đóng và thiết bị còn fingerprint lúc học."""
+        self._address_timers.pop(device_id, None)
+        pending = self._pending_addresses.pop(device_id, None)
+        if pending is None or self._closing or self._store is None or self._registry is None:
+            return
+        ip, port, fingerprint = pending
+        device = self._store.get(device_id)
+        if device is None or device.fingerprint != fingerprint:
+            return
+        try:
+            self._save_address(device, ip, port)
+        except Exception:
+            log.exception("không áp được địa chỉ mới của %s", device_id[:8])
+
+    def _forget_addresses(self) -> None:
+        """Bỏ trạng thái ghi địa chỉ của thiết bị không còn tin cậy (gọi sau khi kho đổi)."""
+        if self._store is None:
+            return
+        for device_id in list(self._address_saved_at.keys() | self._pending_addresses.keys()):
+            if self._store.get(device_id) is None:
+                self._address_saved_at.pop(device_id, None)
+                self._drop_pending_address(device_id)
+
+    def _cancel_address_timers(self) -> None:
+        for timer in self._address_timers.values():
+            timer.cancel()
+        self._address_timers.clear()
+        self._pending_addresses.clear()
 
     def _transfer_control_up(self, device_id: str, conn_id: int, outgoing: bool) -> None:
         """Kết nối điều khiển hiện tại của thiết bị vừa có hay vừa đổi → `TransferManager`."""
@@ -1968,7 +2210,8 @@ class Node:
             log.info("khám phá mDNS đã hoạt động trở lại")
 
     def _auto_target(self, device_id: str) -> bool:
-        """Địa chỉ mDNS của thiết bị có được đưa vào tracker không (`auto_connect`, `auto_connect_to`)."""
+        """Địa chỉ mDNS và địa chỉ đã lưu của thiết bị có được đưa vào tracker không (`auto_connect`,
+        `auto_connect_to`). Địa chỉ đã lưu vẫn được học và ghi cho mọi thiết bị."""
         return self._auto_connect and self._auto_connect_to in (None, device_id)
 
     def _on_discovery_event(self, source: MdnsDiscovery, event: DeviceEvent) -> None:

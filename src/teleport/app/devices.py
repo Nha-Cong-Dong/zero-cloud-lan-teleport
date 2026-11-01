@@ -5,7 +5,8 @@
   thiết bị đã ghép đôi chỉ lấy từ `trusted.json`; mDNS chỉ là gợi ý (tên của thiết bị
   chưa ghép đôi, hệ điều hành, địa chỉ, cổng). Hệ điều hành của thiết bị đã ghép đôi lấy
   trước hết từ `hello.os` của kết nối điều khiển đã xác thực (`set_peer_hello`), chỉ giữ
-  trong RAM.
+  trong RAM. `last_address` (địa chỉ của kết nối điều khiển ra gần nhất) lấy từ
+  `trusted.json`; đổi địa chỉ không sinh sự kiện.
 - `parse_manual_address`: địa chỉ nhập tay (`ip[:cổng]`).
 - `resolve_trusted` / `resolve_device`: tên hoặc tiền tố mã thiết bị.
 
@@ -22,6 +23,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from teleport.core.discovery import DiscoveredDevice
+from teleport.core.links import check_endpoint
 from teleport.net.connection import DEFAULT_PORT
 from teleport.trust.store import TrustedDevice
 
@@ -31,7 +33,6 @@ MIN_ID_PREFIX = 4
 _ADDRESS_RE = re.compile(r"([0-9.]+)(?::([1-9][0-9]{0,4}))?")
 _HEX_RE = re.compile(r"[0-9a-f]+")
 _ASCII_SPACE = " \t\n\r\x0b\x0c"
-_BROADCAST = ipaddress.IPv4Address("255.255.255.255")
 _ADDRESS_HINT = "ví dụ 192.168.1.5 hoặc 192.168.1.5:47474"
 
 
@@ -49,6 +50,8 @@ class DeviceView:
     connected: bool  # có kết nối điều khiển (chỉ có thể True khi paired)
     addresses: tuple[str, ...]  # từ mDNS; () nếu không thấy
     port: int | None  # từ mDNS; None nếu không thấy
+    # Đã ghép đôi: (IPv4, cổng) của kết nối điều khiển ra gần nhất (`TrustedDevice.last_address`).
+    last_address: tuple[str, int] | None = None
 
 
 class DeviceLookupError(Exception):
@@ -170,6 +173,7 @@ class DeviceRegistry:
             connected=device_id in self._connected,
             addresses=seen.addresses if seen is not None else (),
             port=seen.port if seen is not None else None,
+            last_address=trusted.last_address if trusted is not None else None,
         )
 
     def views(self) -> tuple[DeviceView, ...]:
@@ -201,12 +205,14 @@ def parse_manual_address(text: str, default_port: int = DEFAULT_PORT) -> tuple[s
         raise ValueError(f"địa chỉ IP không hợp lệ: {ip_text!r}; {_ADDRESS_HINT}") from e
     if str(ip) != ip_text:
         raise ValueError(f"địa chỉ IP không hợp lệ: {ip_text!r}; {_ADDRESS_HINT}")
-    if ip.is_unspecified or ip.is_multicast or ip == _BROADCAST:
-        raise ValueError(f"{ip_text} không phải địa chỉ của một máy; {_ADDRESS_HINT}")
     port = default_port if port_text is None else int(port_text)
     if not 1 <= port <= 65535:
         raise ValueError(f"cổng phải trong 1–65535; {_ADDRESS_HINT}")
-    return ip_text, port
+    try:
+        # Cùng luật với địa chỉ đưa vào `core.links` (`hint`, địa chỉ đã lưu).
+        return check_endpoint(ip_text, port)
+    except ValueError as e:
+        raise ValueError(f"{ip_text} không phải địa chỉ của một máy; {_ADDRESS_HINT}") from e
 
 
 def _resolve[D: (TrustedDevice, DeviceView)](query: str, devices: Iterable[D]) -> D:

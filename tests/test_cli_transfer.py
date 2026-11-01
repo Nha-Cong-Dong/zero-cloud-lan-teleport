@@ -3968,3 +3968,106 @@ async def test_c1_yes_still_accepts_every_device_even_if_saved_policy_asks(pair_
     assert await send.code(30) == 0, send.text()
     [offer] = recv.events_of("offer")
     assert offer["auto_accepted"] is True
+
+
+# =================================================================================================
+# F3a (specs/spec-f3a.md mục 10.5): `send --to X` dùng địa chỉ đã kết nối lần trước khi không có mDNS;
+# câu cảnh báo chế độ ẩn mới.
+# =================================================================================================
+
+# 10.5, nguyên văn ({x} = tên máy nhận); không có IP trong câu.
+F3A_SAVED_CONNECT = "Đang kết nối tới “{x}” ở địa chỉ đã kết nối lần trước…"
+# 10.5: đuôi mới của `_HIDDEN_WARNING` (cli.py) và câu tương ứng ở mvp.md; câu cũ không còn.
+F3A_HIDDEN_TAIL = (
+    "máy đã ghép đôi tự kết nối được với máy này khi máy kia đang hiện, hoặc khi hai máy đã từng kết nối "
+    "và địa chỉ không đổi."
+)
+F3A_HIDDEN_OLD = "chỉ tự kết nối được với máy này khi máy kia đang hiện"
+
+
+def _save_receiver_address(net, ip: str, port: int) -> None:
+    """Ghi `last_address` của máy nhận vào `trusted.json` của máy gửi (như sau một lần kết nối ra)."""
+    TrustStore.load(net.S).set_last_address(net.rid, ip, port)
+
+
+def _hide(config_dir: Path) -> None:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "settings.json").write_text(json.dumps({"version": 1, "visible": False}), encoding="utf-8")
+
+
+@with_marks(socket_test)
+async def test_f3a_send_without_mdns_uses_saved_address(pair_dirs, transfer_env, cli_runs):
+    """Không mDNS (chỉ `--host`), không `--address`, máy nhận có `last_address` → không thoát sớm, in câu
+    10.5 (không có IP), kết nối và gửi xong."""
+    net = pair_dirs
+    recv = cli_runs("receive", receive_argv(net))
+    port = (await recv.wait_event("receiving"))["port"]
+    _save_receiver_address(net, LOCAL, port)
+    f = make_file(net.src, "a.bin", 100 * KiB)
+    send = cli_runs("send", send_argv(net, [f], None, json_mode=False))
+    assert await send.code(30) == 0, send.text()
+    text = send.text()
+    expected = F3A_SAVED_CONNECT.format(x=RECEIVER)
+    assert expected in text, text
+    [line] = [x for x in text.splitlines() if "Đang kết nối tới" in x]
+    assert LOCAL not in line and str(port) not in line, line
+    assert B8B_PREFIX.format(x=RECEIVER) not in text
+    assert sha256_of(net.recv / "a.bin") == sha256_of(f)
+
+
+@with_marks(socket_test)
+async def test_f3a_send_when_mdns_fails_uses_saved_address(pair_dirs, transfer_env, cli_runs, cli_mdns):
+    """mDNS bật nhưng không khởi động được (`not node.discovery_active`), có địa chỉ đã lưu: vẫn gửi
+    được."""
+    net = pair_dirs
+    recv = cli_runs("receive", receive_argv(net))
+    port = (await recv.wait_event("receiving"))["port"]
+    _save_receiver_address(net, LOCAL, port)
+    cli_mdns.fail_start = OSError(99, "giả lập mDNS hỏng")
+    f = make_file(net.src, "a.bin", 10 * KiB)
+    send = cli_runs("send", send_argv(net, [f], None, json_mode=False, extra=("--mdns-interface", LOCAL)))
+    assert await send.code(30) == 0, send.text()
+    assert F3A_SAVED_CONNECT.format(x=RECEIVER) in send.text()
+    assert sha256_of(net.recv / "a.bin") == sha256_of(f)
+
+
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_f3a_send_without_mdns_and_only_global_saved_address_still_exits_1(
+    pair_dirs, cli_runs, json_mode
+):
+    """10.4/10.5: địa chỉ đã lưu là IP Internet công khai thì không dùng → lối thoát sớm cũ (B8b, mã 1)."""
+    _save_receiver_address(pair_dirs, "8.8.8.8", 47474)
+    f = make_file(pair_dirs.src, "a.bin", 10)
+    run = cli_runs("send", send_argv(pair_dirs, [f], None, json_mode=json_mode))
+    assert await run.code(10) == 1
+    prefix = B8B_PREFIX.format(x=RECEIVER)
+    if json_mode:
+        [ev] = run.events_of("error")
+        assert ev["error"] == "discovery_error" and ev["message"].startswith(prefix)
+    else:
+        assert prefix in run.text()
+        assert F3A_SAVED_CONNECT.format(x=RECEIVER) not in run.text()
+    assert lock_is_free(pair_dirs.S)
+
+
+@with_marks(socket_test)
+async def test_f3a_hidden_sender_prints_new_hidden_warning(pair_dirs, transfer_env, cli_runs):
+    net = pair_dirs
+    _hide(net.S)
+    recv = cli_runs("receive", receive_argv(net))
+    port = (await recv.wait_event("receiving"))["port"]
+    _save_receiver_address(net, LOCAL, port)
+    f = make_file(net.src, "a.bin", 10 * KiB)
+    send = cli_runs("send", send_argv(net, [f], None, json_mode=False))
+    assert await send.code(30) == 0, send.text()
+    text = send.text()
+    assert F3A_HIDDEN_TAIL in text, text
+    assert F3A_HIDDEN_OLD not in text
+
+
+def test_f3a_hidden_warning_sentence_matches_mvp():
+    """Câu cảnh báo chế độ ẩn của CLI đã đổi cùng mvp.md (10.5); tài liệu không còn câu cũ."""
+    mvp = (Path(__file__).resolve().parents[1] / "docs" / "mvp.md").read_text(encoding="utf-8")
+    assert F3A_HIDDEN_TAIL in mvp
+    assert F3A_HIDDEN_OLD not in mvp
+    assert "hai máy tin cậy cùng ẩn sẽ không tự kết nối được" not in mvp
