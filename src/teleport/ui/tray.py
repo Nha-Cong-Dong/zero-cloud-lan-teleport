@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, Signal
 from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -103,7 +103,7 @@ class Tray(QObject):
         self._pause.setText(texts.menu_pause())
         self._quit.setText(texts.menu_quit())
         self._icon.setToolTip(texts.APP_NAME)
-        self._menu.setAccessibleName(self.tr("Menu của Teleport"))
+        self._menu.setAccessibleName(QCoreApplication.translate("Tray", "Menu của Teleport"))
 
     def show(self) -> None:
         """Hiện biểu tượng nếu hệ thống có khay."""

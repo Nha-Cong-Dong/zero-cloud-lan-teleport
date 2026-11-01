@@ -39,7 +39,9 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
   `success_bg`/`success`, WARNING `warning_bg`/`warning`, ERROR `danger_bg`/`danger`; chữ `text`;
   bo `RADIUS_CARD`. Nút hành động nằm ở hàng dưới, thẳng cột chữ (luật PR-1). `accessibleName` bắt
   đầu bằng tên mức (“Lỗi: …”), nên mức không chỉ nói bằng màu; `show_message` gửi sự kiện trợ năng
-  Alert (cố gắng tốt nhất: có HĐH không chuyển tới trình đọc màn hình).
+  Alert (cố gắng tốt nhất: có HĐH không chuyển tới trình đọc màn hình). Chữ là `texts.Text`: đổi
+  ngôn ngữ thì câu dựng bằng hàm được dịch lại, câu là chuỗi dịch sẵn bị ẩn (trừ khi bên gọi đã hiện
+  lại nó bằng ngôn ngữ mới trước khi thanh nhận `LanguageChange`).
 - `EmptyState`: vòng tròn 56 px nền `accent_subtle`, icon `accent_text`; tiêu đề SECTION (font điểm
   nhấn), mô tả `tone=muted`, nút chính (`PRIMARY_PROPERTY`). Khối rộng tối đa 360 px, căn giữa.
 - `PageHeader`: nút “Quay lại” (có chữ, tooltip kèm Esc), tiêu đề SECTION, đường kẻ dưới 1 px
@@ -112,7 +114,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from teleport.ui import icons, theme
+from teleport.ui import i18n, icons, texts, theme
+from teleport.ui.texts import Text
 from teleport.ui.theme import Tokens
 
 ICON_BUTTON_SIZE = 32  # px, cạnh của nút chỉ có icon (vùng chạm ≥ 24, WCAG 2.5.8)
@@ -736,6 +739,8 @@ class InfoBar(QFrame):
         self._level = InfoLevel.INFO
         self._title = ""
         self._text = ""
+        self._sources: tuple[Text, Text, Text | None] = ("", "", None)
+        self._language = ""  # ngôn ngữ lúc hiện câu đang có
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
@@ -790,10 +795,10 @@ class InfoBar(QFrame):
     def show_message(
         self,
         level: InfoLevel,
-        title: str,
-        text: str = "",
+        title: Text,
+        text: Text = "",
         *,
-        action: str | None = None,
+        action: Text | None = None,
         closable: bool = True,
     ) -> None:
         """Hiện thông báo; `action` là chữ của nút ở hàng dưới (None: không có nút).
@@ -802,11 +807,9 @@ class InfoBar(QFrame):
         mới gọi, hoặc tự `show()`.
         """
         self._level = InfoLevel(level)
-        self._title, self._text = title, text
-        self.title_label.setText(title)
-        self.text_label.setText(text)
-        self.text_label.setVisible(bool(text))
-        self.action_button.setText(action or "")
+        self._sources = (title, text, action)
+        self._language = i18n.current_language()
+        self._apply_sources()
         self.action_button.setVisible(action is not None)
         self.close_button.setVisible(closable)
         self._refresh_icon()
@@ -825,6 +828,26 @@ class InfoBar(QFrame):
         self.close_button.set_label(QCoreApplication.translate("Widgets", "Đóng thông báo"))
         self.setAccessibleName(f"{_level_name(self._level)}: {self._title}")
         self.setAccessibleDescription(self._text)
+
+    def _apply_sources(self) -> None:
+        title, text, action = self._sources
+        self._title, self._text = texts.resolve(title), texts.resolve(text)
+        self.title_label.setText(self._title)
+        self.text_label.setText(self._text)
+        self.text_label.setVisible(bool(self._text))
+        self.action_button.setText(texts.resolve(action) if action is not None else "")
+
+    def _retranslate_message(self) -> None:
+        """Sau `LanguageChange`: câu dựng bằng hàm thì dịch lại; câu dịch sẵn của ngôn ngữ cũ thì ẩn."""
+        language = i18n.current_language()
+        if self.isHidden() or self._language == language:
+            return
+        if all(callable(source) or not source for source in self._sources):
+            self._language = language
+            self._apply_sources()
+            self.retranslate()
+        else:
+            self.clear()
 
     def _on_close(self) -> None:
         self.setVisible(False)
@@ -856,6 +879,7 @@ class InfoBar(QFrame):
             self.update()
         elif event.type() == QEvent.Type.LanguageChange:
             self.retranslate()
+            self._retranslate_message()
 
 
 # ---- EmptyState --------------------------------------------------------------------------------

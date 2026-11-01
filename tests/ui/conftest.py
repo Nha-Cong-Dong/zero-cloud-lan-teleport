@@ -23,6 +23,8 @@ Fixture chính:
 - `peer_node`: một `Node` thật (máy gửi B) chạy event loop riêng trong một thread.
 - `ui_helpers`: hàm phụ trợ (test không import được conftest).
 - `aumid_registration` (tự dùng): `main` không ghi registry thật; fixture trả hàm đăng ký thật.
+- `ui_language_reset` (tự dùng): ngôn ngữ của hệ điều hành coi là tiếng Việt và mỗi test kết thúc ở
+  chuỗi nguồn, để test không phụ thuộc locale của máy chạy test (có `teleport_en.qm` rồi).
 """
 
 from __future__ import annotations
@@ -258,6 +260,27 @@ def qt_thread_gc(qapp):
     guard.start()
     yield guard
     guard.stop()
+
+
+@pytest.fixture(autouse=True)
+def ui_language_reset(qapp, monkeypatch):
+    """Mọi test ui: `i18n.system_language()` → `vi`, và sau test về lại chuỗi nguồn (spec-d6 đợt 3).
+
+    Có `teleport_en.qm` thì máy chạy test để locale English (CI, máy dev) làm `install(app)` /
+    `apply_preference(None)` hiện English, và các test so câu tiếng Việt đỏ theo máy. Test cần ngôn ngữ
+    hệ điều hành khác tự vá lại `system_language` (lần vá sau thắng). Sau test: ngôn ngữ đang dùng khác
+    `vi` thì `set_language("vi")` (gỡ translator, widget còn sống nhận `LanguageChange`).
+    """
+    try:
+        from teleport.ui import i18n
+    except Exception:  # module đang hỏng: test của nó tự đỏ, không làm đỏ mọi test ui
+        yield
+        return
+    monkeypatch.setattr(i18n, "system_language", lambda: i18n.SOURCE_LANGUAGE)
+    yield
+    if i18n.current_language() != i18n.SOURCE_LANGUAGE:
+        i18n.set_language(i18n.SOURCE_LANGUAGE)
+        qapp.processEvents()
 
 
 @pytest.fixture(autouse=True)

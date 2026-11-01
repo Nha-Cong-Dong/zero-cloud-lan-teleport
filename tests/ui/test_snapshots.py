@@ -13,6 +13,10 @@ nên biến môi trường thắng)::
     $env:QT_QPA_PLATFORM="windows"; $env:TELEPORT_UI_SNAPSHOT_DIR="<thư mục ngoài repo>"
     pytest tests/ui/test_snapshots.py
 
+Ngôn ngữ: mặc định chuỗi nguồn tiếng Việt; đặt `TELEPORT_SNAPSHOT_LANG` (ví dụ `en`) thì mọi cảnh
+dựng sau khi `i18n.set_language(<mã>)` (phải có `teleport_<mã>.qm`), để soát chữ dài có tràn không.
+Nên ghi ảnh mỗi ngôn ngữ vào một thư mục riêng vì tên file không có mã ngôn ngữ.
+
 Ảnh không commit vào repo: đính vào PR. Các PR của đợt B thêm cảnh của mình vào `SCENES`.
 
 Cảnh: `welcome`, `starting`, `running` (một địa chỉ, chưa có máy đã ghép đôi → “Ghép đôi máy đầu
@@ -54,6 +58,7 @@ pytestmark = pytest.mark.slow
 
 SIZES = ((980, 660), (720, 460))
 SNAPSHOT_ENV = "TELEPORT_UI_SNAPSHOT_DIR"
+LANG_ENV = "TELEPORT_SNAPSHOT_LANG"
 NOW = datetime.datetime(2026, 10, 31, 10, 45).timestamp()  # giờ địa phương cố định của các cảnh
 RECEIVE_DIR = Path("C:/Users/Minh/Downloads/Teleport")
 
@@ -661,6 +666,12 @@ def _save(image: QImage, scene: str, mode: str, width: int, height: int) -> None
 @pytest.mark.parametrize("scene", list(SCENES))
 def test_snapshot(qtbot, ui_theme, scene, width, height):
     build, is_window, corner_token = SCENES[scene]
+    language = os.environ.get(LANG_ENV)
+    if language:
+        from teleport.ui import i18n
+
+        i18n.set_language(language)  # autouse `ui_language_reset` trả về chuỗi nguồn sau test
+        assert i18n.current_language() == language, f"không nạp được bản dịch {language!r}"
     images: dict[str, QImage] = {}
     for dark, mode in ((False, "light"), (True, "dark")):
         tokens = ui_theme(dark)

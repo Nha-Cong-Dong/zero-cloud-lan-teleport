@@ -44,6 +44,7 @@ teleport send video.mp4 --to PC-Nha              # send to a paired machine runn
 teleport send a.zip --to PC-Nha --address 192.168.1.5:47474 --limit-rate 20M   # when mDNS is blocked; --to still required
 teleport-gui --config-dir D                      # desktop UI (also: python -m teleport.ui); one instance per config dir, --background starts in the tray
 pytest tests/ui                                  # UI tests, offscreen (marker gui)
+python packaging/i18n/update.py [--check]        # refresh the English .ts/.qm from ui strings; --check only verifies (rules: CONTRIBUTING.md, Bản dịch)
 ```
 
 CI matrix and pre-PR checks: `CONTRIBUTING.md`. Test conventions (markers, the admission fixture, monkeypatch seams, CLI test seams): `architecture.md` §6. The distribution name is `zero-cloud-lan-teleport` and the import name is `teleport`. Set `TELEPORT_HOME` (or pass `--config-dir`) to give each node its own identity when running several nodes on one machine.
