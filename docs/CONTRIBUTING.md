@@ -34,13 +34,15 @@ mypy src
 pytest
 ```
 
-CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check .`, `ruff format --check .`, `mypy src` và `pytest` trên Windows, macOS, Linux × Python 3.12 và 3.14. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
+Muốn nhanh hơn thì chạy `pytest -n 4 --dist loadgroup -m "not gui"` rồi `pytest -m gui` (song song, test giao diện tách riêng; vì sao không dùng `-n auto` trên máy nhiều lõi: [architecture.md](architecture.md) mục 6).
+
+CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) chạy `ruff check .`, `ruff format --check .`, `mypy src`, `pytest -n auto --dist loadgroup -m "not gui"` và `pytest -m gui` trên Windows, macOS, Linux × Python 3.12 và 3.14. Push commit mới vào một PR thì lần chạy CI cũ của PR đó bị hủy. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
 
 PR đổi giao diện: đính kèm ảnh sáng/tối do `tests/ui/test_snapshots.py` sinh (lệnh: [architecture.md](architecture.md) mục 6), không commit ảnh vào repo.
 
 Mức kiểm tra kiểu của từng gói nằm ở `[tool.mypy]` trong `pyproject.toml`. Lỗi kiểu thì sửa chú thích; chỉ dùng `# type: ignore[<mã lỗi>]` kèm lý do khi không còn cách nào khác.
 
-Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (`tests/net/test_discovery.py`, `tests/app/test_node_mdns.py`, `tests/test_cli.py`).
+Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (marker `mdns`).
 
 ## Build thử bản CLI (Windows)
 Bản CLI được đóng gói thử bằng PyInstaller để sớm phát hiện lỗi đóng gói và antivirus. Đây chưa phải bản phát hành: không gắn tag, không tạo GitHub Release. File build nằm trong `packaging/pyinstaller/`: `teleport-cli.spec` (cấu hình build), `third_party.py` (kiểm giấy phép, sinh file giấy phép), `requirements.txt` (công cụ build, ghim phiên bản) và `constraints.txt` (ghim bản dependency runtime được đóng vào exe).

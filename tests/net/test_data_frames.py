@@ -522,7 +522,7 @@ async def test_read_rejects_bad_idle_timeout(peer, method, idle):
     assert not conn.closed
 
 
-@pytest.mark.parametrize("hook", [5, "x", b"x", object()], ids=repr)
+@pytest.mark.parametrize("hook", [5, "x", b"x", object()], ids=["5", "'x'", "b'x'", "object()"])
 @pytest.mark.parametrize("method", ["write_raw", "write_block"])
 async def test_before_chunk_must_be_callable(peer, method, hook):
     conn, _, writer = make_conn(peer)

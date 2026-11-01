@@ -432,7 +432,7 @@ async def test_set_name_readvertises_with_new_name(node_factory, fake_mdns):
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
+@pytest.mark.mdns
 async def test_set_name_txt_updated_within_3s(node_factory):
     """mDNS thật trên loopback: máy kia thấy tên mới (TXT) trong 3 s sau `set_name`."""
 
@@ -1205,20 +1205,33 @@ async def test_restore_late_handle_closed_on_old_dir_after_change(
 
     gate = Gate()
     returned: dict[str, object] = {}
+    failed: dict[str, BaseException] = {}  # lỗi trong thread đĩa: báo thẳng thay vì chờ hết hạn
     real_open = storage.ReceiveDir.open_for_resume
 
     def open_for_resume(rd, scan, *, stop=None):
         if scan.transfer_id != tid:
             return real_open(rd, scan, stop=stop)
-        gate.wait()
         try:
+            gate.wait()
             handle = real_open(rd, scan, stop=None)  # bỏ qua `stop`: trả handle thật, tới muộn
             returned[tid] = handle
             return handle
+        except BaseException as e:
+            failed[tid] = e
+            raise
         finally:
             rd_spy.add("open_done", tid)
 
     monkeypatch.setattr(storage.ReceiveDir, "open_for_resume", open_for_resume)
+    # `cleanup` đánh dấu từng lượt `_busy` trong lúc xét; chạy trùng lúc với việc mở lại tới muộn trên
+    # thư mục cũ thì việc đó gặp NotResumableError “đang được dùng” (đã thấy trên CI chạy song song).
+    # Ca này kiểm handle tới muộn *mở được* thì được đóng đúng chỗ, nên dọn tạm bỏ qua lượt này.
+    real_cleanup = storage.ReceiveDir.cleanup
+
+    def cleanup(rd, wall_now, *, own_device_id, skip, retention):
+        return real_cleanup(rd, wall_now, own_device_id=own_device_id, skip=skip | {tid}, retention=retention)
+
+    monkeypatch.setattr(storage.ReceiveDir, "cleanup", cleanup)
     new = tmp_path / "nhan-moi"
     try:
         A = await receiver("A", receive_dir=old, auto_accept=True)
@@ -1229,7 +1242,9 @@ async def test_restore_late_handle_closed_on_old_dir_after_change(
         assert same_path(root, new)
     finally:
         gate.release.set()
-    await wait_until(lambda: tid in returned, 10, "việc mở lại treo chưa trả handle")
+    # Hạn bằng hạn của `Gate`: trên CI chạy song song (xdist) 10 s từng không đủ.
+    await wait_until(lambda: tid in returned or tid in failed, 30, "việc mở lại treo chưa trả handle")
+    assert tid not in failed, f"open_for_resume tới muộn lỗi: {failed[tid]!r}"
     handle = returned[tid]
     try:
         await wait_until(lambda: handle.temp.closed, 10, "handle tới muộn không được đóng")

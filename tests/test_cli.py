@@ -1349,7 +1349,7 @@ async def test_list_runtime_errors_exit_1(tmp_path, cli_mdns, case):
 
 @pytest.mark.slow
 @pytest.mark.integration
-@pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1")
+@pytest.mark.mdns
 def test_list_interrupted_prints_cancelled(tmp_path, procs):
     """`cmd_list`: Ctrl+C → “Đã hủy.”, mã 1, không traceback (mDNS thật chỉ trên loopback).
 

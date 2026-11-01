@@ -16,7 +16,6 @@ mDNS thật trên 127.0.0.1 (bỏ qua khi `TELEPORT_SKIP_MDNS=1`); `device_id` n
 from __future__ import annotations
 
 import asyncio
-import os
 import secrets
 import time
 
@@ -30,7 +29,7 @@ from teleport.net.discovery import DiscoveryError, MdnsDiscovery, build_service_
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(os.environ.get("TELEPORT_SKIP_MDNS") == "1", reason="TELEPORT_SKIP_MDNS=1"),
+    pytest.mark.mdns,
 ]
 
 LOOPBACK = ["127.0.0.1"]
