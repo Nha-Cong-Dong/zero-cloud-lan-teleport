@@ -1868,8 +1868,11 @@ async def test_i7_ctrl_c_on_receive_mid_transfer(pair_dirs, transfer_env, cli_ru
     assert (res["result"], res["by_peer"]) == ("cancelled_user", False), res
     assert res["message"] == S_SELF_CANCELLED.format(p=RECEIVER)
     # `payload_sent` có ở mọi `result` của `send` (spec-p3-4 mục 3.2): int ≥ 0, không phải bool.
+    # Có thể là 0: bên nhận báo `transferring` ngay khi lượt chạy, trước khi kết nối dữ liệu mở,
+    # nên máy tải nặng có thể Ctrl+C trước khi bên gửi ghi byte nào. Giá trị đúng của bộ đếm có test
+    # ở `tests/app/test_transfer_suspend.py`.
     sent = res["payload_sent"]
-    assert type(sent) is int and 0 < sent <= f.stat().st_size, res
+    assert type(sent) is int and 0 <= sent <= f.stat().st_size, res
 
 
 @pytest.mark.slow
