@@ -26,7 +26,8 @@ sẵn đi qua `QCoreApplication.translate("Home", …)` gọi lúc dùng; chỉ 
   mục” chỉ hiện khi có thư mục nhận; “Đổi…” luôn hiện và không bị tắt khi đang đổi (bấm lúc đó
   không làm gì: `ReceiveDirController.choose` trả False).
 - `MachineCard` huy hiệu, ưu tiên: “Đang truyền n lượt” (BUSY) > “Không nhận file” (WARNING,
-  `set_receiving_unavailable`) > “Sẵn sàng nhận” (SUCCESS).
+  `set_receiving_unavailable`) > “Đang ẩn” (MUTED, `set_hidden`, spec D2 mục 1.8; mô tả trợ năng “Máy
+  chưa ghép đôi không thấy máy này. Vẫn nhận file từ máy đã ghép đôi.”) > “Sẵn sàng nhận” (SUCCESS).
 
 **Token**: `MachineCard` trong suốt (thấy nền `sidebar` của cột trái), đường kẻ trên 1 px `border`
 tự vẽ; avatar nền `accent`, icon `accent_text`, vành `sidebar`. `SaveBar` tự vẽ nền `sidebar` và
@@ -250,6 +251,13 @@ class StartPanel(QWidget):
 # ---- MachineCard -------------------------------------------------------------------------------
 
 
+def hidden_badge_description() -> str:
+    """Mô tả trợ năng của huy hiệu “Đang ẩn”."""
+    return QCoreApplication.translate(
+        "Home", "Máy chưa ghép đôi không thấy máy này. Vẫn nhận file từ máy đã ghép đôi."
+    )
+
+
 class MachineCard(QFrame):
     """Chân cột trái: máy này (tên, địa chỉ, nút chép, huy hiệu trạng thái)."""
 
@@ -264,6 +272,7 @@ class MachineCard(QFrame):
         self._name: str | None = None
         self._active = 0
         self._receiving_unavailable = False
+        self._hidden = False
         self._copy_value: str | None = None
 
         self.avatar = DeviceAvatar(
@@ -345,6 +354,16 @@ class MachineCard(QFrame):
         self._receiving_unavailable = bool(unavailable)
         self._update_badge()
 
+    @property
+    def machine_hidden(self) -> bool:
+        """Máy này đang ẩn với máy chưa ghép đôi (cài đặt “Cho máy chưa ghép đôi thấy máy này” tắt)."""
+        return self._hidden
+
+    def set_hidden(self, hidden: bool) -> None:
+        """Máy này đang ẩn: huy hiệu “Đang ẩn” khi không có lượt nào và vẫn nhận file."""
+        self._hidden = bool(hidden)
+        self._update_badge()
+
     def set_copy_value(self, value: str | None) -> None:
         """Chuỗi mà “Chép địa chỉ” chép; None thì ẩn nút."""
         self._copy_value = value or None
@@ -367,17 +386,24 @@ class MachineCard(QFrame):
         self._update_description()
 
     def _update_badge(self) -> None:
+        t = QCoreApplication.translate
+        description = ""
         if self._active > 0:
-            text = QCoreApplication.translate("Home", "Đang truyền %n lượt", None, self._active)
-            self.badge.set_status(BadgeTone.BUSY, text)
+            self.badge.set_status(BadgeTone.BUSY, t("Home", "Đang truyền %n lượt", None, self._active))
         elif self._receiving_unavailable:
-            self.badge.set_status(BadgeTone.WARNING, QCoreApplication.translate("Home", "Không nhận file"))
+            self.badge.set_status(BadgeTone.WARNING, t("Home", "Không nhận file"))
+        elif self._hidden:
+            self.badge.set_status(BadgeTone.MUTED, t("Home", "Đang ẩn"))
+            description = hidden_badge_description()
         else:
-            self.badge.set_status(BadgeTone.SUCCESS, QCoreApplication.translate("Home", "Sẵn sàng nhận"))
+            self.badge.set_status(BadgeTone.SUCCESS, t("Home", "Sẵn sàng nhận"))
+        self.badge.setAccessibleDescription(description)
         self._update_description()
 
     def _update_description(self) -> None:
         parts = [part for part in (self.name_label.text(), self.badge.text) if part]
+        if self.badge.accessibleDescription():
+            parts.append(self.badge.accessibleDescription().rstrip("."))
         self.name_label.setAccessibleDescription(". ".join(parts))
 
     def _copy(self) -> None:
