@@ -11,19 +11,21 @@ Hai phần, theo mẫu `ui.discover`:
   (thread node), registry tự khởi động (`app.autostart`, thread Qt), hộp xác nhận và hộp lưu file
   (mở bằng `open()`, không `exec()`), việc xuất log (thread riêng).
 
-**Các mục** (`Section`, thứ tự cố định): Chung (tên thiết bị, thư mục nhận, ngôn ngữ, khởi động cùng
-Windows) · Quyền riêng tư (cho máy chưa ghép đôi thấy máy này, xóa toàn bộ lịch sử) · Thiết bị tin
-cậy (mỗi máy đã ghép đôi một `TrustedDeviceRow`: “Hỏi trước khi nhận”, “Hủy ghép đôi…”; không máy nào
-thì `EmptyState` + “Tìm máy mới”) · Truyền file (giới hạn tốc độ gửi, ngưỡng dọn phần nhận dở) · Nâng
+**Các mục** (`Section`, thứ tự cố định): Chung (tên thiết bị, thư mục nhận, khởi động cùng Windows) ·
+Giao diện (`ui.appearance.AppearanceSection`, spec D6: chế độ màu, màu nhấn, ngôn ngữ) · Quyền
+riêng tư (cho máy chưa ghép đôi thấy máy này, xóa toàn bộ lịch sử) · Thiết bị tin cậy (mỗi máy đã
+ghép đôi một `TrustedDeviceRow`: “Hỏi trước khi nhận”, “Hủy ghép đôi…”; không máy nào thì
+`EmptyState` + “Tìm máy mới”) · Truyền file (giới hạn tốc độ gửi, ngưỡng dọn phần nhận dở) · Nâng
 cao (xuất log, phiên bản, giấy phép, “Thông báo bên thứ ba” khi có file `THIRD-PARTY-NOTICES.txt` cạnh
 `sys.executable`). Không có ô Clipboard (D5) và “Kiểm tra cập nhật” (GĐ6). Hàng thư mục nhận: chữ
 theo ba trạng thái của `ui.receive_dir` (đang đổi sang / thư mục nhận / thư mục đã lưu hỏng), “Mở”
 (chỉ khi có thư mục nhận) và “Đổi…” (ẩn tới `set_change_available(True)`; `ui.app` bật và nối vào
 `ReceiveDirController.choose`).
 
-**Hàng** (`SettingsRow`, `QFrame[surface="raised"]`, bo `RADIUS_CARD`): nhãn đậm vừa, gợi ý màu dịu
-xuống dòng, control bên phải; hàng hẹp tới mức cột chữ còn dưới `LABEL_MIN_WIDTH` thì control xuống
-hàng dưới (cửa sổ `MIN_SIZE` không cuộn ngang). Control mang tên trợ năng = nhãn hàng và mô tả = gợi ý.
+**Hàng** (`widgets.SettingsRow`, `QFrame[surface="raised"]`, bo `RADIUS_CARD`): nhãn đậm vừa, gợi ý
+màu dịu xuống dòng, control bên phải; hàng hẹp tới mức cột chữ còn dưới `widgets.LABEL_MIN_WIDTH` thì control
+xuống hàng dưới (cửa sổ `MIN_SIZE` không cuộn ngang). Control mang tên trợ năng = nhãn hàng và mô tả =
+gợi ý.
 
 **Số** (spec D2 mục 9.1, không viết cứng): ngưỡng dọn tạm mặc định = `storage.TEMP_RETENTION / 86400`
 (đọc lúc dùng), khoảng `settings.MIN_RETENTION_DAYS`–`MAX_RETENTION_DAYS`; tốc độ hiện theo MB/s
@@ -44,7 +46,8 @@ hàng kế, không có thì hàng trước, không còn thì nút của màn r�
 chữ thuần, tooltip qua `widgets.safe_tooltip`; tên trợ năng của hàng “{tên}, {HĐH}, {trạng thái}”.
 
 **Bàn phím** (mvp N12): Tab: Quay lại → `nav` → thanh thông báo (khi hiện) → control của mục đang mở
-→ hàng thiết bị → nút màn rỗng. Lên/Xuống trong `nav` đổi mục; trang hiện thì tiêu điểm vào `nav`
+(mục Giao diện: trong mỗi nhóm chỉ phần tử đang chọn nhận Tab, mũi tên đi giữa các phần tử) → hàng
+thiết bị → nút màn rỗng. Lên/Xuống trong `nav` đổi mục; trang hiện thì tiêu điểm vào `nav`
 (`setFocusProxy`). Không hoạt ảnh.
 
 **Controller** (bảng ở spec D2 mục 1.6, 9): lưu trước, áp sau; lỗi thì trả control về giá trị đã xác
@@ -53,7 +56,10 @@ cũ hay về sau `close_all` bị bỏ (`_generation`). `SettingsSaveError` → 
 tên → lỗi ngay dưới ô (không trả chữ về); `KeyError` của “Hỏi trước khi nhận” → im lặng, đọc lại;
 `RuntimeError` (node không chạy) / `CancelledError` → im lặng (DEBUG); lỗi khác → câu OTHER, log ERROR chỉ
 tên loại lỗi (mvp N9). Ẩn/hiện: `node.set_visible(v)` và `host.apply_pairing_policy(node)` trong **cùng
-một** `call` (hợp đồng ở docstring `ui.bridge`). Ngôn ngữ: lưu xong mới `i18n.apply_preference`.
+một** `call` (hợp đồng ở docstring `ui.bridge`). Ngôn ngữ: lưu xong mới `i18n.apply_preference`; chế độ
+màu và màu nhấn: lưu xong (`set_ui_preferences(theme=…)` / `(accent=…)` trên thread node) mới
+`theme.set_preference` trên thread Qt. Mỗi ảnh chụp cài đặt khác lựa chọn đang áp thì cũng áp theo ảnh
+chụp.
 
 **Tự khởi động** (registry thắng, spec D2 mục 1.2): lúc `started` và mỗi lần trang hiện, đọc
 `autostart.state` trên thread Qt; khác `settings.autostart` thì chỉ ghi `set_ui_preferences(autostart=…)`
@@ -112,7 +118,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -138,6 +143,8 @@ from teleport.app.node import Node
 from teleport.app.settings import DeviceSettings, SettingsSaveError
 from teleport.core.messages import PROTOCOL_VERSION, MessageError, validate_device_name
 from teleport.ui import i18n, icons, texts, theme
+from teleport.ui.appearance import AppearanceSection
+from teleport.ui.appearance import section_title as appearance_title
 from teleport.ui.radar import DeviceListModel
 from teleport.ui.send import printable
 from teleport.ui.widgets import (
@@ -147,6 +154,7 @@ from teleport.ui.widgets import (
     InfoLevel,
     PageHeader,
     Presence,
+    SettingsRow,
     ToggleSwitch,
     safe_tooltip,
 )
@@ -156,7 +164,6 @@ log = logging.getLogger(__name__)
 NAV_WIDTH = 184  # px, cột chọn mục
 SECTION_MARGIN = theme.SPACING[4]  # 24 px, lề nội dung của mỗi mục
 ROW_SPACING = theme.SPACING[1]  # 8 px, khoảng giữa hai hàng
-LABEL_MIN_WIDTH = 240  # px: cột chữ của hàng hẹp hơn thì control xuống hàng dưới
 DEVICE_ROW_WIDE = 560  # px: hàng thiết bị hẹp hơn thì ô và nút xuống hàng dưới
 SPIN_COMMIT_MS = 600  # ms không đổi sau khi bấm mũi tên thì chốt giá trị ô số
 MB = 1024 * 1024  # byte của “MB” trong ô tốc độ
@@ -180,6 +187,7 @@ class Section(StrEnum):
     """Các mục của trang, đúng thứ tự trong `nav`."""
 
     GENERAL = "general"
+    APPEARANCE = "appearance"
     PRIVACY = "privacy"
     DEVICES = "devices"
     TRANSFER = "transfer"
@@ -188,6 +196,7 @@ class Section(StrEnum):
 
 SECTION_ICONS = {
     Section.GENERAL: "settings",
+    Section.APPEARANCE: "color",
     Section.PRIVACY: "eye_off",
     Section.DEVICES: "shield_checkmark",
     Section.TRANSFER: "arrow_swap",
@@ -210,6 +219,7 @@ def section_title(section: Section) -> str:
     t = QCoreApplication.translate
     return {
         Section.GENERAL: t("Settings", "Chung"),
+        Section.APPEARANCE: appearance_title(),
         Section.PRIVACY: t("Settings", "Quyền riêng tư"),
         Section.DEVICES: t("Settings", "Thiết bị tin cậy"),
         Section.TRANSFER: t("Settings", "Truyền file"),
@@ -452,97 +462,6 @@ class _ElidedLabel(QLabel):
             self._elide()
 
 
-class SettingsRow(QFrame):
-    """Một hàng cài đặt: nhãn, gợi ý, các dòng phụ, control bên phải (hẹp thì xuống dưới)."""
-
-    def __init__(self, parent: QWidget | None = None, *, object_name: str = "") -> None:
-        super().__init__(parent)
-        if object_name:
-            self.setObjectName(object_name)
-        self.setProperty(theme.SURFACE_PROPERTY, "raised")
-        # Không cao hơn cần: QBoxLayout chia chỗ thừa cho hàng có nhãn xuống dòng (heightForWidth).
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        self.label = _plain(self, object_name=f"{object_name}Label" if object_name else "")
-        font = self.label.font()
-        font.setWeight(font.Weight.DemiBold)
-        self.label.setFont(font)
-        self.hint_label = _plain(self, object_name=f"{object_name}Hint" if object_name else "")
-        self.hint_label.setProperty(theme.TONE_PROPERTY, "muted")
-        self.hint_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.hint_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._control: QWidget | None = None
-        self._narrow: bool | None = None
-
-        self._text_column = QVBoxLayout()
-        self._text_column.setContentsMargins(0, 0, 0, 0)
-        self._text_column.setSpacing(2)
-        self._text_column.addWidget(self.label)
-        self._text_column.addWidget(self.hint_label)
-        self._grid = QGridLayout(self)
-        self._grid.setContentsMargins(theme.SPACING[3], theme.SPACING[2], theme.SPACING[3], theme.SPACING[2])
-        self._grid.setHorizontalSpacing(theme.SPACING[3])
-        self._grid.setVerticalSpacing(theme.SPACING[1])
-        self._grid.addLayout(self._text_column, 0, 0)
-        self._grid.setColumnStretch(0, 1)
-        self.hint_label.setVisible(False)
-
-    @property
-    def control(self) -> QWidget | None:
-        return self._control
-
-    @property
-    def narrow(self) -> bool:
-        """Control đang nằm dưới cột chữ."""
-        return bool(self._narrow)
-
-    def set_text(self, label: str, hint: str = "") -> None:
-        """Nhãn và gợi ý; control (nếu có) mang tên trợ năng = nhãn, mô tả = gợi ý."""
-        self.label.setText(label)
-        self.hint_label.setText(hint)
-        self.hint_label.setVisible(bool(hint))
-        self.setAccessibleName(label)
-        control = self._control
-        if control is not None and not control.property("keepAccessible"):
-            control.setAccessibleName(label)
-            control.setAccessibleDescription(hint)
-
-    def add_line(self, widget: QWidget) -> None:
-        """Thêm một dòng dưới gợi ý (dòng phụ, lỗi), trong cột chữ."""
-        self._text_column.addWidget(widget)
-
-    def set_control(self, widget: QWidget) -> None:
-        self._control = widget
-        self._narrow = None
-        self._place_control()
-
-    def _control_width(self) -> int:
-        control = self._control
-        if control is None:
-            return 0
-        hint = control.sizeHint().width()
-        return max(hint, control.minimumWidth())
-
-    def _place_control(self) -> None:
-        control = self._control
-        if control is None:
-            return
-        margins = self._grid.contentsMargins()
-        inner = self.width() - margins.left() - margins.right()
-        narrow = inner - self._control_width() - self._grid.horizontalSpacing() < LABEL_MIN_WIDTH
-        if narrow == self._narrow:
-            return
-        self._narrow = narrow
-        self._grid.removeWidget(control)
-        if narrow:
-            self._grid.addWidget(control, 1, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        else:
-            self._grid.addWidget(control, 0, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._place_control()
-
-
 class _NameField(QLineEdit):
     """Ô tên thiết bị: Esc trả tên đã lưu khi chữ khác tên đó; trùng thì để Esc cho cửa sổ."""
 
@@ -736,6 +655,8 @@ class SettingsSnapshot:
     language: str | None
     autostart: bool
     devices: Mapping[str, DeviceSettings]
+    theme: str | None = None  # trường `theme` của settings.json (None = theo hệ điều hành)
+    accent: str | None = None  # trường `accent` (None = mặc định; mã lạ giữ nguyên)
 
 
 def _read_device_settings(node: Node) -> dict[str, DeviceSettings]:
@@ -753,6 +674,8 @@ def read_snapshot(node: Node) -> SettingsSnapshot:
         language=settings.language,
         autostart=settings.autostart,
         devices=_read_device_settings(node),
+        theme=settings.theme,
+        accent=settings.accent,
     )
 
 
@@ -765,6 +688,8 @@ class SettingsPage(QWidget):
     name_submitted = Signal(str)
     visible_toggled = Signal(bool)
     language_selected = Signal(object)  # mã ngôn ngữ hay None (theo hệ điều hành)
+    theme_selected = Signal(object)  # None (theo hệ điều hành) | "light" | "dark"
+    accent_selected = Signal(object)  # None (mặc định) | mã màu nhấn
     autostart_toggled = Signal(bool)
     rate_limit_changed = Signal(object)  # byte/giây hay None
     retention_changed = Signal(object)  # ngày hay None (= mặc định)
@@ -785,8 +710,6 @@ class SettingsPage(QWidget):
         self._loaded = False
         self._visible = True
         self._name = ""
-        self._language: str | None = None
-        self._languages: tuple[str, ...] = (i18n.SOURCE_LANGUAGE,)
         self._autostart: autostart.AutostartState | None = autostart.AutostartState.OFF
         self._rate: int | None = None  # giá trị đã biết (đặt từ ngoài hay vừa phát)
         self._retention: int | None = None
@@ -825,6 +748,7 @@ class SettingsPage(QWidget):
             self._add_section(section)
 
         self._build_general()
+        self._build_appearance()
         self._build_privacy()
         self._build_devices()
         self._build_transfer()
@@ -935,13 +859,6 @@ class SettingsPage(QWidget):
         self.open_dir_button.clicked.connect(self._on_open_dir)
         self.change_dir_button.clicked.connect(self.change_receive_dir_requested)
 
-        self.language_row = self._row(Section.GENERAL, "languageRow")
-        self.language_combo = QComboBox(self.language_row)
-        self.language_combo.setObjectName("languageCombo")
-        self.language_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.language_combo.activated.connect(self._on_language_activated)
-        self.language_row.set_control(self.language_combo)
-
         self.autostart_row = self._row(Section.GENERAL, "autostartRow")
         self.autostart_switch = ToggleSwitch(self.autostart_row)
         self.autostart_switch.setObjectName("autostartSwitch")
@@ -952,6 +869,23 @@ class SettingsPage(QWidget):
         self.autostart_state_label.setVisible(False)
         self.autostart_row.add_line(self.autostart_state_label)
         self._section_layouts[Section.GENERAL].addStretch(1)
+
+    def _build_appearance(self) -> None:
+        layout = self._section_layouts[Section.APPEARANCE]
+        self.appearance = AppearanceSection(self._section_widgets[Section.APPEARANCE].widget())
+        self.appearance.theme_selected.connect(self.theme_selected)
+        self.appearance.accent_selected.connect(self.accent_selected)
+        self.appearance.language_selected.connect(self.language_selected)
+        layout.addWidget(self.appearance)
+        layout.addStretch(1)
+
+    @property
+    def language_row(self) -> SettingsRow:
+        return self.appearance.language_row
+
+    @property
+    def language_combo(self) -> QComboBox:
+        return self.appearance.language_combo
 
     def _build_privacy(self) -> None:
         self.visible_row = self._row(Section.PRIVACY, "visibleRow")
@@ -1075,8 +1009,9 @@ class SettingsPage(QWidget):
             content = self._section_widgets[section].widget()
             if content is not None:
                 content.setEnabled(self._loaded)
-        for row in (self.name_row, self.language_row, self.autostart_row):
+        for row in (self.name_row, self.autostart_row):
             row.setEnabled(self._loaded)
+        self.appearance.set_loaded(self._loaded)
 
     def set_values(self, s: SettingsSnapshot) -> None:
         """Đặt mọi giá trị từ ảnh chụp (không phát signal)."""
@@ -1085,6 +1020,8 @@ class SettingsPage(QWidget):
         self.set_rate_limit(s.rate_limit)
         self.set_retention(s.temp_retention_days)
         self.set_language(s.language, i18n.available_languages())
+        self.appearance.set_theme(s.theme)
+        self.appearance.set_accent(s.accent)
         with _blocked(self.autostart_switch):
             self.autostart_switch.setChecked(bool(s.autostart))
         self.set_device_settings(s.devices)
@@ -1120,9 +1057,13 @@ class SettingsPage(QWidget):
         self._update_visibility_texts()
 
     def set_language(self, code: str | None, available: Sequence[str]) -> None:
-        self._language = code
-        self._languages = tuple(available)
-        self._fill_languages()
+        self.appearance.set_language(code, available)
+
+    def set_theme(self, value: str | None) -> None:
+        self.appearance.set_theme(value)
+
+    def set_accent(self, value: str | None) -> None:
+        self.appearance.set_accent(value)
 
     def set_autostart(self, state: autostart.AutostartState | None) -> None:
         """Trạng thái registry (None: đọc lỗi); UNSUPPORTED hay `autostart.supported()` False → ẩn hàng."""
@@ -1204,15 +1145,17 @@ class SettingsPage(QWidget):
         self.open_dir_button.setAccessibleName(t("Settings", "Mở thư mục nhận"))
         self.change_dir_button.setText(t("Settings", "Đổi…"))
         self.change_dir_button.setAccessibleName(t("Settings", "Đổi thư mục nhận"))
-        self.language_row.set_text(t("Settings", "Ngôn ngữ"))
-        self._fill_languages()
         self.autostart_row.set_text(
             t("Settings", "Khởi động cùng Windows"),
             t("Settings", "Teleport chạy ở khay hệ thống khi bạn đăng nhập Windows, sẵn sàng nhận file."),
         )
         self.visible_row.set_text(
             t("Settings", "Cho máy chưa ghép đôi thấy máy này"),
-            t("Settings", "Máy đã ghép đôi chỉ tự kết nối được khi ít nhất một trong hai máy đang hiện."),
+            t(
+                "Settings",
+                "Máy đã ghép đôi tự kết nối được khi ít nhất một trong hai máy đang hiện, "
+                "hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.",
+            ),
         )
         self.history_row.set_text(
             t("Settings", "Lịch sử truyền file"),
@@ -1289,7 +1232,9 @@ class SettingsPage(QWidget):
         self.hidden_label.setText(hidden)
         self.hidden_label.setVisible(not self._visible)
         base = QCoreApplication.translate(
-            "Settings", "Máy đã ghép đôi chỉ tự kết nối được khi ít nhất một trong hai máy đang hiện."
+            "Settings",
+            "Máy đã ghép đôi tự kết nối được khi ít nhất một trong hai máy đang hiện, "
+            "hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.",
         )
         self.visible_switch.setAccessibleDescription(base if self._visible else f"{base} {hidden}")
 
@@ -1341,19 +1286,6 @@ class SettingsPage(QWidget):
         text = t("Settings", "Đang xuất…") if self._export_running else t("Settings", "Xuất log…")
         self.export_button.setText(text)
         self.export_button.setAccessibleName(t("Settings", "Xuất log"))
-
-    def _fill_languages(self) -> None:
-        combo = self.language_combo
-        with _blocked(combo):
-            combo.clear()
-            combo.addItem(QCoreApplication.translate("Settings", "Theo hệ điều hành"), None)
-            codes = list(self._languages)
-            if self._language is not None and self._language not in codes:
-                codes.append(self._language)
-            for code in codes:
-                combo.addItem(i18n.language_name(code), code)
-            index = combo.findData(self._language) if self._language is not None else 0
-            combo.setCurrentIndex(max(0, index))
 
     # ---- Bên trong: thiết bị -------------------------------------------------------------------
 
@@ -1424,8 +1356,8 @@ class SettingsPage(QWidget):
             self.name_edit,
             self.open_dir_button,
             self.change_dir_button,
-            self.language_combo,
             self.autostart_switch,
+            *self.appearance.focus_widgets(),
             self.visible_switch,
             self.clear_history_button,
         ]
@@ -1473,14 +1405,6 @@ class SettingsPage(QWidget):
         self._visible = bool(checked)
         self._update_visibility_texts()
         self.visible_toggled.emit(self._visible)
-
-    def _on_language_activated(self, index: int) -> None:
-        code = self.language_combo.itemData(index)
-        code = code if isinstance(code, str) else None
-        if code == self._language:
-            return
-        self._language = code
-        self.language_selected.emit(code)
 
     def _on_rate_checkbox(self, checked: bool) -> None:
         self.rate_spin.setEnabled(bool(checked))
@@ -1640,6 +1564,8 @@ class SettingsController(QObject):
         page.name_submitted.connect(self._on_name)
         page.visible_toggled.connect(self._on_visible)
         page.language_selected.connect(self._on_language)
+        page.theme_selected.connect(self._on_theme)
+        page.accent_selected.connect(self._on_accent)
         page.autostart_toggled.connect(self._on_autostart)
         page.rate_limit_changed.connect(self._on_rate)
         page.retention_changed.connect(self._on_retention)
@@ -1748,11 +1674,14 @@ class SettingsController(QObject):
             language=result.language,
             rate=result.rate_limit,
             retention=result.temp_retention_days,
+            theme=result.theme,
+            accent=result.accent,
         )
         self._devices = dict(result.devices)
         self._saved_autostart = result.autostart
         self.page.set_values(result)
         self.page.set_loaded(True)
+        self._sync_theme(theme.mode_from_setting(result.theme), result.accent)
         if self.page.info_bar.title == snapshot_error_text():  # đọc lại được: câu lỗi cũ không còn đúng
             self.page.clear_notice()
         self._reconcile_autostart()
@@ -1901,6 +1830,40 @@ class SettingsController(QObject):
             ok,
             value=language,
         )
+
+    def _on_theme(self, value: object) -> None:
+        saved = theme.mode_from_setting(value if isinstance(value, str) else None).setting_value
+
+        def ok(_result: object) -> None:
+            _apply_theme(theme.mode_from_setting(saved), theme.current_accent())
+
+        self._call(
+            "theme",
+            lambda node: node.set_ui_preferences(theme=saved),
+            lambda old: self.page.set_theme(old if isinstance(old, str) else None),
+            ok,
+            value=saved,
+        )
+
+    def _on_accent(self, value: object) -> None:
+        accent = value if isinstance(value, str) else None
+
+        def ok(_result: object) -> None:
+            _apply_theme(theme.current_mode(), accent)
+
+        self._call(
+            "accent",
+            lambda node: node.set_ui_preferences(accent=accent),
+            lambda old: self.page.set_accent(old if isinstance(old, str) else None),
+            ok,
+            value=accent,
+        )
+
+    @staticmethod
+    def _sync_theme(mode: theme.Mode, accent: str | None) -> None:
+        """Ảnh chụp khác lựa chọn đang áp (mỗi ảnh chụp; chỉ áp khi khác): áp theo ảnh chụp."""
+        if mode is not theme.current_mode() or theme.accent_from_setting(accent) != theme.current_accent():
+            _apply_theme(mode, accent)
 
     def _on_rate(self, value: object) -> None:
         rate = value if isinstance(value, int) else None
@@ -2138,6 +2101,13 @@ class SettingsController(QObject):
         ):
             self.refresh()
         return False
+
+
+def _apply_theme(mode: theme.Mode, accent: str | None) -> None:
+    """Thread Qt: áp chế độ màu và màu nhấn cho ứng dụng (`theme.set_preference`)."""
+    app = QApplication.instance()
+    if isinstance(app, QApplication):
+        theme.set_preference(app, mode, accent)
 
 
 def _retry_text() -> str:

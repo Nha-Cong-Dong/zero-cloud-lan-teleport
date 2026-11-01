@@ -18,7 +18,8 @@ nên biến môi trường thắng)::
 Cảnh: `welcome`, `starting`, `running` (một địa chỉ, chưa có máy đã ghép đôi → “Ghép đôi máy đầu
 tiên”), `running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo),
 `running_unavailable` (thư mục nhận đã lưu không mở được, spec B1b), `error`, `widgets` (trang
-mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`), `page` (RUNNING, mở một trang mẫu có
+mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`, kể cả `SegmentedControl` của spec D6),
+`page` (RUNNING, mở một trang mẫu có
 `PageHeader` ở chỗ SETTINGS, vì DISCOVER đã là trang thật), `discover` (trang “Tìm máy mới”: 4 máy
 chưa ghép đôi, một tên dài bị cắt “…”, 2 máy đã ghép đôi), `discover_list` (9 máy: tự sang dạng danh
 sách), `conversations` (spec B2 mục 7: 4 máy đã ghép đôi ở cột trái — đang gửi 62% và đang chọn,
@@ -26,7 +27,9 @@ trực tuyến đã nhận một file, ngoại tuyến đã gửi hôm qua, tr�
 của PC-Nha có bong bóng đang gửi ở khung phải), `conversations_drop` (như trên, đang kéo 3 file qua
 hàng đang chọn).
 
-Trang “Cài đặt” (spec D2): `settings_general`, `settings_privacy_hidden` (máy đang ẩn),
+Trang “Cài đặt” (spec D2): `settings_general`, `settings_appearance` (spec D6: chế độ Tối, màu Đại
+dương chọn sẵn; ảnh sáng và tối dựng bằng `ui_theme` nên chỉ thấy lựa chọn, không thấy màu đại
+dương), `settings_privacy_hidden` (máy đang ẩn),
 `settings_devices` (bốn máy đã ghép đôi: đã kết nối, trong mạng, ngoại tuyến, tên lạ dài; một máy
 chưa ghép đôi không hiện), `settings_advanced` (kèm thông báo xuất log xong),
 `settings_receive_dir_unavailable` (thư mục nhận đã lưu không mở được).
@@ -38,7 +41,7 @@ tuyến: lượt chờ kết nối, câu ngoại tuyến ở thanh dưới), `ch
 qua và lượt của phiên hôm nay), `chat_empty` (máy chưa có lượt nào: màn rỗng “Kéo file vào đây…”).
 
 Giờ cố định bằng seam `_wall_now` của `ui.conversations`, `ui.transfers` (`NOW`) và `ui.chat` (cảnh
-luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 23 cảnh × 2 chế độ × 2 cỡ = 92 ảnh.
+luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 24 cảnh × 2 chế độ × 2 cỡ = 96 ảnh.
 """
 
 from __future__ import annotations
@@ -333,6 +336,13 @@ def scene_widgets(qtbot) -> QWidget:
         badge.set_status(tone, text)
     badges.setColumnStretch(2, 1)
     right.insertLayout(1, badges)
+    segmented = widgets.SegmentedControl(("system", "light", "dark"))
+    segmented.set_texts(("Theo hệ điều hành", "Sáng", "Tối"))
+    segmented.set_value("light")
+    segmented_row = QHBoxLayout()
+    segmented_row.addWidget(segmented)
+    segmented_row.addStretch(1)
+    right.insertLayout(2, segmented_row)
     right.addStretch(1)
 
     empty = widgets.EmptyState()
@@ -571,6 +581,16 @@ def scene_settings_general(qtbot) -> QWidget:
     return _settings_window(qtbot, Section.GENERAL)
 
 
+def scene_settings_appearance(qtbot) -> QWidget:
+    from teleport.ui.settings import Section
+
+    window = _settings_window(qtbot, Section.APPEARANCE)
+    page = window.pages.currentWidget()
+    page.set_theme("dark")
+    page.set_accent("ocean")
+    return window
+
+
 def scene_settings_privacy_hidden(qtbot) -> QWidget:
     from teleport.ui.settings import Section
 
@@ -805,6 +825,7 @@ SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     "conversations": (scene_conversations, True, "sidebar"),
     "conversations_drop": (scene_conversations_drop, True, "sidebar"),
     "settings_general": (scene_settings_general, True, "surface"),
+    "settings_appearance": (scene_settings_appearance, True, "surface"),
     "settings_privacy_hidden": (scene_settings_privacy_hidden, True, "surface"),
     "settings_devices": (scene_settings_devices, True, "surface"),
     "settings_advanced": (scene_settings_advanced, True, "surface"),

@@ -52,7 +52,31 @@ Luật chính:
   không thì địa chỉ mDNS cũ (chỉ còn khi đang `hold`). Có cả `hint` và mDNS tươi cùng
   cổng: địa chỉ `hint` trước rồi địa chỉ mDNS, bỏ trùng, tối đa `_MAX_ADDRESSES`. Khác
   cổng: lần thử do chính `hint()` gây ra dùng địa chỉ/cổng `hint` (gọi lúc đang thử thì
-  lần thử kế tiếp, sau khi lần đó kết thúc, dùng `hint`), các lần sau dùng mDNS.
+  lần thử kế tiếp, sau khi lần đó kết thúc, dùng `hint`), các lần sau dùng mDNS. Không có
+  địa chỉ nào ở trên thì dùng địa chỉ đã lưu (`saved`, xem dưới); `saved` không bao giờ gộp
+  với địa chỉ khác, để lỗi của lần thử nhắm vào nó nhận diện được. Giới hạn đã biết: đang
+  `hold` thì địa chỉ mDNS cũ đứng trước `saved`, kể cả khi địa chỉ cũ không còn đúng.
+- `remember` (protocol §6.2, gạch “Địa chỉ đã lưu”): `app` đưa địa chỉ đã quan sát được của
+  thiết bị tin cậy (lúc khởi động, từ `trusted.json`; hoặc vừa kết nối ra thành công). Chỉ
+  nhận địa chỉ không phải Internet công khai (`is_saveable`). Tracker nhớ đúng một địa chỉ
+  (`saved`) tới khi thôi tin cậy, có địa chỉ khác, hoặc lần thử tới đó gặp sai danh tính.
+  Lần thử nhắm vào `saved` mà không `hold` có lịch riêng: thất bại thứ n hẹn lại sau
+  `min(SAVED_RETRY_BASE · 2^(n−1), SAVED_RETRY_MAX)`; sau `SAVED_MAX_ATTEMPTS` lần liên tiếp
+  (một “đợt”) thì chỉ còn một lần mỗi `SAVED_RETRY_MAX`, kể cả lần thử do sự kiện. Lịch này
+  không báo `LinkFailed(UNREACHABLE)` và không tính vào bộ đếm §6.2. Đợt bắt đầu lại khi kết
+  nối được, có địa chỉ khác, người dùng thao tác (`hint`, `retry_now`, `trusted_changed`),
+  mạng đổi, hoặc mất kết nối hiện tại; sự kiện mDNS và `hold` không bắt đầu lại đợt (mDNS do
+  người khác điều khiển được). Sai danh tính tại `saved`: quên nó trong phiên, không báo,
+  không chặn. Lỗi chặn khác (bị từ chối, khác phiên bản) thì như mọi địa chỉ. Đang `hold`
+  thì lần thử tới `saved` theo lịch §6.2. mDNS báo máy đi (không `hold`) thì thử `saved` sau
+  `SAVED_GONE_GRACE`; mất kết nối, `hold(False)`, hay lần thử khác “không kết nối được” mà
+  không còn lịch nào, thì sau `SAVED_RETRY_BASE` (hết đợt thì vẫn theo nhịp `SAVED_RETRY_MAX`).
+- `LinkFailed.from_hint` đánh dấu lỗi của lần thử do `hint()` gây ra (kèm `addresses`, `port`
+  của lần thử đó), để `app` biết lỗi thuộc địa chỉ người dùng vừa đưa. Lỗi chặn của lần thử
+  đó luôn được báo, kể cả khi cùng loại đã được báo. Lần thử đó “không kết nối được” hay sai
+  danh tính khi có `saved` thì quên `hint`, kể cả khi `hint` trùng `saved` (địa chỉ nhập sai
+  không che địa chỉ đã lưu); sai danh tính lúc đó không chặn thiết bị, và lịch `saved` chạy
+  tiếp; `hint` trùng `saved` mà sai danh tính thì `saved` cũng bị quên trong phiên.
 - `hold(device_id, True)` (app gọi khi thiết bị còn lượt truyền dở, protocol §6.1, §6.2):
   mDNS báo biến mất thì địa chỉ cũ chỉ bị đánh dấu cũ (`stale`), lịch nối lại vẫn chạy;
   `hold(False)` lúc địa chỉ đã cũ thì quên nó như khi mDNS vừa báo biến mất. `hold` chỉ
@@ -80,6 +104,12 @@ RETRY_BASE = 1.0  # protocol §6.2: lịch 1, 2, 4… giây
 RETRY_MAX = 30.0  # … tối đa 30 s
 EVENT_RETRY_GAP = 2.0  # sự kiện mDNS/mạng: hai lần thử tới cùng máy cách nhau ≥ 2 s
 UNREACHABLE_REPORT_AFTER = 3  # báo "không kết nối được" sau 3 lần thất bại liên tiếp
+# Địa chỉ đã lưu (`remember`, protocol §6.2): lịch 5, 10, 20, 40, 80 s… ≤ 300 s; một “đợt” tối đa
+# 6 lần thất bại liên tiếp, rồi một lần mỗi SAVED_RETRY_MAX; mDNS báo máy đi thì chờ 15 s.
+SAVED_RETRY_BASE = 5.0
+SAVED_RETRY_MAX = 300.0
+SAVED_MAX_ATTEMPTS = 6
+SAVED_GONE_GRACE = 15.0
 
 _MAX_ADDRESSES = 16  # như net.connection: số địa chỉ tối đa cho một lần mở kết nối
 _MAX_DELAY_EXPONENT = 20  # chặn số mũ của lịch thử lại (2**20 · 1 s đã vượt xa RETRY_MAX)
@@ -146,10 +176,17 @@ class LinkDown:
 
 @dataclass(frozen=True, slots=True)
 class LinkFailed:
-    """Báo người dùng; `result` khác OK; mỗi loại tối đa một lần (xem `LinkTracker`)."""
+    """Báo người dùng; `result` khác OK; mỗi loại tối đa một lần (xem `LinkTracker`).
+
+    `from_hint`: lỗi của lần thử do `hint()` gây ra; khi đó `addresses`, `port` là đích của lần
+    thử đó (còn lại: `()`, None).
+    """
 
     device_id: str
     result: ConnectResult
+    from_hint: bool = False
+    addresses: tuple[str, ...] = ()
+    port: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +236,11 @@ class _Device:
     held: bool = False  # còn lượt truyền dở (`hold`): không quên `seen` khi mDNS báo biến mất
     hint_next: bool = False  # `hint()` vừa gọi: lần `_start` kế tiếp dùng `hint_target()`
     hint_attempt: int | None = None  # attempt_id của lần thử do `hint()` gây ra (đang chạy)
+    saved: _Target | None = None  # đúng một địa chỉ đã quan sát được (`remember`)
+    saved_failures: int = 0  # lần thử `saved` (không `held`) “không kết nối được” liên tiếp trong đợt
+    saved_attempt: int | None = None  # attempt_id của lần thử nhắm vào `saved` (đang chạy)
+    saved_last: float | None = None  # `now` của lần thử `saved` gần nhất
+    attempt_target: _Target | None = None  # đích của lần thử đang chạy
     current: _Conn | None = None
     attempt: int | None = None  # attempt_id đang chạy
     dirty: bool = False  # có sự kiện mDNS/mạng trong lúc đang thử
@@ -221,7 +263,13 @@ class _Device:
             return fresh
         if self.hint is not None:
             return self.hint
-        return self.seen  # địa chỉ cũ, chỉ còn khi đang `held`
+        if self.seen is not None:
+            return self.seen  # địa chỉ cũ, chỉ còn khi đang `held`
+        return self.saved
+
+    def from_saved(self) -> bool:
+        """`target()` lấy từ nhánh `saved` (không có địa chỉ mDNS, kể cả cũ, và không có `hint`)."""
+        return self.seen is None and self.hint is None and self.saved is not None
 
     def hint_target(self) -> _Target | None:
         """Địa chỉ của lần thử do `hint()` gây ra: `hint`, gộp với mDNS tươi nếu cùng cổng."""
@@ -276,14 +324,52 @@ def _check_addresses(addresses: object) -> tuple[str, ...]:
         if not isinstance(value, str):
             raise ValueError("địa chỉ phải là chuỗi IPv4 dạng chấm")
         try:
-            ip = ipaddress.IPv4Address(value)
+            _check_ip(value)
         except ValueError as e:
-            raise ValueError(f"địa chỉ phải là IPv4 dạng chấm: {value!r}") from e
-        if str(ip) != value:
-            raise ValueError(f"địa chỉ phải là IPv4 dạng chấm: {value!r}")
-        if ip.is_unspecified or ip.is_multicast or ip == _BROADCAST:
-            raise ValueError(f"{value} không phải địa chỉ của một máy")
+            # Đầu vào của bên gọi (người dùng nhập, mDNS đã kiểm): trích giá trị cho dễ sửa.
+            raise ValueError(f"{e}: {value!r}") from None
     return tuple(dict.fromkeys(items))
+
+
+def _check_ip(value: object) -> str:
+    """Một IPv4 dạng chấm viết chuẩn, không phải 0.0.0.0, multicast hay broadcast.
+
+    Thông điệp lỗi không chứa giá trị (giá trị có thể đến từ file hay từ máy khác).
+    """
+    if not isinstance(value, str):
+        raise ValueError("địa chỉ phải là chuỗi IPv4 dạng chấm")
+    try:
+        ip = ipaddress.IPv4Address(value)
+    except ValueError:
+        raise ValueError("địa chỉ phải là IPv4 dạng chấm") from None
+    if str(ip) != value:
+        raise ValueError("địa chỉ phải là IPv4 dạng chấm")
+    if ip.is_unspecified or ip.is_multicast or ip == _BROADCAST:
+        raise ValueError("địa chỉ không phải địa chỉ của một máy")
+    return str(ip)
+
+
+def check_endpoint(ip: object, port: object) -> tuple[str, int]:
+    """Kiểm một địa chỉ `(ip, port)`; trả `(ip, port)`, sai → ValueError (thông điệp không chứa giá trị).
+
+    `ip`: IPv4 dạng chấm viết chuẩn (`str(IPv4Address(ip)) == ip`, nên chặn luôn khoảng trắng, số 0
+    ở đầu, chuỗi dài), không phải 0.0.0.0, multicast hay 255.255.255.255; loopback và link-local
+    được phép; không IPv6. `port`: `int` (không phải `bool`) 1–65535. Cùng luật với địa chỉ của
+    `hint` / `device_seen`, nên mọi địa chỉ lưu được đều đưa vào tracker được.
+    """
+    return _check_ip(ip), _check_port(port)
+
+
+def is_saveable(ip: str) -> bool:
+    """Địa chỉ được lưu và tự thử lại không: hợp lệ theo `check_endpoint` và không phải Internet công khai.
+
+    True cho RFC 1918, link-local, loopback, 100.64.0.0/10…; False cho địa chỉ công khai
+    (`IPv4Address.is_global`) và giá trị sai. Node không tự gọi ra Internet (mvp N9).
+    """
+    try:
+        return not ipaddress.IPv4Address(_check_ip(ip)).is_global
+    except ValueError:
+        return False
 
 
 class LinkTracker:
@@ -300,7 +386,8 @@ class LinkTracker:
 
     Tracker nhớ địa chỉ mDNS của mọi thiết bị đang thấy (cả chưa tin cậy, để thiết bị
     vừa ghép đôi mà đang thấy thì nối được ngay), và `hint` của mọi thiết bị được đưa
-    (cả chưa tin cậy); bên gọi bảo đảm số thiết bị đang thấy / có `hint` có giới hạn.
+    (cả chưa tin cậy); bên gọi bảo đảm số thiết bị đang thấy / có `hint` có giới hạn. Địa
+    chỉ đã lưu (`remember`) chỉ nhớ cho thiết bị đang tin cậy.
     """
 
     def __init__(self, own_device_id: str) -> None:
@@ -371,7 +458,8 @@ class LinkTracker:
         """mDNS báo thiết bị biến mất: ngừng thử lại; KHÔNG đóng kết nối, KHÔNG hủy lần thử.
 
         Đang `hold`: chỉ đánh dấu địa chỉ là cũ, lịch nối lại giữ nguyên. Còn `hint`: vẫn nhớ,
-        nhưng chỉ thử khi có thao tác người dùng hay sự kiện (không theo lịch).
+        nhưng chỉ thử khi có thao tác người dùng hay sự kiện (không theo lịch). Còn `saved` (và
+        không có `hint`): hẹn thử nó sau `SAVED_GONE_GRACE` (`_saved_followup`).
         """
         dev = self._lookup(device_id, now)
         if dev is None:
@@ -381,6 +469,8 @@ class LinkTracker:
                 dev.stale = True
             return []
         self._forget_seen(device_id, dev)
+        if dev.trusted:
+            self._saved_followup(dev, now, SAVED_GONE_GRACE)
         return []
 
     def hint(self, device_id: str, addresses: Sequence[str], port: int, now: float) -> list[LinkAction]:
@@ -403,6 +493,7 @@ class LinkTracker:
         if not dev.trusted:
             return []
         dev.failures = 0
+        dev.saved_failures = 0
         dev.blocked = False
         dev.reported.clear()
         if dev.eligible():
@@ -414,13 +505,53 @@ class LinkTracker:
             dev.hint_next = True
         return []
 
+    def remember(self, device_id: str, ip: str, port: int, now: float) -> list[LinkAction]:
+        """Địa chỉ đã quan sát được của thiết bị tin cậy (`app`: lúc khởi động từ `trusted.json`,
+        hoặc vừa kết nối ra thành công tới đúng thiết bị).
+
+        Kiểm `device_id` (MessageError), `check_endpoint` (ValueError), `now` (TypeError /
+        ValueError); sai thì trạng thái giữ nguyên. Máy này, thiết bị không tin cậy hay địa chỉ
+        Internet công khai (`is_saveable`) → `[]` và không nhớ. Nhớ đúng một địa chỉ (`saved`);
+        địa chỉ khác địa chỉ cũ thì bắt đầu lại đợt. `hint` trùng đúng địa chỉ này (và không còn
+        lần thử `hint` chờ chạy) thì bị bỏ: địa chỉ người dùng đưa đã thành địa chỉ đã lưu. Đang
+        có lần thử chạy thì chỉ nhớ; không thì, nếu đích là `saved`, không bị chặn và (`held`
+        hoặc đợt còn lượt), thử như một sự kiện (≥ `EVENT_RETRY_GAP`).
+        """
+        validate_device_id(device_id)
+        ip, port = check_endpoint(ip, port)
+        now = self._check_now(now)
+        self._last_now = now
+        if device_id == self._own_id:
+            return []
+        dev = self._devices.get(device_id)
+        if dev is None or not dev.trusted or not is_saveable(ip):
+            return []
+        target: _Target = ((ip,), port)
+        if dev.saved != target:
+            dev.saved = target
+            dev.saved_failures = 0
+        if dev.hint == target and not dev.hint_next:
+            dev.hint = None
+        if dev.attempt is not None:
+            return []
+        if (
+            dev.eligible()
+            and dev.from_saved()
+            and not dev.blocked
+            and (dev.held or dev.saved_failures < SAVED_MAX_ATTEMPTS)
+        ):
+            return self._event_retry(device_id, dev, now)
+        return []
+
     def hold(self, device_id: str, held: bool, now: float) -> list[LinkAction]:
         """Giữ (`held=True`) hay thả địa chỉ của thiết bị còn lượt truyền dở (protocol §6.1, §6.2).
 
         Giữ: mDNS báo biến mất thì không quên địa chỉ, lịch nối lại vẫn chạy. Lúc đổi từ thả sang
-        giữ, thiết bị đủ điều kiện, không bị chặn và chưa có lịch thì thử như một sự kiện
+        giữ, thiết bị đủ điều kiện, không bị chặn và chưa có lịch (lần hẹn của lịch địa chỉ đã lưu
+        không tính, kể cả khi đã hết đợt) thì thử như một sự kiện
         (≥ `EVENT_RETRY_GAP`); gọi lặp `hold(True)` không làm gì. Thả: địa chỉ đã cũ thì quên nó
-        như `device_gone`; không còn mDNS tươi thì ngừng lịch. Thiết bị lạ hay không tin cậy →
+        như `device_gone`; không còn mDNS tươi thì ngừng lịch §6.2, và nếu đích là địa chỉ đã lưu
+        thì hẹn thử nó sau `SAVED_RETRY_BASE` (`_saved_followup`). Thiết bị lạ hay không tin cậy →
         `[]`. Chỉ có thể trả `Connect`, không bao giờ `CloseConnection` hay `Notify`.
         """
         if type(held) is not bool:
@@ -430,12 +561,17 @@ class LinkTracker:
             return []
         if held:
             was_held, dev.held = dev.held, True
-            if not was_held and not dev.blocked and dev.eligible() and dev.next_at is None:
+            # Lần hẹn của lịch `saved` (tới SAVED_RETRY_MAX) không tính là “đã có lịch”: lượt truyền
+            # mới không phải chờ nó; từ nay lịch §6.2 chạy. `hold` do app điều khiển, máy khác không bật được.
+            scheduled = dev.next_at is not None and not dev.from_saved()
+            if not was_held and not dev.blocked and dev.eligible() and not scheduled:
                 return self._event_retry(device_id, dev, now)
             return []
         if dev.held:
             dev.held = False
             self._forget_seen(device_id, dev, stale_only=True)
+            # Lịch §6.2 vừa dừng: còn địa chỉ đã lưu thì lịch `saved` chạy tiếp (hết đợt: `_saved_floor`).
+            self._saved_followup(dev, now, SAVED_RETRY_BASE)
         return []
 
     def network_changed(self, now: float) -> list[LinkAction]:
@@ -446,6 +582,7 @@ class LinkTracker:
         for device_id in sorted(self._devices):
             dev = self._devices[device_id]
             if dev.trusted:
+                dev.saved_failures = 0  # mạng đổi: đợt `saved` bắt đầu lại
                 actions.extend(self._event_retry(device_id, dev, now))
         return actions
 
@@ -479,7 +616,9 @@ class LinkTracker:
             return [CloseConnection(device_id, conn_id)] if conn_id is not None else []
         dev.attempt = None
         from_hint = dev.hint_attempt == attempt_id
-        dev.hint_attempt = None
+        from_saved = dev.saved_attempt == attempt_id
+        target = dev.attempt_target
+        dev.hint_attempt = dev.saved_attempt = dev.attempt_target = None
         if result is ConnectResult.OK:
             assert conn_id is not None
             self._reset_failures(dev)
@@ -487,7 +626,11 @@ class LinkTracker:
             if not dev.trusted:
                 return [CloseConnection(device_id, conn_id)]
             return self._add_connection(device_id, dev, conn_id, True, now)
-        return self._failed(device_id, dev, result, now, from_hint=from_hint)
+        if from_saved:
+            handled = self._saved_failed(dev, result, now)
+            if handled is not None:
+                return handled
+        return self._failed(device_id, dev, result, now, from_hint=from_hint, target=target)
 
     def incoming_control(self, device_id: str, conn_id: int, now: float) -> list[LinkAction]:
         """Máy kia vừa mở kết nối điều khiển tới máy này (đã qua `control_open`)."""
@@ -514,8 +657,11 @@ class LinkTracker:
         if dev is None or dev.current is None or dev.current.conn_id != conn_id:
             return []
         dev.current = None
+        dev.saved_failures = 0  # mất kết nối hiện tại: đợt `saved` bắt đầu lại
         if dev.trusted and dev.scheduled() and not dev.blocked:
             dev.next_at = now + _delay(max(dev.failures, 1))
+        else:
+            self._saved_followup(dev, now, SAVED_RETRY_BASE)
         return [Notify(LinkDown(device_id, conn_id))]
 
     def tick(self, now: float) -> list[LinkAction]:
@@ -563,13 +709,19 @@ class LinkTracker:
         from_hint = dev.hint_next
         target = dev.hint_target() if from_hint else None
         dev.hint_next = False
+        from_saved = False
         if target is None:
+            from_saved = dev.from_saved()
             target = dev.target()
         assert target is not None
         attempt_id = self._next_attempt
         self._next_attempt += 1
         dev.attempt = attempt_id
+        dev.attempt_target = target
         dev.hint_attempt = attempt_id if from_hint else None
+        dev.saved_attempt = attempt_id if from_saved else None
+        if from_saved:
+            dev.saved_last = now
         dev.last_start = now
         dev.next_at = None
         dev.dirty = False
@@ -579,6 +731,7 @@ class LinkTracker:
     @staticmethod
     def _reset_failures(dev: _Device) -> None:
         dev.failures = 0
+        dev.saved_failures = 0
         dev.blocked = False
         dev.reported.clear()
         dev.next_at = None
@@ -593,6 +746,7 @@ class LinkTracker:
                 earliest = dev.last_start + max(EVENT_RETRY_GAP, _delay(dev.failures))
             else:
                 earliest = dev.last_start + EVENT_RETRY_GAP
+            earliest = self._saved_floor(dev, earliest)
             if now >= earliest:
                 return [self._start(device_id, dev, now)]
             dev.next_at = earliest if dev.next_at is None else min(dev.next_at, earliest)
@@ -603,6 +757,7 @@ class LinkTracker:
     def _user_retry(self, device_id: str, dev: _Device, now: float) -> list[LinkAction]:
         """Thử do người dùng hoặc vì vừa được tin cậy: gỡ chặn, không xét khoảng cách."""
         dev.failures = 0
+        dev.saved_failures = 0
         dev.blocked = False
         dev.reported.clear()
         if dev.eligible():
@@ -610,9 +765,17 @@ class LinkTracker:
         return []
 
     def _failed(
-        self, device_id: str, dev: _Device, result: ConnectResult, now: float, *, from_hint: bool
+        self,
+        device_id: str,
+        dev: _Device,
+        result: ConnectResult,
+        now: float,
+        *,
+        from_hint: bool,
+        target: _Target | None,
     ) -> list[LinkAction]:
-        """Lần thử hiện tại thất bại (`dev.attempt` đã được xóa); `from_hint`: lần thử do `hint()` gây ra."""
+        """Lần thử hiện tại thất bại (`dev.attempt` đã được xóa); `from_hint`: lần thử do `hint()` gây
+        ra, `target`: đích của lần thử."""
         if dev.current is not None:
             # Máy kia đã nối tới trong lúc thử: không tính là thất bại.
             dev.dirty = False
@@ -620,6 +783,37 @@ class LinkTracker:
             return []
         dev.failures += 1
         actions: list[LinkAction] = []
+        if from_hint and target is not None:
+            failed = LinkFailed(device_id, result, True, target[0], target[1])
+        else:
+            failed = LinkFailed(device_id, result)
+        # Địa chỉ người dùng đưa sai (không tới được, hay là máy khác) không được che địa chỉ đã lưu:
+        # quên `hint` (trừ khi người dùng vừa đưa `hint` mới trong lúc thử), lịch `saved` chạy tiếp.
+        # `hint` trùng `saved` cũng bị quên: không thì nó đứng trước `saved` và lịch `saved` không chạy.
+        drop_hint = (
+            from_hint
+            and not dev.hint_next
+            and result in (ConnectResult.UNREACHABLE, ConnectResult.IDENTITY_MISMATCH)
+            and dev.saved is not None
+        )
+        same_as_saved = drop_hint and dev.hint == dev.saved
+        if drop_hint:
+            dev.hint = None
+        if drop_hint and result is ConnectResult.IDENTITY_MISMATCH:
+            # Không chặn: lỗi thuộc địa chỉ vừa nhập, không thuộc thiết bị (nó vẫn có thể ở `saved`).
+            # Địa chỉ vừa nhập chính là `saved` thì `saved` giờ là của máy khác: quên nó trong phiên.
+            if same_as_saved:
+                dev.saved = None
+                dev.saved_failures = 0
+            dev.reported.add(result)
+            actions.append(Notify(failed))
+            if dev.dirty and dev.last_start is not None and dev.target() is not None:
+                dev.next_at = self._saved_floor(dev, max(now, dev.last_start + EVENT_RETRY_GAP))
+            elif dev.scheduled():
+                dev.next_at = now + _delay(max(dev.failures, 1))
+            dev.dirty = False
+            self._saved_followup(dev, now, SAVED_RETRY_BASE)
+            return actions
         if result is ConnectResult.UNREACHABLE:
             dev.blocked = False
             scheduled = dev.scheduled()
@@ -637,8 +831,10 @@ class LinkTracker:
             due = scheduled and dev.failures >= UNREACHABLE_REPORT_AFTER and result not in dev.reported
             if from_hint or due:
                 dev.reported.add(result)
-                actions.append(Notify(LinkFailed(device_id, result)))
+                actions.append(Notify(failed))
             dev.dirty = False
+            # Không còn lịch nào khác (ví dụ mDNS báo máy đi trong lúc thử): thử địa chỉ đã lưu.
+            self._saved_followup(dev, now, SAVED_RETRY_BASE)
             return actions
         assert result in _BLOCKING
         dev.blocked = True
@@ -648,13 +844,81 @@ class LinkTracker:
             dev.next_at = now + max(EVENT_RETRY_GAP, _delay(dev.failures))
         else:
             dev.next_at = None
-        if result not in dev.reported:
+        # Lỗi chặn của lần thử do `hint()` gây ra luôn được báo: người dùng đang chờ kết quả.
+        if from_hint or result not in dev.reported:
             dev.reported.add(result)
-            actions.append(Notify(LinkFailed(device_id, result)))
+            actions.append(Notify(failed))
         if dev.dirty:
             dev.dirty = False
             actions.extend(self._event_retry(device_id, dev, now))
         return actions
+
+    def _saved_failed(self, dev: _Device, result: ConnectResult, now: float) -> list[LinkAction] | None:
+        """Lần thử nhắm vào `saved` thất bại (`dev.attempt` đã được xóa).
+
+        Trả None khi lần thử được xử lý như mọi lần thử (`_failed`): máy kia đã nối tới, bị từ
+        chối / khác phiên bản, hay “không kết nối được” khi đang `held` (lịch §6.2).
+        """
+        if dev.current is not None:
+            return None
+        if result is ConnectResult.IDENTITY_MISMATCH:
+            # IP đã lưu giờ là của máy khác (đổi chủ): quên trong phiên, không báo, không chặn,
+            # không tăng bộ đếm §6.2; `trusted.json` không bị sửa (app không biết lần này).
+            dev.saved = None
+            dev.saved_failures = 0
+            if (dev.hint_next or dev.dirty) and dev.last_start is not None:
+                dev.next_at = max(now, dev.last_start + EVENT_RETRY_GAP)
+            elif dev.scheduled():
+                dev.next_at = now + _delay(max(dev.failures, 1))
+            else:
+                dev.next_at = None
+            dev.dirty = False
+            return []
+        if result is not ConnectResult.UNREACHABLE or dev.held:
+            return None
+        dev.saved_failures += 1
+        if (dev.dirty or dev.hint_next) and dev.last_start is not None:
+            dev.next_at = self._saved_floor(dev, max(now, dev.last_start + EVENT_RETRY_GAP))
+        elif dev.saved_failures < SAVED_MAX_ATTEMPTS:
+            exponent = min(dev.saved_failures - 1, _MAX_DELAY_EXPONENT)
+            dev.next_at = now + min(SAVED_RETRY_BASE * 2**exponent, SAVED_RETRY_MAX)
+        else:
+            dev.next_at = now + SAVED_RETRY_MAX  # hết đợt: một lần mỗi SAVED_RETRY_MAX
+        dev.dirty = False
+        return []
+
+    @staticmethod
+    def _saved_floor(dev: _Device, at: float) -> float:
+        """Hết đợt `saved` (không `held`): lần thử tới `saved` không sớm hơn lần trước + SAVED_RETRY_MAX."""
+        if (
+            dev.from_saved()
+            and not dev.held
+            and dev.saved_failures >= SAVED_MAX_ATTEMPTS
+            and dev.saved_last is not None
+        ):
+            return max(at, dev.saved_last + SAVED_RETRY_MAX)
+        return at
+
+    def _saved_followup(self, dev: _Device, now: float, delay: float) -> None:
+        """Hẹn thử `saved` sau `delay` khi không còn lịch nào khác (mDNS báo máy đi, mất kết nối…).
+
+        Chỉ khi tin cậy, không bị chặn, không `held`, chưa kết nối, không đang thử, chưa hẹn, và
+        đích là `saved`. Cách lần thử trước ≥ `EVENT_RETRY_GAP`; hết đợt thì theo `_saved_floor`.
+        """
+        if (
+            not dev.trusted
+            or dev.blocked
+            or dev.held
+            or dev.current is not None
+            or dev.attempt is not None
+            or dev.next_at is not None
+            or not dev.from_saved()
+        ):
+            return
+        at = now + delay
+        if dev.last_start is not None:
+            at = max(at, dev.last_start + EVENT_RETRY_GAP)
+        dev.next_at = self._saved_floor(dev, at)
 
     def _add_connection(
         self, device_id: str, dev: _Device, conn_id: int, local: bool, now: float
@@ -696,7 +960,7 @@ class LinkTracker:
     def _untrust(self, device_id: str) -> list[LinkAction]:
         """Thiết bị thôi tin cậy: đóng kết nối, hủy lần thử, quên mọi thứ trừ địa chỉ mDNS tươi.
 
-        `hint`, `held` và địa chỉ mDNS cũ (`stale`) cũng bị quên.
+        `hint`, `saved`, `held` và địa chỉ mDNS cũ (`stale`) cũng bị quên.
         """
         dev = self._devices[device_id]
         actions: list[LinkAction] = []
