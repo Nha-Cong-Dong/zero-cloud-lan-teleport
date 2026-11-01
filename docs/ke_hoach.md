@@ -22,7 +22,7 @@
 | Nguồn lực | Làm một mình |
 | Thời hạn | Không có hạn cố định → kiểm soát bằng các bản phát hành (mục 5), mốc tham khảo ~15 tuần tới v1.0 |
 | Ngôn ngữ giao diện | Tiếng Việt và English |
-| Tên sản phẩm | **Zero-Cloud LAN Teleport** (dạng viết liền `zero-cloud-lan-teleport`, đã dùng cho repo và tên gói phân phối); biểu tượng là logo vẽ ở `src/teleport/ui/logo.py`. Chốt 01/11/2026 |
+| Tên sản phẩm | **Zero-Cloud LAN Teleport** (dạng viết liền `zero-cloud-lan-teleport`, đã dùng cho repo và tên gói phân phối); tên ngắn hiển thị trong app và bộ cài là **ZCL Teleport** (`APP_NAME` ở `src/teleport/ui/texts.py`), còn định danh kỹ thuật (gói `teleport`, lệnh `teleport`, `Teleport.exe`, thư mục cấu hình và thư mục nhận) giữ “Teleport” để không mất dữ liệu cũ; biểu tượng là logo vẽ ở `src/teleport/ui/logo.py`. Chốt 01/11/2026 |
 
 ---
 
