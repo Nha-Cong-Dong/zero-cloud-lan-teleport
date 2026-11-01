@@ -488,6 +488,33 @@ def test_w5_open_address_entry_without_notice(window, qtbot, tmp_path):
     assert not window.discover.info_bar.isVisibleTo(window)
 
 
+def test_w5_open_address_entry_replaces_address_error(window, qtbot, tmp_path, qapp):
+    """Đang ở DISCOVER với lỗi IP: câu của `open_address_entry` thay lỗi; đổi ngôn ngữ không hiện lại
+    lỗi cũ (câu dạng hàm được dịch lại), gõ chữ không ẩn câu INFO."""
+    from teleport.ui import i18n, texts
+    from teleport.ui.main_window import Page
+    from teleport.ui.widgets import InfoLevel
+
+    running(window, tmp_path)
+    show_window(window, qtbot, active=True)
+    assert window.open_page(Page.DISCOVER)
+    settle()
+    window.discover.address_edit.setText("192.0.2")
+    assert not window.discover.submit_address()
+    bar = window.discover.info_bar
+    assert bar.level is InfoLevel.ERROR
+    assert window.open_address_entry(texts.menu_open)
+    settle()
+    assert bar.level is InfoLevel.INFO and bar.title == texts.menu_open()
+    i18n.set_language("en")
+    settle()
+    assert bar.isVisibleTo(window)
+    assert bar.level is InfoLevel.INFO and bar.title == "Open Teleport"
+    window.discover.address_edit.setText("192.0.2.1")
+    settle()
+    assert bar.isVisibleTo(window) and bar.level is InfoLevel.INFO
+
+
 def test_w5_open_address_entry_outside_running_is_refused(window):
     from teleport.ui.main_window import Page
 

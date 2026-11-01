@@ -6,8 +6,15 @@ M3 (máy chưa có danh tính) đã bỏ: thay bằng màn lần chạy đầu (
 `ui.transfers_view`).
 
 Chuỗi nguồn tiếng Việt, mọi chuỗi qua `QCoreApplication.translate` với ngữ cảnh `Texts`, gọi lúc
-dùng (không lúc import) để đổi ngôn ngữ có hiệu lực ngay. Viết nguyên lời gọi `translate(...)` ở
-từng chỗ để `pyside6-lupdate` trích được chuỗi.
+dùng (không lúc import) để đổi ngôn ngữ có hiệu lực ngay. Chuỗi nguồn luôn là literal để bộ trích
+`packaging/i18n/update.py` (đọc bằng `ast`) thấy được; số đếm dùng `%n` (luật: `CONTRIBUTING.md`, mục
+Bản dịch).
+
+Số hiện cho người dùng (`format_size`, `percent`, `format_duration`, `decimal`) là bản giao diện của
+`core.display`: dấu thập phân và đơn vị đếm qua bản dịch, tiếng Việt ra đúng chữ của `core`.
+
+`Text` là chuỗi đã dịch hoặc hàm dựng câu; `resolve` trả ra chuỗi. Thông báo còn hiện khi người dùng
+đổi ngôn ngữ nhận hàm, để câu được dịch lại.
 
 Chèn giá trị bằng `fill` (một lượt, chỉ thay `{tên}` có trong bản dịch): bản dịch có ngoặc nhọn
 lạ không làm hỏng câu, và chữ do máy kia đặt chứa `{size}` không bị thay tiếp. Chữ từ máy khác
@@ -22,17 +29,31 @@ lỗi khởi động, tên đăng ký cho AppUserModelID ở `ui.app`): tên ri�
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
+from collections.abc import Callable
 
 from PySide6.QtCore import QCoreApplication
 
 from teleport.core.display import display_filename, display_name
+from teleport.core.display import format_size as core_format_size
 
 APP_NAME = "ZCL Teleport"  # tên ngắn của “Zero-Cloud LAN Teleport”
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 _REPLACEMENT = "�"  # U+FFFD thay ký tự điều khiển, như `cli._printable`
+
+
+# Chữ của một thông báo: chuỗi đã dịch sẵn, hoặc hàm dựng lại câu theo ngôn ngữ đang dùng. Thông báo
+# nhận hàm thì dịch lại khi đổi ngôn ngữ; nhận chuỗi thì bị ẩn khi đổi ngôn ngữ (`widgets.InfoBar`,
+# `chat.ChatView.show_notice`), để không còn câu của ngôn ngữ cũ.
+Text = str | Callable[[], str]
+
+
+def resolve(text: Text) -> str:
+    """Chữ để hiện của `text` (gọi hàm nếu là hàm)."""
+    return text() if callable(text) else text
 
 
 def fill(template: str, **values: str) -> str:
@@ -52,6 +73,65 @@ def peer_label(name: str | None, device_id: str) -> str:
 def file_label(name: str) -> str:
     """Tên file để hiện: ký tự điều khiển thành U+FFFD, rồi `display_filename`."""
     return display_filename(_printable(name))
+
+
+# ---- Số, dung lượng, thời gian -------------------------------------------------------------
+# Bản giao diện của `core.display.format_size` / `format_duration`: cùng cách tính, nhưng dấu thập
+# phân và đơn vị đếm được qua bản dịch. Tiếng Việt ra đúng chữ của `core` (CLI vẫn dùng `core`).
+
+
+def decimal(tenths: int) -> str:
+    """Số có một chữ số thập phân từ số phần mười ≥ 0: 21 → “2,1” (English “2.1”)."""
+    whole, tenth = divmod(tenths, 10)
+    template = QCoreApplication.translate("Texts", "{whole},{tenth}", "số có một chữ số thập phân, ví dụ 2,1")
+    return fill(template, whole=str(whole), tenth=str(tenth))
+
+
+def format_size(size: int, *, trim: bool = False) -> str:
+    """Như `core.display.format_size` (“512 byte”, “2,1 MB”, `trim` bỏ “,0”), qua bản dịch: English
+    “512 bytes”, “1 byte”, “2.1 MB”. Lỗi kiểu / giá trị âm như `core`."""
+    text = core_format_size(size, trim=trim)
+    number, unit = text.rsplit(" ", 1)
+    if unit == "byte":
+        return QCoreApplication.translate("Texts", "%n byte", None, size)
+    whole, sep, tenth = number.partition(",")
+    if sep:
+        number = decimal(int(whole) * 10 + int(tenth))
+    return f"{number} {unit}"
+
+
+def percent(tenths: int) -> str:
+    """Phần trăm có một chữ số thập phân từ số phần nghìn: 420 → “42,0%” (English “42.0%”)."""
+    return f"{decimal(tenths)}%"
+
+
+def _duration_unit(seconds: int, count: int) -> str:
+    """`count` đơn vị cỡ `seconds` giây (86400, 3600, 60, 1), qua bản dịch số đếm."""
+    t = QCoreApplication.translate
+    if seconds == 86400:
+        return t("Texts", "%n ngày", None, count)
+    if seconds == 3600:
+        return t("Texts", "%n giờ", None, count)
+    if seconds == 60:
+        return t("Texts", "%n phút", None, count)
+    return t("Texts", "%n giây", None, count)
+
+
+def format_duration(seconds: float) -> str:
+    """Như `core.display.format_duration` (cùng cách làm tròn, hai đơn vị lớn nhất, bỏ đơn vị sau khi
+    bằng 0), đơn vị qua bản dịch: tiếng Việt “2 phút 10 giây”, English “2 min 10 sec”. `seconds` hữu
+    hạn (không thì ValueError, như core); âm tính là 0."""
+    if not math.isfinite(seconds):
+        raise ValueError("seconds phải hữu hạn")
+    total = max(0, math.floor(seconds + 0.5))
+    for size, small in ((86400, 3600), (3600, 60), (60, 1)):
+        if total >= size:
+            major, rest = divmod(total, size)
+            minor = rest // small
+            if minor == 0:
+                return _duration_unit(size, major)
+            return f"{_duration_unit(size, major)} {_duration_unit(small, minor)}"
+    return _duration_unit(1, total)
 
 
 # ---- Lỗi khởi động node --------------------------------------------------------------------

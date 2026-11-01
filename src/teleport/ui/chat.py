@@ -35,7 +35,8 @@ trước), `row` (chỉ bong bóng của phiên: `ui.transfers` dựa vào `row(
 `hide_notice`, `notice_text` (“” khi không có), `notice_action_text`, `set_device_names`,
 `set_connected`, `set_receive_dir`, `cancel_requested`, `content_changed` (gộp: phát một lần mỗi lời
 gọi ngoài cùng có thay đổi cấu trúc: thêm/gỡ bong bóng kể cả lịch sử và bong bóng tạm, lượt kết thúc,
-thông báo, đổi máy).
+thông báo, đổi máy). Chữ của `show_notice` là `texts.Text`: đổi ngôn ngữ thì câu dựng bằng hàm được dịch
+lại, câu dịch sẵn thì thông báo bị ẩn (không còn câu của ngôn ngữ cũ).
 
 **Gửi**: nút “Gửi file” và Ctrl+O (`QAction` `WindowShortcut` trên `ChatView`, chỉ bật khi có máy được
 chọn; widget ẩn thì không chạy) phát `pick_files_requested(id)`. Thả file vào bất cứ đâu trong
@@ -146,7 +147,7 @@ from teleport.app.transfers import (
     TransferUpdate,
 )
 from teleport.core.history import HistoryEntry
-from teleport.ui import icons, send, texts, theme
+from teleport.ui import i18n, icons, send, texts, theme
 from teleport.ui.chat_bubbles import (
     BubbleContext,
     HistoryBubble,
@@ -798,6 +799,8 @@ class ChatView(QWidget):
         self._connected: dict[str, bool] = {}
         self._receive_dir: Path | None = None
         self._notice_callback: Callable[[], None] | None = None
+        self._notice_sources: tuple[texts.Text, texts.Text | None] = ("", None)  # câu đang hiện
+        self._notice_language = ""  # ngôn ngữ lúc hiện câu đang có
         self._change_depth = 0
         self._changed = False
 
@@ -1132,33 +1135,58 @@ class ChatView(QWidget):
 
     def show_notice(
         self,
-        text: str,
-        action_text: str | None = None,
+        text: texts.Text,
+        action_text: texts.Text | None = None,
         on_action: Callable[[], None] | None = None,
         *,
         level: InfoLevel = InfoLevel.INFO,
     ) -> None:
         """Hiện `text` ở `info_bar` (thay thông báo cũ); rỗng → ẩn. `action_text` và `on_action` cùng có
-        → nút hành động; bấm thì ẩn thông báo rồi gọi `on_action`."""
+        → nút hành động; bấm thì ẩn thông báo rồi gọi `on_action`.
+
+        `text`, `action_text` là `texts.Text`: đổi ngôn ngữ thì câu dựng bằng hàm được dịch lại, câu dịch
+        sẵn (chuỗi) thì thanh bị ẩn, không còn câu của ngôn ngữ cũ (như `widgets.InfoBar`)."""
         with self._changes():
             self._mark_changed()
-            if not text:
+            if not texts.resolve(text):
                 self.hide_notice()
                 return
             has_action = bool(action_text) and on_action is not None
             self._notice_callback = on_action if has_action else None
+            self._notice_sources = (text, action_text if has_action else None)
+            self._notice_language = i18n.current_language()
             self.info_bar.show_message(level, text, action=action_text if has_action else None)
-            # Ô của thanh nhận Tab: đặt tên cho trình đọc màn hình (InfoBar chỉ đặt tên cho chính nó).
-            bar = self.info_bar
-            bar.title_label.setAccessibleName(QCoreApplication.translate("Chat", "Thông báo"))
-            bar.title_label.setAccessibleDescription(text)
-            bar.action_button.setAccessibleName(action_text if has_action and action_text else "")
-            bar.action_button.setAccessibleDescription(text if has_action else "")
+            self._apply_notice_accessibility()
+
+    def _apply_notice_accessibility(self) -> None:
+        """Tên/mô tả trợ năng cho các ô nhận Tab của thanh (InfoBar chỉ đặt tên cho chính nó)."""
+        source, action_source = self._notice_sources
+        text = texts.resolve(source)
+        action_text = texts.resolve(action_source) if action_source else ""
+        bar = self.info_bar
+        bar.title_label.setAccessibleName(QCoreApplication.translate("Chat", "Thông báo"))
+        bar.title_label.setAccessibleDescription(text)
+        bar.action_button.setAccessibleName(action_text)
+        bar.action_button.setAccessibleDescription(text if action_text else "")
+
+    def _retranslate_notice(self) -> None:
+        """Sau `LanguageChange`: câu dựng bằng hàm thì dịch lại tên trợ năng (chữ do `InfoBar` tự dịch);
+        câu dịch sẵn của ngôn ngữ cũ thì ẩn thông báo (`InfoBar` cũng tự ẩn, thứ tự sự kiện không quan
+        trọng)."""
+        language = i18n.current_language()
+        if not self._notice_sources[0] or self._notice_language == language:
+            return
+        if all(callable(source) or not source for source in self._notice_sources):
+            self._notice_language = language
+            self._apply_notice_accessibility()
+        else:
+            self.hide_notice()
 
     def hide_notice(self) -> None:
         with self._changes():
             self._mark_changed()
             self._notice_callback = None
+            self._notice_sources = ("", None)
             self.info_bar.clear()
 
     def notice_text(self) -> str:
@@ -1253,6 +1281,7 @@ class ChatView(QWidget):
         super().changeEvent(event)
         if event.type() == QEvent.Type.LanguageChange:
             self.retranslate()
+            self._retranslate_notice()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -1397,6 +1426,7 @@ class ChatView(QWidget):
 
     def _on_notice_dismissed(self) -> None:
         self._notice_callback = None
+        self._notice_sources = ("", None)
         self._mark_changed()
 
     def _schedule_history(self) -> None:

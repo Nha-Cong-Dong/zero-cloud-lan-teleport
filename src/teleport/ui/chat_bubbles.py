@@ -103,7 +103,6 @@ from teleport.app.transfers import (
     TransferResult,
     TransferStatus,
 )
-from teleport.core.display import format_size
 from teleport.core.history import HistoryEntry
 from teleport.ui import icons, texts, theme
 from teleport.ui.transfers_view import (
@@ -860,7 +859,7 @@ class TransferBubble(_Bubble):
             who = texts.fill(t("Chat", "Gửi tới {name}"), name=ctx.peer)
         else:
             who = texts.fill(t("Chat", "Nhận từ {name}"), name=ctx.peer)
-        parts = [who, f"{self._title()}, {format_size(max(0, self.total_bytes))}", status]
+        parts = [who, f"{self._title()}, {texts.format_size(max(0, self.total_bytes))}", status]
         if percent is not None:
             parts.append(f"{percent}%")
         if tail:
@@ -880,7 +879,7 @@ class TransferBubble(_Bubble):
             return  # `ChatBubble.__init__` gọi trước khi lớp con dựng xong
         title = self._title()
         self.title_label.set_full_text(title)
-        self.size_label.setText(format_size(max(0, self.total_bytes)))
+        self.size_label.setText(texts.format_size(max(0, self.total_bytes)))
         names = self.info.names if self.info is not None else self.offer_names
         self.icon_label.set_icon(file_icon(names, self.file_count))
         self.progress_bar.setAccessibleName(t("Chat", "Tiến độ"))
@@ -987,7 +986,7 @@ class HistoryBubble(_Bubble):
             title = files_text(entry.file_count)
         self.title_label.set_full_text(title)
         when = clock_text(self.at)
-        size = format_size(max(0, entry.total_bytes))
+        size = texts.format_size(max(0, entry.total_bytes))
         self.size_label.setText(f"{size} · {when}" if when else size)
         self.icon_label.set_icon(file_icon(entry.names, entry.file_count))
         result = _result_of(entry.result)

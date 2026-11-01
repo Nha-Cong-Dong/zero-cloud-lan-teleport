@@ -35,7 +35,6 @@ from teleport.app.transfers import (
     TransferResult,
     TransferStatus,
 )
-from teleport.core.display import format_duration, format_size
 from teleport.ui import texts
 from teleport.ui.send import printable
 from teleport.ui.texts import fill as _fill
@@ -74,8 +73,7 @@ def bar_value(done: int, total: int) -> int:
 
 def percent_text(shown: int, total: int) -> str:
     """“42,0%”: một chữ số thập phân, làm tròn xuống, tối đa 99,9% (chỉ thẻ đã xong mới đầy)."""
-    tenths = min(bar_value(shown, total), BAR_MAX - 1)
-    return f"{tenths // 10},{tenths % 10}%"
+    return texts.percent(min(bar_value(shown, total), BAR_MAX - 1))
 
 
 def _file_at(info: TransferInfo, index: int | None) -> str:
@@ -287,8 +285,8 @@ def _send_result(finished: TransferFinished, p: str) -> str:
                 "{name} không đủ chỗ trống để nhận: cần {needed}, ổ lưu file trên máy đó còn {available}.",
             ),
             name=p,
-            needed=format_size(reject.needed),
-            available=format_size(reject.available),
+            needed=texts.format_size(reject.needed),
+            available=texts.format_size(reject.available),
         )
     if result is TransferResult.REJECTED_FILE_TOO_LARGE and reject is not None:
         index, max_size = reject.file_index, reject.max_size
@@ -301,8 +299,8 @@ def _send_result(finished: TransferFinished, p: str) -> str:
                 ),
                 name=p,
                 file=_file_at(info, index),
-                size=format_size(info.files[index].size),
-                limit=format_size(max_size + 1, trim=True),
+                size=texts.format_size(info.files[index].size),
+                limit=texts.format_size(max_size + 1, trim=True),
             )
     if result is TransferResult.REJECTED_NOT_RECEIVING:
         return _fill(
@@ -399,9 +397,9 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
                 n,
             ),
             name=s,
-            needed=format_size(reject.needed),
+            needed=texts.format_size(reject.needed),
             drive=_drive_label(receive_dir),
-            available=format_size(reject.available),
+            available=texts.format_size(reject.available),
         )
     if result is TransferResult.REJECTED_FILE_TOO_LARGE and reject is not None:
         index, max_size = reject.file_index, reject.max_size
@@ -416,9 +414,9 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
                 ),
                 name=s,
                 drive=_drive_label(receive_dir),
-                limit=format_size(max_size + 1, trim=True),
+                limit=texts.format_size(max_size + 1, trim=True),
                 file=_file_at(info, index),
-                size=format_size(info.files[index].size),
+                size=texts.format_size(info.files[index].size),
             )
     if result is TransferResult.CANCELLED_USER:
         if not finished.by_peer:
@@ -521,7 +519,9 @@ def progress_text(update: TransferProgress, shown: int | None = None) -> str:
     if eta is None or not math.isfinite(eta) or speed_bytes == 0:
         remaining = QCoreApplication.translate("Transfers", "đang tính thời gian còn lại")
     else:
-        remaining = _fill(QCoreApplication.translate("Transfers", "còn {time}"), time=format_duration(eta))
+        remaining = _fill(
+            QCoreApplication.translate("Transfers", "còn {time}"), time=texts.format_duration(eta)
+        )
     if speed_bytes == 0:
         return " · ".join((percent, remaining))
-    return " · ".join((percent, f"{format_size(speed_bytes)}/s", remaining))
+    return " · ".join((percent, f"{texts.format_size(speed_bytes)}/s", remaining))

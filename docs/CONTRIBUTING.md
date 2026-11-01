@@ -44,6 +44,45 @@ Mức kiểm tra kiểu của từng gói nằm ở `[tool.mypy]` trong `pyproje
 
 Mạng hoặc máy CI chặn multicast thì đặt biến môi trường `TELEPORT_SKIP_MDNS=1` để bỏ qua các test mDNS thật (marker `mdns`).
 
+## Bản dịch
+Chuỗi nguồn của giao diện là tiếng Việt; bản English nằm ở `src/teleport/ui/i18n/teleport_en.ts` (để review) và `teleport_en.qm` (file app nạp, sinh từ `.ts`). Chạy từ gốc repo:
+
+```powershell
+python packaging/i18n/update.py            # trích chuỗi từ src/teleport/ui, gộp vào .ts, rồi sinh .qm
+python packaging/i18n/update.py --check    # không ghi gì; thoát 1 nếu .ts lỗi thời hoặc còn câu chưa dịch
+```
+
+Luật:
+- PR thêm hoặc sửa chữ của giao diện cập nhật `.ts` và `.qm` trong cùng PR, với bản dịch đầy đủ. Thiếu thì `tests/ui/test_translations.py` đỏ trên CI (có chủ ý).
+- Mọi chuỗi đi qua `QCoreApplication.translate("NgữCảnh", "chuỗi literal")` (được dùng bí danh như `t = QCoreApplication.translate`). Không dùng `self.tr(...)` và không truyền biến làm chuỗi nguồn: bộ trích đọc mã bằng `ast` và báo lỗi những chỗ đó.
+- Câu có số đếm dùng `%n` và tham số `n` (`translate(ctx, "%n máy", None, n)`), không dùng `{n}`; giá trị khác chèn bằng `texts.fill` với `{tên}`, và bản dịch giữ nguyên mọi `{tên}`.
+- Thông báo còn hiện lâu theo trạng thái (dải thông báo, lỗi đọc cài đặt) nhận `texts.Text`: truyền hàm dựng câu thay vì chuỗi đã dịch, để đổi ngôn ngữ thì câu được dịch lại.
+- Không dịch tên tự gọi của ngôn ngữ (“Tiếng Việt”), `APP_NAME`, log, CLI và argparse.
+
+Văn phong English: sentence case, thuật ngữ Windows, “…” ở nút mở hộp thoại. Bảng thuật ngữ (nguồn duy nhất):
+
+| Tiếng Việt | English |
+|---|---|
+| máy | device |
+| ghép đôi / hủy ghép đôi | pair / unpair |
+| thiết bị tin cậy | trusted devices |
+| lượt truyền | transfer |
+| thư mục nhận | receive folder |
+| đang ẩn / đang hiện | hidden / visible |
+| Tìm máy mới | Find devices |
+| mã ghép đôi | pairing code |
+| khay hệ thống | system tray |
+| nhận dở | partially received |
+| Thoát | Exit |
+| Thử lại | Try again |
+| Trùng khớp / Không trùng | Match / Don't match |
+| Nhận / Từ chối (hộp nhận file) | Accept / Decline |
+| mã máy | device ID |
+| danh tính | identity |
+| thư mục cấu hình | configuration folder |
+| cửa sổ dòng lệnh | command prompt window |
+| Bấm … | Click … |
+
 ## Build thử bản CLI (Windows)
 Bản CLI được đóng gói thử bằng PyInstaller để sớm phát hiện lỗi đóng gói và antivirus. Đây chưa phải bản phát hành: không gắn tag, không tạo GitHub Release. File build nằm trong `packaging/pyinstaller/`: `teleport-cli.spec` (cấu hình build), `third_party.py` (kiểm giấy phép, sinh file giấy phép), `requirements.txt` (công cụ build, ghim phiên bản) và `constraints.txt` (ghim bản dependency runtime được đóng vào exe).
 

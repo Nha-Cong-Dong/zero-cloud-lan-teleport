@@ -36,7 +36,6 @@ from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from teleport.app.transfers import OfferReceived, TransferFinished, TransferUpdate
-from teleport.core.display import format_size
 from teleport.core.transfer import TransferKey
 from teleport.ui import texts, theme
 from teleport.ui.send import printable
@@ -54,10 +53,10 @@ def offer_parts(offer: OfferReceived, receive_dir: Path | None) -> tuple[str, li
     head = _fill(
         t("Offer", "“{name}” muốn gửi %n file ({size}) tới máy này.", None, count),
         name=peer,
-        size=format_size(max(0, offer.total_bytes)),
+        size=texts.format_size(max(0, offer.total_bytes)),
     )
     lines = [
-        f"{texts.file_label(name)}  {format_size(max(0, entry.size))}"
+        f"{texts.file_label(name)}  {texts.format_size(max(0, entry.size))}"
         for name, entry in zip(offer.names[:LIST_MAX], offer.files[:LIST_MAX], strict=False)
     ]
     rest = count - min(count, LIST_MAX)

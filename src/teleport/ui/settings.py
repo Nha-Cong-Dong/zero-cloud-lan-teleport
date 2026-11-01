@@ -29,9 +29,10 @@ gợi ý.
 
 **Số** (spec D2 mục 9.1, không viết cứng): ngưỡng dọn tạm mặc định = `storage.TEMP_RETENTION / 86400`
 (đọc lúc dùng), khoảng `settings.MIN_RETENTION_DAYS`–`MAX_RETENTION_DAYS`; tốc độ hiện theo MB/s
-(MB = `MB` = 1 048 576 byte, một số lẻ, 0,1–100 000), gửi `round(MB/s × MB)` kẹp trong
-`app.transfers.MIN_RATE_LIMIT`–`settings.MAX_RATE_LIMIT`. Giá trị bằng mặc định → gửi None. Hai ô số
-chỉ phát khi **chốt** (spec D2 mục 9.4): Enter hay rời ô (`editingFinished`), hoặc `SPIN_COMMIT_MS`
+(MB = `MB` = 1 048 576 byte, một số lẻ, 0,1–100 000; dấu thập phân theo ngôn ngữ giao diện), gửi
+`round(MB/s × MB)` kẹp trong `app.transfers.MIN_RATE_LIMIT`–`settings.MAX_RATE_LIMIT`. Giá trị bằng
+mặc định → gửi None. Hậu tố của ô ngày theo số (English “1 day” / “2 days”). Hai ô số chỉ phát khi
+**chốt** (spec D2 mục 9.4): Enter hay rời ô (`editingFinished`), hoặc `SPIN_COMMIT_MS`
 không đổi sau khi bấm mũi tên; không phát khi bằng giá trị đã biết.
 
 **Ô tên** (`_NameField`): Enter / rời ô thì kiểm (`core.messages.validate_device_name` sau `strip`);
@@ -100,6 +101,7 @@ from typing import Any
 from PySide6.QtCore import (
     QCoreApplication,
     QEvent,
+    QLocale,
     QObject,
     QSize,
     QStandardPaths,
@@ -108,7 +110,14 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QDesktopServices, QFontMetrics, QHideEvent, QKeyEvent, QResizeEvent
+from PySide6.QtGui import (
+    QDesktopServices,
+    QFontMetrics,
+    QHideEvent,
+    QKeyEvent,
+    QResizeEvent,
+    QValidator,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -205,10 +214,6 @@ SECTION_ICONS = {
 
 
 # ---- Câu chữ -----------------------------------------------------------------------------------
-
-
-def _t(text: str) -> str:
-    return QCoreApplication.translate("Settings", text)
 
 
 def page_title() -> str:
@@ -519,6 +524,25 @@ class _CommitSpin:
         self._timer.stop()
 
 
+class _DecimalSpin(QDoubleSpinBox):
+    """Ô số lẻ nhận cả “,” lẫn “.” làm dấu thập phân, không có dấu nhóm hàng nghìn.
+
+    `QDoubleSpinBox` theo locale lặng lẽ bỏ dấu nhóm: giao diện English gõ “2,5” thành 25. Ở đây cả
+    hai dấu đổi thành dấu thập phân của locale trước khi kiểm, nên “2,5” và “2.5” đều là 2,5, còn
+    “1,000” (quá số chữ số lẻ) bị từ chối.
+    """
+
+    def _normalized(self, text: str) -> str:
+        point = self.locale().decimalPoint()
+        return text.replace(",", point).replace(".", point)
+
+    def validate(self, text: str, pos: int) -> tuple[QValidator.State, str, int]:
+        return super().validate(self._normalized(text), pos)
+
+    def valueFromText(self, text: str) -> float:
+        return super().valueFromText(self._normalized(text))
+
+
 class TrustedDeviceRow(QFrame):
     """Một máy đã ghép đôi: avatar, tên, “HĐH · trạng thái”, “Hỏi trước khi nhận”, “Hủy ghép đôi…”."""
 
@@ -608,12 +632,16 @@ class TrustedDeviceRow(QFrame):
         self.setAccessibleName(summary)
         self.setToolTip(safe_tooltip(f"{name}\n{detail}"))
         self.avatar.set_presence(Presence.ONLINE if (view.connected or view.online) else Presence.OFFLINE)
-        ask = _t("Hỏi trước khi nhận")
+        ask = QCoreApplication.translate("Settings", "Hỏi trước khi nhận")
         self.ask_checkbox.setText(ask)
-        self.ask_checkbox.setAccessibleName(texts.fill(_t("{option}: {name}"), option=ask, name=name))
-        unpair = _t("Hủy ghép đôi…")
+        self.ask_checkbox.setAccessibleName(
+            texts.fill(QCoreApplication.translate("Settings", "{option}: {name}"), option=ask, name=name)
+        )
+        unpair = QCoreApplication.translate("Settings", "Hủy ghép đôi…")
         self.unpair_button.setText(unpair)
-        self.unpair_button.setAccessibleName(texts.fill(_t("{option}: {name}"), option=unpair, name=name))
+        self.unpair_button.setAccessibleName(
+            texts.fill(QCoreApplication.translate("Settings", "{option}: {name}"), option=unpair, name=name)
+        )
         self.ask_checkbox.setAccessibleDescription(summary)
         self.unpair_button.setAccessibleDescription(summary)
 
@@ -932,7 +960,7 @@ class SettingsPage(QWidget):
         box_layout.setSpacing(theme.SPACING[1])
         self.rate_checkbox = QCheckBox(box)
         self.rate_checkbox.setObjectName("rateCheckbox")
-        self.rate_spin = QDoubleSpinBox(box)
+        self.rate_spin = _DecimalSpin(box)
         self.rate_spin.setObjectName("rateSpin")
         self.rate_spin.setDecimals(1)
         self.rate_spin.setRange(RATE_MIN_MB, RATE_MAX_MB)
@@ -952,6 +980,7 @@ class SettingsPage(QWidget):
         self.retention_spin.setObjectName("retentionSpin")
         self.retention_spin.setRange(app_settings.MIN_RETENTION_DAYS, app_settings.MAX_RETENTION_DAYS)
         self.retention_spin.setValue(default_retention_days())
+        self.retention_spin.valueChanged.connect(self._update_retention_suffix)
         self.retention_row.set_control(self.retention_spin)
         self._retention_commit = _CommitSpin(self.retention_spin, self._commit_retention)
         self._section_layouts[Section.TRANSFER].addStretch(1)
@@ -1086,6 +1115,16 @@ class SettingsPage(QWidget):
         self._retention = days
         with _blocked(self.retention_spin):
             self.retention_spin.setValue(default_retention_days() if days is None else days)
+        self._update_retention_suffix()
+
+    def _update_retention_suffix(self) -> None:
+        """Chữ đơn vị quanh số của ô ngày theo giá trị đang có (English “1 day” / “2 days”): dịch câu
+        đếm “%n ngày” rồi tách phần trước/sau số làm tiền tố/hậu tố của ô."""
+        value = self.retention_spin.value()
+        full = QCoreApplication.translate("Settings", "%n ngày", "đơn vị của ô số ngày", value)
+        before, found, after = full.partition(str(value))
+        self.retention_spin.setPrefix(before if found else "")
+        self.retention_spin.setSuffix(after if found else "")
 
     def set_device_settings(self, mapping: Mapping[str, DeviceSettings]) -> None:
         self._device_settings = dict(mapping)
@@ -1117,7 +1156,7 @@ class SettingsPage(QWidget):
                 row.ask_checkbox.setFocus(Qt.FocusReason.OtherFocusReason)
                 self._section_widgets[Section.DEVICES].ensureWidgetVisible(row)
 
-    def show_notice(self, level: InfoLevel, text: str, *, action: str | None = None) -> None:
+    def show_notice(self, level: InfoLevel, text: texts.Text, *, action: texts.Text | None = None) -> None:
         self.info_bar.show_message(InfoLevel(level), text, action=action)
 
     def clear_notice(self) -> None:
@@ -1192,7 +1231,9 @@ class SettingsPage(QWidget):
             "Phần nhận dở không còn lượt nào chờ nối lại, để quá số ngày này, được tự xóa khỏi thư mục nhận.",
         )
         self.retention_row.set_text(t("Settings", "Dọn phần nhận dở sau"), retention_hint)
-        self.retention_spin.setSuffix(t("Settings", " ngày"))
+        self._update_retention_suffix()
+        # Dấu thập phân của ô tốc độ theo ngôn ngữ giao diện (“2,5” / “2.5”), không theo hệ điều hành.
+        self.rate_spin.setLocale(QLocale(i18n.current_language()))
         self.export_row.set_text(
             t("Settings", "Xuất log"),
             t(
@@ -1664,7 +1705,7 @@ class SettingsController(QObject):
                 log.debug("không đọc được cài đặt: node không chạy")
                 return
             log.error("không đọc được cài đặt: %s", type(result).__name__)
-            self._show_notice(InfoLevel.ERROR, snapshot_error_text(), action=(_retry_text(), self.refresh))
+            self._show_notice(InfoLevel.ERROR, snapshot_error_text, action=(_retry_text, self.refresh))
             return
         if not isinstance(result, SettingsSnapshot):
             return
@@ -2074,14 +2115,22 @@ class SettingsController(QObject):
         return bar.title if not bar.isHidden() else None
 
     def show_notice(
-        self, level: InfoLevel, text: str, *, action: tuple[str, Callable[[], None]] | None = None
+        self,
+        level: InfoLevel,
+        text: texts.Text,
+        *,
+        action: tuple[texts.Text, Callable[[], None]] | None = None,
     ) -> None:
         """Hiện câu ở thanh thông báo của trang; `action` = (chữ nút, hàm) chỉ gắn với câu này
         (thông báo kế tiếp thay hay xóa nó). `ui.app` dùng cho lỗi đổi thư mục nhận."""
         self._show_notice(level, text, action=action)
 
     def _show_notice(
-        self, level: InfoLevel, text: str, *, action: tuple[str, Callable[[], None]] | None = None
+        self,
+        level: InfoLevel,
+        text: texts.Text,
+        *,
+        action: tuple[texts.Text, Callable[[], None]] | None = None,
     ) -> None:
         self._notice_action = action[1] if action is not None else None
         self.page.show_notice(level, text, action=action[0] if action is not None else None)
