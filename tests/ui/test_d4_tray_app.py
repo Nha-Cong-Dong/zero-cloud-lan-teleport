@@ -196,6 +196,15 @@ def fake_tray_icon(monkeypatch):
 
 
 @pytest.fixture
+def offers_as_boxes(monkeypatch):
+    """spec-b4 11.3: đang nhìn đúng luồng của máy gửi thì lời mời chỉ ở bong bóng; test chờ hộp hỏi
+    vá `ui.transfers.default_window_active` thành False để hộp luôn bật."""
+    from teleport.ui import transfers
+
+    monkeypatch.setattr(transfers, "default_window_active", lambda: False)
+
+
+@pytest.fixture
 def no_exec(monkeypatch):
     from PySide6.QtWidgets import QDialog, QMessageBox
 
@@ -907,6 +916,7 @@ def test_hidden_to_tray_while_paused_says_paused(gui, gui_wait, config_dir, monk
 @pytest.mark.gui
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_a5_paused_gui_rejects_then_resumed_gui_receives(
     gui, gui_wait, config_dir, trust_each_other, peer_node, tmp_path, ui_helpers
 ):
