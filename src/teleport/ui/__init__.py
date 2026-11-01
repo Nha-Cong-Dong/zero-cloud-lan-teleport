@@ -11,7 +11,9 @@ giữa, thẻ máy này, chân “Lưu vào”), `tray`, `radar` (model thiết 
 `conversations` (danh sách cuộc trò chuyện ở cột trái, kéo thả), `activity` (hoạt động theo máy, không
 Qt), `discover` (trang “Tìm máy mới”: radar vòng tròn, ô nhập IP), `motion` (có được chạy hoạt ảnh
 không), `pairing` (hộp ghép đôi, mvp mục 7.2), `transfers` (điều phối gửi/nhận file), `offer` (hộp hỏi
-nhận file, mvp mục 7.3), `transfers_view` (danh sách lượt truyền), `receive_dir` (đổi thư mục nhận),
+nhận file, mvp mục 7.3), `chat` (luồng chat theo máy ở khung phải), `chat_bubbles` (bong bóng của
+lượt truyền, mục lịch sử, mốc thời gian), `transfers_view` (câu chữ của lượt truyền), `receive_dir`
+(đổi thư mục nhận),
 `send` (lấy đường dẫn, kiểm trước và câu lỗi khi gửi), `texts` (câu chữ dùng chung), `i18n`, `theme`
 (token màu, thang chữ, stylesheet), `icons` (icon SVG đóng gói), `fonts` (font điểm nhấn đóng gói),
 `widgets` (thành phần dùng chung), `gcguard` (gom rác vòng tham chiếu chỉ trên thread Qt),

@@ -30,15 +30,25 @@ mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`, kể cả `
 `PageHeader` ở chỗ SETTINGS, vì DISCOVER đã là trang thật), `discover` (trang “Tìm máy mới”: 4 máy
 chưa ghép đôi, một tên dài bị cắt “…”, 2 máy đã ghép đôi), `discover_list` (9 máy: tự sang dạng danh
 sách), `conversations` (spec B2 mục 7: 4 máy đã ghép đôi ở cột trái — đang gửi 62% và đang chọn,
-trực tuyến đã nhận một file, ngoại tuyến đã gửi hôm qua, trực tuyến bị từ chối kết nối — và thẻ đang
-gửi ở khung phải), `conversations_drop` (như trên, đang kéo 3 file qua hàng đang chọn),
-`settings_general`, `settings_appearance` (spec D6: chế độ Tối, màu Đại dương chọn sẵn; ảnh sáng và
-tối dựng bằng `ui_theme` nên chỉ thấy lựa chọn, không thấy màu đại dương), `settings_privacy_hidden`
-(máy đang ẩn), `settings_devices` (bốn máy đã ghép đôi:
-đã kết nối, trong mạng, ngoại tuyến, tên lạ dài; một máy chưa ghép đôi không hiện), `settings_advanced`
-(kèm thông báo xuất log xong), `settings_receive_dir_unavailable` (thư mục nhận đã lưu không mở được)
-của trang “Cài đặt” (spec D2). Giờ cố định bằng seam `_wall_now` của `ui.conversations` và
-`ui.transfers` (`NOW`). Tổng 21 cảnh × 2 chế độ × 2 cỡ = 84 ảnh.
+trực tuyến đã nhận một file, ngoại tuyến đã gửi hôm qua, trực tuyến bị từ chối kết nối — và luồng
+của PC-Nha có bong bóng đang gửi ở khung phải), `conversations_drop` (như trên, đang kéo 3 file qua
+hàng đang chọn).
+
+Trang “Cài đặt” (spec D2): `settings_general`, `settings_appearance` (spec D6: chế độ Tối, màu Đại
+dương chọn sẵn; ảnh sáng và tối dựng bằng `ui_theme` nên chỉ thấy lựa chọn, không thấy màu đại
+dương), `settings_privacy_hidden` (máy đang ẩn),
+`settings_devices` (bốn máy đã ghép đôi: đã kết nối, trong mạng, ngoại tuyến, tên lạ dài; một máy
+chưa ghép đôi không hiện), `settings_advanced` (kèm thông báo xuất log xong),
+`settings_receive_dir_unavailable` (thư mục nhận đã lưu không mở được).
+
+Luồng chat (spec B3, `ui.chat`): `chat` (luồng của PC-Nha: nhận xong “Đã lưu” + “Mở thư mục”, gửi lỗi
+viền đỏ + “Gửi lại”, đang gửi 62%, bong bóng tạm “Đang chuẩn bị…”, dòng mốc), `chat_new` (cuộn lên
+rồi có lượt mới: nút “↓ Mới”), `chat_drop` (đang kéo 3 file vào luồng), `chat_offline` (máy ngoại
+tuyến: lượt chờ kết nối, câu ngoại tuyến ở thanh dưới), `chat_history` (lịch sử hai ngày trước, hôm
+qua và lượt của phiên hôm nay), `chat_empty` (máy chưa có lượt nào: màn rỗng “Kéo file vào đây…”).
+
+Giờ cố định bằng seam `_wall_now` của `ui.conversations`, `ui.transfers` (`NOW`) và `ui.chat` (cảnh
+luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 27 cảnh × 2 chế độ × 2 cỡ = 108 ảnh.
 """
 
 from __future__ import annotations
@@ -63,6 +73,7 @@ SIZES = ((980, 660), (720, 460))
 SNAPSHOT_ENV = "TELEPORT_UI_SNAPSHOT_DIR"
 LANG_ENV = "TELEPORT_SNAPSHOT_LANG"
 NOW = datetime.datetime(2026, 10, 31, 10, 45).timestamp()  # giờ địa phương cố định của các cảnh
+_CLOCK = [NOW]  # giờ tường của `ui.chat` (cảnh luồng chat đổi giữa các bong bóng)
 RECEIVE_DIR = Path("C:/Users/Minh/Downloads/Teleport")
 
 
@@ -81,10 +92,12 @@ def accent_font(qapp):
 @pytest.fixture(autouse=True)
 def fixed_clock(monkeypatch):
     """Giờ tường cố định (`NOW`) cho chữ giờ của danh sách cuộc trò chuyện."""
-    from teleport.ui import conversations, transfers
+    from teleport.ui import chat, conversations, transfers
 
+    _CLOCK[0] = NOW
     monkeypatch.setattr(conversations, "_wall_now", lambda: NOW)
     monkeypatch.setattr(transfers, "_wall_now", lambda: NOW)
+    monkeypatch.setattr(chat, "_wall_now", lambda: _CLOCK[0])
 
 
 # ---- Cảnh --------------------------------------------------------------------------------------
@@ -168,6 +181,18 @@ def _device(label: str, *, paired: bool, online: bool, connected: bool):
     )
 
 
+def _chat_view(window):
+    """`ChatView` đặt vào khung phải như `TransfersController` (lề 0), chưa nối node."""
+    from teleport.ui.chat import ChatView
+
+    view = ChatView(window.devices, window.transfers_area)
+    layout = window.transfers_area.layout()
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(view)
+    view.content_changed.connect(lambda: window.set_transfer_summary(view.has_content(), view.active_count()))
+    return view
+
+
 def _transfer_info(
     device_id: str, direction: str, transfer_id: str, status: str, name: str, size: int, done: int
 ):
@@ -195,7 +220,6 @@ def scene_running_full(qtbot) -> QWidget:
         TransferResult,
         TransferStatusChanged,
     )
-    from teleport.ui.transfers_view import TransfersView
 
     window = _main_window(qtbot)
     nha = _device("PC-Nha", paired=True, online=True, connected=True)
@@ -203,8 +227,9 @@ def scene_running_full(qtbot) -> QWidget:
     guest = _device("PC-Khach", paired=False, online=True, connected=False)
     window.devices.reset([nha, lan, guest])
 
-    view = TransfersView(window.transfers_area)
-    window.transfers_area.layout().addWidget(view)
+    view = _chat_view(window)
+    window.conversations.select_device(nha.device_id)
+    view.set_device(nha.device_id)
     view.set_device_names({nha.device_id: nha.name, lan.device_id: lan.name})
     size = 18 * 2**30
     sending = _transfer_info(
@@ -234,11 +259,9 @@ def scene_running_unavailable(qtbot) -> QWidget:
     """RUNNING mà thư mục nhận đã lưu không mở được (spec B1b): huy hiệu “Không nhận file”, chân “Lưu
     vào” báo warning kèm “Đổi…”, dải thông báo có nút “Chọn thư mục nhận”."""
     from teleport.ui import receive_dir
-    from teleport.ui.transfers_view import TransfersView
 
     window = _main_window(qtbot)
-    view = TransfersView(window.transfers_area)
-    window.transfers_area.layout().addWidget(view)
+    view = _chat_view(window)
     missing = Path("E:/Teleport")
     view.show_notice(receive_dir.unavailable_text(missing), receive_dir.choose_action_text(), lambda: None)
     window.set_transfer_summary(view.has_content(), view.active_count())
@@ -476,7 +499,6 @@ def scene_conversations(qtbot) -> QWidget:
     )
     from teleport.core.links import ConnectResult
     from teleport.ui.activity import ActiveTransfer, DeviceActivity, FinishedTransfer
-    from teleport.ui.transfers_view import TransfersView
 
     def paired(label: str, os_name: str, *, online: bool, connected: bool = False) -> DeviceView:
         return DeviceView(
@@ -536,8 +558,8 @@ def scene_conversations(qtbot) -> QWidget:
     )
     window.conversations.select_device(nha.device_id)
 
-    view = TransfersView(window.transfers_area)
-    window.transfers_area.layout().addWidget(view)
+    view = _chat_view(window)
+    view.set_device(nha.device_id)
     view.set_device_names({d.device_id: d.name for d in (nha, lan, lab, old)})
     view.handle(TransferStatusChanged(sending))
     view.handle(TransferProgress(sending, 94 * 2**20, 60.0, shown_bytes=sending.done_bytes, idle_seconds=0.0))
@@ -655,6 +677,183 @@ def scene_settings_receive_dir_unavailable(qtbot) -> QWidget:
     return window
 
 
+def _paired(label: str, os_name: str, *, online: bool, connected: bool = False):
+    from teleport.app.devices import DeviceView
+
+    return DeviceView(
+        device_id=hashlib.sha256(label.encode()).hexdigest()[:32],
+        name=label,
+        os=os_name,
+        paired=True,
+        online=online,
+        connected=connected,
+        addresses=("192.168.1.20",) if online else (),
+        port=47474 if online else None,
+    )
+
+
+def _finished(info, result: str, **kw):
+    from teleport.app.transfers import TransferFinished, TransferResult
+
+    return TransferFinished(
+        info=info,
+        result=TransferResult(result),
+        by_peer=kw.get("by_peer", False),
+        reason=None,
+        file_index=kw.get("file_index", 0),
+        reject=None,
+    )
+
+
+def _chat_window(qtbot, *, nha_online: bool = True):
+    """Cửa sổ RUNNING có hai máy đã ghép đôi, PC-Nha đang chọn; trả (cửa sổ, luồng chat, PC-Nha)."""
+    window = _main_window(qtbot)
+    nha = _paired("PC-Nha", "windows", online=nha_online, connected=nha_online)
+    lan = _paired("MacBook-Lan", "macos", online=True)
+    window.devices.reset([nha, lan])
+    view = _chat_view(window)
+    view.set_device_names({nha.device_id: nha.name, lan.device_id: lan.name})
+    view.set_receive_dir(RECEIVE_DIR)
+    window.conversations.select_device(nha.device_id)
+    view.set_device(nha.device_id)
+    window.show_running("Laptop-Minh", RECEIVE_DIR)
+    window.set_addresses(["192.168.1.15"], None)
+    return window, view, nha
+
+
+def _fill_chat(view, nha) -> None:
+    """Luồng của PC-Nha: nhận xong (9:12), gửi lỗi có “Gửi lại” (10:40), đang gửi 62%, bong bóng tạm."""
+    from teleport.app.transfers import FileDone, TransferProgress, TransferStatusChanged
+
+    _CLOCK[0] = _at(31, 9, 12)
+    small = 1_800 * 2**20
+    received = _transfer_info(nha.device_id, "receive", "b" * 32, "verifying", "anh-cuoi.zip", small, small)
+    view.handle(TransferStatusChanged(received))
+    view.handle(FileDone(received.key, 0, "anh-cuoi.zip", RECEIVE_DIR / "anh-cuoi.zip"))
+    view.handle(_finished(received, "done"))
+
+    _CLOCK[0] = _at(31, 10, 40)
+    report = _transfer_info(nha.device_id, "send", "c" * 32, "transferring", "bao-cao.pdf", 4 * 2**20, 2**20)
+    view.handle(TransferStatusChanged(report))
+    view.handle(_finished(report, "source_changed"))
+    view.set_resendable(report.key, True)
+
+    _CLOCK[0] = _at(31, 10, 42)
+    size = 18 * 2**30
+    sending = _transfer_info(
+        nha.device_id, "send", "a" * 32, "transferring", "phim-4k.mkv", size, size * 62 // 100
+    )
+    view.handle(TransferStatusChanged(sending))
+    view.handle(TransferProgress(sending, 94 * 2**20, 60.0, shown_bytes=sending.done_bytes, idle_seconds=0.0))
+
+    _CLOCK[0] = _at(31, 10, 44)
+    view.add_pending(nha.device_id, [Path("C:/Users/Minh/Videos/slide-thuyet-trinh.pptx")])
+    _CLOCK[0] = NOW
+
+
+def scene_chat(qtbot) -> QWidget:
+    """Spec B3: luồng của PC-Nha với bốn loại bong bóng và dòng mốc “Hôm nay …”."""
+    window, view, nha = _chat_window(qtbot)
+    _fill_chat(view, nha)
+    return window
+
+
+def scene_chat_new(qtbot) -> QWidget:
+    """Luồng dài đã cuộn lên đầu, rồi có lượt mới: nút “↓ Mới” hiện, luồng không tự cuộn."""
+    from teleport.app.transfers import TransferStatusChanged
+
+    window, view, nha = _chat_window(qtbot)
+    for index in range(9):
+        _CLOCK[0] = _at(31, 8, 5 * index)
+        info = _transfer_info(
+            nha.device_id, "send", f"{index:032x}", "transferring", f"anh-{index:02d}.jpg", 3 * 2**20, 0
+        )
+        view.handle(TransferStatusChanged(info))
+        view.handle(_finished(info, "done"))
+    window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+    window.resize(980, 660)
+    window.show()
+    QApplication.processEvents()
+    thread = view.thread_for(nha.device_id)
+    thread.scroll_area.verticalScrollBar().setValue(0)
+    QApplication.processEvents()
+    _CLOCK[0] = _at(31, 10, 44)
+    info = _transfer_info(nha.device_id, "receive", "f" * 32, "waiting", "hop-dong.docx", 2**20, 0)
+    view.handle(TransferStatusChanged(info))
+    _CLOCK[0] = NOW
+    return window
+
+
+def scene_chat_drop(qtbot) -> QWidget:
+    """Như `chat`, đang kéo 3 file vào luồng: viền nét đứt và “Thả để gửi 3 file tới PC-Nha”."""
+    window, view, nha = _chat_window(qtbot)
+    _fill_chat(view, nha)
+    window.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+    window.show()
+    QApplication.processEvents()
+    view.preview_drop(3)
+    return window
+
+
+def scene_chat_offline(qtbot) -> QWidget:
+    """PC-Nha ngoại tuyến: lượt gửi đang chờ kết nối, thanh dưới có câu ngoại tuyến và icon."""
+    from teleport.app.transfers import TransferStatusChanged
+
+    window, view, nha = _chat_window(qtbot, nha_online=False)
+    view.set_connected(nha.device_id, False)
+    _CLOCK[0] = _at(31, 10, 43)
+    info = _transfer_info(nha.device_id, "send", "d" * 32, "waiting", "video-demo.mp4", 3 * 2**30, 0)
+    view.handle(TransferStatusChanged(info))
+    _CLOCK[0] = NOW
+    return window
+
+
+def scene_chat_history(qtbot) -> QWidget:
+    """Lịch sử với PC-Nha (hai ngày trước, hôm qua, lỗi, đã từ chối) và một lượt phiên hôm nay."""
+    from teleport.app.transfers import TransferStatusChanged
+    from teleport.core.history import HistoryEntry
+    from teleport.core.transfer import Direction
+
+    window, view, nha = _chat_window(qtbot)
+
+    def entry(tid: str, direction: str, names, result: str, day: int, hour: int, minute: int, saved=None):
+        return HistoryEntry(
+            direction=Direction(direction),
+            device_id=nha.device_id,
+            device_name="PC-Nha",
+            transfer_id=tid * 32,
+            file_count=len(names),
+            total_bytes=len(names) * 420 * 2**20,
+            done_bytes=len(names) * 420 * 2**20 if result == "done" else 0,
+            names=tuple(names),
+            result=result,
+            finished_at=datetime.datetime(2026, 10, day, hour, minute).astimezone(datetime.UTC),
+            saved_path=saved,
+        )
+
+    entries = [
+        entry("1", "receive", ["slide.pptx"], "done", 29, 15, 2, str(RECEIVE_DIR / "slide.pptx")),
+        entry("2", "send", ["a.jpg", "b.jpg", "c.jpg"], "done", 29, 15, 20),
+        entry("3", "send", ["phim-cu.mkv"], "rejected_user", 30, 21, 3),
+        entry("4", "receive", ["nhac.mp3"], "disk_failed", 30, 21, 40),
+    ]
+    view.history_needed.connect(lambda device_id: view.load_history(device_id, entries))
+    view._history_timer.stop()
+    view._request_history()
+    _CLOCK[0] = _at(31, 10, 41)
+    info = _transfer_info(nha.device_id, "send", "e" * 32, "transferring", "ghi-chu.txt", 12 * 2**10, 0)
+    view.handle(TransferStatusChanged(info))
+    view.handle(_finished(info, "done"))
+    _CLOCK[0] = NOW
+    return window
+
+
+def scene_chat_empty(qtbot) -> QWidget:
+    """PC-Nha chưa có lượt nào (không có lịch sử): màn rỗng “Kéo file vào đây để gửi cho PC-Nha”."""
+    window, _view, _nha = _chat_window(qtbot)
+    return window
+
+
 SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     # tên cảnh: (hàm dựng, là cửa sổ chính, token mà điểm (4,4) phải bằng; None: không kiểm góc)
     "welcome": (scene_welcome, True, "surface"),
@@ -678,6 +877,12 @@ SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     "settings_devices": (scene_settings_devices, True, "surface"),
     "settings_advanced": (scene_settings_advanced, True, "surface"),
     "settings_receive_dir_unavailable": (scene_settings_receive_dir_unavailable, True, "surface"),
+    "chat": (scene_chat, True, "sidebar"),
+    "chat_new": (scene_chat_new, True, "sidebar"),
+    "chat_drop": (scene_chat_drop, True, "sidebar"),
+    "chat_offline": (scene_chat_offline, True, "sidebar"),
+    "chat_history": (scene_chat_history, True, "sidebar"),
+    "chat_empty": (scene_chat_empty, True, "sidebar"),
 }
 
 

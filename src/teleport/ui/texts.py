@@ -47,7 +47,7 @@ _REPLACEMENT = "�"  # U+FFFD thay ký tự điều khiển, như `cli._printab
 
 # Chữ của một thông báo: chuỗi đã dịch sẵn, hoặc hàm dựng lại câu theo ngôn ngữ đang dùng. Thông báo
 # nhận hàm thì dịch lại khi đổi ngôn ngữ; nhận chuỗi thì bị ẩn khi đổi ngôn ngữ (`widgets.InfoBar`,
-# `transfers_view.TransfersView.show_notice`), để không còn câu của ngôn ngữ cũ.
+# `chat.ChatView.show_notice`), để không còn câu của ngôn ngữ cũ.
 Text = str | Callable[[], str]
 
 

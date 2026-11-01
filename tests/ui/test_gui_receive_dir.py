@@ -226,7 +226,7 @@ def test_change_receive_dir_then_received_file_lands_in_new_dir_and_settings_sav
         yield gui_wait(lambda: not c.changing, 10, "đổi thư mục xong")
         seen["after"] = (c.receive_dir, c.unavailable, run.window.receive_dir)
         seen["bar"] = run.window.save_bar.full_text
-        seen["notice"] = app.transfers.view.notice_text()
+        seen["notice"] = app.transfers.view.notice_text() or None
         seen["settings"] = saved_receive_dir(a)
 
         yield from connect_b(run, peer, gui_wait, a_id)
@@ -287,7 +287,7 @@ def test_changed_receive_dir_survives_restart(gui, gui_wait, config_dir, dialogs
         c = app_of(run).receive_dir_controller
         seen["second"] = (c.receive_dir, c.unavailable, run.window.receive_dir, run.host.receive_dir)
         seen["bar"] = run.window.save_bar.full_text
-        seen["notice"] = app_of(run).transfers.view.notice_text()
+        seen["notice"] = app_of(run).transfers.view.notice_text() or None
         run.tray.quit_requested.emit()
 
     gui(["--config-dir", str(a)], first, keep_receive_dir=True)
@@ -331,7 +331,7 @@ def test_gui_saved_dir_is_a_file_runs_not_receiving_and_change_fixes_it(
         c = app.receive_dir_controller
         w = run.window
         view = app.transfers.view
-        yield gui_wait(lambda: view.notice_text() is not None, 5, "dải thông báo thư mục hỏng")
+        yield gui_wait(lambda: view.notice_text() != "", 5, "dải thông báo thư mục hỏng")
         seen["host"] = (run.host.receive_dir, run.host.receive_dir_error)
         seen["ctl"] = (c.receive_dir, c.unavailable)
         seen["badge"] = (w.badge.text, w.badge.tone)
@@ -348,7 +348,7 @@ def test_gui_saved_dir_is_a_file_runs_not_receiving_and_change_fixes_it(
         seen["after_ctl"] = (c.receive_dir, c.unavailable)
         seen["after_badge"] = (w.badge.text, w.badge.tone)
         seen["after_bar"] = (w.save_bar.full_text, w.save_bar.open_button.isVisibleTo(w))
-        seen["after_notice"] = view.notice_text()
+        seen["after_notice"] = view.notice_text() or None
         run.tray.quit_requested.emit()
 
     run = gui(["--config-dir", str(a)], script, keep_receive_dir=True)
@@ -387,11 +387,11 @@ def test_success_hides_unavailable_notice(gui, gui_wait, config_dir, dialogs, tm
         app = app_of(run)
         c = app.receive_dir_controller
         view = app.transfers.view
-        yield gui_wait(lambda: view.notice_text() is not None, 5, "dải thông báo thư mục hỏng")
-        seen["before"] = view.notice_text()
+        yield gui_wait(lambda: view.notice_text() != "", 5, "dải thông báo thư mục hỏng")
+        seen["before"] = view.notice_text() or None
         pick_with_button(run, dialogs, good)
         yield gui_wait(lambda: not c.changing and c.receive_dir is not None, 10, "đổi xong")
-        seen["after"] = view.notice_text()
+        seen["after"] = view.notice_text() or None
         run.tray.quit_requested.emit()
 
     gui(["--config-dir", str(a)], script, keep_receive_dir=True)
@@ -412,13 +412,13 @@ def test_success_hides_previous_change_error_notice(gui, gui_wait, config_dir, d
         app = app_of(run)
         c = app.receive_dir_controller
         view = app.transfers.view
-        seen["start_notice"] = view.notice_text()
+        seen["start_notice"] = view.notice_text() or None
         pick_with_button(run, dialogs, not_a_dir)
-        yield gui_wait(lambda: not c.changing and view.notice_text() is not None, 10, "báo lỗi đổi")
+        yield gui_wait(lambda: not c.changing and view.notice_text() != "", 10, "báo lỗi đổi")
         seen["error"] = (view.notice_text(), view.notice_action_text(), c.receive_dir)
         pick_with_notice_action(app, dialogs, good)
         yield gui_wait(lambda: not c.changing and same(c.receive_dir, good), 10, "đổi sang thư mục tốt")
-        seen["after"] = view.notice_text()
+        seen["after"] = view.notice_text() or None
         run.tray.quit_requested.emit()
 
     gui(["--config-dir", str(a)], script, keep_receive_dir=True)
@@ -446,7 +446,7 @@ def test_success_does_not_hide_unrelated_notice(gui, gui_wait, config_dir, dialo
         app.transfers.view.show_notice(other)
         pick_with_button(run, dialogs, good)
         yield gui_wait(lambda: not c.changing and same(c.receive_dir, good), 10, "đổi xong")
-        seen["after"] = app.transfers.view.notice_text()
+        seen["after"] = app.transfers.view.notice_text() or None
         run.tray.quit_requested.emit()
 
     gui(["--config-dir", str(a)], script, keep_receive_dir=True)
@@ -463,7 +463,7 @@ def test_saved_dir_broken_in_background_shows_tray_message(gui, gui_wait, config
         yield from wait_running(run, gui_wait)
         yield gui_wait(lambda: any(m == TRAY_TEXT for _, m in run.messages), 5, "bóng thoại khay")
         seen["visible"] = run.window.isVisible()
-        seen["notice"] = app_of(run).transfers.view.notice_text()
+        seen["notice"] = app_of(run).transfers.view.notice_text() or None
         run.tray.quit_requested.emit()
 
     run = gui(["--config-dir", str(a), "--background"], script, keep_receive_dir=True)
@@ -516,7 +516,7 @@ def test_change_while_receiving_shows_busy_notice(
         yield gui_wait(lambda: receiving(key.transfer_id), 15, "A đang nhận")
         pick_with_button(run, dialogs, new_dir)
         yield gui_wait(lambda: not c.changing, 10, "đổi thư mục kết thúc")
-        seen["notice"] = view.notice_text()
+        seen["notice"] = view.notice_text() or None
         seen["ctl"] = (c.receive_dir, c.pending)
         seen["bar"] = run.window.save_bar.full_text
         seen["finished_before"] = a_finished(updates, key.transfer_id) is not None

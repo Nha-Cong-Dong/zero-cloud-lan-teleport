@@ -1,5 +1,13 @@
-"""Danh sách lượt truyền `teleport.ui.transfers_view.TransfersView` (spec PR3 pha 1, `ui/transfers_view.py`;
-mvp F5, F6, mục 7.3 hàng “Tiến độ”, mục 8; spec-hackathon PR3 “Xong khi” (6), (7), (8), 9.7, mục 10 A2).
+"""Chữ và luật theo từng lượt của các lượt truyền (spec PR3 pha 1, `ui/transfers_view.py`; mvp F5, F6, mục
+7.3 hàng “Tiến độ”, mục 8; spec-hackathon PR3 “Xong khi” (6), (7), (8), 9.7, mục 10 A2).
+
+Spec B3 (mục 2, 9.7, 9.8): widget danh sách cũ đã gỡ; luật theo từng lượt dời nguyên vào
+`ui.chat_bubbles.TransferBubble`, API công khai giữ ở `ui.chat.ChatView`. Fixture `view` là
+`ChatView(DeviceListModel())` đã `set_device(PEER_ID)`; `view.row(k)` là `TransferBubble`. Hàm chữ thuần
+(`result_message`, `STALL_TEXT_AFTER`, …) vẫn ở `ui.transfers_view`. Chữ đổi cố ý theo 9.8: tiêu đề bỏ
+“· tới/· từ X” (tên máy nằm ở accessibleName “Gửi tới X” / “Nhận từ X”), nhãn DONE “Đã lưu” / “Đã gửi”,
+`rows()` cũ trước. Test bố cục của danh sách cũ (gợi ý rỗng, dải thông báo riêng) đã bỏ: `ChatView` dùng
+`InfoBar` (9.7) và `EmptyState` (9b.21), có test riêng trong `test_chat.py`.
 
 Đã cập nhật theo chỉnh câu chữ của điều phối (2026-10-29, kiểu AirDrop/LocalSend, thắng spec pha 1):
 `status_label` là nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang nối lại…”, “Đang kiểm tra”,
@@ -33,7 +41,8 @@ SHORT_RECEIVING = "Đang nhận"
 SHORT_WAITING = "Đang chờ"
 SHORT_RECONNECTING = "Đang nối lại…"  # mvp F6, mục 8
 SHORT_VERIFYING = "Đang kiểm tra"
-SHORT_DONE = "Xong ✓"
+SHORT_DONE_RECEIVE = "Đã lưu"  # spec B3 9.8 (ii)
+SHORT_DONE_SEND = "Đã gửi"
 SHORT_FAILED = "Lỗi"
 SHORT_CANCELLED = "Đã hủy"
 
@@ -43,7 +52,6 @@ WAIT_ANSWER_SEND = "Đang chờ {p} trả lời…"  # mvp 7.3 (CLI)
 WAIT_OFFLINE_SEND = "Đang chờ kết nối tới {p}…"  # mới (mục 10 A2)
 WAIT_RESUMED = "Đang chờ {p} nối lại…"  # mới (9.7)
 DONE_DETAIL = "Đã kiểm tra toàn vẹn"  # mới
-EMPTY_HINT = "Kéo file vào một thiết bị để gửi"  # mới
 CANCEL = "Hủy"
 OPEN_FOLDER = "Mở thư mục"
 ETA_UNKNOWN = "đang tính thời gian còn lại"  # mvp 7.3
@@ -222,9 +230,26 @@ def data_unreachable(device_id: str = PEER_ID):
 def row_texts(row) -> str:
     return "\n".join(
         lb.text()
-        for lb in (row.title_label, row.status_label, row.detail_label)
+        for lb in (row.title_label, row.size_label, row.status_label, row.detail_label)
         if lb is not None and lb.text()
     )
+
+
+def make_view(qtbot, names: dict | None = None):
+    """`ChatView` đứng riêng (spec B3 mục 2), đã mở luồng của `PEER_ID`."""
+    from teleport.ui.chat import ChatView
+    from teleport.ui.radar import DeviceListModel
+
+    v = ChatView(DeviceListModel())
+    qtbot.addWidget(v)
+    v.cancels = []  # type: ignore[attr-defined]
+    v.cancel_requested.connect(lambda k: v.cancels.append(k))
+    if names is not None:
+        v.set_device_names(names)
+    v.set_device(PEER_ID)
+    v.resize(720, 460)
+    v.show()
+    return v
 
 
 def shown(widget, root) -> bool:
@@ -233,15 +258,7 @@ def shown(widget, root) -> bool:
 
 @pytest.fixture
 def view(qtbot):
-    from teleport.ui.transfers_view import TransfersView
-
-    v = TransfersView()
-    qtbot.addWidget(v)
-    v.cancels = []  # type: ignore[attr-defined]
-    v.cancel_requested.connect(lambda k: v.cancels.append(k))
-    v.set_device_names({PEER_ID: PEER})
-    v.show()
-    return v
+    return make_view(qtbot, {PEER_ID: PEER})
 
 
 @pytest.fixture
@@ -327,12 +344,11 @@ def test_notice_action_button_tab_order_and_hidden_without_action(view):
     view.show_notice("Câu có nút.", "Làm gì đó", lambda: calls.append(1))
     assert view.notice_action_text() == "Làm gì đó"
     assert view.notice_action.accessibleName() == "Làm gì đó"
-    # Thứ tự Tab: câu → nút hành động → “Đóng”.
-    assert view.notice_label.nextInFocusChain() is view.notice_action
-    assert view.notice_action.nextInFocusChain() is view.notice_close
+    # Thứ tự Tab: nút hành động → “Đóng” của `info_bar` (9.7: `notice_close` bỏ, dùng `InfoBar.close_button`).
+    assert view.notice_action.nextInFocusChain() is view.info_bar.close_button
     view.notice_action.click()
     assert calls == [1]
-    assert view.notice_text() is None
+    assert view.notice_text() == ""  # 9.7: “” khi ẩn
     view.show_notice("Câu không nút.")
     assert view.notice_action_text() is None
     view.show_notice("Câu thiếu hàm.", "Nút", None)
@@ -371,7 +387,7 @@ def test_offer_received_adds_receive_row_waiting(view):
     row = view.row(k)
     assert row.key == k
     assert "chờ" in row.status_label.text().lower()
-    assert f"từ {PEER}" in row_texts(row)
+    assert f"Nhận từ {PEER}" in row.accessibleName()  # 9.8 (i): tên máy rời tiêu đề, còn ở accessibleName
 
 
 # =================================================================================================
@@ -385,9 +401,11 @@ def test_title_send_many_files_shows_count_and_size(view):
     files = (("a.bin", 2**20), ("b.bin", 3 * 2**20), ("c.bin", 5))
     k = key("send")
     view.handle(status_changed(k, "transferring", files=files))
-    text = row_texts(view.row(k))
-    assert f"tới {PEER}" in text
-    assert f"3 file ({format_size(sum(s for _, s in files))})" in text
+    row = view.row(k)
+    # 9.8 (i) + mục 4 dòng 1: tiêu đề “3 file” không “· tới X”, cỡ ở `size_label`.
+    assert row.title_label.full_text() == "3 file"
+    assert row.size_label.text() == format_size(sum(s for _, s in files))
+    assert f"Gửi tới {PEER}" in row.accessibleName()
 
 
 def test_title_single_file_shows_file_name(view):
@@ -396,22 +414,20 @@ def test_title_single_file_shows_file_name(view):
     name = "bao-cao-" * 20 + ".docx"
     k = key("receive")
     view.handle(status_changed(k, "transferring", files=((name, 10),)))
-    text = row_texts(view.row(k))
-    assert f"từ {PEER}" in text
-    assert file_label(name) in text
+    row = view.row(k)
+    text = row_texts(row)
+    assert f"Nhận từ {PEER}" in row.accessibleName()  # 9.8 (i)
+    assert row.title_label.full_text() == file_label(name)  # tiêu đề cắt giữa theo bề ngang (mục 4)
     assert name not in text
 
 
 def test_unknown_device_shows_first_8_chars_of_id(qtbot):
-    from teleport.ui.transfers_view import TransfersView
-
-    v = TransfersView()
-    qtbot.addWidget(v)
+    v = make_view(qtbot)
     k = key("receive")
     v.handle(status_changed(k, "transferring"))
-    text = row_texts(v.row(k))
-    assert f"từ {PEER_ID[:8]}" in text
-    assert PEER_ID not in text
+    row = v.row(k)
+    assert f"Nhận từ {PEER_ID[:8]}" in row.accessibleName()  # 9.8 (i)
+    assert PEER_ID not in row_texts(row) and PEER_ID not in row.accessibleName()
 
 
 def test_set_device_names_redraws_existing_rows(view):
@@ -419,12 +435,13 @@ def test_set_device_names_redraws_existing_rows(view):
     view.set_device_names({})
     view.set_connected(PEER_ID, True)
     view.handle(status_changed(k, "waiting"))
-    assert f"tới {PEER_ID[:8]}" in row_texts(view.row(k))
+    # 9.8 (i): tên máy ở accessibleName (“Gửi tới X”) và câu chờ, không ở tiêu đề.
+    assert f"Gửi tới {PEER_ID[:8]}" in view.row(k).accessibleName()
     view.set_device_names({PEER_ID: "May-Moi"})
-    assert "tới May-Moi" in row_texts(view.row(k))
+    assert "Gửi tới May-Moi" in view.row(k).accessibleName()
     assert fill(WAIT_ANSWER_SEND, p="May-Moi") in view.row(k).detail_label.text()
     view.set_device_names({PEER_ID: None})
-    assert f"tới {PEER_ID[:8]}" in row_texts(view.row(k))
+    assert f"Gửi tới {PEER_ID[:8]}" in view.row(k).accessibleName()
 
 
 def test_hostile_device_and_file_names_shown_as_plain_text(view):
@@ -441,8 +458,8 @@ def test_hostile_device_and_file_names_shown_as_plain_text(view):
     view.handle(status_changed(d, "transferring", files=((name, 10),)))
     view.handle(finished(d, "cancelled_user", by_peer=True, files=((name, 10),)))
     text = "\n".join(lb.text() for lb in view.findChildren(QLabel))
-    assert peer_label(device, PEER_ID) in text
-    assert file_label(name) in text
+    assert peer_label(device, PEER_ID) in text  # tên máy ở đầu luồng (mục 5)
+    assert view.row(k).title_label.full_text() == file_label(name)  # tiêu đề cắt giữa (mục 4)
     assert "<i>f</i>‮" not in text  # BiDi trong tên file thành `·` (mvp 7.3)
     for lb in view.findChildren(QLabel):
         if "<b>" in lb.text() or "<i>" in lb.text():
@@ -455,7 +472,7 @@ def test_all_row_labels_are_plain_text(view):
     k = key("send")
     view.handle(status_changed(k, "transferring"))
     row = view.row(k)
-    for lb in (row.title_label, row.status_label, row.detail_label):
+    for lb in (row.title_label, row.size_label, row.status_label, row.detail_label):
         assert lb.textFormat() == Qt.TextFormat.PlainText
 
 
@@ -550,12 +567,13 @@ ALL_DIRECTIONS = ("send", "receive")
 
 
 def test_done_shows_done_label_verified_detail_and_full_bar(view):
-    for direction in ALL_DIRECTIONS:
+    # 9.8 (ii): nhãn DONE là “Đã lưu” (nhận) / “Đã gửi” (gửi); dòng phụ giữ `done_text()`.
+    for direction, label in (("send", SHORT_DONE_SEND), ("receive", SHORT_DONE_RECEIVE)):
         k = key(direction)
         view.handle(status_changed(k, "transferring"))
         view.handle(finished(k, "done", status="verifying", done=8 * 2**30))
         row = view.row(k)
-        assert "xong" in row.status_label.text().lower()
+        assert row.status_label.text() == label
         assert DONE_DETAIL in row.detail_label.text()
         assert row.progress_bar.value() == 1000
         assert row.finished is True
@@ -566,11 +584,8 @@ def test_every_result_and_direction_has_a_sentence(qtbot):
     giữ hàng như cũ). Câu chi tiết bắt buộc trừ khi máy này là bên nhận và lượt bị từ chối (máy này tự
     từ chối: nhãn ngắn “Đã từ chối” đã đủ, như CLI chỉ in “Đã từ chối.”)."""
     from teleport.app.transfers import TransferResult
-    from teleport.ui.transfers_view import TransfersView
 
-    v = TransfersView()
-    qtbot.addWidget(v)
-    v.set_device_names({PEER_ID: PEER})
+    v = make_view(qtbot, {PEER_ID: PEER})
     missing = []
     for i, result in enumerate(TransferResult):
         if result is TransferResult.SUSPENDED:
@@ -681,7 +696,8 @@ def test_cancel_button_emits_cancel_requested_with_key(view):
     k = key("receive")
     view.handle(status_changed(k, "transferring"))
     row = view.row(k)
-    assert row.cancel_button.text().replace("&", "") == CANCEL
+    # Mục 4: `cancel_button` là `IconButton("dismiss", "Hủy")` chỉ có icon: chữ ở tên trợ năng.
+    assert row.cancel_button.accessibleName().replace("&", "") == CANCEL
     row.cancel_button.click()
     assert view.cancels == [k]
 
@@ -689,10 +705,11 @@ def test_cancel_button_emits_cancel_requested_with_key(view):
 def test_open_folder_opens_parent_of_last_received_file(view, monkeypatch, tmp_path):
     from PySide6.QtCore import QUrl
 
-    from teleport.ui import transfers_view
+    from teleport.ui import chat
 
     opened: list = []
-    monkeypatch.setattr(transfers_view, "open_url", lambda url: opened.append(QUrl(url)) or True)
+    # Spec B3 mục 2: seam `open_url` dời sang `ui/chat.py`.
+    monkeypatch.setattr(chat, "open_url", lambda url: opened.append(QUrl(url)) or True)
     folder = tmp_path / "nhan"
     files = (("a.bin", 5), ("b.bin", 5))
     k = key("receive")
@@ -732,11 +749,14 @@ def test_open_folder_not_shown_when_receive_fails(view, tmp_path):
 
 
 def test_buttons_reachable_by_tab_and_have_accessible_names(view):
+    # 9.10: nút trong bong bóng là ClickFocus; Tab tới chúng qua roving tabindex của luồng
+    # (`focus_buttons()` của bong bóng hiện hành; đường Tab thật kiểm ở test_chat.py F2).
     k = key("receive")
     view.handle(status_changed(k, "transferring"))
     row = view.row(k)
     button = row.cancel_button
-    assert button.focusPolicy() & Qt.FocusPolicy.TabFocus
+    assert button in row.focus_buttons()
+    assert button.focusPolicy() & Qt.FocusPolicy.ClickFocus
     assert (button.accessibleName() or button.text()).replace("&", "")
 
 
@@ -753,7 +773,7 @@ def test_snapshot_after_resumed_does_not_duplicate(view):
     other = key("send", "d" * 32)
     view.load_snapshot([info(k, "reconnecting", done=4 * 2**30), info(other, "queued")])
     keys = [r.key for r in view.rows()]
-    assert keys == [other, k]  # thứ tự hiển thị: thẻ thêm sau nằm trên (PR-7 B3), không nhân đôi
+    assert keys == [k, other]  # 9.8 (iii): `rows()` cũ trước; không nhân đôi
     assert view.row(k) is row
     assert fill(WAIT_RESUMED, p=PEER) in row.detail_label.text()
 
@@ -763,7 +783,7 @@ def test_snapshot_twice_and_resumed_after_snapshot_do_not_duplicate(view):
     view.load_snapshot([info(a, "reconnecting"), info(b, "transferring")])
     view.load_snapshot([info(a, "reconnecting"), info(b, "transferring")])
     view.handle(resumed(a))
-    assert [r.key for r in view.rows()] == [b, a]  # thẻ thêm sau nằm trên (PR-7 B3), không nhân đôi
+    assert [r.key for r in view.rows()] == [a, b]  # 9.8 (iii): `rows()` cũ trước; không nhân đôi
 
 
 def test_snapshot_rows_show_status_text(view):
@@ -774,10 +794,7 @@ def test_snapshot_rows_show_status_text(view):
 
 
 def test_resumed_without_device_name_uses_id_prefix(qtbot):
-    from teleport.ui.transfers_view import TransfersView
-
-    v = TransfersView()
-    qtbot.addWidget(v)
+    v = make_view(qtbot)
     k = key("receive")
     v.handle(resumed(k))
     assert fill(WAIT_RESUMED, p=PEER_ID[:8]) in v.row(k).detail_label.text()
@@ -805,29 +822,20 @@ def test_data_unreachable_marks_unfinished_rows_of_that_device_only(view):
 
 
 # =================================================================================================
-# Trống, clear()
+# clear() (gợi ý “Kéo file vào một thiết bị để gửi” của danh sách cũ đã bỏ: 9.7 bỏ `empty_label`; luồng
+# rỗng là `EmptyState` theo 9b.21, test V6 trong test_chat.py)
 # =================================================================================================
 
 
-def _hint_shown(view, ui_helpers) -> bool:
-    return any(EMPTY_HINT in t for t in ui_helpers.widget_texts(view))
-
-
-def test_empty_view_shows_hint(view, ui_helpers):
-    assert view.rows() == []
-    assert _hint_shown(view, ui_helpers)
-
-
-def test_hint_hidden_with_rows_and_back_after_clear(view, ui_helpers):
+def test_clear_forgets_rows_and_new_events_rebuild(view):
     a, b = key("send"), key("receive", "d" * 32)
+    assert view.rows() == []
     view.handle(status_changed(a, "transferring"))
     view.handle(offer_received(b))
-    assert not _hint_shown(view, ui_helpers)
     assert len(view.rows()) == 2
     view.clear()
     assert view.rows() == []
     assert view.row(a) is None and view.row(b) is None
-    assert _hint_shown(view, ui_helpers)
     view.handle(status_changed(a, "transferring"))
     assert len(view.rows()) == 1
 
@@ -849,7 +857,7 @@ def test_language_change_retranslates_rows(qtbot, view, translator):
     assert PREFIX not in before
     QCoreApplication.installTranslator(translator)
     qtbot.waitUntil(lambda: PREFIX in row.status_label.text(), timeout=3_000)
-    assert PREFIX in row.cancel_button.text()
+    assert PREFIX in row.cancel_button.accessibleName()  # nút ✕ chỉ có icon: chữ ở tên trợ năng
     QCoreApplication.removeTranslator(translator)
     qtbot.waitUntil(lambda: PREFIX not in row.status_label.text(), timeout=3_000)
     assert row.status_label.text() == before
@@ -995,11 +1003,7 @@ def test_no_space_and_file_too_large_sentences_both_directions(view, direction, 
 def test_disk_reject_sentences_have_no_control_chars_from_peer_or_path(qtbot, direction, result):
     """Tên máy kia, tên file (đến từ máy khác) và thư mục nhận có ký tự điều khiển → câu không chứa ký tự
     điều khiển nào (mvp N8: chữ của máy khác hiện như chữ thuần)."""
-    from teleport.ui.transfers_view import TransfersView
-
-    v = TransfersView()
-    qtbot.addWidget(v)
-    v.set_device_names({PEER_ID: "PC\x1b[31m-Nha\r\n"})
+    v = make_view(qtbot, {PEER_ID: "PC\x1b[31m-Nha\r\n"})
     v.set_receive_dir(Path("/tmp/nhan\x07\x1b/Teleport"))
     k = key(direction)
     files = (("a.txt", 10), ("vi\x1b[2Jdeo\n.mp4", BIG))
@@ -1112,7 +1116,8 @@ def test_transferring_idle_at_threshold_says_waiting_for_data(view, direction):
     detail = view.row(k).detail_label.text()
     assert detail == expected, detail
     assert_no_speed_or_eta(detail)
-    assert expected in view.row(k).accessibleDescription()
+    # 9.6: câu dài vào accessibleName (không accessibleDescription); câu đứng yên vẫn phải tới trình đọc.
+    assert expected in view.row(k).accessibleName()
     view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=420 * MiB, idle=STALL_TEXT_AFTER + 20))
     assert view.row(k).detail_label.text() == expected
 
@@ -1136,13 +1141,13 @@ def test_stalled_card_returns_to_progress_text_when_data_flows_again(view):
     view.handle(status_changed(k, "transferring", total=P1_TOTAL))
     view.handle(progress(k, 0, P1_TOTAL, bps=0.0, eta=None, shown=420 * MiB, idle=9.0))
     assert "Đang chờ dữ liệu" in view.row(k).detail_label.text()
-    assert "Đang chờ dữ liệu" in view.row(k).accessibleDescription()
+    assert "Đang chờ dữ liệu" in view.row(k).accessibleName()  # 9.6: tóm tắt ở accessibleName
     view.handle(progress(k, 0, P1_TOTAL, bps=5 * MiB, eta=100.0, shown=430 * MiB, idle=0.0))
     detail = view.row(k).detail_label.text()
     assert "Đang chờ dữ liệu" not in detail and "/s" in detail, detail
-    # Trình đọc màn hình theo kịp lúc đổi loại câu (đứng yên → tốc độ).
-    assert "Đang chờ dữ liệu" not in view.row(k).accessibleDescription()
-    assert "/s" in view.row(k).accessibleDescription()
+    # Trình đọc màn hình theo kịp lúc đổi loại câu (đứng yên → tốc độ). Mục 4: tên không theo nhịp tốc
+    # độ, nên không còn đòi “/s” trong tên.
+    assert "Đang chờ dữ liệu" not in view.row(k).accessibleName()
 
 
 def test_send_stalled_while_receiver_verifies_says_waiting_for_peer(view):
@@ -1343,117 +1348,29 @@ def test_new_sentences_are_in_mvp_doc():
         assert written in doc, f"mvp.md mục 8 thiếu câu {written!r}"
 
 
-# ---- Dải thông báo hai hàng (UI-02) ---------------------------------------------------------------
-
-
-def _layout_notice(qtbot, view, width: int, text: str, action: str | None):
-    from PySide6.QtWidgets import QApplication
-
-    view.resize(width, 600)
-    if action is None:
-        view.show_notice(text)
-    else:
-        view.show_notice(text, action, lambda: None)
-    qtbot.waitUntil(lambda: view.notice_frame.isVisible(), timeout=2000)
-    for _ in range(3):
-        QApplication.processEvents()
-    assert view.notice_text() == text
-    return view.notice_frame
-
-
-def _geom(widget, frame):
-    """Hình chữ nhật của `widget` trong hệ tọa độ của `frame`."""
-    from PySide6.QtCore import QPoint, QRect
-
-    return QRect(widget.mapTo(frame, QPoint(0, 0)), widget.size())
-
-
-def _label_lines(label) -> float:
-    return label.height() / label.fontMetrics().lineSpacing()
-
-
-def _blocked_rejected():
-    from teleport.core.links import ConnectResult
-    from teleport.ui.send import blocked_message
-    from teleport.ui.transfers import repair_action_text
-
-    return blocked_message(ConnectResult.REJECTED, PEER), repair_action_text()
-
-
-def _blocked_identity():
-    from teleport.core.links import ConnectResult
-    from teleport.ui.send import blocked_message
-    from teleport.ui.transfers import unpair_action_text
-
-    return blocked_message(ConnectResult.IDENTITY_MISMATCH, PEER), unpair_action_text()
-
-
-@pytest.mark.parametrize("combo", ["rejected", "identity"])
-def test_notice_buttons_sit_below_label_aligned_right(qtbot, view, combo):
-    text, action = _blocked_rejected() if combo == "rejected" else _blocked_identity()
-    assert PEER in text and action
-    frame = _layout_notice(qtbot, view, 360, text, action)
-    label = _geom(view.notice_label, frame)
-    act = _geom(view.notice_action, frame)
-    close = _geom(view.notice_close, frame)
-    assert view.notice_action.isVisible() and view.notice_close.isVisible()
-    assert act.top() > label.bottom(), f"nút hành động không ở hàng dưới nhãn: {act} / {label}"
-    assert close.top() > label.bottom(), f"nút Đóng không ở hàng dưới nhãn: {close} / {label}"
-    assert abs(act.center().y() - close.center().y()) <= 4, "hai nút không cùng một hàng"
-    assert act.right() < close.left(), "nút hành động phải đứng trước nút Đóng"
-    right_gap = frame.width() - 1 - close.right()
-    left_gap = act.left()
-    assert right_gap < left_gap, f"hai nút không căn phải (trái {left_gap}, phải {right_gap})"
-    assert right_gap <= 24, f"nút Đóng cách mép phải {right_gap} px"
-    assert label.width() >= 0.75 * frame.width(), f"nhãn hẹp: {label.width()}/{frame.width()}"
-
-
-def test_rejected_notice_wraps_to_at_most_three_lines_at_360px(qtbot, view):
-    text, action = _blocked_rejected()
-    frame = _layout_notice(qtbot, view, 360, text, action)
-    assert frame.width() <= 380
-    lines = _label_lines(view.notice_label)
-    assert lines <= 3.5, f"câu REJECTED chiếm {lines:.1f} dòng ở bề ngang {frame.width()} px"
-
-
-def test_short_notice_fits_one_line_when_wide(qtbot, view):
-    _layout_notice(qtbot, view, 700, "Câu ngắn.", "Làm gì đó")
-    assert _label_lines(view.notice_label) < 1.9
-
-
-def test_notice_without_action_keeps_close_below_label(qtbot, view):
-    text = "Kéo file vào một thiết bị đã ghép đôi để gửi."
-    frame = _layout_notice(qtbot, view, 360, text, None)
-    assert view.notice_action_text() is None
-    assert not view.notice_action.isVisible()
-    label = _geom(view.notice_label, frame)
-    close = _geom(view.notice_close, frame)
-    assert close.top() > label.bottom(), f"nút Đóng không ở hàng dưới nhãn: {close} / {label}"
-    assert frame.width() - 1 - close.right() <= 24
-
-
-def test_notice_keeps_object_names_and_tab_order(qtbot, view):
-    text, action = _blocked_rejected()
-    _layout_notice(qtbot, view, 360, text, action)
-    assert view.notice_frame.objectName() == "transfersNotice"
-    assert view.notice_label.objectName() == "transfersNoticeText"
-    assert view.notice_action.objectName() == "transfersNoticeAction"
-    assert view.notice_close.objectName() == "transfersNoticeClose"
-    assert view.notice_label.nextInFocusChain() is view.notice_action
-    assert view.notice_action.nextInFocusChain() is view.notice_close
-    assert view.notice_action_text() == action
-
-
 # =================================================================================================
 # V1 (spec B1 mục 2.5, 6 V1, 12.10, 12.11): `content_changed`, `has_content`, `active_count`
 # =================================================================================================
 
 
 @pytest.fixture
-def changes(view):
+def bare(qtbot):
+    """`ChatView` chưa chọn máy: 9.15 `has_content()` = thông báo đang hiện hoặc đang chọn một máy."""
+    from teleport.ui.chat import ChatView
+    from teleport.ui.radar import DeviceListModel
+
+    v = ChatView(DeviceListModel())
+    qtbot.addWidget(v)
+    v.set_device_names({PEER_ID: PEER})
+    v.show()
+    return v
+
+
+@pytest.fixture
+def changes(bare):
     """Số lần `content_changed` đã phát (đếm từ lúc dựng fixture)."""
     seen: list[int] = []
-    view.content_changed.connect(lambda: seen.append(1))
+    bare.content_changed.connect(lambda: seen.append(1))
     return seen
 
 
@@ -1461,40 +1378,49 @@ def _snapshot_infos():
     return [info(key("send", "1" * 32), "transferring"), info(key("receive", "2" * 32), "waiting")]
 
 
-def test_v1_empty_view_has_no_content(view):
+def test_v1_empty_view_has_no_content(bare):
+    assert bare.has_content() is False
+    assert bare.active_count() == 0
+
+
+def test_v1_selected_device_counts_as_content(view):
+    # 9.15: đang chọn một máy là có nội dung (để “Ghép đôi máy đầu tiên” chỉ hiện khi cột trái trống).
+    assert view.has_content() is True
+    view.set_device(None)
     assert view.has_content() is False
-    assert view.active_count() == 0
 
 
-# (tên, thao tác trên view rỗng, has_content sau đó, active_count sau đó)
+# (tên, thao tác trên view rỗng chưa chọn máy, has_content sau đó, active_count sau đó).
+# 9.15: bong bóng không tính là nội dung (chỉ thông báo đang hiện hay máy đang chọn).
 V1_FROM_EMPTY = [
-    ("status_changed tạo thẻ", lambda v: v.handle(status_changed(key("send"), "transferring")), True, 1),
-    ("offer tạo thẻ nhận", lambda v: v.handle(offer_received(key("receive"))), True, 1),
-    ("progress tạo thẻ", lambda v: v.handle(progress(key("send"), 10, 1000)), True, 1),
+    ("status_changed tạo thẻ", lambda v: v.handle(status_changed(key("send"), "transferring")), False, 1),
+    ("offer tạo thẻ nhận", lambda v: v.handle(offer_received(key("receive"))), False, 1),
+    ("progress tạo thẻ", lambda v: v.handle(progress(key("send"), 10, 1000)), False, 1),
     (
         "finished tạo thẻ đã kết thúc",
         lambda v: v.handle(finished(key("send"), "done", status="verifying")),
-        True,
+        False,
         0,
     ),
     ("show_notice", lambda v: v.show_notice("Một thông báo."), True, 0),
     ("hide_notice", lambda v: v.hide_notice(), False, 0),
     ("clear", lambda v: v.clear(), False, 0),
-    ("load_snapshot", lambda v: v.load_snapshot(_snapshot_infos()), True, 2),
+    ("load_snapshot", lambda v: v.load_snapshot(_snapshot_infos()), False, 2),
 ]
 
 
 @pytest.mark.parametrize(
     ("what", "action", "content", "active"), V1_FROM_EMPTY, ids=[c[0] for c in V1_FROM_EMPTY]
 )
-def test_v1_each_public_call_emits_content_changed_once(view, changes, what, action, content, active):
-    action(view)
+def test_v1_each_public_call_emits_content_changed_once(bare, changes, what, action, content, active):
+    action(bare)
     assert len(changes) == 1, f"{what}: content_changed phát {len(changes)} lần"
-    assert view.has_content() is content
-    assert view.active_count() == active
+    assert bare.has_content() is content
+    assert bare.active_count() == active
 
 
-def test_v1_card_finishing_emits_once_and_lowers_active_count(view, changes):
+def test_v1_card_finishing_emits_once_and_lowers_active_count(bare, changes):
+    view = bare
     a, b = key("send", "a" * 32), key("receive", "b" * 32)
     view.handle(status_changed(a, "transferring"))
     view.handle(status_changed(b, "transferring"))
@@ -1502,14 +1428,13 @@ def test_v1_card_finishing_emits_once_and_lowers_active_count(view, changes):
     view.handle(finished(a, "done", status="verifying"))
     assert len(changes) == 3
     assert view.active_count() == 1
-    assert view.has_content() is True
     view.handle(finished(b, "cancelled_user"))
     assert len(changes) == 4
     assert view.active_count() == 0
-    assert view.has_content() is True  # thẻ đã kết thúc vẫn là nội dung
 
 
-def test_v1_suspended_does_not_lower_active_count(view, changes):
+def test_v1_suspended_does_not_lower_active_count(bare, changes):
+    view = bare
     k = key("receive")
     view.handle(status_changed(k, "transferring"))
     view.handle(finished(k, "suspended"))
@@ -1517,15 +1442,17 @@ def test_v1_suspended_does_not_lower_active_count(view, changes):
     assert view.row(k) is not None and view.row(k).finished is False
 
 
-def test_v1_notice_close_button_emits_once(view, changes):
+def test_v1_notice_close_button_emits_once(bare, changes):
+    view = bare
     view.show_notice("Một thông báo.", "Làm gì đó", lambda: None)
     assert len(changes) == 1
-    view.notice_close.click()
+    view.info_bar.close_button.click()  # 9.7: `notice_close` bỏ, nút Đóng của `InfoBar`
     assert len(changes) == 2
     assert view.has_content() is False
 
 
-def test_v1_clear_with_rows_and_notice_emits_once(view, changes):
+def test_v1_clear_with_rows_and_notice_emits_once(bare, changes):
+    view = bare
     view.handle(status_changed(key("send", "a" * 32), "transferring"))
     view.handle(status_changed(key("send", "b" * 32), "transferring"))
     view.show_notice("Một thông báo.")
@@ -1536,14 +1463,16 @@ def test_v1_clear_with_rows_and_notice_emits_once(view, changes):
     assert view.active_count() == 0
 
 
-def test_v1_load_snapshot_with_many_rows_emits_once(view, changes):
+def test_v1_load_snapshot_with_many_rows_emits_once(bare, changes):
+    view = bare
     infos = [info(key("send", c * 32), "transferring") for c in "abcde"]
     view.load_snapshot(infos)
     assert len(changes) == 1
     assert view.active_count() == 5
 
 
-def test_v1_remove_emits_once_and_updates_counts(view, changes):
+def test_v1_remove_emits_once_and_updates_counts(bare, changes):
+    view = bare
     a, b = key("send", "a" * 32), key("send", "b" * 32)
     view.handle(status_changed(a, "transferring"))
     view.handle(status_changed(b, "transferring"))
@@ -1556,7 +1485,8 @@ def test_v1_remove_emits_once_and_updates_counts(view, changes):
     assert view.active_count() == 0
 
 
-def test_v1_has_content_counts_notice_while_view_hidden(view):
+def test_v1_has_content_counts_notice_while_view_hidden(bare):
+    view = bare
     # 12.11: cửa sổ ẩn xuống khay thì dải thông báo vẫn tính là nội dung.
     view.hide()
     view.show_notice("Một thông báo.")

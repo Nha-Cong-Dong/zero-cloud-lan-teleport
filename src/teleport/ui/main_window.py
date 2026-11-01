@@ -40,9 +40,11 @@ không hiện.
   chép địa chỉ; tên, huy hiệu, địa chỉ ở mô tả trợ năng và tooltip). Tiêu điểm ở widget sắp ẩn
   (`name_label`, `address_label`, `copy_button`) → `compact_machine`; rời thu gọn mà tiêu điểm ở
   `compact_machine` → `name_label` (ẩn thì `copy_button`, rồi danh sách hay nút “＋”).
-- Khung phải: `empty_state` (“Ghép đôi máy đầu tiên”) khi chưa có máy nào đã ghép đôi **và**
-  danh sách lượt rỗng (`set_transfer_summary`), không thì `transfers_area` (`ui.transfers` đặt
-  `TransfersView` vào). Nút của `empty_state` chỉ có khi đã có trang DISCOVER.
+- Khung phải: `empty_state` (“Ghép đôi máy đầu tiên”) khi chưa có máy nào đã ghép đôi **và** luồng
+  chat không có gì để hiện (không thông báo, không máy nào đang chọn; `set_transfer_summary`), không
+  thì `transfers_area`, nơi `ui.transfers` đặt luồng chat của máy đang chọn (`ui.chat.ChatView`: thông
+  báo, đầu luồng, bong bóng gửi/nhận và lịch sử, thanh “Gửi file” ở dưới; lề 0). Nút của
+  `empty_state` chỉ có khi đã có trang DISCOVER.
 - `save_bar` (`home.SaveBar`, “Lưu vào: …” + “Mở thư mục” + “Đổi…”) chạy hết chiều ngang dưới `body`;
   ẩn khi không biết thư mục nhận lẫn thư mục đã lưu hỏng. Bấm “Mở thư mục” phát
   `open_receive_dir_requested(Path)`, bấm “Đổi…” phát `change_receive_dir_requested` (`ui.app` mở
@@ -66,8 +68,9 @@ và gọi `set_addresses`.
 **Trợ năng** (mvp N12): mọi chữ là chữ thuần (`Qt.PlainText`), có tên cho trình đọc màn hình; nhãn
 chọn được bằng chuột nhưng không có con trỏ chữ khi Tab tới (không `TextSelectableByKeyboard`).
 Thứ tự Tab ở RUNNING: “Tìm máy mới” → “Cài đặt” → từng hàng của danh sách cuộc trò chuyện → “Ghép
-đôi máy mới” → tên máy này → địa chỉ → “Chép địa chỉ” → `compact_machine` → khung phải → “Mở thư
-mục” → “Đổi…” (luôn cuối: widget tạo sau như thẻ lượt truyền hay trang mới rơi vào cuối chuỗi, nên
+đôi máy mới” → tên máy này → địa chỉ → “Chép địa chỉ” → `compact_machine` → khung phải (luồng chat:
+thông báo → luồng, một điểm dừng → “↓ Mới” → “Gửi file”, xem `ui.chat`) → “Mở thư
+mục” → “Đổi…” (luôn cuối: widget tạo sau như luồng chat hay trang mới rơi vào cuối chuỗi, nên
 `set_transfer_summary` và `add_page` dời hai nút về cuối bằng `_keep_footer_last`; “Mở thư mục” ẩn
 thì Tab bỏ qua nó, “Đổi…” vẫn cuối). WELCOME: ô tên → “Đổi…” → công tắc (khi hiện) → “Bắt đầu”
 (nhãn của form không nhận Tab). ERROR: dòng trạng thái → chi tiết → gợi ý → “Thử lại”. Tiêu điểm ban
@@ -423,7 +426,7 @@ class MainWindow(QMainWindow):
         self._error_detail = ""
         self._addresses: tuple[str, ...] = ()
         self._port: int | None = None
-        self._has_content = False  # danh sách lượt có thẻ hay dải thông báo (`set_transfer_summary`)
+        self._has_content = False  # luồng chat có bong bóng hay thanh thông báo (`set_transfer_summary`)
         self._active = 0
         self._has_paired = False  # danh sách cuộc trò chuyện có máy (đã ghép đôi)
         self._scroll_target: QWidget | None = None  # widget chờ được cuộn tới (`_on_focus_changed`)
@@ -558,7 +561,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.machine_card)
         sidebar_layout.addWidget(self.compact_footer)
 
-        # Khung phải: màn rỗng hay danh sách lượt truyền (`ui.transfers`).
+        # Khung phải: màn rỗng hay luồng chat (`ui.chat`).
         self.stream_pane = QStackedWidget(self.body)
         self.stream_pane.setObjectName("streamPane")
         self.empty_state = EmptyState(self.stream_pane)
@@ -1037,7 +1040,7 @@ class MainWindow(QMainWindow):
         self._update_stream()
 
     def _update_stream(self) -> None:
-        """Khung phải: màn rỗng khi RUNNING, chưa có máy đã ghép đôi và danh sách lượt rỗng."""
+        """Khung phải: màn rỗng khi RUNNING, chưa có máy đã ghép đôi và luồng chat rỗng."""
         show_empty = self._state is ViewState.RUNNING and not self._has_paired and not self._has_content
         target = self.empty_state if show_empty else self.transfers_area
         if self.stream_pane.currentWidget() is not target:

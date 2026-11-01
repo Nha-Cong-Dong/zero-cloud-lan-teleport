@@ -1,13 +1,15 @@
 """PR-7 “Giao diện trông như một app” (spec-pr7: B3, B4, B6, B7).
 
-Viết từ spec, không từ code. Mọi widget dựng riêng (không `main()`, không socket): `TransfersView`,
-`MainWindow`, `DeviceListModel`, `PairingController` với host giả, `OfferPrompts`,
+Viết từ spec, không từ code. Mọi widget dựng riêng (không `main()`, không socket): `ChatView` (spec B3
+thay danh sách lượt cũ), `MainWindow`, `DeviceListModel`, `PairingController` với host giả, `OfferPrompts`,
 `PairingDialog`, `PairingProgressDialog`; nối dây `ui/app.py` kiểm bằng `GuiApp` không chạy node.
 
 Nhóm:
 
-- B3: thẻ mới lên đầu (`rows()`, vị trí y, thứ tự Tab); dòng phụ “Đã lưu thành …” khi tên lưu khác
-  tên gốc; thanh tiến độ ẩn khi kết thúc khác DONE; tỉ lệ radar : lượt = 1:1; câu trống căn giữa.
+- B3: thứ tự bong bóng (spec B3 9.8 (iii) thay “thẻ mới lên đầu”: `rows()` cũ trước, luồng cũ trên cùng;
+  thứ tự Tab trong luồng là roving tabindex, kiểm ở `test_chat.py` F2); dòng phụ “Đã lưu thành …” khi tên
+  lưu khác tên gốc; thanh tiến độ ẩn khi kết thúc (spec B3 mục 4: thanh chỉ khi chưa kết thúc). Câu trống
+  căn giữa của danh sách cũ đã bỏ (9.7 bỏ `empty_label`; luồng rỗng là `EmptyState`, `test_chat.py` V6).
 - B4: ghép đôi xong / hủy ghép đôi xong → `notice`, không hộp; lỗi vẫn hộp; hộp lỗi đang mở thì đóng.
 - B6: câu chữ radar trống, UNREACHABLE, PEER_BUSY / REJECTED.
 - B7: `default_size`, tiêu đề ẩn khi RUNNING, không nhãn nào chọn chữ bằng bàn phím, tiêu điểm khi
@@ -334,11 +336,13 @@ def ctl(qtbot):
 
 @pytest.fixture
 def view(qtbot):
-    from teleport.ui.transfers_view import TransfersView
+    from teleport.ui.chat import ChatView
+    from teleport.ui.radar import DeviceListModel
 
-    v = TransfersView()
+    v = ChatView(DeviceListModel())
     qtbot.addWidget(v)
     v.set_device_names({TRANSFER_PEER_ID: PEER})
+    v.set_device(TRANSFER_PEER_ID)
     v.resize(420, 560)
     v.show()
     qtbot.waitExposed(v)
@@ -394,7 +398,7 @@ def spec_key(v) -> tuple:
 
 
 # =================================================================================================
-# B3.1 — Thẻ mới lên đầu
+# B3.1 — Thứ tự bong bóng (spec B3 9.8 (iii) thay “thẻ mới lên đầu”: cũ trước, cũ trên cùng)
 # =================================================================================================
 
 
@@ -406,45 +410,31 @@ def three_rows(view):
     return [view.row(k) for k in keys]
 
 
-def test_rows_lists_newest_card_first(view):
+def test_rows_lists_oldest_card_first(view):
     r1, r2, r3 = three_rows(view)
-    assert view.rows() == [r3, r2, r1]
+    assert view.rows() == [r1, r2, r3]
 
 
-def test_newest_card_is_drawn_on_top(view, qtbot):
+def test_newest_card_is_drawn_at_the_bottom(view, qtbot):
     r1, r2, r3 = three_rows(view)
     qtbot.waitUntil(lambda: r3.isVisible() and r1.isVisible(), timeout=1000)
-    ys = [r.mapTo(view, QPoint(0, 0)).y() for r in (r3, r2, r1)]
-    assert ys[0] < ys[1] < ys[2], f"thẻ mới phải nằm trên thẻ cũ: y = {ys}"
+    ys = [r.mapTo(view, QPoint(0, 0)).y() for r in (r1, r2, r3)]
+    assert ys[0] < ys[1] < ys[2], f"bong bóng mới phải nằm dưới bong bóng cũ: y = {ys}"
 
 
-def test_card_added_via_progress_or_offer_also_goes_on_top(view):
-    """Mọi đường tạo thẻ (tiến độ, offer) đều chèn lên đầu, không chỉ `StatusChanged`."""
+def test_card_added_via_progress_or_offer_also_goes_last(view):
+    """Mọi đường tạo bong bóng (tiến độ, offer) đều chèn cuối, không chỉ `StatusChanged`."""
     first = tkey("send", "a" * 32)
     view.handle(status_changed(first))
     second = tkey("receive", "b" * 32)
     view.handle(progress(second, 100))
     third = tkey("receive", "c" * 32)
     view.handle(offer_received(third))
-    assert view.rows() == [view.row(third), view.row(second), view.row(first)]
+    assert view.rows() == [view.row(first), view.row(second), view.row(third)]
 
 
-def test_tab_walks_cards_in_display_order(view, qtbot):
-    from PySide6.QtTest import QTest
-
-    r1, r2, r3 = three_rows(view)
-    view.activateWindow()
-    qtbot.waitUntil(lambda: r3.cancel_button.isVisible(), timeout=1000)
-    cancels = {r.cancel_button: r for r in (r1, r2, r3)}
-    r3.cancel_button.setFocus(Qt.FocusReason.TabFocusReason)
-    qtbot.waitUntil(lambda: QApplication.focusWidget() is r3.cancel_button, timeout=1000)
-    seen = [r3]
-    for _ in range(10):
-        QTest.keyClick(QApplication.focusWidget() or view, Qt.Key.Key_Tab)
-        row = cancels.get(QApplication.focusWidget())
-        if row is not None and row not in seen:
-            seen.append(row)
-    assert seen == [r3, r2, r1], "Tab phải đi qua thẻ theo thứ tự hiển thị (trên xuống)"
+# `test_tab_walks_cards_in_display_order` đã bỏ: spec B3 9.10 đổi Tab trong luồng sang roving tabindex
+# (luồng một điểm dừng, nút trong bong bóng ClickFocus), kiểm ở `test_chat.py` F2.
 
 
 # =================================================================================================
@@ -544,12 +534,13 @@ def test_progress_bar_hidden_when_finished_not_done(view, direction, result):
 
 
 @pytest.mark.parametrize("direction", ["send", "receive"])
-def test_progress_bar_full_and_visible_when_done(view, direction):
+def test_progress_bar_full_and_hidden_when_done(view, direction):
+    # Spec B3 mục 4 dòng 2: thanh tiến độ chỉ khi chưa kết thúc (kể cả DONE: icon ✓ + “Đã lưu/Đã gửi”).
     k = tkey(direction)
     view.handle(progress(k, 2**20))
     view.handle(finished(k, "done"))
     bar = view.row(k).progress_bar
-    assert bar.isVisibleTo(view.row(k))
+    assert not bar.isVisibleTo(view.row(k))
     assert bar.value() == bar.maximum()
 
 
@@ -570,24 +561,8 @@ def test_suspended_keeps_progress_bar(view):
 
 
 # B3.4 (radar : lượt = 1:1) đã bỏ: spec B1 (mục 8a) đổi sang cột trái cố định 288/248 px; bề ngang
-# mới kiểm ở `test_home_layout.py` (L2).
-
-
-def test_transfers_empty_label_centered_both_ways(view, qtbot):
-    from PySide6.QtWidgets import QScrollArea
-
-    label = view.empty_label
-    assert label.isVisibleTo(view)
-    assert label.alignment() & Qt.AlignmentFlag.AlignHCenter
-    [scroll] = view.findChildren(QScrollArea)
-    viewport = scroll.viewport()
-    qtbot.waitUntil(lambda: viewport.height() > 200, timeout=1000)
-    QApplication.processEvents()
-    center = label.mapTo(viewport, label.rect().center())
-    assert abs(center.y() - viewport.height() / 2) < viewport.height() * 0.1, (
-        f"câu trống phải căn giữa dọc: tâm y={center.y()}, vùng cuộn cao {viewport.height()}"
-    )
-    assert abs(center.x() - viewport.width() / 2) < viewport.width() * 0.1
+# mới kiểm ở `test_home_layout.py` (L2). B3.5 (câu trống căn giữa) đã bỏ: spec B3 9.7 bỏ `empty_label`;
+# luồng rỗng là `EmptyState` (9b.21), kiểm ở `test_chat.py` V6.
 
 
 # =================================================================================================
@@ -861,11 +836,12 @@ def keyboard_selectable(root) -> list[str]:
 def full_window(window, tmp_path):
     """Cửa sổ RUNNING có nhiều máy ở cột trái, danh sách lượt có thẻ và thông báo (spec B2 12.26: không còn
     khung nhập IP trong cột trái)."""
-    from teleport.ui.transfers_view import TransfersView
+    from teleport.ui.chat import ChatView
 
-    tv = TransfersView(window.transfers_area)
+    tv = ChatView(window.devices, window.transfers_area)  # spec B3 mục 2: thay danh sách lượt cũ
     window.transfers_area.layout().addWidget(tv)
     tv.set_device_names({TRANSFER_PEER_ID: PEER})
+    tv.set_device(TRANSFER_PEER_ID)
     tv.handle(status_changed(tkey("send", "a" * 32)))
     k = tkey("receive", "b" * 32)
     tv.handle(status_changed(k))
@@ -1345,7 +1321,7 @@ def test_real_receive_of_duplicate_name_shows_saved_as(
     from PySide6.QtWidgets import QDialog
 
     from teleport.trust.identity import load_or_create_identity
-    from teleport.ui.transfers_view import TransfersView
+    from teleport.ui.chat import ChatView
 
     a, b = config_dir("A"), config_dir("B")
     trust_each_other(a, b)
@@ -1369,7 +1345,7 @@ def test_real_receive_of_duplicate_name_shows_saved_as(
 
     def card_details(run) -> list[str]:
         out = []
-        for tv in run.window.findChildren(TransfersView):
+        for tv in run.window.findChildren(ChatView):  # spec B3 mục 2
             out += [r.detail_label.text() for r in tv.rows()]
         return out
 

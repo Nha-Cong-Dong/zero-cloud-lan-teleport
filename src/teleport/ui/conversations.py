@@ -46,24 +46,27 @@ module `_wall_now` (đọc lúc gọi). Không có hẹn giờ qua nửa đêm: 
 
 **View** (`_ConversationView`, `QListView` objectName `conversationList`): bấm trái một lần chỉ chọn;
 bấm đúp phát `row_double_clicked` một lần mỗi sự kiện dblclick; Enter/Return phát `row_entered` (bỏ
-phím tự lặp); phím Menu, Shift+F10, chuột phải phát `menu_requested`. Tab / Shift+Tab đi qua **từng**
-hàng rồi mới ra khỏi danh sách (vào bằng Tab tới hàng đầu, Shift+Tab tới hàng cuối), chỉ dời hàng
-hiện hành, không đổi máy được chọn (đổi bằng chuột hay phím mũi tên). Không thanh cuộn
-riêng: cao cố định đúng `rowCount × row_height() + 2×frameWidth`, cột trái (`sidebar_scroll`) cuộn cả
-danh sách lẫn nút “＋”. Kéo thả tự xử lý (model không hỗ trợ mime): chỉ nhận URL file cục bộ
-(`send.local_paths`, không chạm đĩa), tô hàng dưới con trỏ mà không đổi hàng đang chọn; hàng không
-gửi tới được (`radar.can_receive_files` sai; phòng hờ, vì mọi hàng đã ghép đôi) thì từ chối thả.
+phím tự lặp); cả hai thành `ConversationList.open_requested`; phím Menu, Shift+F10, chuột phải phát
+`menu_requested`. Tab / Shift+Tab đi qua **từng** hàng rồi mới ra khỏi danh sách (vào bằng Tab tới
+hàng đầu, Shift+Tab tới hàng cuối), chỉ dời hàng hiện hành, không đổi máy được chọn (đổi bằng chuột
+hay phím mũi tên). Không thanh cuộn riêng: cao cố định đúng `rowCount × row_height() + 2×frameWidth`,
+cột trái (`sidebar_scroll`) cuộn cả danh sách lẫn nút “＋”. Kéo thả tự xử lý (model không hỗ trợ
+mime): chỉ nhận URL file cục bộ (`send.local_paths`, không chạm đĩa), tô hàng dưới con trỏ mà không
+đổi hàng đang chọn; hàng không gửi tới được (`radar.can_receive_files` sai; phòng hờ, vì mọi hàng
+đã ghép đôi) thì từ chối thả.
 `preview_drop(device_id, n)` đi cùng đường với `dragMoveEvent` (ảnh chụp, test).
 
 **`ConversationList`** (objectName `conversations`): signal `send_files_requested(id, list[Path])`
-(thả), `pick_files_requested(id)` (menu “Gửi file…”, bấm đúp, Enter; B3 đổi bấm đúp/Enter thành “vào
-luồng”), `drop_hint_requested(câu)` (thả vào chỗ không có máy: `radar.drop_hint_text()`),
-`unpair_requested(id)`, `add_device_requested()`, `current_changed(id | None)`. **Máy hiện hành = máy
-được chọn** (`current_device`): giữ qua `modelReset` (nhớ id rồi chọn lại) và qua lúc sắp lại; hàng
-đang chọn bị bỏ thì không chọn gì (Qt tự chọn hàng kế, ở đây trả lại); có hàng mà chưa có hàng hiện
-hành thì đặt hàng 0 làm hiện hành mà không chọn, để Tab / phím Menu dùng được ngay. Không có máy đã
-ghép đôi thì ẩn danh sách, nút “＋” vẫn hiện. Menu ngữ cảnh mở bằng `popup()` (không `exec()`), tên
-trợ năng “Thao tác với {tên}”.
+(thả), `pick_files_requested(id)` (menu “Gửi file…”), `drop_hint_requested(câu)` (thả vào chỗ không
+có máy: `radar.drop_hint_text()`), `unpair_requested(id)`, `add_device_requested()`,
+`current_changed(id | None)`, `open_requested(id)` (Enter, bấm đúp: chọn máy đó rồi mở cuộc trò
+chuyện, `ui.chat` đặt tiêu điểm vào nút “Gửi file”).
+**Máy hiện hành = máy được chọn** (`current_device`): giữ qua `modelReset` (nhớ id rồi chọn lại) và qua
+lúc sắp lại. **Luôn có một cuộc trò chuyện được chọn khi danh sách có hàng** (spec B3 mục 6): sau
+`rowsInserted`, `modelReset`, `layoutChanged` và khi hàng đang chọn bị bỏ, chưa máy nào được chọn thì
+chọn hàng hiện hành nếu có, không thì hàng 0 (phát `current_changed`). Tab qua hàng vẫn không đổi máy
+được chọn. Không có máy đã ghép đôi thì ẩn danh sách, nút “＋” vẫn hiện. Menu ngữ cảnh mở bằng
+`popup()` (không `exec()`), tên trợ năng “Thao tác với {tên}”.
 
 Bẫy dời từ radar cũ: nối `rowsAboutToBeRemoved` **trước** `setModel` (phải thấy lựa chọn trước khi view
 dời nó sang hàng kế); `setTabKeyNavigation(False)` (Tab do `focusNextPrevChild` xử lý); không thanh
@@ -285,7 +288,8 @@ def _active_text(view_active: ActiveTransfer) -> str:
     return t("Conversations", "Đang chờ")
 
 
-def _failure_text(failure: ConnectResult) -> str:
+def failure_text(failure: ConnectResult) -> str:
+    """Chữ ngắn cho lần kết nối thất bại (dùng chung danh sách hội thoại và luồng chat)."""
     t = QCoreApplication.translate
     if failure is ConnectResult.REJECTED:
         return t("Conversations", "Bị từ chối kết nối")
@@ -314,7 +318,7 @@ def status_line(
     if failure is not None and failure is not ConnectResult.OK:
         presence = Presence.ONLINE if _is_online(view) else Presence.OFFLINE
         tone = StatusTone.DANGER if failure in _BLOCKING else StatusTone.WARNING
-        head = _failure_text(failure)
+        head = failure_text(failure)
     elif _is_online(view):
         presence, tone, head = Presence.ONLINE, StatusTone.NORMAL, t("Conversations", "Trực tuyến")
     else:
@@ -1017,7 +1021,8 @@ class ConversationList(QWidget):
     """Cột trái: danh sách cuộc trò chuyện và nút “Ghép đôi máy mới” (xem docstring module)."""
 
     send_files_requested = Signal(str, list)  # device_id, list[Path] (thả)
-    pick_files_requested = Signal(str)  # menu “Gửi file…”, bấm đúp, Enter
+    pick_files_requested = Signal(str)  # menu “Gửi file…”
+    open_requested = Signal(str)  # Enter, bấm đúp: mở cuộc trò chuyện (tiêu điểm vào thanh gửi)
     drop_hint_requested = Signal(str)  # thả chỗ không có máy: radar.drop_hint_text()
     unpair_requested = Signal(str)
     add_device_requested = Signal()  # “＋ Ghép đôi máy mới”
@@ -1190,7 +1195,8 @@ class ConversationList(QWidget):
         self.list_view.setAccessibleDescription(
             t(
                 "Conversations",
-                "Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để gửi file, phím Menu để mở thao tác.",
+                "Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để mở cuộc trò chuyện, "
+                "phím Menu để mở thao tác.",
             )
         )
         self.add_button.set_label(t("Conversations", "Ghép đôi máy mới"))
@@ -1246,9 +1252,12 @@ class ConversationList(QWidget):
         self.list_view.setVisible(rows > 0)
         self._update_height()
         selection = self.list_view.selectionModel()
-        if rows and selection is not None and not self.list_view.currentIndex().isValid():
-            # Luôn có hàng hiện hành để Tab / phím Menu dùng được ngay (không chọn sẵn hàng nào).
-            selection.setCurrentIndex(self.model.index(0, 0), QItemSelectionModel.SelectionFlag.NoUpdate)
+        if rows and selection is not None and self._selected_id() is None:
+            # Luôn có một cuộc trò chuyện được chọn khi có hàng (spec B3 mục 6): hàng hiện hành nếu có,
+            # không thì hàng 0.
+            current = self.list_view.currentIndex()
+            index = current if current.isValid() else self.model.index(0, 0)
+            selection.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
         self._emit_current()
 
     def _update_height(self) -> None:
@@ -1284,18 +1293,11 @@ class ConversationList(QWidget):
         self._selected_before_remove = self._selected_id()
 
     def _keep_selection_after_remove(self) -> None:
-        # Bỏ hàng hiện hành thì Qt chọn luôn hàng kế tiếp dù người dùng chưa chọn nó: đưa lựa chọn về
-        # đúng máy đã chọn trước đó, hoặc không chọn gì.
+        # Bỏ một hàng mà máy đang chọn vẫn còn: giữ đúng máy đó (Qt có thể dời lựa chọn sang hàng kế).
+        # Hàng đang chọn bị bỏ: `_on_rows_changed` chọn hàng hiện hành hay hàng 0.
         device_id, self._selected_before_remove = self._selected_before_remove, None
-        selection = self.list_view.selectionModel()
-        if selection is None:
-            return
-        chosen = self._selected_id()
-        if device_id is not None and self.model.row_of(device_id) >= 0:
-            if chosen != device_id:
-                self.select_device(device_id)
-        elif chosen is not None:
-            selection.clearSelection()
+        if device_id is not None and self.model.row_of(device_id) >= 0 and self._selected_id() != device_id:
+            self.select_device(device_id)
 
     def _device_at(self, index: QModelIndex) -> DeviceView | None:
         device_id = index.data(DEVICE_ID_ROLE) if index.isValid() else None
@@ -1304,7 +1306,8 @@ class ConversationList(QWidget):
     def _on_row_activated(self, index: QModelIndex) -> None:
         view = self._device_at(index)
         if view is not None:
-            self._request_pick(view.device_id)
+            self.select_device(view.device_id)
+            self.open_requested.emit(view.device_id)
 
     def _on_menu_requested(self, index: QModelIndex, global_pos: QPoint) -> None:
         device_id = index.data(DEVICE_ID_ROLE) if index.isValid() else None

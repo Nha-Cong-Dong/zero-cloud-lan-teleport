@@ -3,8 +3,9 @@
 - `texts.format_size` / `texts.format_duration` / `texts.percent`: tiếng Việt ra **y hệt**
   `core.display.format_size` / `format_duration` (CLI vẫn dùng `core`), English đúng dạng (“2.1 MB”,
   “1 byte”, “512 bytes”, “2 min 10 sec”, “42.0%”).
-- `InfoBar.show_message` và `TransfersView.show_notice`: hàm → đổi ngôn ngữ thì câu dịch lại; chuỗi →
-  bị ẩn; đổi en → vi liền nhau trước khi Qt xử lý sự kiện → câu vẫn còn (ngôn ngữ cuối = ngôn ngữ lúc hiện).
+- `InfoBar.show_message` và `ChatView.show_notice` (luồng chat, spec B3): hàm → đổi ngôn ngữ thì câu
+  dịch lại; chuỗi → bị ẩn; đổi en → vi liền nhau trước khi Qt xử lý sự kiện → câu vẫn còn (ngôn ngữ
+  cuối = ngôn ngữ lúc hiện).
 - `DiscoverPage`: lỗi địa chỉ IP đang hiện thì đổi ngôn ngữ hiện lại lỗi bằng ngôn ngữ mới.
 - Ô số ngày của Cài đặt: hậu tố theo số (“ ngày”; English “ day” / “ days”); ô tốc độ dùng dấu thập
   phân của ngôn ngữ giao diện.
@@ -270,43 +271,53 @@ def test_info_bar_string_kept_when_language_switches_back_before_events(qapp, in
 
 
 @pytest.fixture
-def transfers_view(qtbot):
-    from teleport.ui.transfers_view import TransfersView
+def chat_view(qtbot):
+    from teleport.ui.chat import ChatView
+    from teleport.ui.radar import DeviceListModel
 
-    view = TransfersView()
+    view = ChatView(DeviceListModel())
     qtbot.addWidget(view)
     view.show()
     qtbot.waitExposed(view)
     return view
 
 
-def test_transfers_notice_callable_retranslates(qapp, transfers_view):
+def test_chat_notice_callable_retranslates(qapp, chat_view):
     calls: list[int] = []
-    transfers_view.show_notice(_menu_open, _menu_open, lambda: calls.append(1))
-    assert transfers_view.notice_label.text() == "Mở Teleport"
+    chat_view.show_notice(_menu_open, _menu_open, lambda: calls.append(1))
+    assert chat_view.notice_text() == "Mở Teleport"
     _english(qapp)
-    assert transfers_view.notice_frame.isVisible()
-    assert transfers_view.notice_label.text() == "Open Teleport"
-    assert transfers_view.notice_action.text() == "Open Teleport"
+    assert chat_view.info_bar.isVisible()
+    assert chat_view.notice_text() == "Open Teleport"
+    assert chat_view.notice_action_text() == "Open Teleport"
+    assert chat_view.notice_label.accessibleDescription() == "Open Teleport"
+    assert chat_view.notice_action.accessibleName() == "Open Teleport"
     _vietnamese(qapp)
-    assert transfers_view.notice_label.text() == "Mở Teleport"
+    assert chat_view.notice_text() == "Mở Teleport"
+    chat_view.notice_action.click()
+    assert calls == [1], "nút hành động vẫn gọi `on_action` sau khi dịch lại"
 
 
-def test_transfers_notice_string_is_hidden_on_language_change(qapp, transfers_view):
-    transfers_view.show_notice(_menu_open())
+def test_chat_notice_string_is_hidden_on_language_change(qapp, chat_view):
+    changed: list[int] = []
+    chat_view.show_notice(_menu_open())
+    chat_view.content_changed.connect(lambda: changed.append(1))
     _english(qapp)
-    assert not transfers_view.notice_frame.isVisible()
+    assert not chat_view.info_bar.isVisible()
+    assert chat_view.notice_text() == ""
+    assert not chat_view.has_content()
+    assert changed, "ẩn thông báo là thay đổi nội dung (`content_changed`)"
 
 
-def test_transfers_notice_string_kept_when_language_switches_back_before_events(qapp, transfers_view):
+def test_chat_notice_string_kept_when_language_switches_back_before_events(qapp, chat_view):
     from teleport.ui import i18n
 
-    transfers_view.show_notice(_menu_open())
+    chat_view.show_notice(_menu_open())
     i18n.set_language("en")
     i18n.set_language("vi")
     qapp.processEvents()
-    assert transfers_view.notice_frame.isVisible()
-    assert transfers_view.notice_label.text() == "Mở Teleport"
+    assert chat_view.info_bar.isVisible()
+    assert chat_view.notice_text() == "Mở Teleport"
 
 
 # =================================================================================================

@@ -420,8 +420,8 @@ def test_w3_shift_tab_reverses_outside_rows(env, qtbot):
 def test_w3_list_accessible_name(window):
     lst = window.conversations.list_view
     assert lst.accessibleName() == "Máy đã ghép đôi"
-    assert lst.accessibleDescription() == (
-        "Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để gửi file, phím Menu để mở thao tác."
+    assert lst.accessibleDescription() == (  # spec B3 mục 6
+        "Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để mở cuộc trò chuyện, phím Menu để mở thao tác."
     )
 
 
@@ -454,7 +454,8 @@ def test_w4_open_conversation_unknown_id_stays(window, qtbot, tmp_path):
     assert not window.open_conversation("f" * 32)
     assert not window.open_conversation(OTHER_ID), "máy chưa ghép đôi không có cuộc trò chuyện"
     assert window.current_page is Page.DISCOVER
-    assert window.conversations.current_device() is None
+    # Spec B3 mục 6: máy đã ghép đôi duy nhất tự được chọn; id lạ / máy chưa ghép đôi không đổi nó.
+    assert window.conversations.current_device().device_id == PEER_ID
 
 
 def test_w5_open_address_entry_shows_notice_and_focuses_address_edit(window, qtbot, tmp_path):

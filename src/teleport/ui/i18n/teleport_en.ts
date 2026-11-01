@@ -60,6 +60,178 @@
     </message>
 </context>
 <context>
+    <name>Chat</name>
+    <message numerus="yes">
+        <location filename="../chat_bubbles.py"/>
+        <source>%n file</source>
+        <translation>
+            <numerusform>%n file</numerusform>
+            <numerusform>%n files</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Chọn một máy ở cột trái để xem file đã gửi và nhận.</source>
+        <translation>Choose a device on the left to see files you sent and received.</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Các lượt gửi nhận với {name}</source>
+        <translation>Transfers with {name}</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../chat.py"/>
+        <source>Có %n lượt mới. Bấm để cuộn xuống cuối</source>
+        <translation>
+            <numerusform>%n new transfer. Click to scroll to the bottom</numerusform>
+            <numerusform>%n new transfers. Click to scroll to the bottom</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Gửi file</source>
+        <translation>Send files</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Gửi lại</source>
+        <translation>Resend</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Gửi tới {name}</source>
+        <translation>To {name}</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>HH:mm</source>
+        <translation>HH:mm</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Hoặc bấm Gửi file ở dưới.</source>
+        <translation>Or click Send files below.</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Hôm nay {time}</source>
+        <translation>Today {time}</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Hôm qua {time}</source>
+        <translation>Yesterday {time}</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Hủy</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Không mở được thư mục {path}. Thư mục có thể đã bị xóa, đổi tên hay nằm trên ổ đã rút ra.</source>
+        <translation>Couldn't open the folder {path}. It may have been deleted, renamed, or be on a drive that was removed.</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Không đọc được lịch sử với máy này.</source>
+        <translation>Couldn't read the history with this device.</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Kéo file vào đây để gửi cho {name}</source>
+        <translation>Drag files here to send to {name}</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Lượt gửi nhận</source>
+        <translation>Transfers</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Mới</source>
+        <translation>New</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Mở thư mục</source>
+        <translation>Open folder</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Ngoại tuyến</source>
+        <translation>Offline</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Nhận từ {name}</source>
+        <translation>From {name}</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Thông báo</source>
+        <translation>Notification</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../chat.py"/>
+        <source>Thả để gửi %n file tới {name}</source>
+        <translation>
+            <numerusform>Drop to send %n file to {name}</numerusform>
+            <numerusform>Drop to send %n files to {name}</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Tiến độ</source>
+        <translation>Progress</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Trực tuyến</source>
+        <translation>Online</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>dd/MM</source>
+        <translation>d MMM</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>dd/MM/yyyy</source>
+        <translation>d MMM yyyy</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>hoặc kéo file vào đây</source>
+        <translation>or drag files here</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>{date} {time}</source>
+        <translation>{date} {time}</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>{name} đang ngoại tuyến. File gửi lúc này sẽ chờ và tự gửi khi máy đó mở Teleport trong cùng mạng, nếu Teleport trên máy này vẫn chạy (kể cả khi chỉ còn ở khay).</source>
+        <translation>{name} is offline. Files you send now will wait and go out automatically when that device opens Teleport on the same network, as long as Teleport keeps running here (even in the tray).</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Đang chuẩn bị…</source>
+        <translation>Preparing…</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Đã gửi</source>
+        <translation>Sent</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Đã lưu</source>
+        <translation>Saved</translation>
+    </message>
+</context>
+<context>
     <name>Conversations</name>
     <message numerus="yes">
         <location filename="../conversations.py"/>
@@ -136,8 +308,8 @@
     </message>
     <message>
         <location filename="../conversations.py"/>
-        <source>Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để gửi file, phím Menu để mở thao tác.</source>
-        <translation>Arrow keys to choose a device, Tab to move through devices, Enter to send files, Menu key for actions.</translation>
+        <source>Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để mở cuộc trò chuyện, phím Menu để mở thao tác.</source>
+        <translation>Arrow keys to choose a device, Tab to move through devices, Enter to open the conversation, Menu key for actions.</translation>
     </message>
     <message>
         <location filename="../conversations.py"/>
@@ -1683,14 +1855,6 @@
 </context>
 <context>
     <name>Transfers</name>
-    <message numerus="yes">
-        <location filename="../transfers_view.py"/>
-        <source>%n file ({size})</source>
-        <translation>
-            <numerusform>%n file ({size})</numerusform>
-            <numerusform>%n files ({size})</numerusform>
-        </translation>
-    </message>
     <message>
         <location filename="../transfers.py"/>
         <source>Chọn file gửi tới {name}</source>
@@ -1710,11 +1874,6 @@
         <location filename="../transfers.py"/>
         <source>Ghép đôi lại</source>
         <translation>Pair again</translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
-        <source>Hủy</source>
-        <translation>Cancel</translation>
     </message>
     <message>
         <location filename="../transfers.py"/>
@@ -1748,20 +1907,11 @@
     </message>
     <message>
         <location filename="../transfers_view.py"/>
-        <source>Kéo file vào một thiết bị để gửi</source>
-        <translation>Drag files onto a device to send them</translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
         <source>Lượt gửi với {name} đã dừng vì máy đó gửi dữ liệu không hợp lệ. Hãy cập nhật Teleport trên cả hai máy rồi thử lại.</source>
         <translation>The transfer with {name} stopped because that device sent invalid data. Update Teleport on both devices, then try again.</translation>
     </message>
     <message>
-        <location filename="../transfers_view.py"/>
-        <source>Lượt truyền</source>
-        <translation>Transfers</translation>
-    </message>
-    <message>
+        <location filename="../chat_bubbles.py"/>
         <location filename="../transfers_view.py"/>
         <source>Lỗi</source>
         <translation>Error</translation>
@@ -1775,21 +1925,6 @@
         <location filename="../transfers_view.py"/>
         <source>Mất kết nối với {name} quá lâu nên đã dừng nhận. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.</source>
         <translation>The connection to {name} was lost for too long, so receiving stopped. Files that weren't fully received were deleted; files that were fully received are kept.</translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
-        <source>Mở thư mục</source>
-        <translation>Open folder</translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
-        <source>Thông báo</source>
-        <translation>Notice</translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
-        <source>Tiến độ</source>
-        <translation>Progress</translation>
     </message>
     <message>
         <location filename="../transfers_view.py"/>
@@ -1885,16 +2020,6 @@
         <location filename="../transfers_view.py"/>
         <source>{percent} · Đang chờ {name} phản hồi…</source>
         <translation>{percent} · Waiting for {name} to respond…</translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
-        <source>{what} · tới {name}</source>
-        <translation>{what} · to {name}</translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
-        <source>{what} · từ {name}</source>
-        <translation>{what} · from {name}</translation>
     </message>
     <message>
         <location filename="../transfers_view.py"/>
@@ -2027,11 +2152,6 @@
             <numerusform>Declined %n file from {name}: {drive} only holds files smaller than {limit}, and {file} is {size}.</numerusform>
             <numerusform>Declined %n files from {name}: {drive} only holds files smaller than {limit}, and {file} is {size}.</numerusform>
         </translation>
-    </message>
-    <message>
-        <location filename="../transfers_view.py"/>
-        <source>Đóng</source>
-        <translation>Close</translation>
     </message>
     <message>
         <location filename="../transfers_view.py"/>

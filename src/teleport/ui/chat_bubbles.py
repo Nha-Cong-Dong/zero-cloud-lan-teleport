@@ -1,0 +1,1048 @@
+"""Bong bóng của luồng chat theo máy (spec B3 mục 4; mvp F4, F5, mục 8, N12).
+
+Mỗi lượt truyền của phiên là một `TransferBubble`, mỗi mục lịch sử (`history()`) một `HistoryBubble`,
+mỗi lần gửi đang chờ `transfers.send` trả về một `PendingBubble` (“Đang chuẩn bị…”, spec B3 mục
+9b.22). Dòng mốc thời gian giữa hai bong bóng là `TimeSeparator`. Ba hàm thuần `file_icon`,
+`needs_separator`, `separator_text` không chạm widget. `ui.chat` dựng, xếp và định tuyến sự kiện tới
+các bong bóng; mọi luật **theo từng lượt** (tiến độ, chữ trạng thái, bỏ sự kiện tới muộn) nằm ở đây.
+
+**Chiều**: lượt `SEND` là `Side.OUT` (bên phải, nền `bubble_out`), `RECEIVE` là `Side.IN` (bên trái,
+nền `bubble_in`, viền `border`). `widgets.Direction` trùng tên `app.transfers.Direction` nên được
+import thành `Side`.
+
+**Bố cục của `TransferBubble`**: dòng 1 icon loại file (`icon_label`, `text_muted`, chỉ trang trí),
+tên file hay “n file” (`title_label`, cắt giữa theo bề ngang, tên đầy đủ ở accessibleName), cỡ
+(`size_label`) và nút ✕ “Hủy” (`cancel_button`) khi chưa xong; **không có ⏸** (giao thức không có
+tạm dừng). Dòng 2 thanh tiến độ mảnh `BubbleBar` (rãnh `track`, phần đã chạy `accent_strong`, thang
+`BAR_MAX`), chỉ khi lượt chưa kết thúc. Dòng 3 icon trạng thái (`status_icon`, chỉ khi đã kết thúc:
+`checkmark` màu `success` khi xong, `warning` màu `danger` khi lỗi, `dismiss` màu `text_muted` khi hủy
+hay từ chối) và nhãn trạng thái ngắn (`status_label`); dưới đó dòng phụ (`detail_label`, xuống
+dòng). Dòng 4 các nút “Mở thư mục” (bên nhận đã xong, mở thư mục cha của `FileDone.path`) và “Gửi
+lại”. Cuối cùng là `extension_slot` (chỗ cắm nút Nhận/Từ chối của B4; B3 để trống).
+
+Chữ trạng thái giữ nguyên chữ của `ui.transfers_view` (ví dụ “Đang gửi” + “42,0% · 85,2 MB/s · còn 1
+phút”), trừ lượt đã xong: nhận “Đã lưu”, gửi “Đã gửi” (dòng phụ vẫn “Đã kiểm tra toàn vẹn” hay “Đã
+lưu thành …”). Lỗi (`Kind.ERROR`): viền `BubbleEmphasis.DANGER` và câu mvp mục 8 đầy đủ
+(`result_message`) màu `text`. Hủy / từ chối: không viền nhấn. Tiêu đề không còn “· tới X / · từ X”
+(luồng đã thuộc một máy); tên máy vẫn có trong accessibleName.
+
+**Tiến độ nói đúng sự thật** (spec-hackathon PR-1, dời nguyên từ `TransfersView`): mỗi bong bóng giữ
+`shown_bytes`, chỉ tăng, ≤ tổng: `TransferProgress.shown_bytes`, còn ảnh chụp /
+`TransferStatusChanged` / `TransferResumed` góp `done_bytes + unsynced_bytes`. Thanh và % đều theo
+nó, nên bong bóng chưa kết thúc không bao giờ lùi. % làm tròn xuống và chặn ở 99,9% tới khi xong.
+Dòng phụ theo trạng thái: TRANSFERRING “x% · tốc độ · còn …” (tốc độ 0 thì bỏ phần “/s”), nhưng
+`idle_seconds` ≥ `STALL_TEXT_AFTER` thì câu đứng yên (bên nhận “x% · Đang chờ dữ liệu…”, bên gửi “x% ·
+Đang chờ X phản hồi…”); RECONNECTING “x% · Đang chờ X nối lại…”; VERIFYING “Đang kiểm tra video.mp4…”.
+Mỗi nhịp tiến độ chỉ `setValue` khi giá trị thang đổi và `setText` dòng phụ; lúc đổi loại câu (đứng
+yên ↔ tốc độ) mới vẽ lại cả trạng thái. Câu tường lửa (`DataUnreachable`) và câu lượt nhận được khôi
+phục (`TransferResumed`) giữ tới khi dữ liệu thật sự chảy (`shown_bytes` tăng hay về TRANSFERRING);
+`TransferStatusChanged(RECONNECTING)` giữ câu tường lửa (engine báo `DataUnreachable` trước), câu
+lượt khôi phục chỉ mất khi trạng thái mới là TRANSFERRING / VERIFYING. Bong bóng đã kết thúc không
+đổi nữa (bỏ sự kiện tới muộn); `TransferFinished(SUSPENDED)` bị bỏ qua. Bên nhận xong mà file được
+lưu khác tên gốc (`FileDone.path.name` ≠ tên trong `TransferInfo.names`): “Đã lưu thành video (1).mp4 ·
+Đã kiểm tra toàn vẹn” hay “Đã lưu n file với tên mới · …”.
+
+**“Gửi lại”** (spec B3 mục 5, 9.1): chỉ hiện khi đủ bốn điều kiện: chiều `SEND`, đã kết thúc, kết
+quả khác `DONE` và `UNPAIRED`, và bên điều phối đã nhớ đường dẫn nguồn (`set_resendable(True)`). Xét
+cả lúc `set_resendable` lẫn lúc kết thúc, nên thứ tự nào cũng đúng. Bấm được một lần (`resend_clicked`
+rồi ẩn).
+
+**Trình đọc màn hình**: câu tóm tắt qua `ChatBubble.set_summary` (accessibleName): “Gửi tới X” /
+“Nhận từ X”, tên file, cỡ, trạng thái, % nguyên (đang chạy) hay dòng phụ (chờ, kết thúc), giờ. Chỉ
+đặt lại khi loại trạng thái, nhãn, % nguyên hay câu phụ không phải tiến độ đổi, không theo từng nhịp
+tốc độ. Mọi trạng thái là icon + chữ, không chỉ màu (mvp N12). Bong bóng nhận tiêu điểm bằng chuột hay
+bằng code (`ClickFocus`; Tab do `ui.chat` lo, roving tabindex) và vẽ vòng tiêu điểm 2 px
+`theme.focus_ring_color` thụt vào 3 px, sau nền và viền của `ChatBubble`.
+
+**Bẫy**: `ChatBubble.__init__` gọi `self.retranslate()` trước khi lớp con dựng xong, nên lớp con
+**không ghi đè `retranslate`**; chữ dựng trong `_render()`, gọi từ `changeEvent` sau
+`super().changeEvent` (LanguageChange). Icon chỉ có cỡ 20 (`icons.SIZES`): icon trạng thái 16 px là
+pixmap 20 thu vào nhãn 16×16.
+
+**`HistoryBubble`**: chiều theo `entry.direction`; tên `file_label(names[0])` khi một file, không thì
+“n file”; dòng phụ “cỡ · HH:mm”; trạng thái “Đã lưu” / “Đã gửi” khi xong, còn lại `result_status`,
+giá trị `result` lạ → “Lỗi” và viền DANGER (`Kind.ERROR`). Không có “Gửi lại”. “Mở thư mục” chỉ khi
+`saved_path` tuyệt đối, và đường dẫn UNC chỉ khi thư mục nhận hiện tại nằm cùng `\\server\\share`
+(`can_open_saved`, so chuỗi sau `normcase`, không chạm đĩa).
+
+Chữ máy kia (tên máy, tên file) qua `texts.peer_label` / `texts.file_label`, mọi nhãn
+`Qt.PlainText`, không tooltip chứa chữ máy kia. Chuỗi mới ở ngữ cảnh `"Chat"`, gọi lúc dùng; câu mvp
+mục 8 lấy từ `ui.transfers_view` (ngữ cảnh `"Transfers"`, không chép lại).
+"""
+
+from __future__ import annotations
+
+import datetime
+import ntpath
+import os
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path, PurePath
+
+from PySide6.QtCore import QCoreApplication, QDate, QEvent, QRectF, QSize, Qt, QTime, Signal
+from PySide6.QtGui import QFocusEvent, QFont, QFontMetrics, QPainter, QPaintEvent, QPen, QResizeEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from teleport.app.transfers import (
+    Direction,
+    FileDone,
+    OfferReceived,
+    TransferFinished,
+    TransferInfo,
+    TransferKey,
+    TransferProgress,
+    TransferResult,
+    TransferStatus,
+)
+from teleport.core.history import HistoryEntry
+from teleport.ui import icons, texts, theme
+from teleport.ui.transfers_view import (
+    _FLOWING_STATUSES,
+    _WAITING_STATUSES,
+    BAR_MAX,
+    STALL_TEXT_AFTER,
+    Kind,
+    bar_value,
+    done_text,
+    percent_text,
+    progress_text,
+    reconnecting_text,
+    result_kind,
+    result_message,
+    result_status,
+    resumed_text,
+    saved_as_text,
+    short_status,
+    stalled_text,
+    status_kind,
+    unreachable_text,
+    verifying_text,
+    waiting_detail,
+)
+from teleport.ui.widgets import BubbleEmphasis, ChatBubble, IconButton, bubble_path
+from teleport.ui.widgets import Direction as Side
+
+SEPARATOR_GAP = 3600.0  # giây; cách bong bóng trước ≥ mức này thì có dòng mốc
+BUBBLE_MIN_WIDTH = 220  # px
+_ICON = 20  # px, icon loại file
+_STATUS_ICON = 16  # px, icon trạng thái (pixmap 20 thu vào)
+_FOCUS_INSET = 3  # px, vòng tiêu điểm thụt vào trong bong bóng
+_PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
+
+_VIDEO = frozenset({"mp4", "mkv", "mov", "avi", "webm", "wmv", "m4v", "flv", "mpg", "mpeg", "3gp", "ts"})
+_IMAGE = frozenset(
+    {"jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "tif", "tiff", "svg", "ico", "raw", "avif"}
+)
+_AUDIO = frozenset({"mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "wma", "aiff"})
+_ARCHIVE = frozenset({"zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz", "zst", "cab"})
+
+
+# ---- Hàm thuần --------------------------------------------------------------------------------
+
+
+def file_icon(names: Sequence[str], file_count: int) -> str:
+    """Tên icon theo loại file (chỉ trang trí): nhiều file hay không biết tên → “document”."""
+    if file_count > 1 or not names:
+        return "document"
+    _, dot, ext = names[0].rpartition(".")
+    ext = ext.casefold() if dot else ""
+    if ext in _VIDEO:
+        return "video"
+    if ext in _IMAGE:
+        return "image"
+    if ext in _AUDIO:
+        return "music_note_2"
+    if ext == "pdf":
+        return "document_pdf"
+    if ext in _ARCHIVE:
+        return "folder_zip"
+    return "document"
+
+
+def needs_separator(prev_at: float | None, at: float) -> bool:
+    """Có dòng mốc trước bong bóng ở `at` không: không có bong bóng trước, khác ngày (giờ địa phương),
+    hay cách bong bóng trước ≥ `SEPARATOR_GAP` giây. Giờ không đổi được → có mốc."""
+    if prev_at is None:
+        return True
+    try:
+        if datetime.datetime.fromtimestamp(prev_at).date() != datetime.datetime.fromtimestamp(at).date():
+            return True
+    except (OverflowError, OSError, ValueError):
+        return True
+    return at - prev_at >= SEPARATOR_GAP
+
+
+def separator_text(at: float, now: float) -> str:
+    """Chữ dòng mốc (giờ địa phương): “Hôm nay 10:40”, “Hôm qua 21:03”, “28/10 21:03” (cùng năm),
+    “28/10/2025 21:03”; ngày sau hôm nay theo hai dạng ngày. Giờ không đổi được → chuỗi rỗng."""
+    t = QCoreApplication.translate
+    try:
+        moment = datetime.datetime.fromtimestamp(at)
+        today = datetime.datetime.fromtimestamp(now).date()
+        day = moment.date()
+        clock = QTime(moment.hour, moment.minute).toString(t("Chat", "HH:mm"))
+        if day == today:
+            return texts.fill(t("Chat", "Hôm nay {time}"), time=clock)
+        if day < today and day == today - datetime.timedelta(days=1):
+            return texts.fill(t("Chat", "Hôm qua {time}"), time=clock)
+    except (OverflowError, OSError, ValueError):
+        return ""
+    date = QDate(day.year, day.month, day.day)
+    shown = date.toString(t("Chat", "dd/MM") if day.year == today.year else t("Chat", "dd/MM/yyyy"))
+    return texts.fill(t("Chat", "{date} {time}"), date=shown, time=clock)
+
+
+def clock_text(at: float) -> str:
+    """Giờ địa phương “HH:mm” của `at`; giờ không đổi được → chuỗi rỗng."""
+    try:
+        moment = datetime.datetime.fromtimestamp(at)
+    except (OverflowError, OSError, ValueError):
+        return ""
+    return QTime(moment.hour, moment.minute).toString(QCoreApplication.translate("Chat", "HH:mm"))
+
+
+def files_text(file_count: int) -> str:
+    """“n file” (tiêu đề khi nhiều file hay không biết tên)."""
+    return QCoreApplication.translate("Chat", "%n file", None, max(0, file_count))
+
+
+def _unc_share(path: str) -> str | None:
+    r"""Ổ mạng hay thiết bị (đã `normcase`) của `path`; ổ chữ cái `X:` hay không bắt đầu bằng `\\` → None.
+
+    Bỏ tiền tố `\\?\UNC\` (không phân biệt hoa thường) như `transfers_view._drive_label`, và `\\?\`
+    khi phía sau là ổ chữ cái; `\\?\` với phần sau khác (`GLOBALROOT\…`, `Volume{…}`) → "" (không bao
+    giờ trùng, kể cả khi thư mục nhận cùng dạng). Mọi dạng còn bắt đầu bằng `\\` hay `//` sau chuẩn
+    hóa (UNC, `\\.\`) coi là mạng/thiết bị: trả ổ của nó, hay "" khi không tách được ổ (không bao giờ
+    trùng thư mục nhận). Chỉ xử lý chuỗi.
+    """
+    text = path
+    if text[:8].lower() in ("\\\\?\\unc\\", "//?/unc/"):
+        text = "\\\\" + text[8:]
+    elif text[:4] in ("\\\\?\\", "//?/"):
+        rest = text[4:]
+        if len(rest) >= 2 and rest[1] == ":" and rest[0].isascii() and rest[0].isalpha():
+            text = rest
+        else:
+            # `\\?\GLOBALROOT\…`, `\\?\Volume{…}\…`: không tách được ổ đáng tin → không bao giờ trùng.
+            return ""
+    if not text.startswith(("\\\\", "//")):
+        return None
+    return ntpath.normcase(ntpath.splitdrive(text)[0])
+
+
+def can_open_saved(saved_path: str | None, receive_dir: Path | None) -> bool:
+    """“Mở thư mục” của mục lịch sử được không (spec B3 mục 5, 9.12): `saved_path` tuyệt đối; ổ mạng
+    hay thiết bị (`_unc_share`) chỉ khi thư mục nhận hiện tại nằm trên cùng ổ đó. Không chạm đĩa."""
+    if not saved_path:
+        return False
+    share = _unc_share(saved_path)
+    if share is not None:
+        return bool(share) and receive_dir is not None and _unc_share(str(receive_dir)) == share
+    if os.name == "nt":
+        return ntpath.isabs(saved_path) and bool(ntpath.splitdrive(saved_path)[0])
+    return PurePath(saved_path).is_absolute()
+
+
+# ---- Widget nhỏ -------------------------------------------------------------------------------
+
+
+def _label(*, wrap: bool = False, caption: bool = False, tone: str | None = None) -> QLabel:
+    label = QLabel()
+    label.setTextFormat(Qt.TextFormat.PlainText)
+    label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+    label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    if wrap:
+        label.setWordWrap(True)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    if caption:
+        label.setFont(theme.font_for(theme.TextStyle.CAPTION, label.font()))
+    if tone is not None:
+        label.setProperty(theme.TONE_PROPERTY, tone)
+    return label
+
+
+def _set_tone(label: QLabel, tone: str | None) -> None:
+    """Đổi `TONE_PROPERTY` của nhãn (chỉ khi khác) và áp lại stylesheet."""
+    if label.property(theme.TONE_PROPERTY) == tone:
+        return
+    label.setProperty(theme.TONE_PROPERTY, tone)
+    style = label.style()
+    style.unpolish(label)
+    style.polish(label)
+
+
+class _ElidedLabel(QLabel):
+    """Nhãn một dòng cắt giữa theo bề ngang; `full_text()` là chữ đầy đủ (cũng ở accessibleName)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._full = ""
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def full_text(self) -> str:
+        return self._full
+
+    def set_full_text(self, text: str) -> None:
+        if text == self._full and self.text():
+            return
+        self._full = text
+        self.setAccessibleName(text)
+        self._elide()
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:
+        metrics = QFontMetrics(self.font())
+        return QSize(metrics.horizontalAdvance(self._full) + 2, super().sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(40, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        width = max(0, self.width())
+        metrics = QFontMetrics(self.font())
+        shown = (
+            self._full
+            if metrics.horizontalAdvance(self._full) <= width
+            else (metrics.elidedText(self._full, Qt.TextElideMode.ElideMiddle, width))
+        )
+        if shown != self.text():
+            self.setText(shown)
+
+
+class _IconLabel(QLabel):
+    """Icon tô màu token (`icons.pixmap`), vẽ lại khi đổi sáng/tối; chỉ trang trí (NoFocus)."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__()
+        self._size = size
+        self._name: str | None = None
+        self._token = "text_muted"
+        self.setFixedSize(size, size)
+        self.setScaledContents(size != _ICON)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    @property
+    def icon_name(self) -> str | None:
+        return self._name
+
+    @property
+    def token(self) -> str:
+        return self._token
+
+    def set_icon(self, name: str | None, token: str = "text_muted") -> None:
+        if name == self._name and token == self._token and (name is None or not self.pixmap().isNull()):
+            return
+        self._name, self._token = name, token
+        self.refresh()
+
+    def refresh(self) -> None:
+        if self._name is None:
+            self.clear()
+            self.setVisible(False)
+            return
+        color = getattr(theme.tokens_for(self), self._token)
+        self.setPixmap(icons.pixmap(self._name, _ICON, color, self.devicePixelRatioF()))
+        self.setVisible(True)
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in (*_PALETTE_EVENTS, QEvent.Type.DevicePixelRatioChange):
+            self.refresh()
+
+
+class BubbleBar(QProgressBar):
+    """Thanh tiến độ mảnh 6 px của bong bóng: rãnh `track`, phần đã chạy `accent_strong`, thang
+    `BAR_MAX`; vẫn là `QProgressBar` nên giữ vai trò trợ năng ProgressBar."""
+
+    HEIGHT = 6
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setRange(0, BAR_MAX)
+        self.setValue(0)
+        self.setTextVisible(False)
+        self.setFixedHeight(self.HEIGHT)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        t = theme.tokens_for(self)
+        rect = QRectF(self.rect())
+        radius = rect.height() / 2
+        span = max(1, self.maximum() - self.minimum())
+        done = rect.width() * max(0, self.value() - self.minimum()) / span
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(t.track)
+            painter.drawRoundedRect(rect, radius, radius)
+            if done > 0:
+                painter.setBrush(t.accent_strong)
+                painter.drawRoundedRect(
+                    QRectF(rect.left(), rect.top(), max(done, rect.height()), rect.height()), radius, radius
+                )
+        finally:
+            painter.end()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in _PALETTE_EVENTS:
+            self.update()
+
+
+class TimeSeparator(QLabel):
+    """Dòng mốc thời gian giữa hai bong bóng: căn giữa, CAPTION, `tone=muted`, không nhận tiêu điểm."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.setFont(theme.font_for(theme.TextStyle.CAPTION, self.font()))
+        self.setProperty(theme.TONE_PROPERTY, "muted")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setWordWrap(True)
+
+
+# ---- Nền chung của bong bóng ------------------------------------------------------------------
+
+
+class _Bubble(ChatBubble):
+    """Phần chung: dòng 1 (icon, tên, cỡ, chỗ nút), vòng tiêu điểm, vẽ lại chữ khi đổi ngôn ngữ."""
+
+    focus_entered = Signal()
+
+    def __init__(self, side: Side, parent: QWidget | None, *, at: float) -> None:
+        super().__init__(side, parent)
+        self.at = at
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setMinimumWidth(BUBBLE_MIN_WIDTH)
+        self.icon_label = _IconLabel(_ICON)
+        self.title_label = _ElidedLabel()
+        title_font = self.title_label.font()
+        title_font.setWeight(QFont.Weight.DemiBold)
+        self.title_label.setFont(title_font)
+        self.size_label = _label(caption=True, tone="muted")
+        self.status_icon = _IconLabel(_STATUS_ICON)
+        self.status_icon.setVisible(False)
+        self.status_label = _label(caption=True)
+        status_font = self.status_label.font()
+        status_font.setWeight(QFont.Weight.DemiBold)
+        self.status_label.setFont(status_font)
+        self.detail_label = _label(wrap=True, caption=True, tone="muted")
+
+        names = QVBoxLayout()
+        names.setContentsMargins(0, 0, 0, 0)
+        names.setSpacing(0)
+        names.addWidget(self.title_label)
+        names.addWidget(self.size_label)
+        self.head = QHBoxLayout()
+        self.head.setContentsMargins(0, 0, 0, 0)
+        self.head.setSpacing(theme.SPACING[1])
+        self.head.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        self.head.addLayout(names, 1)
+        self.status_row = QHBoxLayout()
+        self.status_row.setContentsMargins(0, 0, 0, 0)
+        self.status_row.setSpacing(theme.SPACING[0])
+        self.status_row.addWidget(self.status_icon, 0, Qt.AlignmentFlag.AlignTop)
+        self.status_row.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignTop)
+        self.status_row.addStretch(1)
+        self.body().addLayout(self.head)
+
+    def focus_buttons(self) -> list[QWidget]:
+        """Các nút của bong bóng đang hiện và bật, theo thứ tự Tab."""
+        return []
+
+    def _render(self) -> None:
+        """Dựng lại mọi chữ (lớp con)."""
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.LanguageChange:
+            self._render()
+
+    def focusInEvent(self, event: QFocusEvent) -> None:
+        super().focusInEvent(event)
+        self.update()
+        self.focus_entered.emit()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:
+        super().focusOutEvent(event)
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        if not self.hasFocus():
+            return
+        dark = theme.is_dark_palette(QApplication.palette())
+        inset = _FOCUS_INSET
+        path = bubble_path(QRectF(self.rect()).adjusted(inset, inset, -inset, -inset), self.direction)
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(theme.focus_ring_color(dark), 2))
+            painter.drawPath(path)
+        finally:
+            painter.end()
+
+
+def _button(parent: QWidget) -> QPushButton:
+    button = QPushButton(parent)
+    button.setAutoDefault(False)
+    button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # Tab do `ui.chat` (roving tabindex)
+    button.setVisible(False)
+    return button
+
+
+# ---- TransferBubble ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BubbleContext:
+    """Những gì bong bóng cần từ luồng để dựng chữ: tên máy kia (đã qua `peer_label`), có kết nối điều
+    khiển không, thư mục nhận (câu lỗi ghi đĩa)."""
+
+    peer: str
+    connected: bool = True
+    receive_dir: Path | None = None
+
+
+class TransferBubble(_Bubble):
+    """Bong bóng của một lượt trong phiên (xem docstring module)."""
+
+    cancel_clicked = Signal()
+    open_clicked = Signal()
+    resend_clicked = Signal()
+
+    def __init__(
+        self,
+        key: TransferKey,
+        parent: QWidget | None = None,
+        *,
+        at: float = 0.0,
+        context: Callable[[TransferBubble], BubbleContext] | None = None,
+    ) -> None:
+        super().__init__(Side.OUT if key.direction is Direction.SEND else Side.IN, parent, at=at)
+        self.key = key
+        self.finished = False
+        self.kind = Kind.WAITING
+        self.status = TransferStatus.WAITING
+        self.info: TransferInfo | None = None
+        self.file_count = 0
+        self.total_bytes = 0
+        self.first_name: str | None = None  # tên file đầu (chưa qua `file_label`)
+        self.offer_name: str | None = None  # tên máy trong `OfferReceived` (dự phòng)
+        self.offer_names: tuple[str, ...] = ()
+        self.resumed = False
+        self.unreachable = False
+        self.progress: TransferProgress | None = None
+        self.shown_bytes = 0  # byte hiển thị (thanh, %), chỉ tăng
+        self.stalled_shown = False
+        self.result: TransferFinished | None = None
+        self.last_path: Path | None = None  # `FileDone.path` cuối (bên nhận)
+        self.renamed: dict[int, str] = {}
+        self._resend_known = False
+        self._resend_used = False
+        self._summary_key: tuple[object, ...] | None = None
+        self._context = context
+
+        self.cancel_button = IconButton("dismiss", QCoreApplication.translate("Chat", "Hủy"), self)
+        self.cancel_button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.cancel_button.clicked.connect(self._on_cancel)
+        self.head.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignTop)
+        self.progress_bar = BubbleBar(self)
+        self.open_button = _button(self)
+        self.open_button.clicked.connect(self.open_clicked)
+        self.resend_button = _button(self)
+        self.resend_button.clicked.connect(self._on_resend)
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, theme.SPACING[0], 0, 0)
+        buttons.setSpacing(theme.SPACING[1])
+        buttons.addWidget(self.open_button)
+        buttons.addWidget(self.resend_button)
+        buttons.addStretch(1)
+        self.extension_slot = QVBoxLayout()
+        self.extension_slot.setContentsMargins(0, 0, 0, 0)
+        body = self.body()
+        body.addWidget(self.progress_bar)
+        body.addLayout(self.status_row)
+        body.addWidget(self.detail_label)
+        body.addLayout(buttons)
+        body.addLayout(self.extension_slot)
+        self.icon_label.set_icon("document")
+        self._render()
+
+    # -- Dữ liệu ----------------------------------------------------------------------------------
+
+    def context(self) -> BubbleContext:
+        if self._context is not None:
+            return self._context(self)
+        return BubbleContext(texts.peer_label(self.offer_name, self.key.device_id))
+
+    def set_info(self, info: TransferInfo) -> None:
+        self.info = info
+        self.status = info.status
+        self.file_count = len(info.files)
+        self.total_bytes = info.total_bytes
+        self.first_name = info.names[0] if info.names else None
+
+    def original_name(self, index: int) -> str | None:
+        """Tên gốc (đã làm sạch) của file thứ `index`: `info.names`, không có thì tên trong `offer`."""
+        names = self.info.names if self.info is not None and self.info.names else self.offer_names
+        return names[index] if 0 <= index < len(names) else None
+
+    def raise_shown(self, shown: int, total: int) -> None:
+        """Nâng `shown_bytes` lên `shown` (kẹp trong 0…`total`); không bao giờ hạ, thanh không lùi."""
+        self.shown_bytes = max(self.shown_bytes, min(max(0, shown), max(0, total)))
+        value = bar_value(self.shown_bytes, total)
+        if value > self.progress_bar.value():
+            self.progress_bar.setValue(value)
+
+    def set_resendable(self, on: bool) -> None:
+        """Bên điều phối đã nhớ (True) hay bỏ (False) đường dẫn nguồn của lượt này cho “Gửi lại”."""
+        self._resend_known = bool(on)
+        self._update_resend()
+
+    def resendable(self) -> bool:
+        """Nút “Gửi lại” đang được phép hiện (đủ bốn điều kiện, chưa bấm)."""
+        result = None if self.result is None else self.result.result
+        return (
+            self.key.direction is Direction.SEND
+            and self.finished
+            and result not in (None, TransferResult.DONE, TransferResult.UNPAIRED)
+            and self._resend_known
+            and not self._resend_used
+        )
+
+    def focus_buttons(self) -> list[QWidget]:
+        candidates: list[QWidget] = [self.cancel_button, self.open_button, self.resend_button]
+        for i in range(self.extension_slot.count()):
+            item = self.extension_slot.itemAt(i)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                candidates.append(widget)
+        return [w for w in candidates if not w.isHidden() and w.isEnabled()]
+
+    # -- Sự kiện của lượt -------------------------------------------------------------------------
+
+    def apply_status(self, info: TransferInfo) -> None:
+        """`TransferStatusChanged`."""
+        if self.finished:
+            return
+        self.set_info(info)
+        self.raise_shown(info.done_bytes + info.unsynced_bytes, info.total_bytes)
+        # Engine báo `DataUnreachable` TRƯỚC `StatusChanged(RECONNECTING)` của cùng lần thất bại:
+        # RECONNECTING không xóa câu tường lửa. Câu lượt khôi phục chỉ mất khi dữ liệu chảy lại.
+        if info.status is not TransferStatus.RECONNECTING:
+            self.unreachable = False
+        if info.status in _FLOWING_STATUSES:
+            self.resumed = False
+        self._render()
+
+    def apply_offer(self, update: OfferReceived) -> None:
+        if self.finished:
+            return
+        self.offer_name = update.device_name
+        self.offer_names = tuple(update.names)
+        if self.info is None:
+            self.status = TransferStatus.WAITING
+            self.file_count = len(update.files)
+            self.total_bytes = update.total_bytes
+            self.first_name = update.names[0] if update.names else None
+        self._render()
+
+    def apply_file_done(self, update: FileDone) -> None:
+        if self.finished or update.path is None:
+            return
+        self.last_path = update.path
+        # Trùng tên có sẵn thì file được lưu với tên khác (protocol.md §4.4). `FileDone.name` bên nhận
+        # ĐÃ là tên lưu cuối: so với tên gốc (đã làm sạch) trong `info.names`, dự phòng tên của `offer`.
+        original = self.original_name(update.file_index)
+        if original is not None and update.path.name != original:
+            self.renamed[update.file_index] = update.path.name
+        else:
+            self.renamed.pop(update.file_index, None)
+
+    def apply_resumed(self, info: TransferInfo) -> None:
+        if self.finished:
+            return
+        self.set_info(info)
+        self.resumed = True
+        self.raise_shown(info.done_bytes + info.unsynced_bytes, info.total_bytes)
+        self._render()
+
+    def apply_unreachable(self) -> None:
+        if self.finished:
+            return
+        self.unreachable = True
+        self.render_status()
+
+    def apply_progress(self, update: TransferProgress) -> None:
+        """Một nhịp tiến độ: chỉ `setValue` / `setText` tại chỗ (xem docstring module)."""
+        if self.finished:
+            return
+        info = update.info
+        self.info = info
+        self.progress = update
+        old_shown = self.shown_bytes
+        self.raise_shown(update.shown_bytes, info.total_bytes)
+        # App phát tiến độ mỗi nhịp cả khi RECONNECTING đứng yên: chỉ khi dữ liệu thật sự chảy mới bỏ
+        # câu tường lửa / câu lượt khôi phục.
+        flowing = self.shown_bytes > old_shown or info.status is TransferStatus.TRANSFERRING
+        cleared = flowing and (self.resumed or self.unreachable)
+        if cleared:
+            self.resumed = False
+            self.unreachable = False
+        if cleared or info.status is not self.status:
+            self.status = info.status
+            self.render_status()
+        elif self.status not in _WAITING_STATUSES and not (self.resumed or self.unreachable):
+            if self._is_stalled() is not self.stalled_shown:
+                self.render_status()  # đổi loại câu: cập nhật cả trình đọc màn hình
+            else:
+                detail = self._active_detail(self.context().peer)
+                if detail != self.detail_label.text():
+                    self.detail_label.setText(detail)
+                if self.detail_label.isHidden() == bool(detail):
+                    self.detail_label.setVisible(bool(detail))
+                self._update_summary()
+
+    def finish(self, update: TransferFinished) -> bool:
+        """`TransferFinished`; True nếu bong bóng vừa kết thúc (SUSPENDED và sự kiện muộn → False)."""
+        if update.result is TransferResult.SUSPENDED or self.finished:
+            return False
+        self.set_info(update.info)
+        self.finished = True
+        self.result = update
+        if update.result is TransferResult.DONE:
+            self.progress_bar.setValue(BAR_MAX)
+        self.progress_bar.setVisible(False)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setVisible(False)
+        self.open_button.setVisible(
+            update.result is TransferResult.DONE
+            and self.key.direction is Direction.RECEIVE
+            and self.last_path is not None
+        )
+        self._render()
+        return True
+
+    # -- Vẽ chữ -----------------------------------------------------------------------------------
+
+    def _title(self) -> str:
+        if self.file_count == 1 and self.first_name is not None:
+            return texts.file_label(self.first_name)
+        return files_text(self.file_count)
+
+    def _status(self, ctx: BubbleContext) -> tuple[Kind, str, str]:
+        """(loại, nhãn ngắn, dòng phụ)."""
+        peer = ctx.peer
+        direction = self.key.direction
+        if self.result is not None:
+            result = self.result.result
+            if result is TransferResult.DONE:
+                t = QCoreApplication.translate
+                if direction is Direction.RECEIVE:
+                    detail = (
+                        saved_as_text([self.renamed[i] for i in sorted(self.renamed)])
+                        if self.renamed
+                        else done_text()
+                    )
+                    return Kind.DONE, t("Chat", "Đã lưu"), detail
+                return Kind.DONE, t("Chat", "Đã gửi"), done_text()
+            return (
+                result_kind(result),
+                result_status(result),
+                result_message(self.result, peer, ctx.receive_dir),
+            )
+        if self.unreachable:
+            return (
+                Kind.RECONNECTING,
+                short_status(direction, TransferStatus.RECONNECTING),
+                unreachable_text(peer),
+            )
+        if self.resumed:
+            return Kind.WAITING, short_status(direction, TransferStatus.WAITING), resumed_text(peer)
+        waiting = waiting_detail(direction, self.status, peer, connected=ctx.connected)
+        detail = waiting if waiting is not None else self._active_detail(peer)
+        return status_kind(self.status), short_status(direction, self.status), detail
+
+    def _active_detail(self, peer: str) -> str:
+        status = self.status
+        if status is TransferStatus.VERIFYING:
+            return verifying_text(self.info)
+        percent = percent_text(self.shown_bytes, self.total_bytes)
+        if status is TransferStatus.RECONNECTING:
+            return reconnecting_text(percent, peer)
+        progress = self.progress
+        if progress is None:
+            return ""
+        if self._is_stalled():
+            return stalled_text(percent, self.key.direction, peer)
+        return progress_text(progress, self.shown_bytes)
+
+    def _is_stalled(self) -> bool:
+        progress = self.progress
+        return (
+            self.status is TransferStatus.TRANSFERRING
+            and progress is not None
+            and progress.idle_seconds >= STALL_TEXT_AFTER
+        )
+
+    def render_status(self) -> None:
+        """Vẽ lại icon, nhãn trạng thái, dòng phụ và câu tóm tắt."""
+        ctx = self.context()
+        self.stalled_shown = self._is_stalled()
+        kind, status, detail = self._status(ctx)
+        self.kind = kind
+        self.set_emphasis(BubbleEmphasis.DANGER if kind is Kind.ERROR else BubbleEmphasis.NONE)
+        if kind is Kind.DONE:
+            self.status_icon.set_icon("checkmark", "success")
+        elif kind is Kind.ERROR:
+            self.status_icon.set_icon("warning", "danger")
+        elif kind is Kind.CANCELLED:
+            self.status_icon.set_icon("dismiss", "text_muted")
+        else:
+            self.status_icon.set_icon(None)
+        _set_tone(self.status_label, "accent" if kind in (Kind.ACTIVE, Kind.RECONNECTING) else None)
+        _set_tone(self.detail_label, None if kind is Kind.ERROR else "muted")
+        self.status_label.setText(status)
+        self.detail_label.setText(detail)
+        self.detail_label.setVisible(bool(detail))
+        self.progress_bar.setAccessibleDescription(status)
+        self._update_summary(ctx, kind, status, detail)
+
+    def _update_summary(
+        self,
+        ctx: BubbleContext | None = None,
+        kind: Kind | None = None,
+        status: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        """Câu tóm tắt cho trình đọc màn hình; chỉ đặt khi phần không theo nhịp tốc độ đổi."""
+        if ctx is None or kind is None or status is None or detail is None:
+            ctx = self.context()
+            kind, status, detail = self._status(ctx)
+        t = QCoreApplication.translate
+        moving = (
+            not self.finished
+            and kind in (Kind.ACTIVE, Kind.RECONNECTING)
+            and not (self.unreachable or self.resumed)
+        )
+        percent = None
+        if moving and self.total_bytes > 0 and self.status is not TransferStatus.VERIFYING:
+            percent = min(99, self.shown_bytes * 100 // self.total_bytes)
+        # Câu tốc độ theo nhịp không vào tên; câu đứng yên (“Đang chờ dữ liệu…”) thì vào, vì đó là đổi
+        # loại câu và không đổi theo nhịp (dữ liệu không chạy nên % không đổi).
+        tail = detail if not moving or self.stalled_shown else ""
+        key = (kind, status, percent, tail, ctx.peer, self._title(), self.total_bytes)
+        if key == self._summary_key:
+            return
+        self._summary_key = key
+        if self.key.direction is Direction.SEND:
+            who = texts.fill(t("Chat", "Gửi tới {name}"), name=ctx.peer)
+        else:
+            who = texts.fill(t("Chat", "Nhận từ {name}"), name=ctx.peer)
+        parts = [who, f"{self._title()}, {texts.format_size(max(0, self.total_bytes))}", status]
+        if percent is not None:
+            parts.append(f"{percent}%")
+        if tail:
+            parts.append(tail)
+        when = clock_text(self.at)
+        if when:
+            parts.append(when)
+        self.set_summary(". ".join(p.rstrip(".") for p in parts if p) + ".")
+
+    def refresh_text(self) -> None:
+        """Dựng lại mọi chữ (tiêu đề, cỡ, nút, trạng thái)."""
+        self._render()
+
+    def _render(self) -> None:
+        t = QCoreApplication.translate
+        if not hasattr(self, "key"):
+            return  # `ChatBubble.__init__` gọi trước khi lớp con dựng xong
+        title = self._title()
+        self.title_label.set_full_text(title)
+        self.size_label.setText(texts.format_size(max(0, self.total_bytes)))
+        names = self.info.names if self.info is not None else self.offer_names
+        self.icon_label.set_icon(file_icon(names, self.file_count))
+        self.progress_bar.setAccessibleName(t("Chat", "Tiến độ"))
+        self.cancel_button.set_label(t("Chat", "Hủy"))
+        self.cancel_button.setAccessibleDescription(title)
+        for button, text in (
+            (self.open_button, t("Chat", "Mở thư mục")),
+            (self.resend_button, t("Chat", "Gửi lại")),
+        ):
+            button.setText(text)
+            button.setAccessibleName(text)
+            button.setAccessibleDescription(title)
+        self._summary_key = None
+        self.render_status()
+        self._update_resend()
+
+    def _update_resend(self) -> None:
+        self.resend_button.setVisible(self.resendable())
+
+    def _on_cancel(self) -> None:
+        if not self.finished:
+            self.cancel_clicked.emit()
+
+    def _on_resend(self) -> None:
+        if not self.resendable():
+            return
+        self._resend_used = True
+        self._update_resend()
+        self.resend_clicked.emit()
+
+
+# ---- HistoryBubble ----------------------------------------------------------------------------
+
+
+def _result_of(value: str) -> TransferResult | None:
+    try:
+        return TransferResult(value)
+    except ValueError:
+        return None
+
+
+class HistoryBubble(_Bubble):
+    """Bong bóng của một mục lịch sử (xem docstring module); không có “Gửi lại”."""
+
+    open_clicked = Signal()
+
+    def __init__(
+        self,
+        entry: HistoryEntry,
+        parent: QWidget | None = None,
+        *,
+        peer: str | None = None,
+        receive_dir: Path | None = None,
+    ) -> None:
+        direction = Direction(entry.direction)
+        try:
+            at = entry.finished_at.timestamp()
+        except (OverflowError, OSError, ValueError):
+            at = 0.0
+        super().__init__(Side.OUT if direction is Direction.SEND else Side.IN, parent, at=at)
+        self.entry = entry
+        self.key = TransferKey(entry.device_id, direction, entry.transfer_id)
+        self.finished = True
+        result = _result_of(entry.result)
+        self.kind = Kind.ERROR if result is None else result_kind(result)
+        self._peer = peer
+        self.open_button = _button(self)
+        self.open_button.clicked.connect(self.open_clicked)
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, theme.SPACING[0], 0, 0)
+        buttons.addWidget(self.open_button)
+        buttons.addStretch(1)
+        self.body().addLayout(self.status_row)
+        self.body().addWidget(self.detail_label)
+        self.body().addLayout(buttons)
+        self.set_emphasis(BubbleEmphasis.DANGER if self.kind is Kind.ERROR else BubbleEmphasis.NONE)
+        self.set_receive_dir(receive_dir)
+        self._render()
+
+    def folder(self) -> Path | None:
+        """Thư mục cha của `saved_path` (để mở), hay None."""
+        saved = self.entry.saved_path
+        return Path(saved).parent if saved else None
+
+    def set_receive_dir(self, receive_dir: Path | None) -> None:
+        """Thư mục nhận hiện tại: quyết định “Mở thư mục” của đường dẫn UNC (`can_open_saved`)."""
+        self.open_button.setVisible(can_open_saved(self.entry.saved_path, receive_dir))
+
+    def set_peer(self, peer: str | None) -> None:
+        self._peer = peer
+        self._render()
+
+    def focus_buttons(self) -> list[QWidget]:
+        return [self.open_button] if not self.open_button.isHidden() else []
+
+    def _render(self) -> None:
+        if not hasattr(self, "entry"):
+            return
+        t = QCoreApplication.translate
+        entry = self.entry
+        if entry.file_count == 1 and entry.names:
+            title = texts.file_label(entry.names[0])
+        else:
+            title = files_text(entry.file_count)
+        self.title_label.set_full_text(title)
+        when = clock_text(self.at)
+        size = texts.format_size(max(0, entry.total_bytes))
+        self.size_label.setText(f"{size} · {when}" if when else size)
+        self.icon_label.set_icon(file_icon(entry.names, entry.file_count))
+        result = _result_of(entry.result)
+        if result is TransferResult.DONE:
+            status = t("Chat", "Đã lưu") if self.key.direction is Direction.RECEIVE else t("Chat", "Đã gửi")
+            self.status_icon.set_icon("checkmark", "success")
+        else:
+            status = t("Transfers", "Lỗi") if result is None else result_status(result)
+            if self.kind is Kind.ERROR:
+                self.status_icon.set_icon("warning", "danger")
+            else:
+                self.status_icon.set_icon("dismiss", "text_muted")
+        self.status_label.setText(status)
+        self.detail_label.setVisible(False)
+        open_text = t("Chat", "Mở thư mục")
+        self.open_button.setText(open_text)
+        self.open_button.setAccessibleName(open_text)
+        self.open_button.setAccessibleDescription(title)
+        peer = self._peer if self._peer is not None else texts.peer_label(entry.device_name, entry.device_id)
+        if self.key.direction is Direction.SEND:
+            who = texts.fill(t("Chat", "Gửi tới {name}"), name=peer)
+        else:
+            who = texts.fill(t("Chat", "Nhận từ {name}"), name=peer)
+        parts = [who, f"{title}, {size}", status, when]
+        self.set_summary(". ".join(p for p in parts if p) + ".")
+
+
+# ---- PendingBubble ----------------------------------------------------------------------------
+
+
+class PendingBubble(_Bubble):
+    """Bong bóng tạm “Đang chuẩn bị…” của một lần gửi chưa có lượt (spec B3 mục 9b.22): OUT, icon
+    theo loại file, tên hay “n file”, không cỡ (chưa `stat`), không thanh, không nút."""
+
+    def __init__(
+        self, token: int, names: Sequence[str], parent: QWidget | None = None, *, at: float = 0.0
+    ) -> None:
+        super().__init__(Side.OUT, parent, at=at)
+        self.token = token
+        self.names = tuple(names)
+        self.finished = False
+        self.size_label.setVisible(False)
+        self.body().addLayout(self.status_row)
+        self.body().addWidget(self.detail_label)
+        _set_tone(self.status_label, "muted")
+        self.detail_label.setVisible(False)
+        self._render()
+
+    def _render(self) -> None:
+        if not hasattr(self, "token"):
+            return
+        t = QCoreApplication.translate
+        count = len(self.names)
+        title = texts.file_label(self.names[0]) if count == 1 else files_text(count)
+        self.title_label.set_full_text(title)
+        self.icon_label.set_icon(file_icon(self.names, count))
+        status = t("Chat", "Đang chuẩn bị…")
+        self.status_label.setText(status)
+        self.set_summary(f"{title}. {status}")

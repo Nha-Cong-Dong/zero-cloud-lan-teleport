@@ -575,34 +575,138 @@ def scene_running_unavailable(qtbot):
     return window
 
 
-def scene_conversation(qtbot):
-    """Đang chạy, có máy đã ghép đôi, chọn cuộc trò chuyện có một lượt đang gửi."""
-    from teleport.app.transfers import TransferProgress, TransferStatusChanged
+def _chat(window, views, device):
+    """`ChatView` đặt vào khung phải như `TransfersController` (spec B3), đang mở luồng của `device`."""
+    from teleport.ui.chat import ChatView
+
+    view = ChatView(window.devices, window.transfers_area)
+    layout = window.transfers_area.layout()
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(view)
+    view.content_changed.connect(lambda: window.set_transfer_summary(view.has_content(), view.active_count()))
+    window.conversations.current_changed.connect(view.set_device)
+    view.set_device_names({v.device_id: v.name for v in views})
+    view.set_receive_dir(RECEIVE_DIR)
+    view.history_needed.connect(lambda device_id: view.load_history(device_id, []))
+    assert window.open_conversation(device.device_id)
+    view.set_device(device.device_id)
+    return view
+
+
+def _transfer(device_id: str, direction: str, i: int, status: str, name: str, size: int, done: int = 0):
     from teleport.core.messages import FileEntry
     from teleport.core.transfer import Direction, TransferInfo, TransferKey, TransferStatus
-    from teleport.ui.transfers_view import TransfersView
+
+    return TransferInfo(
+        key=TransferKey(device_id, Direction(direction), f"{i:032x}"),
+        status=TransferStatus(status),
+        files=(FileEntry(name, size, 1_700_000_000_000),),
+        names=(name,),
+        file_index=0,
+        done_bytes=done,
+        total_bytes=size,
+        unsynced_bytes=0,
+    )
+
+
+def _finished(info, result: str):
+    from teleport.app.transfers import TransferFinished, TransferResult
+
+    return TransferFinished(
+        info=info, result=TransferResult(result), by_peer=False, reason=None, file_index=0, reject=None
+    )
+
+
+def _history(device, i: int, direction: str, name: str, result: str, days_ago: int):
+    import datetime
+
+    from teleport.core.history import HistoryEntry
+    from teleport.core.transfer import Direction
+
+    at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days_ago)
+    return HistoryEntry(
+        direction=Direction(direction),
+        device_id=device.device_id,
+        device_name=device.name,
+        transfer_id=f"{i:032x}",
+        file_count=1,
+        total_bytes=420 * 2**20,
+        done_bytes=420 * 2**20 if result == "done" else 0,
+        names=(name,),
+        result=result,
+        finished_at=at,
+        saved_path=str(RECEIVE_DIR / name) if direction == "receive" and result == "done" else None,
+    )
+
+
+def scene_conversation(qtbot):
+    """Luồng chat (spec B3) của máy đang chọn có đủ loại bong bóng: lịch sử (xong, lỗi, đã từ chối, hôm
+    qua và một năm trước), nhận xong (“Mở thư mục”), gửi lỗi có “Gửi lại”, đang gửi (tốc độ, còn …),
+    đang chờ, bong bóng tạm “Đang chuẩn bị…”, dòng mốc, nút “↓ Mới” và thông báo có nút hành động."""
+    from teleport.app.transfers import FileDone, TransferProgress, TransferStatusChanged
+    from teleport.ui import texts
 
     views = _some_devices()
     window = _running(qtbot, views)
     nha = views[0]
-    size = 18 * 2**30
-    info = TransferInfo(
-        key=TransferKey(nha.device_id, Direction.SEND, "a" * 32),
-        status=TransferStatus.TRANSFERRING,
-        files=(FileEntry("movie-4k.mkv", size, 1_700_000_000_000),),
-        names=("movie-4k.mkv",),
-        file_index=0,
-        done_bytes=size // 2,
-        total_bytes=size,
-        unsynced_bytes=0,
+    view = _chat(window, views, nha)
+    view._history_timer.stop()
+    view.history_needed.disconnect()
+    view.history_needed.connect(
+        lambda device_id: view.load_history(
+            device_id,
+            [
+                _history(nha, 1, "receive", "slide.pptx", "done", 400),
+                _history(nha, 2, "send", "old-movie.mkv", "rejected_user", 1),
+                _history(nha, 3, "receive", "music.mp3", "disk_failed", 1),
+            ],
+        )
     )
-    view = TransfersView(window.transfers_area)
-    window.transfers_area.layout().addWidget(view)
-    view.set_device_names({v.device_id: v.name for v in views})
-    view.handle(TransferStatusChanged(info))
-    view.handle(TransferProgress(info, 94 * 2**20, 60.0, shown_bytes=info.done_bytes, idle_seconds=0.0))
-    window.set_transfer_summary(view.has_content(), view.active_count())
-    assert window.open_conversation(nha.device_id)
+    view._request_history()
+    received = _transfer(
+        nha.device_id, "receive", 10, "verifying", "photos.zip", 1_800 * 2**20, 1_800 * 2**20
+    )
+    view.handle(TransferStatusChanged(received))
+    view.handle(FileDone(received.key, 0, "photos.zip", RECEIVE_DIR / "photos.zip"))
+    view.handle(_finished(received, "done"))
+    report = _transfer(nha.device_id, "send", 11, "transferring", "report.pdf", 4 * 2**20, 2**20)
+    view.handle(TransferStatusChanged(report))
+    view.handle(_finished(report, "source_changed"))
+    view.set_resendable(report.key, True)
+    size = 18 * 2**30
+    sending = _transfer(nha.device_id, "send", 12, "transferring", "movie-4k.mkv", size, size // 2)
+    view.handle(TransferStatusChanged(sending))
+    view.handle(TransferProgress(sending, 94 * 2**20, 60.0, shown_bytes=sending.done_bytes, idle_seconds=0.0))
+    waiting = _transfer(nha.device_id, "receive", 13, "waiting", "contract.docx", 2**20)
+    view.handle(TransferStatusChanged(waiting))
+    view.add_pending(nha.device_id, [Path("C:/Users/Minh/Videos/slides.pptx")])
+    view._set_new_count(2)  # như khi đã cuộn lên rồi có lượt mới
+    view.show_notice(texts.menu_open, texts.retry, lambda: None)  # câu dựng bằng hàm: dịch lại được
+    thread = view.thread_for(nha.device_id)
+    assert thread is not None and len(thread.history_bubbles()) == 3 and len(view.rows()) == 4
+    return window
+
+
+def scene_chat_offline(qtbot):
+    """Máy đã ghép đôi đang ngoại tuyến: lượt gửi chờ kết nối, câu ngoại tuyến ở thanh dưới."""
+    from teleport.app.transfers import TransferStatusChanged
+
+    views = _some_devices()
+    window = _running(qtbot, views)
+    lab = views[2]
+    view = _chat(window, views, lab)
+    view.set_connected(lab.device_id, False)
+    view.handle(TransferStatusChanged(_transfer(lab.device_id, "send", 20, "waiting", "demo.mp4", 3 * 2**30)))
+    return window
+
+
+def scene_chat_empty(qtbot):
+    """Máy chưa có lượt nào: màn rỗng “Kéo file vào đây để gửi cho X”."""
+    views = _some_devices()
+    window = _running(qtbot, views)
+    view = _chat(window, views, views[1])
+    view._history_timer.stop()
+    view._request_history()
     return window
 
 
@@ -675,6 +779,8 @@ SCENES = {
     "running_empty": scene_running_empty,
     "running_unavailable": scene_running_unavailable,
     "conversation": scene_conversation,
+    "chat_offline": scene_chat_offline,
+    "chat_empty": scene_chat_empty,
     "discover": _discover_scene(_some_devices),
     "discover_empty": _discover_scene(list),
     "discover_list": _discover_scene(lambda: [_device(f"PC-{i}", paired=False) for i in range(9)]),

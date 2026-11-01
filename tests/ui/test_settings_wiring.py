@@ -731,3 +731,35 @@ def test_page_closed_on_start_error_and_retry_reloads(gui, gui_wait, config_dir,
     assert seen["loaded_on_error"] is False
     assert seen["controller_host"] is True
     assert run.code == 0
+
+
+# =================================================================================================
+# Xóa lịch sử → luồng chat nạp lại (spec B3 mục 9.14)
+# =================================================================================================
+
+
+def test_history_cleared_reaches_chat_view(gui, gui_wait, config_dir, ui_helpers, apps, monkeypatch):
+    """`history_cleared` của trang Cài đặt (None) và của `PairingController` (device_id) →
+    `ChatView.invalidate_history` của luồng chat."""
+    from teleport.ui.chat import ChatView
+
+    calls: list = []
+    real = ChatView.invalidate_history
+
+    def record(self, device_id):
+        calls.append(device_id)
+        real(self, device_id)
+
+    monkeypatch.setattr(ChatView, "invalidate_history", record)
+    d = config_dir("A")
+
+    def script(run):
+        yield gui_wait(lambda: started(run) and loaded(apps), 15, "node chạy, trang nạp xong")
+        app = apps[-1]
+        app.settings.history_cleared.emit(None)
+        app.pairing.history_cleared.emit("a" * 32)
+        quit_via_tray(run, ui_helpers.plain)
+
+    run = gui(["--config-dir", str(d)], script)
+    assert calls == [None, "a" * 32]
+    assert run.code == 0
