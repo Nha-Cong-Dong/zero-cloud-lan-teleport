@@ -39,9 +39,11 @@
 ; AppId cố định: KHÔNG BAO GIỜ ĐỔI. Bộ cài bản sau tìm bản đã cài (cài đè, gỡ, khóa
 ; ...\Uninstall\{AppId}_is1) theo đúng giá trị này. Dấu "{{" là cách viết "{" trong Inno.
 AppId={{A82B1EF5-F24A-4DA0-841B-09F4E2F6D4C1}
-AppName=Teleport
+; Tên hiển thị là “ZCL Teleport” (tên ngắn của sản phẩm); thư mục cài, tên exe, giá trị Run, tên rule
+; tường lửa và thư mục dữ liệu vẫn là “Teleport” để bản cũ cài đè và gỡ đúng.
+AppName=ZCL Teleport
 AppVersion={#AppVersion}
-AppVerName=Teleport {#AppVersion}
+AppVerName=ZCL Teleport {#AppVersion}
 AppPublisher=Nha-Cong-Dong
 AppPublisherURL=https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport
 AppSupportURL=https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport
@@ -50,7 +52,7 @@ AppCopyright=Copyright (C) 2026 Các tác giả của Zero-Cloud LAN Teleport. G
 VersionInfoVersion={#AppVersionNumeric}
 VersionInfoProductName=Zero-Cloud LAN Teleport
 VersionInfoProductTextVersion={#AppVersion}
-VersionInfoDescription=Bộ cài Teleport
+VersionInfoDescription=Bộ cài ZCL Teleport
 
 ; Cài cho cả máy là mặc định; /CURRENTUSER (hay /ALLUSERS) chỉ đổi được từ dòng lệnh, không có hộp
 ; thoại chọn chế độ.
@@ -74,7 +76,7 @@ RestartApplications=no
 LicenseFile={#SourceDir}\LICENSE
 SetupIconFile=..\pyinstaller\teleport.ico
 UninstallDisplayIcon={app}\Teleport.exe
-UninstallDisplayName=Teleport
+UninstallDisplayName=ZCL Teleport
 WizardStyle=modern
 ShowLanguageDialog=no
 
@@ -114,6 +116,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; đúng là chỗ bộ cài này đã cài Teleport (IsOwnInstallDir ở [Code]): cài lần đầu vào thư mục sẵn có
 ; _internal của app khác (ví dụ /DIR=D:\Apps) thì không đụng.
 Type: filesandordirs; Name: "{app}\_internal"; Check: IsOwnInstallDir
+; Lối tắt tên cũ “Teleport” của bản trước khi đổi tên hiển thị (cùng điều kiện như trên).
+Type: files; Name: "{autoprograms}\Teleport.lnk"; Check: IsOwnInstallDir
+Type: files; Name: "{autodesktop}\Teleport.lnk"; Check: IsOwnInstallDir
 
 [Files]
 ; Cả thư mục --onedir trừ DOC-TRUOC.txt (hướng dẫn cho bản zip: giải nén, tự cho qua tường lửa).
@@ -121,12 +126,12 @@ Source: "{#SourceDir}\*"; Excludes: "\DOC-TRUOC.txt"; DestDir: "{app}"; Flags: i
 Source: "licenses\InnoSetup-6.7.3-license.txt"; DestDir: "{app}\licenses"; DestName: "InnoSetup-license.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Teleport"; Filename: "{app}\Teleport.exe"
-Name: "{autodesktop}\Teleport"; Filename: "{app}\Teleport.exe"; Tasks: desktopicon
+Name: "{autoprograms}\ZCL Teleport"; Filename: "{app}\Teleport.exe"
+Name: "{autodesktop}\ZCL Teleport"; Filename: "{app}\Teleport.exe"; Tasks: desktopicon
 
 [Run]
 ; runasoriginaluser: bản cài admin vẫn mở app bằng tài khoản người dùng, không chạy app với quyền admin.
-Filename: "{app}\Teleport.exe"; Description: "{cm:LaunchProgram,Teleport}"; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{app}\Teleport.exe"; Description: "{cm:LaunchProgram,ZCL Teleport}"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}"

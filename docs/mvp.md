@@ -267,8 +267,8 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 
 ### 7.1. Cửa sổ chính — khung chat theo từng máy
 ```
-┌─ Teleport ──────────────────────────────────────────────────────────────┐
-│ [▶] Teleport      [⌕] [⚙] │ (PC) PC-Nha                       [📂] [⋯]  │
+┌─ ZCL Teleport ──────────────────────────────────────────────────────────┐
+│ [▶] ZCL Teleport  [⌕] [⚙] │ (PC) PC-Nha                       [📂] [⋯]  │
 │ ┌────────────────────────┐ │ ● Trực tuyến · Windows · 192.168.1.20       │
 │ │(PC)● PC-Nha            │ ├─────────────────────────────────────────────┤
 │ │      Đang gửi · 62%    │ │            — Đã ghép đôi · 28/10 —          │
@@ -300,7 +300,7 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 
 Màn “Tìm máy mới”:
 ```
-┌─ Teleport ───────────────────────────────────────────────────────┐
+┌─ ZCL Teleport ───────────────────────────────────────────────────┐
 │ [← Quay lại]  Tìm máy mới                 [ Nhập IP thủ công… ]  │
 │                ·          ·          ·                           │
 │   (PC) PC-Khách         ╭───╮        (PC) PC-Nha · đã ghép       │
@@ -458,9 +458,9 @@ Trên terminal, dòng tiến độ được vẽ lại tại chỗ, cắt vừa 
 
 ### 7.6. Lần chạy đầu
 ```
-┌─ Teleport ────────────────────────────────────────┐
+┌─ ZCL Teleport ────────────────────────────────────┐
 │                                                   │
-│                 (logo) Teleport                   │
+│               (logo) ZCL Teleport                 │
 │                                                   │
 │  Gửi file lớn giữa các máy trong cùng mạng.       │
 │  Không qua cloud.                                 │

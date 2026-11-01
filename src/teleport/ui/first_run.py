@@ -42,7 +42,7 @@ ngay dưới hàng và ghép vào mô tả của nút “Đổi…”.
 hay hàm trả chuỗi để dịch lại khi đổi ngôn ngữ; chuỗi đúng bằng câu `ui.settings.autostart_state_hint`
 của OTHER/BLOCKED cũng được dịch lại); rỗng thì ẩn. Form không ghi registry.
 
-**Trợ năng** (mvp N12): `firstRunForm` tên “Thiết lập Teleport”, mô tả = câu giá trị + ba ý. Nhãn
+**Trợ năng** (mvp N12): `firstRunForm` tên “Thiết lập {APP_NAME}”, mô tả = câu giá trị + ba ý. Nhãn
 không nhận Tab (nội dung đã nằm trong mô tả của control); chuỗi Tab: ô tên → “Đổi…” → công tắc (khi
 hiện) → “Bắt đầu” (nối ở `StartPanel`). `focus_target()`: có lỗi thư mục → “Đổi…”; còn lại ô tên
 (có lỗi tên thì chọn hết chữ, không thì con trỏ cuối chữ, không chọn). Công tắc có chữ “Bật”/“Tắt”,
@@ -123,7 +123,7 @@ def feature_texts() -> tuple[str, str, str]:
 
 def form_name_text() -> str:
     """Tên trợ năng của cả form."""
-    return QCoreApplication.translate("FirstRun", "Thiết lập Teleport")
+    return QCoreApplication.translate("FirstRun", "Thiết lập {app}").format(app=texts.APP_NAME)
 
 
 def name_label_text() -> str:

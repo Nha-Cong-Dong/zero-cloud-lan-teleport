@@ -1119,7 +1119,7 @@ def test_l13_names_of_new_regions(window):
     assert window.sidebar.accessibleName() == DEVICES
     assert window.stream_pane.accessibleName() == TRANSFERS
     assert window.transfers_area.accessibleName() == TRANSFERS
-    assert window.brand_label.accessibleName() == "Teleport"
+    assert window.brand_label.accessibleName() == "ZCL Teleport"
     assert window.brand_label.focusPolicy() == Qt.FocusPolicy.NoFocus
     assert window.brand_logo.focusPolicy() == Qt.FocusPolicy.NoFocus
     assert window.starting_bar.accessibleName() == STARTING_BAR

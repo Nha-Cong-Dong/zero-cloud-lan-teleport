@@ -42,7 +42,7 @@ DIR_DESC = "Thư mục nhận: {path}"
 AUTOSTART_LABEL = "Khởi động cùng Windows"
 AUTOSTART_HINT = "Teleport chạy ẩn ở khay hệ thống từ khi bạn đăng nhập Windows, để luôn sẵn sàng nhận file."
 CONSENT = "Bấm Bắt đầu để Teleport chạy và hiện máy này với các máy khác trong mạng."
-FORM_NAME = "Thiết lập Teleport"
+FORM_NAME = "Thiết lập ZCL Teleport"
 AUTOSTART_FAILED = (
     "Chưa bật được khởi động cùng Windows vì Windows không cho ghi cài đặt khởi động. "
     "Bạn có thể bật lại trong Cài đặt."

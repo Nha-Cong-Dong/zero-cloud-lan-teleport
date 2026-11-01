@@ -18,7 +18,7 @@ trạng thái đi qua `retranslate()`, nơi chọn `home_stack` và ẩn/hiện 
 - ERROR: icon lỗi (`status_icon`, màu `danger`, trang trí), “Không khởi động được”, câu lỗi
   (`texts.start_error`) và gợi ý; “Thử lại” là nút chính.
 
-Trong khối căn giữa: logo + “Teleport” (`title_label`, bậc chữ `theme.TextStyle.TITLE`, font điểm
+Trong khối căn giữa: logo + `texts.APP_NAME` (`title_label`, bậc chữ `theme.TextStyle.TITLE`, font điểm
 nhấn nếu `ui.fonts.install()` đã nạp trước khi dựng cửa sổ), dòng trạng thái (SECTION), chi tiết, gợi
 ý, form lần chạy đầu (chỉ WELCOME), nút căn phải. `title_label` nằm trong `start_view` nên ở RUNNING
 không hiện.
@@ -26,7 +26,7 @@ không hiện.
 **Bố cục hai cột** (RUNNING; cây widget ở spec B1 mục 2.3):
 - `body` (`runningBody`): cột trái `sidebar` (`QFrame[surface="sidebar"]`, nền `sidebar`, viền phải
   1 px `border` nằm trong bề ngang của cột) và khung phải `stream_pane` (nền `surface`).
-- Cột trái từ trên xuống: `sidebar_header` (logo 32 px, “Teleport”, nút “Tìm máy mới” và “Cài đặt”),
+- Cột trái từ trên xuống: `sidebar_header` (logo 32 px, tên app, nút “Tìm máy mới” và “Cài đặt”),
   `sidebar_scroll` (danh sách cuộc trò chuyện `conversations`, `ui.conversations.ConversationList`, trong
   `sidebarContent`, nền trong suốt; nội dung cao hơn chỗ thì cuộn) và `machine_card`
   (`home.MachineCard`: máy này, địa chỉ, “Chép địa chỉ”, huy hiệu “Sẵn sàng nhận” / “Đang truyền n lượt”
@@ -35,7 +35,7 @@ không hiện.
   cuộn riêng); hàng hiện hành đổi bằng bàn phím hay bằng code thì `sidebar_scroll` cuộn tới hàng đó.
 - **Thu gọn** (`_apply_compact`, ở `resizeEvent` và `showEvent`; chỉ làm khi trạng thái đổi thật):
   cửa sổ hẹp hơn `COMPACT_BELOW` thì cột trái rộng `SIDEBAR_COMPACT_WIDTH` (`sidebar_compact`): danh
-  sách chỉ còn avatar (`conversations.set_compact`), đầu cột xếp dọc và căn giữa, ẩn chữ “Teleport”,
+  sách chỉ còn avatar (`conversations.set_compact`), đầu cột xếp dọc và căn giữa, ẩn tên app,
   lề hẹp; `machine_card` ẩn, thay bằng `compact_machine` (`_CompactMachine`: avatar máy này, bấm để
   chép địa chỉ; tên, huy hiệu, địa chỉ ở mô tả trợ năng và tooltip). Tiêu điểm ở widget sắp ẩn
   (`name_label`, `address_label`, `copy_button`) → `compact_machine`; rời thu gọn mà tiêu điểm ở
@@ -911,11 +911,11 @@ class MainWindow(QMainWindow):
 
     def retranslate(self) -> None:
         """Đặt lại mọi chữ theo ngôn ngữ hiện tại và trạng thái hiện tại."""
-        self.setWindowTitle(self.tr("Teleport"))
-        self.title_label.setText(self.tr("Teleport"))
+        self.setWindowTitle(texts.APP_NAME)
+        self.title_label.setText(texts.APP_NAME)
         self.title_label.setAccessibleName(self.tr("Tên ứng dụng"))
-        self.brand_label.setText(self.tr("Teleport"))
-        self.brand_label.setAccessibleName(self.tr("Teleport"))
+        self.brand_label.setText(texts.APP_NAME)
+        self.brand_label.setAccessibleName(texts.APP_NAME)
         self.retry_button.setText(texts.retry())
         self.retry_button.setAccessibleName(texts.retry())
         self.retry_button.setToolTip(self.tr("Khởi động lại Teleport (F5)"))
@@ -1061,7 +1061,7 @@ class MainWindow(QMainWindow):
     def _apply_compact(self) -> None:
         """Bề ngang cột trái theo cửa sổ; dạng thu gọn / đầy đủ chỉ đổi khi trạng thái đổi thật.
 
-        Thu gọn: danh sách chỉ còn avatar, đầu cột xếp dọc và căn giữa (ẩn chữ “Teleport”), lề hẹp,
+        Thu gọn: danh sách chỉ còn avatar, đầu cột xếp dọc và căn giữa (ẩn tên app), lề hẹp,
         `compact_machine` thay `machine_card`. Tiêu điểm đang ở widget sắp ẩn thì chuyển sang widget
         tương ứng của dạng mới (spec B2 mục 2.6, 12.15)."""
         compact = self.sidebar_compact

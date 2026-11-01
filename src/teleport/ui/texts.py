@@ -14,6 +14,10 @@ lạ không làm hỏng câu, và chữ do máy kia đặt chứa `{size}` khôn
 đi qua `peer_label` / `file_label` (`core.display`) trước khi chèn.
 
 Tên lệnh CLI trong câu của GUI nằm trong ngoặc kép “…” (không dùng backtick như ở CLI).
+
+`APP_NAME` là tên hiển thị của sản phẩm (tiêu đề cửa sổ, chữ cạnh logo, khay, tiêu đề bóng thoại, hộp
+lỗi khởi động, tên đăng ký cho AppUserModelID ở `ui.app`): tên riêng nên không dịch. Trong câu chữ,
+“Teleport” vẫn là cách gọi tắt.
 """
 
 from __future__ import annotations
@@ -24,6 +28,8 @@ import unicodedata
 from PySide6.QtCore import QCoreApplication
 
 from teleport.core.display import display_filename, display_name
+
+APP_NAME = "ZCL Teleport"  # tên ngắn của “Zero-Cloud LAN Teleport”
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 _REPLACEMENT = "�"  # U+FFFD thay ký tự điều khiển, như `cli._printable`

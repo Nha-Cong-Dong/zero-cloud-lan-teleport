@@ -22,6 +22,7 @@ Fixture chính:
   không giết pytest) và khôi phục handler SIGINT.
 - `peer_node`: một `Node` thật (máy gửi B) chạy event loop riêng trong một thread.
 - `ui_helpers`: hàm phụ trợ (test không import được conftest).
+- `aumid_registration` (tự dùng): `main` không ghi registry thật; fixture trả hàm đăng ký thật.
 """
 
 from __future__ import annotations
@@ -227,6 +228,19 @@ def release_stuck_mouse_buttons(qapp):
         sink.close()
         sink.deleteLater()
     yield
+
+
+@pytest.fixture(autouse=True)
+def aumid_registration(monkeypatch):
+    """Mọi test ui: `main` không ghi HKCU thật (`ui.app._register_app_user_model_id` thành no-op).
+
+    Trả hàm thật cho test của chính nó (`test_app_identity.py`), test đó thay `winreg` bằng bản giả.
+    """
+    from teleport.ui import app
+
+    real = app._register_app_user_model_id
+    monkeypatch.setattr(app, "_register_app_user_model_id", lambda config_dir: None)
+    return real
 
 
 @pytest.fixture(autouse=True)
