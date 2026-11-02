@@ -91,6 +91,17 @@ giá trị `result` lạ → “Lỗi” và viền DANGER (`Kind.ERROR`). Khôn
 `saved_path` tuyệt đối, và đường dẫn UNC chỉ khi thư mục nhận hiện tại nằm cùng `\\server\\share`
 (`can_open_saved`, so chuỗi sau `normcase`, không chạm đĩa).
 
+**`ClipboardNote`** (mvp F8): dòng mảnh báo clipboard vừa nhận từ máy kia, **không** phải
+`ChatBubble` (không nền bong bóng, không hướng gửi/nhận), căn trái: icon `clipboard_paste`, dòng 1
+“Clipboard · đã chép vào máy này” hay “Clipboard · chưa chép được vào máy này” (kèm nút “Thử lại”,
+`retry_clicked`), dòng 2: văn bản → dòng không trắng đầu tiên của `preview` (ký tự điều khiển, vô
+hình, đổi hướng chữ → U+FFFD qua `send.printable`, tối đa `NOTE_PREVIEW_CHARS`, cắt cuối “…” theo bề
+ngang), ảnh → “Ảnh {w} × {h} · {cỡ}”; không có `preview` / `image_size` (ghi lỗi) → “Văn bản · {cỡ}” /
+“Ảnh · {cỡ}”. `set_unavailable()` (“Thử lại” trả `NOTHING_TO_RETRY`): dòng 2 “Clipboard này không
+còn để chép lại.”, ẩn nút. Tên trợ năng “Clipboard từ {tên}: {dòng 1}. {dòng 2}”. Nhận tiêu điểm như
+bong bóng (`ClickFocus`, vòng tiêu điểm 2 px, `focus_buttons()`). Nội dung chỉ ở RAM của widget, không
+ghi đĩa, không tooltip.
+
 Chữ máy kia (tên máy, tên file) qua `texts.peer_label` / `texts.file_label`, mọi nhãn
 `Qt.PlainText`, không tooltip chứa chữ máy kia. Chuỗi mới ở ngữ cảnh `"Chat"`, gọi lúc dùng; câu mvp
 mục 8 lấy từ `ui.transfers_view` (ngữ cảnh `"Transfers"`, không chép lại).
@@ -110,6 +121,7 @@ from PySide6.QtGui import QFocusEvent, QFont, QFontMetrics, QPainter, QPaintEven
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QProgressBar,
@@ -131,8 +143,10 @@ from teleport.app.transfers import (
     TransferStatus,
 )
 from teleport.core.history import HistoryEntry
+from teleport.core.messages import ClipKind
 from teleport.ui import icons, offer, texts, theme
 from teleport.ui.offer import OfferEntry, OfferPhase
+from teleport.ui.send import printable
 from teleport.ui.transfers_view import (
     _FLOWING_STATUSES,
     _WAITING_STATUSES,
@@ -164,6 +178,7 @@ BUBBLE_MIN_WIDTH = 220  # px
 _ICON = 20  # px, icon loại file
 _STATUS_ICON = 16  # px, icon trạng thái (pixmap 20 thu vào)
 _FOCUS_INSET = 3  # px, vòng tiêu điểm thụt vào trong bong bóng
+NOTE_PREVIEW_CHARS = 200  # code point tối đa của dòng xem trước clipboard
 _PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
 
 _VIDEO = frozenset({"mp4", "mkv", "mov", "avi", "webm", "wmv", "m4v", "flv", "mpg", "mpeg", "3gp", "ts"})
@@ -333,11 +348,13 @@ def set_tone(label: QLabel, tone: str | None) -> None:
 
 
 class _ElidedLabel(QLabel):
-    """Nhãn một dòng cắt giữa theo bề ngang; `full_text()` là chữ đầy đủ (cũng ở accessibleName)."""
+    """Nhãn một dòng cắt theo bề ngang (mặc định cắt giữa); `full_text()` là chữ đầy đủ (cũng ở
+    accessibleName)."""
 
-    def __init__(self) -> None:
+    def __init__(self, mode: Qt.TextElideMode = Qt.TextElideMode.ElideMiddle) -> None:
         super().__init__()
         self._full = ""
+        self._mode = mode
         self.setTextFormat(Qt.TextFormat.PlainText)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -371,7 +388,7 @@ class _ElidedLabel(QLabel):
         shown = (
             self._full
             if metrics.horizontalAdvance(self._full) <= width
-            else (metrics.elidedText(self._full, Qt.TextElideMode.ElideMiddle, width))
+            else (metrics.elidedText(self._full, self._mode, width))
         )
         if shown != self.text():
             self.setText(shown)
@@ -1358,3 +1375,194 @@ class PendingBubble(_Bubble):
         status = t("Chat", "Đang chuẩn bị…")
         self.status_label.setText(status)
         self.set_summary(f"{title}. {status}")
+
+
+# ---- ClipboardNote ----------------------------------------------------------------------------
+
+
+def clipboard_title(ok: bool) -> str:
+    """Dòng 1 của `ClipboardNote`."""
+    t = QCoreApplication.translate
+    if ok:
+        return t("Chat", "Clipboard · đã chép vào máy này")
+    return t("Chat", "Clipboard · chưa chép được vào máy này")
+
+
+def clipboard_unavailable_text() -> str:
+    """Dòng 2 sau khi “Thử lại” không còn clip để chép (`NOTHING_TO_RETRY`)."""
+    return QCoreApplication.translate("Chat", "Clipboard này không còn để chép lại.")
+
+
+def preview_line(preview: str | None) -> str:
+    """Dòng không trắng đầu tiên của `preview`, ký tự lạ thành U+FFFD, tối đa `NOTE_PREVIEW_CHARS`
+    code point; không có → ""."""
+    if not preview:
+        return ""
+    for line in preview[:NOTE_PREVIEW_CHARS].splitlines():
+        shown = printable(line.strip())
+        if shown:
+            return shown
+    return ""
+
+
+def clipboard_detail(
+    kind: ClipKind | str | None, size: int, preview: str | None, image_size: tuple[int, int] | None
+) -> str:
+    """Dòng 2 của `ClipboardNote` (xem docstring module)."""
+    t = QCoreApplication.translate
+    shown_size = texts.format_size(max(0, int(size)))
+    if kind == ClipKind.PNG:
+        if image_size is not None:
+            width, height = image_size
+            return texts.fill(
+                t("Chat", "Ảnh {width} × {height} · {size}"),
+                width=str(int(width)),
+                height=str(int(height)),
+                size=shown_size,
+            )
+        return texts.fill(t("Chat", "Ảnh · {size}"), size=shown_size)
+    line = preview_line(preview)
+    if line:
+        return line
+    return texts.fill(t("Chat", "Văn bản · {size}"), size=shown_size)
+
+
+class ClipboardNote(QFrame):
+    """Dòng mảnh báo clipboard vừa nhận trong luồng chat (xem docstring module)."""
+
+    retry_clicked = Signal()
+    focus_entered = Signal()
+
+    def __init__(
+        self,
+        device_id: str,
+        *,
+        ok: bool,
+        kind: ClipKind | str | None,
+        size: int,
+        preview: str | None = None,
+        image_size: tuple[int, int] | None = None,
+        peer: str = "",
+        at: float = 0.0,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("clipboardNote")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # Tab do `ui.chat` (roving tabindex)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.device_id = device_id
+        self.at = at
+        self.ok = bool(ok)
+        self.kind = kind
+        self.byte_size = max(0, int(size))
+        self._preview = preview[:NOTE_PREVIEW_CHARS] if isinstance(preview, str) else None
+        self.image_size = image_size
+        self._peer = peer
+        self._unavailable = False
+
+        self.icon_label = _IconLabel(_ICON)
+        self.title_label = _label(caption=True)
+        title_font = self.title_label.font()
+        title_font.setWeight(QFont.Weight.DemiBold)
+        self.title_label.setFont(title_font)
+        self.title_label.setObjectName("clipboardNoteTitle")
+        self.detail_label = _ElidedLabel(Qt.TextElideMode.ElideRight)
+        self.detail_label.setObjectName("clipboardNoteDetail")
+        self.detail_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.detail_label.font()))
+        self.detail_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.retry_button = _button(self)
+        self.retry_button.setObjectName("clipboardRetryButton")
+        self.retry_button.clicked.connect(self.retry_clicked)
+
+        lines = QVBoxLayout()
+        lines.setContentsMargins(0, 0, 0, 0)
+        lines.setSpacing(0)
+        lines.addWidget(self.title_label)
+        lines.addWidget(self.detail_label)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(theme.SPACING[1], theme.SPACING[0], theme.SPACING[1], theme.SPACING[0])
+        layout.setSpacing(theme.SPACING[1])
+        layout.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(lines, 1)
+        layout.addWidget(self.retry_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.retry_button.setVisible(not self.ok)
+        self.icon_label.set_icon("clipboard_paste", "text_muted")
+        self._render()
+
+    @property
+    def unavailable(self) -> bool:
+        """“Thử lại” đã báo không còn clip để chép lại."""
+        return self._unavailable
+
+    def title(self) -> str:
+        return self.title_label.text()
+
+    def detail(self) -> str:
+        return self.detail_label.full_text()
+
+    def focus_buttons(self) -> list[QWidget]:
+        button = self.retry_button
+        return [button] if not button.isHidden() and button.isEnabled() else []
+
+    def set_peer(self, peer: str) -> None:
+        if peer != self._peer:
+            self._peer = peer
+            self._render()
+
+    def set_busy(self, busy: bool) -> None:
+        """Đang chờ kết quả “Thử lại”: tắt nút (bấm thêm không gửi yêu cầu nữa)."""
+        self.retry_button.setEnabled(not busy)
+
+    def set_unavailable(self) -> None:
+        """“Thử lại” trả `NOTHING_TO_RETRY`: câu “không còn để chép lại”, ẩn nút."""
+        self._unavailable = True
+        if self.retry_button.hasFocus():
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.retry_button.setVisible(False)
+        self._render()
+
+    def _render(self) -> None:
+        title = clipboard_title(self.ok)
+        detail = (
+            clipboard_unavailable_text()
+            if self._unavailable
+            else clipboard_detail(self.kind, self.byte_size, self._preview, self.image_size)
+        )
+        self.title_label.setText(title)
+        self.detail_label.set_full_text(detail)
+        self.retry_button.setText(texts.retry())
+        t = QCoreApplication.translate
+        self.retry_button.setAccessibleName(texts.retry())
+        self.retry_button.setAccessibleDescription(title)
+        summary = t("Chat", "Clipboard từ {name}: {title}. {detail}")
+        self.setAccessibleName(texts.fill(summary, name=self._peer, title=title, detail=detail))
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.LanguageChange:
+            self._render()
+
+    def focusInEvent(self, event: QFocusEvent) -> None:
+        super().focusInEvent(event)
+        self.update()
+        self.focus_entered.emit()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:
+        super().focusOutEvent(event)
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        if not self.hasFocus():
+            return
+        dark = theme.is_dark_palette(QApplication.palette())
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(theme.focus_ring_color(dark), 2))
+            radius = theme.RADIUS_CONTROL
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), radius, radius)
+        finally:
+            painter.end()

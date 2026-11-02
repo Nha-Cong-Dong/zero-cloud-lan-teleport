@@ -1675,3 +1675,227 @@ def test_json_cost_table_matches_json_dumps_for_every_code_point():
 @given(st.text(alphabet=st.characters(exclude_categories=["Cs"])))
 def test_property_json_cost_matches_json_dumps(s):
     assert clip_mod._json_text_len(s) == _real_json_len(s)
+
+
+# ---- D5 (spec-d5 mục 2.4 “Nhận” bước 2, mục 9.2 điểm 4): `reserved_bytes`, `discard` -------------
+#
+# `reserved_bytes(device_id=None)` = tổng `total` (không phải số byte đã nhận) của các clip đang ráp;
+# `discard(device_id)` bỏ clip đang ráp của thiết bị đó (dùng khi `app` bỏ một clip mới vì quá trần RAM
+# chung). Spec không chốt giá trị trả về của `discard`: test chỉ đòi nó không ra `ClipReady`.
+
+
+def test_reserved_bytes_is_total_of_clip_in_progress_not_bytes_received():
+    a = ClipAssembler()
+    f = text_frags(X, ["ab", "cde", "fghi"])  # total 9
+    assert a.feed(D1, f[0], 0.0) == ()
+    assert a.buffered_bytes(D1) == 2
+    assert a.reserved_bytes(D1) == 9
+    assert a.feed(D1, f[1], 0.0) == ()
+    assert a.reserved_bytes(D1) == 9
+
+
+def test_reserved_bytes_without_argument_sums_every_device():
+    a = ClipAssembler()
+    a.feed(D1, text_frags(X, ["ab", "cd"])[0], 0.0)  # total 4
+    a.feed(D2, png_frags(Y, [PNG_SIGNATURE, b"x" * 10])[0], 0.0)  # total 18
+    assert a.reserved_bytes() == 22
+    assert a.reserved_bytes(None) == 22
+    assert a.reserved_bytes(D1) == 4
+    assert a.reserved_bytes(D2) == 18
+    assert a.reserved_bytes(D3) == 0
+
+
+def test_reserved_bytes_zero_when_idle():
+    a = ClipAssembler()
+    assert a.reserved_bytes() == 0
+    assert a.reserved_bytes(D1) == 0
+    assert_ready(a.feed(D1, single(X, "xin"), 0.0), D1, X, ClipKind.TEXT, "xin")
+    assert a.reserved_bytes(D1) == 0, "clip ráp xong không còn giữ chỗ"
+
+
+@pytest.mark.parametrize("how", ["link_lost", "forget_device", "tick_expired", "out_of_order", "replaced"])
+def test_reserved_bytes_released_when_clip_leaves(how):
+    a = ClipAssembler()
+    f = text_frags(X, ["ab", "cd", "ef"])
+    a.feed(D1, f[0], 0.0)
+    a.feed(D2, text_frags(Y, ["x", "y"])[0], 0.0)  # thiết bị khác giữ nguyên
+    assert a.reserved_bytes(D1) == 6
+    if how == "link_lost":
+        a.link_lost(D1)
+    elif how == "forget_device":
+        a.forget_device(D1)
+    elif how == "tick_expired":
+        a.tick(CLIP_ASSEMBLY_TIMEOUT)
+    elif how == "out_of_order":
+        a.feed(D1, f[2], 0.0)
+    else:
+        a.feed(D1, single(Z, "z"), 0.0)
+    assert a.reserved_bytes(D1) == 0
+    if how == "tick_expired":
+        assert a.reserved_bytes() == 0
+    else:
+        assert a.reserved_bytes(D2) == 2
+        assert a.reserved_bytes() == 2
+
+
+def test_reserved_bytes_counts_declared_total_of_huge_png_from_first_fragment():
+    """Trần RAM chung phải tính theo `total` khai báo ở mảnh 0 (máy kia có thể gửi mảnh rất chậm)."""
+    a = ClipAssembler()
+    raw = PNG_SIGNATURE + b"\0" * (MAX_PNG_BYTES - len(PNG_SIGNATURE))
+    first = png_frags(X, [raw[:PNG_FRAGMENT_BYTES], raw[PNG_FRAGMENT_BYTES:]])[0]
+    a.feed(D1, first, 0.0)
+    assert a.reserved_bytes(D1) == MAX_PNG_BYTES
+    assert a.buffered_bytes(D1) == PNG_FRAGMENT_BYTES
+
+
+def test_discard_drops_clip_in_progress_of_that_device_only():
+    a = ClipAssembler()
+    f = text_frags(X, ["ab", "cd"])
+    g = text_frags(Y, ["x", "y"])
+    a.feed(D1, f[0], 0.0)
+    a.feed(D2, g[0], 0.0)
+    out = a.discard(D1)
+    assert not any(isinstance(e, ClipReady) for e in (out or ()))
+    assert a.reserved_bytes(D1) == 0
+    assert a.buffered_bytes(D1) == 0
+    assert a.reserved_bytes(D2) == 2
+    # Phần còn lại của clip đã bỏ không bao giờ ráp thành clip.
+    assert not any(isinstance(e, ClipReady) for e in a.feed(D1, f[1], 0.0))
+    assert a.buffered_bytes(D1) == 0
+    # Thiết bị khác ráp tiếp bình thường.
+    assert_ready(a.feed(D2, g[1], 0.0), D2, Y, ClipKind.TEXT, "xy")
+
+
+def test_discard_unknown_or_idle_device_is_harmless():
+    a = ClipAssembler()
+    a.discard(D3)
+    assert_ready(a.feed(D1, single(X, "a"), 0.0), D1, X, ClipKind.TEXT, "a")
+    a.discard(D1)
+    assert a.reserved_bytes() == 0
+    # Sau khi bỏ, thiết bị vẫn mở được clip mới.
+    assert_ready(a.feed(D1, single(Y, "b"), 0.0), D1, Y, ClipKind.TEXT, "b")
+
+
+def test_discard_never_raises_and_new_clip_after_discard_assembles():
+    a = ClipAssembler()
+    f = text_frags(X, ["ab", "cd"])
+    a.feed(D1, f[0], 0.0)
+    a.discard(D1)
+    a.discard(D1)
+    g = text_frags(Y, ["12", "34"])
+    assert a.feed(D1, g[0], 0.0) == ()
+    assert_ready(a.feed(D1, g[1], 0.0), D1, Y, ClipKind.TEXT, "1234")
+
+
+@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(st.data())
+def test_property_reserved_bytes_matches_model_of_clips_in_progress(data):
+    """Chuỗi thao tác tùy ý: `reserved_bytes(d)` luôn bằng `total` của clip đang ráp theo mô hình
+    (clip mở ở mảnh 0, rời đi khi xong/bỏ), `reserved_bytes()` bằng tổng, và ≥ `buffered_bytes`."""
+    a = ClipAssembler(rate=1000.0, burst=1000)
+    devices = [D1, D2, D3]
+    clips: dict[str, list[Clipboard]] = {}
+    pos: dict[str, int] = {}
+    counter = itertools.count(1)
+    for _ in range(data.draw(st.integers(1, 40))):
+        dev = data.draw(st.sampled_from(devices))
+        op = data.draw(st.sampled_from(["new", "next", "next", "lost", "discard", "forget"]))
+        if op == "new":
+            pieces = data.draw(st.lists(st.text("abc", min_size=1, max_size=3), min_size=1, max_size=3))
+            clips[dev] = text_frags(cid(next(counter)), pieces)
+            pos[dev] = 0
+            op = "next"
+        if op == "next" and dev in clips:
+            msgs = clips[dev]
+            a.feed(dev, msgs[pos[dev]], 0.0)
+            pos[dev] += 1
+            if pos[dev] >= len(msgs):
+                del clips[dev]
+        elif op == "lost":
+            a.link_lost(dev)
+            clips.pop(dev, None)
+        elif op == "discard":
+            a.discard(dev)
+            clips.pop(dev, None)
+        elif op == "forget":
+            a.forget_device(dev)
+            clips.pop(dev, None)
+        expected = {d: (clips[d][0].total if d in clips else 0) for d in devices}
+        for d in devices:
+            assert a.reserved_bytes(d) == expected[d]
+            assert a.reserved_bytes(d) >= a.buffered_bytes(d)
+        assert a.reserved_bytes() == sum(expected.values())
+
+
+# --- partials(), LoopGuard.snapshot/restore (sửa sau tan-cong / soat-code P5-1) --------------------
+
+
+def test_partials_report_start_and_last_progress_with_given_now():
+    a = ClipAssembler()
+    assert a.partials() == ()
+    f = text_frags(X, ["ab", "cd", "ef"])
+    g = text_frags(Y, ["x", "y"])
+    a.feed(D1, f[0], 10.0)
+    a.feed(D2, g[0], 11.0)
+    a.feed(D1, f[1], 12.5)
+    (p1, p2) = a.partials()
+    assert (p1.device_id, p1.clip_id, p1.total, p1.received) == (D1, X, 6, 4)
+    assert (p1.started_at, p1.progress_at) == (10.0, 12.5)
+    assert (p2.device_id, p2.clip_id, p2.total, p2.received) == (D2, Y, 2, 1)
+    assert (p2.started_at, p2.progress_at) == (11.0, 11.0)
+    assert sum(p.total for p in a.partials()) == a.reserved_bytes()
+
+
+def test_partials_ignore_rejected_fragments_and_drop_finished_clips():
+    a = ClipAssembler()
+    f = text_frags(X, ["ab", "cd", "ef"])
+    a.feed(D1, f[0], 1.0)
+    a.feed(D1, f[2], 3.0)  # sai thứ tự: clip bị bỏ
+    assert a.partials() == ()
+    a.feed(D1, text_frags(Y, ["x", "y"])[0], 4.0)
+    a.feed(D1, text_frags(Z, ["q", "r"])[1], 5.0)  # mảnh mồ côi: không tính là tiến triển
+    (p,) = a.partials()
+    assert p.progress_at == 4.0
+    a.feed(D1, text_frags(Y, ["x", "y"])[1], 6.0)
+    assert a.partials() == ()
+    a.feed(D2, text_frags(Z, ["q", "r"])[0], 7.0)
+    a.discard(D2)
+    assert a.partials() == ()
+
+
+def test_partials_use_clamped_now():
+    a = ClipAssembler()
+    f = text_frags(X, ["ab", "cd", "ef"])
+    a.feed(D1, f[0], 5.0)
+    a.feed(D1, f[1], 2.0)  # đồng hồ lùi: kẹp về 5,0
+    (p,) = a.partials()
+    assert p.progress_at == 5.0
+
+
+def test_partial_info_has_no_content():
+    a = ClipAssembler()
+    a.feed(D1, text_frags(X, ["bí-mật-1", "bí-mật-2"])[0], 0.0)
+    (p,) = a.partials()
+    assert "bí-mật" not in repr(p)
+    assert not any(isinstance(getattr(p, f.name), bytes | list) for f in dataclasses.fields(p))
+
+
+def test_loop_guard_snapshot_and_restore():
+    g = LoopGuard()
+    old, new = "1" * 64, "2" * 64
+    assert g.local_changed(old) is True
+    before = g.snapshot()
+    g.remote_written(new)
+    assert g.is_current(new) and not g.is_current(old)
+    g.restore(before)
+    assert g.is_current(old) and not g.is_current(new)
+    assert g.local_changed(old) is False, "nội dung cũ vẫn là “hiện tại”: không gửi lại"
+    assert g.local_changed(new) is True
+
+
+def test_loop_guard_restore_empty_snapshot_equals_reset():
+    g = LoopGuard()
+    before = g.snapshot()
+    g.remote_written("1" * 64)
+    g.restore(before)
+    assert g.is_current("1" * 64) is False

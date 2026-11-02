@@ -269,8 +269,8 @@ def paused_badge_description() -> str:
     return texts.fill(
         QCoreApplication.translate(
             "Home",
-            "File mới gửi tới sẽ bị từ chối; lượt đang nhận vẫn tiếp tục. "
-            "Bỏ chọn “{menu}” trong menu khay để nhận lại.",
+            "File mới gửi tới sẽ bị từ chối, clipboard gửi tới sẽ bị bỏ qua; lượt đang nhận vẫn "
+            "tiếp tục. Bỏ chọn “{menu}” trong menu khay để nhận lại.",
         ),
         menu=texts.menu_pause(),
     )

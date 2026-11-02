@@ -1223,6 +1223,15 @@ class TransferManager:
         self._apply_receiving()  # `_closing`: không nhận nữa
         self._cancel_every()
 
+    def control_idle(self, device_id: str, control_id: int) -> asyncio.Event | None:
+        """Sự kiện “hàng gửi điều khiển trống” của kết nối `control_id` với thiết bị (đặt khi hàng
+        rỗng và không có message đang gửi, hay hàng đã đóng); None nếu đó không phải kết nối điều
+        khiển hiện tại. `ClipboardSync` chờ nó trước mỗi mảnh clip để nhường message truyền file."""
+        ctl = self._controls.get(device_id)
+        if ctl is None or ctl.control_id != control_id:
+            return None
+        return ctl.outbox.idle
+
     async def flush_control(self, timeout: float) -> None:
         """Chờ tối đa `timeout` giây cho mọi hàng gửi điều khiển trống (đẩy hết các `cancel`)."""
         outboxes = [c.outbox for c in self._controls.values() if not c.outbox.closed]

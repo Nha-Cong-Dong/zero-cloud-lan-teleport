@@ -48,7 +48,7 @@ OFFLINE = "{name} (ngoại tuyến)"
 NO_PAIRED = "Chưa ghép đôi với máy nào"
 FIND = "Tìm máy mới…"
 HIDDEN_PAUSED_VI = (
-    "Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới. "
+    "Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới và clipboard. "
     "Chọn Thoát trong menu khay để tắt hẳn."
 )
 HIDDEN_PAUSED_EN_PART = "paused receiving new files"

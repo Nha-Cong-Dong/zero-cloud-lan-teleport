@@ -4,7 +4,7 @@
 > **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, danh sách phép đo của đợt đo trên thiết bị thật (mục 5.4), quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
 > **Không chứa:** phạm vi, tính năng, tiêu chí chấp nhận và con số chất lượng → [mvp.md](mvp.md) (tham chiếu theo mã F1–F12, N1–N12). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
 > **Bản chính thức về kỹ thuật:** đặc tả giao thức [protocol.md](protocol.md) và trạng thái từng module [architecture.md](architecture.md); khi lệch nhau thì hai file đó đúng.
-> **Cập nhật:** 2026-10-31
+> **Cập nhật:** 2026-11-02
 
 ---
 
@@ -159,12 +159,13 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 
 ### 3.6. Đồng bộ clipboard
 *(mvp F8, N6)*
-- Dùng `QClipboard.dataChanged` (văn bản + ảnh). Nếu signal không đáng tin trên một hệ điều hành thì chuyển sang polling 500ms. Lõi làm việc qua giao diện `ClipboardBackend`; bản Qt do tầng `ui` cung cấp.
+- Dùng `QClipboard.dataChanged` (văn bản + ảnh), **chưa** polling: chỉ chuyển sang polling 500 ms khi đo trên máy thật thấy signal không đáng tin trên một hệ điều hành. Giới hạn đã biết, chưa thử máy thật: Wayland không báo `dataChanged` khi app không ở tiền cảnh (và hạn chế ghi), macOS có thể chỉ báo khi app đang được kích hoạt. Lõi làm việc qua giao diện `ClipboardBackend`; bản Qt do tầng `ui` cung cấp; điều phối (gộp các lần đổi, hàng gửi, hàng ghi, trần RAM) ở `teleport.app.clipboard` ([architecture.md](architecture.md) mục 5).
 - Phần sans-IO (chia, ráp, chống vòng lặp, giới hạn tốc độ, lọc nhạy cảm) ở `teleport.core.clipboard`; hành vi và hợp đồng với `app`/`ui` ở docstring của module đó.
 - **Chống vòng lặp** bằng fingerprint: văn bản là SHA-256 của văn bản đã chuẩn hóa như trên dây (`\r\n` thành `\n`, `protocol.md` mục 3.3), nên hệ điều hành đổi xuống dòng khi ghi clipboard không làm đổi fingerprint; bên nhận tính fingerprint từ văn bản đã ráp, không lấy `sha256` trên dây (bên gửi khác có thể không chuẩn hóa); ảnh là SHA-256 của **pixel** đã giải mã (kèm kích thước và định dạng pixel), không phải của byte PNG, vì mã hóa lại PNG ra byte khác. **Một** `LoopGuard` cho cả node nhớ các fingerprint vừa ghi từ máy khác (cả fingerprint đọc lại sau khi ghi); clipboard đổi thành nội dung trùng thì không gửi. Máy chỉ gửi nội dung do chính người dùng nó tạo ra, **không chuyển tiếp** clip nhận được: với 3 máy, máy thứ hai không gửi tiếp cho máy thứ ba clip mà máy thứ nhất đã gửi thẳng cho cả hai.
-- Bật/tắt theo từng thiết bị đã ghép đôi, **mặc định tắt** (clipboard có thể chứa mật khẩu).
+- Bật/tắt theo từng thiết bị đã ghép đôi, **mặc định tắt** (clipboard có thể chứa mật khẩu); ghép đôi lại cũng đặt về tắt. Không có message báo bật/tắt: mỗi máy chỉ gửi tới và nhận từ máy mình đã bật, nên clip chỉ đi khi **cả hai máy** cùng bật cho nhau ([protocol.md](protocol.md) mục 3.3; bật một chiều thì máy gửi tốn băng thông cho clip bị bỏ, chấp nhận để giữ nguyên dây). Không bật với máy nào đang kết nối thì clipboard máy này không bị đọc. “Tạm dừng nhận” bỏ cả clipboard gửi tới (vẫn gửi đi được).
 - Bỏ qua nội dung được trình quản lý mật khẩu đánh dấu nhạy cảm. Windows: có định dạng `ExcludeClipboardContentFromMonitorProcessing`, hoặc `CanIncludeInClipboardHistory` / `CanUploadToCloudClipboard` mang DWORD bằng 0. macOS: `org.nspasteboard.ConcealedType`; Linux: `x-kde-passwordManagerHint`. So tên không phân biệt hoa thường, cả tên trần lẫn dạng `application/x-qt-…-mime;value="…"` của Qt. Không đọc được giá trị DWORD thì coi là nhạy cảm. Tên trên macOS/Linux chưa kiểm tay (Giai đoạn 5, phần giao diện).
 - Văn bản và ảnh lớn được chia thành nhiều message nhỏ, nên một lần gửi clipboard không giữ kết nối điều khiển lâu và `ping`/`pong` vẫn chen vào được giữa các mảnh; khối dữ liệu file đi trên kết nối riêng. Cách chia, trần dung lượng và luật ráp: [protocol.md](protocol.md) mục 3.3.
+- Rủi ro chấp nhận: lịch sử clipboard của Windows (Win+V) và clipboard đám mây lưu cả nội dung nhận từ máy khác (nội dung nhạy cảm thì vẫn không gửi); một máy đã ghép đôi và đã bật đồng bộ có thể gửi ảnh liên tục ở mức tối đa bên nhận chấp nhận, làm máy này giải mã và ghi ảnh liên tục: không thêm trần riêng; RAM chưa đo (sẽ ghi ở [benchmark.md](benchmark.md) mục 9.5). Máy giữ clip dở, bỏ dở clip hay dội mảnh đầu liên tục bị đẩy ra khỏi trần RAM chung khi máy khác cần chỗ ([architecture.md](architecture.md) mục 5, “Clipboard ở tầng app”); máy tin cậy vẫn có thể gửi clip thật liên tục ở mức tối đa như trên. Cách xử lý: tắt đồng bộ hay hủy ghép đôi với máy đó.
 
 ### 3.7. Quyền riêng tư & “Zero-Cloud”
 *(mvp N9)*
@@ -242,7 +243,7 @@ Nguyên tắc: **làm bằng dòng lệnh (CLI) trước, giao diện sau.** Ph�
 | 2 | Truyền file, backpressure, an toàn khi nhận | 3 tuần | 6 | `v0.1.0-alpha` | F4, F5 (CLI), F12 | Gửi file lớn qua CLI giữa 2 máy đã ghép đôi | ⏸ Code xong, chờ đợt đo (mục 5.4) |
 | 3 | Merkle & tự nối lại | 3 tuần | 9 | `v0.2.0-alpha` | F6, F7 | Rớt mạng vẫn tự nối lại, chỉ gửi phần còn thiếu. **Bản CLI đầu tiên đáng cho người dùng kỹ thuật dùng thử** | ⏳ Đang làm |
 | 4 | Giao diện, khay hệ thống, đa ngôn ngữ | 2 tuần | 11 | `v0.3.0-beta` | F2–F5 (giao diện), F9, F10, F11 | Dùng hoàn toàn bằng giao diện: radar, kéo thả, ghép đôi | ⏳ Đang làm phần cho buổi demo hackathon (mục 5.5) |
-| 5 | Đồng bộ clipboard | 1 tuần | 12 | `v0.4.0-beta` | F8 | Đồng bộ clipboard | ⏳ Lõi đã làm sớm (`core/clipboard.py`, message `clipboard`); phần app và giao diện làm sau buổi demo hackathon (mục 5.5) |
+| 5 | Đồng bộ clipboard | 1 tuần | 12 | `v0.4.0-beta` | F8 | Đồng bộ clipboard | ⏳ Code xong (module: [architecture.md](architecture.md) mục 3); còn ca ảnh 8192² vượt mvp N6 ([benchmark.md](benchmark.md) mục 9.4) và đợt đo (mục 5.4); chưa thử tay trên máy thật (Wayland, macOS, trình quản lý mật khẩu) |
 | 6 | Hoàn thiện, bộ cài, phát hành | 3 tuần | 15 | `v1.0.0` | F1, toàn bộ N1–N12 | Bộ cài 3 hệ điều hành, tài liệu người dùng, đã thử với người dùng thật | ⏳ Đang làm bộ cài Windows (Inno Setup, build thử chạy tay, chưa ký mã: [CONTRIBUTING.md](CONTRIBUTING.md) “Bộ cài Windows”); phần còn lại chưa làm |
 
 Ký hiệu trạng thái: [README.md](README.md) mục 4. Giai đoạn ⏸ còn chờ gì: dòng “Xong khi” của nó ở mục 5.2.
@@ -314,7 +315,7 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 #### Giai đoạn 5 — Đồng bộ clipboard
 - Văn bản và ảnh chụp màn hình; chống vòng lặp; công tắc theo thiết bị; bỏ qua nội dung nhạy cảm; biểu tượng khay báo vừa nhận (mục 3.6).
 - **Xong khi** (kiểm được ngay, trên loopback): đạt mọi AC của F8.
-- **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D6. → **`v0.4.0-beta`** (thời điểm gắn tag: mục 5.4).
+- **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D6, và D8 phần clipboard (Wayland, macOS, trình quản lý mật khẩu; mục 3.6). → **`v0.4.0-beta`** (thời điểm gắn tag: mục 5.4).
 
 #### Giai đoạn 6 — Hoàn thiện & phát hành v1.0
 - Bộ cài: Inno Setup (Windows, tự tạo rule tường lửa cho mạng Private), `.dmg` (macOS), AppImage (Linux), build tự động bằng GitHub Actions khi gắn tag; lần chạy đầu theo F1; đạt N11.
@@ -347,7 +348,7 @@ Máy chính có thêm một máy ảo Ubuntu bridged ([benchmark.md](benchmark.m
 | D3 | mvp N3 khi truyền qua card mạng giữa hai máy, với cỡ file lớn nhất mvp N3 nêu, RAM hai phía; đo cùng lượt D2 | Máy thật thứ hai | [benchmark.md](benchmark.md) mục 4.1 (“Qua card mạng giữa hai máy”), 4.4 |
 | D4 | mvp N3 khi ổ đích chậm; nhận nhiều file nhỏ trên ổ chậm (mục 8, dòng rủi ro “nhiều file nhỏ”) | USB định dạng NTFS hoặc exFAT, hoặc ổ ảo giới hạn tốc độ | [benchmark.md](benchmark.md) mục 4.4, 4.8 |
 | D5 | mvp N4 trên mạng thật: tắt Wi-Fi giữa lượt truyền rồi bật lại; phần gửi thừa do bộ đệm socket qua card mạng thật, trên Linux (máy ảo bridged được) và trên macOS ([protocol.md](protocol.md) mục 4.3) | Máy thật thứ hai hoặc máy ảo Linux bridged; một máy macOS | [benchmark.md](benchmark.md) mục 7.4, 7.5 |
-| D6 | mvp N6 trên loại mạng Wi-Fi mà mvp N6 nêu | Máy thật thứ hai; điểm phát Wi-Fi đúng loại đó | [benchmark.md](benchmark.md), mục mvp N6 (viết ở Giai đoạn 5) |
+| D6 | mvp N6 trên loại mạng Wi-Fi mà mvp N6 nêu | Máy thật thứ hai; điểm phát Wi-Fi đúng loại đó | [benchmark.md](benchmark.md) mục 9 (việc còn lại: 9.5) |
 | D7 | mvp N10: các hệ điều hành mvp N10 nêu gửi/nhận qua lại, gồm N1 và truyền file cho từng cặp | Máy thật cho từng hệ điều hành đó | [benchmark.md](benchmark.md), mục mvp N10 (viết khi đo) |
 | D8 | Kiểm thủ công trên thiết bị thật (mục 7, dòng “Thủ công trên thiết bị thật”) | Hai máy thật, nhiều mạng | Mục 7 |
 
@@ -401,7 +402,7 @@ Bản chính thức: [CONTRIBUTING.md](CONTRIBUTING.md). Tóm tắt:
 | Benchmark | Tốc độ so với SMB, RSS theo thời gian, thời gian phát hiện, byte gửi lại | N1–N4 |
 | Soak test | 100 lượt truyền liên tiếp, kiểm tra không rò bộ nhớ, không còn file tạm | N7 |
 | Thủ công trước mỗi bản beta/1.0 | Trên một máy: giao diện, trợ năng (bàn phím, tương phản, chế độ sáng/tối) | N12, AC giao diện |
-| Thủ công trên thiết bị thật | 2 máy thật trên Wi-Fi nhà, văn phòng, quán cà phê; các hệ điều hành của mvp N10; phát hiện tường lửa và cô lập thiết bị (mvp mục 8). Làm trong đợt đo (mục 5.4) | N10, AC giao diện |
+| Thủ công trên thiết bị thật | 2 máy thật trên Wi-Fi nhà, văn phòng, quán cà phê; các hệ điều hành của mvp N10; phát hiện tường lửa và cô lập thiết bị (mvp mục 8); đồng bộ clipboard (mục 3.6). Làm trong đợt đo (mục 5.4) | N10, AC giao diện |
 
 Quy ước viết test (marker, fixture, chỗ test thay được): [architecture.md](architecture.md) mục 6.
 

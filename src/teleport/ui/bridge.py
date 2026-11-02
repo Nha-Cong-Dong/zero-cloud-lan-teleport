@@ -8,9 +8,9 @@ không bao giờ chạy lồng trong một lượt xử lý action list của `T
 Mọi phương thức công khai của `NodeHost` `assert` đang ở thread đã dựng nó (thread Qt).
 
 Chiều ngược lại: callback của node (`on_event`, `on_transfer_event`, `on_pairing_prompt`,
-`on_pairing_finished`) chạy trên loop, chỉ chuyển sự kiện về thread Qt và không bao giờ raise:
-`on_pairing_prompt` raise thì lõi hủy phiên (`PROMPT_FAILED`), nên hộp hiện mã được mở sau đó trên
-thread Qt và lỗi hiển thị (nếu có) nằm lại ở `ui`, không bay về phiên. Mọi thứ về thread Qt
+`on_pairing_finished`, `on_clipboard_event`) chạy trên loop, chỉ chuyển sự kiện về thread Qt và không
+bao giờ raise: `on_pairing_prompt` raise thì lõi hủy phiên (`PROMPT_FAILED`), nên hộp hiện mã được mở
+sau đó trên thread Qt và lỗi hiển thị (nếu có) nằm lại ở `ui`, không bay về phiên. Mọi thứ về thread Qt
 đi qua một signal nội bộ nối kiểu `QueuedConnection` tới slot của chính `NodeHost` (sống ở
 thread Qt), rồi slot đó mới phát các signal công khai. Nhờ vậy mọi slot, kể cả hàm thường hay
 lambda, chạy trên thread Qt.
@@ -75,6 +75,7 @@ from typing import Any, TypeVar
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from teleport.app import node as app_node
+from teleport.app.clipboard import ClipboardBackend, ClipboardEvent
 from teleport.app.node import (
     ConfigDirError,
     MdnsOptions,
@@ -121,6 +122,8 @@ class NodeOptions:
     `name`: tên thiết bị cho `Node(name=…)`; None thì node dùng tên đã lưu, chưa có thì hostname.
     `save_args` (lần chạy đầu, `ui.first_run`): `Node.start` lưu `name` (nếu có) trước khi quảng bá và
     lưu `receive_dir` (nếu là Path) ngay khi mở được; mặc định False (không lưu gì).
+    `clipboard`: backend clipboard cho `Node(clipboard=…)` (`ui.clipboard_qt.QtClipboardBackend` khi
+    chạy GUI thật, dựng trên thread Qt); None → node không đồng bộ clipboard (mặc định, test).
     """
 
     config_dir: Path
@@ -130,6 +133,7 @@ class NodeOptions:
     port: int | None = None
     name: str | None = None
     save_args: bool = False
+    clipboard: ClipboardBackend | None = None
 
 
 def _clean(text: str) -> str:
@@ -255,8 +259,8 @@ class NodeHost(QObject):
 
     Signal (luôn phát trên thread Qt): `started`; `start_failed(mã StartError, chi tiết)`;
     `node_event(NodeEvent)`; `transfer_event(TransferUpdate)`; `pairing_prompt(PairingPrompt)`;
-    `pairing_finished(PairingFinished)`; `stopped` (thread node đã xong việc, `join` sẽ trả True
-    ngay). `call` / `submit` khi node chưa chạy hoặc đang đóng thì báo
+    `pairing_finished(PairingFinished)`; `clipboard_event(ClipboardEvent)`; `stopped` (thread node đã
+    xong việc, `join` sẽ trả True ngay). `call` / `submit` khi node chưa chạy hoặc đang đóng thì báo
     `on_done(RuntimeError)`. `on_done` luôn được gọi trên thread Qt, sau khi hàm gọi đã trả về.
     """
 
@@ -266,6 +270,7 @@ class NodeHost(QObject):
     transfer_event = Signal(object)
     pairing_prompt = Signal(object)  # PairingPrompt
     pairing_finished = Signal(object)  # PairingFinished
+    clipboard_event = Signal(object)  # ClipboardEvent
     stopped = Signal()
 
     _relay = Signal(object)  # hàm không tham số, chạy trên thread Qt
@@ -506,6 +511,8 @@ class NodeHost(QObject):
                 auto_accept=False,
                 on_transfer_event=self._transfer_callback,
                 save_args=opts.save_args,
+                clipboard=opts.clipboard,
+                on_clipboard_event=self._clipboard_callback,
             )
         except Exception as e:
             self._fail(e)
@@ -629,6 +636,9 @@ class NodeHost(QObject):
 
     def _transfer_callback(self, update: TransferUpdate) -> None:
         self._post(functools.partial(self.transfer_event.emit, update))
+
+    def _clipboard_callback(self, event: ClipboardEvent) -> None:
+        self._post(functools.partial(self.clipboard_event.emit, event))
 
     def _pairing_prompt_callback(self, prompt: PairingPrompt) -> None:
         """`on_prompt` của lõi: chỉ chuyển về thread Qt, không raise (raise → PROMPT_FAILED)."""

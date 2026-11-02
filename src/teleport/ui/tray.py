@@ -14,28 +14,43 @@
 3. “Tạm dừng nhận”: mục `checkable`, có dấu = đang tạm dừng. Bấm → `pause_toggled(bool)` (nối
    `QAction.triggered`, không `toggled`); dấu chọn đổi ngay khi bấm, còn trạng thái khay (`state.paused`,
    dấu biểu tượng, tooltip) chỉ đổi khi `ui.app` gọi `set_receiving_paused` sau khi node xác nhận (lệnh
-   đó cũng đặt lại dấu chọn, dưới `QSignalBlocker`, không phát `pause_toggled`). Tạm dừng chỉ chặn
-   `offer` file **mới** (lượt đang nhận vẫn tiếp tục), chỉ trong phiên; clipboard do D5 quyết.
+   đó cũng đặt lại dấu chọn, dưới `QSignalBlocker`, không phát `pause_toggled`). Tạm dừng chặn
+   `offer` file **mới** (lượt đang nhận vẫn tiếp tục) và bỏ clipboard gửi tới (mvp F8), chỉ trong
+   phiên; không chặn việc gửi clipboard đi.
 4. Dòng kẻ, “Thoát”.
 
 “Gửi file…” và “Tạm dừng nhận” bật/tắt **chỉ** theo `TrayState.running` (`set_running`): node chưa
 chạy (lần chạy đầu, đang khởi động, lỗi) thì hiện mà tắt.
 
 **Trạng thái** (`TrayState`, dataclass thuần; `ui.app` đẩy vào bằng `set_running`, `set_activity`,
-`set_receiving_paused`, `set_receiving_unavailable`), gom về một chỗ `_render()`:
-- Dấu biểu tượng `tray_badge` (hàm thuần), ưu tiên UNAVAILABLE > PAUSED > TRANSFERRING > NONE; node
-  chưa chạy thì NONE. Thứ tự này khác có chủ ý với huy hiệu thẻ máy này (`ui.home`: đang truyền đứng
-  đầu): khay cảnh báo trước việc người dùng dễ quên (không nhận file, đang tạm dừng).
+`set_receiving_paused`, `set_receiving_unavailable`, `flash_clipboard`), gom về một chỗ `_render()`:
+- Dấu biểu tượng `tray_badge` (hàm thuần), ưu tiên UNAVAILABLE > PAUSED > CLIPBOARD > TRANSFERRING >
+  NONE; node chưa chạy thì NONE. CLIPBOARD chỉ khi thông báo clipboard đang hiện là `received`. Thứ
+  tự này khác có chủ ý với huy hiệu thẻ máy này (`ui.home`: đang truyền đứng đầu): khay cảnh báo trước
+  việc người dùng dễ quên (không nhận file, đang tạm dừng).
 - Biểu tượng (`make_icon(badge)`): logo + dấu tròn góc dưới phải, đường kính nửa cỡ icon, viền 1 px
   (2 px khi cỡ ≥ 32) màu `surface`. Khác cả hình lẫn màu (không chỉ bằng màu, mvp N12): TRANSFERRING
-  chấm `accent_strong`; PAUSED nền `warning` hai vạch dừng `surface`; UNAVAILABLE nền `danger` dấu “!”
-  `surface`. Màu từ `theme.tokens(dark=False, accent=None)` (bộ mint cố định, không theo màu nhấn của
-  người dùng). Vẽ bằng `QPainter`; icon có dấu thêm cỡ 20 và 40. Mỗi dấu dựng **một lần** lúc gọi đầu
-  tiên (không lúc import) rồi cache; `_render()` chỉ `setIcon` khi dấu đổi. Không hẹn giờ, không polling.
+  chấm `accent_strong`; CLIPBOARD nền `accent_strong` hình tờ giấy có kẹp `surface`; PAUSED nền
+  `warning` hai vạch dừng `surface`; UNAVAILABLE nền `danger` dấu “!” `surface`. Màu từ
+  `theme.tokens(dark=False, accent=None)` (bộ mint cố định, không theo màu nhấn của người dùng). Vẽ bằng
+  `QPainter`; icon có dấu thêm cỡ 20 và 40. Mỗi dấu dựng **một lần** lúc gọi đầu tiên (không lúc import)
+  rồi cache; `_render()` chỉ `setIcon` khi dấu đổi. Không polling; hẹn giờ duy nhất là của thông báo
+  clipboard (bên dưới).
 - Tooltip `tray_tooltip` (hàm thuần, dịch lúc gọi, ngữ cảnh “Tray”): dòng 1 `texts.APP_NAME`; node chạy
-  thì thêm “Đang truyền n lượt”, rồi “Không nhận file: …” hay (nếu không) “Đã tạm dừng nhận file
-  mới”, không dòng nào thì “Sẵn sàng nhận”. Tooltip của khay là rich text trên X11: không bao giờ đưa
-  chữ do máy kia đặt vào đó (cả F4/D5 sau này); giữ dưới 100 ký tự (Windows cắt ở 127).
+  thì thêm dòng clipboard (nếu đang có, bên dưới), “Đang truyền n lượt”, rồi “Không nhận file: …” hay
+  (nếu không) “Đã tạm dừng nhận file mới và clipboard”, không dòng nào thì “Sẵn sàng nhận”.
+- **Chữ máy kia trong tooltip** (chỉ tên máy của dòng clipboard, mvp F8): tooltip khay là
+  rich text trên X11 và Windows cắt nó ở `TOOLTIP_MAX_UNITS` đơn vị UTF-16. Tên đã qua
+  `texts.peer_label` rồi `tray_safe` (`<` → `‹`, `>` → `›`, `&` → `＆`; không dùng
+  `widgets.safe_tooltip` vì tooltip khay Windows là chữ thuần, thực thể HTML sẽ hiện nguyên văn), rồi
+  bị cắt (thêm `…`) sao cho cả tooltip ≤ `TOOLTIP_MAX_UNITS` đơn vị UTF-16 (tên toàn emoji hay dấu kết
+  hợp dài hơn số cột nhiều lần). Dòng cảnh báo (“Không nhận file: …” / “Đã tạm dừng…”) **không bao giờ**
+  bị cắt: tên không còn chỗ cho ít nhất một ký tự thì bỏ cả dòng clipboard, vẫn quá thì bỏ dòng “Đang
+  truyền”. Ngoài tên đó không có chữ nào của máy kia.
+- **Clipboard** (`flash_clipboard(ClipNotice)`, mvp F8): `received` (“Vừa nhận clipboard từ
+  X”), `write_failed` (“Chưa chép được clipboard từ X”), `too_large` (“Clipboard quá lớn nên không gửi.
+  Hãy gửi dạng file.”). Hiện `CLIP_FLASH_MS` (đọc lúc dùng) bằng một `QTimer` một lần; thông báo mới
+  thay thông báo cũ và đếm lại; node thôi chạy (`set_running(False)`) thì xóa. Không bóng thoại.
 
 **Bóng thoại** (`show_message(text, folder=None)`, chỗ duy nhất hiện bóng thoại; F4 gộp ở đây): chỉ hiện
 khi có khay và biểu tượng đang hiện; khi thật sự hiện thì nhớ `folder` của bóng thoại đó (None cũng nhớ).
@@ -61,7 +76,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRectF, QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRectF, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QBrush, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -71,6 +86,29 @@ log = logging.getLogger(__name__)
 
 _ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 _BADGE_EXTRA_SIZES = (20, 40)  # cỡ khay thường gặp ở 125 % / 250 %
+CLIP_FLASH_MS = 5000  # ms hiện thông báo clipboard ở khay (đọc lúc dùng, test chỉnh được)
+TOOLTIP_MAX_UNITS = 127  # đơn vị UTF-16 tối đa của tooltip khay (Windows cắt phần sau)
+_ELLIPSIS = "…"
+_ZWJ = "\u200d"
+_TRAY_SAFE = str.maketrans({"<": "‹", ">": "›", "&": "＆"})
+
+
+class ClipNoticeKind(StrEnum):
+    """Loại thông báo clipboard ở khay."""
+
+    RECEIVED = "received"  # vừa chép clipboard từ máy kia
+    TOO_LARGE = "too_large"  # nội dung vừa sao chép quá lớn nên không gửi
+    WRITE_FAILED = "write_failed"  # nhận được mà chưa chép được vào máy này
+
+
+@dataclass(frozen=True, slots=True)
+class ClipNotice:
+    """Một thông báo clipboard: `label` là tên máy kia đã qua `texts.peer_label` (rỗng với `too_large`).
+
+    Khay tự đưa `label` qua `tray_safe` và cắt theo ngân sách tooltip."""
+
+    kind: ClipNoticeKind
+    label: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +119,7 @@ class TrayState:
     active: int = 0  # số lượt chưa kết thúc (= `ChatView.active_count()`)
     paused: bool = False  # người dùng tạm dừng nhận (node đã xác nhận)
     unavailable: bool = False  # thư mục nhận hỏng: không nhận file
+    clipboard: ClipNotice | None = None  # thông báo clipboard đang hiện (`flash_clipboard`)
 
 
 class TrayBadge(StrEnum):
@@ -90,6 +129,7 @@ class TrayBadge(StrEnum):
     TRANSFERRING = "transferring"
     PAUSED = "paused"
     UNAVAILABLE = "unavailable"
+    CLIPBOARD = "clipboard"
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,33 +142,91 @@ class SendTarget:
 
 
 def tray_badge(state: TrayState) -> TrayBadge:
-    """Dấu biểu tượng: UNAVAILABLE > PAUSED > TRANSFERRING > NONE; node chưa chạy → NONE."""
+    """Dấu biểu tượng: UNAVAILABLE > PAUSED > CLIPBOARD > TRANSFERRING > NONE; node chưa chạy → NONE.
+
+    CLIPBOARD chỉ khi thông báo clipboard đang hiện là `received`."""
     if not state.running:
         return TrayBadge.NONE
     if state.unavailable:
         return TrayBadge.UNAVAILABLE
     if state.paused:
         return TrayBadge.PAUSED
+    if state.clipboard is not None and state.clipboard.kind is ClipNoticeKind.RECEIVED:
+        return TrayBadge.CLIPBOARD
     if state.active > 0:
         return TrayBadge.TRANSFERRING
     return TrayBadge.NONE
 
 
+def tray_safe(text: str) -> str:
+    """Chữ do máy kia đặt để đưa vào tooltip khay: `<` → `‹`, `>` → `›`, `&` → `＆`.
+
+    Tooltip khay là rich text trên X11 mà là chữ thuần trên Windows: đổi ký tự thay vì escape HTML để
+    hiện đúng ở cả hai nơi. Không cắt độ dài (`tray_tooltip` lo ngân sách)."""
+    return text.translate(_TRAY_SAFE)
+
+
+def utf16_units(text: str) -> int:
+    """Số đơn vị UTF-16 của `text` (cách Windows đếm độ dài tooltip khay)."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _cut_units(text: str, budget: int) -> str:
+    """Phần đầu dài nhất của `text` ≤ `budget` đơn vị UTF-16 (không bao giờ tách cặp surrogate)."""
+    used = 0
+    for index, ch in enumerate(text):
+        used += 2 if ord(ch) > 0xFFFF else 1
+        if used > budget:
+            return text[:index]
+    return text
+
+
+def _clip_line(notice: ClipNotice) -> tuple[str, str | None]:
+    """(mẫu câu, tên) của dòng clipboard; `too_large` không có tên."""
+    t = QCoreApplication.translate
+    if notice.kind is ClipNoticeKind.TOO_LARGE:
+        return t("Tray", "Clipboard quá lớn nên không gửi. Hãy gửi dạng file."), None
+    if notice.kind is ClipNoticeKind.WRITE_FAILED:
+        return t("Tray", "Chưa chép được clipboard từ {name}"), notice.label
+    return t("Tray", "Vừa nhận clipboard từ {name}"), notice.label
+
+
 def tray_tooltip(state: TrayState) -> str:
-    """Tooltip của biểu tượng khay (xem docstring module); dịch lúc gọi."""
+    """Tooltip của biểu tượng khay (xem docstring module); dịch lúc gọi; ≤ `TOOLTIP_MAX_UNITS` đơn vị
+    UTF-16."""
     if not state.running:
         return texts.APP_NAME
-    lines = [texts.APP_NAME]
     t = QCoreApplication.translate
-    if state.active > 0:
-        lines.append(t("Tray", "Đang truyền %n lượt", None, state.active))
+    active = t("Tray", "Đang truyền %n lượt", None, state.active) if state.active > 0 else None
+    warning: str | None = None
     if state.unavailable:
-        lines.append(t("Tray", "Không nhận file: không mở được thư mục nhận"))
+        warning = t("Tray", "Không nhận file: không mở được thư mục nhận")
     elif state.paused:
-        lines.append(t("Tray", "Đã tạm dừng nhận file mới"))
-    if len(lines) == 1:
-        lines.append(t("Tray", "Sẵn sàng nhận"))
-    return "\n".join(lines)
+        warning = t("Tray", "Đã tạm dừng nhận file mới và clipboard")
+
+    def join(*lines: str | None) -> str:
+        return "\n".join(line for line in (texts.APP_NAME, *lines) if line is not None)
+
+    if state.clipboard is None:
+        if active is None and warning is None:
+            return _cut_units(join(t("Tray", "Sẵn sàng nhận")), TOOLTIP_MAX_UNITS)
+    else:
+        template, name = _clip_line(state.clipboard)
+        clip = template if name is None else texts.fill(template, name=tray_safe(name))
+        if utf16_units(join(clip, active, warning)) <= TOOLTIP_MAX_UNITS:
+            return join(clip, active, warning)
+        if name is not None:  # rút gọn tên trước, còn ít nhất một ký tự của tên
+            name = tray_safe(name)
+            bare = utf16_units(join(texts.fill(template, name=""), active, warning))
+            room = TOOLTIP_MAX_UNITS - bare - utf16_units(_ELLIPSIS)
+            short = _cut_units(name, max(0, room)).rstrip(_ZWJ)
+            if short:
+                return join(texts.fill(template, name=short + _ELLIPSIS), active, warning)
+        # Không vừa: bỏ dòng clipboard (rồi dòng “Đang truyền”), không bao giờ cắt dòng cảnh báo.
+    text = join(active, warning)
+    if utf16_units(text) <= TOOLTIP_MAX_UNITS:
+        return text
+    return _cut_units(join(warning), TOOLTIP_MAX_UNITS)  # APP_NAME + cảnh báo luôn vừa ngân sách
 
 
 def offline_target_text(label: str) -> str:
@@ -176,6 +274,7 @@ def _draw_badged(size: int, badge: TrayBadge) -> QPixmap:
     circle = outer.adjusted(border / 2, border / 2, -border / 2, -border / 2)
     fill = {
         TrayBadge.TRANSFERRING: t.accent_strong,
+        TrayBadge.CLIPBOARD: t.accent_strong,
         TrayBadge.PAUSED: t.warning,
         TrayBadge.UNAVAILABLE: t.danger,
     }[badge]
@@ -199,6 +298,15 @@ def _draw_badged(size: int, badge: TrayBadge) -> QPixmap:
             painter.drawRect(QRectF(cx - bar_w / 2, top, bar_w, stem))
             dot = max(1.0, d * 0.16)
             painter.drawRect(QRectF(cx - dot / 2, cy + d * 0.3 - dot, dot, dot))
+        elif badge is TrayBadge.CLIPBOARD:
+            # Tờ giấy `surface` có kẹp ở mép trên: khác hình chấm của TRANSFERRING (cùng màu nền).
+            sheet_w, sheet_h = d * 0.46, d * 0.52
+            sheet = QRectF(cx - sheet_w / 2, cy - sheet_h / 2 + d * 0.06, sheet_w, sheet_h)
+            painter.drawRect(sheet)
+            clip_w, clip_h = max(1.0, d * 0.26), max(1.0, d * 0.16)
+            painter.drawRect(QRectF(cx - clip_w / 2, sheet.top() - clip_h * 0.6, clip_w, clip_h))
+            painter.setBrush(QBrush(fill))  # khe dưới kẹp: kẹp tách khỏi tờ giấy
+            painter.drawRect(QRectF(cx - clip_w / 2, sheet.top() + clip_h * 0.4, clip_w, max(1.0, d * 0.06)))
     finally:
         painter.end()
     return pixmap
@@ -258,6 +366,9 @@ class Tray(QObject):
         self._menu.setDefaultAction(self._open)
         self._menu.aboutToShow.connect(self._rebuild_send_menu)
         self._send_menu.aboutToShow.connect(self._rebuild_send_menu)
+        self._clip_timer = QTimer(self)  # tắt thông báo clipboard sau `CLIP_FLASH_MS`
+        self._clip_timer.setSingleShot(True)
+        self._clip_timer.timeout.connect(self._clear_clipboard)
         self._icon_badge = TrayBadge.NONE
         self._icon = QSystemTrayIcon(make_icon(), self)
         self._icon.setContextMenu(self._menu)
@@ -300,8 +411,26 @@ class Tray(QObject):
         return self._icon.toolTip()
 
     def set_running(self, running: bool) -> None:
-        """Node đang chạy: bật “Gửi file…” và “Tạm dừng nhận”, tooltip có dòng trạng thái."""
-        self._apply(replace(self._state, running=bool(running)))
+        """Node đang chạy: bật “Gửi file…” và “Tạm dừng nhận”, tooltip có dòng trạng thái.
+
+        Thôi chạy thì xóa thông báo clipboard đang hiện."""
+        if running:
+            self._apply(replace(self._state, running=True))
+            return
+        self._clip_timer.stop()
+        self._apply(replace(self._state, running=False, clipboard=None))
+
+    def flash_clipboard(self, notice: ClipNotice) -> None:
+        """Hiện thông báo clipboard `CLIP_FLASH_MS` ms (dấu CLIPBOARD khi `received`, dòng tooltip).
+
+        Thông báo mới thay thông báo cũ và đếm lại từ đầu. Không bóng thoại; node chưa chạy → bỏ qua."""
+        if not isinstance(notice, ClipNotice) or not self._state.running:
+            return
+        self._apply(replace(self._state, clipboard=notice))
+        self._clip_timer.start(max(0, int(CLIP_FLASH_MS)))
+
+    def _clear_clipboard(self) -> None:
+        self._apply(replace(self._state, clipboard=None))
 
     def set_activity(self, active: int) -> None:
         """Số lượt chưa kết thúc (âm coi là 0)."""
