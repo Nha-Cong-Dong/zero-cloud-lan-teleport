@@ -9,7 +9,18 @@ Ba phần:
   U+FFFD) và nằm trong “…”.
 - **`PairingDialog`**: hộp mvp mục 7.2, theo đúng bố cục chống giả mã: tiêu đề cửa sổ chỉ
   “Ghép đôi”; dòng đầu cố định theo vai; một nhãn chữ lớn CHỈ có mã; cảnh báo nhiều mã ngay dưới
-  mã; rồi mới tới tên máy kia. Không cha, `NonModal`, `WA_DeleteOnClose`, mở bằng `show()` +
+  mã; rồi mới tới tên máy kia; rồi đếm ngược hạn xác nhận; cuối cùng là nút. Mã là `CodeLabel`
+  (objectName `pairingCode`, `text()` vẫn là `format_code`, ví dụ `382 104`) vẽ thành hai nhóm ba ô bo
+  góc (khoảng giữa hai nhóm gấp đôi), màu từ `theme.tokens_for`; chữ không đúng 6 chữ số thì vẽ như
+  `QLabel` thường. Đếm ngược (spec B4 mục 3.7): thanh mảnh `pairingCountdown` (`CountdownBar` vẽ
+  tay, thang 0…1000, không chữ, không lộ giá trị cho trợ năng, tên trợ năng “Thời gian còn lại để xác
+  nhận”) và nhãn `pairingCountdownText` “Còn n giây để xác
+  nhận”; `QTimer` con của hộp mỗi `COUNTDOWN_TICK_MS`, đọc `clock` tiêm được (cùng đồng hồ với
+  `expires_at`), chỉ `setText` / `setValue` khi số giây / giá trị thang đổi; thang là
+  `max(CONFIRM_TIMEOUT, thời gian còn lại lúc mở)`. Còn ≤ `COUNTDOWN_WARN_SECONDS` giây thì nhãn
+  `tone=warning` (thanh vẫn ngắn dần, không chỉ dựa vào màu). Mô tả trợ năng của thanh chỉ cập nhật
+  ở các mốc `COUNTDOWN_ANNOUNCE`, không theo từng giây. Hết hạn vẫn do `PairingController` đóng hộp.
+  Không cha, `NonModal`, `WA_DeleteOnClose`, mở bằng `show()` +
   `raise_()` + `activateWindow()`, không bao giờ `exec()`. Rộng tối thiểu `theme.DIALOG_MIN_WIDTH`
   như hộp nhận file; nút căn phải (“Không trùng”, rồi “Trùng khớp” là nút chính tô màu nhấn qua
   `theme.PRIMARY_PROPERTY`). Nút mặc định (Enter) và Esc là “Không trùng” (nút được tô màu không phải
@@ -84,13 +95,14 @@ import contextlib
 import dataclasses
 import functools
 import logging
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QPalette
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPaintEvent, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QCheckBox,
@@ -113,11 +125,17 @@ from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc l�
 from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
 from teleport.ui import texts, theme
+from teleport.ui.chat_bubbles import paint_thin_bar, set_tone
 
 log = logging.getLogger(__name__)
 
 _CODE_FONT_SCALE = 2.6  # cỡ chữ của mã so với cỡ chữ thường
 _MAX_TIMER_MS = 24 * 3600 * 1000  # QTimer nhận int32 mili giây; hạn thật chỉ vài chục giây
+COUNTDOWN_TICK_MS = 250  # nhịp đếm ngược của hộp mã
+COUNTDOWN_MAX = 1000  # thang của thanh đếm ngược
+COUNTDOWN_WARN_SECONDS = 10  # còn từng này giây trở xuống: chữ màu cảnh báo
+COUNTDOWN_ANNOUNCE = (30, 10, 5)  # mốc (giây) cập nhật mô tả trợ năng của thanh
+_CODE_DIGITS = 6
 
 # Phiên chưa xong vì người dùng hay máy kia (mvp mục 8, hai dòng “chưa xong”).
 _UNFINISHED = frozenset(
@@ -170,6 +188,16 @@ def prompt_header(role: Role) -> str:
 def code_text(prompt: PairingPrompt) -> str:
     """Chữ của nhãn mã: chỉ có mã, ví dụ `382 104`."""
     return format_code(prompt.code)
+
+
+def countdown_text(seconds: int) -> str:
+    """Nhãn đếm ngược dưới tên máy kia: “Còn n giây để xác nhận”."""
+    return QCoreApplication.translate("Pairing", "Còn %n giây để xác nhận", None, max(0, seconds))
+
+
+def countdown_name() -> str:
+    """Tên trợ năng của thanh đếm ngược."""
+    return QCoreApplication.translate("Pairing", "Thời gian còn lại để xác nhận")
 
 
 def code_label_name() -> str:
@@ -479,15 +507,140 @@ def _plain_label(object_name: str) -> QLabel:
     return label
 
 
+class CountdownBar(QWidget):
+    """Thanh đếm ngược mảnh 6 px, vẽ tay (`chat_bubbles.paint_thin_bar`); thang `minimum()…maximum()`.
+
+    Cố ý KHÔNG phải `QProgressBar`: thanh đó lộ giá trị cho trình đọc màn hình và phát sự kiện đổi giá
+    trị mỗi lần `setValue` (mỗi nhịp `COUNTDOWN_TICK_MS`), nên NVDA bíp liên tục (mvp N12). Trợ năng
+    chỉ thấy tên và mô tả (`setAccessibleDescription` ở các mốc `COUNTDOWN_ANNOUNCE`) cùng nhãn chữ
+    đếm ngược ngay dưới."""
+
+    HEIGHT = 6
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._minimum = 0
+        self._maximum = COUNTDOWN_MAX
+        self._value = COUNTDOWN_MAX
+        self.setFixedHeight(self.HEIGHT)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def minimum(self) -> int:
+        return self._minimum
+
+    def maximum(self) -> int:
+        return self._maximum
+
+    def value(self) -> int:
+        return self._value
+
+    def setRange(self, minimum: int, maximum: int) -> None:
+        self._minimum, self._maximum = int(minimum), max(int(minimum), int(maximum))
+        self.setValue(self._value)
+
+    def setValue(self, value: int) -> None:
+        value = max(self._minimum, min(self._maximum, int(value)))
+        if value != self._value:
+            self._value = value
+            self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        span = max(1, self._maximum - self._minimum)
+        paint_thin_bar(self, (self._value - self._minimum) / span)
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self.update()
+
+
+class CodeLabel(QLabel):
+    """Nhãn mã ghép đôi vẽ thành 6 ô (2 nhóm × 3); `text()` vẫn là chữ thuần `format_code`."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setWordWrap(False)
+
+    def digits(self) -> str | None:
+        """6 chữ số ASCII của mã, hay None khi chữ không đúng dạng (vẽ như `QLabel` thường)."""
+        raw = self.text().replace(" ", "")
+        if len(raw) == _CODE_DIGITS and raw.isascii() and raw.isdigit():
+            return raw
+        return None
+
+    def _digit_font(self) -> QFont:
+        font = QFont(self.font())
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0)
+        return font
+
+    def _metrics(self) -> tuple[int, int, int]:
+        """(rộng ô, cao ô, khoảng giữa hai ô) theo font hiện tại."""
+        metrics = QFontMetrics(self._digit_font())
+        digit = max(metrics.horizontalAdvance(c) for c in "0123456789")
+        pad = max(4, round(metrics.height() * 0.22))
+        gap = max(6, round(digit * 0.4))
+        return digit + 2 * pad, metrics.height() + pad, gap
+
+    def sizeHint(self) -> QSize:
+        if self.digits() is None:
+            return super().sizeHint()
+        box_w, box_h, gap = self._metrics()
+        # 6 ô, 4 khoảng thường, 1 khoảng giữa hai nhóm gấp đôi; thêm 2 px cho viền.
+        return QSize(6 * box_w + 6 * gap + 2, box_h + 2)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint() if self.digits() is not None else super().minimumSizeHint()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        digits = self.digits()
+        if digits is None:
+            super().paintEvent(event)
+            return
+        t = theme.tokens_for(self)
+        box_w, box_h, gap = self._metrics()
+        total = 6 * box_w + 6 * gap
+        left = (self.width() - total) / 2
+        top = (self.height() - box_h) / 2
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setFont(self._digit_font())
+            x = left
+            for index, digit in enumerate(digits):
+                if index == 3:
+                    x += gap  # khoảng giữa hai nhóm gấp đôi
+                rect = QRectF(x + 0.5, top + 0.5, box_w - 1, box_h - 1)
+                painter.setPen(QPen(t.border_strong, 1))
+                painter.setBrush(t.surface_raised)
+                painter.drawRoundedRect(rect, theme.RADIUS_CARD, theme.RADIUS_CARD)
+                painter.setPen(t.text)
+                painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), digit)
+                x += box_w + gap
+        finally:
+            painter.end()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self.update()
+
+
 class PairingDialog(QDialog):
     """Hộp so mã của một phiên ghép đôi; `decided(session_id, accepted)` phát tối đa một lần."""
 
     decided = Signal(int, bool)
 
-    def __init__(self, prompt: PairingPrompt) -> None:
+    def __init__(self, prompt: PairingPrompt, *, clock: Callable[[], float] = time.monotonic) -> None:
         super().__init__(None)
         self._prompt = prompt
+        self._clock = clock
         self._resolved = False  # đã quyết định hoặc đã đóng không quyết định
+        self._shown_seconds: int | None = None
+        self._announced: int | None = None  # mốc `COUNTDOWN_ANNOUNCE` đã báo cho trình đọc màn hình
+        self._announce_set = False  # đã đặt mô tả trợ năng lần đầu
+        remaining = max(0.0, prompt.expires_at - clock())
+        self._scale = max(float(core_pairing.CONFIRM_TIMEOUT), remaining, 1e-3)
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
@@ -496,8 +649,8 @@ class PairingDialog(QDialog):
         self._header = _plain_label("pairingHeader")
         self._header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._header.setForegroundRole(QPalette.ColorRole.PlaceholderText)
-        self._code = _plain_label("pairingCode")
-        self._code.setWordWrap(False)
+        self._code = CodeLabel()
+        self._code.setObjectName("pairingCode")
         self._code.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = self._code.font()
         base = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
@@ -527,6 +680,18 @@ class PairingDialog(QDialog):
         self._peer = _plain_label("pairingPeer")
         self._peer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._peer.setForegroundRole(QPalette.ColorRole.PlaceholderText)
+        # Đếm ngược hạn xác nhận: thanh ngắn dần và chữ (không chỉ dựa vào màu).
+        self.countdown_bar = CountdownBar()
+        self.countdown_bar.setObjectName("pairingCountdown")
+        self.countdown_bar.setRange(0, COUNTDOWN_MAX)
+        self.countdown_bar.setValue(COUNTDOWN_MAX)
+        self.countdown_label = _plain_label("pairingCountdownText")
+        self.countdown_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.countdown_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.countdown_label.font()))
+        self.countdown_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.setInterval(COUNTDOWN_TICK_MS)
+        self._countdown_timer.timeout.connect(self._tick)
         self.reject_button = QPushButton()
         self.reject_button.setObjectName("pairingReject")
         self.accept_button = QPushButton()
@@ -554,10 +719,14 @@ class PairingDialog(QDialog):
         layout.addSpacing(8)
         layout.addWidget(self._peer)
         layout.addSpacing(8)
+        layout.addWidget(self.countdown_bar)
+        layout.addWidget(self.countdown_label)
+        layout.addSpacing(8)
         layout.addLayout(buttons)
         self.setTabOrder(self.reject_button, self.accept_button)
         self.reject_button.setFocus()
         self.retranslate()
+        self._countdown_timer.start()
 
     @property
     def session_id(self) -> int:
@@ -587,13 +756,43 @@ class PairingDialog(QDialog):
         self._peer.setText("\n".join(peer_lines(prompt)))
         self.reject_button.setText(reject_button_text())
         self.accept_button.setText(accept_button_text())
+        self.countdown_bar.setAccessibleName(countdown_name())
+        self._shown_seconds = None  # dựng lại chữ đếm ngược theo ngôn ngữ mới
+        self._announce_set = False
+        self._tick()
+
+    def remaining(self) -> float:
+        """Số giây còn lại để xác nhận (≥ 0), theo `clock`."""
+        return max(0.0, self._prompt.expires_at - self._clock())
+
+    def _tick(self) -> None:
+        """Một nhịp đếm ngược: chỉ đổi chữ / thanh khi giá trị hiện ra đổi."""
+        remaining = self.remaining()
+        seconds = math.ceil(remaining)
+        value = max(0, min(COUNTDOWN_MAX, round(COUNTDOWN_MAX * remaining / self._scale)))
+        if value != self.countdown_bar.value():
+            self.countdown_bar.setValue(value)
+        if seconds == self._shown_seconds:
+            return
+        self._shown_seconds = seconds
+        text = countdown_text(seconds)
+        self.countdown_label.setText(text)
+        set_tone(self.countdown_label, "warning" if seconds <= COUNTDOWN_WARN_SECONDS else "muted")
+        # Trình đọc màn hình: mô tả của thanh chỉ đổi ở vài mốc, không theo từng giây.
+        mark = next((m for m in sorted(COUNTDOWN_ANNOUNCE) if seconds <= m), None)
+        if not self._announce_set or mark != self._announced:
+            self._announce_set = True
+            self._announced = mark
+            self.countdown_bar.setAccessibleDescription(text)
 
     def dismiss(self) -> None:
         """Đóng hộp mà không quyết định (hết hạn, đã có kết quả, thoát)."""
         self._resolved = True
+        self._countdown_timer.stop()
         self.close()
 
     def done(self, result: int) -> None:
+        self._countdown_timer.stop()
         if not self._resolved:
             self._resolved = True
             accepted = result in (QDialog.DialogCode.Accepted, QDialog.DialogCode.Accepted.value)
@@ -1016,7 +1215,7 @@ class PairingController(QObject):
         if not self._current(generation) or prompt.session_id in self._dialogs:
             return
         try:
-            dialog = PairingDialog(prompt)
+            dialog = PairingDialog(prompt, clock=self._clock)
         except Exception:
             # Lõi tự kết thúc phiên khi hết hạn; không có gì để quyết định ở đây.
             log.exception("không mở được hộp ghép đôi của phiên %d", prompt.session_id)

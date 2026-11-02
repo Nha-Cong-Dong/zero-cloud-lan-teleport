@@ -20,6 +20,14 @@ pytestmark = pytest.mark.integration
 FILE_SIZE = 300_000
 
 
+@pytest.fixture(autouse=True)
+def offers_open_as_boxes(monkeypatch):
+    """spec-b4 11.3: đang nhìn luồng của B thì lời mời chỉ ở bong bóng; các test này chờ hộp."""
+    from teleport.ui import transfers
+
+    monkeypatch.setattr(transfers, "default_window_active", lambda: False)
+
+
 @pytest.fixture
 def pair(config_dir, trust_each_other, tmp_path):
     """Hai thư mục cấu hình tin nhau; `name_b`: tên của B trong `trusted.json` của A."""

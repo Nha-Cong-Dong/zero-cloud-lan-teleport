@@ -866,11 +866,27 @@ def test_no_label_in_main_window_is_keyboard_selectable(window, tmp_path, state)
     assert keyboard_selectable(window) == []
 
 
+def _offer_prompts(receive_dir):
+    """`OfferPrompts` mới (spec-b4 3.4) kèm `OfferBook`; `handle(offer)` đóng vai controller: thêm vào
+    book rồi `show_prompt`."""
+    from teleport.ui.offer import OfferBook, OfferPrompts
+
+    book = OfferBook()
+    prompts = OfferPrompts(book, receive_dir)
+    prompts.test_book = book  # type: ignore[attr-defined]  # giữ book sống cùng prompts
+
+    def handle(update) -> None:
+        if book.add(update):
+            prompts.show_prompt(update.key)
+
+    prompts.handle = handle  # type: ignore[attr-defined]
+    return prompts
+
+
 def test_offer_box_and_pairing_dialogs_have_no_keyboard_selectable_label(qtbot):
-    from teleport.ui.offer import OfferPrompts
     from teleport.ui.pairing import PairingDialog, PairingProgressDialog
 
-    prompts = OfferPrompts(Path("nhan"))
+    prompts = _offer_prompts(Path("nhan"))  # spec-b4 3.4: OfferPrompts(book, …), bỏ `handle`
     k = tkey("receive")
     prompts.handle(offer_received(k))
     box = prompts.box(k)
@@ -1088,13 +1104,12 @@ def test_primary_property_name():
 
 
 def test_primary_buttons_carry_property(window, qtbot):
-    from teleport.ui.offer import OfferPrompts
     from teleport.ui.pairing import PairingDialog
 
     assert is_primary(window.start_button)
     assert is_primary(window.discover.address_submit)  # spec B2: ô nhập IP chỉ còn ở “Tìm máy mới”
 
-    prompts = OfferPrompts(Path("nhan"))
+    prompts = _offer_prompts(Path("nhan"))  # spec-b4 3.4: OfferPrompts(book, …), bỏ `handle`
     k = tkey("receive")
     prompts.handle(offer_received(k))
     dlg = PairingDialog(make_prompt())
@@ -1118,11 +1133,10 @@ def offer_buttons(box):
 
 def test_enter_stays_safe_in_offer_box_and_code_dialog(qtbot, qapp, restore_style):
     from teleport.ui import theme
-    from teleport.ui.offer import OfferPrompts
     from teleport.ui.pairing import PairingDialog
 
     theme.apply(qapp)
-    prompts = OfferPrompts(Path("nhan"))
+    prompts = _offer_prompts(Path("nhan"))  # spec-b4 3.4: OfferPrompts(book, …), bỏ `handle`
     k = tkey("receive")
     prompts.handle(offer_received(k))
     dlg = PairingDialog(make_prompt())
@@ -1236,10 +1250,9 @@ def test_stylesheet_does_not_resize_ordinary_buttons(qapp, qtbot, restore_style)
 
 
 def test_code_and_progress_dialogs_share_offer_min_width(qtbot):
-    from teleport.ui.offer import OfferPrompts
     from teleport.ui.pairing import PairingDialog, PairingProgressDialog
 
-    prompts = OfferPrompts(Path("nhan"))
+    prompts = _offer_prompts(Path("nhan"))  # spec-b4 3.4: OfferPrompts(book, …), bỏ `handle`
     k = tkey("receive")
     prompts.handle(offer_received(k))
     dlg = PairingDialog(make_prompt())
@@ -1282,11 +1295,10 @@ def test_code_dialog_buttons_aligned_right_reject_then_accept(qtbot):
 
 def test_primary_and_neighbour_buttons_have_same_height(qapp, qtbot, restore_style):
     from teleport.ui import theme
-    from teleport.ui.offer import OfferPrompts
     from teleport.ui.pairing import PairingDialog
 
     theme.apply(qapp)
-    prompts = OfferPrompts(Path("nhan"))
+    prompts = _offer_prompts(Path("nhan"))  # spec-b4 3.4: OfferPrompts(book, …), bỏ `handle`
     k = tkey("receive")
     prompts.handle(offer_received(k))
     dlg = PairingDialog(make_prompt())
@@ -1312,7 +1324,7 @@ def test_primary_and_neighbour_buttons_have_same_height(qapp, qtbot, restore_sty
 
 @pytest.mark.integration
 def test_real_receive_of_duplicate_name_shows_saved_as(
-    gui, gui_wait, config_dir, trust_each_other, peer_node, tmp_path, ui_helpers
+    gui, gui_wait, config_dir, trust_each_other, peer_node, tmp_path, ui_helpers, monkeypatch
 ):
     """A (GUI thật) đã có `a.txt` trong thư mục nhận; B gửi `a.txt` → file lưu thành `a (1).txt` và
     thẻ bên nhận ghi “Đã lưu thành a (1).txt · Đã kiểm tra toàn vẹn”."""
@@ -1321,8 +1333,11 @@ def test_real_receive_of_duplicate_name_shows_saved_as(
     from PySide6.QtWidgets import QDialog
 
     from teleport.trust.identity import load_or_create_identity
+    from teleport.ui import transfers as transfers_mod
     from teleport.ui.chat import ChatView
 
+    # spec-b4 11.3: luồng của B đang mở thì lời mời chỉ ở bong bóng; test này chờ hộp.
+    monkeypatch.setattr(transfers_mod, "default_window_active", lambda: False)
     a, b = config_dir("A"), config_dir("B")
     trust_each_other(a, b)
     a_id = load_or_create_identity(a).device_id

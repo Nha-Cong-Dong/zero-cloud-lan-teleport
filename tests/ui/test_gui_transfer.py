@@ -310,6 +310,7 @@ def temp_dir(receive_dir: Path, transfer_id: str) -> Path:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_a_gui_receives_64_mib_after_accept_and_row_shows_done(
     gui, gui_wait, pair, peer, tmp_path, ui_helpers
 ):
@@ -360,6 +361,7 @@ def test_a_gui_receives_64_mib_after_accept_and_row_shows_done(
 # =================================================================================================
 
 
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_b_same_name_again_is_saved_numbered_and_old_file_unchanged(
     gui, gui_wait, pair, peer, tmp_path, ui_helpers
 ):
@@ -400,6 +402,7 @@ def test_b_same_name_again_is_saved_numbered_and_old_file_unchanged(
 # =================================================================================================
 
 
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_c_reject_makes_sender_see_rejected_user(gui, gui_wait, pair, peer, tmp_path, ui_helpers):
     a, b, a_id, _, src = pair()
     p = peer(b)
@@ -500,6 +503,7 @@ def test_d_gui_sends_to_peer_with_progress_on_row_then_done(
 
 
 @pytest.mark.parametrize("who", ["gui_receiver", "peer_sender", "gui_sender", "peer_receiver"])
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_e_cancel_from_either_side_is_cancelled_user_and_temp_removed(
     gui, gui_wait, pair, peer, tmp_path, fast_progress, ui_helpers, who
 ):
@@ -581,6 +585,7 @@ def test_e_cancel_from_either_side_is_cancelled_user_and_temp_removed(
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_f_network_cut_shows_reconnecting_then_finishes_without_going_back(
     gui, gui_wait, pair, peer, tmp_path, tcp_proxy, fast_progress, ui_helpers
 ):
@@ -655,6 +660,7 @@ def test_f_network_cut_shows_reconnecting_then_finishes_without_going_back(
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_g_restart_gui_mid_transfer_resumes_row_and_finishes(
     gui, gui_wait, pair, peer, tmp_path, fast_progress, ui_helpers
 ):
@@ -921,3 +927,12 @@ def test_j2_gui_resend_after_peer_refused_shows_notice_repair_button_and_no_new_
     assert seen["button_name"] == REPAIR
     assert seen["repaired"] == [b_id]
     assert seen["files_b"] == [], seen["files_b"]
+
+
+@pytest.fixture
+def offers_as_boxes(monkeypatch):
+    """spec-b4 11.3: đang nhìn đúng luồng của máy gửi thì lời mời chỉ ở bong bóng; test chờ hộp hỏi
+    vá `ui.transfers.default_window_active` thành False để hộp luôn bật."""
+    from teleport.ui import transfers
+
+    monkeypatch.setattr(transfers, "default_window_active", lambda: False)

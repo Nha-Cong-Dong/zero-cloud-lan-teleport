@@ -18,8 +18,22 @@ tạm dừng). Dòng 2 thanh tiến độ mảnh `BubbleBar` (rãnh `track`, ph�
 `checkmark` màu `success` khi xong, `warning` màu `danger` khi lỗi, `dismiss` màu `text_muted` khi hủy
 hay từ chối) và nhãn trạng thái ngắn (`status_label`); dưới đó dòng phụ (`detail_label`, xuống
 dòng). Dòng 4 các nút “Mở thư mục” (bên nhận đã xong, mở thư mục cha của `FileDone.path`), “Gửi
-lại” và “Đổi thư mục nhận” (bên dưới). Cuối cùng là `extension_slot` (chỗ cắm nút Nhận/Từ chối của B4;
-B3 để trống).
+lại” và “Đổi thư mục nhận” (bên dưới). Cuối cùng là `extension_slot`: lời mời nhận file đang chờ
+(spec B4 mục 3.5) cắm ở đây một `OfferPanel`.
+
+
+**Lời mời nhận file** (`TransferBubble.set_offer(entry, receive_dir, pending)`, `ui.chat` gọi theo
+`ui.offer.OfferBook`): entry PENDING → dựng `OfferPanel` một lần trong `extension_slot`, **ẩn ✕
+“Hủy”** (lời mời chỉ trả lời bằng Nhận / Từ chối) và viền `BubbleEmphasis.ATTENTION`; entry None hay
+ANSWERED → gỡ panel, ✕ theo luật B3 (`setVisible(not finished)`). Emphasis luôn do `render_status` tự
+tính (ATTENTION khi có panel, DANGER khi lỗi, còn lại NONE), vì `render_status` được gọi lại từ đổi
+tên, đổi kết nối và đổi ngôn ngữ. `_on_cancel` bỏ qua khi có panel. Panel từ trên xuống: tên file
+(chỉ khi > 1 file; tối đa `offer.LIST_MAX` tên nối bằng “ · ”, rồi “… và k file khác”), dòng mất
+kết nối, “Lưu vào” / “Đang đổi sang …” kèm “Đổi…”, dòng “Chờ đổi thư mục nhận xong” khi đang đổi, ô
+“Luôn nhận từ thiết bị này”, [Từ chối] [Nhận] (Nhận là nút chính; tắt khi đang đổi thư mục). Bấm
+Nhận / Từ chối: tiêu điểm về bong bóng, tắt hai nút ngay rồi phát `offer_answer(accept)`; panel bị
+gỡ khi book báo ANSWERED. Chữ dùng chung với hộp hỏi (`ui.offer`, ngữ cảnh `"Offer"`); panel tự dịch
+lại khi `LanguageChange` (bẫy dưới chỉ áp cho lớp con `ChatBubble`).
 
 Chữ trạng thái giữ nguyên chữ của `ui.transfers_view` (ví dụ “Đang gửi” + “42,0% · 85,2 MB/s · còn 1
 phút”), trừ lượt đã xong: nhận “Đã lưu”, gửi “Đã gửi” (dòng phụ vẫn “Đã kiểm tra toàn vẹn” hay “Đã
@@ -60,8 +74,10 @@ có nút này.
 **Trình đọc màn hình**: câu tóm tắt qua `ChatBubble.set_summary` (accessibleName): “Gửi tới X” /
 “Nhận từ X”, tên file, cỡ, trạng thái, % nguyên (đang chạy) hay dòng phụ (chờ, kết thúc), giờ. Chỉ
 đặt lại khi loại trạng thái, nhãn, % nguyên hay câu phụ không phải tiến độ đổi, không theo từng nhịp
-tốc độ. Mọi trạng thái là icon + chữ, không chỉ màu (mvp N12). Bong bóng nhận tiêu điểm bằng chuột hay
-bằng code (`ClickFocus`; Tab do `ui.chat` lo, roving tabindex) và vẽ vòng tiêu điểm 2 px
+tốc độ. Có panel lời mời thì câu tóm tắt thêm “Lời mời nhận file. Dùng Tab để tới nút Nhận hay Từ
+chối.” Mọi trạng thái là icon + chữ, không chỉ màu (mvp N12). Bong bóng nhận tiêu điểm bằng chuột hay
+bằng code (`ClickFocus`; Tab do `ui.chat` lo, roving tabindex: bong bóng rồi các nút của nó theo
+`focus_buttons()`, với panel lời mời là Đổi…, ô tick, Từ chối, Nhận) và vẽ vòng tiêu điểm 2 px
 `theme.focus_ring_color` thụt vào 3 px, sau nền và viền của `ChatBubble`.
 
 **Bẫy**: `ChatBubble.__init__` gọi `self.retranslate()` trước khi lớp con dựng xong, nên lớp con
@@ -100,10 +116,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 
-from PySide6.QtCore import QCoreApplication, QDate, QEvent, QRectF, QSize, Qt, QTime, Signal
+from PySide6.QtCore import QCoreApplication, QDate, QEvent, QRectF, QSignalBlocker, QSize, Qt, QTime, Signal
 from PySide6.QtGui import QFocusEvent, QFont, QFontMetrics, QPainter, QPaintEvent, QPen, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -127,7 +144,8 @@ from teleport.app.transfers import (
 )
 from teleport.core.history import HistoryEntry
 from teleport.core.messages import ClipKind
-from teleport.ui import icons, texts, theme
+from teleport.ui import icons, offer, texts, theme
+from teleport.ui.offer import OfferEntry, OfferPhase
 from teleport.ui.send import printable
 from teleport.ui.transfers_view import (
     _FLOWING_STATUSES,
@@ -309,8 +327,18 @@ def _label(*, wrap: bool = False, caption: bool = False, tone: str | None = None
     return label
 
 
-def _set_tone(label: QLabel, tone: str | None) -> None:
-    """Đổi `TONE_PROPERTY` của nhãn (chỉ khi khác) và áp lại stylesheet."""
+def _peer_text(object_name: str) -> offer.PeerTextLabel:
+    """Nhãn phụ xuống dòng (CAPTION, `tone=muted`) cho chữ máy kia trong panel lời mời."""
+    label = offer.PeerTextLabel(wrap=True, object_name=object_name)
+    label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+    label.setFont(theme.font_for(theme.TextStyle.CAPTION, label.font()))
+    label.setProperty(theme.TONE_PROPERTY, "muted")
+    return label
+
+
+def set_tone(label: QLabel, tone: str | None) -> None:
+    """Đổi `TONE_PROPERTY` của nhãn (chỉ khi khác) và áp lại stylesheet (dùng chung với `ui.pairing`)."""
     if label.property(theme.TONE_PROPERTY) == tone:
         return
     label.setProperty(theme.TONE_PROPERTY, tone)
@@ -422,29 +450,36 @@ class BubbleBar(QProgressBar):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        t = theme.tokens_for(self)
-        rect = QRectF(self.rect())
-        radius = rect.height() / 2
         span = max(1, self.maximum() - self.minimum())
-        done = rect.width() * max(0, self.value() - self.minimum()) / span
-        painter = QPainter(self)
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(t.track)
-            painter.drawRoundedRect(rect, radius, radius)
-            if done > 0:
-                painter.setBrush(t.accent_strong)
-                painter.drawRoundedRect(
-                    QRectF(rect.left(), rect.top(), max(done, rect.height()), rect.height()), radius, radius
-                )
-        finally:
-            painter.end()
+        paint_thin_bar(self, max(0, self.value() - self.minimum()) / span)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
         if event.type() in _PALETTE_EVENTS:
             self.update()
+
+
+def paint_thin_bar(widget: QWidget, fraction: float) -> None:
+    """Vẽ thanh mảnh bo tròn trên cả `widget`: rãnh `track`, phần `fraction` (0…1) màu `accent_strong`.
+
+    Dùng chung cho `BubbleBar` và thanh đếm ngược của hộp ghép đôi (`ui.pairing`)."""
+    t = theme.tokens_for(widget)
+    rect = QRectF(widget.rect())
+    radius = rect.height() / 2
+    done = rect.width() * min(1.0, max(0.0, fraction))
+    painter = QPainter(widget)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(t.track)
+        painter.drawRoundedRect(rect, radius, radius)
+        if done > 0:
+            painter.setBrush(t.accent_strong)
+            painter.drawRoundedRect(
+                QRectF(rect.left(), rect.top(), max(done, rect.height()), rect.height()), radius, radius
+            )
+    finally:
+        painter.end()
 
 
 class TimeSeparator(QLabel):
@@ -551,6 +586,166 @@ def _button(parent: QWidget) -> QPushButton:
     return button
 
 
+# ---- OfferPanel -------------------------------------------------------------------------------
+
+
+class OfferPanel(QWidget):
+    """Phần trả lời lời mời nhận file trong bong bóng (xem docstring module, “Lời mời nhận file”)."""
+
+    answer_clicked = Signal(bool)  # accept
+    always_toggled = Signal(bool)
+    change_clicked = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("offerPanel")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._entry: OfferEntry | None = None
+        self._receive_dir: Path | None = None
+        self._pending: Path | None = None
+        self._answered = False  # đã bấm Nhận / Từ chối: hai nút tắt tới khi panel bị gỡ
+        # Chữ máy kia (tên file, tên máy) và đường dẫn: không ép bong bóng rộng quá luồng
+        # (`offer.PeerTextLabel`).
+        self.files_label = _peer_text("offerPanelFiles")
+        self.note_label = _peer_text("offerPanelDisconnected")
+        self.save_label = _peer_text("offerPanelSaveTo")
+        self.change_button = QPushButton(self)
+        self.change_button.setObjectName("offerChangeDir")
+        self.dir_note = _label(wrap=True, caption=True, tone="muted")
+        self.dir_note.setObjectName("offerPanelDirNote")
+        self.always_check = QCheckBox(self)
+        self.always_check.setObjectName("offerAlways")
+        self.reject_button = QPushButton(self)
+        self.reject_button.setObjectName("offerReject")
+        self.accept_button = QPushButton(self)
+        self.accept_button.setObjectName("offerAccept")
+        self.accept_button.setProperty(theme.PRIMARY_PROPERTY, True)
+        for button in (self.change_button, self.reject_button, self.accept_button):
+            button.setAutoDefault(False)
+        for widget in (self.change_button, self.always_check, self.reject_button, self.accept_button):
+            widget.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # Tab do `ui.chat` (roving tabindex)
+        self.change_button.clicked.connect(self.change_clicked)
+        self.always_check.toggled.connect(lambda on: self.always_toggled.emit(bool(on)))
+        self.reject_button.clicked.connect(lambda: self._on_answer(False))
+        self.accept_button.clicked.connect(lambda: self._on_answer(True))
+
+        save_row = QHBoxLayout()
+        save_row.setContentsMargins(0, 0, 0, 0)
+        save_row.setSpacing(theme.SPACING[1])
+        save_row.addWidget(self.save_label, 1)
+        save_row.addWidget(self.change_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, theme.SPACING[0], 0, 0)
+        buttons.setSpacing(theme.SPACING[1])
+        buttons.addStretch(1)
+        buttons.addWidget(self.reject_button)
+        buttons.addWidget(self.accept_button)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, theme.SPACING[0], 0, 0)
+        layout.setSpacing(theme.SPACING[0])
+        layout.addWidget(self.files_label)
+        layout.addWidget(self.note_label)
+        layout.addLayout(save_row)
+        layout.addWidget(self.dir_note)
+        layout.addWidget(self.always_check)
+        layout.addLayout(buttons)
+        for label in (self.files_label, self.note_label, self.dir_note):
+            label.setVisible(False)
+        self.retranslate()
+
+    @property
+    def entry(self) -> OfferEntry | None:
+        return self._entry
+
+    def set_entry(self, entry: OfferEntry, receive_dir: Path | None, pending: Path | None) -> None:
+        """Lời mời (`entry`), thư mục nhận và thư mục đang đổi sang (None: không đổi)."""
+        self._entry = entry
+        self._receive_dir = receive_dir
+        self._pending = pending
+        self.retranslate()
+
+    def set_receive_dir(self, receive_dir: Path | None, pending: Path | None) -> None:
+        """Thư mục nhận và thư mục đang đổi sang (dòng “Lưu vào”, nút Nhận / Đổi…)."""
+        self._receive_dir = receive_dir
+        self._pending = pending
+        self._refresh_state()
+
+    def focus_widgets(self) -> list[QWidget]:
+        """Các ô nhận Tab đang hiện và bật, theo thứ tự: Đổi…, ô tick, Từ chối, Nhận."""
+        widgets: list[QWidget] = [
+            self.change_button,
+            self.always_check,
+            self.reject_button,
+            self.accept_button,
+        ]
+        return [w for w in widgets if not w.isHidden() and w.isEnabled()]
+
+    def retranslate(self) -> None:
+        """Dựng lại mọi chữ theo lời mời, thư mục và trạng thái đã lưu."""
+        self.change_button.setText(offer.change_text())
+        self.change_button.setAccessibleName(offer.change_name())
+        always = offer.always_text()
+        self.always_check.setText(always)
+        self.always_check.setAccessibleName(always)
+        for button, text in (
+            (self.reject_button, offer.reject_text()),
+            (self.accept_button, offer.accept_text()),
+        ):
+            button.setText(text)
+            button.setAccessibleName(text)
+        entry = self._entry
+        if entry is not None:
+            item = entry.offer
+            count = len(item.files)
+            if count > 1:
+                text = " · ".join(texts.file_label(name) for name in item.names[: offer.LIST_MAX])
+                rest = count - min(count, offer.LIST_MAX)
+                if rest > 0:
+                    text = f"{text} {offer.more_text(rest)}" if text else offer.more_text(rest)
+                self.files_label.setText(text)
+            self.files_label.setVisible(count > 1)
+            peer = texts.peer_label(item.device_name, item.key.device_id)
+            self.note_label.setText(offer.disconnected_text(peer))
+        self._refresh_state()
+
+    def _refresh_state(self) -> None:
+        save = offer.save_line(self._receive_dir, self._pending)
+        self.save_label.setText(save or "")
+        self.save_label.setVisible(save is not None)
+        changing = self._pending is not None
+        self.change_button.setVisible(self._receive_dir is not None)
+        self.change_button.setEnabled(not changing)
+        hint = offer.pending_accept_hint() if changing else ""
+        self.dir_note.setText(hint)
+        self.dir_note.setVisible(changing)
+        self.accept_button.setAccessibleDescription(hint)
+        self.accept_button.setEnabled(not changing and not self._answered)
+        self.reject_button.setEnabled(not self._answered)
+        entry = self._entry
+        if entry is None:
+            return
+        self.note_label.setVisible(not entry.connected)
+        if self.always_check.isChecked() != entry.always:
+            with QSignalBlocker(self.always_check):
+                self.always_check.setChecked(entry.always)
+
+    def _on_answer(self, accept: bool) -> None:
+        if self._answered:
+            return
+        self._answered = True
+        bubble = self.parentWidget()
+        if bubble is not None:
+            bubble.setFocus(Qt.FocusReason.OtherFocusReason)  # nút sắp tắt rồi bị gỡ
+        self.accept_button.setEnabled(False)
+        self.reject_button.setEnabled(False)
+        self.answer_clicked.emit(accept)
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.LanguageChange:
+            self.retranslate()
+
+
 # ---- TransferBubble ---------------------------------------------------------------------------
 
 
@@ -570,6 +765,9 @@ class TransferBubble(_Bubble):
     cancel_clicked = Signal()
     open_clicked = Signal()
     resend_clicked = Signal()
+    offer_answer = Signal(bool)  # Nhận / Từ chối trong panel lời mời
+    offer_always = Signal(bool)  # ô “Luôn nhận” trong panel
+    offer_change = Signal()  # “Đổi…” trong panel
     change_dir_clicked = Signal()  # “Đổi thư mục nhận” (spec D4 mục 5.2)
 
     def __init__(
@@ -605,6 +803,7 @@ class TransferBubble(_Bubble):
         self._current_receive_dir: Path | None = None
         self._summary_key: tuple[object, ...] | None = None
         self._context = context
+        self.offer_panel: OfferPanel | None = None
 
         self.cancel_button = IconButton("dismiss", QCoreApplication.translate("Chat", "Hủy"), self)
         self.cancel_button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -704,9 +903,52 @@ class TransferBubble(_Bubble):
         for i in range(self.extension_slot.count()):
             item = self.extension_slot.itemAt(i)
             widget = item.widget() if item is not None else None
-            if widget is not None:
+            if widget is None or widget.isHidden():
+                continue
+            focus_widgets = getattr(widget, "focus_widgets", None)
+            if callable(focus_widgets):
+                candidates.extend(focus_widgets())
+            else:
                 candidates.append(widget)
         return [w for w in candidates if not w.isHidden() and w.isEnabled()]
+
+    # -- Lời mời nhận file ------------------------------------------------------------------------
+
+    def set_offer(
+        self, entry: OfferEntry | None, receive_dir: Path | None = None, pending: Path | None = None
+    ) -> bool:
+        """Lời mời của bong bóng (xem docstring module); True nếu vừa thêm hay gỡ panel."""
+        changed = False
+        if entry is not None and entry.phase is OfferPhase.PENDING and not self.finished:
+            panel = self.offer_panel
+            if panel is None:
+                panel = OfferPanel(self)
+                panel.answer_clicked.connect(self.offer_answer)
+                panel.always_toggled.connect(self.offer_always)
+                panel.change_clicked.connect(self.offer_change)
+                self.extension_slot.addWidget(panel)
+                self.offer_panel = panel
+                changed = True
+            panel.set_entry(entry, receive_dir, pending)
+            self.cancel_button.setVisible(False)
+        else:
+            panel = self.offer_panel
+            if panel is not None:
+                self.offer_panel = None
+                self.extension_slot.removeWidget(panel)
+                panel.hide()
+                panel.setParent(None)
+                panel.deleteLater()
+                changed = True
+            self.cancel_button.setVisible(not self.finished)
+        if changed:
+            self.render_status()
+        return changed
+
+    def set_offer_dir(self, receive_dir: Path | None, pending: Path | None) -> None:
+        """Thư mục nhận / đang đổi sang cho dòng “Lưu vào” của panel (không có panel → bỏ qua)."""
+        if self.offer_panel is not None:
+            self.offer_panel.set_receive_dir(receive_dir, pending)
 
     # -- Sự kiện của lượt -------------------------------------------------------------------------
 
@@ -812,6 +1054,7 @@ class TransferBubble(_Bubble):
             and self.key.direction is Direction.RECEIVE
             and self.last_path is not None
         )
+        self.set_offer(None)  # lượt kết thúc: lời mời (nếu còn) không còn gì để trả lời
         self._render()
         return True
 
@@ -883,7 +1126,13 @@ class TransferBubble(_Bubble):
         self.stalled_shown = self._is_stalled()
         kind, status, detail = self._status(ctx)
         self.kind = kind
-        self.set_emphasis(BubbleEmphasis.DANGER if kind is Kind.ERROR else BubbleEmphasis.NONE)
+        if kind is Kind.ERROR:
+            emphasis = BubbleEmphasis.DANGER
+        elif self.offer_panel is not None:
+            emphasis = BubbleEmphasis.ATTENTION
+        else:
+            emphasis = BubbleEmphasis.NONE
+        self.set_emphasis(emphasis)
         if kind is Kind.DONE:
             self.status_icon.set_icon("checkmark", "success")
         elif kind is Kind.ERROR:
@@ -892,8 +1141,8 @@ class TransferBubble(_Bubble):
             self.status_icon.set_icon("dismiss", "text_muted")
         else:
             self.status_icon.set_icon(None)
-        _set_tone(self.status_label, "accent" if kind in (Kind.ACTIVE, Kind.RECONNECTING) else None)
-        _set_tone(self.detail_label, None if kind is Kind.ERROR else "muted")
+        set_tone(self.status_label, "accent" if kind in (Kind.ACTIVE, Kind.RECONNECTING) else None)
+        set_tone(self.detail_label, None if kind is Kind.ERROR else "muted")
         self.status_label.setText(status)
         self.detail_label.setText(detail)
         self.detail_label.setVisible(bool(detail))
@@ -923,7 +1172,8 @@ class TransferBubble(_Bubble):
         # Câu tốc độ theo nhịp không vào tên; câu đứng yên (“Đang chờ dữ liệu…”) thì vào, vì đó là đổi
         # loại câu và không đổi theo nhịp (dữ liệu không chạy nên % không đổi).
         tail = detail if not moving or self.stalled_shown else ""
-        key = (kind, status, percent, tail, ctx.peer, self._title(), self.total_bytes)
+        asking = self.offer_panel is not None
+        key = (kind, status, percent, tail, ctx.peer, self._title(), self.total_bytes, asking)
         if key == self._summary_key:
             return
         self._summary_key = key
@@ -939,6 +1189,8 @@ class TransferBubble(_Bubble):
         when = clock_text(self.at)
         if when:
             parts.append(when)
+        if asking:
+            parts.append(t("Chat", "Lời mời nhận file. Dùng Tab để tới nút Nhận hay Từ chối."))
         self.set_summary(". ".join(p.rstrip(".") for p in parts if p) + ".")
 
     def refresh_text(self) -> None:
@@ -977,7 +1229,7 @@ class TransferBubble(_Bubble):
         self.change_dir_button.setVisible(self.change_dir_available())
 
     def _on_cancel(self) -> None:
-        if not self.finished:
+        if not self.finished and self.offer_panel is None:  # lời mời chỉ trả lời bằng Nhận / Từ chối
             self.cancel_clicked.emit()
 
     def _on_resend(self) -> None:
@@ -1108,7 +1360,7 @@ class PendingBubble(_Bubble):
         self.size_label.setVisible(False)
         self.body().addLayout(self.status_row)
         self.body().addWidget(self.detail_label)
-        _set_tone(self.status_label, "muted")
+        set_tone(self.status_label, "muted")
         self.detail_label.setVisible(False)
         self._render()
 

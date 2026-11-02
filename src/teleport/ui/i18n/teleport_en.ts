@@ -168,6 +168,11 @@
         <translation>Transfers</translation>
     </message>
     <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Lời mời nhận file. Dùng Tab để tới nút Nhận hay Từ chối.</source>
+        <translation>File offer. Press Tab to reach Accept or Decline.</translation>
+    </message>
+    <message>
         <location filename="../chat.py"/>
         <source>Mới</source>
         <translation>New</translation>
@@ -916,13 +921,33 @@
     <name>Offer</name>
     <message>
         <location filename="../offer.py"/>
+        <source>Chưa lưu được “Luôn nhận” cho {name} vì không ghi được cài đặt của Teleport. Hãy thử lại trong Cài đặt ▸ Thiết bị tin cậy (bỏ chọn “Hỏi trước khi nhận”).</source>
+        <translation>Could not save “Always accept” for {name} because Teleport could not write its settings. Try again in Settings ▸ Trusted devices (clear “Ask before receiving”).</translation>
+    </message>
+    <message>
+        <location filename="../offer.py"/>
+        <source>Chờ đổi thư mục nhận xong</source>
+        <translation>Wait until the receive folder has changed</translation>
+    </message>
+    <message>
+        <location filename="../offer.py"/>
         <source>Có file gửi tới</source>
         <translation>Incoming files</translation>
     </message>
     <message>
         <location filename="../offer.py"/>
+        <source>Luôn nhận từ thiết bị này</source>
+        <translation>Always accept from this device</translation>
+    </message>
+    <message>
+        <location filename="../offer.py"/>
         <source>Lưu vào: {path}</source>
         <translation>Save to: {path}</translation>
+    </message>
+    <message>
+        <location filename="../offer.py"/>
+        <source>Mất kết nối với {name}. Bạn vẫn trả lời được; nếu nhận, file sẽ bắt đầu khi hai máy nối lại.</source>
+        <translation>Lost connection to {name}. You can still answer; if you accept, the files will start once the two devices reconnect.</translation>
     </message>
     <message>
         <location filename="../offer.py"/>
@@ -933,6 +958,21 @@
         <location filename="../offer.py"/>
         <source>Từ chối</source>
         <translation>Decline</translation>
+    </message>
+    <message>
+        <location filename="../offer.py"/>
+        <source>Đang đổi sang {path}…</source>
+        <translation>Changing to {path}…</translation>
+    </message>
+    <message>
+        <location filename="../offer.py"/>
+        <source>Đổi thư mục nhận</source>
+        <translation>Change receive folder</translation>
+    </message>
+    <message>
+        <location filename="../offer.py"/>
+        <source>Đổi…</source>
+        <translation>Change…</translation>
     </message>
     <message numerus="yes">
         <location filename="../offer.py"/>
@@ -953,6 +993,14 @@
 </context>
 <context>
     <name>Pairing</name>
+    <message numerus="yes">
+        <location filename="../pairing.py"/>
+        <source>Còn %n giây để xác nhận</source>
+        <translation>
+            <numerusform>%n second left to confirm</numerusform>
+            <numerusform>%n seconds left to confirm</numerusform>
+        </translation>
+    </message>
     <message>
         <location filename="../pairing.py"/>
         <source>Có yêu cầu ghép đôi</source>
@@ -1080,6 +1128,11 @@
         <location filename="../pairing.py"/>
         <source>Thiết bị ở {target} gửi danh tính không hợp lệ nên kết nối đã bị chặn. Có thể có người đang giả mạo.</source>
         <translation>The device at {target} sent an invalid identity, so the connection was blocked. Someone may be impersonating a device.</translation>
+    </message>
+    <message>
+        <location filename="../pairing.py"/>
+        <source>Thời gian còn lại để xác nhận</source>
+        <translation>Time left to confirm</translation>
     </message>
     <message>
         <location filename="../pairing.py"/>

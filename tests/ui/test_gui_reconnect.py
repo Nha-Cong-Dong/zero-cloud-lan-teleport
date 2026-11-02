@@ -240,6 +240,7 @@ def start_gui(run, gui_wait, updates: list | None = None):
         run.host.transfer_event.connect(updates.append)
 
 
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_h_restart_gui_peer_reconnects_by_itself_through_proxy(
     gui, gui_wait, pair, peer, tmp_path, tcp_proxy, fast_progress, ui_helpers
 ):
@@ -319,3 +320,12 @@ def test_h_restart_gui_peer_reconnects_by_itself_through_proxy(
     assert seen["done_label"] in seen["status"], (seen["status"], seen["done_label"])
     assert sha256_of(tmp_path / "nhan-gui" / f.name) == want
     print(f"\nB reconnected {seen['reconnect_after']:.1f} s after the receiver restarted on a new port")
+
+
+@pytest.fixture
+def offers_as_boxes(monkeypatch):
+    """spec-b4 11.3: đang nhìn đúng luồng của máy gửi thì lời mời chỉ ở bong bóng; test chờ hộp hỏi
+    vá `ui.transfers.default_window_active` thành False để hộp luôn bật."""
+    from teleport.ui import transfers
+
+    monkeypatch.setattr(transfers, "default_window_active", lambda: False)

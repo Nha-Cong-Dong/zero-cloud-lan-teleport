@@ -47,8 +47,14 @@ rồi có lượt mới: nút “↓ Mới”), `chat_drop` (đang kéo 3 file v
 tuyến: lượt chờ kết nối, câu ngoại tuyến ở thanh dưới), `chat_history` (lịch sử hai ngày trước, hôm
 qua và lượt của phiên hôm nay), `chat_empty` (máy chưa có lượt nào: màn rỗng “Kéo file vào đây…”).
 
+Lời mời nhận file và hộp mã (spec B4): `offer_box` (hộp hỏi nhận 3 file từ PC-Nha: “Đổi…”, ô “Luôn
+nhận”, Từ chối / Nhận), `chat_offer` (luồng của PC-Nha có bong bóng lời mời đang chờ với panel Nhận /
+Từ chối, viền nhấn, không có ✕), `pairing_countdown` (hộp mã ghép đôi còn 8 giây: mã vẽ thành hai
+nhóm ô, thanh đếm ngược ngắn, chữ màu cảnh báo). Hai hộp được nhúng (cờ `Qt.Widget`) giữa một nền
+`surface` cỡ cảnh để ảnh dễ duyệt; không kiểm góc.
+
 Giờ cố định bằng seam `_wall_now` của `ui.conversations`, `ui.transfers` (`NOW`) và `ui.chat` (cảnh
-luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 27 cảnh × 2 chế độ × 2 cỡ = 108 ảnh.
+luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 30 cảnh × 2 chế độ × 2 cỡ = 120 ảnh.
 """
 
 from __future__ import annotations
@@ -854,6 +860,96 @@ def scene_chat_empty(qtbot) -> QWidget:
     return window
 
 
+def _offer(device_id: str, names_sizes, transfer_id: str = "d" * 32):
+    from teleport.app.transfers import OfferReceived
+    from teleport.core.messages import FileEntry
+    from teleport.core.transfer import Direction, TransferKey
+
+    files = tuple(FileEntry(name, size, 1_700_000_000_000) for name, size in names_sizes)
+    return OfferReceived(
+        key=TransferKey(device_id, Direction.RECEIVE, transfer_id),
+        device_name="PC-Nha",
+        files=files,
+        names=tuple(name for name, _ in names_sizes),
+        total_bytes=sum(size for _, size in names_sizes),
+        auto_accepted=False,
+    )
+
+
+_OFFER_FILES = (
+    ("video-dam-cuoi.mp4", 8 * 2**30),
+    ("anh-bia.png", int(2.1 * 2**20)),
+    ("ke-hoach.docx", 380 * 1024),
+)
+
+
+def _framed(qtbot, dialog) -> QWidget:
+    """Nhúng hộp `dialog` (cờ `Qt.Widget`) giữa một nền `surface` để chụp như ảnh duyệt."""
+    from PySide6.QtWidgets import QGridLayout
+
+    frame = QWidget()
+    qtbot.addWidget(frame)
+    frame.setObjectName("snapshotDialogFrame")
+    frame.setAutoFillBackground(True)  # nền Window của bảng màu theme (`surface`)
+    dialog.setWindowFlags(Qt.WindowType.Widget)
+    layout = QGridLayout(frame)
+    layout.addWidget(dialog, 0, 0, Qt.AlignmentFlag.AlignCenter)
+    return frame
+
+
+def scene_offer_box(qtbot) -> QWidget:
+    """Hộp hỏi nhận 3 file từ PC-Nha (spec B4 mục 3.4): “Đổi…”, ô “Luôn nhận”, Từ chối / Nhận."""
+    from teleport.ui.offer import OfferBook, OfferPrompts
+
+    book = OfferBook()
+    prompts = OfferPrompts(book, RECEIVE_DIR)
+    nha = _paired("PC-Nha", "windows", online=True, connected=True)
+    item = _offer(nha.device_id, _OFFER_FILES)
+    assert book.add(item)
+    box = prompts.preview(item.key)
+    assert box is not None
+    frame = _framed(qtbot, box)
+    frame._snapshot_keep = (book, prompts)  # giữ sống tới khi chụp xong
+    return frame
+
+
+def scene_chat_offer(qtbot) -> QWidget:
+    """Luồng của PC-Nha có lời mời đang chờ trả lời: panel Nhận / Từ chối trong bong bóng (spec B4)."""
+    from teleport.ui.offer import OfferBook
+
+    window, view, nha = _chat_window(qtbot)
+    _fill_chat(view, nha)
+    book = OfferBook(window)
+    view.set_offer_book(book)
+    _CLOCK[0] = _at(31, 10, 45)
+    item = _offer(nha.device_id, _OFFER_FILES)
+    view.handle(item)
+    assert book.add(item)
+    _CLOCK[0] = NOW
+    return window
+
+
+def scene_pairing_countdown(qtbot) -> QWidget:
+    """Hộp mã ghép đôi còn 8 giây (spec B4 mục 3.7): mã thành ô, thanh ngắn, chữ màu cảnh báo."""
+    from teleport.app.pairing import PairingPrompt
+    from teleport.core.pairing import Role
+    from teleport.ui.pairing import PairingDialog
+
+    prompt = PairingPrompt(
+        session_id=1,
+        role=Role.RESPONDER,
+        address="192.168.1.20",
+        peer_name="PC-Nha",
+        peer_device_id=hashlib.sha256(b"PC-Nha").hexdigest()[:32],
+        code="382104",
+        expires_at=100.0,
+        recent_codes=1,
+        known_name=None,
+    )
+    dialog = PairingDialog(prompt, clock=lambda: 92.0)
+    return _framed(qtbot, dialog)
+
+
 SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     # tên cảnh: (hàm dựng, là cửa sổ chính, token mà điểm (4,4) phải bằng; None: không kiểm góc)
     "welcome": (scene_welcome, True, "surface"),
@@ -883,6 +979,9 @@ SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     "chat_offline": (scene_chat_offline, True, "sidebar"),
     "chat_history": (scene_chat_history, True, "sidebar"),
     "chat_empty": (scene_chat_empty, True, "sidebar"),
+    "offer_box": (scene_offer_box, False, None),
+    "chat_offer": (scene_chat_offer, True, "sidebar"),
+    "pairing_countdown": (scene_pairing_countdown, False, None),
 }
 
 
