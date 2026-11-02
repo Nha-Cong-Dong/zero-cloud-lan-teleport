@@ -7,9 +7,9 @@ Viết từ spec, không từ code:
   mục (`FileNotFoundError` / `NotADirectoryError` / `OSError`) → `("vi",)`.
 - `language_name(code)`: tên tự gọi (`vi` “Tiếng Việt”, `en` “English”), mã lạ → chính mã.
 - `apply_preference(None)` theo hệ điều hành; mã sai dạng → chuỗi nguồn (không ném lỗi).
-- `_run` gọi `i18n.install(app, ngôn ngữ)` với ngôn ngữ từ `_saved_ui_preferences(config_dir)` (spec D6
-  mục 2.6, thay `_saved_language` của D2): phần tử đầu là `Settings.load(config_dir).language`, mọi lỗi
-  → None. Chỉ đọc.
+- `_run` gọi `i18n.install(app, ngôn ngữ)` với ngôn ngữ từ `_saved_settings(config_dir)` (spec-f1 R1,
+  thay `_saved_ui_preferences` của D6): `Settings.load(config_dir).language`, mọi lỗi → `Settings()`
+  (ngôn ngữ None). Chỉ đọc.
 
 Giả định seam (chưa có trong spec): thư mục bản dịch được tìm qua `i18n.resources.files("teleport.ui")`
 (như `_load` hiện có), nên test thay `resources.files` để giả thư mục có file `.qm`.
@@ -182,7 +182,7 @@ def test_saved_language_reads_settings_only(tmp_path, content, want):
         path.write_text(content, encoding="utf-8")
     before = sorted(p.name for p in d.iterdir())
     raw = path.read_bytes() if path.exists() else None
-    assert ui_app._saved_ui_preferences(d)[0] == want
+    assert ui_app._saved_settings(d).language == want
     assert sorted(p.name for p in d.iterdir()) == before, "chỉ đọc: không tạo file nào"
     assert (path.read_bytes() if path.exists() else None) == raw, "chỉ đọc: không sửa settings.json"
 
@@ -192,7 +192,9 @@ def test_saved_language_unreadable_dir_is_none(tmp_path):
 
     f = tmp_path / "la-file"
     f.write_text("x", encoding="utf-8")
-    assert ui_app._saved_ui_preferences(f) == (None, None, None)
+    from teleport.app.settings import Settings
+
+    assert ui_app._saved_settings(f) == Settings()
 
 
 @integration
