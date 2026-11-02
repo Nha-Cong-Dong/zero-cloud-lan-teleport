@@ -21,6 +21,7 @@ import datetime
 import os
 import pathlib
 import re
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,7 +60,10 @@ OFFLINE_HINT = (
 )  # 9.9 (thắng câu ở mục 5)
 DRAG_HINT = "kéo file vào đây"  # “hoặc kéo file vào đây” (mục 5, 8.1)
 EMPTY_TITLE = "Kéo file vào đây để gửi cho {name}"  # 9b.21
-EMPTY_TEXT = "Hoặc bấm Gửi file ở dưới."
+# Spec “phím tắt và dán file” mục 4 (S15): {key} là NativeText của phím Paste đầu (macOS: ⌘V).
+EMPTY_TEXT = "Hoặc bấm Gửi file ở dưới, hay nhấn {key} để dán file đã chép.".format(
+    key="⌘V" if sys.platform == "darwin" else "Ctrl+V"
+)
 NEW_NAME = "Có {n} lượt mới. Bấm để cuộn xuống cuối"
 LIST_DESCRIPTION = (
     "Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để mở cuộc trò chuyện, phím Menu để mở thao tác."
@@ -669,6 +673,39 @@ def test_v6_empty_state_is_built_once(h, qtbot):
     open_and_load(v, qtbot, PEER_ID)
     open_and_load(v, qtbot, OTHER_ID)
     assert empty_state_of(v) is es
+
+
+def test_v6_empty_state_shows_no_transfers_illustration(h, qtbot):
+    """Spec G6 tiêu chí 8 (mục 7): luồng rỗng (`chatEmpty`) có minh họa NO_TRANSFERS thay vòng icon."""
+    from teleport.ui.illustrations import Scene
+
+    v = h.view
+    open_and_load(v, qtbot, PEER_ID)
+    es = empty_state_of(v)
+    assert es.objectName() == "chatEmpty"
+    assert es.illustration.isVisibleTo(v)
+    assert es.illustration.scene is Scene.NO_TRANSFERS
+    assert not es.icon_badge.isVisibleTo(v)
+
+
+def test_v6_empty_illustration_does_not_replay_when_switching_device(h, qtbot, real_motion, monkeypatch):
+    """Spec G6 mục 7: đổi máy (cùng cảnh NO_TRANSFERS) không chạy lại minh họa."""
+    from teleport.ui import illustrations
+
+    monkeypatch.setattr(illustrations, "PLAY_MS", 1500)
+    v = h.view
+    ill = empty_state_of(v).illustration
+    open_and_load(v, qtbot, PEER_ID)
+    qtbot.waitUntil(lambda: ill.playing, timeout=1000)  # đối chứng: lần hiện đầu có chạy
+    qtbot.waitUntil(lambda: not ill.playing, timeout=5000)
+    assert ill.progress == 1.0
+    open_and_load(v, qtbot, OTHER_ID)
+    assert empty_state_of(v).illustration is ill
+    assert ill.isVisibleTo(v)
+    QApplication.processEvents()
+    qtbot.wait(50)
+    assert not ill.playing
+    assert ill.progress == 1.0
 
 
 def test_v7_drop_on_empty_state_sends_files(h, qtbot, tmp_path):
