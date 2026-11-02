@@ -284,6 +284,9 @@ async def test_receiver_disabled_does_not_write_or_buffer(clip_net, arrivals):
     assert assembler_of(B.node.clipboard).reserved_bytes() == 0
     A.cb.set_text("A sao chép khi B tắt")
     await wait_until(lambda: any(e.outcome == ClipOutcome.SENT for e in A.events), 10, "A chưa gửi")
+    # `SENT` chỉ là đã ghi xuống socket: chờ B xử lý xong mảnh đó (lúc còn tắt) rồi mới bật.
+    off_sha = core_clip.text_fingerprint("A sao chép khi B tắt")
+    await wait_until(lambda: arrived(arrivals, B.node, off_sha), 5, "B chưa nhận clip lúc tắt")
     B.node.set_clipboard(A.id, True)
     for m in msgs[1:]:
         await A.node.control_connection(B.id).send(m)

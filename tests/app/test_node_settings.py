@@ -1648,8 +1648,8 @@ async def test_busy_devices_both_directions(transfer_nodes):
 async def test_ui_preferences_validate_and_persist(node_factory, tmp_path, monkeypatch):
     A = await node_factory("A")
     assert (
-        A.set_ui_preferences(language="vi_VN", autostart=True, first_run_done=True, radar_view="list") is None
-    )
+        A.set_ui_preferences(language="vi_VN", autostart=True, first_run_done=True, radar_view="list") is True
+    )  # spec-f1 D5/R2: trả True khi đã ghi file
     s = A.settings
     assert (s.language, s.autostart, s.first_run_done, s.radar_view) == ("vi_VN", True, True, "list")
     data = on_disk(A.dir)
@@ -1715,7 +1715,7 @@ async def test_setters_do_not_touch_port_and_extra(node_factory, tmp_path):
 async def test_set_ui_preferences_theme_accent_saved(node_factory):
     A = await node_factory("A")
     assert (A.settings.theme, A.settings.accent) == (None, None)
-    assert A.set_ui_preferences(theme="dark", accent="ocean") is None
+    assert A.set_ui_preferences(theme="dark", accent="ocean") is True  # spec-f1 D5/R2
     assert (A.settings.theme, A.settings.accent) == ("dark", "ocean")
     data = on_disk(A.dir)
     assert (data["theme"], data["accent"]) == ("dark", "ocean")

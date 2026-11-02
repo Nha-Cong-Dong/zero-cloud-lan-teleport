@@ -6,7 +6,8 @@ Luồng khởi động (spec P4-3 mục 4): phân tích tham số (`--config-dir
 nhấn (`ui.fonts.install`, lỗi thì dùng font hệ thống), chế độ màu và màu nhấn đã lưu
 (`theme.set_preference`, trước khi dựng cửa sổ nào nên không nháy màu); `SingleInstance.acquire`;
 log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node trong `bridge.NodeHost` nếu máy
-đã có `device.crt`. Hiện cửa sổ trừ khi `--background`, có khay và node đang khởi động; `app.exec()`.
+đã có `device.crt`. Áp hình học cửa sổ đã lưu (bên dưới), rồi hiện cửa sổ trừ khi `--background`, có
+khay và node đang khởi động; `app.exec()`.
 
 **Lần chạy đầu** (mvp F1, spec D1; form ở `ui.first_run`):
 - Màn lần chạy đầu (WELCOME) chỉ hiện khi `<config_dir>/device.crt` chưa có (`_setup_done`), không
@@ -65,9 +66,26 @@ máy này theo `Node.visible` đọc lúc `started` và `visibility_changed`. `h
 toàn bộ) của trang và của `PairingController` (theo `device_id`, khi hủy ghép đôi có xóa lịch sử) →
 `TransfersController.view.invalidate_history` (gỡ lịch sử đang hiện, nạp lại luồng đang mở; spec B3
 mục 9.14). Ngôn ngữ, chế độ màu và màu
-nhấn đã lưu (`settings.json`) được áp lúc khởi động (`_saved_ui_preferences`: `Settings.load` một lần,
-chỉ đọc, lỗi gì cũng về mặc định: theo hệ điều hành, màu nhấn mặc định); màn “Bắt đầu” cũng dùng chủ
-đề đọc lúc này.
+nhấn đã lưu (`settings.json`) được áp lúc khởi động (`_saved_settings`: `Settings.load` một lần,
+chỉ đọc, lỗi gì cũng về `Settings()`: theo hệ điều hành, màu nhấn mặc định); màn “Bắt đầu” cũng dùng
+chủ đề đọc lúc này. Cùng `Settings` đó được đưa cho `GuiApp(saved=...)` (nhớ trạng thái, bên dưới).
+
+**Nhớ trạng thái cửa sổ** (`ui.placement`): `GuiApp` nhận `saved` (`Settings` đọc lúc khởi động; None =
+mặc định). Dòng đầu `start()` gọi `placement.restore(window, saved.window)` khi cửa sổ còn ẩn, cả khi
+`--background` (trước `tray.show()` và `start_node()`). `current_changed` của danh sách cuộc trò chuyện
+(id khác None) cập nhật `_last_conversation`; `start_node` đặt `_restore_conversation` = máy đó trước
+`devices.clear()`, rồi `_on_devices` của host hiện tại (chụp và xóa nó; kết quả của host cũ không đụng
+tới) sau `devices.reset` chọn lại máy đó bằng `select_device` (không đổi trang, không đổi tiêu điểm; máy
+không còn thì giữ hàng 0). `_save_ui_state` lưu qua `NodeHost.call` → `Node.set_ui_preferences` chỉ các
+trường khác mốc (giá trị đọc lúc đầu, cập nhật khi lưu xong): `window` (`placement.capture`, None thì
+không gửi), `last_conversation`, `tray_hint_shown=True` khi đã báo câu khay; không có gì đổi hay node
+không chạy thì không gọi. Gọi ở: ẩn xuống khay, Thoát (ngay sau `_quitting = True`, trước khi ẩn cửa sổ
+và `NodeHost.stop()`; `call` và `stop` cùng đi `call_soon_threadsafe` nên lần lưu chạy trước
+`Node.close()`), `commitDataRequest` và dòng đầu `shutdown()`; gọi lặp không sao. `on_done` coi mọi kết
+quả không phải `BaseException` là thành công (cả None, False) rồi cập nhật mốc; lỗi → WARNING (tên loại
+lỗi), giữ mốc nên lần sau gửi lại; không bỏ kết quả khi đang thoát. `on_done` có thể không chạy khi
+`exec()` đã trả về, nhưng việc ghi vẫn xảy ra vì `shutdown` `join` thread node. Lưu lúc tắt máy / đăng
+xuất là best-effort: không chặn và không trì hoãn việc tắt máy.
 
 **Gửi/nhận file**: `ui.transfers.TransfersController` (`GuiApp.transfers`) giữ luồng chat, hộp
 hỏi nhận file và việc gửi; `GuiApp` chỉ báo host mới (`attach`), `started`, `NodeEvent` và
@@ -160,7 +178,10 @@ trong menu con (danh sách từ `ConversationModel`, đọc lúc menu sắp hi�
 thì chỉ hiện cửa sổ. “Tạm dừng nhận” → `host.call` chạy `pause_receiving` trên thread node; mỗi yêu
 cầu có số thứ tự `_pause_seq`: chỉ kết quả của yêu cầu mới nhất được áp lên khay và huy hiệu thẻ
 máy này, kết quả cũ chỉ cập nhật `_paused_confirmed`; lỗi thì áp lại giá trị đã xác nhận và ghi
-một WARNING. Đang tạm dừng thì bóng thoại M4 dùng `texts.still_running_paused()`.
+một WARNING. Bóng thoại “vẫn chạy ở khay” (`texts.still_running()`, đang tạm dừng nhận thì
+`texts.still_running_paused()`) chỉ hiện lần đầu cửa sổ thu xuống khay trong suốt đời thư mục cấu
+hình: đã báo (`Settings.tray_hint_shown`, hay đã báo trong phiên này) thì không báo lại, kể cả ở các
+lần mở app sau.
 
 **Clipboard** (mvp F8): `GuiApp` chạy GUI thật (không `make_options`) thì mỗi host mới
 có một `ui.clipboard_qt.QtClipboardBackend` (dựng trên thread Qt, cha là `GuiApp`) qua
@@ -224,7 +245,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from types import FrameType
-from typing import cast
+from typing import Any, cast
 
 from PySide6.QtCore import QBuffer, QCoreApplication, QEventLoop, QIODevice, QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontInfo
@@ -237,12 +258,24 @@ from teleport.app import node as app_node
 from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipOutcome
 from teleport.app.devices import DeviceView
 from teleport.app.node import NodeEvent
-from teleport.app.settings import Settings
+from teleport.app.settings import Settings, WindowGeometry
 from teleport.app.transfers import TransferUpdate
 from teleport.atomic import write_atomic
 from teleport.lock import NodeLock, NodeLockedError
 from teleport.trust.identity import CERT_FILE, Identity
-from teleport.ui import errorlog, first_run, fonts, i18n, icons, logo, receive_dir, send, texts, theme
+from teleport.ui import (
+    errorlog,
+    first_run,
+    fonts,
+    i18n,
+    icons,
+    logo,
+    placement,
+    receive_dir,
+    send,
+    texts,
+    theme,
+)
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.appearance import AppearanceSection
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
@@ -517,9 +550,11 @@ class GuiApp(QObject):
         *,
         background: bool = False,
         make_options: Callable[[Path], NodeOptions] | None = None,
+        saved: Settings | None = None,
         clipboard_factory: Callable[[QObject], ClipboardBackend | None] | None = None,
     ) -> None:
         super().__init__()
+        saved = Settings() if saved is None else saved
         self._app = app
         self._config_dir = config_dir
         self._instance = instance
@@ -529,7 +564,15 @@ class GuiApp(QObject):
             clipboard_factory = _qt_clipboard  # GUI thật: đồng bộ clipboard (docstring module)
         self._clipboard_factory = clipboard_factory
         self._quitting = False
-        self._told_tray = False
+        # Nhớ trạng thái cửa sổ (docstring module): hình học đã lưu, câu khay đã báo, cuộc trò chuyện
+        # gần nhất; `_mark_*` là giá trị đã có trong `settings.json` (chỉ gửi trường khác mốc).
+        self._saved_window = saved.window
+        self._told_tray = saved.tray_hint_shown
+        self._last_conversation = saved.last_conversation
+        self._restore_conversation: str | None = None  # máy cần chọn lại ở ảnh chụp `devices()` tới
+        self._mark_window: WindowGeometry | None = saved.window
+        self._mark_conversation: str | None = saved.last_conversation
+        self._mark_tray_hint = saved.tray_hint_shown
         # Lựa chọn ở màn lần chạy đầu, giữ tới `started` (“Thử lại” dùng lại); None: chưa bấm “Bắt đầu”.
         self._first_run: FirstRunChoice | None = None
         self._session_ending = False  # hệ điều hành đang tắt máy / đăng xuất (`commitDataRequest`)
@@ -586,6 +629,7 @@ class GuiApp(QObject):
         self.transfers.view.retry_clipboard_requested.connect(self._on_clipboard_retry)
         app.commitDataRequest.connect(self._on_commit_data)
         self.window.conversations.unpair_requested.connect(self._on_unpair_requested)
+        self.window.conversations.current_changed.connect(self._on_conversation_changed)
         self.pairing.devices_changed.connect(self._on_devices_changed)
         self.transfers.pair_needed.connect(self._on_pair_needed)
         self.transfers.repair_requested.connect(self._on_repair_requested)
@@ -636,7 +680,8 @@ class GuiApp(QObject):
 
     def start(self) -> None:
         """Hiện khay, chạy node (hoặc hiện màn lần chạy đầu), hiện cửa sổ trừ khi `--background`, có
-        khay và node đang khởi động."""
+        khay và node đang khởi động. Hình học đã lưu được áp trước tiên, khi cửa sổ còn ẩn."""
+        placement.restore(self.window, self._saved_window)
         self.tray.show()
         self.start_node()
         if (
@@ -664,6 +709,7 @@ class GuiApp(QObject):
             self._show_first_run()
             return
         self._stop_addresses()
+        self._restore_conversation = self._last_conversation
         self.window.devices.clear()
         options = self._make_options(self._config_dir)
         if choice is not None:
@@ -718,6 +764,7 @@ class GuiApp(QObject):
         if self._quitting:
             return
         self._quitting = True
+        self._save_ui_state()  # trước khi ẩn cửa sổ và trước `host.stop()` (FIFO trên loop của node)
         self._stop_addresses()
         self._reset_pause()
         self._close_quit_box()
@@ -740,6 +787,7 @@ class GuiApp(QObject):
 
     def shutdown(self) -> None:
         """Sau `exec()`: dừng node, đóng `SingleInstance`, chờ thread node có hạn; kẹt → `os._exit(1)`."""
+        self._save_ui_state()  # trước `host.stop()`
         self._quit_timer.stop()
         self._stop_addresses()
         self._close_quit_box()
@@ -820,6 +868,7 @@ class GuiApp(QObject):
         """
         self._session_ending = True
         self._close_quit_box()
+        self._save_ui_state()  # best-effort, không chờ
         self._session_timer.start(SESSION_END_GRACE_MS)  # tới lần nữa thì tính lại từ đầu
 
     def _end_session_grace(self) -> None:
@@ -1068,13 +1117,17 @@ class GuiApp(QObject):
             self.address_timer.start(ADDRESS_REFRESH_MS)
 
     def _on_devices(self, host: NodeHost, result: tuple[DeviceView, ...] | BaseException) -> None:
-        """Ảnh chụp `Node.devices()` lúc `started` (sự kiện tới trước đó đã nằm trong ảnh chụp)."""
+        """Ảnh chụp `Node.devices()` lúc `started` (sự kiện tới trước đó đã nằm trong ảnh chụp); chọn lại
+        cuộc trò chuyện gần nhất nếu máy đó còn trong danh sách."""
         if host is not self.host or self._quitting:
-            return
+            return  # kết quả của host cũ không lấy mất lần khôi phục của host mới
+        wanted, self._restore_conversation = self._restore_conversation, None
         if isinstance(result, BaseException):
             log.warning("không đọc được danh sách thiết bị: %s", type(result).__name__)
             return
         self.window.devices.reset(result)
+        if wanted is not None:
+            self.window.conversations.select_device(wanted)  # không còn → False, hàng 0 giữ nguyên
 
     def _on_radar_view(self, host: NodeHost, result: str | BaseException | None) -> None:
         """`radar_view` đã lưu; bỏ nếu host cũ, đang thoát, hay người dùng vừa tự chọn dạng."""
@@ -1206,13 +1259,54 @@ class GuiApp(QObject):
             self.start_node()
 
     def _on_hidden_to_tray(self) -> None:
-        """Thu cửa sổ xuống khay lần đầu trong phiên: bóng thoại M4 (đang tạm dừng nhận thì câu riêng)."""
+        """Thu cửa sổ xuống khay: chưa từng báo thì bóng thoại “vẫn chạy ở khay” (đang tạm dừng nhận thì
+        câu riêng), rồi lưu trạng thái cửa sổ."""
         if not self._told_tray:
             self._told_tray = True
             if self._paused_confirmed:
                 self.tray.show_message(texts.still_running_paused())
             else:
                 self.tray.show_message(texts.still_running())
+        self._save_ui_state()
+
+    # ---- Nhớ trạng thái cửa sổ -----------------------------------------------------------------
+
+    def _on_conversation_changed(self, device_id: object) -> None:
+        if isinstance(device_id, str):
+            self._last_conversation = device_id
+
+    def _save_ui_state(self) -> None:
+        """Lưu các trường nhớ trạng thái khác mốc qua node; node không chạy hay không có gì đổi → thôi."""
+        host = self.host
+        if host is None or not host.running:
+            return
+        changes: dict[str, Any] = {}
+        window = placement.capture(self.window, fallback=self._mark_window)
+        if window is not None and window != self._mark_window:
+            changes["window"] = window
+        conversation = self._last_conversation
+        if conversation is not None and conversation != self._mark_conversation:
+            changes["last_conversation"] = conversation
+        if self._told_tray and not self._mark_tray_hint:
+            changes["tray_hint_shown"] = True
+        if not changes:
+            return
+        host.call(
+            lambda node: node.set_ui_preferences(**changes),
+            functools.partial(self._on_ui_state_saved, changes),
+        )
+
+    def _on_ui_state_saved(self, changes: dict[str, Any], result: object) -> None:
+        """Mọi kết quả không phải `BaseException` là đã lưu (cả None, False): cập nhật mốc."""
+        if isinstance(result, BaseException):
+            log.warning("không lưu được trạng thái cửa sổ: %s", type(result).__name__)
+            return
+        if "window" in changes:
+            self._mark_window = changes["window"]
+        if "last_conversation" in changes:
+            self._mark_conversation = changes["last_conversation"]
+        if "tray_hint_shown" in changes:
+            self._mark_tray_hint = True
 
     # ---- Clipboard (mvp F8) ------------------------------------------------------------------
 
@@ -1332,15 +1426,13 @@ def log_files(config_dir: Path) -> list[Path]:
     return [directory / f"{LOG_FILE}.{n}" for n in range(LOG_BACKUPS, 0, -1)] + [directory / LOG_FILE]
 
 
-def _saved_ui_preferences(config_dir: Path) -> tuple[str | None, str | None, str | None]:
-    """(ngôn ngữ, chế độ màu, màu nhấn) đã lưu ở `settings.json`: đọc một lần, chỉ đọc; lỗi gì cũng
-    `(None, None, None)` (theo hệ điều hành, màu nhấn mặc định)."""
+def _saved_settings(config_dir: Path) -> Settings:
+    """`settings.json` đọc một lần lúc khởi động, chỉ đọc; lỗi gì cũng `Settings()` (mặc định)."""
     try:
-        saved = Settings.load(config_dir)
-        return saved.language, saved.theme, saved.accent
+        return Settings.load(config_dir)
     except Exception as e:
-        log.debug("không đọc được cài đặt giao diện đã lưu: %s", type(e).__name__)
-        return None, None, None
+        log.debug("không đọc được cài đặt đã lưu: %s", type(e).__name__)
+        return Settings()
 
 
 def _default_options(config_dir: Path) -> NodeOptions:
@@ -1714,10 +1806,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
     """Phần của `main` sau khi có `QApplication` (ngoài `--selftest`), chạy trong `GcGuard`."""
-    language, saved_theme, accent = _saved_ui_preferences(config_dir)
-    i18n.install(app, language)
+    saved = _saved_settings(config_dir)
+    i18n.install(app, saved.language)
     fonts.install()  # lỗi thì `theme.font_for` rơi về font hệ thống
-    theme.set_preference(app, theme.mode_from_setting(saved_theme), accent)
+    theme.set_preference(app, theme.mode_from_setting(saved.theme), saved.accent)
     try:
         instance = SingleInstance.acquire(config_dir)
     except TimeoutError:  # trước OSError: TimeoutError là lớp con của OSError
@@ -1734,7 +1826,7 @@ def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
     _register_app_user_model_id(config_dir)  # cũng chỉ bản duy nhất, trước bóng thoại đầu tiên
     restore_excepthooks = errorlog.install_excepthooks()
     try:
-        controller = GuiApp(app, config_dir, instance, background=args.background)
+        controller = GuiApp(app, config_dir, instance, background=args.background, saved=saved)
         restore_sigint = _install_sigint(controller)
         try:
             controller.start()

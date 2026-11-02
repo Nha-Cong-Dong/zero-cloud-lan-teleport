@@ -84,7 +84,9 @@ lại (khi nút đang hiện), Ctrl+W = đóng cửa sổ, Ctrl+Q = Thoát, Ctrl
 SETTINGS và đang RUNNING, như nút ⚙; tooltip của nút có phím tắt).
 
 Cỡ cửa sổ lúc mở: `default_size(vùng dùng được của màn hình chính)` = `DEFAULT_SIZE` kẹp theo màn
-hình; cỡ tối thiểu `MIN_SIZE`. Không lưu cỡ giữa các lần chạy.
+hình; cỡ tối thiểu `MIN_SIZE`. Hình học, phóng to và màn hình được nhớ giữa các lần chạy
+(`ui.placement`, `ui.app` áp lại trước khi hiện); `shown_once` cho biết cửa sổ đã từng hiện (chưa hiện
+thì không có gì để lưu). `bring_to_front` khi đang thu nhỏ chỉ bỏ cờ thu nhỏ nên giữ phóng to.
 
 Đóng cửa sổ (`closeEvent`): khay dùng được (`Tray.is_available()`) thì ẩn cửa sổ và phát
 `hidden_to_tray` (app vẫn chạy và nhận file); không có khay thì phát `quit_requested`. Cửa sổ
@@ -434,6 +436,7 @@ class MainWindow(QMainWindow):
         self._has_paired = False  # danh sách cuộc trò chuyện có máy (đã ghép đôi)
         self._scroll_target: QWidget | None = None  # widget chờ được cuộn tới (`_on_focus_changed`)
         self._compact_applied: bool | None = None  # dạng cột trái đã áp (`_apply_compact`)
+        self._shown_once = False  # cửa sổ đã từng hiện (`ui.placement.capture`)
         # Các thiết bị (ảnh chụp `devices()` + `NodeEvent`), dùng chung cho danh sách cuộc trò chuyện
         # và trang “Tìm máy mới”.
         self.devices = DeviceListModel(self)
@@ -915,12 +918,16 @@ class MainWindow(QMainWindow):
             return
         self.status_label.setFocus(Qt.FocusReason.OtherFocusReason)
 
+    @property
+    def shown_once(self) -> bool:
+        """Cửa sổ đã hiện ít nhất một lần (từ đó hình học mới đáng lưu)."""
+        return self._shown_once
+
     def bring_to_front(self) -> None:
-        """Hiện lại cửa sổ (kể cả khi đang thu nhỏ hay ẩn) và đưa lên trước."""
+        """Hiện lại cửa sổ (kể cả khi đang thu nhỏ hay ẩn) và đưa lên trước; giữ phóng to."""
         if self.isMinimized():
-            self.showNormal()
-        else:
-            self.show()
+            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.show()
         self.raise_()
         self.activateWindow()
 
@@ -1204,6 +1211,7 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        self._shown_once = True
         self._apply_compact()
 
     def changeEvent(self, event: QEvent) -> None:
