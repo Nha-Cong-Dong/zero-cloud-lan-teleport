@@ -29,12 +29,13 @@ NOT_RECEIVING = "Không nhận file"
 PAUSED = "Đã tạm dừng nhận"
 HIDDEN = "Đang ẩn"
 READY = "Sẵn sàng nhận"
-PAUSED_DESCRIPTION_VI = (
-    "File mới gửi tới sẽ bị từ chối; lượt đang nhận vẫn tiếp tục. "
+PAUSED_DESCRIPTION_VI = (  # spec D5 mục 3.6
+    "File mới gửi tới sẽ bị từ chối, clipboard gửi tới sẽ bị bỏ qua; lượt đang nhận vẫn tiếp tục. "
     "Bỏ chọn “Tạm dừng nhận” trong menu khay để nhận lại."
 )
 PAUSED_DESCRIPTION_EN = (
-    "New files sent to this device will be declined; transfers in progress continue. "
+    "New files sent to this device will be declined and incoming clipboard content will be ignored; "
+    "transfers in progress continue. "
     "Uncheck “Pause receiving” in the tray menu to receive again."
 )
 

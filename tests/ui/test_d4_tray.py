@@ -32,12 +32,12 @@ M5 = ("Mở Teleport", "Gửi file…", "Tạm dừng nhận", "Thoát")
 # Bảng tooltip (spec D4 mục 4.2; số nhiều EN theo 14.7).
 TIP_ACTIVE_VI = "Đang truyền {n} lượt"
 TIP_UNAVAILABLE_VI = "Không nhận file: không mở được thư mục nhận"
-TIP_PAUSED_VI = "Đã tạm dừng nhận file mới"
+TIP_PAUSED_VI = "Đã tạm dừng nhận file mới và clipboard"  # spec D5 mục 3.4
 TIP_READY_VI = "Sẵn sàng nhận"
 TIP_ACTIVE_EN_ONE = "{n} transfer in progress"
 TIP_ACTIVE_EN_MANY = "{n} transfers in progress"
 TIP_UNAVAILABLE_EN = "Not receiving files: can't open the receive folder"
-TIP_PAUSED_EN = "Paused receiving new files"
+TIP_PAUSED_EN = "Paused receiving new files and clipboard"  # spec D5 mục 3.4
 TIP_READY_EN = "Ready to receive"
 TOOLTIP_BUDGET = 100  # 14.18: chừa chỗ cho F4
 
@@ -213,7 +213,13 @@ def test_tray_state_defaults_and_frozen():
 def test_tray_badge_values():
     from teleport.ui.tray import TrayBadge
 
-    assert [b.value for b in TrayBadge] == ["none", "transferring", "paused", "unavailable"]
+    assert [b.value for b in TrayBadge] == [
+        "none",
+        "transferring",
+        "paused",
+        "unavailable",
+        "clipboard",
+    ]  # + D5
 
 
 @pytest.mark.parametrize(("running", "active", "paused", "unavailable"), STATES, ids=STATE_IDS)

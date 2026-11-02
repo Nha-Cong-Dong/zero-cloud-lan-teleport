@@ -192,7 +192,7 @@ class DeviceSettings:
     """Cài đặt của một thiết bị tin cậy. `extra` giữ khóa lạ của mục (ghi lại nguyên trạng)."""
 
     ask_before_receive: bool = True  # False = "Luôn nhận" từ thiết bị này
-    clipboard: bool = False  # đồng bộ clipboard (chưa dùng: chỉ lưu)
+    clipboard: bool = False  # “Đồng bộ clipboard” với thiết bị này (`app.clipboard`)
     extra: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
 
     def __post_init__(self) -> None:

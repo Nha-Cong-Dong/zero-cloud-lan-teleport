@@ -162,6 +162,18 @@ cầu có số thứ tự `_pause_seq`: chỉ kết quả của yêu cầu mới
 máy này, kết quả cũ chỉ cập nhật `_paused_confirmed`; lỗi thì áp lại giá trị đã xác nhận và ghi
 một WARNING. Đang tạm dừng thì bóng thoại M4 dùng `texts.still_running_paused()`.
 
+**Clipboard** (mvp F8): `GuiApp` chạy GUI thật (không `make_options`) thì mỗi host mới
+có một `ui.clipboard_qt.QtClipboardBackend` (dựng trên thread Qt, cha là `GuiApp`) qua
+`NodeOptions.clipboard`; test truyền `clipboard_factory` để bật (mặc định khi có `make_options`: không
+đồng bộ clipboard). Backend do factory dựng được dọn khi host của nó phát `stopped`
+(`QtClipboardBackend.dispose`; QObject khác: `deleteLater`), nên chạy lại node (“Thử lại”) không để lại
+backend cũ. `NodeHost.clipboard_event` của host hiện tại (bỏ khi đang thoát): `RECEIVED` /
+`WRITE_FAILED` → `Tray.flash_clipboard` (tên máy qua `texts.peer_label`; khay tự qua `tray_safe`) và
+`ChatView.show_clipboard`; `TOO_LARGE` → chỉ `Tray.flash_clipboard`; `SENT` không hiện gì. “Thử lại”
+của note (`ChatView.retry_clipboard_requested`) → `host.submit(_retry_clipboard)`: đọc `node.clipboard`
+trên thread node (không có → `NOTHING_TO_RETRY`), rồi `ChatView.finish_clipboard_retry` (`NOTHING_TO_RETRY`
+→ câu “không còn để chép lại”; lỗi khác chỉ DEBUG và bật lại nút). Không bóng thoại.
+
 Ctrl+C ở cửa sổ dòng lệnh (khi chạy `python -m teleport.ui`): handler SIGINT hẹn luồng Thoát không
 hỏi lại (`request_quit(confirm=False)`) bằng `QTimer.singleShot(0, …)` (không gọi thẳng giữa
 chừng một slot Qt); một `QTimer` rỗng 200 ms cho Python có dịp chạy handler trong lúc Qt giữ vòng lặp.
@@ -172,8 +184,9 @@ mạng; thêm kiểm tài sản đóng gói: lỗi (mã 1) khi thiếu file font
 nền `offscreen` khác nhau giữa các hệ điều hành), khi icon `checkmark_circle` vẽ ra rỗng và khi một
 bản dịch có trong `i18n.available_languages()` (khác chuỗi nguồn) không nạp được. Selftest còn dựng
 mục “Giao diện” (`ui.appearance.AppearanceSection`) và đổi chủ đề một vòng (tối rồi theo hệ điều
-hành) bằng `theme.set_preference`, và chạy khay một vòng (`_tray_ok`: các setter trạng thái,
-mỗi `TrayBadge` vẽ ra pixmap 32 px không rỗng, menu con với một máy giả, đủ bốn mục). Khi
+hành) bằng `theme.set_preference`, và chạy khay một vòng (`_tray_ok`: các setter trạng thái, một
+thông báo clipboard (dấu CLIPBOARD), mỗi `TrayBadge` vẽ ra pixmap 32 px không rỗng, menu con với một
+máy giả, đủ bốn mục). Khi
 chạy từ bản đóng gói (`sys.frozen`) thì kiểm thêm `QFontInfo(font_for(SECTION)).styleName()` là
 “Medium” và của TITLE là “Bold” (instance thật của font variable, không đậm giả).
 
@@ -221,6 +234,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from teleport import paths
 from teleport.app import autostart
 from teleport.app import node as app_node
+from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipOutcome
 from teleport.app.devices import DeviceView
 from teleport.app.node import NodeEvent
 from teleport.app.settings import Settings
@@ -232,6 +246,7 @@ from teleport.ui import errorlog, first_run, fonts, i18n, icons, logo, receive_d
 from teleport.ui import transfers as ui_transfers
 from teleport.ui.appearance import AppearanceSection
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
+from teleport.ui.clipboard_qt import QtClipboardBackend
 from teleport.ui.conversations import is_online
 from teleport.ui.first_run import FirstRunChoice, TextSource
 from teleport.ui.gcguard import GcGuard
@@ -241,7 +256,7 @@ from teleport.ui.radar import DeviceListModel
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
 from teleport.ui.settings import SettingsController, SettingsPage, autostart_state_hint
 from teleport.ui.transfers import TransfersController
-from teleport.ui.tray import SendTarget, Tray, TrayBadge, make_icon
+from teleport.ui.tray import ClipNotice, ClipNoticeKind, SendTarget, Tray, TrayBadge, make_icon
 from teleport.ui.widgets import InfoLevel
 
 EXIT_OK = 0
@@ -502,6 +517,7 @@ class GuiApp(QObject):
         *,
         background: bool = False,
         make_options: Callable[[Path], NodeOptions] | None = None,
+        clipboard_factory: Callable[[QObject], ClipboardBackend | None] | None = None,
     ) -> None:
         super().__init__()
         self._app = app
@@ -509,6 +525,9 @@ class GuiApp(QObject):
         self._instance = instance
         self._background = background
         self._make_options = make_options or _default_options
+        if clipboard_factory is None and make_options is None:
+            clipboard_factory = _qt_clipboard  # GUI thật: đồng bộ clipboard (docstring module)
+        self._clipboard_factory = clipboard_factory
         self._quitting = False
         self._told_tray = False
         # Lựa chọn ở màn lần chạy đầu, giữ tới `started` (“Thử lại” dùng lại); None: chưa bấm “Bắt đầu”.
@@ -564,6 +583,7 @@ class GuiApp(QObject):
         self.tray.discover_requested.connect(self._on_tray_discover)
         self.tray.pause_toggled.connect(self._on_pause_toggled)
         self.transfers.view.change_receive_dir_requested.connect(self._choose_receive_dir)
+        self.transfers.view.retry_clipboard_requested.connect(self._on_clipboard_retry)
         app.commitDataRequest.connect(self._on_commit_data)
         self.window.conversations.unpair_requested.connect(self._on_unpair_requested)
         self.pairing.devices_changed.connect(self._on_devices_changed)
@@ -653,11 +673,20 @@ class GuiApp(QObject):
                 save_args=True,
                 receive_dir=choice.receive_dir if choice.receive_dir_chosen else options.receive_dir,
             )
+        backend: ClipboardBackend | None = None
+        if options.clipboard is None and self._clipboard_factory is not None:
+            backend = self._clipboard_factory(self)
+            options = replace(options, clipboard=backend)
         host = NodeHost(options, self)
+        if isinstance(backend, QtClipboardBackend):  # backend riêng của host này: dọn khi host dừng
+            host.stopped.connect(backend.dispose)
+        elif isinstance(backend, QObject):
+            host.stopped.connect(backend.deleteLater)
         host.started.connect(functools.partial(self._on_started, host))
         host.start_failed.connect(functools.partial(self._on_start_failed, host))
         host.transfer_event.connect(functools.partial(self._on_transfer, host))
         host.node_event.connect(functools.partial(self._on_node_event, host))
+        host.clipboard_event.connect(functools.partial(self._on_clipboard_event, host))
         self.host = host
         self._receive_dir_notice = None
         self._settings_dir_notice = None
@@ -1185,6 +1214,54 @@ class GuiApp(QObject):
             else:
                 self.tray.show_message(texts.still_running())
 
+    # ---- Clipboard (mvp F8) ------------------------------------------------------------------
+
+    def _peer_label(self, device_id: str) -> str:
+        view = self.window.devices.device(device_id)
+        return texts.peer_label(None if view is None else view.name, device_id)
+
+    def _on_clipboard_event(self, host: NodeHost, event: object) -> None:
+        """Sự kiện của `app.clipboard` (đã về thread Qt): khay và luồng chat (docstring module)."""
+        if host is not self.host or self._quitting or not isinstance(event, ClipboardEvent):
+            return
+        outcome = event.outcome
+        if outcome is ClipOutcome.TOO_LARGE:
+            self.tray.flash_clipboard(ClipNotice(ClipNoticeKind.TOO_LARGE))
+            return
+        if outcome not in (ClipOutcome.RECEIVED, ClipOutcome.WRITE_FAILED) or event.device_id is None:
+            return
+        ok = outcome is ClipOutcome.RECEIVED
+        device_id = event.device_id
+        kind = ClipNoticeKind.RECEIVED if ok else ClipNoticeKind.WRITE_FAILED
+        self.tray.flash_clipboard(ClipNotice(kind, self._peer_label(device_id)))
+        self.transfers.view.show_clipboard(
+            device_id,
+            ok=ok,
+            kind=event.kind,
+            size=event.size,
+            preview=event.preview,
+            image_size=event.image_size,
+        )
+
+    def _on_clipboard_retry(self, device_id: str) -> None:
+        """“Thử lại” của note clipboard: ghi lại clip lỗi gần nhất của máy đó trên thread node."""
+        host = self.host
+        if host is None or self._quitting or not host.running:
+            self.transfers.view.finish_clipboard_retry(device_id, available=True)
+            return
+        host.submit(
+            functools.partial(_retry_clipboard, device_id=device_id),
+            functools.partial(self._on_clipboard_retry_done, host, device_id),
+        )
+
+    def _on_clipboard_retry_done(self, host: NodeHost, device_id: str, result: object) -> None:
+        if host is not self.host or self._quitting:
+            return
+        if isinstance(result, BaseException):
+            log.debug("không thử lại được việc chép clipboard: %s", type(result).__name__)
+        available = result is not ClipOutcome.NOTHING_TO_RETRY
+        self.transfers.view.finish_clipboard_retry(device_id, available=available)
+
     # ---- Khay: Gửi file…, Tạm dừng nhận ---------------------------------------------------------
 
     def _send_targets(self) -> list[SendTarget]:
@@ -1339,6 +1416,19 @@ def _set_receiving_paused(node: app_node.Node, paused: bool) -> bool:
     """Thread node: tạm dừng (True) hay nhận lại (False) `offer` mới; trả giá trị node đang giữ."""
     node.transfers.pause_receiving(paused)
     return node.transfers.receiving_paused
+
+
+def _qt_clipboard(parent: QObject) -> ClipboardBackend:
+    """Backend clipboard của GUI thật (thread Qt)."""
+    return QtClipboardBackend(parent)
+
+
+async def _retry_clipboard(node: app_node.Node, *, device_id: str) -> ClipOutcome:
+    """Thread node: “Thử lại” ghi clipboard; node không đồng bộ clipboard → `NOTHING_TO_RETRY`."""
+    sync = node.clipboard
+    if sync is None:
+        return ClipOutcome.NOTHING_TO_RETRY
+    return await sync.retry_write(device_id)
 
 
 def _mark_first_run_done(node: app_node.Node) -> bool:
@@ -1496,6 +1586,10 @@ def _tray_ok(tray: Tray) -> bool:
     tray.set_receiving_unavailable(False)
     tray.set_receiving_paused(False)
     tray.set_activity(0)
+    tray.flash_clipboard(ClipNotice(ClipNoticeKind.RECEIVED, "Teleport"))
+    if tray.badge is not TrayBadge.CLIPBOARD:
+        log.error("selftest: khay không hiện dấu clipboard")
+        return False
     tray.set_running(False)
     for badge in TrayBadge:
         if make_icon(badge).pixmap(32).isNull():

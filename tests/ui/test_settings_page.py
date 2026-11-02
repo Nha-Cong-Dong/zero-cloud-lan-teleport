@@ -1066,16 +1066,15 @@ def test_devices_empty_state_requests_discover(ui):
     assert EMPTY_TITLE not in joined(devices)
 
 
-def test_no_clipboard_and_no_check_updates_controls(ui):
+def test_no_check_updates_control(ui):
+    """Ô “Đồng bộ clipboard” đã có từ D5 (test ở `test_clipboard_ui.py`); “Kiểm tra cập nhật” vẫn chưa."""
     page = ui.page
     ui.devices([view("May-B")])
     for name in ("GENERAL", "PRIVACY", "DEVICES", "TRANSFER", "ADVANCED"):
         section = open_section(page, name)
-        # Chỉ xét control (nút, ô chọn): câu gợi ý của “Xuất log” được nhắc tới clipboard.
         text = " | ".join(
             plain(b.text()) for b in section.findChildren(QAbstractButton) if b.isVisibleTo(section)
         ).casefold()
-        assert "clipboard" not in text, f"{name}: ô Clipboard thuộc D5"
         assert "kiểm tra cập nhật" not in text, f"{name}: “Kiểm tra cập nhật” thuộc GĐ6"
 
 

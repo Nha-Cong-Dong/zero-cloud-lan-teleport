@@ -14,10 +14,11 @@ Hai phần, theo mẫu `ui.discover`:
 **Các mục** (`Section`, thứ tự cố định): Chung (tên thiết bị, thư mục nhận, khởi động cùng Windows) ·
 Giao diện (`ui.appearance.AppearanceSection`, spec D6: chế độ màu, màu nhấn, ngôn ngữ) · Quyền
 riêng tư (cho máy chưa ghép đôi thấy máy này, xóa toàn bộ lịch sử) · Thiết bị tin cậy (mỗi máy đã
-ghép đôi một `TrustedDeviceRow`: “Hỏi trước khi nhận”, “Hủy ghép đôi…”; không máy nào thì
-`EmptyState` + “Tìm máy mới”) · Truyền file (giới hạn tốc độ gửi, ngưỡng dọn phần nhận dở) · Nâng
-cao (xuất log, phiên bản, giấy phép, “Thông báo bên thứ ba” khi có file `THIRD-PARTY-NOTICES.txt` cạnh
-`sys.executable`). Không có ô Clipboard (D5) và “Kiểm tra cập nhật” (GĐ6). Hàng thư mục nhận: chữ
+ghép đôi một `TrustedDeviceRow`: “Hỏi trước khi nhận”, “Đồng bộ clipboard” (objectName
+`syncClipboard`, mặc định tắt; clip chỉ đi khi cả hai máy cùng bật, mvp F8), “Hủy ghép
+đôi…”; không máy nào thì `EmptyState` + “Tìm máy mới”) · Truyền file (giới hạn tốc độ gửi, ngưỡng
+dọn phần nhận dở) · Nâng cao (xuất log, phiên bản, giấy phép, “Thông báo bên thứ ba” khi có file
+`THIRD-PARTY-NOTICES.txt` cạnh `sys.executable`). Chưa có “Kiểm tra cập nhật” (GĐ6). Hàng thư mục nhận: chữ
 theo ba trạng thái của `ui.receive_dir` (đang đổi sang / thư mục nhận / thư mục đã lưu hỏng), “Mở”
 (chỉ khi có thư mục nhận) và “Đổi…” (ẩn tới `set_change_available(True)`; `ui.app` bật và nối vào
 `ReceiveDirController.choose`).
@@ -54,7 +55,8 @@ thiết bị → nút màn rỗng. Lên/Xuống trong `nav` đổi mục; trang 
 **Controller** (bảng ở spec D2 mục 1.6, 9): lưu trước, áp sau; lỗi thì trả control về giá trị đã xác
 nhận gần nhất của trường đó, nhưng chỉ khi đó là lời gọi mới nhất của trường (`_seq`); kết quả của host
 cũ hay về sau `close_all` bị bỏ (`_generation`). `SettingsSaveError` → câu SETTINGS; `MessageError` của
-tên → lỗi ngay dưới ô (không trả chữ về); `KeyError` của “Hỏi trước khi nhận” → im lặng, đọc lại;
+tên → lỗi ngay dưới ô (không trả chữ về); `KeyError` của “Hỏi trước khi nhận” và “Đồng bộ clipboard”
+(`node.set_clipboard`) → im lặng, đọc lại;
 `RuntimeError` (node không chạy) / `CancelledError` → im lặng (DEBUG); lỗi khác → câu OTHER, log ERROR chỉ
 tên loại lỗi (mvp N9). Ẩn/hiện: `node.set_visible(v)` và `host.apply_pairing_policy(node)` trong **cùng
 một** `call` (hợp đồng ở docstring `ui.bridge`). Ngôn ngữ: lưu xong mới `i18n.apply_preference`; chế độ
@@ -544,9 +546,11 @@ class _DecimalSpin(QDoubleSpinBox):
 
 
 class TrustedDeviceRow(QFrame):
-    """Một máy đã ghép đôi: avatar, tên, “HĐH · trạng thái”, “Hỏi trước khi nhận”, “Hủy ghép đôi…”."""
+    """Một máy đã ghép đôi: avatar, tên, “HĐH · trạng thái”, “Hỏi trước khi nhận”, “Đồng bộ
+    clipboard”, “Hủy ghép đôi…”."""
 
     ask_toggled = Signal(str, bool)
+    clipboard_toggled = Signal(str, bool)
     unpair_requested = Signal(str)
 
     def __init__(self, view: DeviceView, parent: QWidget | None = None) -> None:
@@ -569,10 +573,16 @@ class TrustedDeviceRow(QFrame):
         self.ask_checkbox = QCheckBox(self)
         self.ask_checkbox.setObjectName("askBeforeReceive")
         self.ask_checkbox.setChecked(True)
+        self.clipboard_checkbox = QCheckBox(self)
+        self.clipboard_checkbox.setObjectName("syncClipboard")
+        self.clipboard_checkbox.setChecked(False)
         self.unpair_button = QPushButton(self)
         self.unpair_button.setObjectName("unpairButton")
         self.ask_checkbox.clicked.connect(
             lambda checked: self.ask_toggled.emit(self.device_id, bool(checked))
+        )
+        self.clipboard_checkbox.clicked.connect(
+            lambda checked: self.clipboard_toggled.emit(self.device_id, bool(checked))
         )
         self.unpair_button.clicked.connect(lambda: self.unpair_requested.emit(self.device_id))
 
@@ -590,6 +600,7 @@ class TrustedDeviceRow(QFrame):
         self._actions.setContentsMargins(0, 0, 0, 0)
         self._actions.setSpacing(theme.SPACING[2])
         self._actions.addWidget(self.ask_checkbox)
+        self._actions.addWidget(self.clipboard_checkbox)
         self._actions.addWidget(self.unpair_button)
         self._actions.addStretch(0)
         # Rộng: [đầu hàng | ô, nút] một hàng; hẹp: ô và nút xuống dưới, thẳng cột chữ.
@@ -610,7 +621,7 @@ class TrustedDeviceRow(QFrame):
         return self._view
 
     def focus_widgets(self) -> list[QWidget]:
-        return [self.ask_checkbox, self.unpair_button]
+        return [self.ask_checkbox, self.clipboard_checkbox, self.unpair_button]
 
     def set_view(self, view: DeviceView) -> None:
         self._view = view
@@ -619,6 +630,10 @@ class TrustedDeviceRow(QFrame):
     def set_ask(self, ask: bool) -> None:
         """Đặt ô “Hỏi trước khi nhận” (không phát `ask_toggled`)."""
         self.ask_checkbox.setChecked(bool(ask))
+
+    def set_clipboard(self, enabled: bool) -> None:
+        """Đặt ô “Đồng bộ clipboard” (không phát `clipboard_toggled`)."""
+        self.clipboard_checkbox.setChecked(bool(enabled))
 
     def retranslate(self) -> None:
         view = self._view
@@ -637,12 +652,17 @@ class TrustedDeviceRow(QFrame):
         self.ask_checkbox.setAccessibleName(
             texts.fill(QCoreApplication.translate("Settings", "{option}: {name}"), option=ask, name=name)
         )
+        clipboard = QCoreApplication.translate("Settings", "Đồng bộ clipboard")
+        self.clipboard_checkbox.setText(clipboard)
+        option = QCoreApplication.translate("Settings", "{option}: {name}")
+        self.clipboard_checkbox.setAccessibleName(texts.fill(option, option=clipboard, name=name))
         unpair = QCoreApplication.translate("Settings", "Hủy ghép đôi…")
         self.unpair_button.setText(unpair)
         self.unpair_button.setAccessibleName(
             texts.fill(QCoreApplication.translate("Settings", "{option}: {name}"), option=unpair, name=name)
         )
         self.ask_checkbox.setAccessibleDescription(summary)
+        self.clipboard_checkbox.setAccessibleDescription(summary)
         self.unpair_button.setAccessibleDescription(summary)
 
     def _place_actions(self) -> None:
@@ -722,6 +742,7 @@ class SettingsPage(QWidget):
     rate_limit_changed = Signal(object)  # byte/giây hay None
     retention_changed = Signal(object)  # ngày hay None (= mặc định)
     ask_toggled = Signal(str, bool)
+    clipboard_toggled = Signal(str, bool)  # device_id, bật “Đồng bộ clipboard”
     unpair_requested = Signal(str)
     clear_history_requested = Signal()
     export_logs_requested = Signal()
@@ -1028,6 +1049,9 @@ class SettingsPage(QWidget):
     def _ask_of(self, device_id: str) -> bool:
         return self._device_settings.get(device_id, DeviceSettings()).ask_before_receive
 
+    def _clipboard_of(self, device_id: str) -> bool:
+        return self._device_settings.get(device_id, DeviceSettings()).clipboard
+
     def set_loaded(self, loaded: bool) -> None:
         """Đã có ảnh chụp cài đặt: bật các control đọc/ghi node.
 
@@ -1130,6 +1154,7 @@ class SettingsPage(QWidget):
         self._device_settings = dict(mapping)
         for device_id, row in self._rows.items():
             row.set_ask(self._ask_of(device_id))
+            row.set_clipboard(self._clipboard_of(device_id))
 
     def set_receive_dir(
         self, path: Path | None, unavailable: Path | None = None, pending: Path | None = None
@@ -1207,7 +1232,9 @@ class SettingsPage(QWidget):
         self.clear_history_button.setText(t("Settings", "Xóa toàn bộ lịch sử…"))
         intro = t(
             "Settings",
-            "Các máy đã ghép đôi với máy này. Bỏ chọn “Hỏi trước khi nhận” để tự nhận file từ máy đó.",
+            "Các máy đã ghép đôi với máy này. Bỏ chọn “Hỏi trước khi nhận” để tự nhận file từ máy đó. "
+            "Clipboard chỉ đồng bộ khi cả hai máy cùng bật “Đồng bộ clipboard”; mật khẩu chép từ trình "
+            "quản lý mật khẩu không được gửi.",
         )
         self.devices_intro.setText(intro)
         self.device_list.setAccessibleName(section_title(Section.DEVICES))
@@ -1358,8 +1385,10 @@ class SettingsPage(QWidget):
             if existing is None:
                 created = TrustedDeviceRow(view, self.device_list)
                 created.ask_toggled.connect(self.ask_toggled)
+                created.clipboard_toggled.connect(self.clipboard_toggled)
                 created.unpair_requested.connect(self.unpair_requested)
                 created.set_ask(self._ask_of(view.device_id))
+                created.set_clipboard(self._clipboard_of(view.device_id))
                 self._rows[view.device_id] = created
             elif existing.view != view:
                 existing.set_view(view)
@@ -1611,6 +1640,7 @@ class SettingsController(QObject):
         page.rate_limit_changed.connect(self._on_rate)
         page.retention_changed.connect(self._on_retention)
         page.ask_toggled.connect(self._on_ask)
+        page.clipboard_toggled.connect(self._on_clipboard)
         page.clear_history_requested.connect(self.request_clear_history)
         page.export_logs_requested.connect(self.request_export)
         page.open_notices_requested.connect(self._on_open_notices)
@@ -1943,6 +1973,29 @@ class SettingsController(QObject):
             revert,
             ok,
             value=ask,
+            on_key_error=self.refresh,
+        )
+
+    def _on_clipboard(self, device_id: str, enabled: bool) -> None:
+        """“Đồng bộ clipboard” của một máy: như `_on_ask`, với `Node.set_clipboard`."""
+        field = f"clipboard:{device_id}"
+        self._confirmed.setdefault(field, self._devices.get(device_id, DeviceSettings()).clipboard)
+
+        def revert(old: object) -> None:
+            row = self.page.device_row(device_id)
+            if row is not None:
+                row.set_clipboard(False if old is None else bool(old))
+
+        def ok(_result: object) -> None:
+            current = self._devices.get(device_id, DeviceSettings())
+            self._devices[device_id] = replace(current, clipboard=enabled)
+
+        self._call(
+            field,
+            lambda node: node.set_clipboard(device_id, enabled),
+            revert,
+            ok,
+            value=enabled,
             on_key_error=self.refresh,
         )
 

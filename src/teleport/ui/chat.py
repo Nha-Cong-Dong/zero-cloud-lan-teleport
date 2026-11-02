@@ -49,6 +49,16 @@ mục 8); thanh dưới đổi câu gợi ý thành câu ngoại tuyến kèm ic
 bị…” (`add_pending` / `remove_pending`) hiện từ lúc chọn xong tới khi `transfers.send` trả về; không
 nằm trong `rows`, `row`, `active_count`.
 
+**Clipboard** (mvp F8): `show_clipboard(device_id, ok=…, kind=…, size=…, preview=…,
+image_size=…)` (từ `ui.app`, sự kiện `RECEIVED` / `WRITE_FAILED` của `app.clipboard`) đặt một
+`chat_bubbles.ClipboardNote` vào luồng của máy đó (dựng luồng nếu chưa có). Mỗi luồng tối đa **một**
+note, mới nhất: note cũ bị gỡ, note mới chèn cuối (`at` = `session_at()`); có tính “↓ Mới” và
+`content_changed`, nhưng không nằm trong `rows`, `row`, `active_count`, lịch sử (`keys`, `bubble_for`
+bỏ qua nó), không bị `MAX_THREAD_BUBBLES` gỡ. “Thử lại” của note → `retry_clipboard_requested(id)`
+(note tắt nút tới khi `finish_clipboard_retry(id, available=…)`; False → câu “không còn để chép
+lại”; kết quả áp cho note của lần bấm cũ nhất còn chờ, note đó đã bị thay thì bỏ). Nội dung chỉ ở RAM
+của widget, chỉ trong phiên; `clear()` (host mới) gỡ hết.
+
 **Lịch sử theo máy** (F5): mở luồng mà `history_state` là NONE thì sau `HISTORY_DEBOUNCE_MS` (đổi máy
 liên tiếp chỉ gọi một lần) đặt LOADING và phát `history_needed(id)`; chưa ai nối signal thì coi như
 không có lịch sử (LOADED). `load_history(id, entries)` chỉ áp khi luồng đó đang mở và đang LOADING;
@@ -148,9 +158,11 @@ from teleport.app.transfers import (
     TransferUpdate,
 )
 from teleport.core.history import HistoryEntry
+from teleport.core.messages import ClipKind
 from teleport.ui import i18n, icons, send, texts, theme
 from teleport.ui.chat_bubbles import (
     BubbleContext,
+    ClipboardNote,
     HistoryBubble,
     PendingBubble,
     TimeSeparator,
@@ -204,7 +216,7 @@ _SCROLL_FOCUS_REASONS = frozenset(
     }
 )
 
-Bubble = TransferBubble | HistoryBubble | PendingBubble
+Bubble = TransferBubble | HistoryBubble | PendingBubble | ClipboardNote
 
 
 class HistoryState(StrEnum):
@@ -250,7 +262,14 @@ class _Item:
         self.separator = TimeSeparator(self.wrapper)
         self.separator.setVisible(False)
         layout.addWidget(self.separator)
-        layout.addWidget(BubbleRow(bubble, self.wrapper))
+        if isinstance(bubble, ChatBubble):
+            layout.addWidget(BubbleRow(bubble, self.wrapper))
+        else:  # `ClipboardNote`: dòng mảnh căn trái
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(bubble, 3)
+            row.addStretch(2)
+            layout.addLayout(row)
 
     @property
     def order(self) -> tuple[float, int]:
@@ -317,8 +336,8 @@ class ChatThread(QWidget):
 
     # -- API ------------------------------------------------------------------------------------
 
-    def bubbles(self) -> list[ChatBubble]:
-        """Bong bóng theo thứ tự hiển thị, cũ trên cùng."""
+    def bubbles(self) -> list[Bubble]:
+        """Bong bóng (kể cả note clipboard) theo thứ tự hiển thị, cũ trên cùng."""
         return [item.bubble for item in self._items]
 
     def has_bubbles(self) -> bool:
@@ -327,13 +346,13 @@ class ChatThread(QWidget):
     def bubble_for(self, key: TransferKey) -> Bubble | None:
         for item in self._items:
             bubble = item.bubble
-            if not isinstance(bubble, PendingBubble) and bubble.key == key:
+            if isinstance(bubble, TransferBubble | HistoryBubble) and bubble.key == key:
                 return bubble
         return None
 
     def keys(self) -> set[TransferKey]:
-        """Khóa của mọi bong bóng có lượt (của phiên và lịch sử; bỏ bong bóng tạm)."""
-        return {i.bubble.key for i in self._items if not isinstance(i.bubble, PendingBubble)}
+        """Khóa của mọi bong bóng có lượt (của phiên và lịch sử; bỏ bong bóng tạm và note clipboard)."""
+        return {i.bubble.key for i in self._items if isinstance(i.bubble, TransferBubble | HistoryBubble)}
 
     def history_bubbles(self) -> list[HistoryBubble]:
         return [i.bubble for i in self._items if isinstance(i.bubble, HistoryBubble)]
@@ -423,7 +442,7 @@ class ChatThread(QWidget):
             QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
             bar.setValue(anchor.mapTo(container, QPoint(0, 0)).y() - offset)
 
-    def remove(self, bubble: ChatBubble) -> bool:
+    def remove(self, bubble: Bubble) -> bool:
         """Gỡ `bubble` (không có → False); tính lại mốc của bong bóng đứng sau nó."""
         index = next((i for i, it in enumerate(self._items) if it.bubble is bubble), -1)
         if index < 0:
@@ -784,6 +803,7 @@ class ChatView(QWidget):
     drop_hint_requested = Signal(str)  # thả khi chưa chọn máy
     history_needed = Signal(str)  # mở luồng mà chưa có lịch sử (sau HISTORY_DEBOUNCE_MS)
     change_receive_dir_requested = Signal()  # nút “Đổi thư mục nhận” của bong bóng nhận (spec D4)
+    retry_clipboard_requested = Signal(str)  # “Thử lại” của note clipboard: device_id (mvp F8)
     content_changed = Signal()
 
     def __init__(self, devices: DeviceListModel, parent: QWidget | None = None) -> None:
@@ -795,6 +815,9 @@ class ChatView(QWidget):
         self._threads: dict[str, ChatThread] = {}
         self._bubbles: dict[TransferKey, TransferBubble] = {}
         self._pending: dict[int, tuple[str, PendingBubble]] = {}
+        self._clip_notes: dict[str, ClipboardNote] = {}  # device_id → note clipboard mới nhất
+        # device_id → các note đã bấm “Thử lại”, đang chờ kết quả, theo thứ tự bấm
+        self._clip_retrying: dict[str, list[ClipboardNote]] = {}
         self._next_token = 1
         self._seq = 0
         self._names: dict[str, str | None] = {}
@@ -953,6 +976,8 @@ class ChatView(QWidget):
             peer = self._peer(thread.device_id, None)
             for history in thread.history_bubbles():
                 history.set_peer(peer)
+        for device_id, note in self._clip_notes.items():
+            note.set_peer(self._peer(device_id, None))
         self._update_header()
 
     def set_connected(self, device_id: str, connected: bool) -> None:
@@ -1004,6 +1029,8 @@ class ChatView(QWidget):
             self._connected.clear()
             self._bubbles.clear()
             self._pending.clear()
+            self._clip_notes.clear()
+            self._clip_retrying.clear()
             for thread in self._threads.values():
                 self.threads.removeWidget(thread)
                 thread.setParent(None)
@@ -1081,6 +1108,75 @@ class ChatView(QWidget):
 
     def pending_bubbles(self) -> list[PendingBubble]:
         return [bubble for _, bubble in self._pending.values()]
+
+    # ---- Clipboard (mvp F8) --------------------------------------------------------------------
+
+    def show_clipboard(
+        self,
+        device_id: str,
+        *,
+        ok: bool,
+        kind: ClipKind | str | None,
+        size: int,
+        preview: str | None = None,
+        image_size: tuple[int, int] | None = None,
+    ) -> ClipboardNote:
+        """Note clipboard mới nhất của `device_id` (`ok`: đã chép vào máy này); thay note cũ của luồng đó."""
+        with self._changes():
+            thread = self._thread(device_id)
+            old = self._clip_notes.pop(device_id, None)
+            focus = self.window().focusWidget()
+            had_focus = old is not None and focus is not None and (focus is old or old.isAncestorOf(focus))
+            if old is not None:
+                thread.remove(old)
+            note = ClipboardNote(
+                device_id,
+                ok=ok,
+                kind=kind,
+                size=size,
+                preview=preview,
+                image_size=image_size,
+                peer=self._peer(device_id, None),
+                at=thread.session_at(),
+            )
+            note.retry_clicked.connect(lambda n=note: self._clipboard_retry_clicked(n))
+            self._clip_notes[device_id] = note
+            thread.add(note, self._next_seq(), new=True)
+            self._mark_changed()
+            self._update_page()
+            if had_focus:  # tiêu điểm đang ở note cũ: sang note mới, không rơi khỏi luồng
+                note.setFocus(Qt.FocusReason.OtherFocusReason)
+            return note
+
+    def clipboard_note(self, device_id: str) -> ClipboardNote | None:
+        """Note clipboard đang hiện trong luồng của `device_id` (không có → None)."""
+        return self._clip_notes.get(device_id)
+
+    def finish_clipboard_retry(self, device_id: str, *, available: bool) -> None:
+        """Kết quả “Thử lại”: False (`NOTHING_TO_RETRY`) → câu “không còn để chép lại”; True → bật lại nút
+        (kết quả RECEIVED / WRITE_FAILED đã tới bằng `show_clipboard`).
+
+        Kết quả thuộc lần bấm cũ nhất còn chờ của máy đó; note của lần bấm ấy đã bị note mới thay thì bỏ
+        (không áp lên note mới)."""
+        waiting = self._clip_retrying.get(device_id)
+        if not waiting:
+            return
+        note = waiting.pop(0)
+        if not waiting:
+            del self._clip_retrying[device_id]
+        if self._clip_notes.get(device_id) is not note:
+            return
+        if available:
+            note.set_busy(False)
+        else:
+            note.set_unavailable()
+
+    def _clipboard_retry_clicked(self, note: ClipboardNote) -> None:
+        if self._clip_notes.get(note.device_id) is not note or note.ok or note.unavailable:
+            return
+        note.set_busy(True)
+        self._clip_retrying.setdefault(note.device_id, []).append(note)
+        self.retry_clipboard_requested.emit(note.device_id)
 
     # ---- Lịch sử --------------------------------------------------------------------------------
 

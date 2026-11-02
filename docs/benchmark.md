@@ -3,7 +3,7 @@
 > **Vai trò:** số đo thực tế của các yêu cầu phi chức năng và kết quả kiểm tiêu chí MVP hackathon.
 > **Nguồn duy nhất cho:** định nghĩa từng phép đo, môi trường, kết quả từng lần đo và kết luận so với ngưỡng.
 > **Không chứa:** ngưỡng yêu cầu → [mvp.md](mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](ke_hoach.md) mục 5.1.
-> **Cập nhật:** 2026-10-31
+> **Cập nhật:** 2026-11-02
 
 ## 1. Quy ước
 
@@ -23,7 +23,7 @@
 | mvp N3 | 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8). 2026-10-28: trước/sau thay đổi ghi trạng thái nối lại bền, 1 GiB và 1000 file nhỏ (mục 4.9) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), 10 GiB qua card mạng giữa hai máy, lúc rảnh của app có giao diện chưa đo (mục 4.4). Sau thay đổi ghi trạng thái nối lại bền (mục 4.9), tiêu chí 1 và 2a vẫn ĐẠT với 1 GiB và 1000 file nhỏ |
 | mvp N4 | 2026-10-31: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, qua proxy TCP trên loopback, file 1 GiB, cắt ở 85 % theo 6 kiểu (mục 7.3) | **CHƯA ĐỦ DỮ LIỆU**: trên loopback Windows phần gửi thừa mỗi gián đoạn lớn nhất 24,31 MiB, ĐẠT ở mọi lần (49/49); theo tiêu chí ở mục 7.1 thì **không đặt** `SO_RCVBUF`/`SO_SNDBUF` trên Windows. Linux (máy ảo), card mạng thật / Wi-Fi và macOS chưa đo (mục 7.4, D5) |
 | mvp N5 | — | chưa đo |
-| mvp N6 | — | chưa đo |
+| mvp N6 | 2026-11-02: hai `Node` thật trong một tiến trình trên một máy Windows 11, loopback, `FakeClipboard` (mục 9.3); backend Qt `read`/`write` ảnh thật, nền Qt offscreen, cùng máy (M4, mục 9.4) | **KHÔNG ĐẠT** ở ca ảnh 8192² dễ nén (cận dưới trên nền offscreen đã vượt ngưỡng ảnh, mục 9.4); các ca còn lại **CHƯA ĐỦ DỮ LIỆU** (D6): trên loopback văn bản 1 KB và 1 MiB, ảnh PNG 10 MiB đều dưới ngưỡng ở mọi lần, RAM phẳng sau 1000 clip; backend Qt nhanh với ảnh 1920×1080 và 3840×2160 nhưng ảnh 8192² dễ nén (PNG 3,53 MiB) đã tốn khoảng 4,3–5,0 s (p95 `read` + `write`, lượt r1 và r3), vượt ngưỡng ảnh, chủ yếu do mã hóa PNG; ảnh khó nén vượt trần nay bị loại sau dưới 0,75 s nhờ kiểm sơ bộ (trước: tới 24,3 s); Wi-Fi 5 giữa hai máy thật (D6) và clipboard thật của Windows chưa đo (mục 9.5) |
 | mvp N7 | — | chưa đo |
 | mvp N8 | — | chưa đo |
 | mvp N9 | — | chưa đo |
@@ -880,3 +880,219 @@ python -I zipsize.py <thư mục dist> <đường dẫn zip ra>
 ```
 
 Script (`n11_installer.ps1`, phiên đo 2026-10-31) dừng ngay nếu khóa gỡ cài đặt của Teleport đã có ở HKCU hoặc HKLM, nếu `%TEMP%\tpn11` đã có hoặc nếu đang elevated; mỗi lần cài/gỡ có hạn 180 s; cuối cùng xóa `%TEMP%\tpn11` (chỉ khi khóa gỡ cài đặt đã mất). Đường dẫn cài phải ngắn: thư mục quá sâu làm bộ cài lỗi 206.
+
+## 9. mvp N6: Clipboard
+
+### 9.1. Định nghĩa phép đo
+
+- **Độ trễ một clip:** từ ngay trước lúc máy A “sao chép” (`FakeClipboard.set_text` / `set_image` ở A) tới lúc backend của máy B ghi xong nội dung đó (mục mới trong `FakeClipboard.writes` của B, mốc `time.monotonic()`). Hai node chạy trong **một** tiến trình, cùng đồng hồ `time.monotonic()`, nên không phải so đồng hồ hai máy. Số đo đã gồm thời gian gộp `CLIP_DEBOUNCE` của bên gửi (docstring `app/clipboard.py`). Lần hợp lệ: B ghi đúng nội dung A sao chép (so nguyên văn bản / byte PNG); không thấy trong 15 s là **quá hạn**.
+- **Mốc phụ** (để biết phần nào tốn thời gian): A bắt đầu đọc backend (hết gộp), A bắt đầu gửi mảnh `index 0` (`Connection.send`), B nhận mảnh cuối (`ClipboardSync.on_message`), B ghi xong. Bốn đoạn: *gộp* (sao chép → đọc), *đọc → mảnh 0* (đọc, fingerprint, `split_clip`), *mảnh 0 → mảnh cuối tới B* (gửi mọi mảnh qua TLS, B đọc khung, kiểm message, ráp), *mảnh cuối → ghi* (kiểm SHA-256, fingerprint, ghi).
+- **RAM (M3):** working set và private bytes của tiến trình (`GetProcessMemoryInfo` qua `ctypes`, như mục 4.1; gồm **cả hai** node và script), và `tracemalloc` (byte Python còn cấp phát, tính từ lúc bật ngay trước clip đo đầu tiên). Đọc trước clip đo đầu tiên (sau 20 clip khởi động, 3 s nghỉ, `gc.collect()`) và 5 s sau clip cuối, trước và sau `gc.collect()`. Tiêu chí “phẳng” chốt **trước khi đo**: tăng < 10 MB (10⁶ byte), xét working set và `tracemalloc` sau `gc`.
+
+### 9.2. Phương pháp
+
+- Hai `Node` thật (A gửi, B nhận), mỗi node một thư mục cấu hình riêng trong thư mục làm việc của script, đã tin nhau (`trusted.json` dựng bằng `TrustStore.add`, như fixture `trust_each_other`), nghe `127.0.0.1` cổng ngẫu nhiên, không mDNS; A nối B bằng `Node.connect_hint`; bật “Đồng bộ clipboard” ở cả hai đầu (`Node.set_clipboard`). Backend là `FakeClipboard` (`app/clipboard.py`): không giải mã ảnh, fingerprint ảnh là hash của byte PNG. Không vá hằng số nào (gộp, giới hạn tốc độ, trần RAM đều là mặc định của mã).
+- **M1, M2** (tuần tự): mỗi lần một nội dung mới (văn bản ASCII ngẫu nhiên có mã riêng ở đầu; PNG đủ cấu trúc chunk, IHDR hợp lệ 3000×3000, IDAT là byte ngẫu nhiên, tổng đúng 10 MiB); chờ B ghi rồi nghỉ 0,3 s mới sao chép tiếp. Nhịp vì vậy ≤ 2,2 clip/s, dưới giới hạn tốc độ của bên gửi (docstring `app/clipboard.py`, “Hàng gửi”), nên số đo không gồm thời gian chờ token. 3 lần khởi động đầu không tính.
+- **M3:** 1000 clip xen kẽ văn bản 100 000 byte và PNG 1 000 000 byte (mỗi clip khác nhau), nhịp mở đều (không chờ B), sau 20 clip khởi động. Hai nhịp: 0,25 s (4 clip/s, bằng giới hạn của bên gửi) và 0,2 s (5 clip/s, vượt giới hạn đó: clip mới thay clip đang chờ token ở bên gửi, theo thiết kế). Ở M3, `FakeClipboard.writes` chỉ giữ mốc thời gian, không giữ nội dung (danh sách này là bản ghi của đồ giả, không phải của app), và script chỉ đếm `ClipboardEvent` (lượt 1 còn giữ các event, xem mục 9.3).
+- Mọi lần chờ có hạn; xong thì `Node.close()` cả hai và xóa thư mục cấu hình.
+
+### 9.3. Lần đo 2026-11-02: tầng app (`app.clipboard`) với `FakeClipboard`, loopback trên một máy Windows 11
+
+Hai lượt liền nhau, 00:59–01:09 và 01:09–01:23 giờ máy, cùng script. Lượt 2 chạy lại vì máy có tải nền nặng (bảng môi trường); số của hai lượt khớp nhau.
+
+**Môi trường**
+
+| | |
+|---|---|
+| Hệ điều hành | Windows 11 Pro, bản 10.0.26300 |
+| Python | 3.14.5 (64 bit, qua `.venv` ở checkout chính), `ProactorEventLoop` |
+| Teleport | `__version__` 0.1.0a0; worktree `ui-clipboard-d5-91ccf3`, commit `8dcecf2` (`main`) **cộng thay đổi chưa commit của tầng app** (`app/clipboard.py` mới; `app/node.py`, `core/clipboard.py` sửa). SHA-256 (12 ký tự đầu) lúc đo, giống nhau trước và sau hai lượt: `app/clipboard.py` `9c5497958bd9`, `app/node.py` `5ff6d5616ab1`, `core/clipboard.py` `9c82f1e97d2f`. Mã nạp từ `src/` của worktree qua `PYTHONPATH` (đã kiểm `teleport.__file__`); tầng `ui` (đang được sửa song song) không được nạp |
+| cryptography | 50.0.2 (mDNS tắt) |
+| CPU / RAM | Intel Core i7-12800H, 20 luồng / 15,7 GiB, trống 2,7–5,3 GiB lúc bắt đầu từng phép đo |
+| Mạng | loopback 127.0.0.1, TLS 1.3 như khi chạy thật |
+| Tải nền | các agent khác chạy song song 2–6 tiến trình `pytest` (cả `-n 4` lẫn test giao diện); CPU toàn máy bận trung bình 54–91 % trong từng phép đo (`GetSystemTimes`) |
+
+**Kết quả độ trễ** (ms; mọi lần hợp lệ: 0 quá hạn, 0 sai nội dung; p95 theo hạng gần nhất)
+
+| Phép đo | Lượt | Số lần | Trung vị | p95 | Min | Max | So với ngưỡng mvp N6 (chỉ trên loopback) |
+|---|---|---|---|---|---|---|---|
+| M1 văn bản 1 KB | 1 | 200 | 158,1 | 161,1 | 154,2 | 163,6 | dưới ngưỡng văn bản |
+| M1 văn bản 1 KB | 2 | 200 | 158,4 | 161,9 | 154,2 | 164,0 | dưới ngưỡng văn bản |
+| M1 văn bản 1 MiB | 1 | 200 | 264,4 | 335,3 | 202,7 | 379,8 | dưới ngưỡng văn bản |
+| M1 văn bản 1 MiB | 2 | 200 | 261,9 | 320,2 | 213,6 | 415,9 | dưới ngưỡng văn bản |
+| M2 PNG 10 MiB | 1 | 20 | 1131,5 | 1293,9 | 1052,6 | 1328,9 | dưới ngưỡng ảnh |
+| M2 PNG 10 MiB | 2 | 20 | 1044,2 | 1134,3 | 775,2 | 1136,1 | dưới ngưỡng ảnh |
+
+**Thời gian đi đâu** (ms, trung vị / p95 của từng đoạn ở mục 9.1)
+
+| Phép đo | Lượt | Gộp | Đọc → mảnh 0 | Mảnh 0 → mảnh cuối tới B | Mảnh cuối → ghi |
+|---|---|---|---|---|---|
+| M1 1 KB | 2 | 155,7 / 157,7 | 1,0 / 2,1 | 0,4 / 1,8 | 0,6 / 1,5 |
+| M1 1 MiB | 1 | 165,9 / 176,1 | 34,0 / 67,9 | 29,2 / 63,8 | 23,4 / 63,0 |
+| M1 1 MiB | 2 | 166,4 / 174,8 | 34,9 / 69,9 | 29,3 / 65,6 | 23,4 / 50,0 |
+| M2 10 MiB | 1 | 172,0 / 180,4 | 304,3 / 382,6 | 614,3 / 745,3 | 26,7 / 42,8 |
+| M2 10 MiB | 2 | 173,6 / 179,8 | 273,6 / 337,1 | 565,7 / 627,5 | 27,3 / 36,8 |
+
+- Văn bản nhỏ: gần như toàn bộ là thời gian gộp. Với nội dung lớn, đoạn “gộp” dài hơn `CLIP_DEBOUNCE` 10–20 ms vì mốc đầu đặt trước `set_text`, mà `FakeClipboard.set_text` tự tính fingerprint của nội dung trước khi báo đổi, và vì loop còn bận với clip trước.
+- Ảnh 10 MiB: đoạn lớn nhất là *mảnh 0 → mảnh cuối* (20 mảnh base64, khoảng 14 MB trên dây; trên loopback đoạn này chủ yếu là CPU: TLS, đọc và kiểm khung JSON, giải base64), rồi *đọc → mảnh 0* (SHA-256 và chia base64 10 MiB trong executor). Đoạn ghi nhỏ vì `FakeClipboard` không giải mã PNG; backend Qt thật sẽ thêm thời gian giải mã (M4, chưa đo).
+
+**Kết quả RAM (M3)** (MiB = 2²⁰ byte; MB = 10⁶ byte; “tăng” = sau `gc` − trước)
+
+| Lượt | Nhịp | Clip B ghi / 1000 | Working set trước → sau (MiB) | Tăng working set | Tăng private bytes | `tracemalloc` sau `gc` (đỉnh) | Max working set ¼ đầu / ¼ cuối (MiB) | Kết luận (tăng < 10 MB) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 0,25 s | 1000 | 71,99 → 72,43 | +0,45 MB | +0,21 MB | 4,13 MiB (7,37) | 73,2 / 73,2 | phẳng |
+| 2 | 0,25 s | 998 | 71,10 → 68,66 | −2,56 MB | −3,09 MB | 3,34 MiB (7,40) | 71,8 / 71,4 | phẳng |
+| 2 | 0,2 s | 800 | 71,50 → 71,46 | −0,05 MB | +0,38 MB | 3,32 MiB (7,37) | 71,3 / 70,3 | phẳng |
+
+- `tracemalloc` còn lại sau `gc` không tăng theo số clip: khoảng 1,27 MiB là các mảnh base64 của clip ảnh cuối mà A vừa gửi (cấp ở `split_clip`), 0,95 MiB là ảnh cuối trong clipboard giả của B, 0,95 MiB là ảnh cuối trong clipboard giả của A (do script tạo), dưới 0,15 MiB là danh sách mốc của script. Lượt 1 còn giữ mọi `ClipboardEvent` trong script (khoảng 0,47 MiB cho 2000 event); lượt 2 chỉ đếm.
+- Nhịp 0,2 s: B ghi 800/1000 vì giới hạn tốc độ của bên gửi, clip mới thay clip đang chờ (đúng thiết kế, không phải lỗi). Nhịp 0,25 s lượt 2: B ghi 998/1000, 2 clip bị clip sau thay ở chỗ chờ khi loop chậm (CPU toàn máy bận trung bình 91 % trong phép đo đó).
+- Working set đỉnh của tiến trình (hai node cộng script, tính từ lúc khởi động): 74,8–76,0 MiB.
+
+**Kết luận**
+
+- Trên loopback với `FakeClipboard`: văn bản 1 KB, 1 MiB và ảnh PNG 10 MiB đều dưới ngưỡng mvp N6 ở mọi lần của cả hai lượt (p95 văn bản lớn nhất 335,3 ms, ảnh chậm nhất 1328,9 ms); RAM phẳng sau 1000 clip ở cả hai nhịp.
+- So với mvp N6: **CHƯA ĐỦ DỮ LIỆU**, vì mvp N6 đặt ngưỡng trên Wi-Fi 5 giữa hai máy (D6) và chưa có backend clipboard thật (M4).
+- Phép tính (không phải số đo) cho D6: phần không phụ thuộc mạng của ảnh 10 MiB (gộp + đọc → mảnh 0 + mảnh cuối → ghi) có p95 cộng lại khoảng 0,6 s trên máy này, nên trên Wi-Fi còn khoảng 1,4 s cho khoảng 14 MB trên dây cộng thời gian giải mã PNG của backend Qt.
+
+**Giới hạn của lần đo này**
+
+- Loopback, RTT gần 0; hai node chung một tiến trình và một loop (CPU của hai bên dồn lên một luồng; trên hai máy thật mỗi bên một luồng nhưng có thêm mạng).
+- `FakeClipboard` không đọc/ghi clipboard của hệ điều hành và không mã hóa/giải mã ảnh; thời gian của `QClipboard` và giải mã PNG chưa có (M4).
+- Máy có tải nền nặng của các agent khác (bảng môi trường).
+- RAM là của cả tiến trình (hai node cộng script), không tách được từng node.
+
+### 9.4. Lần đo 2026-11-02: M4, backend Qt (`QtClipboardBackend`), nền Qt offscreen trên một máy Windows 11
+
+05:37–05:47 giờ máy, một lượt.
+
+**Định nghĩa**
+
+- **`read`:** ảnh đã nằm trên clipboard (script đặt `setImage` một bản sao mới, cùng ảnh, `cacheKey` mới, nên không đi đường tắt “vọng của lần ghi”), đo từ ngay trước `await backend.read()` tới lúc nó trả về, trên loop asyncio ở thread riêng như node thật (`time.perf_counter`). Gồm chuyển việc sang thread Qt, `clipboard.image()`, rồi trong pool: đổi `RGBA8888`, fingerprint, mã hóa PNG (docstring `ui/clipboard_qt.py`, “Đọc”). Lần hợp lệ: `OK` có fingerprint đúng bằng fingerprint tính trước, hoặc `TOO_LARGE` khi PNG vượt `MAX_PNG_BYTES` (khi đó thời gian vẫn gồm trọn lần mã hóa).
+- **`write`:** từ ngay trước `await backend.write(PNG, png)` tới lúc trả về; `png` là đúng byte mà `encode_image` tạo cho ảnh đó (thứ máy gửi sẽ gửi). Gồm giải mã PNG, đổi `RGBA8888`, fingerprint trong pool, `setImage` và đọc lại trên thread Qt. Lần hợp lệ: `OK` và fingerprint đầu đúng bằng fingerprint mong đợi.
+- **Lệch thread Qt:** `QTimer` 10 ms (`PreciseTimer`) trên thread Qt, slot Python ghi `perf_counter`; số ghi là khoảng cách lớn nhất giữa hai lần chạy slot trong lúc một thao tác chạy (10 ms là không lệch). Vì slot là Python, số này gồm cả lúc thread Qt chờ GIL, đúng như các slot của app.
+- **RAM:** working set của tiến trình (`GetProcessMemoryInfo`), lấy mẫu mỗi 2 ms ở một thread riêng; số ghi là mức tăng đỉnh trong một thao tác so với ngay trước thao tác đó (lớn nhất qua mọi lần).
+- **Ảnh thử:** `Format_RGB32` (đục, như ảnh chụp màn hình), hai loại: *dễ nén* (gradient chéo ba màu vẽ bằng `QPainter`) và *khó nén* (nhiễu ngẫu nhiên `os.urandom`, trường hợp xấu nhất cho PNG). Ba cỡ: 1920×1080, 3840×2160, 8192×8192.
+- Mỗi tổ hợp một tiến trình riêng; 1 lần khởi động + 12 lần đo cho mỗi thao tác; `gc.collect()` và nghỉ 0,25 s trước mỗi lần. Thêm 3 lần đo từng bước (`_rgba`, `_fingerprint`, mã hóa PNG; giải mã PNG) gọi thẳng các hàm của module, ngoài backend, để biết phần nào tốn thời gian.
+
+**Môi trường**
+
+| | |
+|---|---|
+| Hệ điều hành | Windows 11 Pro, bản 10.0.26300 |
+| Python / Qt | 3.14.5 (64 bit, `.venv` ở checkout chính); PySide6 6.12.0, nền QPA **`offscreen`** (clipboard trong tiến trình của Qt; không chạm clipboard thật của Windows) |
+| Teleport | `__version__` 0.1.0a0; worktree `ui-clipboard-d5-91ccf3`, commit `8dcecf2` (`main`) **cộng thay đổi chưa commit của D5**; `ui/clipboard_qt.py` SHA-256 (12 ký tự đầu) `cfad91a7c4cc` (đã có `convertTo` tại chỗ và bỏ lần qua pool thứ hai khi đọc lại cùng `cacheKey`). Mã nạp từ `src/` của worktree qua `PYTHONPATH` (đã kiểm `teleport.__file__`) |
+| CPU / RAM | Intel Core i7-12800H, 20 luồng / 15,7 GiB, trống khoảng 6,6 GiB lúc bắt đầu |
+| Tải nền | một agent khác chạy test song song: 2 tiến trình `pytest` lúc bắt đầu hai tổ hợp 1920×1080, 0 ở các tổ hợp sau; CPU toàn máy bận trung bình 23–43 % trong từng tổ hợp (`GetSystemTimes`) |
+
+**Kết quả** (ms; mọi lần hợp lệ: 0 lỗi, 0 sai fingerprint, 0 quá hạn; p95 theo hạng gần nhất)
+
+| Ảnh | PNG | Thao tác | Số lần | Trung vị | p95 | Min | Max | Lệch Qt lớn nhất | RAM tăng đỉnh (MiB) |
+|---|---|---|---|---|---|---|---|---|---|
+| 1920×1080 gradient | 0,11 MiB | `read` → `OK` | 12 | 111,7 | 131,6 | 110,0 | 131,6 | 11,9 | 8 |
+| 1920×1080 gradient | | `write` | 12 | 20,8 | 28,2 | 19,1 | 28,2 | 11,2 | 8 |
+| 1920×1080 nhiễu | 6,84 MiB | `read` → `OK` | 12 | 478,0 | 534,5 | 451,7 | 534,5 | 12,2 | 28 |
+| 1920×1080 nhiễu | | `write` | 12 | 51,1 | 58,7 | 47,7 | 58,7 | 12,1 | 15 |
+| 3840×2160 gradient | 0,37 MiB | `read` → `OK` | 12 | 354,2 | 371,4 | 346,2 | 371,4 | 18,3 | 33 |
+| 3840×2160 gradient | | `write` | 12 | 69,7 | 70,5 | 68,6 | 70,5 | 13,3 | 32 |
+| 3840×2160 nhiễu | 27,21 MiB (vượt `MAX_PNG_BYTES`) | `read` → `TOO_LARGE` | 12 | 1880,3 | 1938,1 | 1868,6 | 1938,1 | 21,0 | 114 |
+| 3840×2160 nhiễu | | `write` (*) | 12 | 196,8 | 224,3 | 193,6 | 224,3 | 14,7 | 59 |
+| 8192×8192 gradient | 3,53 MiB | `read` → `OK` | 12 | 3020,0 | 3250,8 | 2931,9 | 3250,8 | 92,3 | 267 |
+| 8192×8192 gradient | | `write` | 12 | 956,9 | 1058,9 | 941,9 | 1058,9 | 35,2 | 260 |
+| 8192×8192 nhiễu | 219,42 MiB (vượt `MAX_PNG_BYTES`) | `read` → `TOO_LARGE` | 12 | 18375,1 | 24306,5 | 16677,7 | 24306,5 | 325,0 | 914 |
+| 8192×8192 nhiễu | | `write` (*) | 12 | 1982,1 | 2116,1 | 1790,5 | 2116,1 | 69,4 | 476 |
+
+(*) PNG lớn hơn `MAX_PNG_BYTES` không bao giờ tới backend của máy nhận (bên nhận bỏ trước khi ráp xong); hai dòng này chỉ là cận trên của thời gian giải mã.
+
+Working set đỉnh của cả tiến trình (gồm cả lúc script tạo ảnh thử và PNG mẫu, nên lớn hơn phần của backend): 86 / 120 / 159 / 266 / 848 / 1708 MiB theo thứ tự sáu tổ hợp trên.
+
+**Thời gian đi đâu** (ms, trung vị của 3 lần, gọi thẳng các hàm trong module, ngoài backend)
+
+| Ảnh | `read`: đổi `RGBA8888` / fingerprint / mã hóa PNG | `write`: giải mã PNG / đổi `RGBA8888` / fingerprint |
+|---|---|---|
+| 1920×1080 gradient | 0,5 / 5,8 / 106,9 | 12,6 / 1,0 / 5,6 |
+| 1920×1080 nhiễu | 0,5 / 5,2 / 451,3 | 45,4 / 0,7 / 5,3 |
+| 3840×2160 gradient | 2,1 / 21,7 / 333,3 | 49,6 / 3,1 / 21,5 |
+| 3840×2160 nhiễu | 2,1 / 21,3 / 1862,1 | 178,8 / 2,9 / 20,9 |
+| 8192×8192 gradient | 20,2 / 176,6 / 2951,9 | 759,3 / 26,3 / 176,7 |
+| 8192×8192 nhiễu | 21,7 / 195,5 / 18859,3 | 1847,9 / 29,8 / 207,2 |
+
+- `read`: mã hóa PNG (`QImageWriter`) chiếm 94–99 % thời gian ở mọi cỡ; phần chuyển việc giữa các thread và `clipboard.image()` (offscreen) không đáng kể (tổng ba bước gần bằng thời gian `read`).
+- `write`: giải mã PNG là phần lớn nhất; fingerprint (SHA-256 của 256 MiB ở 8192²) khoảng 180–210 ms. Thời gian đọc lại sau `setImage` không đáng kể (offscreen trả đúng ảnh đã đặt, cùng `cacheKey`, không qua pool lần hai).
+- **Lệch thread Qt**, đo thêm từng bước với `QTimer` 10 ms (3 lần, 8192²): mã hóa PNG và SHA-256 không giữ GIL (lệch 11–14 ms suốt 3–21 s); các bước giữ GIL làm thread Qt chờ: chép PNG từ `QByteArray` sang `bytes` (`buffer.data().data()`: 113–221 ms với PNG 219 MiB, 1,6 ms với PNG 3,5 MiB), `convertTo` 8192² (lệch 22–30 ms), giải mã PNG 8192² (lệch 27–34 ms ảnh gradient, 66–89 ms ảnh nhiễu). Lệch 325 ms ở `read` 8192² nhiễu chủ yếu do bước chép PNG 219 MiB đó; lệch 92 ms ở `read` 8192² gradient chưa tách hết được (các bước đo riêng chỉ giải thích tới khoảng 30 ms).
+- **RAM**: `read` 8192² tăng tới 267 MiB với ảnh dễ nén (ảnh 256 MiB tách khỏi bản của clipboard khi `convertTo`) và 914 MiB với ảnh nhiễu (thêm `QByteArray` của PNG 219 MiB đang lớn dần và bản `bytes` của nó); `write` 8192² tăng 260 MiB (gradient) và 476 MiB (nhiễu, PNG vượt trần nên không xảy ra ở máy nhận thật).
+
+**Kết luận**
+
+- Với PNG trong `MAX_PNG_BYTES`, phần backend thêm vào độ trễ một clip ảnh (`read` ở máy gửi + `write` ở máy nhận, p95, máy này, offscreen): 1920×1080 khoảng 0,16 s (gradient) và 0,59 s (nhiễu); 3840×2160 gradient khoảng 0,44 s; **8192×8192 gradient khoảng 4,3 s, riêng `read` đã 2,9–3,3 s**, tức vượt ngưỡng ảnh của mvp N6 ngay cả khi mạng tức thì, dù PNG chỉ 3,53 MiB. Phần tốn nhất là mã hóa PNG ở máy gửi (2,95 s trung vị), rồi giải mã ở máy nhận (0,76 s).
+- Ảnh khó nén lớn: 3840×2160 nhiễu trả `TOO_LARGE` sau khoảng 1,9 s mã hóa; **8192×8192 nhiễu mất 16,7–24,3 s mới biết `TOO_LARGE`, dài hơn `CLIP_READ_TIMEOUT`** (`app/clipboard.py`): trong app thật lần đọc đó quá hạn, việc mã hóa vẫn chạy tiếp trong pool tới hết (cờ hủy chỉ được kiểm giữa các bước), và trong lúc đó mọi lần đọc ảnh mới trả `FAILED` ngay (docstring `ui/clipboard_qt.py`). Lệch thread Qt lớn nhất của ca này là 325 ms, các ca còn lại ≤ 92,3 ms.
+- So với mvp N6: **KHÔNG ĐẠT** ở ca ảnh 8192² dễ nén: phần backend đo được là cận dưới của độ trễ một clip (chưa tính mạng) và đã vượt ngưỡng ảnh trên máy này (mục 1). Các ca còn lại **CHƯA ĐỦ DỮ LIỆU** (chưa đo trên máy thật với clipboard của hệ điều hành và Wi-Fi 5, D6).
+
+**Giới hạn của lần đo này**
+
+- Nền **offscreen**: `clipboard.image()` và `setImage` chỉ đổi đối tượng trong tiến trình. Trên Windows thật, `clipboard.image()` phải chuyển DIB/PNG của hệ điều hành ngay trên thread Qt (với ảnh 8192² có thể tới cỡ giây, docstring `ui/clipboard_qt.py`) và `setImage` phải xuất dữ liệu cho hệ điều hành; phần này **chưa đo**, nên số `read`/`write` và lệch Qt ở trên là cận dưới của máy thật.
+- Ảnh nhiễu là trường hợp xấu nhất của PNG; ảnh chụp thật nằm giữa hai loại. Một máy, một lượt, có tải nền nhẹ (bảng môi trường).
+
+#### Đo lại 2026-11-02 (lượt r3): sau khi thêm kiểm sơ bộ zlib trước mã hóa PNG
+
+06:24–06:30 giờ máy, một lượt. Bảng trên là lượt r1 (“trước”). Thay đổi giữa hai lượt: `read` chạy `prescreen` (nén zlib mức thấp theo khối, dừng khi vượt `PRESCREEN_LIMIT_BYTES`, docstring `ui/clipboard_qt.py`) trước khi mã hóa PNG; vượt thì trả `TOO_LARGE` mà không mã hóa PNG. Mức nén PNG giữ mặc định của Qt (cỡ PNG của r3 bằng r1). Một lượt thử xen giữa (r2) còn đổi mức nén PNG, đã bỏ thay đổi đó, nên không dùng số r2.
+
+- Định nghĩa, ảnh thử, số lần, script: như trên (lượt `-Tag r3`, 12 lần mỗi thao tác, mọi lần hợp lệ: 0 lỗi, 0 sai fingerprint, 0 quá hạn).
+- Môi trường: như trên, trừ `ui/clipboard_qt.py` SHA-256 (12 ký tự đầu) `e014884587d2`; mã nạp từ `src/` của worktree (đã kiểm `teleport.__file__`).
+- **Tải nền nặng hơn r1:** phiên chính chạy toàn bộ pytest song song (2 lượt `-n 4`, 2 tiến trình `pytest` cùng các worker) suốt cả lượt r3; CPU toàn máy bận trung bình 30–45 % trong từng tổ hợp (r1: 23–43 %, pytest chỉ chạy ở hai tổ hợp đầu). Số r3 của các ca `OK` vì vậy có nhiễu, thiên về chậm hơn: phần mã hóa PNG đo riêng (cùng một hàm ở hai lượt) lệch so với r1 từ −4 % tới +15 % (5 trên 6 tổ hợp chậm hơn).
+
+| Ảnh | Thao tác | Trung vị r1 → r3 | p95 r1 → r3 | Min / Max r3 | Lệch Qt lớn nhất r1 → r3 | RAM tăng đỉnh r1 → r3 (MiB) |
+|---|---|---|---|---|---|---|
+| 1920×1080 gradient | `read` → `OK` | 111,7 → 144,3 | 131,6 → 153,5 | 137,3 / 153,5 | 11,9 → 12,0 | 8 → 9 |
+| 1920×1080 gradient | `write` | 20,8 → 21,5 | 28,2 → 23,1 | 20,2 / 23,1 | 11,2 → 10,7 | 8 → 8 |
+| 1920×1080 nhiễu | `read` → `OK` | 478,0 → 625,9 | 534,5 → 672,3 | 591,8 / 672,3 | 12,2 → 13,4 | 28 → 29 |
+| 1920×1080 nhiễu | `write` | 51,1 → 55,2 | 58,7 → 89,2 | 48,8 / 89,2 | 12,1 → 11,4 | 15 → 15 |
+| 3840×2160 gradient | `read` → `OK` | 354,2 → 442,8 | 371,4 → 465,8 | 412,9 / 465,8 | 18,3 → 17,8 | 33 → 33 |
+| 3840×2160 gradient | `write` | 69,7 → 80,5 | 70,5 → 91,8 | 72,6 / 91,8 | 13,3 → 13,6 | 32 → 32 |
+| 3840×2160 nhiễu | `read` → `TOO_LARGE` | **1880,3 → 345,9** | **1938,1 → 379,1** | 317,9 / 379,1 | 21,0 → 18,5 | **114 → 36** |
+| 3840×2160 nhiễu | `write` (*) | 196,8 → 226,9 | 224,3 → 251,9 | 208,1 / 251,9 | 14,7 → 15,1 | 59 → 59 |
+| 8192×8192 gradient | `read` → `OK` | 3020,0 → 3399,4 | 3250,8 → 3812,8 | 3260,5 / 3812,8 | 92,3 → 116,7 | 267 → 267 |
+| 8192×8192 gradient | `write` | 956,9 → 1118,8 | 1058,9 → 1170,3 | 1015,7 / 1170,3 | 35,2 → 50,3 | 260 → 260 |
+| 8192×8192 nhiễu | `read` → `TOO_LARGE` | **18375,1 → 648,2** | **24306,5 → 737,4** | 593,9 / 737,4 | **325,0 → 111,6** | **914 → 260** |
+| 8192×8192 nhiễu | `write` (*) | 1982,1 → 1828,7 | 2116,1 → 2282,0 | 1715,3 / 2282,0 | 69,4 → 66,1 | 476 → 476 |
+
+(*) như bảng r1: chỉ là cận trên của thời gian giải mã. `write` không đổi mã giữa hai lượt; chênh lệch ở các dòng `write` là do tải nền.
+
+**Giá của bước kiểm sơ bộ** (ms, gọi thẳng `prescreen` trên ảnh `RGBA8888`, trung vị 3 lần, cùng lúc pytest chạy): 1920×1080 gradient 24,0, nhiễu 186,8 (chưa vượt mức, đi tiếp sang mã hóa PNG); 3840×2160 gradient 46,3, nhiễu 382,3 (dừng ở mức); 8192×8192 gradient 164,9, nhiễu 400,3 (dừng ở mức). Với ảnh `OK`, đây là thời gian cộng thêm vào `read`; phần chênh r1 → r3 còn lại của các ca `OK` khớp với mức chậm do tải nền nói trên.
+
+**Kết luận r3**
+
+- Ảnh khó nén vượt trần giờ được loại sớm: `TOO_LARGE` sau khoảng 0,35 s (3840×2160) và 0,65 s (8192×8192, max 0,74 s, trước là 16,7–24,3 s), nay ngắn hơn nhiều so với `CLIP_READ_TIMEOUT` (`app/clipboard.py`), nên không còn ca quá hạn để việc mã hóa chạy tiếp trong pool như ở kết luận r1. RAM tăng đỉnh của ca 8192² nhiễu giảm từ 914 xuống 260 MiB (chỉ còn bản ảnh sau `convertTo`), lệch thread Qt lớn nhất từ 325 xuống 111,6 ms (không còn bước chép PNG 219 MiB).
+- Ảnh `OK` trả thêm giá kiểm sơ bộ: khoảng 24–47 ms với ảnh dễ nén 1920×1080 và 3840×2160, 165 ms với 8192² dễ nén, khoảng 190 ms với 1920×1080 nhiễu (ca xấu nhất của ảnh vẫn vừa trần: trên ảnh này phải nén hết rồi mới mã hóa PNG).
+- Phần backend thêm vào một clip ảnh trong trần (p95 `read` + `write`, r3, có tải nền): 1920×1080 khoảng 0,18 s (gradient) và 0,76 s (nhiễu); 3840×2160 gradient khoảng 0,56 s; **8192×8192 gradient khoảng 5,0 s** (r1: 4,3 s), vẫn vượt ngưỡng ảnh của mvp N6 ngay cả khi mạng tức thì; phần tốn nhất vẫn là mã hóa PNG ở máy gửi (3,39 s trung vị khi đo riêng ở r3), rồi giải mã ở máy nhận (0,87 s).
+- So với mvp N6: như r1, **KHÔNG ĐẠT** ở ca 8192² dễ nén (phần backend, cận dưới, vẫn vượt ngưỡng ảnh trên máy này); các ca còn lại **CHƯA ĐỦ DỮ LIỆU** (D6). Nên đo lại các ca `OK` khi máy rảnh để tách hẳn phần tải nền.
+
+### 9.5. Việc còn lại
+
+- **Wi-Fi 5 giữa hai máy thật: chưa đo** (D6, [ke_hoach.md](ke_hoach.md) mục 5.4). Cần máy thật thứ hai và điểm phát Wi-Fi đúng loại mvp N6 nêu; mỗi đầu chỉ dùng đồng hồ của chính nó (ví dụ đo khứ hồi A → B → A trên đồng hồ A), không so đồng hồ hai máy.
+- **M4 trên clipboard thật của Windows** (nền `windows`: thời gian `clipboard.image()` chuyển DIB trên thread Qt, `setImage`, lệch Qt): **chưa đo**; cần một phiên máy thật mà người dùng chấp nhận clipboard bị ghi đè trong lúc đo (mục 9.4 chỉ đo offscreen).
+- M1–M4 trên Linux và macOS: chưa đo.
+
+### 9.6. Cách đo lại
+
+Script `n6_bench.py` và `summ.py` nằm ngoài repo (không commit); thư mục cấu hình node tạo trong `cfg\` cạnh script và tự xóa. Chạy từ thư mục gốc của checkout cần đo, bằng `python.exe` của `.venv`, `PYTHONPATH` trỏ `src` (kiểm `teleport_file` trong file kết quả):
+
+```powershell
+$env:PYTHONPATH = 'src'; $env:PYTHONIOENCODING = 'utf-8'
+& $PY <scratchpad>\n6_bench.py --mode m1 --size 1024 --repeat 200 --out m1-1k.json
+& $PY <scratchpad>\n6_bench.py --mode m1 --size 1048576 --repeat 200 --out m1-1m.json
+& $PY <scratchpad>\n6_bench.py --mode m2 --repeat 20 --out m2.json          # PNG 10 MiB
+& $PY <scratchpad>\n6_bench.py --mode m3 --count 1000 --interval 0.25 --out m3.json
+& $PY <scratchpad>\n6_bench.py --mode m3 --count 1000 --interval 0.2 --out m3-5hz.json
+python <scratchpad>\summ.py m1-1k.json m1-1m.json m2.json m3.json m3-5hz.json
+```
+
+Tham số khác: `--gap` (nghỉ giữa hai lần ở M1/M2, mặc định 0,3 s), `--warmup` (mặc định 3), `--timeout` (mặc định 15 s mỗi lần).
+
+**M4** (mục 9.4): `m4_bench.py`, `run_all.ps1`, `summ_m4.py`, `lag_steps.py`, cũng ngoài repo. `m4_bench.py` tự dừng nếu `QT_QPA_PLATFORM` không phải `offscreen`, có hạn cho từng thao tác (`--timeout`, mặc định 60 s) và cho cả lượt (`--budget`, mặc định 600 s), cuối cùng xóa clipboard của Qt và ghi một file JSON (có `teleport_file`, `qpa`). Chạy từ thư mục gốc của checkout cần đo (khoảng 10 phút, phần lớn là ca 8192² nhiễu):
+
+```powershell
+& <scratchpad>\run_all.ps1 -Py $PY -Repeat 12 -Tag r1      # lượt sau kiểm sơ bộ: -Tag r3; 3 cỡ × 2 loại ảnh, mỗi tổ hợp một tiến trình, đặt sẵn PYTHONPATH=src và QT_QPA_PLATFORM=offscreen
+& $PY <scratchpad>\summ_m4.py <scratchpad>\r1-*.json         # bảng kết quả và phân rã từng bước
+$env:PYTHONPATH = 'src'; $env:QT_QPA_PLATFORM = 'offscreen'
+& $PY <scratchpad>\lag_steps.py --w 8192 --h 8192 --kind noise --repeat 3   # lệch Qt theo từng bước
+```

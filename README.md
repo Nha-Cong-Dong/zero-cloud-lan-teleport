@@ -18,8 +18,8 @@
 > [!NOTE]
 > **Teleport đang được phát triển. Chưa có bản phát hành: bản thử nghiệm đầu tiên được gắn tag sau đợt đo trên thiết bị thật ([docs/ke_hoach.md](docs/ke_hoach.md) mục 5.4), chưa có bộ cài.**
 > - **Đã có:** danh tính thiết bị (chứng chỉ tự ký), kênh TLS 1.3 với xác thực hai chiều giữa các thiết bị tin cậy, khám phá thiết bị qua mDNS, ghép đôi qua mạng bằng mã 6 số có nonce cam kết, tự giữ kết nối tới thiết bị đã ghép đôi, các lệnh `teleport identity` / `list` / `listen` / `pair` / `unpair`. Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi (`teleport send` / `receive`): hỏi trước khi nhận, kiểm tra toàn vẹn từng khối và cả file, không bao giờ ghi đè file sẵn có, mất kết nối thì tự nối lại (chờ tới 24 giờ), kể cả sau khi dừng hay tắt `teleport receive` rồi chạy lại, chỉ gửi phần còn thiếu. Số đo thực tế: [docs/benchmark.md](docs/benchmark.md).
-> - **Đang làm:** giao diện tối thiểu cho Windows (radar, ghép đôi, kéo thả gửi file, hộp hỏi nhận, danh sách lượt truyền) và bản zip chạy không cần cài Python, cho buổi demo hackathon ([docs/mvp.md](docs/mvp.md) mục 4.1). Cách dùng: [Hướng dẫn sử dụng](#hướng-dẫn-sử-dụng).
-> - **Chưa có:** clipboard, màn hình cài đặt, English, bộ cài; giao diện trên macOS và Linux.
+> - **Đang làm:** giao diện tối thiểu cho Windows (radar, ghép đôi, kéo thả gửi file, hộp hỏi nhận, danh sách lượt truyền) và bản zip chạy không cần cài Python, cho buổi demo hackathon ([docs/mvp.md](docs/mvp.md) mục 4.1); đồng bộ clipboard văn bản và ảnh giữa các máy đã ghép đôi (code xong, chờ đợt đo trên thiết bị thật). Cách dùng: [Hướng dẫn sử dụng](#hướng-dẫn-sử-dụng).
+> - **Chưa có:** bộ cài; giao diện trên macOS và Linux.
 > - **Chưa đo đủ trên thiết bị thật:** số đo hiện có là trên một máy (loopback) và máy ảo, cộng một lần đo tay giữa hai máy thật chỉ để tham khảo; đo đầy đủ qua mạng thật giữa hai máy, với ổ đích chậm và trên các hệ điều hành khác sẽ làm một đợt sau, và các bản thử nghiệm được phát hành sau đợt đo đó ([docs/ke_hoach.md](docs/ke_hoach.md) mục 5.4).
 >
 > Các tính năng bên dưới là **mục tiêu của v1.0**. Tiến độ xem ở [Lộ trình](#lộ-trình); lịch sử thay đổi ở [docs/CHANGELOG.md](docs/CHANGELOG.md).
@@ -197,7 +197,7 @@ Phát hiện lỗ hổng? Xem [docs/SECURITY.md](docs/SECURITY.md).
 | `v0.1.0-alpha` | ⏸ Gửi file lớn qua dòng lệnh giữa hai máy đã ghép đôi: lệnh `teleport send` / `receive` (code xong; phát hành sau đợt đo trên thiết bị thật) |
 | `v0.2.0-alpha` | ⏳ Tự nối lại cả sau khi rớt mạng lâu, tắt app nhận hay khởi động lại máy nhận; chỉ gửi phần còn thiếu |
 | `v0.3.0-beta` | ⏳ Giao diện radar, khay hệ thống, Tiếng Việt / English (đang làm phần tối thiểu cho buổi demo hackathon) |
-| `v0.4.0-beta` | Đồng bộ clipboard |
+| `v0.4.0-beta` | ⏳ Đồng bộ clipboard (code xong; chờ đợt đo trên thiết bị thật) |
 | `v1.0.0` | Bộ cài cho Windows, macOS, Linux; tài liệu người dùng |
 
 **Sau v1.0:** app Android, chế độ khách qua trình duyệt cho điện thoại, gửi tới nhiều thiết bị cùng lúc, gửi và đồng bộ thư mục, app iOS, quảng bá ẩn danh.

@@ -5,7 +5,8 @@ từ `start()` tới `close()`, nạp danh tính và kho tin cậy, mở `Listen
 (47474, hoặc cổng dự phòng lưu trong `settings.json`), rồi giao kết nối tới:
 
 - ghép đôi → `PairingService.handle_incoming`;
-- điều khiển → `ControlChannel` (ping/pong); message truyền file → `TransferManager`;
+- điều khiển → `ControlChannel` (ping/pong); message truyền file → `TransferManager`; mảnh
+  `clipboard` → `ClipboardSync` (`app.clipboard`, chỉ khi có `clipboard` backend);
 - dữ liệu → `TransferManager.serve_data` (`app.transfers`).
 
 Kết nối điều khiển (cả vào lẫn ra) do `core.links.LinkTracker` quyết định: tối đa
@@ -81,9 +82,11 @@ from typing import Any, Final, Self
 
 import teleport
 from teleport import paths
+from teleport.app import clipboard as app_clipboard
 from teleport.app import pairing as app_pairing
 from teleport.app import storage
 from teleport.app import transfers as app_transfers
+from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipboardSync
 from teleport.app.devices import DeviceNotFound, DeviceRegistry, DeviceView, resolve_trusted
 from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt, PairingService
@@ -118,6 +121,7 @@ from teleport.core.links import (
 )
 from teleport.core.messages import (
     PROTOCOL_VERSION,
+    Clipboard,
     ConnectionKind,
     Hello,
     MessageError,
@@ -373,7 +377,8 @@ class ScanResult:
 def close_time_limit() -> float:
     """Trần thời gian (giây) của `Node.close()`, tính từ các hằng đọc lúc gọi (docs/architecture.md mục 5).
 
-    Cộng các bước có hạn của `close()`: chờ đẩy `cancel` (`CANCEL_FLUSH_TIMEOUT`); đóng ghép đôi
+    Cộng các bước có hạn của `close()`: chờ mảnh clipboard đang gửi dở (`CLIP_CLOSE_WAIT`); chờ
+    đẩy `cancel` (`CANCEL_FLUSH_TIMEOUT`); đóng ghép đôi
     (`CLOSE_SESSIONS_TIMEOUT` + `ABORT_ON_CANCEL_TIMEOUT` + 1); đóng mDNS (`MDNS_CLOSE_ALLOWANCE`
     mỗi instance, tối đa hai instance); `Listener.close` (2 × `CLOSE_TIMEOUT` + 1); chờ task nền
     (`CLOSE_TIMEOUT` + 1); chờ đĩa (`CLOSE_DISK_WAIT`); xả bia mộ và lịch sử, song song
@@ -381,7 +386,8 @@ def close_time_limit() -> float:
     Thread đĩa treo không kéo dài thêm (daemon).
     """
     return (
-        app_transfers.CANCEL_FLUSH_TIMEOUT
+        app_clipboard.CLIP_CLOSE_WAIT
+        + app_transfers.CANCEL_FLUSH_TIMEOUT
         + app_pairing.CLOSE_SESSIONS_TIMEOUT
         + app_pairing.ABORT_ON_CANCEL_TIMEOUT
         + 1
@@ -538,6 +544,8 @@ class Node:
         rate_limit: int | None = None,
         on_transfer_event: Callable[[TransferUpdate], None] | None = None,
         save_args: bool = False,
+        clipboard: ClipboardBackend | None = None,
+        on_clipboard_event: Callable[[ClipboardEvent], None] | None = None,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
 
@@ -571,6 +579,11 @@ class Node:
         `hello`, và lưu `receive_dir` (nếu là đường dẫn) ngay sau khi mở được, trước khi mở cổng
         và quảng bá; ghi lỗi thì `start` thất bại với `SettingsSaveError` (không quảng bá một tên
         người dùng chưa chọn). Không phải bool → ValueError.
+
+        Đồng bộ clipboard (`app.clipboard`): `clipboard` là backend đọc/ghi clipboard thật (giao
+        diện; test dùng `FakeClipboard`); None (CLI) → node không đồng bộ clipboard, mảnh
+        `clipboard` tới bị bỏ qua. `on_clipboard_event` nhận `ClipboardEvent`, gọi đồng bộ trên
+        loop; raise thì chỉ ghi log; không gọi được → TypeError.
         """
         if name is not None:
             validate_device_name(name)
@@ -607,6 +620,8 @@ class Node:
             raise ValueError("receive_dir cần auto_accept=True hoặc on_transfer_event để hỏi người dùng")
         if type(save_args) is not bool:
             raise ValueError("save_args phải là bool")
+        if on_clipboard_event is not None and not callable(on_clipboard_event):
+            raise TypeError("on_clipboard_event phải là hàm")
         self._config_dir = Path(config_dir)
         self._name_arg = name
         self._port_arg = port
@@ -624,6 +639,8 @@ class Node:
         self._rate_limit = rate_limit  # None: giới hạn đã lưu
         self._on_transfer_event = on_transfer_event
         self._save_args = save_args
+        self._clipboard_backend = clipboard
+        self._on_clipboard_event = on_clipboard_event or _ignore
         self._settings: Settings | None = None  # đọc lúc `start`; đổi cùng lúc với file (`_save_settings`)
         self._receive_dir_error: ReceiveDirUnavailable | None = None  # thư mục `SAVED` không mở được
         self._receive_dir_lock = asyncio.Lock()  # `set_receive_dir` chạy lần lượt
@@ -643,6 +660,7 @@ class Node:
         self._registry: DeviceRegistry | None = None
         self._disk: DiskExecutor | None = None  # I/O đĩa của truyền file; TransferManager đóng nó
         self._transfers: TransferManager | None = None
+        self._clipboard: ClipboardSync | None = None  # chỉ khi có `clipboard` backend
         self._conns: dict[int, Connection] = {}  # conn_id → kết nối điều khiển đang chạy (vào lẫn ra)
         self._next_conn_id = 1
         self._attempts: dict[int, asyncio.Task] = {}  # attempt_id → task của lần thử đang chạy
@@ -772,6 +790,16 @@ class Node:
                 transfers.set_temp_retention(settings.temp_retention_days * 86400.0)
             self._transfers = transfers
             transfers.start()
+            if self._clipboard_backend is not None:
+                # Sau TransferManager (`paused` đọc nó), trước khi mở cổng (kết nối có thể tới ngay).
+                self._clipboard = ClipboardSync(
+                    backend=self._clipboard_backend,
+                    enabled=self._clipboard_enabled,
+                    paused=self._clipboard_paused,
+                    on_event=self._on_clipboard_event,
+                    control_idle=transfers.control_idle,
+                )
+                self._clipboard.start()
             # Khôi phục lượt nhận dở, bia mộ, lượt đã xong trước khi mở cổng (lời gọi engine đầu tiên).
             await transfers.restore()
             if self._close_done is not None:
@@ -796,6 +824,8 @@ class Node:
             self._closing = True  # _apply không tạo task mới nữa
             self._cancel_rename_timers()
             self._cancel_address_timers()
+            if self._clipboard is not None:
+                self._clipboard.abort()
             try:
                 await self._abort_start(listener)
             finally:
@@ -804,6 +834,7 @@ class Node:
                 self._pairing = self._listener = None
                 self._links = self._registry = None
                 self._transfers = self._disk = None
+                self._clipboard = None
                 lock.release()
             raise
         self._lock = lock
@@ -938,12 +969,15 @@ class Node:
 
         Thứ tự (docs/architecture.md mục 5): `TransferManager.begin_close()` (trước `await` đầu
         tiên): tạm dừng lượt đang nhận (không `cancel`, thư mục tạm giữ cho lần chạy sau), hủy lượt
-        gửi và `offer` đang chờ; dừng hẹn giờ (`core.links`, theo dõi mạng, dọn tạm); chờ đẩy các
-        `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi cổng cắt kết nối
-        dữ liệu; đóng ghép đôi, mDNS (mỗi instance chờ tối đa `MDNS_CLOSE_ALLOWANCE`), cổng, kết
-        nối; rồi `TransferManager.close()`: chờ các hàng đĩa tối đa `CLOSE_DISK_WAIT`, xả
-        `tombstones.json` và `history.json` (song song) tối đa `TOMBSTONE_FLUSH_TIMEOUT`, đóng thư
-        mục nhận (ngay, hay ở đuôi đĩa chạy nền khi còn thread đĩa bận: `TransferManager.close`).
+        gửi và `offer` đang chờ; dừng đồng bộ clipboard (`ClipboardSync.close()`, đồng bộ) và hẹn
+        giờ (`core.links`, theo dõi mạng, dọn tạm); chờ mảnh clipboard đang gửi dở xong tối đa
+        `CLIP_CLOSE_WAIT` (`ClipboardSync.drain`, để nó không giữ khóa gửi khi `cancel` cần); chờ
+        đẩy các `cancel` ra kết nối điều khiển tối đa `CANCEL_FLUSH_TIMEOUT`, trước khi cổng cắt
+        kết nối dữ liệu, rồi hủy các task gửi clipboard còn lại (`ClipboardSync.abort()`); đóng
+        ghép đôi, mDNS (mỗi instance chờ tối đa `MDNS_CLOSE_ALLOWANCE`), cổng, kết nối; rồi
+        `TransferManager.close()`: chờ các hàng đĩa tối đa `CLOSE_DISK_WAIT`, xả `tombstones.json`
+        và `history.json` (song song) tối đa `TOMBSTONE_FLUSH_TIMEOUT`, đóng thư mục nhận (ngay,
+        hay ở đuôi đĩa chạy nền khi còn thread đĩa bận: `TransferManager.close`).
         Gọi nhiều lần hay đồng thời đều được; trước `start` hay sau khi `start` thất bại thì không
         làm gì. Bị hủy giữa chừng thì vẫn hủy cứng mọi phiên ghép đôi (không ghi `trusted.json`
         nữa), mọi task
@@ -970,9 +1004,18 @@ class Node:
             if transfers is not None:
                 # Đồng bộ, trước await đầu tiên: tạm dừng lượt đang nhận, ngừng nhận offer, hủy lượt khác.
                 transfers.begin_close()
+            if self._clipboard is not None:
+                self._clipboard.close()  # đồng bộ: không đọc/ghi/gửi clip mới nữa
             await self._stop_tasks([self._timer_task, self._netwatch_task, self._cleanup_task])
+            if self._clipboard is not None:
+                # Mảnh clip đang gửi dở giữ khóa gửi của kết nối điều khiển: chờ nó xong trước khi
+                # tính hạn đẩy `cancel` (đường chậm: một mảnh có thể lâu hơn CANCEL_FLUSH_TIMEOUT).
+                await self._clipboard.drain(app_clipboard.CLIP_CLOSE_WAIT)
             if transfers is not None:
                 await transfers.flush_control(app_transfers.CANCEL_FLUSH_TIMEOUT)
+            if self._clipboard is not None:
+                # Kết nối sắp đóng: hủy cả mảnh clip đang gửi dở (sau khi các `cancel` đã đi).
+                self._clipboard.abort()
             await self._pairing.close()  # phiên đang chạy gửi pair_abort{user}
             for m in self._mdns_instances():
                 await self._close_mdns(m)  # goodbye: máy khác xóa máy này ngay (mvp N1)
@@ -994,6 +1037,8 @@ class Node:
             self._pairing.abort_all()
             if transfers is not None:
                 transfers.abort_now()
+            if self._clipboard is not None:
+                self._clipboard.abort()
             for task in self._all_node_tasks():
                 task.cancel()  # Connection.close() bị hủy thì abort
             if not listener_closing:
@@ -1107,6 +1152,12 @@ class Node:
         Sau `close()` vẫn trả về đối tượng cũ: mọi lời gọi không làm gì, `send` → RuntimeError.
         """
         return self._need(self._transfers)
+
+    @property
+    def clipboard(self) -> ClipboardSync | None:
+        """Đồng bộ clipboard (`app.clipboard`); None khi node không có `clipboard` backend (CLI)
+        hay chưa `start()`. Sau `close()` vẫn trả về đối tượng cũ: mọi lời gọi không làm gì."""
+        return self._clipboard
 
     @property
     def port(self) -> int | None:
@@ -1298,6 +1349,28 @@ class Node:
         value = dataclasses.replace(current, ask_before_receive=ask)
         self._save_settings(self._settings.with_device(device_id, value))
 
+    def set_clipboard(self, device_id: str, enabled: bool) -> None:
+        """Bật/tắt “Đồng bộ clipboard” với thiết bị tin cậy `device_id`; lưu.
+
+        Clip chỉ đi khi cả hai máy cùng bật cho nhau (mỗi bên chỉ gửi tới và nhận từ máy mình đã
+        bật). Lưu xong mới báo `ClipboardSync.set_enabled` (tắt: bỏ clip đang gửi, đang ráp và chờ
+        ghi của máy đó; bật: không gửi bù). Đọc: `device_settings(device_id).clipboard`.
+        `device_id` sai → MessageError; không tin cậy → KeyError; `enabled` không phải bool →
+        TypeError.
+        """
+        self._check_running()
+        assert self._settings is not None and self._store is not None
+        validate_device_id(device_id)
+        if type(enabled) is not bool:
+            raise TypeError("enabled phải là bool")
+        if self._store.get(device_id) is None:
+            raise KeyError(device_id)
+        current = self._settings.device(device_id)
+        value = dataclasses.replace(current, clipboard=enabled)
+        self._save_settings(self._settings.with_device(device_id, value))
+        if self._clipboard is not None:
+            self._clipboard.set_enabled(device_id, enabled)
+
     def set_visible(self, visible: bool) -> None:
         """Bật/tắt chế độ ẩn (F10) và lưu; không phải bool → TypeError.
 
@@ -1390,17 +1463,31 @@ class Node:
             return True
         return self._settings.device(device_id).ask_before_receive
 
+    def _clipboard_enabled(self, device_id: str) -> bool:
+        """`ClipboardSync`: đồng bộ clipboard với `device_id` không (đọc cài đặt và kho lúc gọi)."""
+        settings, store = self._settings, self._store
+        if settings is None or store is None or store.get(device_id) is None:
+            return False
+        return settings.device(device_id).clipboard
+
+    def _clipboard_paused(self) -> bool:
+        """`ClipboardSync`: đang tạm dừng nhận (clipboard tới bị bỏ như `offer` mới)."""
+        return self._transfers is not None and self._transfers.receiving_paused
+
     def _before_pair_save(self, device_id: str) -> None:
         """`PairingService` ngay trước `store.add`: ghép đôi (kể cả lại) đặt lại cài đặt theo thiết bị.
 
         Chỉ ghi khi file có mục của thiết bị; ghi lỗi → SettingsSaveError (ghép đôi `SAVE_FAILED`).
         Tên đang chờ hết trần đổi tên bị bỏ (không đè tên vừa ghép đôi), và lần ghép đôi tính là
-        một lần ghi tên: cùng khối đồng bộ với `store.add`, nên hẹn giờ không chen vào giữa.
+        một lần ghi tên: cùng khối đồng bộ với `store.add`, nên hẹn giờ không chen vào giữa. Đồng
+        bộ clipboard với máy đó về tắt (ghép đôi lại khi chưa hủy: bỏ clip đang gửi, đang ráp).
         """
         self._drop_pending_name(device_id)
         self._renamed_at[device_id] = self._now()
         if self._settings is not None and device_id in self._settings.devices:
             self._save_settings(self._settings.with_device(device_id, None))
+        if self._clipboard is not None:
+            self._clipboard.set_enabled(device_id, False)
 
     def _restart_cleanup(self) -> None:
         """Hẹn giờ dọn tạm lại từ đầu (đồng bộ): dọn ngay một lần (sau khi lần trước xong), rồi theo nhịp.
@@ -1595,6 +1682,8 @@ class Node:
             self._transfers.forget_device(device.device_id)
             if clear_history:  # sau `forget_device`: các mục `UNPAIRED` của nó cũng bị xóa
                 self._transfers.clear_history(device.device_id)
+        if self._clipboard is not None:
+            self._clipboard.forget_device(device.device_id)
         if closes:
             await asyncio.wait(closes, timeout=UNPAIR_CLOSE_TIMEOUT)
         log.info("đã hủy ghép đôi với %s", device.device_id[:8])
@@ -1698,8 +1787,18 @@ class Node:
                 self._apply(self._links.connection_lost(device_id, conn_id, self._now()))
 
     def _on_control_message(self, device_id: str, conn_id: int, msg: object) -> None:
-        """Message trên kết nối điều khiển (đồng bộ): `ping`/`pong` bỏ qua, còn lại → `TransferManager`."""
-        if isinstance(msg, Ping | Pong) or self._transfers is None:
+        """Message trên kết nối điều khiển (đồng bộ): `ping`/`pong` bỏ qua, `clipboard` →
+        `ClipboardSync` (không có thì bỏ qua), còn lại → `TransferManager`."""
+        if isinstance(msg, Ping | Pong):
+            return
+        if isinstance(msg, Clipboard):
+            if self._clipboard is not None:
+                try:
+                    self._clipboard.on_message(device_id, conn_id, msg)
+                except Exception:
+                    log.exception("lỗi khi xử lý clipboard từ %s", device_id[:8])
+            return
+        if self._transfers is None:
             return
         try:
             self._transfers.on_message(device_id, conn_id, msg)
@@ -1830,10 +1929,12 @@ class Node:
             )
             self._refresh_peer(event.device_id, self._conns.get(event.conn_id))
             self._transfer_control_up(event.device_id, event.conn_id, event.outgoing)
+            self._clipboard_link_up(event.device_id, event.conn_id)
         elif isinstance(event, LinkUp):
             # Trước `_transfer_control_up` và `DeviceConnected`: offer và view mang tên, `os` mới.
             self._refresh_peer(event.device_id, self._conns.get(event.conn_id))
             self._transfer_control_up(event.device_id, event.conn_id, event.outgoing)
+            self._clipboard_link_up(event.device_id, event.conn_id)
             registry.set_connected(event.device_id, True)
             log.info("đã kết nối với %s", event.device_id[:8])
             view = registry.get(event.device_id)
@@ -1842,6 +1943,11 @@ class Node:
         elif isinstance(event, LinkDown):
             if self._transfers is not None:
                 self._transfers.control_lost(event.device_id, event.conn_id)
+            if self._clipboard is not None:
+                try:
+                    self._clipboard.link_down(event.device_id, event.conn_id)
+                except Exception:
+                    log.exception("lỗi khi báo mất kết nối cho đồng bộ clipboard")
             registry.set_connected(event.device_id, False)
             log.info("mất kết nối với %s", event.device_id[:8])
             view = registry.get(event.device_id)
@@ -2071,6 +2177,16 @@ class Node:
             log.error("kết nối điều khiển %d với %s không có trong bảng", conn_id, device_id[:8])
             return
         self._transfers.control_up(device_id, conn_id, conn, client=outgoing)
+
+    def _clipboard_link_up(self, device_id: str, conn_id: int) -> None:
+        """Kết nối điều khiển hiện tại của thiết bị vừa có hay vừa đổi → `ClipboardSync`."""
+        conn = self._conns.get(conn_id)
+        if self._clipboard is None or conn is None:
+            return
+        try:
+            self._clipboard.link_up(device_id, conn_id, conn)
+        except Exception:
+            log.exception("lỗi khi báo kết nối cho đồng bộ clipboard")
 
     def _emit(self, event: NodeEvent) -> None:
         if self._closing:

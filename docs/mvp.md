@@ -3,7 +3,7 @@
 > **Vai trò:** đặc tả sản phẩm — giải quyết vấn đề gì, cho ai, gồm những gì, trông ra sao, đạt chuẩn nào thì được phát hành.
 > **Nguồn duy nhất cho:** phạm vi MVP, tính năng và tiêu chí chấp nhận (F1–F12), yêu cầu phi chức năng (N1–N12), thông báo lỗi, tiêu chí phát hành.
 > **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
-> **Cập nhật:** 2026-10-29
+> **Cập nhật:** 2026-11-02
 
 ---
 
@@ -190,7 +190,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 ### F8. Đồng bộ clipboard
 - **US-11:** Tôi muốn copy đoạn văn hoặc ảnh chụp màn hình trên máy này rồi dán ngay trên máy kia.
 - **AC:**
-  - Bật/tắt riêng cho từng thiết bị đã ghép đôi; **mặc định tắt**.
+  - Bật/tắt riêng cho từng thiết bị đã ghép đôi; **mặc định tắt**; ghép đôi lại cũng về tắt; clipboard chỉ đi khi cả hai máy cùng bật cho nhau.
   - Văn bản tới máy kia trong < 500ms; ảnh ≤ 10MB trong < 2 giây trên Wi-Fi 5.
   - Bật hai chiều cùng lúc không gây vòng lặp vô hạn.
   - Bỏ qua nội dung mà trình quản lý mật khẩu đánh dấu nhạy cảm.
@@ -259,7 +259,8 @@ Wi-Fi có lại ──► tự kết nối ──► so bitfield ──► gửi
 
 ### 6.3. Clipboard
 ```
-Cài đặt ▸ Thiết bị tin cậy ▸ PC-Nha ▸ bật “Đồng bộ clipboard”
+Cài đặt ▸ Thiết bị tin cậy ▸ bật “Đồng bộ clipboard” ở cả hai máy
+  (PC-Nha trên máy A, máy A trên PC-Nha)
 Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V dán được
 ```
 
@@ -284,7 +285,7 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 │                            │ ┌ PC-Nha muốn gửi 2 file (340 MB) ┐        │
 │ (◆) Máy này            [⧉] │ │ [Từ chối] [Nhận]                │        │
 │     Laptop-Minh            │ └─────────────────────────────────┘        │
-│     Địa chỉ: 192.168.1.15  │ [Gửi file] [Gửi clipboard]                 │
+│     Địa chỉ: 192.168.1.15  │ [Gửi file]                                 │
 │     ● Sẵn sàng nhận        │                     hoặc kéo file vào đây  │
 ├────────────────────────────┴─────────────────────────────────────────────┤
 │ ↓ Lưu vào: Downloads\Teleport                      [Mở thư mục] [Đổi…]   │
@@ -296,7 +297,7 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 - ⌕ mở màn “Tìm máy mới” (radar, có “Nhập IP thủ công” và “Chờ ghép đôi”).
 - Chưa ghép đôi máy nào thì bên phải là “Ghép đôi máy đầu tiên”.
 - Cửa sổ hẹp thì cột trái thu gọn, chỉ còn avatar (tên và trạng thái ở chú thích khi trỏ chuột).
-- Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái (câu chữ của từng lượt: mục 7.3). Thanh dưới luồng có “Gửi file” (Ctrl+O) và câu “hoặc kéo file vào đây”; không gửi được cả thư mục (mục 4). “[Gửi clipboard]” thuộc F8 (D5). Mốc sự kiện trong luồng (“Đã ghép đôi · 28/10”, “Mất kết nối”) để sau; luồng chỉ có mốc thời gian.
+- Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái (câu chữ của từng lượt: mục 7.3). Thanh dưới luồng có “Gửi file” (Ctrl+O) và câu “hoặc kéo file vào đây”; không gửi được cả thư mục (mục 4). Clipboard vừa nhận từ máy đó hiện thành một dòng mảnh ở cuối luồng (không phải bong bóng; mỗi luồng chỉ giữ dòng mới nhất, chỉ trong lần mở app này): “Clipboard · đã chép vào máy này” hay “Clipboard · chưa chép được vào máy này” kèm nút “Thử lại”, dòng dưới là dòng đầu của văn bản hay “Ảnh *1920* × *1080* · *2,4 MB*”. Nút gửi clipboard thủ công để sau (máy gửi chưa biết máy kia đã bật đồng bộ hay chưa). Mốc sự kiện trong luồng (“Đã ghép đôi · 28/10”, “Mất kết nối”) để sau; luồng chỉ có mốc thời gian.
 - “Đổi…” ở chân cửa sổ đổi thư mục nhận chung cho mọi thiết bị; thư mục mới được lưu và dùng cho các lần mở app sau. Thư mục nhận đã lưu không mở được lúc mở app thì app vẫn chạy nhưng không nhận file: thẻ máy này ghi “Không nhận file”, chân cửa sổ nói thư mục nào hỏng và vẫn có “Đổi…” (câu chữ ở mục 8).
 - Không hiện tên Wi-Fi.
 
@@ -438,6 +439,9 @@ Trên terminal, dòng tiến độ được vẽ lại tại chỗ, cắt vừa 
 │ MacBook   macOS    ☑ Hỏi trước khi nhận  ☐ Clipboard   [ Hủy ghép ] │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+Ô thứ hai là “Đồng bộ clipboard” (mặc định tắt). Câu đầu mục: “Các máy đã ghép đôi với máy này. Bỏ chọn
+“Hỏi trước khi nhận” để tự nhận file từ máy đó. Clipboard chỉ đồng bộ khi cả hai máy cùng bật “Đồng bộ
+clipboard”; mật khẩu chép từ trình quản lý mật khẩu không được gửi.”
 
 ### 7.5. Chờ ghép đôi
 ```
@@ -563,9 +567,11 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Ổ đĩa báo lỗi khi kiểm file chọn gửi | “Không đọc được *video.mp4*: ổ đĩa báo lỗi.” | Lượt gửi không bắt đầu |
 | Chọn quá số file một lượt | “Mỗi lần gửi được tối đa *1000* file.” | Lượt gửi không bắt đầu |
 | Giao diện: Thoát (menu khay, Ctrl+Q, đóng cửa sổ khi không có khay hệ thống) khi còn lượt gửi chưa xong | Hộp “Thoát Teleport?”: “Đang gửi file tới *PC-Nha*. Thoát bây giờ sẽ hủy lượt gửi.” (nhiều máy: “Đang gửi file tới *2* máy. Thoát bây giờ sẽ hủy các lượt gửi.”). Chỉ còn lượt nhận dở thì thoát ngay, không hỏi (lượt nhận chạy tiếp khi mở lại app). Windows tắt máy hay đăng xuất thì không hỏi | Nút “Thoát”, “Không” (mặc định) |
-| Giao diện: đóng cửa sổ khi app chạy được ở khay hệ thống (lần đầu trong mỗi lần mở app) | Bóng thoại ở khay: “Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn.” Đang tạm dừng nhận thì thay bằng: “Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới. Chọn Thoát trong menu khay để tắt hẳn.” | — |
-| Giao diện: biểu tượng khay | Chú thích khi trỏ chuột: tên app, rồi các dòng “Đang truyền *2* lượt”, “Không nhận file: không mở được thư mục nhận” hoặc “Đã tạm dừng nhận file mới”; không có dòng nào thì “Sẵn sàng nhận”. Biểu tượng có dấu nhỏ ở góc, khác nhau cả hình lẫn màu: đang truyền, đã tạm dừng nhận, không nhận file (ưu tiên: không nhận file > tạm dừng > đang truyền) | — |
-| Giao diện: tạm dừng nhận (mục “Tạm dừng nhận” có dấu chọn trong menu khay) | Thẻ máy này có huy hiệu “Đã tạm dừng nhận”, mô tả: “File mới gửi tới sẽ bị từ chối; lượt đang nhận vẫn tiếp tục. Bỏ chọn “Tạm dừng nhận” trong menu khay để nhận lại.” Chỉ chặn lời mời nhận file mới (lượt đang chạy, đang hỏi hay đang nối lại vẫn tiếp tục), chỉ áp cho file, chỉ trong lần mở app này (mở lại app là nhận lại). Máy không có khay hệ thống thì không có mục này | Bỏ chọn trong menu khay |
+| Giao diện: đóng cửa sổ khi app chạy được ở khay hệ thống (lần đầu trong mỗi lần mở app) | Bóng thoại ở khay: “Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn.” Đang tạm dừng nhận thì thay bằng: “Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới và clipboard. Chọn Thoát trong menu khay để tắt hẳn.” | — |
+| Giao diện: biểu tượng khay | Chú thích khi trỏ chuột: tên app, rồi các dòng “Đang truyền *2* lượt”, “Không nhận file: không mở được thư mục nhận” hoặc “Đã tạm dừng nhận file mới và clipboard”; không có dòng nào thì “Sẵn sàng nhận”. Trong 5 giây sau khi nhận clipboard, ngay dưới tên app có thêm dòng “Vừa nhận clipboard từ *PC-Nha*” (hay hai câu clipboard ở dưới). Biểu tượng có dấu nhỏ ở góc, khác nhau cả hình lẫn màu: đang truyền, vừa nhận clipboard (5 giây), đã tạm dừng nhận, không nhận file (ưu tiên: không nhận file > tạm dừng > vừa nhận clipboard > đang truyền) | — |
+| Giao diện: tạm dừng nhận (mục “Tạm dừng nhận” có dấu chọn trong menu khay) | Thẻ máy này có huy hiệu “Đã tạm dừng nhận”, mô tả: “File mới gửi tới sẽ bị từ chối, clipboard gửi tới sẽ bị bỏ qua; lượt đang nhận vẫn tiếp tục. Bỏ chọn “Tạm dừng nhận” trong menu khay để nhận lại.” Chặn lời mời nhận file mới (lượt đang chạy, đang hỏi hay đang nối lại vẫn tiếp tục) và bỏ clipboard gửi tới (vẫn gửi clipboard đi), chỉ trong lần mở app này (mở lại app là nhận lại). Máy không có khay hệ thống thì không có mục này | Bỏ chọn trong menu khay |
+| Vừa sao chép nội dung vượt trần clip ([protocol.md](protocol.md) mục 3.3) khi đang đồng bộ clipboard với ít nhất một máy đang kết nối | Tooltip khay 5 giây: “Clipboard quá lớn nên không gửi. Hãy gửi dạng file.” | Dùng “Gửi file” |
+| Nhận clipboard nhưng không chép được vào máy này (ứng dụng khác đang giữ clipboard) | Luồng của *PC-Nha*: “Clipboard · chưa chép được vào máy này”; tooltip khay 5 giây: “Chưa chép được clipboard từ *PC-Nha*” | Nút “Thử lại” trong cuộc trò chuyện với *PC-Nha* (clipboard đó không còn để chép lại thì dòng dưới đổi thành “Clipboard này không còn để chép lại.”) |
 | Giao diện: “Gửi file…” trong menu khay | Menu con liệt kê các máy đã ghép đôi (máy ngoại tuyến: “*PC-Nha* (ngoại tuyến)”); chọn một máy thì hiện cửa sổ ở cuộc trò chuyện đó và mở hộp chọn file. Chưa ghép đôi máy nào: mục mờ “Chưa ghép đôi với máy nào” và mục “Tìm máy mới…” | Chọn máy rồi chọn file |
 | Giao diện, máy nhận: thư mục nhận không còn hoặc không dùng được khi nhận một lượt | “Không nhận được lượt gửi từ *Laptop-Minh* vì thư mục nhận *D:\Downloads\Teleport* không còn hoặc không dùng được, và Teleport không tạo lại được (có thể thư mục chứa nó đã bị xóa, hoặc ổ đã bị rút ra). Hãy kiểm tra lại rồi nhờ gửi lại.” | Nút “Đổi thư mục nhận” |
 | Giao diện: có file gửi tới | Hộp hỏi ở mục 7.3; khi không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) thì thêm bóng thoại ở khay: “Có file đang chờ bạn nhận.” | Nút “Nhận”, “Từ chối” trong hộp hỏi. Bấm vào bóng thoại: hiện cửa sổ chính và đưa hộp hỏi lên trước |

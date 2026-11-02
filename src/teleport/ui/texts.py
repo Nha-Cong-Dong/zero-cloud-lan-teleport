@@ -236,7 +236,7 @@ def still_running_paused() -> str:
     """M4 khi người dùng đang tạm dừng nhận (menu khay, spec D4 mục 14.12)."""
     return QCoreApplication.translate(
         "Texts",
-        "Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới. "
+        "Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới và clipboard. "
         "Chọn Thoát trong menu khay để tắt hẳn.",
     )
 

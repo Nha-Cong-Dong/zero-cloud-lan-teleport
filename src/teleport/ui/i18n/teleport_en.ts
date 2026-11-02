@@ -75,6 +75,26 @@
         <translation>Choose a device on the left to see files you sent and received.</translation>
     </message>
     <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Clipboard này không còn để chép lại.</source>
+        <translation>This clipboard item is no longer available to copy again.</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Clipboard từ {name}: {title}. {detail}</source>
+        <translation>Clipboard from {name}: {title}. {detail}</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Clipboard · chưa chép được vào máy này</source>
+        <translation>Clipboard · couldn't copy to this device</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Clipboard · đã chép vào máy này</source>
+        <translation>Clipboard · copied to this device</translation>
+    </message>
+    <message>
         <location filename="../chat.py"/>
         <source>Các lượt gửi nhận với {name}</source>
         <translation>Transfers with {name}</translation>
@@ -192,6 +212,11 @@
     </message>
     <message>
         <location filename="../chat_bubbles.py"/>
+        <source>Văn bản · {size}</source>
+        <translation>Text · {size}</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
         <source>dd/MM</source>
         <translation>d MMM</translation>
     </message>
@@ -234,6 +259,16 @@
         <location filename="../chat_bubbles.py"/>
         <source>Đổi thư mục nhận</source>
         <translation>Change receive folder</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Ảnh {width} × {height} · {size}</source>
+        <translation>Image {width} × {height} · {size}</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Ảnh · {size}</source>
+        <translation>Image · {size}</translation>
     </message>
 </context>
 <context>
@@ -680,8 +715,8 @@
     </message>
     <message>
         <location filename="../home.py"/>
-        <source>File mới gửi tới sẽ bị từ chối; lượt đang nhận vẫn tiếp tục. Bỏ chọn “{menu}” trong menu khay để nhận lại.</source>
-        <translation>New files sent to this device will be declined; transfers in progress continue. Uncheck “{menu}” in the tray menu to receive again.</translation>
+        <source>File mới gửi tới sẽ bị từ chối, clipboard gửi tới sẽ bị bỏ qua; lượt đang nhận vẫn tiếp tục. Bỏ chọn “{menu}” trong menu khay để nhận lại.</source>
+        <translation>New files sent to this device will be declined and incoming clipboard content will be ignored; transfers in progress continue. Uncheck “{menu}” in the tray menu to receive again.</translation>
     </message>
     <message>
         <location filename="../home.py"/>
@@ -1352,8 +1387,8 @@
     </message>
     <message>
         <location filename="../settings.py"/>
-        <source>Các máy đã ghép đôi với máy này. Bỏ chọn “Hỏi trước khi nhận” để tự nhận file từ máy đó.</source>
-        <translation>Devices paired with this device. Clear “Ask before receiving” to accept files from that device automatically.</translation>
+        <source>Các máy đã ghép đôi với máy này. Bỏ chọn “Hỏi trước khi nhận” để tự nhận file từ máy đó. Clipboard chỉ đồng bộ khi cả hai máy cùng bật “Đồng bộ clipboard”; mật khẩu chép từ trình quản lý mật khẩu không được gửi.</source>
+        <translation>Devices paired with this device. Clear “Ask before receiving” to accept files from that device automatically. The clipboard syncs only when both devices turn on “Sync clipboard”; passwords copied from a password manager are never sent.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1642,6 +1677,11 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Đồng bộ clipboard</source>
+        <translation>Sync clipboard</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Đổi thư mục nhận</source>
         <translation>Change receive folder</translation>
     </message>
@@ -1800,8 +1840,8 @@
     </message>
     <message>
         <location filename="../texts.py"/>
-        <source>Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới. Chọn Thoát trong menu khay để tắt hẳn.</source>
-        <translation>Teleport is still running in the system tray but has paused receiving new files. Choose Exit in the tray menu to close it completely.</translation>
+        <source>Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới và clipboard. Chọn Thoát trong menu khay để tắt hẳn.</source>
+        <translation>Teleport is still running in the system tray but has paused receiving new files and clipboard. Choose Exit in the tray menu to close it completely.</translation>
     </message>
     <message>
         <location filename="../texts.py"/>
@@ -2208,8 +2248,18 @@
     <name>Tray</name>
     <message>
         <location filename="../tray.py"/>
+        <source>Chưa chép được clipboard từ {name}</source>
+        <translation>Couldn't copy the clipboard from {name}</translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
         <source>Chưa ghép đôi với máy nào</source>
         <translation>No paired devices</translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
+        <source>Clipboard quá lớn nên không gửi. Hãy gửi dạng file.</source>
+        <translation>Clipboard is too large to send. Send it as a file instead.</translation>
     </message>
     <message>
         <location filename="../tray.py"/>
@@ -2233,6 +2283,11 @@
     </message>
     <message>
         <location filename="../tray.py"/>
+        <source>Vừa nhận clipboard từ {name}</source>
+        <translation>Received the clipboard from {name}</translation>
+    </message>
+    <message>
+        <location filename="../tray.py"/>
         <source>{name} (ngoại tuyến)</source>
         <translation>{name} (offline)</translation>
     </message>
@@ -2246,8 +2301,8 @@
     </message>
     <message>
         <location filename="../tray.py"/>
-        <source>Đã tạm dừng nhận file mới</source>
-        <translation>Paused receiving new files</translation>
+        <source>Đã tạm dừng nhận file mới và clipboard</source>
+        <translation>Paused receiving new files and clipboard</translation>
     </message>
 </context>
 <context>

@@ -2,14 +2,14 @@
 
 Đặc tả trên dây ở docs/protocol.md mục 3.2, 3.3 (message `clipboard`); thiết kế ở
 docs/ke_hoach.md mục 3.6. Module này không đọc clipboard, không gửi gì: `app`
-(`ClipboardSync`, P5-1) đưa nội dung, `clip_id` (UUID4 hex) và `now` (đồng hồ monotonic)
-vào, rồi gửi/ghi theo kết quả; `ui` (P5-2) đọc/ghi clipboard thật.
+(`ClipboardSync`, `app.clipboard`) đưa nội dung, `clip_id` (UUID4 hex) và `now` (đồng hồ monotonic)
+vào, rồi gửi/ghi theo kết quả; `ui` (`ui.clipboard_qt`) đọc/ghi clipboard thật.
 
 - **Văn bản trên dây** (`normalize_text`): surrogate ghép cặp, surrogate lẻ thành U+FFFD,
   `"\\r\\n"` thành `"\\n"`; `\\r` đứng một mình, NUL và mọi ký tự điều khiển khác giữ
   nguyên. Chuẩn hóa **không lũy đẳng**: `"\\r\\r\\n"` → `"\\r\\n"` → `"\\n"`. Chỉ bên gửi
   chuẩn hóa; bên nhận giữ nguyên văn bản đã ráp (`ClipReady.content` khớp `sha256`).
-- **Hợp đồng chống vòng lặp với P5-1:** `LoopGuard` dùng `text_fingerprint(content)` hoặc
+- **Hợp đồng chống vòng lặp với `app.clipboard`:** `LoopGuard` dùng `text_fingerprint(content)` hoặc
   fingerprint đọc lại sau khi ghi, không bao giờ dùng `ClipReady.sha256` (bên gửi khác có
   thể gửi văn bản chưa chuẩn hóa, có `\\r\\n`).
 - **Chia** (`split_clip`): mỗi khung (gồm header 4 byte) ≤ `MAX_CLIP_MESSAGE_SIZE`. Ảnh cắt
@@ -39,7 +39,7 @@ from teleport.core.ratelimit import TokenBucket
 MAX_TEXT_BYTES = 1024 * 1024  # byte UTF-8 sau chuẩn hóa
 MAX_PNG_BYTES = 10 * 1024 * 1024  # byte PNG
 MAX_CLIP_BYTES: Mapping[str, int] = {ClipKind.TEXT: MAX_TEXT_BYTES, ClipKind.PNG: MAX_PNG_BYTES}
-MAX_IMAGE_SIDE = 8192  # cạnh ảnh tối đa, px (P5-2 kiểm qua QImageReader trước khi giải mã)
+MAX_IMAGE_SIDE = 8192  # cạnh ảnh tối đa, px (`ui.clipboard_qt` kiểm qua QImageReader trước khi giải mã)
 MAX_CLIP_MESSAGE_SIZE = 768 * 1024  # cả khung: header 4 byte + JSON; vừa trần 1 MiB của framing
 PNG_FRAGMENT_BYTES = 512 * 1024  # byte thô mỗi mảnh ảnh (base64 ≈ 683 KiB)
 CLIP_ASSEMBLY_TIMEOUT = 15.0  # giây, tính từ mảnh index 0
@@ -222,7 +222,7 @@ class ClipReady:
 
     Text: `content` đúng là byte nhận được giải mã UTF-8, **không** chuẩn hóa lại; `sha256`
     là hash của chính các byte đó. Bên gửi khác có thể không chuẩn hóa (gửi cả `\\r\\n`),
-    nên `sha256` có thể khác `text_fingerprint(content)`. Hợp đồng với P5-1: `LoopGuard`
+    nên `sha256` có thể khác `text_fingerprint(content)`. Hợp đồng với `app.clipboard`: `LoopGuard`
     dùng `text_fingerprint(content)` hoặc fingerprint đọc lại sau khi ghi, **không** dùng
     `sha256`.
     """
@@ -257,10 +257,26 @@ class _Partial:
     total: int
     count: int
     started_at: float
+    progress_at: float  # `now` lúc nhận mảnh hợp lệ gần nhất (mảnh 0: bằng `started_at`)
     next_index: int = 0
     received: int = 0
     chunks: list[bytes] = field(default_factory=list)
     hasher: hashlib._Hash = field(default_factory=hashlib.sha256)
+
+
+@dataclass(frozen=True, slots=True)
+class PartialInfo:
+    """Thông tin một clip dở (`ClipAssembler.partials`), không có nội dung (mvp N9).
+
+    `started_at`: `now` của mảnh `index 0`; `progress_at`: `now` của mảnh hợp lệ gần nhất.
+    """
+
+    device_id: str
+    clip_id: str
+    total: int
+    received: int
+    started_at: float
+    progress_at: float
 
 
 @dataclass(slots=True)
@@ -299,7 +315,8 @@ class ClipAssembler:
     Clip bị bỏ ở bất kỳ bước nào được nhớ là "clip vừa bỏ" của thiết bị (một giá trị).
     `tick` bỏ clip quá hạn và xóa trạng thái (kể cả clip vừa bỏ) của thiết bị không còn
     clip dở mà bucket đã đầy lại; thiết bị vừa bị bỏ clip ở chính lần `tick` đó chỉ được
-    dọn ở lần sau. `forget_device` xóa ngay. `next_wakeup` chỉ tính hạn của clip dở; trạng
+    dọn ở lần sau. `forget_device` xóa ngay; `discard` bỏ im lặng clip dở (trần RAM chung
+    của `app`, xem `reserved_bytes` và `partials`). `next_wakeup` chỉ tính hạn của clip dở; trạng
     thái rảnh được dọn ở lần `tick` sau (số thiết bị có trạng thái ≤ số thiết bị tin cậy đã
     gửi clip).
     """
@@ -341,7 +358,7 @@ class ClipAssembler:
                 dev = self._devices[device_id] = _Device(TokenBucket(self._rate, self._burst))
             self._feed_first(device_id, dev, msg, now, events)
         elif dev is not None and dev.partial is not None and dev.partial.clip_id == msg.clip_id:
-            self._feed_next(device_id, dev, dev.partial, msg, events)
+            self._feed_next(device_id, dev, dev.partial, msg, now, events)
         elif dev is None or dev.last_dropped != msg.clip_id:
             events.append(ClipDropped(device_id, msg.clip_id, msg.kind, DropReason.ORPHAN))
         return tuple(events)
@@ -380,12 +397,46 @@ class ClipAssembler:
         """Hủy ghép đôi: xóa mọi trạng thái của `device_id`, không phát sự kiện."""
         self._devices.pop(device_id, None)
 
+    def discard(self, device_id: str) -> None:
+        """Bỏ im lặng clip dở của `device_id` (nếu có), không phát sự kiện; giữ bucket.
+
+        Clip bị bỏ được nhớ là "clip vừa bỏ": mảnh `index > 0` còn lại của nó bị bỏ im lặng.
+        `app` gọi khi bỏ clip để giữ trần RAM chung (`reserved_bytes`).
+        """
+        dev = self._devices.get(device_id)
+        if dev is not None and dev.partial is not None:
+            self._drop(device_id, dev, DropReason.REPLACED)
+
     def buffered_bytes(self, device_id: str | None = None) -> int:
         """Số byte đang giữ trong clip dở của `device_id` (None: mọi thiết bị)."""
         if device_id is not None:
             dev = self._devices.get(device_id)
             return 0 if dev is None or dev.partial is None else dev.partial.received
         return sum(d.partial.received for d in self._devices.values() if d.partial is not None)
+
+    def reserved_bytes(self, device_id: str | None = None) -> int:
+        """Tổng `total` (cỡ khi ráp xong) của clip dở của `device_id` (None: mọi thiết bị).
+
+        Là số byte RAM tối đa các clip dở có thể chiếm, kể cả phần chưa nhận; `app` dùng để
+        giữ trần RAM chung trước khi cho một clip mới vào ráp.
+        """
+        if device_id is not None:
+            dev = self._devices.get(device_id)
+            return 0 if dev is None or dev.partial is None else dev.partial.total
+        return sum(d.partial.total for d in self._devices.values() if d.partial is not None)
+
+    def partials(self) -> tuple[PartialInfo, ...]:
+        """Mọi clip dở, mỗi thiết bị ≤ 1, theo thứ tự thiết bị gửi mảnh đầu tiên.
+
+        `app` dùng để chọn clip dở đã đứng (không có mảnh mới) hay đã giữ chỗ lâu mà bỏ đi
+        (`discard`) khi clip mới không vừa trần RAM chung. Không tính hạn: clip đã quá hạn mà
+        chưa có `tick` vẫn có mặt.
+        """
+        return tuple(
+            PartialInfo(device_id, p.clip_id, p.total, p.received, p.started_at, p.progress_at)
+            for device_id, dev in self._devices.items()
+            if (p := dev.partial) is not None
+        )
 
     # ---- Nội bộ --------------------------------------------------------------------------
 
@@ -433,9 +484,9 @@ class ClipAssembler:
         if msg.count > msg.total:
             events.append(self._reject(device_id, dev, msg, DropReason.INCONSISTENT))
             return
-        partial = _Partial(msg.clip_id, msg.kind, msg.sha256, msg.total, msg.count, now)
+        partial = _Partial(msg.clip_id, msg.kind, msg.sha256, msg.total, msg.count, now, now)
         dev.partial = partial
-        self._append(device_id, dev, partial, msg, events)
+        self._append(device_id, dev, partial, msg, now, events)
 
     def _feed_next(
         self,
@@ -443,6 +494,7 @@ class ClipAssembler:
         dev: _Device,
         partial: _Partial,
         msg: Clipboard,
+        now: float,
         events: list[ClipEvent],
     ) -> None:
         if (msg.kind, msg.sha256, msg.total, msg.count) != (
@@ -456,7 +508,7 @@ class ClipAssembler:
         if msg.index != partial.next_index:
             events.append(self._drop(device_id, dev, DropReason.OUT_OF_ORDER))
             return
-        self._append(device_id, dev, partial, msg, events)
+        self._append(device_id, dev, partial, msg, now, events)
 
     def _append(
         self,
@@ -464,6 +516,7 @@ class ClipAssembler:
         dev: _Device,
         partial: _Partial,
         msg: Clipboard,
+        now: float,
         events: list[ClipEvent],
     ) -> None:
         # `msg` đã qua `core.messages`: text không có surrogate, PNG là base64 chuẩn.
@@ -474,6 +527,7 @@ class ClipAssembler:
         partial.chunks.append(chunk)
         partial.hasher.update(chunk)
         partial.received += len(chunk)
+        partial.progress_at = now
         partial.next_index += 1
         if partial.next_index < partial.count:
             return
@@ -511,7 +565,7 @@ _IMAGE_FINGERPRINT_PREFIX = b"teleport-image-v1\0"
 def image_fingerprint(width: int, height: int, pixel_format: str, pixels: bytes) -> str:
     """Fingerprint của ảnh theo **pixel**, không theo byte PNG (mã hóa lại PNG ra byte khác).
 
-    Hợp đồng với P5-2: `pixels` là ảnh đã giải mã, đổi về **một** định dạng pixel cố định
+    Hợp đồng với `ui.clipboard_qt`: `pixels` là ảnh đã giải mã, đổi về **một** định dạng pixel cố định
     (ghi tên ở `pixel_format`, chuỗi ASCII không rỗng, không có NUL), các hàng nối liền nhau
     không đệm. Hai máy dùng cùng định dạng thì cùng ảnh cho cùng fingerprint. `width` hay
     `height` không phải số nguyên 1…`MAX_IMAGE_SIDE` → ValueError.
@@ -538,8 +592,9 @@ class LoopGuard:
 
     - Ghi clip nhận được vào clipboard → `remote_written(fp, ...)` với `fp =
       text_fingerprint(ClipReady.content)` (không phải `ClipReady.sha256`) hay fingerprint
-      ảnh theo pixel; P5-1 truyền cả fingerprint đọc lại sau khi ghi, phòng hệ điều hành đổi
-      nội dung (ví dụ cắt NUL).
+      ảnh theo pixel; `app.clipboard` truyền cả fingerprint đọc lại sau khi ghi, phòng hệ điều hành đổi
+      nội dung (ví dụ cắt NUL). Ghi thất bại → `restore` tập đã `snapshot` trước
+      `remote_written`: clipboard vẫn giữ nội dung cũ, nên nội dung cũ vẫn không được gửi lại.
     - Clipboard đổi → `local_changed(fp)`: thuộc tập hiện tại → False (đó là clip vừa ghi,
       không gửi); không thì tập = {fp} và True (người dùng sao chép mới, gửi đi).
 
@@ -571,6 +626,14 @@ class LoopGuard:
 
     def reset(self) -> None:
         self._current = frozenset()
+
+    def snapshot(self) -> frozenset[str]:
+        """Tập hiện tại, để `restore` lại (ví dụ ghi clipboard thất bại sau `remote_written`)."""
+        return self._current
+
+    def restore(self, snapshot: frozenset[str]) -> None:
+        """Trả tập hiện tại về `snapshot` đã lấy bằng `snapshot()`."""
+        self._current = frozenset(snapshot)
 
 
 # ---- Lọc nội dung nhạy cảm -----------------------------------------------------------------
@@ -609,7 +672,7 @@ def is_sensitive(formats: Iterable[str], value_of: Callable[[str], bytes | None]
     `None`, < 4 byte hay DWORD little-endian bằng 0 → True (không đọc được thì coi là nhạy
     cảm). `value_of` chỉ được gọi cho các định dạng đó; nó ném thì lỗi đi thẳng ra ngoài.
 
-    Tên trên macOS/Linux theo tài liệu của NSPasteboard và KDE, chưa kiểm tay (P5-2).
+    Tên trên macOS/Linux theo tài liệu của NSPasteboard và KDE, chưa kiểm tay (ke_hoach mục 3.6).
     """
     dword_names: list[str] = []
     for name in formats:
