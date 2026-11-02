@@ -7,7 +7,12 @@ bản gốc được chép sang `settings.json.bak` trước khi bị ghi đè. 
 chỉ làm mất đúng trường đó (WARNING nêu tên trường).
 
 Cài đặt theo thiết bị (`devices`, khóa là `device_id`) chỉ có hiệu lực với thiết bị đang tin cậy:
-`Node` trả mặc định cho thiết bị khác và bỏ mục của chúng mỗi lần ghi (`pruned`).
+`Node` trả mặc định cho thiết bị khác và bỏ mục của chúng mỗi lần ghi (`pruned`); `last_conversation`
+cũng vậy.
+
+Nhớ trạng thái cửa sổ (`window`, `last_conversation`, `tray_hint_shown`) do giao diện ghi. `window`
+(`WindowGeometry`) là một object được ghi đè nguyên khối: khóa lạ bên trong không được giữ, và một
+khóa sai làm mất cả `window`.
 
 Không bao giờ ghi nội dung file vào log (mvp N9): chỉ ghi đường dẫn, tên trường và loại lỗi.
 """
@@ -37,6 +42,11 @@ MAX_RATE_LIMIT = 2**53 - 1  # số nguyên lớn nhất JSON giữ chính xác
 MIN_RETENTION_DAYS = 1
 MAX_RETENTION_DAYS = 365
 MAX_RECEIVE_DIR_LEN = 32767  # ký tự; trần đường dẫn dài của Windows
+MAX_WINDOW_COORD = 100_000  # |x|, |y| tối đa của `WindowGeometry` (pixel logic)
+MAX_WINDOW_SIZE = 100_000  # rộng/cao tối đa của `WindowGeometry`
+MAX_SCREEN_NAME_LEN = 256  # ký tự; `QScreen.name()`
+MIN_DPR = 0.25  # tỉ lệ điểm ảnh (`devicePixelRatio`) hợp lệ của `WindowGeometry`
+MAX_DPR = 16.0
 RADAR_VIEWS = ("radar", "list")
 THEMES = ("light", "dark")  # chế độ màu ép; None = theo hệ điều hành
 # Mã màu nhấn: chỉ kiểm dạng (`app` không biết bảng màu của `ui`); mã lạ đúng dạng được giữ nguyên.
@@ -58,9 +68,14 @@ _FIELDS = (
     "radar_view",
     "theme",
     "accent",
+    "window",
+    "last_conversation",
+    "tray_hint_shown",
     "devices",
 )
 _DEVICE_FIELDS = ("ask_before_receive", "clipboard")
+_WINDOW_REQUIRED = ("x", "y", "width", "height")
+_WINDOW_OPTIONAL = ("maximized", "screen", "dpr")
 
 log = logging.getLogger(__name__)
 
@@ -170,6 +185,11 @@ def _check_accent(value: object) -> str | None:
     return value
 
 
+def _check_last_conversation(value: object) -> str | None:
+    # MessageError là ValueError.
+    return None if value is None else validate_device_id(value)
+
+
 _CHECKS: dict[str, Any] = {
     "name": _check_name,
     "receive_dir": _check_receive_dir,
@@ -182,9 +202,86 @@ _CHECKS: dict[str, Any] = {
     "radar_view": _check_radar_view,
     "theme": _check_theme,
     "accent": _check_accent,
+    "last_conversation": _check_last_conversation,
+    "tray_hint_shown": lambda v: _check_bool("tray_hint_shown", v),
 }
 # Trường bool: `null` trong file không hợp lệ (khác các trường có thể là None).
-_BOOL_FIELDS = frozenset({"visible", "autostart", "first_run_done"})
+_BOOL_FIELDS = frozenset({"visible", "autostart", "first_run_done", "tray_hint_shown"})
+
+
+@dataclass(frozen=True, slots=True)
+class WindowGeometry:
+    """Hình học cửa sổ chính đã lưu (pixel logic). Sai kiểu → TypeError, sai giá trị → ValueError.
+
+    `x`, `y`, `width`, `height` là hình học thường (không phóng to); `maximized` là cờ phóng to
+    (trạng thái thu nhỏ không được lưu); `screen` là `QScreen.name()` của màn hình chứa cửa sổ,
+    `dpr` là tỉ lệ điểm ảnh của nó (None: không biết; số nguyên được đổi sang float).
+    """
+
+    x: int
+    y: int
+    width: int
+    height: int
+    maximized: bool = False
+    screen: str | None = None
+    dpr: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("x", "y"):
+            value = getattr(self, name)
+            if type(value) is not int:  # bool bị từ chối
+                raise TypeError(f"{name} phải là số nguyên")
+            if not -MAX_WINDOW_COORD <= value <= MAX_WINDOW_COORD:
+                raise ValueError(f"{name} phải trong ±{MAX_WINDOW_COORD}")
+        for name in ("width", "height"):
+            value = getattr(self, name)
+            if type(value) is not int:
+                raise TypeError(f"{name} phải là số nguyên")
+            if not 1 <= value <= MAX_WINDOW_SIZE:
+                raise ValueError(f"{name} phải trong 1–{MAX_WINDOW_SIZE}")
+        _check_bool("maximized", self.maximized)
+        if self.screen is not None:
+            if not isinstance(self.screen, str):
+                raise TypeError("screen phải là None hoặc chuỗi")
+            if not 1 <= len(self.screen) <= MAX_SCREEN_NAME_LEN or "\x00" in self.screen:
+                raise ValueError(f"screen phải dài 1–{MAX_SCREEN_NAME_LEN} ký tự, không có NUL")
+        if self.dpr is not None:
+            if type(self.dpr) not in (int, float):  # bool bị từ chối
+                raise TypeError("dpr phải là None hoặc số")
+            # Chỉ so sánh, không đổi sang float trước (kể cả `math.isfinite`): số nguyên khổng lồ đổi
+            # sang float là OverflowError. NaN và ±inf đều không qua phép so sánh khoảng.
+            if not MIN_DPR <= self.dpr <= MAX_DPR:
+                raise ValueError(f"dpr phải là số hữu hạn trong {MIN_DPR}–{MAX_DPR}")
+            object.__setattr__(self, "dpr", float(self.dpr))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Dạng ghi ra file: luôn có `x, y, width, height, maximized`; `screen`, `dpr` khi khác None."""
+        data: dict[str, Any] = {
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+            "maximized": self.maximized,
+        }
+        if self.screen is not None:
+            data["screen"] = self.screen
+        if self.dpr is not None:
+            data["dpr"] = self.dpr
+        return data
+
+    @classmethod
+    def from_dict(cls, value: object) -> WindowGeometry:
+        """Đọc `window` từ file; khóa lạ bị bỏ qua (không giữ).
+
+        Không phải object, thiếu một trong `x/y/width/height` hay một trường sai → TypeError /
+        ValueError (thông điệp không chứa giá trị).
+        """
+        if not isinstance(value, dict):
+            raise TypeError("window phải là object")
+        if any(key not in value for key in _WINDOW_REQUIRED):
+            raise ValueError("window thiếu trường bắt buộc")
+        fields = {key: value[key] for key in (*_WINDOW_REQUIRED, *_WINDOW_OPTIONAL) if key in value}
+        return cls(**fields)
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +325,9 @@ class Settings:
     radar_view: str | None = None  # None = giao diện tự chọn
     theme: str | None = None  # None = theo hệ điều hành; ngoài ra một trong THEMES
     accent: str | None = None  # None = màu nhấn mặc định; mã lạ đúng dạng: `ui` hiện mặc định
+    window: WindowGeometry | None = None  # None = giao diện dùng cỡ mặc định
+    last_conversation: str | None = None  # `device_id` của cuộc trò chuyện mở gần nhất
+    tray_hint_shown: bool = False  # True = đã báo “vẫn chạy ở khay” (chỉ báo một lần)
     devices: Mapping[str, DeviceSettings] = field(default_factory=dict)
     # `load` không đọc được file (OSError khác "chưa có file"): bản này là mặc định chứ không phải nội
     # dung file, nên `save` chép nguyên file đang có sang `.bak` trước khi ghi đè. Không ghi ra file.
@@ -239,6 +339,8 @@ class Settings:
         for name, check in _CHECKS.items():
             check(getattr(self, name))
         object.__setattr__(self, "extra", _check_extra(self.extra, _FIELDS))
+        if self.window is not None and not isinstance(self.window, WindowGeometry):
+            raise TypeError("window phải là None hoặc WindowGeometry")
         if not isinstance(self.devices, Mapping):
             raise TypeError("devices phải là mapping device_id → DeviceSettings")
         devices: dict[str, DeviceSettings] = {}
@@ -266,11 +368,19 @@ class Settings:
         return replace(self, devices=devices)
 
     def pruned(self, trusted_ids: Iterable[str]) -> Settings:
-        """Bản sao bỏ mục của thiết bị không có trong `trusted_ids` (không có gì để bỏ: trả `self`)."""
+        """Bản sao bỏ mục `devices` và `last_conversation` của thiết bị không có trong `trusted_ids`.
+
+        Không có gì để bỏ: trả `self`.
+        """
         keep = set(trusted_ids)
-        if all(device_id in keep for device_id in self.devices):
+        stale_conversation = self.last_conversation is not None and self.last_conversation not in keep
+        if not stale_conversation and all(device_id in keep for device_id in self.devices):
             return self
-        return replace(self, devices={k: v for k, v in self.devices.items() if k in keep})
+        return replace(
+            self,
+            devices={k: v for k, v in self.devices.items() if k in keep},
+            last_conversation=None if stale_conversation else self.last_conversation,
+        )
 
     # ---- Đọc / ghi --------------------------------------------------------------------------
 
@@ -318,6 +428,7 @@ class Settings:
             "radar_view",
             "theme",
             "accent",
+            "last_conversation",
         ):
             value = getattr(self, name)
             if value is not None:
@@ -328,6 +439,10 @@ class Settings:
             data["autostart"] = True
         if self.first_run_done:
             data["first_run_done"] = True
+        if self.window is not None:
+            data["window"] = self.window.to_dict()
+        if self.tray_hint_shown:
+            data["tray_hint_shown"] = True
         devices = {k: _device_dict(v) for k, v in self.devices.items() if not v.is_default()}
         if devices:
             data["devices"] = devices
@@ -391,6 +506,13 @@ def _parse(raw: bytes) -> tuple[Settings, list[str]]:
                 extra[key] = value  # version lớn hơn bản này hỗ trợ không phải lỗi: giữ nguyên
             else:
                 problems.append("trường version không hợp lệ, bỏ qua")
+        elif key == "window":
+            if value is None:
+                continue  # `null` = mặc định
+            try:
+                values["window"] = WindowGeometry.from_dict(value)
+            except (ValueError, TypeError):
+                problems.append("trường window không hợp lệ, bỏ qua")
         elif key == "devices":
             if value is not None:  # `null` = không có mục nào
                 values["devices"] = _parse_devices(value, problems)
