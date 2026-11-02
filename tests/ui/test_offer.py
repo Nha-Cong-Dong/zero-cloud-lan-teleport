@@ -26,7 +26,7 @@ MORE = "… và {k} file khác"  # mvp 7.3: dòng thứ 11
 SAVE_TO = "Lưu vào: {path}"
 ACCEPT = "Nhận"
 REJECT = "Từ chối"
-FORBIDDEN = ("Đổi…", "Luôn nhận")  # Q6: bỏ cả hai
+FORBIDDEN = ("Đổi…", "Luôn nhận")  # không có trong `offer_text`; hộp có từ spec-b4 3.4
 LIST_MAX = 10
 
 PREFIX = "[x]"
@@ -126,14 +126,28 @@ def receive_dir(tmp_path):
 
 @pytest.fixture
 def prompts(qtbot, receive_dir):
-    from teleport.ui.offer import OfferPrompts
+    from teleport.app.transfers import OfferReceived, TransferFinished
+    from teleport.ui.offer import OfferBook, OfferPrompts
 
-    made = OfferPrompts(receive_dir)
+    # spec-b4 3.4/11.15: `OfferPrompts(book, …)` và bỏ `handle`; `handle` dưới đây đóng vai controller (3.3).
+    book = OfferBook()
+    made = OfferPrompts(book, receive_dir)
+
+    def handle(update) -> None:
+        if isinstance(update, OfferReceived):
+            if book.add(update):
+                made.show_prompt(update.key)
+        elif isinstance(update, TransferFinished):
+            book.finish(update.info.key)
+
+    made.handle = handle  # type: ignore[attr-defined]
     made.decisions = []  # type: ignore[attr-defined]
     made.opens = []  # type: ignore[attr-defined]
     made.decided.connect(lambda key, ok: made.decisions.append((key, ok)))
+    made.decided.connect(book.answer)  # như controller: ý định → book
     made.opened.connect(lambda key: made.opens.append(key))
     yield made
+    book.clear()
     made.close_all()
     qtbot.wait(10)
 
@@ -281,7 +295,8 @@ def test_box_is_parentless_nonmodal_visible_with_two_buttons(prompts, ui_helpers
     assert prompts.opens == [offer.key]
 
 
-def test_box_shows_all_section_7_3_fields_without_change_or_always(prompts, receive_dir, ui_helpers):
+def test_box_shows_all_section_7_3_fields_with_change_and_always(prompts, receive_dir, ui_helpers):
+    # spec-b4 3.4: hộp nay có “Đổi…” và “Luôn nhận” (mvp 7.3 bỏ câu “để sau hackathon”).
     from teleport.core.display import format_size
 
     files = (("video.mp4", 8 * 2**30), ("thumbnail.png", int(2.1 * 2**20)))
@@ -295,10 +310,10 @@ def test_box_shows_all_section_7_3_fields_without_change_or_always(prompts, rece
         assert name in shown and format_size(size) in shown
     assert fill(SAVE_TO, path=str(receive_dir)) in shown
     for word in FORBIDDEN:
-        assert word not in shown
+        assert word in shown
     from PySide6.QtWidgets import QCheckBox
 
-    assert not [c for c in box.findChildren(QCheckBox) if c.isVisibleTo(box)]
+    assert len([c for c in box.findChildren(QCheckBox) if c.isVisibleTo(box)]) == 1
 
 
 def test_default_button_is_reject(prompts, ui_helpers):
@@ -520,3 +535,615 @@ def test_language_change_retranslates_open_box(qtbot, prompts, translator, ui_he
     QCoreApplication.removeTranslator(translator)
     qtbot.waitUntil(lambda: not any(PREFIX in t for t in ui_helpers.widget_texts(box)), timeout=3_000)
     assert len(ui_helpers.buttons_with_text(box, ACCEPT)) == 1
+
+
+# =================================================================================================
+# B4 (spec-b4 mục 3.4, mục 7 T-P; mục 11 thắng): hộp mở theo `OfferBook`, có “Đổi…” và “Luôn nhận”
+# =================================================================================================
+
+CHANGE = "Đổi…"
+CHANGE_NAME = "Đổi thư mục nhận"
+ALWAYS = "Luôn nhận từ thiết bị này"
+PENDING_HINT = "Chờ đổi thư mục nhận xong"
+CHANGING = "Đang đổi sang {path}…"
+DISCONNECTED = "Mất kết nối với {name}. Bạn vẫn trả lời được; nếu nhận, file sẽ bắt đầu khi hai máy nối lại."
+ALWAYS_SAVE_ERROR = (  # spec-b4 mục 11.7 (thay câu ở mục 4)
+    "Chưa lưu được “Luôn nhận” cho {name} vì không ghi được cài đặt của Teleport. Hãy thử lại trong "
+    "Cài đặt ▸ Thiết bị tin cậy (bỏ chọn “Hỏi trước khi nhận”)."
+)
+EN = {
+    "accept": "Accept",
+    "reject": "Decline",
+    "change": "Change…",
+    "always": "Always accept from this device",
+    "title": "Incoming files",
+}
+
+
+@pytest.fixture
+def bp(qtbot, receive_dir):
+    """(book, prompts) mới: `OfferPrompts(book, receive_dir)`; ghi `decided`, `always_toggled`,
+    `change_dir_requested`, `opened`."""
+    from teleport.ui.offer import OfferBook, OfferPrompts
+
+    book = OfferBook()
+    made = OfferPrompts(book, receive_dir)
+    made.decisions = []  # type: ignore[attr-defined]
+    made.toggles = []  # type: ignore[attr-defined]
+    made.changes = []  # type: ignore[attr-defined]
+    made.opens = []  # type: ignore[attr-defined]
+    made.decided.connect(lambda key, ok: made.decisions.append((key, ok)))
+    made.always_toggled.connect(lambda key, on: made.toggles.append((key, on)))
+    made.change_dir_requested.connect(lambda: made.changes.append(1))
+    made.opened.connect(made.opens.append)
+    yield book, made
+    book.clear()
+    made.close_all()
+    qtbot.wait(10)
+
+
+def open_box(bp, offer=None, *, connected: bool = True):
+    """Thêm `offer` vào book rồi `show_prompt`; trả (offer, hộp)."""
+    book, prompts = bp
+    offer = offer or make_offer()
+    assert book.add(offer, connected=connected)
+    assert prompts.show_prompt(offer.key) is True
+    box = prompts.box(offer.key)
+    assert box is not None
+    return offer, box
+
+
+def change_button(box):
+    from PySide6.QtWidgets import QPushButton
+
+    return box.findChild(QPushButton, "offerChangeDir")
+
+
+def always_check(box):
+    from PySide6.QtWidgets import QCheckBox
+
+    return box.findChild(QCheckBox, "offerAlways")
+
+
+def dir_error(box):
+    from PySide6.QtWidgets import QLabel
+
+    return box.findChild(QLabel, "offerDirError")
+
+
+def button_of(box, ui_helpers, text: str = ACCEPT):
+    [b] = ui_helpers.buttons_with_text(box, text)
+    return b
+
+
+def gone(box, ui_helpers) -> bool:
+    return not ui_helpers.is_alive(box) or not box.isVisible()
+
+
+# ---- hàm chữ dùng chung (mục 3.4, mục 4, 11.7) -------------------------------------------------
+
+
+def test_b4_shared_texts_match_spec(tmp_path):
+    from teleport.ui import offer as mod
+
+    p = tmp_path / "moi"
+    assert mod.change_text() == CHANGE
+    assert mod.change_name() == CHANGE_NAME
+    assert mod.always_text() == ALWAYS
+    assert mod.accept_text() == ACCEPT
+    assert mod.reject_text() == REJECT
+    assert mod.pending_accept_hint() == PENDING_HINT
+    assert mod.disconnected_text("PC-Nha") == fill(DISCONNECTED, name="PC-Nha")
+    assert mod.always_save_error_text("PC-Nha") == fill(ALWAYS_SAVE_ERROR, name="PC-Nha")
+    assert mod.save_line(p, None) == fill(SAVE_TO, path=str(p))
+    assert mod.save_line(tmp_path, p) == fill(CHANGING, path=str(p)), "đang đổi: câu “Đang đổi sang”"
+    assert mod.save_line(None, None) is None
+
+
+def test_b4_save_line_path_is_printable(tmp_path):
+    from teleport.ui import offer as mod
+
+    p = tmp_path / "a‮b"
+    assert "‮" not in mod.save_line(p, None)
+    assert "‮" not in mod.save_line(tmp_path, p)
+
+
+# ---- P1 dựng hộp, tiêu điểm, Enter / Esc / X ---------------------------------------------------
+
+
+def test_p1_show_prompt_opens_box_with_change_always_reject_accept(bp, ui_helpers):
+    from teleport.ui.offer import PROMPTS_MAX_OPEN
+
+    assert PROMPTS_MAX_OPEN == 3
+    _, prompts = bp
+    offer, box = open_box(bp)
+    assert box.isVisible()
+    assert box.parent() is None
+    assert box.windowModality() == Qt.WindowModality.NonModal
+    assert box.testAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    change = change_button(box)
+    assert change is not None and change.isVisibleTo(box)
+    assert ui_helpers.plain(change.text()) == CHANGE
+    assert change.accessibleName() == CHANGE_NAME
+    check = always_check(box)
+    assert check is not None and check.isVisibleTo(box)
+    assert ui_helpers.plain(check.text()) == ALWAYS
+    assert not check.isChecked()
+    button_of(box, ui_helpers, ACCEPT)
+    button_of(box, ui_helpers, REJECT)
+    assert prompts.keys() == [offer.key]
+    assert prompts.queued() == []
+    assert prompts.opens == [offer.key]
+
+
+def test_p1_initial_focus_is_reject_and_default_button_is_reject(qtbot, bp, ui_helpers):
+    _, box = open_box(bp)
+    reject = button_of(box, ui_helpers, REJECT)
+    assert default_button(box) is reject
+    qtbot.waitUntil(lambda: box.focusWidget() is reject, timeout=2_000)
+
+
+@pytest.mark.parametrize("how", ["enter", "escape", "close"])
+def test_p1_enter_escape_and_x_decide_reject_once(qtbot, bp, how):
+    _, prompts = bp
+    offer, box = open_box(bp)
+    if how == "enter":
+        qtbot.keyClick(box.focusWidget() or box, Qt.Key.Key_Return)
+    elif how == "escape":
+        qtbot.keyClick(box, Qt.Key.Key_Escape)
+    else:
+        box.close()
+    qtbot.waitUntil(lambda: bool(prompts.decisions), timeout=2_000)
+    qtbot.wait(20)
+    assert prompts.decisions == [(offer.key, False)]
+
+
+def test_p1_accept_button_decides_true(qtbot, bp, ui_helpers):
+    _, prompts = bp
+    offer, box = open_box(bp)
+    button_of(box, ui_helpers).click()
+    qtbot.wait(20)
+    assert prompts.decisions == [(offer.key, True)]
+
+
+def test_p1_show_prompt_refuses_unknown_answered_or_already_open_key(bp):
+    book, prompts = bp
+    offer, _ = open_box(bp)
+    assert prompts.show_prompt(offer.key) is False, "đã có hộp"
+    stranger = make_offer(transfer_id="e" * 32)
+    assert prompts.show_prompt(stranger.key) is False, "key không có trong book"
+    answered = make_offer(transfer_id="f" * 32)
+    book.add(answered)
+    book.answer(answered.key, True)
+    assert prompts.show_prompt(answered.key) is False, "key không PENDING"
+    assert prompts.keys() == [offer.key]
+
+
+def test_p1_no_handle_method_any_more():
+    """Spec 3.4: bỏ `OfferPrompts.handle`; việc mở hộp do controller quyết định."""
+    from teleport.ui.offer import OfferPrompts
+
+    assert not hasattr(OfferPrompts, "handle")
+
+
+# ---- P2 thứ tự Tab -----------------------------------------------------------------------------
+
+
+def test_p2_tab_order_change_always_reject_accept(qtbot, bp, ui_helpers):
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    _, box = open_box(bp)
+    box.activateWindow()
+    qtbot.waitUntil(box.isActiveWindow, timeout=3_000)
+    change = change_button(box)
+    order = [change, always_check(box), button_of(box, ui_helpers, REJECT), button_of(box, ui_helpers)]
+    change.setFocus(Qt.FocusReason.TabFocusReason)
+    qtbot.waitUntil(lambda: QApplication.focusWidget() is change, timeout=2_000)
+    for expected in order[1:]:
+        QTest.keyClick(QApplication.focusWidget(), Qt.Key.Key_Tab)
+        QApplication.processEvents()
+        assert QApplication.focusWidget() is expected, (QApplication.focusWidget(), expected)
+
+
+# ---- P3, P4 book đóng hộp --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_p3_book_answered_closes_box_without_deciding(qtbot, bp, ui_helpers, accept):
+    book, prompts = bp
+    offer, box = open_box(bp)
+    assert book.answer(offer.key, accept)
+    qtbot.wait(20)
+    assert gone(box, ui_helpers)
+    assert prompts.box(offer.key) is None
+    assert prompts.keys() == []
+    assert prompts.decisions == [], "đóng vì book: không phát decided"
+
+
+def test_p4_book_removed_closes_box_without_deciding(qtbot, bp, ui_helpers):
+    book, prompts = bp
+    offer, box = open_box(bp)
+    other, other_box = open_box(bp, make_offer(transfer_id="d" * 32))
+    book.finish(offer.key)
+    qtbot.wait(20)
+    assert gone(box, ui_helpers)
+    assert prompts.box(offer.key) is None
+    assert prompts.decisions == []
+    assert other_box.isVisible() and prompts.keys() == [other.key]
+
+
+def test_p4_book_clear_closes_every_box_without_deciding(qtbot, bp, ui_helpers):
+    book, prompts = bp
+    boxes = [open_box(bp, make_offer(transfer_id=c * 32))[1] for c in "cde"]
+    book.clear()
+    qtbot.wait(20)
+    assert all(gone(b, ui_helpers) for b in boxes)
+    assert prompts.keys() == [] and prompts.decisions == []
+
+
+# ---- hàng chờ PROMPTS_MAX_OPEN ----------------------------------------------------------------------
+
+
+def test_queue_opens_at_most_three_then_fifo_on_close(qtbot, bp):
+    book, prompts = bp
+    offers = [make_offer(transfer_id=f"{i:032x}") for i in range(5)]
+    for o in offers:
+        book.add(o)
+        assert prompts.show_prompt(o.key) is True
+    assert prompts.keys() == [o.key for o in offers[:3]]
+    assert prompts.queued() == [o.key for o in offers[3:]]
+    assert prompts.show_prompt(offers[4].key) is False, "đã xếp hàng"
+    book.answer(offers[1].key, True)
+    qtbot.wait(20)
+    opened = prompts.keys()
+    assert offers[3].key in opened and len(opened) == 3
+    assert prompts.queued() == [offers[4].key]
+    book.finish(offers[4].key)
+    assert prompts.queued() == [], "lượt trong hàng chờ kết thúc: bỏ khỏi hàng"
+    assert prompts.decisions == []
+
+
+def test_queue_skips_entries_no_longer_pending(qtbot, bp):
+    book, prompts = bp
+    offers = [make_offer(transfer_id=f"{i:032x}") for i in range(5)]
+    for o in offers:
+        book.add(o)
+        prompts.show_prompt(o.key)
+    book.answer(offers[3].key, False)  # đang chờ trong hàng, trả lời ở bong bóng
+    book.answer(offers[0].key, False)  # hộp đầu đóng: mở hộp kế tiếp còn PENDING
+    qtbot.wait(20)
+    opened = prompts.keys()
+    assert offers[3].key not in opened
+    assert offers[4].key in opened
+    assert prompts.queued() == []
+
+
+def test_close_all_drops_queue(qtbot, bp):
+    book, prompts = bp
+    for i in range(5):
+        o = make_offer(transfer_id=f"{i:032x}")
+        book.add(o)
+        prompts.show_prompt(o.key)
+    prompts.close_all()
+    qtbot.wait(20)
+    assert prompts.keys() == [] and prompts.queued() == []
+    assert prompts.decisions == []
+
+
+# ---- P5 đang đổi thư mục ------------------------------------------------------------------------
+
+
+def test_p5_pending_dir_disables_accept_and_change_keeps_reject(bp, tmp_path, ui_helpers):
+    _, prompts = bp
+    _, box = open_box(bp)
+    new = tmp_path / "moi"
+    prompts.set_receive_dir_pending(new)
+    accept = button_of(box, ui_helpers)
+    reject = button_of(box, ui_helpers, REJECT)
+    assert not accept.isEnabled()
+    assert PENDING_HINT in (accept.toolTip(), accept.accessibleDescription())
+    assert reject.isEnabled()
+    assert not change_button(box).isEnabled()
+    shown = "\n".join(ui_helpers.widget_texts(box))
+    assert fill(CHANGING, path=str(new)) in shown
+    prompts.set_receive_dir_pending(None)
+    assert accept.isEnabled() and reject.isEnabled() and change_button(box).isEnabled()
+    shown = "\n".join(ui_helpers.widget_texts(box))
+    assert fill(CHANGING, path=str(new)) not in shown
+
+
+def test_p5_box_opened_while_pending_starts_with_accept_disabled(bp, tmp_path, ui_helpers):
+    _, prompts = bp
+    prompts.set_receive_dir_pending(tmp_path / "moi")
+    _, box = open_box(bp)
+    assert not button_of(box, ui_helpers).isEnabled()
+
+
+def test_set_receive_dir_updates_save_line_of_open_box(bp, tmp_path, ui_helpers):
+    _, prompts = bp
+    _, box = open_box(bp)
+    new = tmp_path / "khac"
+    prompts.set_receive_dir(new)
+    assert fill(SAVE_TO, path=str(new)) in "\n".join(ui_helpers.widget_texts(box))
+
+
+# ---- P6 lỗi đổi thư mục ---------------------------------------------------------------------------
+
+
+def test_p6_dir_error_shown_in_every_open_box_and_none_hides(bp):
+    _, prompts = bp
+    boxes = [open_box(bp, make_offer(transfer_id=c * 32))[1] for c in "cd"]
+    prompts.set_dir_error("x")
+    for box in boxes:
+        label = dir_error(box)
+        assert label is not None and label.isVisibleTo(box)
+        assert label.text() == "x"
+        assert label.textFormat() == Qt.TextFormat.PlainText
+        assert label.property("tone") == "warning"
+    prompts.set_dir_error(None)
+    for box in boxes:
+        label = dir_error(box)
+        assert label is None or not label.isVisibleTo(box)
+
+
+def test_p6_dir_error_set_before_opening_not_shown_in_new_box(bp):
+    """Review B4 (thay quyết định cũ): lỗi chỉ ở hộp đang mở lúc lỗi, không lưu cho hộp mở sau."""
+    _, prompts = bp
+    prompts.set_dir_error("loi")
+    _, box = open_box(bp)
+    label = dir_error(box)
+    assert label is None or not label.isVisibleTo(box)
+
+
+def test_p6_dir_error_cleared_when_change_starts(bp, tmp_path):
+    _, prompts = bp
+    _, box = open_box(bp)
+    prompts.set_dir_error("loi")
+    assert dir_error(box).isVisibleTo(box)
+    prompts.set_receive_dir_pending(tmp_path / "moi")
+    assert not dir_error(box).isVisibleTo(box)
+
+
+# ---- Tên hợp lệ trên wire nhưng rộng bất thường (review B4, tan-cong) ---------------------------
+
+ZALGO_DEVICE = "҉" * 63  # tên máy: 63 dấu kết hợp U+0489
+ZALGO_FILE = "q" + "҉" * 127  # tên file: một cụm ký tự không tách được
+
+
+def test_zalgo_names_do_not_force_box_wider_than_reasonable(qtbot, bp):
+    from PySide6.QtWidgets import QLabel
+
+    from teleport.ui.offer import BOX_MAX_WIDTH
+
+    offer = make_offer(ZALGO_DEVICE, files=((ZALGO_FILE, 10), (ZALGO_FILE + "x", 20)))
+    _, box = open_box(bp, offer)
+    qtbot.wait(20)
+    assert box.minimumSizeHint().width() <= 600, box.minimumSizeHint()
+    assert box.width() <= BOX_MAX_WIDTH, box.width()
+    for name in ("offerHead", "offerFiles", "offerDisconnected"):
+        label = box.findChild(QLabel, name)
+        assert label is not None and label.minimumSizeHint().width() <= 600, name
+        assert label.textFormat() == Qt.TextFormat.PlainText
+    files = box.findChild(QLabel, "offerFiles")
+    assert files.text().count("\n") == 1, "vẫn hai dòng tên file"
+
+
+def test_long_file_line_is_elided_to_label_width(qtbot, bp):
+    from PySide6.QtWidgets import QLabel
+
+    from teleport.ui import theme
+
+    _, box = open_box(bp, make_offer(files=(("W" * 100 + ".bin", 10),)))
+    box.resize(theme.DIALOG_MIN_WIDTH, box.height())
+    qtbot.wait(20)
+    files = box.findChild(QLabel, "offerFiles")
+    shown = files.shown_text()
+    assert shown != files.text() and "…" in shown, "dòng quá rộng được rút gọn khi vẽ"
+    assert files.fontMetrics().horizontalAdvance(shown) <= files.contentsRect().width()
+    assert "W" * 20 in files.text(), "text() (trình đọc màn hình đọc) vẫn là chữ đầy đủ"
+    assert not files.grab().isNull()
+    box.resize(theme.DIALOG_MIN_WIDTH * 2, box.height())
+    qtbot.wait(20)
+    assert files.fontMetrics().horizontalAdvance(files.shown_text()) <= files.contentsRect().width()
+
+
+# ---- P7 thư mục nhận, “Đổi…” ------------------------------------------------------------------------
+
+
+def test_p7_no_receive_dir_hides_change_button(qtbot):
+    from teleport.ui.offer import OfferBook, OfferPrompts
+
+    book = OfferBook()
+    prompts = OfferPrompts(book, None)
+    offer = make_offer()
+    book.add(offer)
+    prompts.show_prompt(offer.key)
+    box = prompts.box(offer.key)
+    try:
+        button = change_button(box)
+        assert button is None or not button.isVisibleTo(box)
+    finally:
+        book.clear()
+        prompts.close_all()
+        qtbot.wait(10)
+
+
+def test_p7_change_button_emits_change_dir_requested(bp):
+    _, prompts = bp
+    _, box = open_box(bp)
+    change_button(box).click()
+    assert prompts.changes == [1]
+    assert prompts.decisions == [], "Đổi… không trả lời lời mời"
+    assert box.isVisible()
+
+
+# ---- P8 Luôn nhận ----------------------------------------------------------------------------------
+
+
+def test_p8_tick_emits_always_toggled_and_book_change_updates_without_echo(bp):
+    book, prompts = bp
+    offer, box = open_box(bp)
+    check = always_check(box)
+    check.click()
+    assert prompts.toggles == [(offer.key, True)]
+    book.set_always(offer.key, True)  # controller nối always_toggled → book.set_always
+    assert check.isChecked()
+    assert prompts.toggles == [(offer.key, True)], "book đổi về cùng giá trị: không phát lại"
+    book.set_always(offer.key, False)
+    assert not check.isChecked(), "ô tick theo book"
+    assert prompts.toggles == [(offer.key, True)], "cập nhật từ book không phát always_toggled"
+    assert prompts.decisions == []
+
+
+# ---- dòng mất kết nối (E4, phần hộp) ------------------------------------------------------------------
+
+
+def test_disconnected_line_follows_book_connected(bp, ui_helpers):
+    from teleport.ui.texts import peer_label
+
+    book, _ = bp
+    offer, box = open_box(bp, connected=False)
+    line = fill(DISCONNECTED, name=peer_label(offer.device_name, PEER_ID))
+    assert line in "\n".join(ui_helpers.widget_texts(box))
+    book.set_connected(PEER_ID, True)
+    assert line not in "\n".join(ui_helpers.widget_texts(box))
+    book.set_connected(PEER_ID, False)
+    assert line in "\n".join(ui_helpers.widget_texts(box))
+    assert button_of(box, ui_helpers).isEnabled(), "mất kết nối vẫn trả lời được"
+
+
+# ---- P9 chữ độc --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "device",
+    ["<b>x</b>", "A‮B", "PC\x1b[31m\x07", "n" * 255],
+    ids=["html", "bidi", "control", "long255"],
+)
+def test_p9_hostile_names_plain_text(bp, ui_helpers, device):
+    from PySide6.QtWidgets import QLabel, QWidget
+
+    from teleport.ui.texts import file_label, peer_label
+
+    files = (("<i>f</i>‮gnp.exe", 10), ("y" * 255, 5))
+    _, box = open_box(bp, make_offer(device, files=files))
+    for lb in box.findChildren(QLabel):
+        assert lb.textFormat() == Qt.TextFormat.PlainText, lb.objectName()
+    shown = "\n".join(ui_helpers.widget_texts(box))
+    assert peer_label(device, PEER_ID) in shown
+    for name, _ in files:
+        assert file_label(name) in shown
+    assert "\x1b" not in shown and "\x07" not in shown
+    for w in [box, *box.findChildren(QWidget)]:
+        assert device not in w.toolTip()
+        assert "<i>f</i>" not in w.toolTip()
+
+
+# ---- P10 đổi ngôn ngữ (.qm thật) ----------------------------------------------------------------------
+
+
+def test_p10_language_change_to_english_rebuilds_box(qtbot, bp, ui_helpers):
+    from PySide6.QtWidgets import QApplication
+
+    from teleport.ui import i18n
+
+    _, prompts = bp
+    offer, box = open_box(bp)
+    i18n.set_language("en")
+    QApplication.processEvents()
+    assert i18n.current_language() == "en", "cần teleport_en.qm"
+    assert ui_helpers.buttons_with_text(box, EN["accept"])
+    assert ui_helpers.buttons_with_text(box, EN["reject"])
+    assert ui_helpers.plain(change_button(box).text()) == EN["change"]
+    assert ui_helpers.plain(always_check(box).text()) == EN["always"]
+    if sys.platform != "darwin":
+        assert box.windowTitle() == EN["title"]
+    shown = "\n".join(ui_helpers.widget_texts(box))
+    assert "Lưu vào" not in shown and "Save to:" in shown
+    button_of(box, ui_helpers, EN["accept"]).click()
+    qtbot.wait(20)
+    assert prompts.decisions == [(offer.key, True)], "sau đổi ngôn ngữ nút vẫn bấm được"
+
+
+# ---- Hộp đang mở cao lên khi chữ thêm dòng (review B4 lượt 2) ------------------------------------
+
+
+def _labels_cut(box) -> list:
+    """Nhãn đang hiện mà thấp hơn chiều cao chữ cần theo bề ngang hiện tại (chữ bị cắt)."""
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    QApplication.processEvents()
+    cut = []
+    for label in box.findChildren(QLabel):
+        if not label.isVisibleTo(box) or not label.wordWrap():
+            continue
+        need = label.heightForWidth(label.contentsRect().width())
+        if label.height() < need:
+            cut.append((label.objectName(), label.height(), need))
+    return cut
+
+
+LONG_ERROR = (
+    "Không dùng được thư mục C:/Users/Ai/Một/Thư/Mục/Rất/Dài/Để/Xuống/Dòng/Nhiều/Lần. Hãy chọn thư "
+    "mục khác mà bạn có quyền ghi."
+)
+
+
+def test_open_box_grows_when_disconnected_line_and_dir_error_appear(qtbot, bp):
+    book, prompts = bp
+    offer, box = open_box(bp)
+    qtbot.waitExposed(box)
+    assert _labels_cut(box) == []
+    book.set_connected(offer.key.device_id, False)
+    assert _labels_cut(box) == [], "hiện dòng mất kết nối: hộp cao lên, không cắt chữ"
+    prompts.set_dir_error(LONG_ERROR)
+    assert _labels_cut(box) == [], "hiện lỗi đổi thư mục: hộp cao lên, không cắt chữ"
+
+
+def test_open_box_grows_after_language_change(qtbot, bp):
+    from PySide6.QtWidgets import QApplication
+
+    from teleport.ui import i18n
+
+    book, prompts = bp
+    offer, box = open_box(bp, make_offer("Máy-có-tên-khá-dài-để-xuống-dòng"))
+    qtbot.waitExposed(box)
+    book.set_connected(offer.key.device_id, False)
+    prompts.set_dir_error(LONG_ERROR)
+    try:
+        i18n.set_language("en")
+        QApplication.processEvents()
+        assert _labels_cut(box) == []
+    finally:
+        i18n.set_language("vi")
+        QApplication.processEvents()
+    assert _labels_cut(box) == []
+
+
+def test_dir_error_source_is_retranslated_on_language_change(qtbot, bp, tmp_path):
+    """Review B4 lượt 2: hộp giữ nguồn chữ của lỗi (hàm), đổi ngôn ngữ thì câu lỗi được dịch lại."""
+    import functools
+
+    from PySide6.QtWidgets import QApplication
+
+    from teleport.ui import i18n
+    from teleport.ui.receive_dir import ChangeError, change_error_text
+
+    _, prompts = bp
+    _, box = open_box(bp)
+    prompts.set_dir_error(functools.partial(change_error_text, ChangeError.BUSY.value, tmp_path))
+    label = dir_error(box)
+    vi = label.text()
+    assert vi.startswith("Chưa đổi được thư mục nhận")
+    try:
+        i18n.set_language("en")
+        QApplication.processEvents()
+        assert i18n.current_language() == "en", "cần teleport_en.qm"
+        assert label.isVisibleTo(box)
+        assert label.text() == change_error_text(ChangeError.BUSY, tmp_path)
+        assert label.text() != vi, "câu lỗi đã dịch sang English"
+    finally:
+        i18n.set_language("vi")
+        QApplication.processEvents()
+    assert label.text() == vi

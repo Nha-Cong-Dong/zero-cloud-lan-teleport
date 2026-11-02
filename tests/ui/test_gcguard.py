@@ -175,6 +175,7 @@ def test_timer_collects_cycles_from_worker_thread_on_qt_thread(qt_thread_gc, qtb
 
 
 @pytest.mark.integration
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_gui_collects_qt_garbage_only_on_qt_thread(
     qt_thread_gc, gui, gui_wait, config_dir, trust_each_other, peer_node, tmp_path, ui_helpers
 ):
@@ -260,3 +261,12 @@ def test_gui_collects_qt_garbage_only_on_qt_thread(
     starts = seen["starts"]
     assert starts, "không có lần GC nào: test không kiểm được gì"
     assert set(starts) == {qt_name}, f"GC chạy ngoài thread Qt: {sorted(set(starts))}"
+
+
+@pytest.fixture
+def offers_as_boxes(monkeypatch):
+    """spec-b4 11.3: đang nhìn đúng luồng của máy gửi thì lời mời chỉ ở bong bóng; test chờ hộp hỏi
+    vá `ui.transfers.default_window_active` thành False để hộp luôn bật."""
+    from teleport.ui import transfers
+
+    monkeypatch.setattr(transfers, "default_window_active", lambda: False)

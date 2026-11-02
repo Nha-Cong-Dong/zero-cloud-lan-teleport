@@ -166,6 +166,13 @@ class FakeTransfers:
     def decide(self, key, accept):
         self.decided.append((key, accept))
 
+    def get(self, key):
+        """spec-b4 11.7: `_apply_answer` hỏi `get(key)` trước `decide`; lượt giả luôn còn, ở pha hỏi
+        người dùng (WAITING)."""
+        from teleport.core.transfer import TransferStatus
+
+        return SimpleNamespace(key=key, status=TransferStatus.WAITING)
+
     def transfers(self):
         return self.infos
 
@@ -965,6 +972,7 @@ def test_offer_decision_calls_transfers_decide(env, accept):
 
 def test_decide_method_calls_transfers_decide(env):
     key = tkey("receive")
+    env.ctl.on_transfer(offer(key))  # spec-b4 3.3/11.15: `decide` nay đi qua book, cần offer trước
     env.ctl.decide(key, True)
     node = FakeNode()
     env.host.run_calls(node)

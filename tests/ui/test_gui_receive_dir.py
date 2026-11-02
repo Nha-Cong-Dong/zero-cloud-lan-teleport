@@ -201,6 +201,7 @@ def pair(config_dir, trust_each_other, tmp_path):
 # =================================================================================================
 
 
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_change_receive_dir_then_received_file_lands_in_new_dir_and_settings_saved(
     gui, gui_wait, pair, peer_node, dialogs, tmp_path, ui_helpers
 ):
@@ -477,6 +478,7 @@ def test_saved_dir_broken_in_background_shows_tray_message(gui, gui_wait, config
 # =================================================================================================
 
 
+@pytest.mark.usefixtures("offers_as_boxes")  # spec-b4 11.3: test chờ hộp hỏi nhận file
 def test_change_while_receiving_shows_busy_notice(
     gui, gui_wait, pair, peer_node, dialogs, tmp_path, ui_helpers
 ):
@@ -532,3 +534,12 @@ def test_change_while_receiving_shows_busy_notice(
     assert seen["bar"] == SAVE_PREFIX + shown(rd)
     assert saved_receive_dir(a) in (None, str(rd)), "BUSY: không lưu thư mục mới"
     assert not any(new_dir.iterdir()), "BUSY: không ghi gì vào thư mục mới"
+
+
+@pytest.fixture
+def offers_as_boxes(monkeypatch):
+    """spec-b4 11.3: đang nhìn đúng luồng của máy gửi thì lời mời chỉ ở bong bóng; test chờ hộp hỏi
+    vá `ui.transfers.default_window_active` thành False để hộp luôn bật."""
+    from teleport.ui import transfers
+
+    monkeypatch.setattr(transfers, "default_window_active", lambda: False)

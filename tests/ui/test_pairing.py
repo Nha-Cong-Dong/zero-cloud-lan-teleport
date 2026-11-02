@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import itertools
 import re
 import sys
 import threading
@@ -1867,3 +1868,224 @@ def test_result_box_does_not_steal_focus_again_while_open(qtbot, ctl, monkeypatc
     qtbot.wait(20)
     assert ns.c.result_box is box
     assert raised == []
+
+
+# =================================================================================================
+# B4 T-K: hộp mã có đếm ngược, mã vẽ thành ô (spec-b4 mục 3.7, mục 7 T-K; mục 11 thắng)
+# =================================================================================================
+
+COUNTDOWN = "Còn {n} giây để xác nhận"
+COUNTDOWN_NAME = "Thời gian còn lại để xác nhận"
+
+
+def countdown_parts(dlg):
+    # Thanh là widget vẽ tay, không phải QProgressBar (thanh đó phát sự kiện giá trị cho trợ năng mỗi
+    # nhịp, NVDA bíp liên tục; review B4, N12), nên tìm theo QWidget.
+    bar = dlg.findChild(QWidget, "pairingCountdown")
+    text = dlg.findChild(QLabel, "pairingCountdownText")
+    assert bar is not None, "thiếu thanh pairingCountdown"
+    assert text is not None, "thiếu nhãn pairingCountdownText"
+    return bar, text
+
+
+def test_k1_layout_order_header_code_warning_peer_countdown_buttons(qtbot, ctl):
+    from teleport.core.pairing import WARN_RECENT_CODES
+
+    ns = ctl(clock=FakeClock(NOW))
+    dlg = open_prompt(qtbot, ns, make_prompt(role="responder", recent=WARN_RECENT_CODES, expires_at=NOW + 50))
+    bar, text = countdown_parts(dlg)
+    header = dlg.findChild(QLabel, "pairingHeader")
+    code = dlg.findChild(QLabel, "pairingCode")
+    warning = dlg.findChild(QWidget, "pairingWarningBox")
+    peer = dlg.findChild(QLabel, "pairingPeer")
+    buttons = find_button(dlg, "pairingReject")
+    for w in (header, code, warning, peer, bar, text, buttons):
+        assert w is not None and w.isVisibleTo(dlg), w
+    tops = [top_of(w, dlg) for w in (header, code, warning, peer, bar)]
+    assert tops == sorted(tops) and len(set(tops)) == len(tops), tops
+    assert top_of(peer, dlg) < top_of(text, dlg) < top_of(buttons, dlg)
+    assert top_of(bar, dlg) < top_of(buttons, dlg)
+
+
+def test_k1_countdown_bar_properties(qtbot, ctl):
+    ns = ctl(clock=FakeClock(NOW))
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 30))
+    bar, _ = countdown_parts(dlg)
+    assert (bar.minimum(), bar.maximum()) == (0, 1000)
+    assert bar.height() == 6
+    assert bar.accessibleName() == COUNTDOWN_NAME
+
+
+def test_k1_countdown_bar_exposes_no_value_to_accessibility(qtbot, ctl):
+    """N12 (review B4): thanh không phải QProgressBar và không có giao diện giá trị trợ năng, nên
+    `setValue` mỗi nhịp không phát ValueChanged; thông tin chỉ ở mô tả (mốc) và nhãn chữ."""
+    from PySide6.QtGui import QAccessible
+    from PySide6.QtWidgets import QProgressBar
+
+    ns = ctl(clock=FakeClock(NOW))
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 30))
+    bar, _ = countdown_parts(dlg)
+    assert not isinstance(bar, QProgressBar)
+    iface = QAccessible.queryAccessibleInterface(bar)
+    assert iface is not None
+    assert iface.valueInterface() is None
+    assert iface.role() != QAccessible.Role.ProgressBar
+
+
+def test_k2_countdown_text_and_bar_follow_injected_clock(qtbot, ctl):
+    from teleport.core.pairing import CONFIRM_TIMEOUT
+
+    clock = FakeClock(NOW)
+    ns = ctl(clock=clock)
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 42.3))
+    bar, text = countdown_parts(dlg)
+    assert text.text() == COUNTDOWN.format(n=43), "ceil(42,3) = 43"
+    assert text.textFormat() == Qt.TextFormat.PlainText
+    scale = max(CONFIRM_TIMEOUT, 42.3)
+    assert abs(bar.value() - 1000 * 42.3 / scale) <= 2, bar.value()
+    values = [bar.value()]
+    for n in (42, 41, 40):
+        clock.value += 1.0
+        qtbot.waitUntil(lambda n=n: text.text() == COUNTDOWN.format(n=n), timeout=2_000)
+        values.append(bar.value())
+    assert all(later < earlier for earlier, later in itertools.pairwise(values)), values
+    assert ns.host.decisions() == []
+
+
+def test_k2_countdown_waits_for_clock_not_wall_time(qtbot, ctl):
+    clock = FakeClock(NOW)
+    ns = ctl(clock=clock)
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 42.3))
+    bar, text = countdown_parts(dlg)
+    before = (text.text(), bar.value())
+    qtbot.wait(600)
+    assert (text.text(), bar.value()) == before, "đồng hồ tiêm không đổi: chữ và thanh đứng yên"
+
+
+def test_k2_scale_is_remaining_when_longer_than_confirm_timeout(qtbot, ctl):
+    from teleport.core.pairing import CONFIRM_TIMEOUT
+
+    ns = ctl(clock=FakeClock(NOW))
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + CONFIRM_TIMEOUT + 30))
+    bar, _ = countdown_parts(dlg)
+    assert bar.value() == 1000, "thang = max(CONFIRM_TIMEOUT, còn lại lúc mở): mở ra thanh đầy"
+
+
+def test_k3_ten_seconds_or_less_turns_label_warning(qtbot, ctl):
+    clock = FakeClock(NOW)
+    ns = ctl(clock=clock)
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 12))
+    _, text = countdown_parts(dlg)
+    assert text.property("tone") != "warning"
+    clock.value += 2.5  # còn 9,5 s → hiện 10
+    qtbot.waitUntil(lambda: text.text() == COUNTDOWN.format(n=10), timeout=2_000)
+    assert text.property("tone") == "warning"
+
+
+def test_k4_expiry_closes_dialog_without_decide_and_never_goes_negative(qtbot, ctl):
+    clock = FakeClock(NOW)
+    ns = ctl(clock=clock)
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 1.0))
+    bar, text = countdown_parts(dlg)
+    clock.value += 5.0
+    qtbot.waitUntil(lambda: closed(dlg) or text.text() == COUNTDOWN.format(n=0), timeout=2_000)
+    if not closed(dlg):
+        assert bar.value() == 0
+    qtbot.waitUntil(lambda: closed(dlg), timeout=3_000)
+    qtbot.wait(50)
+    assert ns.c.dialog(7) is None
+    assert ns.host.decisions() == []
+
+
+def test_k5_code_label_draws_cells_keeps_text_and_size(qtbot, ctl):
+    from teleport.core.pairing_code import format_code
+    from teleport.ui.pairing import CodeLabel
+
+    ns = ctl(clock=FakeClock(NOW))
+    dlg = open_prompt(qtbot, ns, make_prompt(code="382104"))
+    code = dlg.findChild(QLabel, "pairingCode")
+    assert isinstance(code, CodeLabel)
+    assert code.text() == format_code("382104") == "382 104"
+    assert code.textFormat() == Qt.TextFormat.PlainText
+    assert code.accessibleName()
+    assert "382 104" in code.accessibleDescription()
+    assert not code.grab().isNull()
+    digit = code.fontMetrics().horizontalAdvance("0")
+    assert code.sizeHint().width() >= 6 * digit
+    assert code.minimumSizeHint().width() >= 6 * digit
+
+
+def test_k5_code_label_with_odd_text_paints_like_label(qtbot):
+    from teleport.ui.pairing import CodeLabel
+
+    label = CodeLabel()
+    qtbot.addWidget(label)
+    for value in ("", "12 34", "abc def", "1234567"):
+        label.setText(value)
+        label.show()
+        assert not label.grab().isNull()
+        assert label.text() == value
+
+
+def test_k6_language_change_rebuilds_countdown(qtbot, ctl):
+    from teleport.ui import i18n
+
+    ns = ctl(clock=FakeClock(NOW))
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 42.3))
+    bar, text = countdown_parts(dlg)
+    i18n.set_language("en")
+    QApplication.processEvents()
+    assert i18n.current_language() == "en", "cần teleport_en.qm"
+    assert text.text() == "43 seconds left to confirm"
+    assert bar.accessibleName() == "Time left to confirm"
+    i18n.set_language("vi")
+    QApplication.processEvents()
+    assert text.text() == COUNTDOWN.format(n=43)
+
+
+def test_k6_english_singular(qtbot, ctl):
+    from teleport.ui import i18n
+
+    clock = FakeClock(NOW)
+    ns = ctl(clock=clock)
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 1.0))
+    _, text = countdown_parts(dlg)
+    i18n.set_language("en")
+    QApplication.processEvents()
+    assert text.text() == "1 second left to confirm"
+
+
+@pytest.mark.parametrize("key", sorted(EVIL_NAMES))
+def test_k7_no_peer_text_before_code_and_countdown_has_no_peer_text(qtbot, ctl, key):
+    from teleport.ui.pairing import prompt_header
+
+    ns = ctl(clock=FakeClock(NOW))
+    name = EVIL_NAMES[key]
+    p = make_prompt(name=name, expires_at=NOW + 42.3)
+    dlg = open_prompt(qtbot, ns, p)
+    code = dlg.findChild(QLabel, "pairingCode")
+    above = [lb for lb in visible_labels(dlg) if top_of(lb, dlg) + lb.height() <= top_of(code, dlg)]
+    assert [lb.text() for lb in above if lb.text()] == [prompt_header(p.role)]
+    bar, text = countdown_parts(dlg)
+    assert text.text() == COUNTDOWN.format(n=43)
+    for piece in (name, label(name)):
+        assert piece not in bar.accessibleName() and piece not in bar.accessibleDescription()
+
+
+def test_k_countdown_bar_description_updates_only_at_30_10_5(qtbot, ctl):
+    """Spec 11.11: không accessibleName động; mô tả trợ năng của thanh chỉ đổi ở mốc 30, 10, 5 s."""
+    clock = FakeClock(NOW)
+    ns = ctl(clock=clock)
+    dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 42.0))
+    bar, text = countdown_parts(dlg)
+    name = bar.accessibleName()
+    for left, expected in ((41, None), (30, 30), (29, 30), (11, 30), (10, 10), (6, 10), (5, 5), (3, 5)):
+        clock.value = NOW + 42.0 - left
+        qtbot.waitUntil(lambda left=left: text.text() == COUNTDOWN.format(n=left), timeout=2_000)
+        if expected is None:
+            assert bar.accessibleDescription() != COUNTDOWN.format(n=left), (
+                "ngoài mốc: không đổi theo từng giây"
+            )
+        else:
+            assert bar.accessibleDescription() == COUNTDOWN.format(n=expected), left
+        assert bar.accessibleName() == name
