@@ -11,6 +11,10 @@ file” / phím Chọn file (`ui.shortcuts`) của luồng → `pick_and_send`, 
 `request_send`, thả hay dán khi chưa chọn máy → thông báo; “Gửi lại” → `resend`;
 `view.history_needed` → đọc lịch sử.
 
+**Chẩn đoán kết nối** (spec F3b): `diagnose` (`ui.diagnose.DiagnoseController`, con của controller)
+đặt thanh của nó vào `view` lúc dựng; controller này chỉ chuyển tiếp `attach`, `on_started`,
+`on_node_event`, `close_all` và máy đang chọn (`current_changed`, kèm một lời gọi lúc dựng).
+
 **Host** (`attach`): mỗi `NodeHost` mới (lần đầu, “Bắt đầu”, “Thử lại”) → xóa mọi luồng, bong bóng
 (kể cả tạm), đường dẫn nhớ cho “Gửi lại” và thông báo, đóng hộp hỏi, bỏ việc “ghép rồi gửi” đang
 chờ, đặt thư mục nhận (`options.receive_dir` khi là Path tường minh, không thì None tới khi `ui.app`
@@ -176,6 +180,7 @@ from teleport.ui.activity import ActivityTracker, FinishedTransfer, latest_by_de
 from teleport.ui.bridge import NodeHost
 from teleport.ui.chat import ChatView
 from teleport.ui.chat_bubbles import TransferBubble
+from teleport.ui.diagnose import DiagnoseController
 from teleport.ui.main_window import MainWindow, Page, ViewState
 from teleport.ui.notify import ReceivedBatch, batch_reveal, received_batch_text
 from teleport.ui.offer import OfferBook, OfferPhase, OfferPrompts, always_save_error_text
@@ -352,12 +357,15 @@ class TransfersController(QObject):
             area_layout.addWidget(self.view)
         self.offers = OfferPrompts(self.offer_book, parent=self)
         self.view.set_offer_book(self.offer_book)
+        # Thanh chẩn đoán kết nối ở đầu luồng (spec F3b): tự đặt vào `view` bằng `set_device_banner`.
+        self.diagnose = DiagnoseController(self.view, window.devices, window, self)
 
         conversations = window.conversations
         conversations.send_files_requested.connect(self.request_send)
         conversations.pick_files_requested.connect(self.pick_and_send)
         conversations.drop_hint_requested.connect(self.view.show_notice)
         conversations.current_changed.connect(self.view.set_device)
+        conversations.current_changed.connect(self.diagnose.set_device)
         conversations.open_requested.connect(self.view.focus_composer)
         self.view.cancel_requested.connect(self.cancel)
         self.view.resend_requested.connect(self.resend)
@@ -367,6 +375,7 @@ class TransfersController(QObject):
         self.view.history_needed.connect(self._on_history_needed)
         current = conversations.current_device()
         self.view.set_device(None if current is None else current.device_id)
+        self.diagnose.set_device(None if current is None else current.device_id)
         self.view.content_changed.connect(self._update_summary)
         self.offers.decided.connect(self.answer)
         self.view.offer_answer_requested.connect(self.answer)
@@ -395,6 +404,7 @@ class TransfersController(QObject):
         self._host = host
         self.offer_book.clear()  # trước `view.clear()` và `offers.close_all()` (spec B4 mục 11.2)
         self.view.clear()
+        self.diagnose.attach(host)
         self.activity.clear()
         self._window.conversations.model.clear_activity()
         self.offers.close_all()
@@ -439,6 +449,7 @@ class TransfersController(QObject):
         if host is not self._host:
             return
         self._started = host
+        self.diagnose.on_started(host)
         host.call(
             lambda node: (node.devices(), node.transfers.transfers()),
             functools.partial(self._on_snapshot, host),
@@ -458,6 +469,7 @@ class TransfersController(QObject):
         self._closing = True
         self.offer_book.clear()  # trước `offers.close_all()`: không quyết định gì
         self.offers.close_all()
+        self.diagnose.close_all()
         self._drop_pending()
         self._reset_background()
         dialog, self._dialog = self._dialog, None
@@ -468,6 +480,7 @@ class TransfersController(QObject):
     # ---- Sự kiện của node (đã về thread Qt, của host hiện tại) --------------------------------
 
     def on_node_event(self, event: NodeEvent) -> None:
+        self.diagnose.on_node_event(event)
         if not isinstance(event, _DEVICE_EVENTS):
             return
         view = event.device

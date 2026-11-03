@@ -347,7 +347,7 @@ def outcome_text(result: PairingFinished, *, target: str | None = None) -> str |
             name=x,
         )
     if outcome is PairingOutcome.UNREACHABLE:
-        return _unreachable_text(where)
+        return unreachable_text(where)
     if outcome is PairingOutcome.IDENTITY_MISMATCH:
         return texts.fill(
             tr(
@@ -383,7 +383,9 @@ def outcome_text(result: PairingFinished, *, target: str | None = None) -> str |
     return None  # CANCELLED
 
 
-def _unreachable_text(target: str) -> str:
+def unreachable_text(target: str) -> str:
+    """Câu UNREACHABLE (mvp mục 8) tới `target` (“ip:cổng” hay tên đã qua `peer_label`); dùng cả ở
+    hộp “Kết nối bằng IP…” của `ui.diagnose`."""
     return texts.fill(
         QCoreApplication.translate(
             "Pairing",
@@ -1148,7 +1150,7 @@ class PairingController(QObject):
             self._show_result(device_gone_text(pairing.label))
         elif isinstance(result, ValueError):
             log.warning("ghép đôi: tham số không hợp lệ (%s)", type(result).__name__)
-            self._show_result(_unreachable_text(pairing.target or pairing.label))
+            self._show_result(unreachable_text(pairing.target or pairing.label))
         elif isinstance(result, RuntimeError):
             log.info("ghép đôi: node chưa chạy hoặc đang đóng")
         elif isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
