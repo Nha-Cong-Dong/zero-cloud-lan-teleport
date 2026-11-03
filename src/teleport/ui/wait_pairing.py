@@ -370,6 +370,7 @@ class WaitPairingPage(QWidget):
             t("WaitPairing", "Đóng màn này; máy đang ẩn thì thôi nhận yêu cầu ghép đôi.")
         )
         for label, button in zip(self.address_labels, self.copy_buttons, strict=True):
+            label.setAccessibleName(address_caption)
             self._label_copy_button(button, label.text())
 
     # ---- Địa chỉ -------------------------------------------------------------------------------

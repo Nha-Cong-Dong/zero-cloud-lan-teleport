@@ -69,8 +69,9 @@ CAPTION −1 pt, font của `base`, màu qua `TONE_PROPERTY`. `base` mặc đị
 đặt cỡ theo pixel thì cộng TITLE +8 px, SECTION +3 px, CAPTION −1 px. Không ghi cứng font thân: dùng
 font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
 
-**Stylesheet ứng dụng** (`stylesheet(dark, button_height, accent)`, `_reapply` đặt): mọi luật có bộ chọn hẹp
-(`[property]` hoặc `#objectName`), nên widget không mang property thì Fusion vẽ như cũ.
+**Stylesheet ứng dụng** (`stylesheet(dark, button_height, accent)`, `_reapply` đặt): mọi luật (trừ vòng
+tiêu điểm chung, cuối danh sách) có bộ chọn hẹp (`[property]` hoặc `#objectName`), nên widget không mang
+property thì Fusion vẽ như cũ.
 - `QPushButton[primary="true"]` — **nút chính** (hành động chính của mỗi màn / hộp: “Bắt đầu”, “Ghép
   đôi” của khung nhập IP, “Nhận”, “Trùng khớp”, “Thử lại”): nền `accent`, chữ `accent_text`, viền 2 px
   `accent_strong`, bo `RADIUS_CONTROL`, mã màu viết thẳng từ `primary_colors()` (không qua
@@ -102,6 +103,14 @@ font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
   `:hover` nền `selected`; `:checked` nền `accent`, chữ `accent_text`, viền `accent_strong`; `:focus`
   viền `focus_ring_color` và chữ gạch chân; `:disabled` chữ `text_muted`, nút đang chọn nền
   `selected` viền `border`.
+- `QLabel:focus`, `QAbstractItemView:focus` — **vòng tiêu điểm chung** (mvp N12; spec E1 mục 2.6) cho
+  nhãn chọn được bằng chuột mà vẫn nhận Tab và cho danh sách/bảng (Fusion không vẽ dấu nào cho chúng):
+  viền 2 px `focus_ring_color` (nhãn bo `RADIUS_CONTROL`). Đây là hai luật duy nhất không có bộ chọn
+  hẹp, nhưng chỉ khớp lúc có tiêu điểm. Viền chỉ đặt ở `:focus` (không có viền trong suốt ở trạng thái
+  thường): style tính lề nội dung lúc polish, khi widget chưa có tiêu điểm, nên lúc có tiêu điểm viền
+  vẽ đè lên mép mà cỡ widget và vị trí chữ không đổi. Danh sách/bảng có khung thì phần viền trong bị
+  viewport che, thấy ≈ 1 px; danh sách `NoFrame` bị viewport che hết (không đổi gì). Style windows11 và
+  Fusion chỉ vẽ khi tiêu điểm đến từ bàn phím; luật này vẽ cả khi bấm chuột vào nhãn.
 
 Property (`PRIMARY_PROPERTY`, `TONE_PROPERTY`, `SURFACE_PROPERTY`, `ICON_BUTTON_PROPERTY`,
 `SEGMENTED_PROPERTY`, `SEGMENT_PROPERTY`) đặt
@@ -551,6 +560,12 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f"{segment(':focus')} {{ border-color: {ring}; text-decoration: underline; }}",
         f"{segment(':disabled')} {{ color: {t.text_muted.name()}; }}",
         f"{segment(':checked:disabled')} {{ background: {t.selected.name()}; border-color: {border}; }}",
+    ]
+    # Vòng tiêu điểm chung cho nhãn chọn được và danh sách/bảng (spec E1 mục 2.6): Fusion không vẽ gì
+    # khi chúng có tiêu điểm. Chỉ ở `:focus`, không ở trạng thái thường: không đổi cỡ hay vị trí chữ.
+    lines += [
+        f"QLabel:focus {{ border: 2px solid {ring}; border-radius: {RADIUS_CONTROL}px; }}",
+        f"QAbstractItemView:focus {{ border: 2px solid {ring}; }}",
     ]
     return "\n".join(lines)
 
