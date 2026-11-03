@@ -39,8 +39,11 @@ Viết từ spec, không từ code:
   phải vẫn còn trong nguồn (`test_vietnamese_exemptions_still_exist`).
 - **`KNOWN_GAPS`** (spec E1 mục 2.5): chỉ cảnh mới, lỗi ở file của PR song song, `xfail(strict=True)` kèm
   mã việc sau: `FITS_KNOWN_GAPS` (tràn chữ) và `VIETNAMESE_KNOWN_GAPS` (quét tĩnh). Mục
-  `FITS_KNOWN_GAPS` chỉ thấy trên nền `offscreen` (font thay thế, spec E1 mục 2.6) nên xfail có điều kiện
-  nền đó; với `QT_QPA_PLATFORM=windows` (font thật) cảnh phải xanh thật.
+  `FITS_KNOWN_GAPS` chỉ lộ ra khi chữ thân đo bằng font thay thế (spec E1 mục 2.6): nền `offscreen` và
+  tiến trình chưa nạp font điểm nhấn (`QFontInfo` của font chữ thân khác `theme.ACCENT_FAMILY`). Fixture
+  autouse `_fits_known_gap_xfail` gắn `xfail(strict=True)` lúc chạy, chỉ trong trạng thái đó
+  (`body_font_is_fallback`); ngoài nó (Windows thật, hay offscreen sau khi một test đã gọi
+  `fonts.install()`) hai cảnh chạy như test thường và phải xanh. Đối chứng ở cuối file.
 - `available_languages()` có `"en"`; `i18n.loadable("en")`; locale hệ điều hành `en_GB`/`en_US` → `en`;
   đổi vi → en → vi lúc chạy: chữ trên cửa sổ đổi rồi trở lại đúng như cũ.
 - `ui.app._assets_ok()` bắt `.qm` hỏng: gói `teleport.ui` (bản chép trong `tmp_path`, giả qua
@@ -56,7 +59,6 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import os
 import re
 import shutil
 import xml.etree.ElementTree as ET
@@ -957,49 +959,60 @@ def test_overflow_check_detects_clipped_button_and_label(qtbot, qapp):
 # song song (E1 không sửa). Cảnh → (objectName, kiểm nào, file chủ, mã việc sau). `xfail(strict=True)`: sửa
 # xong thì test XPASS → đỏ, đòi xóa mục.
 #
-# Hai mục dưới chỉ xảy ra trên nền `offscreen` (spec E1 mục 2.6): nền đó không có Segoe UI, chữ đo bằng
-# font thay thế rộng hơn. Lần chạy `QT_QPA_PLATFORM=windows` (style windows11, font thật) hai cảnh này
-# PASS, nên xfail chỉ áp cho `offscreen`; trên Windows thật chúng là test thường và phải xanh. Vẫn strict
-# trên `offscreen`: hết tràn ở đó (vd. đổi font) thì XPASS → đỏ, đòi xóa mục.
+# Hai mục dưới chỉ lộ ra khi chữ thân đo bằng font thay thế (spec E1 mục 2.6): nền `offscreen` không có
+# font hệ thống, và trước khi tiến trình nạp font điểm nhấn (`fonts.install`) thì chữ thân không có font
+# thật nào, đo rộng gần gấp đôi. Sau khi một test bất kỳ đã nạp font điểm nhấn, chữ thân dùng font đó (cả
+# sau `fonts._reset()`, Qt giữ kết quả chọn font) và hai cảnh vừa khung; trên `QT_QPA_PLATFORM=windows`
+# (font thật) hai cảnh cũng vừa. Nên xfail gắn lúc chạy (`_fits_known_gap_xfail`) theo đúng trạng thái làm
+# lỗi lộ ra (`body_font_is_fallback`), không gắn lúc thu thập; ngoài trạng thái đó hai cảnh là test thường
+# và phải xanh. Vẫn strict trong trạng thái đó: hết tràn thì XPASS → đỏ, đòi xóa mục.
 FITS_KNOWN_GAPS: dict[str, str] = {
     "chat_offer": (
-        "E1c-1: chỉ trên offscreen (font thay thế): ô `offerAlways` (OfferPanel) bị cắt chữ English "
-        "(“Always accept from this device”); kiểm: nút/ô một dòng sizeHint ≤ width; file chủ "
-        "`ui/chat_bubbles.py` (G4/F5); Windows thật xanh"
+        "E1c-1: chỉ khi chữ thân dùng font thay thế (offscreen, chưa nạp font điểm nhấn): ô `offerAlways` "
+        "(OfferPanel) bị cắt chữ English (“Always accept from this device”); kiểm: nút/ô một dòng "
+        "sizeHint ≤ width; file chủ `ui/chat_bubbles.py` (G4/F5); Windows thật xanh"
     ),
     "chat_clipboard_note": (
-        "E1c-2: chỉ trên offscreen (font thay thế): nhãn `clipboardNoteTitle` không xuống dòng nên luồng "
-        "chat cuộn ngang ở English; kiểm: vùng cuộn không cuộn ngang; file chủ `ui/chat_bubbles.py` "
-        "(G4/F5); Windows thật xanh"
+        "E1c-2: chỉ khi chữ thân dùng font thay thế (offscreen, chưa nạp font điểm nhấn): nhãn "
+        "`clipboardNoteTitle` không xuống dòng nên luồng chat cuộn ngang ở English; kiểm: vùng cuộn không "
+        "cuộn ngang; file chủ `ui/chat_bubbles.py` (G4/F5); Windows thật xanh"
     ),
 }
 
 
-def _qpa_platform() -> str:
-    """Nền Qt sẽ dùng, đọc lúc thu thập test (chưa có `QGuiApplication`): `tests/ui/conftest.py` đặt mặc
-    định `offscreen` ở mức module, trước khi file này được nạp. Bỏ tùy chọn sau dấu `:` (vd.
-    `windows:darkmode=2`)."""
-    return os.environ.get("QT_QPA_PLATFORM", "offscreen").split(":", 1)[0].strip().lower()
+def body_font_is_fallback() -> bool:
+    """Trạng thái làm E1c-1/E1c-2 lộ ra, đọc từ trạng thái thật của Qt lúc chạy: nền `offscreen` và font
+    chữ thân (`QGuiApplication.font()`) được Qt chọn thành một family khác font điểm nhấn
+    (`theme.ACCENT_FAMILY`), tức chưa nạp font điểm nhấn trong tiến trình. Đo bằng `QFontInfo` (font Qt
+    thật sự dùng để dàn chữ), không bằng cờ `fonts._installed`, vì `fonts._reset()` xóa cờ mà Qt vẫn giữ
+    font đã chọn."""
+    from PySide6.QtGui import QFontInfo, QGuiApplication
+
+    from teleport.ui import theme
+
+    if QGuiApplication.platformName() != "offscreen":
+        return False
+    return QFontInfo(QGuiApplication.font()).family() != theme.ACCENT_FAMILY
 
 
-OFFSCREEN = _qpa_platform() == "offscreen"
+@pytest.fixture(autouse=True)
+def _fits_known_gap_xfail(request):
+    """Gắn `xfail(strict=True)` cho cảnh của `FITS_KNOWN_GAPS` trong `test_english_fits_720x460` khi
+    `body_font_is_fallback()`; ngoài trạng thái đó để test chạy thật (phải PASS)."""
+    if request.node.originalname != "test_english_fits_720x460":
+        return
+    scene = request.node.callspec.params.get("scene")
+    if scene not in FITS_KNOWN_GAPS:
+        return
+    request.getfixturevalue("qapp")
+    if body_font_is_fallback():
+        request.node.add_marker(
+            pytest.mark.xfail(raises=AssertionError, strict=True, reason=FITS_KNOWN_GAPS[scene])
+        )
 
 
 def _fits_params() -> list:
-    return [
-        pytest.param(
-            name,
-            id=name,
-            marks=[
-                pytest.mark.xfail(
-                    condition=OFFSCREEN, raises=AssertionError, strict=True, reason=FITS_KNOWN_GAPS[name]
-                )
-            ]
-            if name in FITS_KNOWN_GAPS
-            else [],
-        )
-        for name in SCENES
-    ]
+    return [pytest.param(name, id=name) for name in SCENES]
 
 
 def test_fits_known_gaps_name_existing_new_scenes():
@@ -1007,15 +1020,6 @@ def test_fits_known_gaps_name_existing_new_scenes():
     assert set(FITS_KNOWN_GAPS) <= set(SCENES)
     assert set(FITS_KNOWN_GAPS) <= set(NEW_SCENE_MARKERS)
     assert all(reason.startswith("E1c-") for reason in FITS_KNOWN_GAPS.values())
-
-
-def test_fits_offscreen_condition_matches_running_platform(qapp):
-    """Điều kiện xfail của `FITS_KNOWN_GAPS` (đọc biến môi trường lúc thu thập) khớp nền Qt đang chạy thật:
-    lệch thì trên Windows thật mục miễn vẫn áp (giấu lỗi) hay trên offscreen thì không áp (đỏ giả)."""
-    from PySide6.QtGui import QGuiApplication
-
-    running_offscreen = QGuiApplication.platformName() == "offscreen"
-    assert running_offscreen == OFFSCREEN
 
 
 @pytest.mark.parametrize("scene", _fits_params())
@@ -1171,3 +1175,35 @@ def test_assets_ok_rejects_broken_qm(qapp, ui_package_copy, back_to_source, garb
     assert "en" in i18n.available_languages()
     assert i18n.loadable("en") is False
     assert ui_app._assets_ok() is False
+
+
+# Đặt cuối file: test này nạp font điểm nhấn (đổi font chữ thân của cả tiến trình), để theo thứ tự file
+# các test 720×460 ở trên vẫn đo trong trạng thái chưa nạp.
+def test_fits_known_gap_condition_follows_real_font_state(qapp):
+    """Đối chứng của điều kiện xfail: (1) nền không phải `offscreen` → luôn False; (2) trên `offscreen`,
+    khi điều kiện là True thì chữ mẫu của E1c-1 đo bằng font chữ thân rộng hơn hẳn khi đo bằng font điểm
+    nhấn (đúng là font thay thế); sau `fonts.install()` điều kiện là False, và vẫn False sau
+    `fonts._reset()` (Qt giữ font đã chọn, hai cảnh vừa khung, nên phải chạy như test thường)."""
+    from PySide6.QtGui import QFont, QFontMetrics, QGuiApplication
+
+    from teleport.ui import fonts, theme
+
+    if QGuiApplication.platformName() != "offscreen":
+        assert body_font_is_fallback() is False
+        return
+    sample = "Always accept from this device"
+    if body_font_is_fallback():
+        body = QFontMetrics(QGuiApplication.font()).horizontalAdvance(sample)
+        accent = QFont(QGuiApplication.font())
+        was_installed = fonts._installed
+        fonts.install()
+        accent.setFamilies([theme.ACCENT_FAMILY])
+        assert body > QFontMetrics(accent).horizontalAdvance(sample), (
+            "điều kiện True mà chữ thân không rộng hơn"
+        )
+        if not was_installed:
+            fonts._reset()
+    fonts.install()
+    assert body_font_is_fallback() is False
+    fonts._reset()
+    assert body_font_is_fallback() is False
