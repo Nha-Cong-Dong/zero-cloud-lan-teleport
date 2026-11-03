@@ -40,7 +40,7 @@ Viết từ spec, không từ code:
 - **`KNOWN_GAPS`** (spec E1 mục 2.5): chỉ cảnh mới, lỗi ở file của PR song song, `xfail(strict=True)` kèm
   mã việc sau: `FITS_KNOWN_GAPS` (tràn chữ) và `VIETNAMESE_KNOWN_GAPS` (quét tĩnh). Mục
   `FITS_KNOWN_GAPS` chỉ lộ ra khi chữ thân đo bằng font thay thế (spec E1 mục 2.6): nền `offscreen` và
-  tiến trình chưa nạp font điểm nhấn (`QFontInfo` của font chữ thân khác `theme.ACCENT_FAMILY`). Fixture
+  chữ thân không có font thật nào (`QFontInfo` trả family rỗng; tiến trình chưa nạp font điểm nhấn). Fixture
   autouse `_fits_known_gap_xfail` gắn `xfail(strict=True)` lúc chạy, chỉ trong trạng thái đó
   (`body_font_is_fallback`); ngoài nó (Windows thật, hay offscreen sau khi một test đã gọi
   `fonts.install()`) hai cảnh chạy như test thường và phải xanh. Đối chứng ở cuối file.
@@ -981,18 +981,17 @@ FITS_KNOWN_GAPS: dict[str, str] = {
 
 
 def body_font_is_fallback() -> bool:
-    """Trạng thái làm E1c-1/E1c-2 lộ ra, đọc từ trạng thái thật của Qt lúc chạy: nền `offscreen` và font
-    chữ thân (`QGuiApplication.font()`) được Qt chọn thành một family khác font điểm nhấn
-    (`theme.ACCENT_FAMILY`), tức chưa nạp font điểm nhấn trong tiến trình. Đo bằng `QFontInfo` (font Qt
+    """Trạng thái làm E1c-1/E1c-2 lộ ra, đọc từ trạng thái thật của Qt lúc chạy: nền `offscreen` và chữ
+    thân (`QGuiApplication.font()`) không có font thật nào (`QFontInfo` trả family rỗng: offscreen trên
+    Windows không thấy font hệ thống, và tiến trình chưa nạp font điểm nhấn). Offscreen trên Linux/macOS có
+    font hệ thống thật nên không rơi vào đây: ở đó hai cảnh là test thường. Đo bằng `QFontInfo` (font Qt
     thật sự dùng để dàn chữ), không bằng cờ `fonts._installed`, vì `fonts._reset()` xóa cờ mà Qt vẫn giữ
     font đã chọn."""
     from PySide6.QtGui import QFontInfo, QGuiApplication
 
-    from teleport.ui import theme
-
     if QGuiApplication.platformName() != "offscreen":
         return False
-    return QFontInfo(QGuiApplication.font()).family() != theme.ACCENT_FAMILY
+    return QFontInfo(QGuiApplication.font()).family() == ""
 
 
 @pytest.fixture(autouse=True)
