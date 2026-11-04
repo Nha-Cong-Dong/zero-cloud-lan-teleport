@@ -129,7 +129,15 @@ các thuộc tính công khai (`conversations`, `transfers_area`, `body`, `statu
 - Trang SETTINGS (`ui.settings.SettingsPage`) do `ui.app.GuiApp` đăng ký (`add_page`), không phải cửa
   sổ: `MainWindow` trần (test) không có nút ⚙. `set_device_name(name)` đổi tên ở thẻ máy này sau khi
   đổi tên trong Cài đặt.
-- Không có hoạt ảnh chuyển trang: đổi tức thì.
+- **Chuyển động khi đổi trang** (spec G3, `ui.motion`): `PageStack` mờ chéo qua `motion.Fader`
+  (`SLOW`): trang mới (cây thật) hiện ngay và đứng yên, ảnh chụp trang cũ (overlay `motionOverlay`,
+  không nhận chuột, không nhận tiêu điểm) mờ 1→0 và dịch `motion.MAX_SHIFT_PX` sang trái khi đi tới
+  (trang khác HOME chưa có trong lịch sử), sang phải khi lùi (HOME, trang đã có trong lịch sử, `back`,
+  `reset`); RTL thì đảo chiều. Trang, `page_changed` và tiêu điểm đổi ngay, trước hoạt ảnh. Khung phải
+  `stream_pane` cũng mờ chéo (overlay dịch lên khi sang luồng chat, xuống khi về màn rỗng), nhưng chỉ
+  khi `set_transfer_summary` hay danh sách máy đổi sau ảnh chụp danh sách máy đầu tiên
+  (`_devices_loaded`); lúc dựng, `retranslate` và khi đổi trạng thái thì tức thì. `home_stack` đổi tức
+  thì. Tắt hiệu ứng (`motion.should_animate()` False) hay widget không hiện thì đổi tức thì.
 """
 
 from __future__ import annotations
@@ -183,7 +191,7 @@ from shiboken6 import isValid
 
 from teleport import paths
 from teleport.net.connection import DEFAULT_PORT
-from teleport.ui import first_run, shortcuts, texts, theme
+from teleport.ui import first_run, motion, shortcuts, texts, theme
 from teleport.ui.backdrop import MicaBackdrop
 from teleport.ui.conversations import ConversationList
 from teleport.ui.discover import DiscoverPage
@@ -244,6 +252,7 @@ class PageStack(QStackedWidget):
         self._pages: dict[Page, QWidget] = {}
         # (trang trước, widget có tiêu điểm lúc rời trang đó)
         self._history: list[tuple[Page, QWidget | None]] = []
+        self._fader = motion.Fader(self)
 
     def add_page(self, page: Page, widget: QWidget) -> None:
         """Thêm trang; trùng → ValueError. Đặt objectName `<page>Page` nếu widget chưa có tên."""
@@ -273,6 +282,7 @@ class PageStack(QStackedWidget):
         current = self.current_page
         if page is current:
             return
+        forward = False
         if page is Page.HOME:
             self._history.clear()
         else:
@@ -281,7 +291,8 @@ class PageStack(QStackedWidget):
                 del self._history[index:]  # không tạo vòng
             else:
                 self._history.append((current, self.window().focusWidget()))
-        self._switch(page, widget)
+                forward = True
+        self._switch(page, widget, forward=forward)
         widget.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def back(self) -> bool:
@@ -290,7 +301,7 @@ class PageStack(QStackedWidget):
             return False
         page, focus = self._history.pop()
         widget = self._pages[page]
-        self._switch(page, widget)
+        self._switch(page, widget, forward=False)
         window = self.window()
         if (
             focus is not None
@@ -308,10 +319,14 @@ class PageStack(QStackedWidget):
         """Về HOME, xóa lịch sử; không đặt tiêu điểm (bên gọi lo)."""
         self._history.clear()
         if Page.HOME in self._pages and self.current_page is not Page.HOME:
-            self._switch(Page.HOME, self._pages[Page.HOME])
+            self._switch(Page.HOME, self._pages[Page.HOME], forward=False)
 
-    def _switch(self, page: Page, widget: QWidget) -> None:
-        self.setCurrentWidget(widget)
+    def _switch(self, page: Page, widget: QWidget, *, forward: bool) -> None:
+        """Đổi trang ngay (mờ chéo ảnh trang cũ nếu được hoạt ảnh) rồi phát `page_changed` một lần."""
+        dx = -motion.MAX_SHIFT_PX if forward else motion.MAX_SHIFT_PX
+        if self.isRightToLeft():
+            dx = -dx
+        self._fader.crossfade(lambda: self.setCurrentWidget(widget), motion.SLOW, shift=QPoint(dx, 0))
         self.page_changed.emit(str(page))
 
 
@@ -448,6 +463,7 @@ class MainWindow(QMainWindow):
         self._active = 0
         self._progress: int | None = None  # % tổng trên tiêu đề cửa sổ (`set_progress`)
         self._has_paired = False  # danh sách cuộc trò chuyện có máy (đã ghép đôi)
+        self._devices_loaded = False  # đã nhận ảnh chụp danh sách máy đầu tiên (`stream_pane` mờ chéo)
         self._scroll_target: QWidget | None = None  # widget chờ được cuộn tới (`_on_focus_changed`)
         self._compact_applied: bool | None = None  # dạng cột trái đã áp (`_apply_compact`)
         self._shown_once = False  # cửa sổ đã từng hiện (`ui.placement.capture`)
@@ -596,6 +612,7 @@ class MainWindow(QMainWindow):
         area_layout.setContentsMargins(*(theme.SPACING[3],) * 4)
         self.stream_pane.addWidget(self.empty_state)
         self.stream_pane.addWidget(self.transfers_area)
+        self._stream_fader = motion.Fader(self.stream_pane)
 
         body_layout.addWidget(self.sidebar)
         body_layout.addWidget(self.stream_pane, 1)
@@ -651,6 +668,8 @@ class MainWindow(QMainWindow):
         model = self.conversations.model
         for signal in (model.modelReset, model.rowsInserted, model.rowsRemoved, model.layoutChanged):
             signal.connect(self._update_paired)
+        # Nối sau proxy: ảnh chụp đầu tiên vẫn đổi khung phải tức thì, các lần đổi sau mới mờ chéo.
+        self.devices.modelReset.connect(self._on_devices_loaded)
         selection = self.conversations.list_view.selectionModel()
         if selection is not None:
             selection.currentChanged.connect(self._on_conversation_current)
@@ -791,7 +810,7 @@ class MainWindow(QMainWindow):
         self._active = active
         self.machine_card.set_activity(active)
         self.compact_machine.update_info()
-        self._update_stream()
+        self._update_stream(animate=True)
         self._keep_footer_last()
 
     def set_progress(self, percent: int | None) -> None:
@@ -1058,14 +1077,31 @@ class MainWindow(QMainWindow):
 
     def _update_paired(self) -> None:
         self._has_paired = self.conversations.model.rowCount() > 0
-        self._update_stream()
+        self._update_stream(animate=True)
 
-    def _update_stream(self) -> None:
-        """Khung phải: màn rỗng khi RUNNING, chưa có máy đã ghép đôi và luồng chat rỗng."""
+    def _on_devices_loaded(self) -> None:
+        """Đã có ảnh chụp danh sách máy: từ đây khung phải mờ chéo khi đổi. `devices.clear()` (host mới,
+        Thử lại) cũng bật cờ; chỉ ảnh hưởng hình ảnh (có thể mờ chéo sớm hơn một lần)."""
+        self._devices_loaded = True
+
+    def _update_stream(self, *, animate: bool = False) -> None:
+        """Khung phải: màn rỗng khi RUNNING, chưa có máy đã ghép đôi và luồng chat rỗng.
+
+        `animate` (chỉ `set_transfer_summary`, `_update_paired`): mờ chéo, nhưng chỉ sau ảnh chụp danh
+        sách máy đầu tiên; còn lại đổi tức thì.
+        """
         show_empty = self._state is ViewState.RUNNING and not self._has_paired and not self._has_content
         target = self.empty_state if show_empty else self.transfers_area
-        if self.stream_pane.currentWidget() is not target:
-            self.stream_pane.setCurrentWidget(target)
+        if self.stream_pane.currentWidget() is target:
+            return
+        stream = self.stream_pane
+        if not (animate and self._devices_loaded):
+            self._stream_fader.crossfade(lambda: stream.setCurrentWidget(target), motion.INSTANT)
+            return
+        shift = -motion.MAX_SHIFT_PX if target is self.transfers_area else motion.MAX_SHIFT_PX
+        self._stream_fader.crossfade(
+            lambda: stream.setCurrentWidget(target), motion.SLOW, shift=QPoint(0, shift)
+        )
 
     def _keep_footer_last(self) -> None:
         """Dời “Mở thư mục” rồi “Đổi…” về cuối chuỗi Tab: widget tạo sau cửa sổ (thẻ lượt truyền,

@@ -31,6 +31,8 @@ Ba phần:
   dựa vào màu). Chữ chỉ cho trình đọc màn hình nằm ở accessibleName/Description.
 - **`PairingProgressDialog`**: hộp “Đang ghép đôi với …” có thanh bận và nút “Hủy”, rộng tối thiểu
   `theme.DIALOG_MIN_WIDTH`.
+- Mọi hộp của module (`PairingDialog`, `PairingProgressDialog`, hộp dựng bằng `_new_box`) mờ dần khi
+  hiện (`motion.fade_in_on_show`, spec G3); đóng tức thì. Tiêu điểm và trình đọc màn hình không chờ.
 - **`PairingController`**: điều phối trên thread Qt. Host là bất cứ gì có signal
   `pairing_prompt`, `pairing_finished` và `call` / `submit` như `bridge.NodeHost` (test dùng host
   giả). `Node` chỉ được chạm bên trong hàm đưa cho `call` / `submit`, chạy trên thread node.
@@ -124,7 +126,7 @@ from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt
 from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc lúc dùng
 from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
-from teleport.ui import texts, theme
+from teleport.ui import motion, texts, theme
 from teleport.ui.chat_bubbles import paint_thin_bar, set_tone
 
 log = logging.getLogger(__name__)
@@ -633,6 +635,7 @@ class PairingDialog(QDialog):
 
     def __init__(self, prompt: PairingPrompt, *, clock: Callable[[], float] = time.monotonic) -> None:
         super().__init__(None)
+        motion.fade_in_on_show(self)  # mờ dần khi hiện (spec G3); đóng tức thì
         self._prompt = prompt
         self._clock = clock
         self._resolved = False  # đã quyết định hoặc đã đóng không quyết định
@@ -813,6 +816,7 @@ class PairingProgressDialog(QDialog):
 
     def __init__(self, name: str) -> None:
         super().__init__(None)
+        motion.fade_in_on_show(self)
         self._name = name
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -954,8 +958,9 @@ def _set_result_buttons(box: QMessageBox, retry: _RetryTarget | None) -> None:
 
 
 def _new_box(parent: QWidget | None, on_finished: Callable[[QMessageBox], None]) -> QMessageBox:
-    """`QMessageBox` không chặn, chữ thuần, tự xóa khi đóng."""
+    """`QMessageBox` không chặn, chữ thuần, tự xóa khi đóng, mờ dần khi hiện."""
     box = QMessageBox(parent)
+    motion.fade_in_on_show(box)
     box.setWindowModality(Qt.WindowModality.NonModal)
     box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
     box.setTextFormat(Qt.TextFormat.PlainText)
