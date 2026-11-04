@@ -18,7 +18,8 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
   `theme.stylesheet`; nền hover/ấn tự vẽ để chuyển dần (dưới). Màu chữ dùng `QLabel[tone=…]` có sẵn.
   Không widget nào gọi `setPalette`.
 - **Chuyển động** (spec G2, `ui/motion.py`): `IconButton` đổi nền hover/ấn, `ToggleSwitch` trượt núm,
-  `SegmentedControl` trượt khối chọn. Tắt hiệu ứng hay chế độ tức thì: nhảy thẳng. Trạng thái
+  `SegmentedControl` trượt khối chọn; chấm của `DeviceAvatar` và `StatusBadge` chuyển màu mờ dần (spec
+  G5). Tắt hiệu ứng hay chế độ tức thì: nhảy thẳng. Trạng thái
   (`isChecked()`, chữ “Bật/Tắt”, `value()`, tiêu điểm, trạng thái trợ năng) đổi **ngay**, chỉ phần vẽ
   chạy theo; rảnh thì không hoạt ảnh nào chạy (mvp N3).
 - **Đổi sáng/tối**: widget tự vẽ bắt `PaletteChange` và `ApplicationPaletteChange`, tô lại icon (dựng
@@ -35,12 +36,21 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
 - `StatusBadge`: chấm 8 px + chữ CAPTION đậm. SUCCESS chấm `success`, chữ `tone=success`; BUSY chấm
   `accent_strong`, chữ `tone=accent` (`accent_text`); WARNING `warning` / `tone=warning`; MUTED vòng
   rỗng 2 px `offline`, chữ `tone=muted`. Trạng thái luôn có chữ (mvp N12); chữ rỗng thì ẩn badge.
+  Đổi tone khi badge đang hiện: chữ và tên trợ năng đổi ngay, chấm mờ chéo từ kiểu cũ sang kiểu mới
+  (`motion.FAST`, `dot_progress()` ∈ [0, 1]); xong thì vẽ đúng đường tĩnh.
 - `paint_avatar` / `DeviceAvatar`: hình tròn nền `surface_raised`, viền 1 px `border`, icon
   `text_muted`; máy này (`emphasis`) nền `accent`, icon `accent_text`. Ngoại tuyến thì icon mờ
   (opacity 0,6). Chấm góc dưới phải có vành 2 px màu nền phía sau (`ring`): ONLINE `success`, BUSY
   `accent_strong`, OFFLINE vòng 2 px `offline` ruột màu `ring`, NONE không chấm. Chấm lệch ra ngoài
   hình tròn 1 px khi `rect` còn chỗ; `DeviceAvatar` cỡ đúng bằng đường kính nên chấm nằm sát góc.
   Chấm không mang thông tin một mình: bên gọi đưa trạng thái vào tên của hàng/khối.
+  **Chuyển màu chấm** (spec G5 mục 3.3): `paint_avatar(..., previous, progress)` nội suy mô hình
+  `_dot_style` (màu ruột, độ “rỗng” của OFFLINE, alpha cả chấm kể cả vành; NONE mượn màu bên kia với
+  alpha 0) và độ mờ icon; `previous` None, trùng `presence` hay `progress ≥ 1` thì vẽ đúng hình tĩnh
+  (trùng từng điểm ảnh). Chỉ đổi màu, không đổi hình hay cỡ. `DeviceAvatar.set_presence(p, animate=True)`
+  chạy `motion.FAST` khi giá trị đổi và avatar đang hiện (đổi tiếp giữa chừng: chạy lại từ đích cũ,
+  có thể giật nhẹ ≤ 120 ms, chấp nhận), còn lại nhảy thẳng; `presence_progress()`. Callback đưa vào
+  `motion` chỉ giữ tham chiếu yếu tới widget.
 - `ChatBubble`: nền `bubble_out` (gửi đi, không viền) / `bubble_in` (nhận vào, viền 1 px `border`);
   ATTENTION viền 2 px `accent_strong`, DANGER viền 2 px `danger`. Hình theo `bubble_path`: bo
   `RADIUS_BUBBLE`, góc dưới phía người gửi bo `RADIUS_BUBBLE_TAIL`. `BubbleRow` đặt bong bóng sát
@@ -102,8 +112,10 @@ from __future__ import annotations
 
 import contextlib
 import html
-from collections.abc import Sequence
+import weakref
+from collections.abc import Callable, Sequence
 from enum import StrEnum
+from typing import Any
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
@@ -196,6 +208,26 @@ def _set_shown(widget: QWidget, shown: bool) -> None:
         widget.setAttribute(Qt.WidgetAttribute.WA_WState_ExplicitShowHide, False)
         return
     widget.setVisible(shown)
+
+
+def _weak(method: Callable[..., Any]) -> Callable[..., None]:
+    """Bọc phương thức của một QObject bằng tham chiếu yếu (xem sổ đăng ký ở `ui/motion.py`)."""
+    ref = weakref.WeakMethod(method)
+
+    def call(*args: Any) -> None:
+        bound = ref()
+        if bound is not None and isValid(getattr(bound, "__self__", None)):
+            bound(*args)
+
+    return call
+
+
+def _unit(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(1.0, number))
 
 
 def _check_label(label: str) -> None:
@@ -349,6 +381,8 @@ class _BadgeDot(QWidget):
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self.tone = BadgeTone.MUTED
+        self.previous: BadgeTone | None = None  # kiểu cũ khi đang mờ chéo
+        self.progress = 1.0
         self.setFixedSize(_BADGE_DOT, _BADGE_DOT)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -356,22 +390,34 @@ class _BadgeDot(QWidget):
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            rect = QRectF(0, 0, _BADGE_DOT, _BADGE_DOT)
-            if self.tone is BadgeTone.MUTED:
-                painter.setPen(QPen(t.offline, 2))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(rect.adjusted(1, 1, -1, -1))
+            previous, m = self.previous, self.progress
+            if previous is None or previous is self.tone or m >= 1.0:
+                self._paint_tone(painter, self.tone, t)  # đường tĩnh
             else:
-                color = {
-                    BadgeTone.SUCCESS: t.success,
-                    BadgeTone.BUSY: t.accent_strong,
-                    BadgeTone.WARNING: t.warning,
-                }[self.tone]
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(color)
-                painter.drawEllipse(rect)
+                m = max(0.0, m)
+                painter.setOpacity(1.0 - m)
+                self._paint_tone(painter, previous, t)
+                painter.setOpacity(m)
+                self._paint_tone(painter, self.tone, t)
         finally:
             painter.end()
+
+    @staticmethod
+    def _paint_tone(painter: QPainter, tone: BadgeTone, t: Tokens) -> None:
+        rect = QRectF(0, 0, _BADGE_DOT, _BADGE_DOT)
+        if tone is BadgeTone.MUTED:
+            painter.setPen(QPen(t.offline, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(rect.adjusted(1, 1, -1, -1))
+        else:
+            color = {
+                BadgeTone.SUCCESS: t.success,
+                BadgeTone.BUSY: t.accent_strong,
+                BadgeTone.WARNING: t.warning,
+            }[tone]
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(rect)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -407,15 +453,38 @@ class StatusBadge(QWidget):
     def text(self) -> str:
         return self._text
 
+    def dot_progress(self) -> float:
+        """Tiến độ mờ chéo của chấm (1 khi đứng yên)."""
+        return self.dot.progress
+
     def set_status(self, tone: BadgeTone, text: str) -> None:
         """Đặt trạng thái; `text` rỗng thì ẩn cả badge, có chữ thì hiện lại.
 
         Badge chưa có cha thì không tự mở thành cửa sổ riêng (`_set_shown`): đặt vào layout trước rồi
-        mới gọi, hoặc tự `show()`.
+        mới gọi, hoặc tự `show()`. Tone đổi khi badge đang hiện: chấm mờ chéo (`motion.FAST`).
         """
-        self._tone = BadgeTone(tone)
+        new_tone = BadgeTone(tone)
+        old_tone = self._tone
+        visible = self.isVisible()  # trước `_set_shown`
+        self._tone = new_tone
         self._text = text
-        self.dot.tone = self._tone
+        self.dot.tone = new_tone
+        if new_tone is not old_tone:
+            if visible:
+                self.dot.previous = old_tone
+                self.dot.progress = 0.0
+                token = motion.FAST
+            else:
+                token = motion.INSTANT
+            motion.animate_value(
+                self,
+                self.dot.progress,
+                1.0,
+                token,
+                _weak(self._set_dot_progress),
+                key="tone",
+                on_finished=_weak(self._end_dot_fade),
+            )
         self.dot.update()
         self.label.setText(text)
         self.label.setProperty(theme.TONE_PROPERTY, _BADGE_LABEL_TONE[self._tone])
@@ -425,6 +494,15 @@ class StatusBadge(QWidget):
 
     def retranslate(self) -> None:
         """Chữ do bên gọi dịch (`set_status`); không có chữ đặt sẵn."""
+
+    def _set_dot_progress(self, value: Any) -> None:
+        self.dot.progress = _unit(value)
+        self.dot.update()
+
+    def _end_dot_fade(self) -> None:
+        self.dot.previous = None
+        self.dot.progress = 1.0
+        self.dot.update()
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -452,6 +530,21 @@ class AvatarKind(StrEnum):
 _RING_TOKENS = frozenset({"surface", "sidebar", "surface_raised", "selected"})
 
 
+def _dot_style(presence: Presence, tokens: Tokens) -> tuple[QColor, float, float]:
+    """(màu ruột, độ rỗng, alpha) của chấm. NONE: alpha 0, màu ruột do bên chuyển tới/từ quyết định."""
+    if presence is Presence.ONLINE:
+        return QColor(tokens.success), 0.0, 1.0
+    if presence is Presence.BUSY:
+        return QColor(tokens.accent_strong), 0.0, 1.0
+    if presence is Presence.OFFLINE:
+        return QColor(tokens.offline), 1.0, 1.0
+    return QColor(tokens.offline), 0.0, 0.0
+
+
+def _icon_opacity(presence: Presence) -> float:
+    return _OFFLINE_ICON_OPACITY if presence is Presence.OFFLINE else 1.0
+
+
 def paint_avatar(
     painter: QPainter,
     rect: QRectF,
@@ -462,14 +555,32 @@ def paint_avatar(
     ring: QColor,
     tokens: Tokens,
     dpr: float,
+    previous: Presence | None = None,
+    progress: float = 1.0,
 ) -> None:
     """Vẽ avatar (hình tròn, icon loại máy, chấm trạng thái) vào `rect`; dùng chung cho delegate.
 
     Hình tròn đường kính `min(rect.width, rect.height)`, căn giữa `rect`. `ring` là màu nền nằm sau
-    avatar (vành của chấm). Lưu và khôi phục trạng thái của `painter`.
+    avatar (vành của chấm). `previous` / `progress`: đang chuyển màu chấm từ `previous` (xem docstring
+    module); mặc định vẽ hình tĩnh. Lưu và khôi phục trạng thái của `painter`.
     """
     d = min(rect.width(), rect.height())
     if d <= 0:
+        return
+    if previous is not None and Presence(previous) is not presence and progress < 1.0:
+        _paint_avatar_fading(
+            painter,
+            rect,
+            d,
+            kind,
+            Presence(previous),
+            presence,
+            max(0.0, progress),
+            emphasis,
+            ring,
+            tokens,
+            dpr,
+        )
         return
     circle = QRectF(rect.center().x() - d / 2, rect.center().y() - d / 2, d, d)
     painter.save()
@@ -519,6 +630,78 @@ def paint_avatar(
         painter.restore()
 
 
+def _paint_avatar_fading(
+    painter: QPainter,
+    rect: QRectF,
+    d: float,
+    kind: AvatarKind,
+    previous: Presence,
+    presence: Presence,
+    m: float,
+    emphasis: bool,
+    ring: QColor,
+    tokens: Tokens,
+    dpr: float,
+) -> None:
+    """`paint_avatar` giữa lúc chuyển chấm `previous` → `presence` ở mức `m` ∈ [0, 1)."""
+    circle = QRectF(rect.center().x() - d / 2, rect.center().y() - d / 2, d, d)
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if emphasis:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(tokens.accent)
+            painter.drawEllipse(circle)
+            icon_color = tokens.accent_text
+        else:
+            painter.setPen(QPen(tokens.border, 1))
+            painter.setBrush(tokens.surface_raised)
+            painter.drawEllipse(circle.adjusted(0.5, 0.5, -0.5, -0.5))
+            icon_color = tokens.text_muted
+
+        size = 24 if d >= 44 else 20
+        pm = icons.pixmap(str(AvatarKind(kind)), size, icon_color, dpr)
+        if not pm.isNull():
+            painter.save()
+            start, end = _icon_opacity(previous), _icon_opacity(presence)
+            icon_opacity = start + (end - start) * m
+            if icon_opacity < 1.0:
+                painter.setOpacity(icon_opacity)
+            center = circle.center()
+            painter.drawPixmap(QPointF(center.x() - size / 2, center.y() - size / 2), pm)
+            painter.restore()
+
+        fill_prev, hole_prev, alpha_prev = _dot_style(previous, tokens)
+        fill_cur, hole_cur, alpha_cur = _dot_style(presence, tokens)
+        if previous is Presence.NONE:
+            fill_prev = fill_cur
+        if presence is Presence.NONE:
+            fill_cur = fill_prev
+        alpha = alpha_prev + (alpha_cur - alpha_prev) * m
+        if alpha <= 0.0:
+            return
+        hole = hole_prev + (hole_cur - hole_prev) * m
+        dot = max(9, round(d * 0.29))
+        right = min(circle.right() + 1, rect.right())
+        bottom = min(circle.bottom() + 1, rect.bottom())
+        outer = QRectF(right - dot, bottom - dot, dot, dot)
+        painter.setOpacity(painter.opacity() * alpha)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(ring)
+        painter.drawEllipse(outer)
+        inner = outer.adjusted(2, 2, -2, -2)
+        painter.setBrush(theme.blend(fill_prev, fill_cur, m))
+        painter.drawEllipse(inner)
+        if hole > 0.0:
+            hole_color = QColor(ring)
+            hole_color.setAlphaF(ring.alphaF() * hole)
+            painter.setBrush(hole_color)
+            painter.drawEllipse(inner.adjusted(2, 2, -2, -2))
+    finally:
+        painter.restore()
+
+
 class DeviceAvatar(QWidget):
     """Avatar tròn cỡ cố định; chỉ để trang trí trừ khi bên gọi đặt tên (`set_label`)."""
 
@@ -539,6 +722,8 @@ class DeviceAvatar(QWidget):
         self._diameter = diameter
         self._kind = AvatarKind(kind)
         self._presence = Presence(presence)
+        self._previous: Presence | None = None  # chấm cũ khi đang chuyển màu
+        self._progress = 1.0
         self._emphasis = emphasis
         self._ring = ring
         self.setFixedSize(diameter, diameter)
@@ -573,8 +758,41 @@ class DeviceAvatar(QWidget):
         self._kind = AvatarKind(kind)
         self.update()
 
-    def set_presence(self, presence: Presence) -> None:
-        self._presence = Presence(presence)
+    def set_presence(self, presence: Presence, *, animate: bool = True) -> None:
+        """Đổi chấm; khác giá trị cũ, `animate` và avatar đang hiện thì chuyển màu (`motion.FAST`)."""
+        new = Presence(presence)
+        old = self._presence
+        if new is old:
+            return
+        self._presence = new
+        if animate and self.isVisible():
+            self._previous = old
+            self._progress = 0.0
+            token = motion.FAST
+        else:
+            token = motion.INSTANT
+        motion.animate_value(
+            self,
+            self._progress,
+            1.0,
+            token,
+            _weak(self._set_progress),
+            key="presence",
+            on_finished=_weak(self._end_fade),
+        )
+        self.update()
+
+    def presence_progress(self) -> float:
+        """Tiến độ chuyển màu chấm (1 khi đứng yên)."""
+        return self._progress
+
+    def _set_progress(self, value: Any) -> None:
+        self._progress = _unit(value)
+        self.update()
+
+    def _end_fade(self) -> None:
+        self._previous = None
+        self._progress = 1.0
         self.update()
 
     def set_emphasis(self, emphasis: bool) -> None:
@@ -607,6 +825,8 @@ class DeviceAvatar(QWidget):
                 ring=getattr(t, self._ring),
                 tokens=t,
                 dpr=self.devicePixelRatioF(),
+                previous=self._previous,
+                progress=self._progress,
             )
         finally:
             painter.end()

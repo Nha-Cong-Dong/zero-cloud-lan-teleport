@@ -26,7 +26,8 @@ Cảnh: `welcome` (màn lần chạy đầu, có công tắc khởi động cùn
 `running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo),
 `running_unavailable` (thư mục nhận đã lưu không mở được, spec B1b), `error`, `widgets` (trang
 mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`, kể cả `SegmentedControl` của spec D6 và,
-từ spec G2 mục 7.4, một `AnimatedButton` chính đang chạy “Đang ghép đôi…” cạnh nút phụ “Đóng”),
+từ spec G2 mục 7.4, một `AnimatedButton` chính đang chạy “Đang ghép đôi…” cạnh nút phụ “Đóng”; từ
+spec G5 mục 7.5, nút “Chép” của trang chờ ghép đôi ở dạng active “✓ Đã chép”),
 `page` (RUNNING, mở một trang mẫu có
 `PageHeader` ở chỗ SETTINGS, vì DISCOVER đã là trang thật), `discover` (trang “Tìm máy mới”: 4 máy
 chưa ghép đôi, một tên dài bị cắt “…”, 2 máy đã ghép đôi), `discover_list` (9 máy: tự sang dạng danh
@@ -46,7 +47,8 @@ chưa ghép đôi không hiện), `settings_devices_empty` (spec G6: chưa ghép
 
 Luồng chat (spec B3, `ui.chat`): `chat` (luồng của PC-Nha: nhận xong “Đã lưu” + “Hiện trong thư mục”, gửi lỗi
 viền đỏ + “Gửi lại”, đang gửi 62%, bong bóng tạm “Đang chuẩn bị…”, dòng mốc), `chat_new` (cuộn lên
-rồi có lượt mới: nút “↓ Mới”), `chat_drop` (đang kéo 3 file vào luồng), `chat_offline` (máy ngoại
+rồi có lượt mới: nút “↓ Mới”), `chat_drop` (đang kéo 3 file vào luồng; từ spec G5, lớp phủ có huy
+hiệu `arrow_upload` trên câu thả), `chat_offline` (máy ngoại
 tuyến: lượt chờ kết nối, câu ngoại tuyến ở thanh dưới), `chat_history` (lịch sử hai ngày trước, hôm
 qua và lượt của phiên hôm nay), `chat_empty` (máy chưa có lượt nào: màn rỗng “Kéo file vào đây…”).
 
@@ -414,6 +416,21 @@ def scene_widgets(qtbot) -> QWidget:
     button_row.addWidget(secondary)
     button_row.addWidget(running)
     left.addLayout(button_row)
+
+    # Spec G5 7.5 (13.21): nút “Chép” của trang chờ ghép đôi ở dạng active (“✓ Đã chép”).
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QPushButton
+
+    from teleport.ui.wait_pairing import WaitPairingPage
+
+    copied = QPushButton()
+    copied.setObjectName("snapshotCopiedButton")
+    copied.setIconSize(QSize(20, 20))
+    WaitPairingPage._label_copy_button(copied, "192.168.1.15", True)
+    copy_row = QHBoxLayout()
+    copy_row.addStretch(1)
+    copy_row.addWidget(copied)
+    left.addLayout(copy_row)
 
     empty = widgets.EmptyState()
     empty.set_content(
@@ -1097,3 +1114,64 @@ def test_snapshot(qtbot, ui_theme, scene, width, height):
         _save(image, scene, mode, width, height)
         images[mode] = image
     assert images["light"] != images["dark"]
+
+
+# ---- Spec G5 mục 7.5 ---------------------------------------------------------------------------
+
+
+def _close(a: QColor, b: QColor, tol: int) -> bool:
+    return (
+        abs(a.red() - b.red()) <= tol
+        and abs(a.green() - b.green()) <= tol
+        and abs(a.blue() - b.blue()) <= tol
+    )
+
+
+@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
+def test_chat_drop_scene_overlay_has_badge(qtbot, ui_theme, dark):
+    """`chat_drop`: lớp phủ đang hiện, có vòng huy hiệu `accent_subtle` ngay trên câu thả (G5)."""
+    from PySide6.QtCore import QPoint
+
+    from teleport.ui import motion, theme
+    from teleport.ui.chat import ChatView
+    from teleport.ui.drop_overlay import _BADGE
+
+    tokens = ui_theme(dark)
+    window = scene_chat_drop(qtbot)
+    # Như `_grab` nhưng chưa ẩn cửa sổ: ẩn (không tự phát) thì lớp phủ tự dismiss (spec G5 13.11).
+    window.resize(*SIZES[0])
+    window.show()
+    for _ in range(3):
+        QApplication.processEvents()
+    motion.finish_all()
+    image = window.grab().toImage()
+    [view] = window.findChildren(ChatView)
+    overlay = view.drop_overlay
+    assert overlay.shown and overlay.opacity() == 1.0
+    label = overlay.label.geometry()
+    origin = overlay.mapTo(window, QPoint(0, 0))
+    bottom = label.top() - theme.SPACING[2]
+    cx = overlay.width() // 2
+    dpr = image.devicePixelRatio()
+    found = False
+    for y in range(bottom - _BADGE, bottom):
+        for x in range(cx - _BADGE // 2, cx + _BADGE // 2):
+            px, py = round((origin.x() + x) * dpr), round((origin.y() + y) * dpr)
+            inside = 0 <= px < image.width() and 0 <= py < image.height()
+            if inside and _close(image.pixelColor(px, py), tokens.accent_subtle, 3):
+                found = True
+                break
+        if found:
+            break
+    assert found, "chat_drop: thiếu huy hiệu accent_subtle trên câu thả"
+
+
+def test_widgets_scene_has_active_copy_button(qtbot, ui_theme):
+    from PySide6.QtWidgets import QPushButton
+
+    ui_theme(False)
+    area = scene_widgets(qtbot)
+    [button] = [b for b in area.findChildren(QPushButton) if b.objectName() == "snapshotCopiedButton"]
+    assert button.text().replace("&", "") == "Đã chép"
+    assert not button.icon().isNull()
+    assert button.accessibleName() == "Đã chép địa chỉ 192.168.1.15"

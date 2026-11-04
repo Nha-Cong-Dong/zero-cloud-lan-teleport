@@ -11,7 +11,12 @@ nhận, `set_waiting(True)`); khối thông tin: tên máy này (`display_name(p
 (không nhận tiêu điểm: nút cạnh nó đã mang địa chỉ trong tên trợ năng) và nút “Chép” (tên trợ năng
 “Chép địa chỉ <chuỗi>”). Chuỗi = địa chỉ, thêm `:cổng` khi cổng khác `DEFAULT_PORT` (như dòng địa chỉ
 của cửa sổ chính và `teleport listen`). “Chép” theo mẫu `home.MachineCard._copy`: đặt clipboard, tooltip
-“Đã chép địa chỉ …” `_COPIED_TOOLTIP_MS`, sự kiện trợ năng Alert (cố gắng tốt nhất). None (chưa có lần
+“Đã chép địa chỉ …” `_COPIED_TOOLTIP_MS`, sự kiện trợ năng Alert (cố gắng tốt nhất); thêm nữa nút thành
+✓ “Đã chép” (`copied_button_text()`, icon `checkmark` 20 px màu `success`, tên trợ năng “Đã chép địa chỉ
+…” cho khớp chữ trên nút, WCAG 2.5.3) trong `buttons.COPIED_FEEDBACK_MS` rồi trở lại “Chép”
+(`copy_feedbacks`, mỗi nút một `buttons.CopiedFeedback`; chạy cả khi tắt hiệu ứng; nút ẩn thì trở lại
+ngay). Hai dạng cùng cỡ: `minimumSize` của nút = lớn nhất của hai dạng, tính lại khi đổi font và khi
+dịch lại; tooltip giữ “Chép địa chỉ …”. None (chưa có lần
 đọc nào) → “Đang lấy địa chỉ…”, không cảnh báo. Đọc xong mà rỗng → InfoBar WARNING (câu mvp mục 8);
 lần sau có địa chỉ thì gỡ cảnh báo đó (chỉ khi thanh vẫn đang hiện đúng câu ấy). Cảnh báo chỉ hiện khi
 thanh đang trống hay đang là chính nó: không đè câu lỗi mở chế độ chờ hay câu kết quả ghép đôi. Cùng địa
@@ -73,11 +78,12 @@ import contextlib
 import functools
 import itertools
 import logging
+import weakref
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QAccessible, QAccessibleEvent, QGuiApplication, QHideEvent, QShowEvent
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QAccessible, QAccessibleEvent, QGuiApplication, QHideEvent, QIcon, QShowEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -93,7 +99,8 @@ from shiboken6 import isValid
 
 from teleport.core.display import display_name
 from teleport.net.connection import DEFAULT_PORT
-from teleport.ui import texts, theme
+from teleport.ui import icons, texts, theme
+from teleport.ui.buttons import CopiedFeedback
 from teleport.ui.main_window import MainWindow, Page
 from teleport.ui.send import printable
 from teleport.ui.widgets import InfoBar, InfoLevel, PageHeader, safe_tooltip
@@ -105,6 +112,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _COPIED_TOOLTIP_MS = 2000
+_COPY_ICON = 20  # px, icon ✓ của dạng “Đã chép”
+_PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
 _CONTENT_MAX_WIDTH = 560  # px, cột nội dung (dòng chữ dài khó đọc trên cửa sổ rộng)
 # Chọn bằng chuột để chép; không `TextSelectableByKeyboard`: Tab tới nhãn sẽ hiện con trỏ chữ nhấp nháy.
 _TEXT_FLAGS = Qt.TextInteractionFlag.TextSelectableByMouse
@@ -145,6 +154,11 @@ def open_failed_text() -> str:
 
 def _copy_name(address: str) -> str:
     return texts.fill(QCoreApplication.translate("WaitPairing", "Chép địa chỉ {address}"), address=address)
+
+
+def copied_button_text() -> str:
+    """Chữ trên nút “Chép” trong lúc báo đã chép."""
+    return QCoreApplication.translate("WaitPairing", "Đã chép")
 
 
 def _copied_text(address: str) -> str:
@@ -190,6 +204,7 @@ class WaitPairingPage(QWidget):
         self._address_rows: list[QWidget] = []
         self.address_labels: list[QLabel] = []
         self.copy_buttons: list[QPushButton] = []
+        self.copy_feedbacks: list[CopiedFeedback] = []  # song song `copy_buttons`
 
         self.header = PageHeader(page_title(), self)
         self.header.back_requested.connect(self.back_requested)
@@ -369,8 +384,11 @@ class WaitPairingPage(QWidget):
         self.close_button.setAccessibleDescription(
             t("WaitPairing", "Đóng màn này; máy đang ẩn thì thôi nhận yêu cầu ghép đôi.")
         )
-        for label, button in zip(self.address_labels, self.copy_buttons, strict=True):
-            self._label_copy_button(button, label.text())
+        for label, button, feedback in zip(
+            self.address_labels, self.copy_buttons, self.copy_feedbacks, strict=True
+        ):
+            self._label_copy_button(button, label.text(), feedback.active)
+        self._align_copy_buttons()
 
     # ---- Địa chỉ -------------------------------------------------------------------------------
 
@@ -386,6 +404,7 @@ class WaitPairingPage(QWidget):
         self._address_rows = []
         self.address_labels = []
         self.copy_buttons = []
+        self.copy_feedbacks = []
         shown = self._addresses
         self.address_pending_label.setVisible(shown is None)
         for address in shown or ():
@@ -399,8 +418,11 @@ class WaitPairingPage(QWidget):
             button = QPushButton(row)
             button.setObjectName("waitPairingCopy")
             button.setProperty("address", address)
-            self._label_copy_button(button, address)
-            button.clicked.connect(functools.partial(self._copy, button, address))
+            button.setIconSize(QSize(_COPY_ICON, _COPY_ICON))
+            self._label_copy_button(button, address, False)
+            feedback = CopiedFeedback(button)
+            feedback.active_changed.connect(_copy_renderer(button, address))
+            button.clicked.connect(functools.partial(self._copy, button, feedback, address))
             line = QHBoxLayout(row)
             line.setContentsMargins(0, 0, 0, 0)
             line.setSpacing(theme.SPACING[2])
@@ -412,27 +434,39 @@ class WaitPairingPage(QWidget):
             self._address_rows.append(row)
             self.address_labels.append(label)
             self.copy_buttons.append(button)
+            self.copy_feedbacks.append(feedback)
         self._align_copy_buttons()
         self._update_tab_order()
         if had_focus and self.copy_buttons:
             self.copy_buttons[0].setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _align_copy_buttons(self) -> None:
-        """Các nút “Chép” thẳng một cột: nhãn địa chỉ rộng bằng nhãn dài nhất (tính lại khi đổi font)."""
+        """Các nút “Chép” thẳng một cột: nhãn địa chỉ rộng bằng nhãn dài nhất; mỗi nút cỡ không đổi giữa
+        “Chép” và “Đã chép” (tính lại khi đổi font và khi dịch lại)."""
         widest = max((label.sizeHint().width() for label in self.address_labels), default=0)
         for label in self.address_labels:
             label.setMinimumWidth(widest)
+        for button, feedback in zip(self.copy_buttons, self.copy_feedbacks, strict=True):
+            button.setMinimumSize(0, 0)
+            sizes = []
+            for active in (False, True):
+                _show_copy_look(button, active)
+                sizes.append(button.sizeHint())
+            _show_copy_look(button, feedback.active)
+            button.setMinimumSize(max(s.width() for s in sizes), max(s.height() for s in sizes))
 
     @staticmethod
-    def _label_copy_button(button: QPushButton, address: str) -> None:
-        button.setText(QCoreApplication.translate("WaitPairing", "Chép"))
-        button.setAccessibleName(_copy_name(address))
+    def _label_copy_button(button: QPushButton, address: str, active: bool) -> None:
+        """Dạng “Chép” hay ✓ “Đã chép” của nút (một hàm cho cả lúc đổi dạng và lúc dịch lại)."""
+        _show_copy_look(button, active)
+        button.setAccessibleName(_copied_text(address) if active else _copy_name(address))
         button.setToolTip(safe_tooltip(_copy_name(address)))
 
-    def _copy(self, button: QPushButton, address: str) -> None:
+    def _copy(self, button: QPushButton, feedback: CopiedFeedback, address: str) -> None:
         clipboard = QGuiApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(address)
+        feedback.trigger()
         QToolTip.showText(
             button.mapToGlobal(QPoint(0, button.height())),
             safe_tooltip(_copied_text(address)),
@@ -509,6 +543,32 @@ class WaitPairingPage(QWidget):
             self.retranslate()
         elif event.type() == QEvent.Type.FontChange:
             self._align_copy_buttons()
+        elif event.type() in _PALETTE_EVENTS:
+            for button, feedback in zip(self.copy_buttons, self.copy_feedbacks, strict=True):
+                if feedback.active:
+                    _show_copy_look(button, True)  # tô lại icon theo chế độ màu
+
+
+def _show_copy_look(button: QPushButton, active: bool) -> None:
+    """Chữ và icon của nút “Chép” (không đổi tên trợ năng; `_label_copy_button` lo phần đó)."""
+    if active:
+        button.setText(copied_button_text())
+        button.setIcon(icons.icon("checkmark", _COPY_ICON, theme.tokens_for(button).success))
+    else:
+        button.setText(QCoreApplication.translate("WaitPairing", "Chép"))
+        button.setIcon(QIcon())
+
+
+def _copy_renderer(button: QPushButton, address: str) -> Callable[[bool], None]:
+    """Slot của `CopiedFeedback.active_changed`: chỉ giữ tham chiếu yếu tới nút (bẫy `ButtonLevels`)."""
+    ref = weakref.ref(button)
+
+    def render(active: bool) -> None:
+        current = ref()
+        if current is not None and isValid(current):
+            WaitPairingPage._label_copy_button(current, address, active)
+
+    return render
 
 
 # ---- Bộ điều khiển -----------------------------------------------------------------------------
