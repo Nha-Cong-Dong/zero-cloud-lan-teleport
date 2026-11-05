@@ -39,22 +39,28 @@ hoạt ảnh lặp tối đa `MAX_LOOP_MS` (5 s). Các hằng là biến cấp m
   chạy lại. Không timer chạy nền khi không có hoạt ảnh (N3).
 - Bàn phím và trình đọc màn hình không chờ hoạt ảnh: tiêu điểm chuyển ngay. `HeightAnimator.collapse`
   không dời tiêu điểm, bên gọi dời trước.
+- `FrameDriver` là nhịp khung chung cho hoạt ảnh tự vẽ dài (tiến độ suốt lượt truyền, không hợp `Loop`):
+  timer chỉ chạy giữa `wake()` thành công và lúc dừng; widget hay cửa sổ ẩn/thu nhỏ → `finish()` (trạng
+  thái nhảy về cuối); không tự chạy lại.
 - Không `QGraphicsOpacityEffect` (hay hiệu ứng đồ họa khác) trên cây widget lớn: vẽ lại cả cây, tốn
-  CPU. Mờ chéo dùng ảnh chụp (`Fader`), cửa sổ cấp cao dùng `windowOpacity` (`fade_in_window`).
+  CPU. Mờ chéo dùng ảnh chụp (`Fader`), cửa sổ cấp cao dùng `windowOpacity` (`fade_in_window`). Ngoại
+  lệ duy nhất: hiệu ứng đồ họa tạm trên **một** widget nhỏ (một hàng của luồng chat), mỗi pha tối đa
+  `SLOW.ms`, gỡ ngay khi xong (`ui/chat_motion.py`): mờ dần, trượt và rung phải dịch cả các widget con thật.
 - Giá trị trả về của `animate` / `animate_value` là hoạt ảnh `DeleteWhenStopped`: chỉ dùng khi
   `shiboken6.isValid(anim)`. Mỗi `(target, prop)` (hay `(owner, key)`) chỉ một hoạt ảnh: hoạt ảnh mới
   thay hoạt ảnh cũ (cũ dừng, `on_finished` cũ không chạy, mới chạy từ giá trị hiện tại).
 - Sổ đăng ký giữ tham chiếu mạnh tới hoạt ảnh đang chạy, xóa khi `finished` / `destroyed`; khóa
   và closure chỉ giữ tham chiếu yếu tới đích (lý do ở chú thích của sổ). Bên dùng cũng đừng nối vào
   signal của hoạt ảnh một closure giữ chặt đích do Python sở hữu. `finish_all()` đưa mọi hoạt ảnh
-  tới giá trị cuối (dùng trước `grab()`), `running_count()` đếm số đang chạy (test N3).
+  tới giá trị cuối và gọi `finish()` của mọi `FrameDriver` (dùng trước `grab()`), `running_count()`
+  đếm số đang chạy, kể cả `Loop` và `FrameDriver` (test N3).
 
 **Seam test** (cấp module, đọc lúc gọi): `_instant` / `_force_instant(on)` (chế độ tức thì, không chạm
 `animations_enabled`), `_reset_for_tests()` (xóa cache GNOME, tắt chế độ tức thì),
-`_stop_all_for_tests()` (dừng mọi hoạt ảnh và `Loop` không gọi `on_finished` / `on_stop`, trả
-`windowOpacity` về 1.0, xóa sổ), `_query_client_area_animation()` (Windows),
-`_query_macos_reduce_motion()`, `_query_gnome_animations()`, `_monotonic`, `_GNOME_CACHE_TTL`,
-`_GSETTINGS_TIMEOUT`. Quy ước fixture: `architecture.md` §6.
+`_stop_all_for_tests()` (dừng mọi hoạt ảnh, `Loop` và `FrameDriver` không gọi `on_finished` /
+`on_stop` / `on_finish`, trả `windowOpacity` về 1.0, xóa sổ), `FrameDriver.FRAME_MS`,
+`_query_client_area_animation()` (Windows), `_query_macos_reduce_motion()`, `_query_gnome_animations()`,
+`_monotonic`, `_GNOME_CACHE_TTL`, `_GSETTINGS_TIMEOUT`. Quy ước fixture: `architecture.md` §6.
 """
 
 from __future__ import annotations
@@ -76,6 +82,7 @@ from PySide6.QtCore import (
     QPoint,
     QPropertyAnimation,
     Qt,
+    QTimer,
     QVariantAnimation,
 )
 from PySide6.QtGui import QGuiApplication, QPainter, QPaintEvent, QPixmap
@@ -263,9 +270,10 @@ def _reset_for_tests() -> None:
 # --- Sổ đăng ký ----------------------------------------------------------------------------------
 
 # Khóa sổ: (loại, `weakref.ref(đối tượng)`, tên): ("prop", target, prop), ("value", owner, key),
-# ("loop", Loop, ""). Khóa và closure nối vào hoạt ảnh KHÔNG giữ tham chiếu mạnh tới đích hay chủ: hoạt
-# ảnh là con của chúng, nên lúc hoạt ảnh bị hủy mà closure thả tham chiếu cuối của một đích do Python sở
-# hữu thì đích bị xóa ngay giữa destructor của chính hoạt ảnh con → xóa hai lần, tiến trình chết.
+# ("loop", Loop, ""), ("driver", FrameDriver, ""). Khóa và closure nối vào hoạt ảnh KHÔNG giữ tham
+# chiếu mạnh tới đích hay chủ: hoạt ảnh là con của chúng, nên lúc hoạt ảnh bị hủy mà closure thả tham
+# chiếu cuối của một đích do Python sở hữu thì đích bị xóa ngay giữa destructor của chính hoạt ảnh con →
+# xóa hai lần, tiến trình chết.
 _Key = tuple[str, Any, str]
 
 
@@ -291,7 +299,7 @@ class _Entry:
         self.on_value = None
 
 
-_registry: dict[_Key, _Entry | Loop] = {}
+_registry: dict[_Key, _Entry | Loop | FrameDriver] = {}
 
 
 def _drop(key: _Key, entry: object) -> None:
@@ -345,7 +353,8 @@ def _restore_window_opacity(entry: _Entry) -> None:
 
 
 def finish_all() -> int:
-    """Đưa mọi hoạt ảnh đang chạy tới giá trị cuối (`finished` và `on_finished` chạy), dừng mọi `Loop`.
+    """Đưa mọi hoạt ảnh đang chạy tới giá trị cuối (`finished` và `on_finished` chạy), dừng mọi `Loop`,
+    gọi `finish()` của mọi `FrameDriver` đang chạy.
 
     Lặp tới khi sổ rỗng (callback có thể chạy hoạt ảnh mới), tối đa 8 vòng; bỏ qua đối tượng đã hủy.
     Trả tổng số đã xử lý. Gọi trước `grab()` để ảnh chụp không bắt giữa chừng.
@@ -357,9 +366,12 @@ def finish_all() -> int:
         for key, entry in list(_registry.items()):
             if _registry.get(key) is not entry:
                 continue
-            if isinstance(entry, Loop):
+            if isinstance(entry, Loop | FrameDriver):
                 if isValid(entry):
-                    entry.stop()  # tự gỡ khỏi sổ; `on_stop` có thể đã đăng ký lại vòng mới
+                    if isinstance(entry, Loop):
+                        entry.stop()  # tự gỡ khỏi sổ; `on_stop` có thể đã đăng ký lại vòng mới
+                    else:
+                        entry.finish()  # tự gỡ khỏi sổ rồi gọi `on_finish`
                     total += 1
                 elif _registry.get(key) is entry:
                     _drop(key, entry)
@@ -377,10 +389,10 @@ def finish_all() -> int:
 
 
 def running_count() -> int:
-    """Số hoạt ảnh và `Loop` đang chạy (rảnh thì 0, mvp N3)."""
+    """Số hoạt ảnh, `Loop` và `FrameDriver` đang chạy (rảnh thì 0, mvp N3)."""
     count = 0
     for entry in _registry.values():
-        if isinstance(entry, Loop):
+        if isinstance(entry, Loop | FrameDriver):
             count += isValid(entry) and entry.running
         elif isValid(entry.anim):
             count += 1
@@ -388,13 +400,17 @@ def running_count() -> int:
 
 
 def _stop_all_for_tests() -> None:
-    """Seam test: dừng mọi hoạt ảnh và `Loop` mà không gọi `on_finished` / `on_stop`, rồi xóa sổ."""
+    """Seam test: dừng mọi hoạt ảnh, `Loop` và `FrameDriver` mà không gọi `on_finished` / `on_stop` /
+    `on_finish`, rồi xóa sổ."""
     entries = list(_registry.values())
     _registry.clear()
     for entry in entries:
         if isinstance(entry, Loop):
             if isValid(entry):
                 entry._halt(notify=False)
+        elif isinstance(entry, FrameDriver):
+            if isValid(entry):
+                entry.stop()
         else:
             entry.release()
             if isValid(entry.anim):
@@ -579,6 +595,110 @@ class Loop(QObject):
             and watched.isMinimized()
         ):
             self.stop()
+        return False
+
+
+# --- Nhịp khung ----------------------------------------------------------------------------------
+
+
+class FrameDriver(QObject):
+    """Nhịp khung chung (`FRAME_MS`) cho hoạt ảnh tự vẽ không có trần `MAX_LOOP_MS`; con của `widget`.
+
+    `wake()`: đang chạy → True; không được hoạt ảnh, widget không hiện hay cửa sổ thu nhỏ → False (bên
+    gọi nhảy thẳng tới trạng thái cuối); còn lại chạy timer rồi True. Mỗi khung gọi `on_frame()`, trả
+    False thì dừng (không gọi `on_finish`). Widget hay cửa sổ ẩn, cửa sổ thu nhỏ → `finish()`. `finish()`
+    dừng (nếu đang chạy) rồi **luôn** gọi `on_finish()` đúng một lần; `stop()` chỉ dừng. Có trong sổ đăng
+    ký khi chạy (`finish_all`, `running_count`, `_stop_all_for_tests`).
+    """
+
+    FRAME_MS = 16
+
+    def __init__(
+        self,
+        widget: QWidget,
+        on_frame: Callable[[], bool],
+        on_finish: Callable[[], None],
+    ) -> None:
+        super().__init__(widget)
+        self._widget = widget
+        self._on_frame = on_frame
+        self._on_finish = on_finish
+        self._running = False
+        self._watched: list[QObject] = []
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.setInterval(self.FRAME_MS)
+        self._timer.timeout.connect(self._frame)
+        self._key = _key("driver", self, "")
+        key = self._key
+        self.destroyed.connect(lambda *_: _registry.pop(key, None))
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    def can_run(self) -> bool:
+        """Được hoạt ảnh, widget đang hiện và cửa sổ không thu nhỏ."""
+        widget = self._widget
+        if not should_animate() or not isValid(widget) or not widget.isVisible():
+            return False
+        return not widget.window().isMinimized()
+
+    def wake(self) -> bool:
+        if self._running:
+            if should_animate():
+                return True
+            # Hệ điều hành vừa tắt hiệu ứng giữa chừng: về cuối ngay, không đợi driver tự dừng (N12).
+            self.finish()
+            return False
+        if not self.can_run():
+            return False
+        widget = self._widget
+        window = widget.window()
+        for watched in (widget, window) if window is not widget else (widget,):
+            watched.installEventFilter(self)
+            self._watched.append(watched)
+        self._running = True
+        _registry[self._key] = self
+        self._timer.start()
+        return True
+
+    def finish(self) -> None:
+        self._halt()
+        self._on_finish()
+
+    def stop(self) -> None:
+        self._halt()
+
+    def _frame(self) -> None:
+        if self._running and not self._on_frame():
+            self._halt()
+
+    def _halt(self) -> None:
+        if not self._running:  # cờ chống dừng hai lần
+            return
+        self._running = False
+        _drop(self._key, self)
+        if isValid(self._timer):
+            self._timer.stop()
+        for watched in self._watched:
+            if isValid(watched):
+                watched.removeEventFilter(self)
+        self._watched.clear()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        # Bẫy giống `Loop.eventFilter`: lúc cây widget bị hủy, thuộc tính Python có thể đã mất.
+        if not self.__dict__.get("_running") or not isValid(self):
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.Hide or (
+            kind == QEvent.Type.WindowStateChange
+            and isValid(watched)
+            and isinstance(watched, QWidget)
+            and watched.isWindow()
+            and watched.isMinimized()
+        ):
+            self.finish()
         return False
 
 
