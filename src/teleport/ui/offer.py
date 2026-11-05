@@ -22,7 +22,8 @@ tự và lần đầu thắng. Lý do phải chặn ở đây: engine vẫn từ
 bao giờ gỡ PENDING; số PENDING bị chặn bởi số máy đã ghép đôi, protocol §3.4).
 
 **`OfferPrompts`**: hộp hỏi nhận file, mỗi `TransferKey` một `QDialog` không cha, `NonModal`,
-`WA_DeleteOnClose`, mở bằng `show()` + `raise_()` + `activateWindow()` (không `exec()`). Việc mở do
+`WA_DeleteOnClose`, mở bằng `show()` + `raise_()` + `activateWindow()` (không `exec()`), mờ dần khi
+hiện (`motion.fade_in_on_show`, spec G3; đóng tức thì). Việc mở do
 `ui.transfers.TransfersController` quyết định (`show_prompt`); tối đa `PROMPTS_MAX_OPEN` hộp cùng lúc,
 thêm thì xếp hàng FIFO và mở dần khi một hộp đóng (chỉ key còn PENDING). Hộp nghe book: ANSWERED hay
 `removed` thì đóng, không phát gì; `always` / `connected` đổi thì cập nhật ô tick (chặn signal) và
@@ -78,7 +79,7 @@ from PySide6.QtWidgets import (
 
 from teleport.app.transfers import Direction, OfferReceived
 from teleport.core.transfer import TransferKey
-from teleport.ui import texts, theme
+from teleport.ui import motion, texts, theme
 from teleport.ui.send import printable
 from teleport.ui.texts import fill as _fill
 
@@ -384,6 +385,7 @@ class _OfferBox(QDialog):
     def __init__(self, on_language_change: Callable[[], None]) -> None:
         super().__init__()
         self._on_language_change = on_language_change
+        motion.fade_in_on_show(self)  # mờ dần khi hiện (spec G3); đóng tức thì
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
