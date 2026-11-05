@@ -30,6 +30,7 @@ API khác:
   `sanitize_filename`; `fallback_filename`: tên dự phòng chỉ gồm ASCII, ≤ `FALLBACK_MAX_BYTES`
   byte, dùng khi hệ file từ chối tên.
 - `prepare_outgoing_name`: bên gửi kiểm và cắt tên.
+- `is_device_name`: tên có phải tên thiết bị của Windows không (bước 9, không tính `.teleport`).
 
 Giới hạn độ dài của cả đường dẫn (Windows `MAX_PATH`) và tên dự phòng khi hệ file từ chối tên
 không thuộc module này: `teleport.app.storage` lo (docs/architecture.md mục 4 “Thư mục nhận”).
@@ -125,12 +126,22 @@ def _fit(name: str, max_bytes: int, suffix: str = "") -> str:
     raise ValueError(f"max_bytes = {max_bytes} không đủ chỗ cho tên và hậu tố {suffix!r}")
 
 
+def is_device_name(name: str) -> bool:
+    """Tên thiết bị của Windows, kể cả có đuôi hay dấu cách (`CON`, `nul.txt`, `con .txt`, `COM¹`).
+
+    So phần trước dấu chấm đầu tiên, đã bỏ dấu cách hai đầu và viết hoa, như bước 9 của
+    `sanitize_filename`; không tính tên nội bộ `.teleport`. `ui.ipc` dùng để từ chối đường dẫn có
+    thành phần là tên thiết bị.
+    """
+    stem = name.split(".", 1)[0].strip(" ").upper()
+    return _RESERVED_STEM_RE.fullmatch(stem) is not None
+
+
 def _is_reserved(name: str) -> bool:
     """Tên thiết bị của Windows (kể cả có đuôi) hoặc trùng tên nội bộ `.teleport`."""
     if name.casefold() in _INTERNAL_NAMES:
         return True
-    stem = name.split(".", 1)[0].strip(" ").upper()
-    return _RESERVED_STEM_RE.fullmatch(stem) is not None
+    return is_device_name(name)
 
 
 def sanitize_filename(name: str) -> str:

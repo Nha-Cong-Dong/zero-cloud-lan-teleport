@@ -704,13 +704,28 @@
     <name>GuiApp</name>
     <message>
         <location filename="../app.py"/>
+        <source>Bạn chọn quá nhiều file một lần. Hãy chọn ít file hơn rồi gửi lại.</source>
+        <translation>You selected too many files at once. Select fewer files and send again.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Không</source>
         <translation>No</translation>
     </message>
     <message>
         <location filename="../app.py"/>
+        <source>Không mở được hộp gửi file.</source>
+        <translation>Couldn't open the send dialog.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Thoát Teleport?</source>
         <translation>Exit Teleport?</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>{path} không phải đường dẫn đầy đủ tới một file. Hãy chọn file trong File Explorer rồi gửi lại.</source>
+        <translation>{path} isn't a full path to a file. Select the files in File Explorer and send again.</translation>
     </message>
     <message numerus="yes">
         <location filename="../app.py"/>
@@ -1388,6 +1403,62 @@
     </message>
 </context>
 <context>
+    <name>SendPicker</name>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Chưa ghép đôi với máy nào. Hãy ghép đôi một máy rồi gửi lại từ File Explorer.</source>
+        <translation>No paired devices yet. Pair a device, then send again from File Explorer.</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>File sẽ gửi</source>
+        <translation>Files to send</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Gửi</source>
+        <translation>Send</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../send_picker.py"/>
+        <source>Gửi %n file tới…</source>
+        <translation>
+            <numerusform>Send %n file to…</numerusform>
+            <numerusform>Send %n files to…</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Gửi tới máy</source>
+        <translation>Send to</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Hủy</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Teleport chỉ gửi khi bạn chọn máy và bấm Gửi. Nếu bạn không tự chọn các file này, hãy bấm Hủy.</source>
+        <translation>Teleport sends only after you choose a device and click Send. If you didn't select these files yourself, click Cancel.</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Tìm máy mới</source>
+        <translation>Find devices</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>{name}, trong {folder}</source>
+        <translation>{name}, in {folder}</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Đang mở một hộp gửi file. Hãy gửi hoặc hủy các file này trước, rồi gửi tiếp từ File Explorer.</source>
+        <translation>A send dialog is already open. Send or cancel those files first, then send again from File Explorer.</translation>
+    </message>
+</context>
+<context>
     <name>Settings</name>
     <message>
         <location filename="../settings.py"/>
@@ -1981,6 +2052,11 @@
     </message>
     <message>
         <location filename="../texts.py"/>
+        <source>Ngoại tuyến</source>
+        <translation>Offline</translation>
+    </message>
+    <message>
+        <location filename="../texts.py"/>
         <source>Teleport không khởi động được vì một lỗi không mong đợi.</source>
         <translation>Teleport couldn't start because of an unexpected error.</translation>
     </message>
@@ -2013,6 +2089,11 @@
         <location filename="../texts.py"/>
         <source>Thử lại</source>
         <translation>Try again</translation>
+    </message>
+    <message>
+        <location filename="../texts.py"/>
+        <source>Trực tuyến</source>
+        <translation>Online</translation>
     </message>
     <message>
         <location filename="../texts.py"/>
