@@ -155,6 +155,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **US-07:** Là người nhận, tôi muốn biết ai gửi gì và được quyền từ chối.
 - **AC:**
   - Kéo thả (lên một máy ở cột trái, hay vào luồng của máy đang mở), hoặc “Gửi file” (nút ở thanh dưới luồng của máy đang chọn, phím Ctrl+O, hay chuột phải vào thiết bị → “Gửi file…”), đều được; hỗ trợ chọn nhiều file. Chép file trong File Explorer (macOS: Finder) rồi nhấn Ctrl+V trong cửa sổ chính khi đang mở luồng của một máy cũng gửi ngay như thả file, không hỏi lại; chỉ gửi bản sao, kể cả khi chép bằng “Cắt”; Ctrl+V trong ô nhập chữ vẫn dán chữ như thường; clipboard không phải file thì không gửi gì (mục 8). Enter hay bấm đúp một máy ở cột trái mở cuộc trò chuyện với máy đó (tiêu điểm tới nút “Gửi file”).
+  - Chọn file trong File Explorer rồi bấm chuột phải › Gửi tới › **ZCL Teleport** (lối tắt do bộ cài Windows tạo; bản zip không có) thì mở hộp “Gửi *n* file tới…” có sẵn các file đó (mục 7.7). Teleport chỉ gửi khi người dùng chọn máy và bấm **Gửi**, không bao giờ tự gửi. Teleport chưa chạy thì được mở trước, hộp hiện khi Teleport đã sẵn sàng.
   - Mỗi file tối đa 4 TB (2⁴² byte, [protocol.md](protocol.md) mục 3.3). File lớn hơn bị chặn ngay lúc chọn, trước khi gửi gì cho máy kia (mục 8).
   - Máy nhận hiện hộp thoại: tên người gửi, danh sách file, tổng dung lượng, nút **Nhận** / **Từ chối**; hoặc, khi đang mở đúng cuộc trò chuyện với máy gửi, một bong bóng lời mời có cùng các nút; trả lời ở một chỗ thì chỗ kia đóng (mục 7.3). Có tùy chọn “Luôn nhận từ thiết bị này” (tương đương tắt “Hỏi trước khi nhận” của thiết bị đó trong cài đặt).
   - Không đủ dung lượng trống → máy nhận tự từ chối ngay, máy gửi được báo cần bao nhiêu và còn bao nhiêu.
@@ -302,7 +303,7 @@ Máy A: Ctrl+C một đoạn văn ──► (< 0,5s) ──► Máy B: Ctrl+V d�
 - ⌕ mở màn “Tìm máy mới” (radar, có “Nhập IP thủ công” và “Chờ ghép đôi”).
 - Chưa ghép đôi máy nào thì bên phải là “Ghép đôi máy đầu tiên”.
 - Cửa sổ hẹp thì cột trái thu gọn, chỉ còn avatar (tên và trạng thái ở chú thích khi trỏ chuột).
-- Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái (câu chữ của từng lượt: mục 7.3). Thanh dưới luồng có “Gửi file” (Ctrl+O) và câu “hoặc kéo file vào đây”; Ctrl+V gửi các file vừa chép trong File Explorer tới máy đang mở (F4); không gửi được cả thư mục (mục 4). Clipboard vừa nhận từ máy đó hiện thành một dòng mảnh ở cuối luồng (không phải bong bóng; mỗi luồng chỉ giữ dòng mới nhất, chỉ trong lần mở app này): “Clipboard · đã chép vào máy này” hay “Clipboard · chưa chép được vào máy này” kèm nút “Thử lại”, dòng dưới là dòng đầu của văn bản hay “Ảnh *1920* × *1080* · *2,4 MB*”. Nút gửi clipboard thủ công để sau (máy gửi chưa biết máy kia đã bật đồng bộ hay chưa). Mốc sự kiện trong luồng (“Đã ghép đôi · 28/10”, “Mất kết nối”) để sau; luồng chỉ có mốc thời gian.
+- Bên phải là luồng của máy đang chọn: gửi đi nằm bên phải, nhận vào nằm bên trái (câu chữ của từng lượt: mục 7.3). Thanh dưới luồng có “Gửi file” (Ctrl+O) và câu “hoặc kéo file vào đây”; trong File Explorer còn gửi được bằng Gửi tới › ZCL Teleport (mục 7.7); Ctrl+V gửi các file vừa chép trong File Explorer tới máy đang mở (F4); không gửi được cả thư mục (mục 4). Clipboard vừa nhận từ máy đó hiện thành một dòng mảnh ở cuối luồng (không phải bong bóng; mỗi luồng chỉ giữ dòng mới nhất, chỉ trong lần mở app này): “Clipboard · đã chép vào máy này” hay “Clipboard · chưa chép được vào máy này” kèm nút “Thử lại”, dòng dưới là dòng đầu của văn bản hay “Ảnh *1920* × *1080* · *2,4 MB*”. Nút gửi clipboard thủ công để sau (máy gửi chưa biết máy kia đã bật đồng bộ hay chưa). Mốc sự kiện trong luồng (“Đã ghép đôi · 28/10”, “Mất kết nối”) để sau; luồng chỉ có mốc thời gian.
 - “Đổi…” ở chân cửa sổ đổi thư mục nhận chung cho mọi thiết bị; thư mục mới được lưu và dùng cho các lần mở app sau. Thư mục nhận đã lưu không mở được lúc mở app thì app vẫn chạy nhưng không nhận file: thẻ máy này ghi “Không nhận file”, chân cửa sổ nói thư mục nào hỏng và vẫn có “Đổi…” (câu chữ ở mục 8).
 - Không hiện tên Wi-Fi.
 
@@ -519,6 +520,38 @@ clipboard”; mật khẩu chép từ trình quản lý mật khẩu không đư
 - Lỗi khởi động đến sau khi danh tính đã được tạo (ví dụ thư mục đã chọn không dùng được): tên đã sửa đã được lưu, thư mục không dùng được thì không lưu. Người dùng thoát app thay vì sửa rồi bấm lại thì lần mở sau không hiện màn này nữa: Teleport dùng thư mục đã lưu hay mặc định, lựa chọn khởi động cùng Windows bị bỏ; đổi lại trong Cài đặt.
 - Bàn phím: tiêu điểm đầu ở ô tên (có lỗi thư mục thì ở “Đổi…”); Tab theo thứ tự ô tên → “Đổi…” → công tắc (khi hiện) → “Bắt đầu”; Space bật/tắt công tắc.
 
+
+### 7.7. Gửi từ File Explorer
+```
+┌─ Gửi 2 file tới… ──────────────────────────────────┐
+│  Gửi 2 file tới…                                   │
+│                                                    │
+│  File sẽ gửi                                       │
+│  ┌──────────────────────────────────────────────┐  │
+│  │ video.mp4                                    │  │
+│  │ D:\Phim\Du lịch                              │  │
+│  │ ảnh.zip                                      │  │
+│  │ C:\Users\Minh\Downloads                      │  │
+│  └──────────────────────────────────────────────┘  │
+│  Gửi tới máy                                       │
+│  ┌──────────────────────────────────────────────┐  │
+│  │ (PC) PC-Nha             Trực tuyến           │  │
+│  │ (Lap) Laptop-Bảo        Ngoại tuyến          │  │
+│  └──────────────────────────────────────────────┘  │
+│  (i) Teleport chỉ gửi khi bạn chọn máy và bấm      │
+│      Gửi. Nếu bạn không tự chọn các file này,      │
+│      hãy bấm Hủy.                                  │
+│                                  [ Hủy ] [ Gửi ]   │
+└────────────────────────────────────────────────────┘
+```
+- Mở khi người dùng Gửi tới › ZCL Teleport trong File Explorer (F4), hay chạy `teleport-gui --send FILE…`. Cửa sổ chính hiện lên trước; hộp nằm trên cửa sổ chính.
+- Danh sách file chỉ để xem: mỗi file một hàng, tên file và thư mục chứa nó (dài thì cắt ở giữa, đầy đủ ở chú thích). Tên lạ (ký tự điều khiển, chữ đảo chiều) hiện như ở hộp hỏi nhận file. File chưa được kiểm lúc mở hộp: thư mục, file không còn hay không đọc được chỉ được báo sau khi bấm Gửi, ở luồng của máy nhận, như khi kéo thả (mục 8).
+- Danh sách máy là các máy đã ghép đôi, cùng thứ tự với cột trái, kèm trạng thái bằng chữ; cập nhật khi máy lên hay xuống mạng. **Không chọn sẵn máy nào**, kể cả khi chỉ có một máy. Bấm đúp một máy chỉ chọn máy đó.
+- “Gửi” chỉ bật khi đã chọn một máy và hộp đã hiện trước mặt người dùng được một lúc ngắn (chống bấm nhầm khi hộp vừa bật lên). Bấm Gửi thì hộp đóng, cửa sổ chính mở cuộc trò chuyện với máy đó và gửi như “Gửi file…”. “Hủy”, Esc hay nút đóng thì không gửi gì.
+- Chưa ghép đôi máy nào: thay danh sách máy bằng câu ở mục 8 và nút “Tìm máy mới” (mở màn Tìm máy mới, hộp đóng).
+- Đang có một hộp như vậy mà Explorer gửi thêm file: không mở hộp thứ hai, danh sách đang hiện không đổi; hộp đang mở được đưa lên trước kèm câu ở mục 8.
+- Bàn phím (N12): tiêu điểm đầu ở danh sách máy (chưa có máy thì ở “Tìm máy mới”); mũi tên chọn máy, Enter bấm Gửi khi nút đang bật, Esc là Hủy.
+
 ---
 
 ## 8. Thông báo lỗi & tình huống đặc biệt
@@ -601,6 +634,10 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: bấm “Ghép đôi lại” khi máy kia không có trong mạng (ví dụ đã ghép bằng IP vì mạng chặn mDNS) | “Không thấy “*PC-Nha*” trong mạng. Nếu mạng chặn việc tìm thiết bị, hãy nhập địa chỉ IP của máy đó để ghép đôi lại.” | Không bắt đầu ghép đôi; mở màn “Tìm máy mới”, câu hiện ở thanh thông báo của màn đó, đặt tiêu điểm vào ô nhập IP |
 | Giao diện: gửi tới thiết bị đã ghép đôi nhưng chưa kết nối | Trạng thái “Đang chờ kết nối tới *PC-Nha*…” (không phải lỗi). Máy đó ngoại tuyến thì thanh dưới luồng ghi: “*PC-Nha* đang ngoại tuyến. File gửi lúc này sẽ chờ và tự gửi khi máy đó mở Teleport trong cùng mạng, nếu Teleport trên máy này vẫn chạy (kể cả khi chỉ còn ở khay).” | Tự xử lý |
 | Giao diện: gửi tới thiết bị không (còn) ghép đôi | “Chưa ghép đôi với *PC-Nha* nên chưa gửi được. Hãy ghép đôi rồi gửi lại.” | Lượt gửi không bắt đầu |
+| Giao diện: Gửi tới › ZCL Teleport mà chưa ghép đôi máy nào (mục 7.7) | “Chưa ghép đôi với máy nào. Hãy ghép đôi một máy rồi gửi lại từ File Explorer.” | Nút “Tìm máy mới” |
+| Giao diện: Gửi tới › ZCL Teleport khi đang mở một hộp “Gửi *n* file tới…” | “Đang mở một hộp gửi file. Hãy gửi hoặc hủy các file này trước, rồi gửi tiếp từ File Explorer.” (trên hộp đang mở) | Gửi hoặc hủy hộp đang mở rồi gửi lại |
+| Giao diện: `--send` / Gửi tới với đường dẫn không dùng được (không phải đường dẫn tới một file trên ổ đĩa hay ổ mạng) | Hộp lỗi “Không mở được hộp gửi file.” kèm “*đường dẫn* không phải đường dẫn đầy đủ tới một file. Hãy chọn file trong File Explorer rồi gửi lại.” | Không mở Teleport |
+| Giao diện: `--send` / Gửi tới quá nhiều file | Hộp lỗi “Không mở được hộp gửi file.” kèm “Mỗi lần gửi được tối đa *n* file.” (quá số file trong một lượt, [protocol.md](protocol.md) mục 3.3) hay “Bạn chọn quá nhiều file một lần. Hãy chọn ít file hơn rồi gửi lại.” (danh sách đường dẫn quá dài) | Không mở Teleport |
 | Giao diện: không gửi được vì lỗi khác lúc bắt đầu lượt | “Không gửi được file tới *PC-Nha*. Hãy thử lại.” | Lượt gửi không bắt đầu |
 | Giao diện: lượt nhận dở được khôi phục khi mở lại app | Trạng thái “Đang chờ *Laptop-Minh* nối lại…” | Tự xử lý |
 | Giao diện: khởi động khi một lệnh CLI đang chạy cùng thư mục cấu hình | “Teleport đang chạy ở nơi khác với thư mục cấu hình này (ví dụ lệnh “teleport receive” trong cửa sổ dòng lệnh).” kèm dòng “Hãy dừng nó rồi bấm Thử lại.” | Nút “Thử lại” |

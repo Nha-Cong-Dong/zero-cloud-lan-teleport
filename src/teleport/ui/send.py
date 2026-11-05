@@ -9,7 +9,7 @@
   (bỏ URL lạ).
 - `selection_error(paths)`: lỗi nhận ra được mà không chạm đĩa (spec-hackathon mục 9.9): quá
   `MAX_OFFER_FILES` file, một file chọn hai lần (so `os.path.normcase(os.path.abspath(...))`, như
-  `app.sources.prepare_sources`). Đếm trước, trùng sau.
+  `app.sources.prepare_sources`). Đếm trước, trùng sau. Câu quá số file là `too_many_text()`.
 - `send_error_message(error, peer)`: câu mvp mục 8 cho lỗi của `transfers.send` (dòng “Chọn
   gửi…”, khớp `cli.source_error_message`; tên lệnh trong “…”, không backtick).
 - `not_paired_message(peer)`: câu mvp mục 8 “Chưa ghép đôi với *X* nên chưa gửi được…”.
@@ -77,10 +77,8 @@ def selection_error(paths: Sequence[Path]) -> str | None:
     """Câu lỗi khi danh sách chọn gửi sai mà không cần chạm đĩa; rỗng hay hợp lệ → None."""
     if not paths:
         return None
-    t = QCoreApplication.translate
-    limit = MAX_OFFER_FILES
-    if len(paths) > limit:
-        return t("Send", "Mỗi lần gửi được tối đa %n file.", None, limit)
+    if len(paths) > MAX_OFFER_FILES:
+        return too_many_text()
     seen: set[str] = set()
     for path in paths:
         key = os.path.normcase(os.path.abspath(os.fspath(path)))
@@ -88,6 +86,11 @@ def selection_error(paths: Sequence[Path]) -> str | None:
             return _duplicate()
         seen.add(key)
     return None
+
+
+def too_many_text() -> str:
+    """Câu “quá số file mỗi lần gửi” (`MAX_OFFER_FILES`), dùng chung với hộp lỗi của `--send`."""
+    return QCoreApplication.translate("Send", "Mỗi lần gửi được tối đa %n file.", None, MAX_OFFER_FILES)
 
 
 def _duplicate() -> str:

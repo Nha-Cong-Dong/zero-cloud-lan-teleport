@@ -43,6 +43,7 @@ teleport receive                                 # receive files from paired mac
 teleport send video.mp4 --to PC-Nha              # send to a paired machine running `teleport receive`
 teleport send a.zip --to PC-Nha --address 192.168.1.5:47474 --limit-rate 20M   # when mDNS is blocked; --to still required
 teleport-gui --config-dir D                      # desktop UI (also: python -m teleport.ui); one instance per config dir, --background starts in the tray
+teleport-gui --send a.zip b.pdf                  # open the "Gửi n file tới…" picker (like Send to › ZCL Teleport); never sends by itself
 pytest tests/ui                                  # UI tests, offscreen (marker gui)
 python packaging/i18n/update.py [--check]        # refresh the English .ts/.qm from ui strings; --check only verifies (rules: CONTRIBUTING.md, Bản dịch)
 ```
