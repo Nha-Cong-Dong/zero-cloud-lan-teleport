@@ -25,7 +25,8 @@ Cảnh: `welcome` (màn lần chạy đầu, có công tắc khởi động cùn
 `starting`, `running` (một địa chỉ, chưa có máy đã ghép đôi → “Ghép đôi máy đầu tiên”),
 `running_full` (ba thiết bị, thẻ đang gửi, thẻ đã nhận xong, một thông báo),
 `running_unavailable` (thư mục nhận đã lưu không mở được, spec B1b), `error`, `widgets` (trang
-mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`, kể cả `SegmentedControl` của spec D6),
+mẫu mọi thành phần của `ui/widgets.py` trong `QScrollArea`, kể cả `SegmentedControl` của spec D6 và,
+từ spec G2 mục 7.4, một `AnimatedButton` chính đang chạy “Đang ghép đôi…” cạnh nút phụ “Đóng”),
 `page` (RUNNING, mở một trang mẫu có
 `PageHeader` ở chỗ SETTINGS, vì DISCOVER đã là trang thật), `discover` (trang “Tìm máy mới”: 4 máy
 chưa ghép đôi, một tên dài bị cắt “…”, 2 máy đã ghép đôi), `discover_list` (9 máy: tự sang dạng danh
@@ -52,11 +53,15 @@ qua và lượt của phiên hôm nay), `chat_empty` (máy chưa có lượt nà
 Lời mời nhận file và hộp mã (spec B4): `offer_box` (hộp hỏi nhận 3 file từ PC-Nha: “Đổi…”, ô “Luôn
 nhận”, Từ chối / Nhận), `chat_offer` (luồng của PC-Nha có bong bóng lời mời đang chờ với panel Nhận /
 Từ chối, viền nhấn, không có ✕), `pairing_countdown` (hộp mã ghép đôi còn 8 giây: mã vẽ thành hai
-nhóm ô, thanh đếm ngược ngắn, chữ màu cảnh báo). Hai hộp được nhúng (cờ `Qt.Widget`) giữa một nền
-`surface` cỡ cảnh để ảnh dễ duyệt; không kiểm góc.
+nhóm ô, thanh đếm ngược ngắn, chữ màu cảnh báo), `pairing_confirmed` (spec G2 mục 4.3, 7.4: hộp mã
+sau khi bấm “Trùng khớp”: nút chính “Đang ghép đôi…” kèm spinner, “Không trùng” thành “Đóng”). Các hộp
+được nhúng (cờ `Qt.Widget`) giữa một nền `surface` cỡ cảnh để ảnh dễ duyệt; không kiểm góc.
+
+Chuyển động (spec G1, G2): mọi cảnh dựng ở chế độ tức thì (autouse `motion_instant`), và `_grab` gọi
+`motion.finish_all()` trước khi chụp, nên spinner đứng ở khung tĩnh và ảnh lặp lại được.
 
 Giờ cố định bằng seam `_wall_now` của `ui.conversations`, `ui.transfers` (`NOW`) và `ui.chat` (cảnh
-luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 32 cảnh × 2 chế độ × 2 cỡ = 128 ảnh.
+luồng chat đổi giờ giữa các bong bóng qua `_CLOCK`). Tổng 33 cảnh × 2 chế độ × 2 cỡ = 132 ảnh.
 """
 
 from __future__ import annotations
@@ -396,6 +401,19 @@ def scene_widgets(qtbot) -> QWidget:
     segmented_row.addStretch(1)
     right.insertLayout(2, segmented_row)
     right.addStretch(1)
+
+    # Spec G2 7.4: nút chính đang chạy (chữ “Đang …” + spinner ở khung tĩnh) cạnh một nút phụ.
+    from teleport.ui.buttons import AnimatedButton
+
+    button_row = QHBoxLayout()
+    button_row.setSpacing(8)
+    secondary = AnimatedButton("Đóng")
+    running = AnimatedButton("Trùng khớp", primary=True)
+    running.set_running(True, "Đang ghép đôi…", "Đã xác nhận mã. Đang chờ máy kia xác nhận.")
+    button_row.addStretch(1)
+    button_row.addWidget(secondary)
+    button_row.addWidget(running)
+    left.addLayout(button_row)
 
     empty = widgets.EmptyState()
     empty.set_content(
@@ -966,6 +984,29 @@ def scene_pairing_countdown(qtbot) -> QWidget:
     return _framed(qtbot, dialog)
 
 
+def scene_pairing_confirmed(qtbot) -> QWidget:
+    """Hộp mã sau khi bấm “Trùng khớp” (spec G2 4.3): nút chính “Đang ghép đôi…” kèm spinner, “Đóng”."""
+    from teleport.app.pairing import PairingPrompt
+    from teleport.core.pairing import Role
+    from teleport.ui.pairing import PairingDialog
+
+    prompt = PairingPrompt(
+        session_id=2,
+        role=Role.INITIATOR,
+        address="192.168.1.20",
+        peer_name="PC-Nha",
+        peer_device_id=hashlib.sha256(b"PC-Nha").hexdigest()[:32],
+        code="382104",
+        expires_at=100.0,
+        recent_codes=1,
+        known_name=None,
+    )
+    dialog = PairingDialog(prompt, clock=lambda: 75.0)
+    dialog.accept_button.click()
+    assert dialog.accept_button.running, "bấm “Trùng khớp”: hộp ở lại, nút đang chạy"
+    return _framed(qtbot, dialog)
+
+
 SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     # tên cảnh: (hàm dựng, là cửa sổ chính, token mà điểm (4,4) phải bằng; None: không kiểm góc)
     "welcome": (scene_welcome, True, "surface"),
@@ -1000,6 +1041,7 @@ SCENES: dict[str, tuple[Callable[..., QWidget], bool, str | None]] = {
     "offer_box": (scene_offer_box, False, None),
     "chat_offer": (scene_chat_offer, True, "sidebar"),
     "pairing_countdown": (scene_pairing_countdown, False, None),
+    "pairing_confirmed": (scene_pairing_confirmed, False, None),
 }
 
 
@@ -1012,6 +1054,9 @@ def _grab(widget: QWidget, width: int, height: int) -> QImage:
     widget.show()
     for _ in range(3):  # hàng đổi bố cục theo bề ngang (trang Cài đặt) cần thêm một lượt layout
         QApplication.processEvents()
+    from teleport.ui import motion
+
+    motion.finish_all()  # spec G1: mọi hoạt ảnh về giá trị cuối trước khi chụp
     image = widget.grab().toImage()
     widget.hide()
     return image
