@@ -1171,6 +1171,11 @@
     </message>
     <message>
         <location filename="../pairing.py"/>
+        <source>Đang ghép đôi…</source>
+        <translation>Pairing…</translation>
+    </message>
+    <message>
+        <location filename="../pairing.py"/>
         <source>Đã ghép đôi với {name}.</source>
         <translation>Paired with {name}.</translation>
     </message>
@@ -1183,6 +1188,11 @@
         <location filename="../pairing.py"/>
         <source>Đã xác nhận ghép đôi với {name} nhưng không lưu được danh sách thiết bị đã ghép đôi. Hãy kiểm tra quyền ghi thư mục cấu hình rồi ghép đôi lại.</source>
         <translation>Pairing with {name} was confirmed, but the list of paired devices couldn't be saved. Check that you can write to the configuration folder, then pair again.</translation>
+    </message>
+    <message>
+        <location filename="../pairing.py"/>
+        <source>Đã xác nhận mã. Đang chờ máy kia xác nhận.</source>
+        <translation>Code confirmed. Waiting for the other device to confirm.</translation>
     </message>
     <message>
         <location filename="../pairing.py"/>
@@ -2533,6 +2543,11 @@
         <location filename="../wait_pairing.py"/>
         <source>Đang lấy địa chỉ…</source>
         <translation>Getting address…</translation>
+    </message>
+    <message>
+        <location filename="../wait_pairing.py"/>
+        <source>Đã chép</source>
+        <translation>Copied</translation>
     </message>
     <message>
         <location filename="../wait_pairing.py"/>
