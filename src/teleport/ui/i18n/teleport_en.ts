@@ -484,6 +484,104 @@
     </message>
 </context>
 <context>
+    <name>Diagnose</name>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Hãy mở Teleport trên máy đó và kiểm tra hai máy dùng chung một mạng. Nếu mạng chặn việc tìm thiết bị, hãy kết nối bằng địa chỉ IP của máy đó.</source>
+        <translation>Open Teleport on that device and make sure both devices are on the same network. If the network blocks device discovery, connect using that device's IP address.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Hãy xem lại địa chỉ ở dòng “Địa chỉ” trong cửa sổ Teleport trên {name}, rồi kết nối lại.</source>
+        <translation>Check the address on the “Address” line in the Teleport window on {name}, then connect again.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Hủy</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Không kết nối được vì một lỗi không mong đợi. Hãy thử lại.</source>
+        <translation>Couldn't connect because of an unexpected error. Please try again.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Không thấy {name} trong mạng</source>
+        <translation>Can't find {name} on the network</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Kết nối</source>
+        <translation>Connect</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Kết nối bằng IP</source>
+        <translation>Connect by IP</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Kết nối bằng IP…</source>
+        <translation>Connect by IP…</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Máy này chưa tìm được thiết bị nào trong mạng</source>
+        <translation>This device can't discover devices on the network</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Máy ở {address} không phải {name}. Có thể đó là một máy khác đang chạy Teleport; hãy kiểm tra lại địa chỉ.</source>
+        <translation>The device at {address} isn't {name}. It may be another device running Teleport; check the address.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Teleport vẫn đang tự thử kết nối lại tới địa chỉ lần trước ({address}). Nếu máy đó đã đổi mạng hay đổi địa chỉ, hãy kết nối bằng địa chỉ IP mới.</source>
+        <translation>Teleport keeps trying to reconnect to the last known address ({address}). If that device has changed networks or addresses, connect using its new IP address.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Tính năng tìm thiết bị của Teleport trên máy này đang không chạy (có thể mạng vừa đổi, hay VPN hoặc phần mềm bảo mật đang chặn). Teleport sẽ tự bật lại. Trong lúc chờ, hãy kết nối tới {name} bằng địa chỉ IP.</source>
+        <translation>Teleport's device discovery isn't running on this device (the network may have just changed, or a VPN or security software may be blocking it). Teleport will turn it back on by itself. In the meantime, connect to {name} by IP address.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Vẫn chưa kết nối được với {name}</source>
+        <translation>Still can't connect to {name}</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Xem ở dòng “Địa chỉ” trong cửa sổ Teleport trên máy đó, ví dụ 192.168.1.5 hoặc 192.168.1.5:47474.</source>
+        <translation>See the “Address” line in the Teleport window on that device, for example 192.168.1.5 or 192.168.1.5:47474.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Đang kết nối tới {address}…</source>
+        <translation>Connecting to {address}…</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Đang kết nối tới {name}…</source>
+        <translation>Connecting to {name}…</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Địa chỉ IP của {name}</source>
+        <translation>IP address of {name}</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Địa chỉ IP vừa nhập là của một máy khác, không phải {name}</source>
+        <translation>The IP address you entered belongs to another device, not {name}</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Địa chỉ lần trước ({address}) giờ là của một máy khác. Hãy kết nối bằng địa chỉ IP mới của {name}.</source>
+        <translation>The last known address ({address}) now belongs to another device. Connect using the new IP address of {name}.</translation>
+    </message>
+</context>
+<context>
     <name>Discover</name>
     <message numerus="yes">
         <location filename="../discover.py"/>

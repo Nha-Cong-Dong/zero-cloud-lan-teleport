@@ -5,6 +5,11 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+### Added
+- Thanh chẩn đoán kết nối ngay dưới tên máy trong cuộc trò chuyện, khi máy đã ghép đôi không kết nối được: nói đúng nguyên nhân (không thấy máy đó trong mạng, Teleport vẫn đang tự thử lại địa chỉ lần trước, máy này không tìm được thiết bị nào trong mạng, thấy máy nhưng mạng chặn kết nối, máy kia từ chối, địa chỉ vừa nhập là của một máy khác) kèm hai nút “Kết nối bằng IP…” và, khi có địa chỉ để thử, “Thử lại”. Thanh chỉ hiện sau vài giây ngoại tuyến để không chớp lúc mở app; bị chặn thì hiện ngay; bấm ✕ thì ẩn tới khi nguyên nhân đổi. Dùng được hết bằng bàn phím và trình đọc màn hình.
+- Hộp “Kết nối bằng IP” cho máy đã ghép đôi: điền sẵn địa chỉ lần trước, báo rõ khi địa chỉ sai, không tới được hay là của máy khác; kết nối được thì Teleport nhớ địa chỉ đó cho lần sau.
+- Nội bộ: `Node.retry_connect` thử kết nối lại ngay tới đích hiện có (như người dùng thao tác) và trả kết quả của đúng lần thử đó, cho nút “Thử lại”.
+
 ### Changed
 - README viết lại cho bản `v0.1.0-alpha`: link tới trang giới thiệu sản phẩm, ảnh chụp giao diện, mục “Bắt đầu nhanh” (tải và kiểm file từ trang Release, SmartScreen, tường lửa), cột cho biết tính năng nào đã có trong bản alpha, đoạn tóm tắt bằng tiếng Anh, câu hỏi thường gặp gọn hơn; con số và chi tiết giao thức nay chỉ trỏ tới tài liệu nguồn trong `docs/`.
 
