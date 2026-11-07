@@ -119,6 +119,49 @@ def _main_window(qtbot):
     return window
 
 
+# ---- Chữ của app trong cảnh (spec E1 mục 2.6) ----------------------------------------------------
+# Câu hiện trong cảnh lấy từ hàm chữ của `ui` hay đúng khóa (ngữ cảnh, nguồn) mà `ui` dịch, không gõ
+# cứng tiếng Việt: dựng sau `i18n.set_language(...)` thì ảnh English ra chữ English như app thật.
+
+
+def _tr(context: str, source: str, n: int = -1) -> str:
+    """`QCoreApplication.translate` với khóa của `ui`. Khi `TELEPORT_SNAPSHOT_LANG` là ngôn ngữ khác
+    tiếng Việt, câu dịch phải khác nguồn: khóa lệch khỏi `ui` (nguồn đổi chữ) thì ảnh sẽ còn chữ Việt, nên
+    báo ngay thay vì chụp sai."""
+    from PySide6.QtCore import QCoreApplication
+
+    text = QCoreApplication.translate(context, source, None, n)
+    if os.environ.get(LANG_ENV, "vi") not in ("", "vi"):
+        assert text != source.replace("%n", str(n)), (
+            f"khóa không có bản dịch (đã lệch khỏi ui?): {context!r} / {source!r}"
+        )
+    return text
+
+
+def _paired_notice(name: str) -> str:
+    """Câu “Đã ghép đôi với …” đúng như app báo (`ui.pairing.outcome_text` cho kết quả PAIRED)."""
+    from teleport.app.pairing import PairingFinished, PairingOutcome
+    from teleport.core.pairing import Role
+    from teleport.ui.pairing import outcome_text
+
+    result = PairingFinished(
+        session_id=1,
+        role=Role.INITIATOR,
+        outcome=PairingOutcome.PAIRED,
+        address="192.168.1.20",
+        port=47474,
+        peer_name=name,
+        peer_device_id="c" * 32,
+        peer_reason=None,
+        device=None,
+        known_name=None,
+        code_shown=True,
+    )
+    text = outcome_text(result)
+    assert text is not None
+    return text
+
+
 def scene_welcome(qtbot) -> QWidget:
     window = _main_window(qtbot)
     window.show_welcome("Laptop-Minh", RECEIVE_DIR, autostart=True)
@@ -255,7 +298,7 @@ def scene_running_full(qtbot) -> QWidget:
             info=received, result=TransferResult.DONE, by_peer=False, reason=None, file_index=0, reject=None
         )
     )
-    view.show_notice("Đã ghép đôi với PC-Nha.")
+    view.show_notice(_paired_notice("PC-Nha"))
     window.set_transfer_summary(view.has_content(), view.active_count())
 
     window.show_running("Laptop-Minh", folder)
@@ -287,15 +330,15 @@ def scene_error(qtbot) -> QWidget:
 def _sample_bubble(direction, emphasis, file_name: str, progress: int | None):
     from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar
 
-    from teleport.ui import widgets
+    from teleport.ui import texts, widgets
 
     bubble = widgets.ChatBubble(direction, emphasis=emphasis)
     head = QHBoxLayout()
     name = QLabel(file_name)
     name.setTextFormat(Qt.TextFormat.PlainText)
     head.addWidget(name, 1)
-    head.addWidget(widgets.IconButton("pause", "Tạm dừng"))
-    head.addWidget(widgets.IconButton("dismiss", "Hủy"))
+    head.addWidget(widgets.IconButton("pause", texts.menu_pause()))
+    head.addWidget(widgets.IconButton("dismiss", _tr("Chat", "Hủy")))
     bubble.body().addLayout(head)
     if progress is not None:
         bar = QProgressBar()
@@ -315,7 +358,7 @@ def _sample_bubble(direction, emphasis, file_name: str, progress: int | None):
 def scene_widgets(qtbot) -> QWidget:
     from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout
 
-    from teleport.ui import widgets
+    from teleport.ui import appearance, receive_dir, texts, theme, widgets
 
     area = QScrollArea()
     qtbot.addWidget(area)
@@ -325,7 +368,8 @@ def scene_widgets(qtbot) -> QWidget:
     column = QVBoxLayout(page)
     column.setContentsMargins(0, 0, 0, 16)
     column.setSpacing(12)
-    column.addWidget(widgets.PageHeader("Thành phần dùng chung"))
+    # Trang mẫu không có trong app nên không có câu dịch: tiêu đề là tên riêng, giống nhau ở mọi ngôn ngữ.
+    column.addWidget(widgets.PageHeader("Teleport"))
 
     # Hai cột để một khung hình thấy được nhiều thành phần: trái InfoBar + EmptyState, phải avatar,
     # badge và bong bóng.
@@ -336,16 +380,22 @@ def scene_widgets(qtbot) -> QWidget:
     left.setSpacing(12)
     right = QVBoxLayout()
     right.setSpacing(12)
+    port_error, port_hints = texts.start_error("port", "[WinError 10048]")
     levels = (
-        (widgets.InfoLevel.INFO, "Đã ghép đôi với PC-Nha", "", None),
-        (widgets.InfoLevel.SUCCESS, "Đã nhận anh-cuoi.zip", "Lưu vào Downloads\\Teleport", "Mở thư mục"),
-        (widgets.InfoLevel.WARNING, "Mạng chặn tìm máy", "Nhập IP thủ công để ghép đôi.", "Nhập IP"),
+        (widgets.InfoLevel.INFO, _paired_notice("PC-Nha"), "", None),
         (
-            widgets.InfoLevel.ERROR,
-            "Không mở được cổng 47474",
-            "Một ứng dụng khác đang dùng cổng này.",
-            "Thử lại",
+            widgets.InfoLevel.SUCCESS,
+            texts.fill(_tr("Conversations", "Đã nhận {what}"), what="anh-cuoi.zip"),
+            texts.fill(_tr("Home", "Lưu vào: {path}"), path="Downloads\\Teleport"),
+            _tr("Settings", "Mở thư mục"),
         ),
+        (
+            widgets.InfoLevel.WARNING,
+            receive_dir.unavailable_text(Path("E:/Teleport")),
+            "",
+            receive_dir.choose_action_text(),
+        ),
+        (widgets.InfoLevel.ERROR, port_error, " ".join(port_hints), texts.retry()),
     )
     for level, title, text, action in levels:
         bar = widgets.InfoBar()
@@ -377,10 +427,10 @@ def scene_widgets(qtbot) -> QWidget:
     badges.setHorizontalSpacing(16)
     badges.setVerticalSpacing(8)
     samples = (
-        (widgets.BadgeTone.SUCCESS, "Sẵn sàng nhận"),
-        (widgets.BadgeTone.BUSY, "Đang truyền"),
-        (widgets.BadgeTone.WARNING, "Tạm dừng"),
-        (widgets.BadgeTone.MUTED, "Đang ẩn"),
+        (widgets.BadgeTone.SUCCESS, _tr("Home", "Sẵn sàng nhận")),
+        (widgets.BadgeTone.BUSY, _tr("Conversations", "Đang truyền %n lượt", 2)),
+        (widgets.BadgeTone.WARNING, _tr("Home", "Đã tạm dừng nhận")),
+        (widgets.BadgeTone.MUTED, _tr("Home", "Đang ẩn")),
     )
     for index, (tone, text) in enumerate(samples):
         badge = widgets.StatusBadge()
@@ -389,7 +439,9 @@ def scene_widgets(qtbot) -> QWidget:
     badges.setColumnStretch(2, 1)
     right.insertLayout(1, badges)
     segmented = widgets.SegmentedControl(("system", "light", "dark"))
-    segmented.set_texts(("Theo hệ điều hành", "Sáng", "Tối"))
+    segmented.set_texts(
+        tuple(appearance.mode_text(m) for m in (theme.Mode.SYSTEM, theme.Mode.LIGHT, theme.Mode.DARK))
+    )
     segmented.set_value("light")
     segmented_row = QHBoxLayout()
     segmented_row.addWidget(segmented)
@@ -400,9 +452,9 @@ def scene_widgets(qtbot) -> QWidget:
     empty = widgets.EmptyState()
     empty.set_content(
         "desktop",
-        "Ghép đôi máy đầu tiên",
-        "Mở Teleport trên máy kia, rồi bấm Tìm máy mới để thấy nó ở đây.",
-        action="Tìm máy mới",
+        _tr("MainWindow", "Ghép đôi máy đầu tiên"),
+        _tr("MainWindow", "Mở Teleport trên máy kia, trong cùng mạng với máy này, rồi bấm Tìm máy mới."),
+        action=_tr("MainWindow", "Tìm máy mới"),
     )
     empty.setMinimumHeight(240)
     left.addWidget(empty)
@@ -417,21 +469,21 @@ def scene_widgets(qtbot) -> QWidget:
 def scene_page(qtbot) -> QWidget:
     from PySide6.QtWidgets import QLineEdit, QVBoxLayout
 
-    from teleport.ui import widgets
+    from teleport.ui import discover, radar, widgets
     from teleport.ui.main_window import Page
 
     window = scene_running(qtbot)
     page = QWidget()
     layout = QVBoxLayout(page)
     layout.setContentsMargins(0, 0, 0, 0)
-    header = widgets.PageHeader("Tìm máy mới")
+    header = widgets.PageHeader(discover.page_title())
     address = QLineEdit()
-    address.setPlaceholderText("Nhập IP…")
+    address.setPlaceholderText(_tr("Discover", "Nhập IP…"))
     address.setFixedWidth(180)
     header.add_trailing(address)
     layout.addWidget(header)
     empty = widgets.EmptyState()
-    empty.set_content("search", "Chưa thấy máy nào", "Mở Teleport trên máy kia, cùng mạng Wi-Fi hoặc dây.")
+    empty.set_content("search", _tr("Discover", "Máy trong mạng"), radar.no_devices_text())
     layout.addWidget(empty, 1)
     page.setFocusProxy(header.back_button)
     window.add_page(Page.SETTINGS, page)
@@ -630,7 +682,7 @@ def _settings_window(
     assert window.open_page(Page.SETTINGS)
     page.show_section(section)
     if notice is not None:
-        page.show_notice(InfoLevel.SUCCESS, notice, action="Mở thư mục")
+        page.show_notice(InfoLevel.SUCCESS, notice, action=_tr("Settings", "Mở thư mục"))
     return window
 
 
@@ -679,13 +731,10 @@ def scene_settings_devices_empty(qtbot) -> QWidget:
 
 
 def scene_settings_advanced(qtbot) -> QWidget:
-    from teleport.ui.settings import Section
+    from teleport.ui.settings import Section, export_saved_text
 
-    return _settings_window(
-        qtbot,
-        Section.ADVANCED,
-        notice="Đã lưu log vào C:\\Users\\Minh\\Documents\\teleport-log-20261031-101500.zip.",
-    )
+    log_zip = Path("C:/Users/Minh/Documents/teleport-log-20261031-101500.zip")
+    return _settings_window(qtbot, Section.ADVANCED, notice=export_saved_text(log_zip))
 
 
 def scene_settings_receive_dir_unavailable(qtbot) -> QWidget:

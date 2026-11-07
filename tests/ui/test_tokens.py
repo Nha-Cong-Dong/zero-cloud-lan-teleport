@@ -919,18 +919,45 @@ def test_primary_colors_every_state_reaches_4_5(dark, accent):
 # =================================================================================================
 
 
+# Bộ chọn rộng được phép, đúng nguyên văn (spec E1 mục 2.6, mvp N12): vòng tiêu điểm chung cho nhãn chọn
+# được bằng bàn phím và danh sách/bảng. Chỉ khớp lúc widget có tiêu điểm nên không đè style Fusion ở trạng
+# thái thường. Không thêm mục nào khác vào đây.
+BROAD_FOCUS_SELECTORS = frozenset({"QLabel:focus", "QAbstractItemView:focus"})
+
+
 @ACCENTS
 @MODES
 @pytest.mark.parametrize("button_height", [None, 30])
 def test_every_stylesheet_selector_is_narrow(dark, button_height, accent):
-    """Mọi bộ chọn có `[property]` hoặc `#objectName`: không đè style Fusion của widget khác."""
+    """Mọi bộ chọn có `[property]` hoặc `#objectName`: không đè style Fusion của widget khác. Miễn đúng
+    `BROAD_FOCUS_SELECTORS` (vòng tiêu điểm, chỉ ở `:focus`)."""
     from teleport.ui import theme
 
     css = theme.stylesheet(dark, button_height, accent=accent)
     rules = parse_rules(css)
     assert rules, "stylesheet rỗng"
-    broad = [s for selectors, _ in rules for s in selectors if "[" not in s and "#" not in s]
+    broad = [
+        s
+        for selectors, _ in rules
+        for s in selectors
+        if "[" not in s and "#" not in s and s.strip() not in BROAD_FOCUS_SELECTORS
+    ]
     assert not broad, f"bộ chọn rộng: {broad}"
+
+
+@ACCENTS
+@MODES
+def test_broad_focus_rules_only_draw_the_focus_ring(dark, accent):
+    """Hai luật của `BROAD_FOCUS_SELECTORS` có trong stylesheet, mỗi luật chỉ đặt viền bằng màu vòng tiêu
+    điểm (`focus_ring_color`, đã kiểm ≥ 3:1) và bo góc, không đổi gì khác của widget."""
+    from teleport.ui import theme
+
+    css = theme.stylesheet(dark, accent=accent)
+    ring = theme.focus_ring_color(dark).name().lower()
+    for selector in sorted(BROAD_FOCUS_SELECTORS):
+        rule = find_rule(css, selector)
+        assert set(rule) <= {"border", "border-radius"}, (selector, rule)
+        assert ring in rule.get("border", "").lower(), (selector, rule)
 
 
 @ACCENTS
