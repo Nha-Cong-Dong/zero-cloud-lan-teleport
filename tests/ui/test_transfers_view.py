@@ -33,7 +33,8 @@ from PySide6.QtCore import QCoreApplication, Qt, QTranslator
 PEER_ID = "a71c04d2" + "e" * 24
 OTHER_ID = "0f0f0f0f" + "1" * 24
 PEER = "PC-Nha"
-_MVP = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+_MVP_PRODUCT = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+_MVP = _MVP_PRODUCT if _MVP_PRODUCT.exists() else (Path(__file__).resolve().parents[2] / "docs" / "mvp.md")
 
 # ---- Nhãn trạng thái ngắn (câu mới, đề xuất; chỉ dùng để kiểm theo ý nghĩa) ----
 SHORT_SENDING = "Đang gửi"
