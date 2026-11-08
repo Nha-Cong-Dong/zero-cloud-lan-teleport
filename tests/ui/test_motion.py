@@ -1,4 +1,5 @@
-"""Test `ui/motion.py`: nền tảng chuyển động (spec-g1 mục 2, 3 và 9; mvp N3, N12).
+"""Test `ui/motion.py`: nền tảng chuyển động (spec-g1 mục 2, 3 và 9; `FrameDriver`: spec G4 mục 3.1, T7;
+mvp N3, N12).
 
 Viết từ spec, không từ code. Mọi test ở chế độ tức thì (autouse `motion_instant`) trừ khi xin
 `real_motion`. Chỉ kiểm giá trị cuối (không giá trị giữa chừng): token ngắn `SHORT` và
@@ -1238,3 +1239,266 @@ def test_real_gnome_query_returns_bool_or_raises(motion):
     else:
         assert isinstance(value, bool)
     assert isinstance(motion.animations_enabled(), bool)
+
+
+# =================================================================================================
+# (l) FrameDriver (spec G4 mục 3.1, mục 6 T7)
+# =================================================================================================
+
+
+class DriverRecorder:
+    """`on_frame` / `on_finish` của một `FrameDriver`: đếm lời gọi; `keep` là giá trị `on_frame` trả."""
+
+    def __init__(self) -> None:
+        self.frames = 0
+        self.finishes = 0
+        self.keep = True
+
+    def frame(self) -> bool:
+        self.frames += 1
+        return self.keep
+
+    def finish(self) -> None:
+        self.finishes += 1
+
+
+def driver_timers(driver) -> list:
+    from PySide6.QtCore import QTimer
+
+    return [t for t in driver.findChildren(QTimer) if is_valid(t)]
+
+
+def any_timer_active(driver) -> bool:
+    return any(t.isActive() for t in driver_timers(driver))
+
+
+def test_frame_driver_frame_ms_is_16(motion):
+    assert motion.FrameDriver.FRAME_MS == 16
+
+
+def test_frame_driver_wake_is_false_in_instant_mode(motion, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = motion.FrameDriver(child, rec.frame, rec.finish)
+    assert not driver.can_run()
+    assert driver.wake() is False
+    assert not driver.running
+    assert not any_timer_active(driver)
+    assert motion.running_count() == 0
+    assert rec.finishes == 0
+
+
+def test_frame_driver_wake_is_false_when_system_disables_animations(
+    real_motion, monkeypatch, window_with_child
+):
+    _win, child = window_with_child
+    monkeypatch.setattr(real_motion, "animations_enabled", lambda: False)
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake() is False
+    assert not driver.running
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_wake_while_running_finishes_when_system_disables_animations(
+    real_motion, monkeypatch, window_with_child
+):
+    """N12: tắt hiệu ứng giữa chừng thì lần gọi kế tiếp về cuối ngay, không đợi driver tự dừng."""
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake() is True
+    monkeypatch.setattr(real_motion, "animations_enabled", lambda: False)
+    assert driver.wake() is False
+    assert not driver.running
+    assert not any_timer_active(driver)
+    assert rec.finishes == 1
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_wake_is_false_when_widget_hidden(real_motion, window_with_child):
+    _win, child = window_with_child
+    child.hide()
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert not driver.can_run()
+    assert driver.wake() is False
+    assert not driver.running
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_wake_is_false_when_window_minimized(real_motion, window_with_child):
+    win, child = window_with_child
+    win.setWindowState(win.windowState() | Qt.WindowState.WindowMinimized)
+    assert win.isMinimized()
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert not driver.can_run()
+    assert driver.wake() is False
+    assert not driver.running
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_wake_starts_precise_timer_and_counts_once(real_motion, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.parent() is child, "FrameDriver là con của widget"
+    assert driver.can_run()
+    assert not driver.running
+    assert real_motion.running_count() == 0
+    assert driver.wake() is True
+    assert driver.running
+    assert real_motion.running_count() == 1
+    timers = [t for t in driver_timers(driver) if t.isActive()]
+    assert len(timers) == 1, "một QTimer con đang chạy"
+    assert timers[0].interval() == real_motion.FrameDriver.FRAME_MS
+    assert timers[0].timerType() == Qt.TimerType.PreciseTimer
+    assert driver.wake() is True, "đang chạy → True"
+    assert real_motion.running_count() == 1, "wake lần hai không đăng ký thêm"
+    driver.stop()
+
+
+def test_frame_driver_calls_on_frame_each_timeout(real_motion, qtbot, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    driver.wake()
+    qtbot.waitUntil(lambda: rec.frames >= 2, timeout=WAIT_MS)
+    assert driver.running
+    assert rec.finishes == 0
+    driver.stop()
+
+
+def test_frame_driver_on_frame_false_stops_without_on_finish(real_motion, qtbot, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    rec.keep = False
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake()
+    qtbot.waitUntil(lambda: not driver.running, timeout=WAIT_MS)
+    assert rec.frames == 1, "on_frame trả False → dừng ngay sau khung đó"
+    assert rec.finishes == 0, "dừng vì hết việc không gọi on_finish"
+    assert not any_timer_active(driver), "timer tắt khi dừng (N3)"
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_can_wake_again_after_stop(real_motion, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake()
+    driver.stop()
+    assert not driver.running
+    assert rec.finishes == 0, "stop không gọi on_finish"
+    assert not any_timer_active(driver)
+    assert real_motion.running_count() == 0
+    assert driver.wake()
+    assert driver.running
+    assert real_motion.running_count() == 1
+    driver.stop()
+
+
+def test_frame_driver_widget_hidden_calls_on_finish_once(real_motion, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake()
+    child.hide()
+    QApplication.processEvents()
+    assert not driver.running
+    assert rec.finishes == 1
+    assert not any_timer_active(driver)
+    assert real_motion.running_count() == 0
+    child.show()
+    QApplication.processEvents()
+    child.hide()
+    QApplication.processEvents()
+    assert rec.finishes == 1, "bộ lọc đã gỡ khi dừng: ẩn lại không gọi on_finish lần nữa"
+    assert not driver.running, "không tự chạy lại"
+
+
+def test_frame_driver_window_hidden_calls_on_finish_once(real_motion, window_with_child):
+    win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake()
+    win.hide()
+    QApplication.processEvents()
+    assert not driver.running
+    assert rec.finishes == 1
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_window_minimized_calls_on_finish_once(real_motion, qtbot, window_with_child):
+    win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake()
+    win.setWindowState(win.windowState() | Qt.WindowState.WindowMinimized)
+    assert win.isMinimized()
+    qtbot.waitUntil(lambda: not driver.running, timeout=WAIT_MS)
+    QApplication.processEvents()
+    assert rec.finishes == 1
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_on_top_level_widget_hidden_calls_on_finish_once(real_motion, shown):
+    w = shown()
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(w, rec.frame, rec.finish)
+    assert driver.wake()
+    w.hide()
+    QApplication.processEvents()
+    assert not driver.running
+    assert rec.finishes == 1, "widget là cửa sổ: bộ lọc không cài hai lần"
+
+
+def test_frame_driver_finish_always_calls_on_finish_once(real_motion, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    driver.finish()  # chưa chạy: vẫn gọi đúng một lần
+    assert rec.finishes == 1
+    assert driver.wake()
+    driver.finish()
+    assert rec.finishes == 2
+    assert not driver.running
+    assert not any_timer_active(driver)
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_finish_all_calls_on_finish(real_motion, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake()
+    total = real_motion.finish_all()
+    assert total >= 1
+    assert rec.finishes == 1
+    assert not driver.running
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_stop_all_for_tests_skips_on_finish(real_motion, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake()
+    real_motion._stop_all_for_tests()
+    assert rec.finishes == 0
+    assert not driver.running
+    assert not any_timer_active(driver)
+    assert real_motion.running_count() == 0
+
+
+def test_frame_driver_leaves_registry_when_widget_destroyed(real_motion, qtbot, window_with_child):
+    _win, child = window_with_child
+    rec = DriverRecorder()
+    driver = real_motion.FrameDriver(child, rec.frame, rec.finish)
+    assert driver.wake()
+    assert real_motion.running_count() == 1
+    child.deleteLater()
+    qtbot.waitUntil(lambda: not is_valid(child), timeout=WAIT_MS)
+    assert real_motion.running_count() == 0
+    real_motion.finish_all()  # không ném

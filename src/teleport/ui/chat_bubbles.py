@@ -103,6 +103,16 @@ còn để chép lại.”, ẩn nút. Tên trợ năng “Clipboard từ {tên}
 bong bóng (`ClickFocus`, vòng tiêu điểm 2 px, `focus_buttons()`). Nội dung chỉ ở RAM của widget, không
 ghi đĩa, không tooltip.
 
+**Chuyển động** (spec G4, `ui.chat_motion`): `ui.chat` gán `_Bubble.motion` (`ThreadMotion` của luồng)
+khi chèn bong bóng, gỡ khi bỏ. Phần vẽ đọc trạng thái lúc vẽ qua ba móc: `ChatBubble.motion_paint` (nền
+phủ `success` khi vừa xong, viền nhấn nháy khi có lời mời), `_IconLabel.sweep` (dấu tích quét lộ, chỉ
+`status_icon`) và `BubbleBar.display_fraction` (giá trị vẽ của tween; `value()` vẫn là số thật). Hết
+trạng thái thì vẽ y như không có chuyển động. Kích hoạt: `raise_shown(…, animate=True)` khi thanh tăng
+(`load_snapshot` truyền False); `finish` bỏ tween thanh rồi DONE → `done`, ERROR → `fail` (hủy hay từ chối
+không có); `set_offer` khi vừa dựng panel lần đầu → `offer` (cờ `_offer_flashed`, đặt cả khi không được
+hoạt ảnh, nên mỗi bong bóng nháy tối đa một lần). `render_status` không bao giờ kích hoạt (nó được gọi
+lại khi đổi tên, kết nối, ngôn ngữ).
+
 Chữ máy kia (tên máy, tên file) qua `texts.peer_label` / `texts.file_label`, mọi nhãn
 `Qt.PlainText`, không tooltip chứa chữ máy kia. Chuỗi mới ở ngữ cảnh `"Chat"`, gọi lúc dùng; câu mvp
 mục 8 lấy từ `ui.transfers_view` (ngữ cảnh `"Transfers"`, không chép lại).
@@ -113,12 +123,22 @@ from __future__ import annotations
 import datetime
 import ntpath
 import os
+import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 
 from PySide6.QtCore import QCoreApplication, QDate, QEvent, QRectF, QSignalBlocker, QSize, Qt, QTime, Signal
-from PySide6.QtGui import QFocusEvent, QFont, QFontMetrics, QPainter, QPaintEvent, QPen, QResizeEvent
+from PySide6.QtGui import (
+    QColor,
+    QFocusEvent,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -145,7 +165,8 @@ from teleport.app.transfers import (
 )
 from teleport.core.history import HistoryEntry
 from teleport.core.messages import ClipKind
-from teleport.ui import icons, offer, shell, texts, theme
+from teleport.ui import chat_motion, icons, offer, shell, texts, theme
+from teleport.ui.chat_motion import ThreadMotion, check_fraction, flash_extra, tint_alpha
 from teleport.ui.offer import OfferEntry, OfferPhase
 from teleport.ui.send import printable
 from teleport.ui.transfers_view import (
@@ -313,6 +334,18 @@ def can_open_saved(saved_path: str | None, receive_dir: Path | None) -> bool:
 # ---- Widget nhỏ -------------------------------------------------------------------------------
 
 
+def _weak_call(method: Callable[[], float | None]) -> Callable[[], float | None]:
+    """Gọi `method` (phương thức gắn đối tượng) qua tham chiếu yếu: đối tượng đã mất → None. Móc vẽ của
+    widget con không giữ chặt bong bóng cha."""
+    ref = weakref.WeakMethod(method)
+
+    def call() -> float | None:
+        bound = ref()
+        return None if bound is None else bound()
+
+    return call
+
+
 def _label(*, wrap: bool = False, caption: bool = False, tone: str | None = None) -> QLabel:
     label = QLabel()
     label.setTextFormat(Qt.TextFormat.PlainText)
@@ -396,10 +429,15 @@ class _ElidedLabel(QLabel):
 
 
 class _IconLabel(QLabel):
-    """Icon tô màu token (`icons.pixmap`), vẽ lại khi đổi sáng/tối; chỉ trang trí (NoFocus)."""
+    """Icon tô màu token (`icons.pixmap`), vẽ lại khi đổi sáng/tối; chỉ trang trí (NoFocus).
+
+    `sweep` (móc vẽ, None mặc định): trả phần đã lộ (0…1); < 1 thì chỉ vẽ phần trái tương ứng của pixmap
+    (dấu tích quét lộ, `ui.chat_motion`), None hay ≥ 1 thì vẽ như `QLabel`.
+    """
 
     def __init__(self, size: int) -> None:
         super().__init__()
+        self.sweep: Callable[[], float | None] | None = None
         self._size = size
         self._name: str | None = None
         self._token = "text_muted"
@@ -435,15 +473,35 @@ class _IconLabel(QLabel):
         if event.type() in (*_PALETTE_EVENTS, QEvent.Type.DevicePixelRatioChange):
             self.refresh()
 
+    def paintEvent(self, event: QPaintEvent) -> None:
+        fraction = self.sweep() if self.sweep is not None else None
+        pixmap = self.pixmap()
+        if fraction is None or fraction >= 1.0 or pixmap.isNull():
+            super().paintEvent(event)
+            return
+        rect = self.contentsRect()
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.setClipRect(QRectF(0, 0, rect.width() * max(0.0, fraction), rect.height()))
+            painter.drawPixmap(rect, pixmap)
+        finally:
+            painter.end()
+
 
 class BubbleBar(QProgressBar):
     """Thanh tiến độ mảnh 6 px của bong bóng: rãnh `track`, phần đã chạy `accent_strong`, thang
-    `BAR_MAX`; vẫn là `QProgressBar` nên giữ vai trò trợ năng ProgressBar."""
+    `BAR_MAX`; vẫn là `QProgressBar` nên giữ vai trò trợ năng ProgressBar.
+
+    `display_fraction` (móc vẽ, None mặc định): phần vẽ (0…1) của tween tiến độ (`ui.chat_motion`),
+    không bao giờ quá `value()`; None thì vẽ theo `value()`.
+    """
 
     HEIGHT = 6
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.display_fraction: Callable[[], float | None] | None = None
         self.setRange(0, BAR_MAX)
         self.setValue(0)
         self.setTextVisible(False)
@@ -452,7 +510,9 @@ class BubbleBar(QProgressBar):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         span = max(1, self.maximum() - self.minimum())
-        paint_thin_bar(self, max(0, self.value() - self.minimum()) / span)
+        real = max(0, self.value() - self.minimum()) / span
+        shown = self.display_fraction() if self.display_fraction is not None else None
+        paint_thin_bar(self, real if shown is None else min(real, shown))
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -500,9 +560,11 @@ class TimeSeparator(QLabel):
 
 
 class _Bubble(ChatBubble):
-    """Phần chung: dòng 1 (icon, tên, cỡ, chỗ nút), vòng tiêu điểm, vẽ lại chữ khi đổi ngôn ngữ."""
+    """Phần chung: dòng 1 (icon, tên, cỡ, chỗ nút), vòng tiêu điểm, vẽ lại chữ khi đổi ngôn ngữ, móc
+    vẽ chuyển động (`motion`: `ThreadMotion` của luồng, `ui.chat` gán)."""
 
     focus_entered = Signal()
+    motion: ThreadMotion | None = None
 
     def __init__(self, side: Side, parent: QWidget | None, *, at: float) -> None:
         super().__init__(side, parent)
@@ -517,6 +579,7 @@ class _Bubble(ChatBubble):
         self.size_label = _label(caption=True, tone="muted")
         self.status_icon = _IconLabel(_STATUS_ICON)
         self.status_icon.setVisible(False)
+        self.status_icon.sweep = _weak_call(self._check_fraction)
         self.status_label = _label(caption=True)
         status_font = self.status_label.font()
         status_font.setWeight(QFont.Weight.DemiBold)
@@ -547,6 +610,30 @@ class _Bubble(ChatBubble):
 
     def _render(self) -> None:
         """Dựng lại mọi chữ (lớp con)."""
+
+    # -- Móc vẽ chuyển động (đọc `motion.state(self)` lúc vẽ) ------------------------------------
+
+    def motion_paint(self) -> tuple[QColor | None, float]:
+        motion = self.motion
+        st = None if motion is None else motion.state(self)
+        if st is None:
+            return None, 0.0
+        now = chat_motion._now()
+        tint: QColor | None = None
+        if st.done_at is not None:
+            alpha = chat_motion.TINT_MAX * tint_alpha(now - st.done_at)
+            if alpha > 0:
+                tint = QColor(theme.tokens_for(self).success)
+                tint.setAlphaF(min(1.0, alpha))
+        extra = 0.0 if st.flash_at is None else flash_extra(now - st.flash_at)
+        return tint, extra
+
+    def _check_fraction(self) -> float | None:
+        motion = self.motion
+        st = None if motion is None else motion.state(self)
+        if st is None or st.done_at is None:
+            return None
+        return check_fraction(chat_motion._now() - st.done_at)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -807,12 +894,14 @@ class TransferBubble(_Bubble):
         self._summary_key: tuple[object, ...] | None = None
         self._context = context
         self.offer_panel: OfferPanel | None = None
+        self._offer_flashed = False  # viền đã nháy cho lời mời (tối đa một lần mỗi bong bóng)
 
         self.cancel_button = IconButton("dismiss", QCoreApplication.translate("Chat", "Hủy"), self)
         self.cancel_button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.cancel_button.clicked.connect(self._on_cancel)
         self.head.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignTop)
         self.progress_bar = BubbleBar(self)
+        self.progress_bar.display_fraction = _weak_call(self._bar_fraction)
         self.open_button = _button(self)
         self.open_button.clicked.connect(self.open_clicked)
         self.resend_button = _button(self)
@@ -857,12 +946,25 @@ class TransferBubble(_Bubble):
         names = self.info.names if self.info is not None and self.info.names else self.offer_names
         return names[index] if 0 <= index < len(names) else None
 
-    def raise_shown(self, shown: int, total: int) -> None:
-        """Nâng `shown_bytes` lên `shown` (kẹp trong 0…`total`); không bao giờ hạ, thanh không lùi."""
+    def raise_shown(self, shown: int, total: int, *, animate: bool = True) -> None:
+        """Nâng `shown_bytes` lên `shown` (kẹp trong 0…`total`); không bao giờ hạ, thanh không lùi.
+
+        `animate`: thanh vẽ trượt tới giá trị mới (`ThreadMotion.progress`); ảnh chụp truyền False."""
         self.shown_bytes = max(self.shown_bytes, min(max(0, shown), max(0, total)))
         value = bar_value(self.shown_bytes, total)
-        if value > self.progress_bar.value():
+        old = self.progress_bar.value()
+        if value > old:
             self.progress_bar.setValue(value)
+            motion = self.motion
+            if animate and motion is not None:
+                motion.progress(self, self.progress_bar, old, value)
+
+    def _bar_fraction(self) -> float | None:
+        motion = self.motion
+        st = None if motion is None else motion.state(self)
+        if st is None or st.bar is None:
+            return None
+        return st.bar.value_at(chat_motion._now()) / BAR_MAX
 
     def set_resendable(self, on: bool) -> None:
         """Bên điều phối đã nhớ (True) hay bỏ (False) đường dẫn nguồn của lượt này cho “Gửi lại”."""
@@ -922,6 +1024,7 @@ class TransferBubble(_Bubble):
     ) -> bool:
         """Lời mời của bong bóng (xem docstring module); True nếu vừa thêm hay gỡ panel."""
         changed = False
+        flash = False
         if entry is not None and entry.phase is OfferPhase.PENDING and not self.finished:
             panel = self.offer_panel
             if panel is None:
@@ -932,6 +1035,8 @@ class TransferBubble(_Bubble):
                 self.extension_slot.addWidget(panel)
                 self.offer_panel = panel
                 changed = True
+                flash = not self._offer_flashed
+                self._offer_flashed = True  # đặt cả khi không được hoạt ảnh: không nháy muộn
             panel.set_entry(entry, receive_dir, pending)
             self.cancel_button.setVisible(False)
         else:
@@ -946,6 +1051,8 @@ class TransferBubble(_Bubble):
             self.cancel_button.setVisible(not self.finished)
         if changed:
             self.render_status()
+        if flash and self.motion is not None:
+            self.motion.offer(self)  # sau `render_status`: viền ATTENTION đã có
         return changed
 
     def set_offer_dir(self, receive_dir: Path | None, pending: Path | None) -> None:
@@ -1062,6 +1169,13 @@ class TransferBubble(_Bubble):
         )
         self.set_offer(None)  # lượt kết thúc: lời mời (nếu còn) không còn gì để trả lời
         self._render()
+        motion = self.motion
+        if motion is not None:
+            motion.stop_progress(self)
+            if self.kind is Kind.DONE:
+                motion.done(self)
+            elif self.kind is Kind.ERROR:
+                motion.fail(self)
         return True
 
     # -- Vẽ chữ -----------------------------------------------------------------------------------

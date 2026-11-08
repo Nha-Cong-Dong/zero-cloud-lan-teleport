@@ -105,16 +105,31 @@ thư mục cha); không mở được (kể cả dự phòng `open_url`) → `in
 {phím Dán} để dán file đã chép.” (tên phím từ `ui.shortcuts`), không nút). Đang nạp (kể cả trong
 lúc chờ debounce) thì luồng trống, không chớp màn rỗng; lịch sử lỗi thì hiện luồng với dòng lỗi.
 
+**Thanh theo máy** (spec F3b): `set_device_banner(bar, focus_chain)` đặt một thanh (một lần) giữa
+`header` và `threads`, lề như `info_bar`; `ui.transfers` đặt thanh chẩn đoán kết nối của
+`ui.diagnose` (module này không import `ui.diagnose`). Thanh ẩn thì không chiếm chỗ.
+
 **Bàn phím** (N12; spec B3 mục 9.10): widget nhận Tab của `ChatView` dựng trong `__init__` theo thứ tự
-các ô của `info_bar` → nhãn của `empty_state` → `threads` (điểm dừng Tab duy nhất của luồng,
-`TabFocus`, tắt khi luồng không có bong bóng) → `new_button` → `composer.send_button`. `threads`
-không có `ClickFocus`: bấm thanh cuộn hay chỗ trống trong luồng không kéo tiêu điểm về đó (nhận tiêu
-điểm sẽ cuộn tới bong bóng hiện hành, giật khung cuộn khỏi chỗ đang đọc). Mọi widget dựng lười (luồng,
-bong bóng, nút trong bong bóng, mốc) là `ClickFocus` / `NoFocus`. `threads` nhận tiêu điểm (từ bàn
-phím) thì chuyển sang bong bóng hiện hành (mặc định mới nhất); ↑/↓/Home/End/PageUp/PageDown đổi bong
-bóng hiện hành và cuộn tới nó; Tab từ bong bóng đi qua các nút của chính nó rồi sang `new_button` (nếu
-hiện) hay `send_button`; Shift+Tab từ bong bóng ra widget trước `threads`
-(`ChatThread.focusNextPrevChild`). `scroll_area` có tên trợ năng “Các lượt gửi nhận với X”.
+các ô của `info_bar` → (các ô của thanh theo máy) → nhãn của `empty_state` → `threads` (điểm dừng Tab
+duy nhất của luồng, `TabFocus`, tắt khi luồng không có bong bóng) → `new_button` →
+`composer.send_button`. `threads` không có `ClickFocus`: bấm thanh cuộn hay chỗ trống trong luồng
+không kéo tiêu điểm về đó (nhận tiêu điểm sẽ cuộn tới bong bóng hiện hành, giật khung cuộn khỏi chỗ
+đang đọc). Mọi widget dựng lười (luồng, bong bóng, nút trong bong bóng, mốc) là `ClickFocus` /
+`NoFocus`. `threads` nhận tiêu điểm (từ bàn phím) thì chuyển sang bong bóng hiện hành (mặc định mới
+nhất); ↑/↓/Home/End/PageUp/PageDown đổi bong bóng hiện hành và cuộn tới nó; Tab từ bong bóng đi qua
+các nút của chính nó rồi sang `new_button` (nếu hiện) hay `send_button`; Shift+Tab từ bong bóng ra
+widget trước `threads` (`ChatThread.focusNextPrevChild`). `scroll_area` có tên trợ năng “Các lượt
+gửi nhận với X”.
+
+**Chuyển động** (spec G4, `ui.chat_motion`): mỗi `ChatThread` có một `motion` (`ThreadMotion`, hàng
+nhận hiệu ứng là `_Item.wrapper`); `add` / `add_many` gán `motion` cho bong bóng (`_Bubble`), `remove`
+gọi `forget` rồi gỡ. Mờ dần chỉ khi `add(…, reveal=True)` **và** bong bóng ở cuối **và** luồng đang ghim
+(và đang hiện, cửa sổ không thu nhỏ, được hoạt ảnh: cổng của `FrameDriver`): bong bóng **nhận** mới tới
+(`_add_bubble(key, arrive=True)`, kể cả qua `_ensure` và lời mời mới) và note clipboard; không bao giờ
+cho bong bóng gửi đi, bong bóng tạm, lịch sử (`add_many`) hay ảnh chụp (`load_snapshot`: `arrive=False`,
+`raise_shown(…, animate=False)`). Bong bóng đầu tiên của luồng đang mở mà trang còn là màn rỗng: đổi
+sang luồng trước khi chèn để nó cũng mờ dần. Luồng bị ẩn (đổi máy, `ChatView` hay cửa sổ ẩn/thu nhỏ)
+thì driver tự `finish()`: mọi trạng thái về cuối; đổi máy cũng gọi `motion.finish()` của luồng cũ.
 
 **Chữ máy kia** qua `texts.peer_label` / `texts.file_label`, nhãn `Qt.PlainText`; hệ điều hành (từ
 mDNS) chỉ hiện khi là giá trị đã biết (`texts.os_label`). Màu tự vẽ lấy từ `theme.tokens_for`. Chuỗi
@@ -175,6 +190,7 @@ from PySide6.QtWidgets import (
 from teleport.app.devices import DeviceView
 from teleport.app.transfers import (
     DataUnreachable,
+    Direction,
     FileDone,
     OfferReceived,
     TransferFinished,
@@ -199,6 +215,7 @@ from teleport.ui.chat_bubbles import (
     needs_separator,
     separator_text,
 )
+from teleport.ui.chat_motion import ThreadMotion
 from teleport.ui.conversations import failure_text
 from teleport.ui.drop_overlay import DropOverlay
 from teleport.ui.offer import OfferBook
@@ -383,6 +400,7 @@ class ChatThread(QWidget):
         self._last_session_at = float("-inf")
         self._exit_next = exit_next
         self._exit_prev = exit_prev
+        self.motion = ThreadMotion(self, host=self._motion_host)
 
         self._container = QWidget()
         self._container.setObjectName("chatThreadContent")
@@ -461,20 +479,25 @@ class ChatThread(QWidget):
         self._last_session_at = at
         return at
 
-    def add(self, bubble: Bubble, seq: int, *, new: bool) -> None:
-        """Chèn `bubble` theo (`at`, `seq`); `new`: bong bóng mới của phiên (có thể bật “↓ Mới”)."""
+    def add(self, bubble: Bubble, seq: int, *, new: bool, reveal: bool = False) -> None:
+        """Chèn `bubble` theo (`at`, `seq`); `new`: bong bóng mới của phiên (có thể bật “↓ Mới”);
+        `reveal`: mờ dần khi bong bóng ở cuối và luồng đang ghim (xem docstring module, “Chuyển động”)."""
         item = _Item(bubble, bubble.at, seq, self._container)
         index = bisect.bisect_right([i.order for i in self._items], item.order)
         self._items.insert(index, item)
         self._layout.insertWidget(index + 1, item.wrapper)
         bubble.installEventFilter(self)
+        self._attach_motion(bubble)
         item.wrapper.show()
         now = _wall_now()
         for i in (index, index + 1):
             self._fix_separator(i, now)
-        if new and index == len(self._items) - 1 and not self._pinned:
+        last = index == len(self._items) - 1
+        if new and last and not self._pinned:
             self._counted.add(bubble)
             self._set_unseen(self._unseen + 1)
+        if reveal and last and self._pinned:
+            self.motion.reveal(bubble)
 
     def add_many(self, bubbles: Sequence[tuple[Bubble, int]]) -> None:
         """Chèn hàng loạt (lịch sử; không bật “↓ Mới”): ẩn nội dung trong lúc chèn để Qt không hiện,
@@ -510,6 +533,7 @@ class ChatThread(QWidget):
                 self._items.insert(index, item)
                 self._layout.insertWidget(index + 1, item.wrapper)
                 bubble.installEventFilter(self)
+                self._attach_motion(bubble)
                 if not hide:
                     item.wrapper.show()
             self.refresh_separators()
@@ -530,6 +554,9 @@ class ChatThread(QWidget):
             return False
         item = self._items.pop(index)
         bubble.removeEventFilter(self)
+        self.motion.forget(bubble)
+        if isinstance(bubble, TransferBubble | HistoryBubble | PendingBubble):
+            bubble.motion = None
         if self._current is bubble:
             self._current = None
         if bubble in self._counted:
@@ -588,6 +615,22 @@ class ChatThread(QWidget):
         return self._current
 
     # -- Bên trong ------------------------------------------------------------------------------
+
+    def _attach_motion(self, bubble: Bubble) -> None:
+        if isinstance(bubble, TransferBubble | HistoryBubble | PendingBubble):
+            bubble.motion = self.motion
+
+    def _motion_host(self, widget: QWidget) -> tuple[QWidget, int] | None:
+        """Hàng (`_Item.wrapper`) nhận hiệu ứng của `widget` và `still_top` (dòng mốc đang hiện + giãn
+        dòng: phần không rung); không còn trong luồng → None."""
+        for item in self._items:
+            if item.bubble is widget:
+                separator = item.separator
+                layout = item.wrapper.layout()
+                spacing = layout.spacing() if layout is not None else 0
+                top = 0 if separator.isHidden() else separator.height() + max(0, spacing)
+                return item.wrapper, top
+        return None
 
     def _fix_separator(self, index: int, now: float) -> None:
         if not 0 <= index < len(self._items):
@@ -880,6 +923,7 @@ class ChatView(QWidget):
         self._notice_language = ""  # ngôn ngữ lúc hiện câu đang có
         self._change_depth = 0
         self._changed = False
+        self._device_banner: QWidget | None = None  # thanh theo máy (`set_device_banner`)
 
         # Dựng theo thứ tự Tab (spec B3 mục 9.10): info_bar → empty_state → threads → new_button → nút gửi.
         self.info_bar = InfoBar(self)
@@ -919,6 +963,7 @@ class ChatView(QWidget):
         new_row.addWidget(self.new_button)
         new_row.addStretch(1)
         layout = QVBoxLayout(self)
+        self._layout = layout
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addLayout(info_wrap)
@@ -973,8 +1018,10 @@ class ChatView(QWidget):
             old = self._device_id
             if old is not None and old != device_id:
                 thread = self._threads.get(old)
-                if thread is not None and thread.unload_history():
-                    self._mark_changed()
+                if thread is not None:
+                    thread.motion.finish()  # rời luồng: chuyển động về cuối ngay
+                    if thread.unload_history():
+                        self._mark_changed()
             self._device_id = device_id
             self._mark_changed()
             if device_id is not None:
@@ -985,6 +1032,21 @@ class ChatView(QWidget):
                 self._history_timer.stop()
             self._update_header()
             self._update_page()
+
+    def set_device_banner(self, bar: QWidget, focus_chain: Sequence[QWidget]) -> None:
+        """Đặt thanh theo máy giữa `header` và `threads` (một lần; gọi lần hai → RuntimeError) và nối
+        `focus_chain` vào chuỗi Tab sau `info_bar`, trước `empty_state`."""
+        if self._device_banner is not None:
+            raise RuntimeError("ChatView đã có thanh theo máy")
+        self._device_banner = bar
+        wrap = QVBoxLayout()
+        # Lề như `info_wrap`; thanh ẩn thì layout rỗng, không chiếm chỗ.
+        wrap.setContentsMargins(_MARGIN, theme.SPACING[2], _MARGIN, 0)
+        wrap.addWidget(bar)
+        self._layout.insertLayout(self._layout.indexOf(self.header) + 1, wrap)
+        chain = [self.info_bar.close_button, *focus_chain, self.empty_state.title_label]
+        for first, second in pairwise(chain):
+            QWidget.setTabOrder(first, second)
 
     def focus_composer(self) -> None:
         """Tiêu điểm vào nút “Gửi file” (Enter / bấm đúp ở cột trái)."""
@@ -1005,7 +1067,7 @@ class ChatView(QWidget):
 
     def has_content(self) -> bool:
         """Thông báo đang hiện hay đang chọn một máy (đúng cả khi cửa sổ đang ẩn xuống khay)."""
-        return not self.info_bar.isHidden() or self._device_id is not None
+        return self.info_bar.is_open or self._device_id is not None
 
     def active_count(self) -> int:
         """Số bong bóng của phiên chưa kết thúc, ở mọi luồng."""
@@ -1124,9 +1186,9 @@ class ChatView(QWidget):
             for info in infos:
                 if info.key in self._bubbles:
                     continue
-                bubble = self._add_bubble(info.key)
+                bubble = self._add_bubble(info.key, arrive=False)  # không phải mới tới: không mờ dần
                 bubble.set_info(info)
-                bubble.raise_shown(info.done_bytes + info.unsynced_bytes, info.total_bytes)
+                bubble.raise_shown(info.done_bytes + info.unsynced_bytes, info.total_bytes, animate=False)
                 bubble.refresh_text()
 
     def remove(self, key: TransferKey) -> None:
@@ -1261,7 +1323,8 @@ class ChatView(QWidget):
             )
             note.retry_clicked.connect(lambda n=note: self._clipboard_retry_clicked(n))
             self._clip_notes[device_id] = note
-            thread.add(note, self._next_seq(), new=True)
+            self._show_thread_page(thread)
+            thread.add(note, self._next_seq(), new=True, reveal=True)
             self._mark_changed()
             self._update_page()
             if had_focus:  # tiêu điểm đang ở note cũ: sang note mới, không rơi khỏi luồng
@@ -1412,7 +1475,7 @@ class ChatView(QWidget):
 
     def notice_text(self) -> str:
         """Chữ của thông báo đang hiện; không có → “”."""
-        return self.info_bar.title if not self.info_bar.isHidden() else ""
+        return self.info_bar.title if self.info_bar.is_open else ""
 
     def notice_action_text(self) -> str | None:
         """Chữ của nút hành động của thông báo đang hiện; không có → None."""
@@ -1599,7 +1662,8 @@ class ChatView(QWidget):
         bubble = self._bubbles.get(key)
         return bubble if bubble is not None else self._add_bubble(key)
 
-    def _add_bubble(self, key: TransferKey) -> TransferBubble:
+    def _add_bubble(self, key: TransferKey, *, arrive: bool = True) -> TransferBubble:
+        """Dựng bong bóng của phiên cho `key`; `arrive`: lượt vừa tới (bong bóng nhận thì mờ dần)."""
         thread = self._thread(key.device_id)
         old = thread.bubble_for(key)
         if isinstance(old, HistoryBubble):
@@ -1615,11 +1679,20 @@ class ChatView(QWidget):
         bubble.offer_change.connect(self.change_receive_dir_requested)
         bubble.change_dir_clicked.connect(self.change_receive_dir_requested)
         self._bubbles[key] = bubble
-        thread.add(bubble, seq, new=True)
+        reveal = arrive and key.direction is Direction.RECEIVE
+        if reveal:
+            self._show_thread_page(thread)
+        thread.add(bubble, seq, new=True, reveal=reveal)
         self._mark_changed()
         self._trim(key.device_id)
         self._update_page()
         return bubble
+
+    def _show_thread_page(self, thread: ChatThread) -> None:
+        """Luồng đang mở mà trang còn là màn rỗng: đổi sang luồng ngay (trước khi chèn bong bóng đầu
+        tiên, để nó mờ dần được); `_update_page` sau đó cũng chọn luồng này."""
+        if thread.device_id == self._device_id and self.threads.currentWidget() is self.empty_state:
+            self.threads.setCurrentWidget(thread)
 
     def _trim(self, device_id: str) -> None:
         thread = self._threads.get(device_id)

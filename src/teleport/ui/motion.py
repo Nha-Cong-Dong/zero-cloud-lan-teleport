@@ -39,22 +39,39 @@ hoạt ảnh lặp tối đa `MAX_LOOP_MS` (5 s). Các hằng là biến cấp m
   chạy lại. Không timer chạy nền khi không có hoạt ảnh (N3).
 - Bàn phím và trình đọc màn hình không chờ hoạt ảnh: tiêu điểm chuyển ngay. `HeightAnimator.collapse`
   không dời tiêu điểm, bên gọi dời trước.
+- `FrameDriver` là nhịp khung chung cho hoạt ảnh tự vẽ dài (tiến độ suốt lượt truyền, không hợp `Loop`):
+  timer chỉ chạy giữa `wake()` thành công và lúc dừng; widget hay cửa sổ ẩn/thu nhỏ → `finish()` (trạng
+  thái nhảy về cuối); không tự chạy lại.
 - Không `QGraphicsOpacityEffect` (hay hiệu ứng đồ họa khác) trên cây widget lớn: vẽ lại cả cây, tốn
-  CPU. Mờ chéo dùng ảnh chụp (`Fader`), cửa sổ cấp cao dùng `windowOpacity` (`fade_in_window`).
+  CPU. Mờ chéo dùng ảnh chụp (`Fader`), cửa sổ cấp cao dùng `windowOpacity` (`fade_in_window`). Ngoại
+  lệ duy nhất: hiệu ứng đồ họa tạm trên **một** widget nhỏ (một hàng của luồng chat), mỗi pha tối đa
+  `SLOW.ms`, gỡ ngay khi xong (`ui/chat_motion.py`): mờ dần, trượt và rung phải dịch cả các widget con thật.
 - Giá trị trả về của `animate` / `animate_value` là hoạt ảnh `DeleteWhenStopped`: chỉ dùng khi
   `shiboken6.isValid(anim)`. Mỗi `(target, prop)` (hay `(owner, key)`) chỉ một hoạt ảnh: hoạt ảnh mới
   thay hoạt ảnh cũ (cũ dừng, `on_finished` cũ không chạy, mới chạy từ giá trị hiện tại).
 - Sổ đăng ký giữ tham chiếu mạnh tới hoạt ảnh đang chạy, xóa khi `finished` / `destroyed`; khóa
   và closure chỉ giữ tham chiếu yếu tới đích (lý do ở chú thích của sổ). Bên dùng cũng đừng nối vào
   signal của hoạt ảnh một closure giữ chặt đích do Python sở hữu. `finish_all()` đưa mọi hoạt ảnh
-  tới giá trị cuối (dùng trước `grab()`), `running_count()` đếm số đang chạy (test N3).
+  tới giá trị cuối và gọi `finish()` của mọi `FrameDriver` (dùng trước `grab()`), `running_count()`
+  đếm số đang chạy, kể cả `Loop` và `FrameDriver` (test N3).
+
+**Helper và chỗ dùng**
+- `Loop`: sóng radar (`ui.discover`), minh họa (`ui.illustrations`).
+- `Fader`: đổi trang (`ui.main_window.PageStack`) và khung phải `stream_pane` (spec G3).
+- `HeightAnimator`: mở/đóng `widgets.InfoBar`.
+- `SlidingRect`: hình chữ nhật trượt (thanh chọn), chủ tự vẽ `rect` trong `paintEvent`: nền hàng
+  được chọn của danh sách cuộc trò chuyện (`ui.conversations`), vạch nhấn cột mục Cài đặt
+  (`ui.settings`).
+- `fade_in_on_show(window)`: bộ lọc sự kiện chỉ trên một hộp, mỗi lần hiện thì `fade_in_window`: hộp
+  hỏi nhận file (`ui.offer`), hộp của `ui.pairing`, hộp hỏi Thoát (`ui.app`), hộp xóa lịch sử
+  (`ui.settings`). Không dùng bộ lọc cấp `QApplication` (mọi sự kiện đi qua Python, tốn CPU, N3).
 
 **Seam test** (cấp module, đọc lúc gọi): `_instant` / `_force_instant(on)` (chế độ tức thì, không chạm
 `animations_enabled`), `_reset_for_tests()` (xóa cache GNOME, tắt chế độ tức thì),
-`_stop_all_for_tests()` (dừng mọi hoạt ảnh và `Loop` không gọi `on_finished` / `on_stop`, trả
-`windowOpacity` về 1.0, xóa sổ), `_query_client_area_animation()` (Windows),
-`_query_macos_reduce_motion()`, `_query_gnome_animations()`, `_monotonic`, `_GNOME_CACHE_TTL`,
-`_GSETTINGS_TIMEOUT`. Quy ước fixture: `architecture.md` §6.
+`_stop_all_for_tests()` (dừng mọi hoạt ảnh, `Loop` và `FrameDriver` không gọi `on_finished` /
+`on_stop` / `on_finish`, trả `windowOpacity` về 1.0, xóa sổ), `FrameDriver.FRAME_MS`,
+`_query_client_area_animation()` (Windows), `_query_macos_reduce_motion()`, `_query_gnome_animations()`,
+`_monotonic`, `_GNOME_CACHE_TTL`, `_GSETTINGS_TIMEOUT`. Quy ước fixture: `architecture.md` §6.
 """
 
 from __future__ import annotations
@@ -75,7 +92,9 @@ from PySide6.QtCore import (
     QObject,
     QPoint,
     QPropertyAnimation,
+    QRectF,
     Qt,
+    QTimer,
     QVariantAnimation,
 )
 from PySide6.QtGui import QGuiApplication, QPainter, QPaintEvent, QPixmap
@@ -263,9 +282,10 @@ def _reset_for_tests() -> None:
 # --- Sổ đăng ký ----------------------------------------------------------------------------------
 
 # Khóa sổ: (loại, `weakref.ref(đối tượng)`, tên): ("prop", target, prop), ("value", owner, key),
-# ("loop", Loop, ""). Khóa và closure nối vào hoạt ảnh KHÔNG giữ tham chiếu mạnh tới đích hay chủ: hoạt
-# ảnh là con của chúng, nên lúc hoạt ảnh bị hủy mà closure thả tham chiếu cuối của một đích do Python sở
-# hữu thì đích bị xóa ngay giữa destructor của chính hoạt ảnh con → xóa hai lần, tiến trình chết.
+# ("loop", Loop, ""), ("driver", FrameDriver, ""). Khóa và closure nối vào hoạt ảnh KHÔNG giữ tham
+# chiếu mạnh tới đích hay chủ: hoạt ảnh là con của chúng, nên lúc hoạt ảnh bị hủy mà closure thả tham
+# chiếu cuối của một đích do Python sở hữu thì đích bị xóa ngay giữa destructor của chính hoạt ảnh con →
+# xóa hai lần, tiến trình chết.
 _Key = tuple[str, Any, str]
 
 
@@ -291,7 +311,7 @@ class _Entry:
         self.on_value = None
 
 
-_registry: dict[_Key, _Entry | Loop] = {}
+_registry: dict[_Key, _Entry | Loop | FrameDriver] = {}
 
 
 def _drop(key: _Key, entry: object) -> None:
@@ -345,7 +365,8 @@ def _restore_window_opacity(entry: _Entry) -> None:
 
 
 def finish_all() -> int:
-    """Đưa mọi hoạt ảnh đang chạy tới giá trị cuối (`finished` và `on_finished` chạy), dừng mọi `Loop`.
+    """Đưa mọi hoạt ảnh đang chạy tới giá trị cuối (`finished` và `on_finished` chạy), dừng mọi `Loop`,
+    gọi `finish()` của mọi `FrameDriver` đang chạy.
 
     Lặp tới khi sổ rỗng (callback có thể chạy hoạt ảnh mới), tối đa 8 vòng; bỏ qua đối tượng đã hủy.
     Trả tổng số đã xử lý. Gọi trước `grab()` để ảnh chụp không bắt giữa chừng.
@@ -357,9 +378,12 @@ def finish_all() -> int:
         for key, entry in list(_registry.items()):
             if _registry.get(key) is not entry:
                 continue
-            if isinstance(entry, Loop):
+            if isinstance(entry, Loop | FrameDriver):
                 if isValid(entry):
-                    entry.stop()  # tự gỡ khỏi sổ; `on_stop` có thể đã đăng ký lại vòng mới
+                    if isinstance(entry, Loop):
+                        entry.stop()  # tự gỡ khỏi sổ; `on_stop` có thể đã đăng ký lại vòng mới
+                    else:
+                        entry.finish()  # tự gỡ khỏi sổ rồi gọi `on_finish`
                     total += 1
                 elif _registry.get(key) is entry:
                     _drop(key, entry)
@@ -377,10 +401,10 @@ def finish_all() -> int:
 
 
 def running_count() -> int:
-    """Số hoạt ảnh và `Loop` đang chạy (rảnh thì 0, mvp N3)."""
+    """Số hoạt ảnh, `Loop` và `FrameDriver` đang chạy (rảnh thì 0, mvp N3)."""
     count = 0
     for entry in _registry.values():
-        if isinstance(entry, Loop):
+        if isinstance(entry, Loop | FrameDriver):
             count += isValid(entry) and entry.running
         elif isValid(entry.anim):
             count += 1
@@ -388,13 +412,17 @@ def running_count() -> int:
 
 
 def _stop_all_for_tests() -> None:
-    """Seam test: dừng mọi hoạt ảnh và `Loop` mà không gọi `on_finished` / `on_stop`, rồi xóa sổ."""
+    """Seam test: dừng mọi hoạt ảnh, `Loop` và `FrameDriver` mà không gọi `on_finished` / `on_stop` /
+    `on_finish`, rồi xóa sổ."""
     entries = list(_registry.values())
     _registry.clear()
     for entry in entries:
         if isinstance(entry, Loop):
             if isValid(entry):
                 entry._halt(notify=False)
+        elif isinstance(entry, FrameDriver):
+            if isValid(entry):
+                entry.stop()
         else:
             entry.release()
             if isValid(entry.anim):
@@ -582,6 +610,110 @@ class Loop(QObject):
         return False
 
 
+# --- Nhịp khung ----------------------------------------------------------------------------------
+
+
+class FrameDriver(QObject):
+    """Nhịp khung chung (`FRAME_MS`) cho hoạt ảnh tự vẽ không có trần `MAX_LOOP_MS`; con của `widget`.
+
+    `wake()`: đang chạy → True; không được hoạt ảnh, widget không hiện hay cửa sổ thu nhỏ → False (bên
+    gọi nhảy thẳng tới trạng thái cuối); còn lại chạy timer rồi True. Mỗi khung gọi `on_frame()`, trả
+    False thì dừng (không gọi `on_finish`). Widget hay cửa sổ ẩn, cửa sổ thu nhỏ → `finish()`. `finish()`
+    dừng (nếu đang chạy) rồi **luôn** gọi `on_finish()` đúng một lần; `stop()` chỉ dừng. Có trong sổ đăng
+    ký khi chạy (`finish_all`, `running_count`, `_stop_all_for_tests`).
+    """
+
+    FRAME_MS = 16
+
+    def __init__(
+        self,
+        widget: QWidget,
+        on_frame: Callable[[], bool],
+        on_finish: Callable[[], None],
+    ) -> None:
+        super().__init__(widget)
+        self._widget = widget
+        self._on_frame = on_frame
+        self._on_finish = on_finish
+        self._running = False
+        self._watched: list[QObject] = []
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.setInterval(self.FRAME_MS)
+        self._timer.timeout.connect(self._frame)
+        self._key = _key("driver", self, "")
+        key = self._key
+        self.destroyed.connect(lambda *_: _registry.pop(key, None))
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    def can_run(self) -> bool:
+        """Được hoạt ảnh, widget đang hiện và cửa sổ không thu nhỏ."""
+        widget = self._widget
+        if not should_animate() or not isValid(widget) or not widget.isVisible():
+            return False
+        return not widget.window().isMinimized()
+
+    def wake(self) -> bool:
+        if self._running:
+            if should_animate():
+                return True
+            # Hệ điều hành vừa tắt hiệu ứng giữa chừng: về cuối ngay, không đợi driver tự dừng (N12).
+            self.finish()
+            return False
+        if not self.can_run():
+            return False
+        widget = self._widget
+        window = widget.window()
+        for watched in (widget, window) if window is not widget else (widget,):
+            watched.installEventFilter(self)
+            self._watched.append(watched)
+        self._running = True
+        _registry[self._key] = self
+        self._timer.start()
+        return True
+
+    def finish(self) -> None:
+        self._halt()
+        self._on_finish()
+
+    def stop(self) -> None:
+        self._halt()
+
+    def _frame(self) -> None:
+        if self._running and not self._on_frame():
+            self._halt()
+
+    def _halt(self) -> None:
+        if not self._running:  # cờ chống dừng hai lần
+            return
+        self._running = False
+        _drop(self._key, self)
+        if isValid(self._timer):
+            self._timer.stop()
+        for watched in self._watched:
+            if isValid(watched):
+                watched.removeEventFilter(self)
+        self._watched.clear()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        # Bẫy giống `Loop.eventFilter`: lúc cây widget bị hủy, thuộc tính Python có thể đã mất.
+        if not self.__dict__.get("_running") or not isValid(self):
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.Hide or (
+            kind == QEvent.Type.WindowStateChange
+            and isValid(watched)
+            and isinstance(watched, QWidget)
+            and watched.isWindow()
+            and watched.isMinimized()
+        ):
+            self.finish()
+        return False
+
+
 # --- Mờ dần --------------------------------------------------------------------------------------
 
 
@@ -629,7 +761,7 @@ class Fader(QObject):
 
     def __init__(self, container: QWidget) -> None:
         super().__init__(container)
-        self._container = container
+        self._container_ref = weakref.ref(container)  # tham chiếu yếu (như `HeightAnimator`)
         self._overlay: _SnapshotOverlay | None = None
         container.installEventFilter(self)
 
@@ -637,7 +769,10 @@ class Fader(QObject):
         self, change: Callable[[], Any], token: Token | None = None, *, shift: QPoint | None = None
     ) -> None:
         token = SLOW if token is None else token
-        container = self._container
+        container = self._container_ref()
+        if container is None or not isValid(container):
+            change()
+            return
         if (
             not should_animate()
             or token.ms <= 0
@@ -651,6 +786,7 @@ class Fader(QObject):
         pixmap = container.grab()  # vẽ cả overlay cũ nên không giật khi đổi liên tiếp
         self._remove_overlay()
         change()
+        self._remove_overlay()  # `change()` có thể gọi lồng `crossfade` và đã dựng overlay riêng
         overlay = _SnapshotOverlay(container, pixmap, _clamp_shift(shift))
         overlay.setGeometry(container.rect())
         overlay.show()
@@ -683,13 +819,10 @@ class Fader(QObject):
         if "_overlay" not in self.__dict__:
             return False
         overlay = self.__dict__["_overlay"]
-        if (
-            overlay is not None
-            and event.type() == QEvent.Type.Resize
-            and isValid(overlay)
-            and isValid(self._container)
-        ):
-            overlay.setGeometry(self._container.rect())
+        if overlay is not None and event.type() == QEvent.Type.Resize and isValid(overlay):
+            container = self.__dict__["_container_ref"]()
+            if container is not None and isValid(container):
+                overlay.setGeometry(container.rect())
         return False
 
 
@@ -744,16 +877,26 @@ class HeightAnimator(QObject):
 
     def __init__(self, widget: QWidget) -> None:
         super().__init__(widget)
-        self._widget = widget
+        # Tham chiếu yếu: widget giữ animator (thường trong `__dict__`), animator giữ mạnh widget sẽ
+        # thành vòng; GC dọn vòng đó xóa `__dict__` của widget trong khi đối tượng C++ còn sống (chờ
+        # `deleteLater`) và vẫn nhận sự kiện. Closure của hoạt ảnh cũng chỉ giữ tham chiếu yếu.
+        self._widget_ref = weakref.ref(widget)
         self._expanded = not widget.isHidden()
         self._saved_min: int | None = None
+
+    def _target(self) -> QWidget | None:
+        widget = self._widget_ref()
+        return widget if widget is not None and isValid(widget) else None
 
     @property
     def expanded(self) -> bool:
         return self._expanded
 
     def set_expanded(self, on: bool, token: Token | None = None) -> None:
-        running = _key("prop", self._widget, self._PROP) in _registry
+        widget = self._target()
+        if widget is None:
+            return
+        running = _key("prop", widget, self._PROP) in _registry
         if on == self._expanded and not running:
             return
         if on:
@@ -762,28 +905,37 @@ class HeightAnimator(QObject):
             self.collapse(token)
 
     def expand(self, token: Token | None = None, on_finished: Callable[[], None] | None = None) -> None:
-        widget = self._widget
+        widget = self._target()
+        if widget is None:
+            return
         self._expanded = True
         if widget.isHidden():
             widget.setMaximumHeight(0)
             start = 0
         else:
             start = min(widget.height(), widget.maximumHeight())
-        self._hold_minimum()
+        self._hold_minimum(widget)
         widget.show()
-        target = self._measure()
+        target = self._measure(widget)
+        widget_ref = self._widget_ref
+        self_ref = weakref.ref(self)
 
         def done() -> None:
-            if isValid(widget):
-                widget.setMaximumHeight(_QWIDGETSIZE_MAX)
-            self._release_minimum()
+            current = widget_ref()
+            if current is not None and isValid(current):
+                current.setMaximumHeight(_QWIDGETSIZE_MAX)
+            owner = self_ref()
+            if owner is not None and isValid(owner):
+                owner._release_minimum()
             if on_finished is not None:
                 on_finished()
 
         animate(widget, self._PROP, target, token, start=start, on_finished=done)
 
     def collapse(self, token: Token | None = None, on_finished: Callable[[], None] | None = None) -> None:
-        widget = self._widget
+        widget = self._target()
+        if widget is None:
+            return
         self._expanded = False
         key = _key("prop", widget, self._PROP)
         if widget.isHidden():
@@ -794,25 +946,37 @@ class HeightAnimator(QObject):
                 on_finished()
             return
         start = min(widget.height(), widget.maximumHeight())
-        self._hold_minimum()
+        self._hold_minimum(widget)
+        widget_ref = self._widget_ref
+        self_ref = weakref.ref(self)
 
         def done() -> None:
-            if isValid(widget):
-                widget.hide()
-                widget.setMaximumHeight(_QWIDGETSIZE_MAX)
-            self._release_minimum()
+            current = widget_ref()
+            if current is not None and isValid(current):
+                current.hide()
+                current.setMaximumHeight(_QWIDGETSIZE_MAX)
+            owner = self_ref()
+            if owner is not None and isValid(owner):
+                owner._release_minimum()
             if on_finished is not None:
                 on_finished()
 
         animate(widget, self._PROP, 0, token, start=start, on_finished=done)
 
-    def _measure(self) -> int:
-        widget = self._widget
+    @staticmethod
+    def _measure(widget: QWidget) -> int:
+        # Gọi sau `widget.show()`: kích hoạt layout của cha để `widget.width()` là bề ngang thật; chỉ khi
+        # vẫn bằng 0 (cha chưa có layout, chưa xếp) mới lấy bề ngang vùng nội dung của cha.
+        parent = widget.parentWidget()
+        parent_layout = parent.layout() if parent is not None else None
+        if parent_layout is not None:
+            parent_layout.activate()
         layout = widget.layout()
         if layout is not None:
             layout.activate()
-        parent = widget.parentWidget()
-        width = parent.contentsRect().width() if parent is not None else widget.width()
+        width = widget.width()
+        if width <= 0 and parent is not None:
+            width = parent.contentsRect().width()
         height = -1
         if widget.hasHeightForWidth():
             height = widget.heightForWidth(width)
@@ -820,14 +984,133 @@ class HeightAnimator(QObject):
             height = widget.sizeHint().height()
         return max(0, height)
 
-    def _hold_minimum(self) -> None:
+    def _hold_minimum(self, widget: QWidget) -> None:
         # Đảo chiều giữa chừng: giá trị đã lưu vẫn là của lúc bắt đầu, giữ nguyên.
         if self._saved_min is None:
-            self._saved_min = self._widget.minimumHeight()
-            self._widget.setMinimumHeight(0)
+            self._saved_min = widget.minimumHeight()
+            widget.setMinimumHeight(0)
 
     def _release_minimum(self) -> None:
         saved = self._saved_min
         self._saved_min = None
-        if saved is not None and isValid(self._widget):
-            self._widget.setMinimumHeight(saved)
+        widget = self._target()
+        if saved is not None and widget is not None:
+            widget.setMinimumHeight(saved)
+
+
+# --- Thanh chọn trượt ----------------------------------------------------------------------------
+
+
+class SlidingRect(QObject):
+    """Một hình chữ nhật trượt giữa các vị trí (thanh chọn); con của `target`, chủ tự vẽ `rect`.
+
+    `move_to(end, animate=True)` trượt từ `rect` đang vẽ tới `end` theo `token` (mặc định `NORMAL`),
+    mỗi bước gọi `target.update()`. Nhảy thẳng khi `animate=False`, lần đầu (`rect` None), không được
+    hoạt ảnh hay token 0 ms; nhánh này chỉ gọi `update()` khi vừa hủy một hoạt ảnh đang chạy (còn lại bên
+    gọi đang vẽ hoặc tự gọi). `end` None → hủy, không vẽ. Đổi đích giữa chừng chạy tiếp từ `rect` đang vẽ.
+    """
+
+    _KEY = "slide"
+
+    def __init__(self, target: QWidget, token: Token | None = None) -> None:
+        super().__init__(target)
+        self._target_ref = weakref.ref(target)  # tham chiếu yếu (luật sổ đăng ký)
+        self._token = NORMAL if token is None else token
+        self._rect: QRectF | None = None
+        self._end: QRectF | None = None
+
+    @property
+    def rect(self) -> QRectF | None:
+        return None if self._rect is None else QRectF(self._rect)
+
+    @property
+    def end(self) -> QRectF | None:
+        return None if self._end is None else QRectF(self._end)
+
+    def move_to(self, end: QRectF | None, *, animate: bool) -> None:
+        if end is None:
+            if self._end is None and self._rect is None:
+                return
+            self._cancel()
+            self._end = None
+            self._rect = None
+            return
+        if self._end is not None and self._end == end:
+            return
+        self._end = QRectF(end)
+        if not animate or self._rect is None or not should_animate() or self._token.ms <= 0:
+            was_running = _key("value", self, self._KEY) in _registry
+            self._cancel()
+            self._rect = QRectF(end)
+            if was_running:  # vẽ lại cả vùng: phần nền đang trượt dở không còn sót (cuộn bằng blit)
+                target = self._target_ref()
+                if target is not None and isValid(target):
+                    target.update()
+            return
+        target_ref = self._target_ref
+        self_ref = weakref.ref(self)
+
+        def on_value(value: Any) -> None:
+            owner = self_ref()
+            if owner is None or not isValid(owner) or not isinstance(value, QRectF):
+                return
+            owner._rect = QRectF(value)
+            target = target_ref()
+            if target is not None and isValid(target):
+                target.update()
+
+        animate_value(self, QRectF(self._rect), QRectF(end), self._token, on_value, key=self._KEY)
+
+    def stop(self) -> None:
+        """Nhảy tới `end` ngay, hủy hoạt ảnh, rồi `target.update()`."""
+        self._cancel()
+        self._rect = None if self._end is None else QRectF(self._end)
+        target = self._target_ref()
+        if target is not None and isValid(target):
+            target.update()
+
+    def _cancel(self) -> None:
+        _cancel(_key("value", self, self._KEY))
+
+
+# --- Hộp thoại mờ dần khi hiện -------------------------------------------------------------------
+
+
+class _ShowFade(QObject):
+    """Bộ lọc sự kiện chỉ trên một cửa sổ: lần hiện không do HĐH → `fade_in_window`."""
+
+    def __init__(self, window: QWidget, token: Token) -> None:
+        super().__init__(window)
+        self.setObjectName("motionShowFade")
+        self._window_ref = weakref.ref(window)
+        self._token = token
+        window.installEventFilter(self)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        # Lúc cây bị hủy PySide có thể đã xóa thuộc tính Python mà Qt vẫn gửi sự kiện (xem `Loop`).
+        if "_window_ref" not in self.__dict__ or not isValid(self):
+            return False
+        if event.type() != QEvent.Type.Show or event.spontaneous():
+            return False
+        window = self.__dict__["_window_ref"]()
+        if window is None or watched is not window or not isinstance(window, QWidget):
+            return False
+        if not isValid(window):
+            return False
+        if not window.isWindow():  # hộp nhúng như widget con (cờ `Qt.Widget`): bỏ qua
+            return False
+        fade_in_window(window, self._token)
+        return False
+
+
+def fade_in_on_show(window: QWidget, token: Token | None = None) -> None:
+    """Mỗi lần `window` hiện (không do HĐH) thì mờ dần vào bằng `fade_in_window` (mặc định `SLOW`).
+
+    Gắn bộ lọc sự kiện con `motionShowFade` **chỉ trên** `window`; gọi lần hai không gắn thêm. Không dùng
+    bộ lọc cấp `QApplication`: mọi sự kiện của app sẽ đi qua Python, tốn CPU cả khi rảnh (mvp N3).
+    Hộp nhúng như widget con thì không mờ. Đóng hộp vẫn tức thì.
+    """
+    for child in window.children():
+        if isinstance(child, _ShowFade) and isValid(child):
+            return
+    _ShowFade(window, SLOW if token is None else token)
