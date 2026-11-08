@@ -78,8 +78,13 @@ property thì Fusion vẽ như cũ.
   `palette(highlight)`, vì Highlight là `accent_strong`). `min-height` theo chiều cao nút Fusion
   thường đo lúc `apply` (cỡ chữ và lề Fusion khác nhau giữa Windows, macOS, Linux), nên cao bằng nút
   bên cạnh. `:hover`/`:pressed` dùng `accent_hover`/`accent_pressed`; `:disabled` về màu nút thường với
-  chữ của mục bị tắt. **Tiêu điểm** (`:focus`) đổi hai thứ, nút không đổi cỡ: viền sang
-  `focus_ring_color` (màu chữ cửa sổ) và chữ gạch chân. Viền tiêu điểm ≥ 3:1 với cả nền nút lẫn nền
+  chữ của mục bị tắt. Bề dày viền là `PRIMARY_BORDER_WIDTH` (cũng dùng trong `_PRIMARY_FRAME`).
+  `buttons.AnimatedButton` vẽ bằng chính luật này nhưng bỏ cờ hover/ấn khỏi `QStyleOption` (QSS đọc
+  pseudo-state `:hover`/`:pressed` từ `opt.state`, không từ `underMouse()`; đã kiểm bằng pixel ở G2),
+  rồi tự phủ màu chuyển dần `accent` → `accent_hover` → `accent_pressed` (`blend`) phía trong viền; nút
+  chính chưa chuyển (ví dụ `chat_bubbles.OfferPanel`) vẫn đổi màu tức thì bằng `:hover`/`:pressed`.
+  **Tiêu điểm** (`:focus`) đổi hai thứ, nút không đổi cỡ: viền sang `focus_ring_color` (màu chữ cửa
+  sổ) và chữ gạch chân. Viền tiêu điểm ≥ 3:1 với cả nền nút lẫn nền
   cửa sổ, nhưng so với viền thường `accent_strong` chỉ khác ≈ 1,7:1 ở chế độ tối, nên gạch chân (màu
   chữ của nút, ≥ 4,5:1 với nền nút) là dấu hiệu thứ hai. Tô màu chỉ để nhấn: nút mặc định (Enter)
   vẫn là nút an toàn của hộp (“Từ chối”, “Không trùng”), không phải nút chính.
@@ -87,7 +92,8 @@ property thì Fusion vẽ như cũ.
   trong suốt (giữ nguyên cỡ nút khi có tiêu điểm), bo `RADIUS_CONTROL`, padding 4 px, chữ `text`;
   `:hover` nền `selected`; `:pressed` nền `border`; `:focus` viền `focus_ring_color` (khớp luật thì
   Fusion không vẽ viền tiêu điểm nữa, nên luật này bắt buộc); `:disabled` chữ `text_muted`;
-  `::menu-indicator` không ảnh, rộng 0 (nút ⋯ có menu không hiện mũi tên).
+  `::menu-indicator` không ảnh, rộng 0 (nút ⋯ có menu không hiện mũi tên). `IconButton` bỏ cờ hover/ấn
+  khỏi `QStyleOption` và tự vẽ nền chuyển dần tới đúng hai màu `:hover`/`:pressed` này (spec G2).
 - `QLabel[tone="muted|success|warning|danger|accent"]`: màu chữ theo token cùng tên (`muted` →
   `text_muted`, `accent` → `accent_text`).
 - `QFrame[surface="sidebar|raised|card"]`: nền `sidebar` (viền phải `border`, không bo) / nền
@@ -100,22 +106,22 @@ property thì Fusion vẽ như cũ.
 - `QFrame[segmented="true"]` và `QRadioButton[segment="first|middle|last"]` — **nhóm chọn một**
   (`widgets.SegmentedControl`, spec D6): khung nền `surface_raised`, viền 1 px `border_strong`, bo
   `RADIUS_CONTROL`; nút nền trong suốt, viền 2 px trong suốt, chữ `text`, ô tròn radio rộng 0;
-  `:hover` nền `selected`; `:checked` nền `accent`, chữ `accent_text`, viền `accent_strong`; `:focus`
+  `:hover` nền `selected`; `:checked` nền và viền trong suốt, chữ `accent_text` (khối chọn nền `accent`,
+  viền 2 px `accent_strong` do khung `SegmentedControl` tự vẽ để trượt được, spec G2); trong lúc khối
+  trượt, nút mới chọn mang `SEGMENT_SLIDING_PROPERTY="true"` và chữ về `text` (chữ nhấn chưa có nền nhấn
+  phía sau); `:focus` viền `focus_ring_color` và chữ gạch chân; `:disabled` chữ `text_muted`,
+  `:checked:disabled` nền và viền trong suốt (khối của khung tắt: nền `selected`, viền `border`).
   viền `focus_ring_color` và chữ gạch chân; `:disabled` chữ `text_muted`, nút đang chọn nền
-  `selected` viền `border`.
-- `QLabel:focus`, `QAbstractItemView:focus` — **vòng tiêu điểm chung** (mvp N12; spec E1 mục 2.6) cho
-  nhãn chọn được bằng chuột mà vẫn nhận Tab và cho danh sách/bảng (Fusion không vẽ dấu nào cho chúng):
   viền 2 px `focus_ring_color` (nhãn bo `RADIUS_CONTROL`). Đây là hai luật duy nhất không có bộ chọn
-  hẹp, nhưng chỉ khớp lúc có tiêu điểm. Viền chỉ đặt ở `:focus` (không có viền trong suốt ở trạng thái
-  thường): style tính lề nội dung lúc polish, khi widget chưa có tiêu điểm, nên lúc có tiêu điểm viền
-  vẽ đè lên mép mà cỡ widget và vị trí chữ không đổi. Danh sách/bảng có khung thì phần viền trong bị
   viewport che, thấy ≈ 1 px; danh sách `NoFrame` bị viewport che hết (không đổi gì). Style windows11 và
   Fusion chỉ vẽ khi tiêu điểm đến từ bàn phím; luật này vẽ cả khi bấm chuột vào nhãn.
 
 Property (`PRIMARY_PROPERTY`, `TONE_PROPERTY`, `SURFACE_PROPERTY`, `ICON_BUTTON_PROPERTY`,
-`SEGMENTED_PROPERTY`, `SEGMENT_PROPERTY`) đặt
+`SEGMENTED_PROPERTY`, `SEGMENT_PROPERTY`, `SEGMENT_SLIDING_PROPERTY`) đặt
 **trước khi hiện** (stylesheet đọc property lúc polish); đặt sau khi widget đã hiện thì gọi
 `style().unpolish(w)` rồi `style().polish(w)`.
+
+`blend(a, b, t)`: trộn tuyến tính hai màu theo RGBA (`t` kẹp [0, 1]), dùng cho màu chuyển dần.
 
 `DIALOG_MIN_WIDTH`: bề ngang tối thiểu chung của hộp nhận file và hộp ghép đôi. `SPACING`: thang
 khoảng cách (px). `RADIUS_*`: góc bo (px) của control, thẻ, khối, bong bóng và đuôi bong bóng.
@@ -137,8 +143,10 @@ SURFACE_PROPERTY = "surface"  # QFrame[surface="sidebar|raised|card"]
 ICON_BUTTON_PROPERTY = "iconButton"  # QToolButton[iconButton="true"] (widgets.IconButton)
 SEGMENTED_PROPERTY = "segmented"  # QFrame[segmented="true"] (khung của widgets.SegmentedControl)
 SEGMENT_PROPERTY = "segment"  # QRadioButton[segment="first|middle|last"] (nút của SegmentedControl)
+SEGMENT_SLIDING_PROPERTY = "segmentSliding"  # nút vừa chọn khi khối chọn đang trượt (spec G2 H5)
 _SEGMENT_POSITIONS = ("first", "middle", "last")
-_PRIMARY_FRAME = 8  # px: padding dọc 2·2 + viền 2·2 của nút chính (`stylesheet`)
+PRIMARY_BORDER_WIDTH = 2  # px, viền của nút chính (`stylesheet`, lớp phủ của `buttons.AnimatedButton`)
+_PRIMARY_FRAME = 2 * 2 + 2 * PRIMARY_BORDER_WIDTH  # px: padding dọc 2·2 + viền hai cạnh (`stylesheet`)
 DIALOG_MIN_WIDTH = 420  # px, hộp nhận file và hộp ghép đôi
 SPACING = (4, 8, 12, 16, 24, 32)  # px
 RADIUS_CONTROL, RADIUS_CARD, RADIUS_BLOCK, RADIUS_BUBBLE, RADIUS_BUBBLE_TAIL = 6, 8, 12, 14, 4
@@ -440,6 +448,17 @@ def palette(dark: bool, accent: str | None = None) -> QPalette:
     return pal
 
 
+def blend(a: QColor, b: QColor, t: float) -> QColor:
+    """Màu giữa `a` (t = 0) và `b` (t = 1), nội suy tuyến tính từng kênh RGBA; `t` kẹp về [0, 1]."""
+    t = max(0.0, min(1.0, float(t)))
+    return QColor.fromRgbF(
+        a.redF() + (b.redF() - a.redF()) * t,
+        a.greenF() + (b.greenF() - a.greenF()) * t,
+        a.blueF() + (b.blueF() - a.blueF()) * t,
+        a.alphaF() + (b.alphaF() - a.alphaF()) * t,
+    )
+
+
 def primary_colors(dark: bool, accent: str | None = None) -> dict[str, tuple[QColor, QColor]]:
     """(chữ, nền) của nút chính theo trạng thái: `normal`, `hover`, `pressed`, `disabled`."""
     t = tokens(dark, accent)
@@ -495,7 +514,7 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f"{primary} {{",
         f"  background-color: {colors['normal'][1].name()};",
         f"  color: {colors['normal'][0].name()};",
-        f"  border: 2px solid {edge};",
+        f"  border: {PRIMARY_BORDER_WIDTH}px solid {edge};",
         f"  border-radius: {RADIUS_CONTROL}px;",
         "  padding: 2px 12px;",  # + viền 2 px: cao bằng nút Fusion (chữ + 8 px)
         "  min-width: 52px;",  # Fusion cho nút có chữ rộng ít nhất 80 px: 52 + 2·12 + 2·2
@@ -548,6 +567,10 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
     def segment(state: str = "") -> str:
         return ", ".join(f'QRadioButton[{SEGMENT_PROPERTY}="{p}"]{state}' for p in _SEGMENT_POSITIONS)
 
+    sliding = ", ".join(
+        f'QRadioButton[{SEGMENT_PROPERTY}="{p}"][{SEGMENT_SLIDING_PROPERTY}="true"]:checked'
+        for p in _SEGMENT_POSITIONS
+    )
     lines += [
         f'QFrame[{SEGMENTED_PROPERTY}="true"] {{ background-color: {t.surface_raised.name()};'
         f" border: 1px solid {t.border_strong.name()}; border-radius: {RADIUS_CONTROL}px; }}",
@@ -555,11 +578,13 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f" border-radius: {RADIUS_CONTROL - 2}px; padding: 2px 12px; spacing: 0px; }}",
         f"{segment('::indicator')} {{ width: 0px; height: 0px; border: none; image: none; }}",
         f"{segment(':hover')} {{ background: {t.selected.name()}; }}",
-        f"{segment(':checked')} {{ background: {t.accent.name()}; color: {t.accent_text.name()};"
-        f" border-color: {edge}; }}",
+        # Khối chọn (nền `accent`, viền `accent_strong`) do khung tự vẽ để trượt (widgets.SegmentedControl).
+        f"{segment(':checked')} {{ background: transparent; color: {t.accent_text.name()};"
+        " border-color: transparent; }",
+        f"{sliding} {{ color: {t.text.name()}; }}",
         f"{segment(':focus')} {{ border-color: {ring}; text-decoration: underline; }}",
         f"{segment(':disabled')} {{ color: {t.text_muted.name()}; }}",
-        f"{segment(':checked:disabled')} {{ background: {t.selected.name()}; border-color: {border}; }}",
+        f"{segment(':checked:disabled')} {{ background: transparent; border-color: transparent; }}",
     ]
     # Vòng tiêu điểm chung cho nhãn chọn được và danh sách/bảng (spec E1 mục 2.6): Fusion không vẽ gì
     # khi chúng có tiêu điểm. Chỉ ở `:focus`, không ở trạng thái thường: không đổi cỡ hay vị trí chữ.

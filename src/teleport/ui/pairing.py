@@ -22,10 +22,18 @@ Ba phần:
   ở các mốc `COUNTDOWN_ANNOUNCE`, không theo từng giây. Hết hạn vẫn do `PairingController` đóng hộp.
   Không cha, `NonModal`, `WA_DeleteOnClose`, mở bằng `show()` +
   `raise_()` + `activateWindow()`, không bao giờ `exec()`. Rộng tối thiểu `theme.DIALOG_MIN_WIDTH`
-  như hộp nhận file; nút căn phải (“Không trùng”, rồi “Trùng khớp” là nút chính tô màu nhấn qua
-  `theme.PRIMARY_PROPERTY`). Nút mặc định (Enter) và Esc là “Không trùng” (nút được tô màu không phải
-  nút mặc định); đóng bằng nút X cũng là “Không trùng”. Mỗi hộp phát `decided` tối đa một lần;
-  `dismiss()` đóng hộp mà không phát (hết hạn, đã có kết quả, thoát). Mã thật to, căn giữa;
+  như hộp nhận file; nút căn phải (“Không trùng”, rồi “Trùng khớp” là nút chính tô màu nhấn; cả hai
+  là `buttons.AnimatedButton`). Nút mặc định (Enter) và Esc là “Không trùng” (nút được tô màu không phải
+  nút mặc định); **trước khi bấm “Trùng khớp”** đóng bằng nút X cũng là “Không trùng”. Mỗi hộp phát
+  `decided` tối đa một lần; `dismiss()` đóng hộp mà không phát (hết hạn, đã có kết quả, thoát).
+  **Chờ máy kia sau “Trùng khớp”** (spec G2): bấm “Trùng khớp” (`_confirm`) phát `decided(sid, True)`
+  một lần rồi hộp **ở lại**: nút thành “Đang ghép đôi…” kèm vòng quay (`set_running`, mô tả trợ năng
+  `pairing_wait_description()`), tiêu điểm ở lại nút đó; “Không trùng” thành “Đóng” (chữ và tên trợ
+  năng), vẫn là nút mặc định. Lúc này Enter, Esc, nút X hay “Đóng” chỉ đóng hộp: `done()` không phát
+  gì nữa (quyết định đã gửi, không hủy được). Bấm lại (chuột, Space, hay `click()` C++ của trình đọc màn
+  hình) bị bỏ qua nhờ cờ `_resolved`. Đếm ngược chạy tiếp; hộp tự đóng khi có kết quả
+  (`pairing_finished` → `dismiss()`), hết hạn, `set_host` / `close_all`. Đổi ngôn ngữ thì chữ chờ và
+  “Đóng” dịch lại. `accept()` gọi từ code giữ hành vi cũ (phát rồi đóng). Mã thật to, căn giữa;
   dòng hướng dẫn và tên máy kia màu dịu theo vai `PlaceholderText` của bảng màu (`ui.theme`, đủ
   tương phản mvp N12); cảnh báo nhiều mã có biểu tượng cảnh báo, chữ đậm và nền riêng (không chỉ
   dựa vào màu). Chữ chỉ cho trình đọc màn hình nằm ở accessibleName/Description.
@@ -42,8 +50,11 @@ Hành vi chính của `PairingController`:
   phát `job_done(device_id, paired)` đúng một lần khi việc chủ động kết thúc (trừ khi đổi host);
   `paired` chỉ đúng khi PAIRED với chính thiết bị được nhắm (`ui.app` dùng cho “ghép rồi gửi”).
 - Hết `expires_at` chỉ đóng hộp, KHÔNG `decide(False)`: lõi tự kết thúc phiên (TIMEOUT) và báo
-  qua `pairing_finished`. `expires_at` tính theo `loop.time()` của asyncio, tức
-  `time.monotonic()`; đồng hồ tiêm được qua `clock`.
+  qua `pairing_finished`. Sau “Trùng khớp” hộp vẫn đóng đúng ở `expires_at` (mvp mục 7.2) dù lõi còn
+  gia hạn `CONFIRM_GRACE` chờ máy kia; kết quả tới sau đó báo như mọi kết quả (dải thông báo hay hộp
+  kết quả). Hộp đang chờ sau “Trùng khớp” mà người dùng đóng thì không gửi thêm quyết định nào.
+  `expires_at` tính theo `loop.time()` của asyncio, tức `time.monotonic()`; đồng hồ tiêm được qua
+  `clock`.
 - Ghép bằng IP (`pair_address`) khớp kết quả theo `result.address == ip` hoặc mã máy, không theo
   `session_id`: khi hai bên cùng chủ động, `pair_with` trả kết quả của phiên thay thế ở vai trả
   lời (`port` None). PAIRED thì MỘT `call` vừa `connect_hint(device_id, [ip], port)` vừa đọc lại
@@ -57,7 +68,8 @@ Hành vi chính của `PairingController`:
   nên máy lạ dội yêu cầu không làm dội hộp. Phiên ở vai trả lời dừng trước khi hiện mã thì không báo
   gì.
 - **Thử lại** (spec D4 mục 5.1, 14.4, 14.9; mvp mục 8): hộp kết quả có [Thử lại] (objectName
-  `pairingRetryButton`, `AcceptRole`, nút chính tô màu nhấn) và [Đóng] (`RejectRole`, Esc) khi câu
+  `pairingRetryButton`, `AcceptRole`, nút chính tô màu nhấn) và [Đóng] (`pairingCloseButton`,
+  `RejectRole`, Esc) khi câu
   thuộc **việc ghép do máy này chủ động** và outcome là “chưa xong” (`_UNFINISHED`), PEER_BUSY,
   REJECTED, UNREACHABLE hay PROMPT_FAILED. Việc ghép chủ động là: câu hiện từ kết quả `pair_with`
   (`_on_pair_done`, nhánh phiên thay thế), hay `pairing_finished` khớp việc đang chạy (`matched`), hay
@@ -65,7 +77,8 @@ Hành vi chính của `PairingController`:
   SELF, BUSY, SAVE_FAILED, CANCELLED, “không thấy … nữa” và tham số sai (`ValueError`) thì chỉ có OK.
   Đích thử lại (`_RetryTarget`) lấy từ việc đang chạy nếu khớp, không thì `result.address` /
   `result.port`. Nút mặc định là “Thử lại”, riêng khi đã hiện mã (`code_shown`) là “Đóng” (lần thử mới
-  lại hiện mã, người dùng phải so lại). Hộp dùng lại thì hàng nút dựng lại theo câu mới nhất
+  lại hiện mã, người dùng phải so lại). Hai nút là `buttons.AnimatedButton` (chính / phụ), tạo với
+  cha là hộp rồi `addButton(nút, vai)`. Hộp dùng lại thì hàng nút dựng lại theo câu mới nhất
   (`result_retry_available`). Bấm “Thử lại” chỉ ghi lại nút đã bấm; việc thử lại chạy trong
   `_result_finished` sau khi `_result_box` đã về None, chỉ khi hộp đó là hộp hiện tại lúc bấm và còn
   host, luôn với host hiện tại: có `ip`/`port` → `pair_address`; không thì `device_lookup(device_id)`
@@ -125,6 +138,7 @@ from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc l�
 from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
 from teleport.ui import texts, theme
+from teleport.ui.buttons import AnimatedButton
 from teleport.ui.chat_bubbles import paint_thin_bar, set_tone
 
 log = logging.getLogger(__name__)
@@ -438,6 +452,16 @@ def reject_button_text() -> str:
     return QCoreApplication.translate("Pairing", "Không trùng")
 
 
+def pairing_wait_text() -> str:
+    """Chữ (và tên trợ năng) của nút “Trùng khớp” khi đang chờ máy kia."""
+    return QCoreApplication.translate("Pairing", "Đang ghép đôi…")
+
+
+def pairing_wait_description() -> str:
+    """Mô tả trợ năng của nút “Trùng khớp” khi đang chờ máy kia."""
+    return QCoreApplication.translate("Pairing", "Đã xác nhận mã. Đang chờ máy kia xác nhận.")
+
+
 def accept_button_text() -> str:
     return QCoreApplication.translate("Pairing", "Trùng khớp")
 
@@ -636,6 +660,7 @@ class PairingDialog(QDialog):
         self._prompt = prompt
         self._clock = clock
         self._resolved = False  # đã quyết định hoặc đã đóng không quyết định
+        self._confirmed = False  # đã bấm “Trùng khớp”, đang chờ máy kia
         self._shown_seconds: int | None = None
         self._announced: int | None = None  # mốc `COUNTDOWN_ANNOUNCE` đã báo cho trình đọc màn hình
         self._announce_set = False  # đã đặt mô tả trợ năng lần đầu
@@ -692,9 +717,9 @@ class PairingDialog(QDialog):
         self._countdown_timer = QTimer(self)
         self._countdown_timer.setInterval(COUNTDOWN_TICK_MS)
         self._countdown_timer.timeout.connect(self._tick)
-        self.reject_button = QPushButton()
+        self.reject_button = AnimatedButton()
         self.reject_button.setObjectName("pairingReject")
-        self.accept_button = QPushButton()
+        self.accept_button = AnimatedButton(primary=True)
         self.accept_button.setObjectName("pairingAccept")
         # Enter là “Không trùng”: đồng ý phải là một lựa chọn có chủ ý.
         self.reject_button.setAutoDefault(True)
@@ -703,7 +728,7 @@ class PairingDialog(QDialog):
         self.accept_button.setDefault(False)
         self.accept_button.setProperty(theme.PRIMARY_PROPERTY, True)  # tô màu nhấn, không phải mặc định
         self.reject_button.clicked.connect(self.reject)
-        self.accept_button.clicked.connect(self.accept)
+        self.accept_button.clicked.connect(self._confirm)
         self.setMinimumWidth(theme.DIALOG_MIN_WIDTH)
 
         # Căn phải như hộp nhận file: “Không trùng” rồi “Trùng khớp”.
@@ -740,6 +765,26 @@ class PairingDialog(QDialog):
     def resolved(self) -> bool:
         return self._resolved
 
+    @property
+    def confirmed(self) -> bool:
+        """Đã bấm “Trùng khớp”, hộp đang chờ máy kia."""
+        return self._confirmed
+
+    def _confirm(self) -> None:
+        """“Trùng khớp”: phát quyết định một lần rồi ở lại chờ máy kia (xem docstring module)."""
+        if self._resolved:
+            return  # bấm lần hai (kể cả `click()` C++ của trình đọc màn hình khi nút đang chạy)
+        self._resolved = True
+        self._confirmed = True
+        self.decided.emit(self.session_id, True)
+        self._show_waiting()
+
+    def _show_waiting(self) -> None:
+        self.accept_button.set_running(True, pairing_wait_text(), pairing_wait_description())
+        text = close_button_text()
+        self.reject_button.setText(text)
+        self.reject_button.setAccessibleName(text)
+
     def retranslate(self) -> None:
         """Đặt lại mọi chữ (lúc dựng và khi đổi ngôn ngữ)."""
         prompt = self._prompt
@@ -756,6 +801,8 @@ class PairingDialog(QDialog):
         self._peer.setText("\n".join(peer_lines(prompt)))
         self.reject_button.setText(reject_button_text())
         self.accept_button.setText(accept_button_text())
+        if self._confirmed:
+            self._show_waiting()
         self.countdown_bar.setAccessibleName(countdown_name())
         self._shown_seconds = None  # dựng lại chữ đếm ngược theo ngôn ngữ mới
         self._announce_set = False
@@ -972,11 +1019,12 @@ def _set_result_buttons(box: QMessageBox, retry: _RetryTarget | None) -> None:
         box.setEscapeButton(QMessageBox.StandardButton.Ok)
         return
     box.setStandardButtons(QMessageBox.StandardButton.NoButton)
-    retry_button = box.addButton(texts.retry(), QMessageBox.ButtonRole.AcceptRole)
+    retry_button = AnimatedButton(texts.retry(), box, primary=True)
     retry_button.setObjectName(RETRY_BUTTON_NAME)
-    retry_button.setProperty(theme.PRIMARY_PROPERTY, True)
-    close_button = box.addButton(close_button_text(), QMessageBox.ButtonRole.RejectRole)
+    box.addButton(retry_button, QMessageBox.ButtonRole.AcceptRole)
+    close_button = AnimatedButton(close_button_text(), box)
     close_button.setObjectName(_CLOSE_BUTTON_NAME)
+    box.addButton(close_button, QMessageBox.ButtonRole.RejectRole)
     _translate_result_buttons(box)
     box.setDefaultButton(close_button if retry.code_shown else retry_button)
     box.setEscapeButton(close_button)

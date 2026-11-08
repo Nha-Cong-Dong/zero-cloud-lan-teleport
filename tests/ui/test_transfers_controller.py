@@ -28,7 +28,8 @@ PEER_ID = "a71c04d2" + "e" * 24
 OTHER_ID = "0f0f0f0f" + "1" * 24
 PEER = "PC-Nha"
 OTHER = "Laptop-Minh"
-_MVP = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+_MVP_PRODUCT = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+_MVP = _MVP_PRODUCT if _MVP_PRODUCT.exists() else (Path(__file__).resolve().parents[2] / "docs" / "mvp.md")
 
 # Câu mới của pha 2a (spec PR3 pha 2a, `on_transfer` và `ui/radar.py`).
 RECEIVED_ONE = "Đã nhận {name} từ {peer}."
