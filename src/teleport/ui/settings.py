@@ -4,9 +4,10 @@ Hai phần, theo mẫu `ui.discover`:
 
 - **`SettingsPage`** (view, objectName `settingsPage`): không bao giờ gọi node; người dùng đổi gì thì
   phát signal, còn `set_*` đặt giá trị mà **không** phát signal. Bố cục: `PageHeader("Cài đặt")`; cột
-  trái `nav` (`QListWidget` `settingsNav`, rộng `NAV_WIDTH`, icon cỡ 20 + chữ) chọn mục; bên phải một
-  `info_bar` cho cả trang rồi `sections` (`QStackedWidget`, mỗi `Section` một `QScrollArea` không viền,
-  lề `SECTION_MARGIN`, khoảng hàng `ROW_SPACING`). Mỗi hàng là một `SettingsRow`.
+  trái `nav` (`_NavList`, một `QListWidget` objectName `settingsNav`, rộng `NAV_WIDTH`, icon cỡ 20 +
+  chữ) chọn mục; bên phải một `info_bar` cho cả trang rồi `sections` (`QStackedWidget`, mỗi
+  `Section` một `QScrollArea` không viền, lề `SECTION_MARGIN`, khoảng hàng `ROW_SPACING`). Mỗi
+  hàng là một `SettingsRow`.
 - **`SettingsController`** (`GuiApp.settings`): nối signal của trang với node qua `NodeHost.call`
   (thread node), registry tự khởi động (`app.autostart`, thread Qt), hộp xác nhận và hộp lưu file
   (mở bằng `open()`, không `exec()`), việc xuất log (thread riêng).
@@ -55,7 +56,10 @@ cửa sổ `MIN_SIZE` cuộn ngang hay cắt chữ; thứ tự Tab không đổi
 **Bàn phím** (mvp N12): Tab: Quay lại → `nav` → thanh thông báo (khi hiện) → control của mục đang mở
 (mục Giao diện: trong mỗi nhóm chỉ phần tử đang chọn nhận Tab, mũi tên đi giữa các phần tử) → hàng
 thiết bị → nút màn rỗng; mục Nâng cao: “Xuất log…” → bảng Phím tắt → “Thông báo bên thứ ba”. Lên/Xuống
-trong `nav` đổi mục; trang hiện thì tiêu điểm vào `nav` (`setFocusProxy`). Không hoạt ảnh.
+trong `nav` đổi mục; trang hiện thì tiêu điểm vào `nav` (`setFocusProxy`). Chuyển động (spec G3): chỉ
+vạch nhấn của `nav` (`_NavList`: pill `accent_strong` rộng 3 px, cao 16 px ở mép trái mục được chọn,
+`motion.SlidingRect`) trượt tới mục mới khi đổi mục lúc cột đang hiện; vùng `sections` đổi tức thì.
+Hộp xác nhận xóa lịch sử mờ dần khi hiện (`motion.fade_in_on_show`).
 `show_section(section, device_id, focus=…)`: mục Thiết bị tin cậy với `device_id` → tiêu điểm vào ô
 “Hỏi trước khi nhận” của máy đó, hay ô “Đồng bộ clipboard” khi `focus="clipboard"` và trang đã có ảnh
 chụp cài đặt (gợi ý khi dán không phải file ở luồng chat, qua `ui.app`).
@@ -123,6 +127,7 @@ from PySide6.QtCore import (
     QLocale,
     QObject,
     QRect,
+    QRectF,
     QSize,
     QStandardPaths,
     Qt,
@@ -135,6 +140,8 @@ from PySide6.QtGui import (
     QFontMetrics,
     QHideEvent,
     QKeyEvent,
+    QPainter,
+    QPaintEvent,
     QResizeEvent,
     QShowEvent,
     QValidator,
@@ -177,7 +184,7 @@ from teleport.app.devices import DeviceView
 from teleport.app.node import Node
 from teleport.app.settings import DeviceSettings, SettingsSaveError
 from teleport.core.messages import PROTOCOL_VERSION, MessageError, validate_device_name
-from teleport.ui import i18n, icons, shortcuts, texts, theme
+from teleport.ui import i18n, icons, motion, shortcuts, texts, theme
 from teleport.ui.appearance import AppearanceSection
 from teleport.ui.appearance import section_title as appearance_title
 from teleport.ui.radar import DeviceListModel
@@ -210,6 +217,10 @@ NOTICES_FILE = "THIRD-PARTY-NOTICES.txt"
 EXPORT_THREAD = "teleport-logexport"
 _NAV_ICON = 20  # px (`shield_checkmark` có cỡ 20)
 _NAV_ROW_HEIGHT = 36  # px
+_NAV_PILL_WIDTH = 3  # px, vạch nhấn của mục được chọn
+_NAV_PILL_HEIGHT = 16  # px
+_NAV_PILL_RADIUS = 1.5  # px
+_NAV_PILL_INSET = 2  # px, từ mép item (nằm trên viền trong suốt 2 px)
 _AVATAR = 32  # px
 _ACTIONS_INDENT = _AVATAR + theme.SPACING[2]  # px, lề trái của ô và nút dưới tên (thẳng cột chữ)
 _PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
@@ -957,6 +968,51 @@ class _ShortcutTable(QTableWidget):
         event.ignore()
 
 
+class _NavList(QListWidget):
+    """Cột chọn mục: vẽ vạch nhấn của mục được chọn, trượt khi đổi mục (`selection_indicator`)."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.selection_indicator = motion.SlidingRect(self.viewport(), motion.NORMAL)
+        self._slide_pending = False
+        self.currentRowChanged.connect(self._on_current_row)
+
+    def _on_current_row(self, _row: int) -> None:
+        self._slide_pending = self.isVisible()
+        self.viewport().update()
+
+    def _pill_rect(self) -> QRectF | None:
+        item = self.currentItem()
+        if item is None:
+            return None
+        rect = self.visualItemRect(item)
+        if not rect.isValid():
+            return None
+        if self.isRightToLeft():
+            left = rect.right() + 1 - _NAV_PILL_INSET - _NAV_PILL_WIDTH
+        else:
+            left = rect.left() + _NAV_PILL_INSET
+        top = rect.top() + (rect.height() - _NAV_PILL_HEIGHT) / 2
+        return QRectF(left, top, _NAV_PILL_WIDTH, _NAV_PILL_HEIGHT)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        indicator = self.selection_indicator
+        indicator.move_to(self._pill_rect(), animate=self._slide_pending)
+        self._slide_pending = False
+        rect = indicator.rect
+        if rect is None:
+            return
+        painter = QPainter(self.viewport())
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(theme.tokens_for(self).accent_strong)
+            painter.drawRoundedRect(rect, _NAV_PILL_RADIUS, _NAV_PILL_RADIUS)
+        finally:
+            painter.end()
+
+
 class SettingsPage(QWidget):
     """Trang “Cài đặt” (xem docstring module). Không gọi node; `set_*` không phát signal."""
 
@@ -1000,7 +1056,7 @@ class SettingsPage(QWidget):
         self._name_error: str | None = None
 
         self.header = PageHeader(page_title(), self)
-        self.nav = QListWidget(self)
+        self.nav = _NavList(self)
         self.nav.setObjectName("settingsNav")
         self.nav.setFixedWidth(NAV_WIDTH)
         self.nav.setFrameShape(QFrame.Shape.NoFrame)
@@ -1783,14 +1839,14 @@ class SettingsPage(QWidget):
             f" border-right: 1px solid {t.border.name()}; padding: {theme.SPACING[1]}px; outline: 0; }}"
             f" QListWidget#settingsNav::item {{ color: {t.text.name()};"
             f" border-radius: {theme.RADIUS_CONTROL}px;"
-            f" padding: 0px {theme.SPACING[1]}px; border: 2px solid transparent;"
-            " border-left: 4px solid transparent; }"
+            # Lề trái thêm 2 px bù cho vạch 4 px cũ: chữ và icon không dời. Vạch nhấn do `_NavList` vẽ.
+            f" padding: 0px {theme.SPACING[1]}px 0px {theme.SPACING[1] + 2}px;"
+            " border: 2px solid transparent; }"
             f" QListWidget#settingsNav::item:hover {{ background: {t.selected.name()}; }}"
             f" QListWidget#settingsNav::item:selected {{ background: {t.selected.name()};"
-            f" color: {t.text.name()}; border-left-color: {t.accent_strong.name()}; }}"
-            # Tiêu điểm bàn phím: viền màu chữ quanh mục đang chọn (vạch nhấn trái giữ nguyên).
-            f" QListWidget#settingsNav::item:selected:focus {{ border-color: {ring};"
-            f" border-left-color: {t.accent_strong.name()}; }}"
+            f" color: {t.text.name()}; }}"
+            # Tiêu điểm bàn phím: vòng đều 2 px quanh mục đang chọn (vạch nhấn vẽ đè lên).
+            f" QListWidget#settingsNav::item:selected:focus {{ border-color: {ring}; }}"
         )
         for index, section in enumerate(Section):
             item = self.nav.item(index)
@@ -2296,6 +2352,7 @@ class SettingsController(QObject):
         generation = self._generation
         box.finished.connect(lambda _r: self._on_confirm_finished(box, accept, generation))
         self._confirm_box = box
+        motion.fade_in_on_show(box)
         box.open()
 
     def _on_confirm_finished(self, box: QMessageBox, accept: object, generation: int) -> None:
@@ -2412,7 +2469,7 @@ class SettingsController(QObject):
     def notice_text(self) -> str | None:
         """Câu đang hiện ở thanh thông báo của trang, hay None khi thanh ẩn."""
         bar = self.page.info_bar
-        return bar.title if not bar.isHidden() else None
+        return bar.title if bar.is_open else None
 
     def show_notice(
         self,

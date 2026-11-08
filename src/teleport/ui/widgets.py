@@ -54,14 +54,21 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
 - `ChatBubble`: nền `bubble_out` (gửi đi, không viền) / `bubble_in` (nhận vào, viền 1 px `border`);
   ATTENTION viền 2 px `accent_strong`, DANGER viền 2 px `danger`. Hình theo `bubble_path`: bo
   `RADIUS_BUBBLE`, góc dưới phía người gửi bo `RADIUS_BUBBLE_TAIL`. `BubbleRow` đặt bong bóng sát
-  phải (OUT) hay sát trái (IN), rộng tối đa `BUBBLE_MAX_RATIO` bề ngang hàng.
+  phải (OUT) hay sát trái (IN), rộng tối đa `BUBBLE_MAX_RATIO` bề ngang hàng. Móc vẽ chuyển động
+  `motion_paint()` (mặc định `(None, 0.0)`, lớp con ở `ui.chat_bubbles` ghi đè): màu phủ lên nền
+  (viền vẽ lại trên), và độ dày thêm của viền nhấn vẽ thành vòng thứ hai thụt vào trong.
 - `InfoBar`: nền/viền và icon theo mức: INFO `accent_subtle`/`accent_strong`, SUCCESS
   `success_bg`/`success`, WARNING `warning_bg`/`warning`, ERROR `danger_bg`/`danger`; chữ `text`;
   bo `RADIUS_CARD`. Nút hành động nằm ở hàng dưới, thẳng cột chữ (luật PR-1). `accessibleName` bắt
   đầu bằng tên mức (“Lỗi: …”), nên mức không chỉ nói bằng màu; `show_message` gửi sự kiện trợ năng
   Alert (cố gắng tốt nhất: có HĐH không chuyển tới trình đọc màn hình). Chữ là `texts.Text`: đổi
   ngôn ngữ thì câu dựng bằng hàm được dịch lại, câu là chuỗi dịch sẵn bị ẩn (trừ khi bên gọi đã hiện
-  lại nó bằng ngôn ngữ mới trước khi thanh nhận `LanguageChange`).
+  lại nó bằng ngôn ngữ mới trước khi thanh nhận `LanguageChange`). Mở/đóng theo chiều cao
+  (`motion.HeightAnimator`, `NORMAL`; cha không hiện hay thanh là cửa sổ cấp cao thì tức thì; spec G3).
+  Trạng thái logic là `is_open`, đổi ngay khi gọi (bên ngoài đọc `is_open`, không đọc `isHidden()`:
+  lúc đang thu về thanh vẫn hiện). Đóng (`clear()`, nút ✕) mà tiêu điểm đang trong thanh thì tiêu điểm
+  sang widget kế tiếp trong chuỗi Tab của cùng cửa sổ (hiện, bật, nhận Tab), không có thì bỏ tiêu
+  điểm; rồi mới thu về; ✕ phát `dismissed` sau cùng.
 - `EmptyState`: vòng tròn 56 px nền `accent_subtle`, icon `accent_text`; icon có cảnh
   (`illustrations.scene_for_icon`) thì thay vòng tròn bằng `illustration` (`illustrations.Illustration`,
   trang trí, cùng cột, cùng khoảng cách tới tiêu đề); tiêu đề SECTION (font điểm nhấn), mô tả
@@ -349,6 +356,8 @@ class IconButton(QToolButton):
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
+        if "_show_text" not in self.__dict__:  # đang dựng, hay đang hủy (GC đã dọn thuộc tính Python)
+            return
         if event.type() in _PALETTE_EVENTS:
             self._refresh_icon()
             self.update()
@@ -918,6 +927,11 @@ class ChatBubble(QFrame):
         """Câu tóm tắt cho trình đọc màn hình (ví dụ “Đang gửi phim-4k.mkv, 62%”)."""
         self.setAccessibleName(text)
 
+    def motion_paint(self) -> tuple[QColor | None, float]:
+        """Móc vẽ chuyển động, đọc lúc vẽ: (màu phủ lên nền hay None, độ dày thêm px của viền nhấn).
+        Mặc định `(None, 0.0)`: vẽ y như không có chuyển động (lớp con ở `ui.chat_bubbles` ghi đè)."""
+        return None, 0.0
+
     def retranslate(self) -> None:
         if self._direction is Direction.OUT:
             self.setAccessibleDescription(QCoreApplication.translate("Widgets", "Gửi đi"))
@@ -937,12 +951,24 @@ class ChatBubble(QFrame):
             pen_color, width = None, 0
         inset = width / 2 if width else 0.5
         path = bubble_path(QRectF(self.rect()).adjusted(inset, inset, -inset, -inset), self._direction)
+        tint, extra = self.motion_paint()
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setBrush(t.bubble_out if self._direction is Direction.OUT else t.bubble_in)
             painter.setPen(QPen(pen_color, width) if pen_color is not None else Qt.PenStyle.NoPen)
             painter.drawPath(path)
+            if tint is not None:  # phủ màu lên nền rồi vẽ lại viền cho viền giữ nguyên màu
+                painter.fillPath(path, tint)
+                if pen_color is not None:
+                    painter.strokePath(path, QPen(pen_color, width))
+            if extra > 0 and pen_color is not None and self._emphasis is not BubbleEmphasis.NONE:
+                # Phần dày thêm là vòng thứ hai thụt vào trong: nền và viền gốc không “thở”.
+                ring = width + extra / 2
+                inner = bubble_path(QRectF(self.rect()).adjusted(ring, ring, -ring, -ring), self._direction)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(pen_color, extra))
+                painter.drawPath(inner)
         finally:
             painter.end()
 
@@ -1066,8 +1092,15 @@ class InfoBar(QFrame):
 
         self.action_button.setVisible(False)
         self.setVisible(False)
+        self._open = False  # trạng thái logic (`is_open`), đổi ngay
+        self._height = motion.HeightAnimator(self)
         self._refresh_icon()
         self.retranslate()
+
+    @property
+    def is_open(self) -> bool:
+        """Thanh đang mở (đổi ngay khi gọi `show_message` / `clear`, không chờ hoạt ảnh)."""
+        return self._open
 
     @property
     def level(self) -> InfoLevel:
@@ -1103,15 +1136,24 @@ class InfoBar(QFrame):
         self.close_button.setVisible(closable)
         self._refresh_icon()
         self.retranslate()
-        _set_shown(self, True)
+        self._open = True
+        parent = self.parentWidget()
+        if parent is None:
+            _set_shown(self, True)
+        else:
+            token = motion.NORMAL if parent.isVisible() else motion.INSTANT
+            if self.isHidden() and self._height.expanded:  # bị ẩn từ ngoài: mở lại hẳn
+                self._height.expand(token)
+            else:  # đang mở và đứng yên: chỉ đổi nội dung
+                self._height.set_expanded(True, token)
         self.update()
         # Cố gắng tốt nhất: có HĐH không chuyển Alert tới trình đọc màn hình; tên mức vẫn ở accessibleName.
         with contextlib.suppress(Exception):
             QAccessible.updateAccessibility(QAccessibleEvent(self, QAccessible.Event.Alert))
 
     def clear(self) -> None:
-        """Ẩn thanh, không phát `dismissed`."""
-        self.setVisible(False)
+        """Đóng thanh (`is_open` False ngay), không phát `dismissed`."""
+        self._close()
 
     def retranslate(self) -> None:
         self.close_button.set_label(QCoreApplication.translate("Widgets", "Đóng thông báo"))
@@ -1129,7 +1171,7 @@ class InfoBar(QFrame):
     def _retranslate_message(self) -> None:
         """Sau `LanguageChange`: câu dựng bằng hàm thì dịch lại; câu dịch sẵn của ngôn ngữ cũ thì ẩn."""
         language = i18n.current_language()
-        if self.isHidden() or self._language == language:
+        if not self.is_open or self._language == language:
             return
         if all(callable(source) or not source for source in self._sources):
             self._language = language
@@ -1139,8 +1181,42 @@ class InfoBar(QFrame):
             self.clear()
 
     def _on_close(self) -> None:
-        self.setVisible(False)
+        self._close()
         self.dismissed.emit()
+
+    def _close(self) -> None:
+        self._open = False
+        self._move_focus_out()
+        if self.parentWidget() is None:  # mở bằng `_set_shown`, không qua animator: đóng tức thì
+            self._height.collapse(motion.INSTANT)
+            return
+        token = motion.INSTANT if self.isWindow() or not self.isVisible() else motion.NORMAL
+        self._height.set_expanded(False, token)  # đang thu dở thì không chạy lại
+
+    def _move_focus_out(self) -> None:
+        """Tiêu điểm đang trong thanh → widget kế tiếp ngoài thanh trong chuỗi Tab của cùng cửa sổ (hiện,
+        bật, nhận Tab); không có thì bỏ tiêu điểm. Thanh đang thu về vẫn hiện nên phải dời trước."""
+        focus = self.window().focusWidget()
+        if focus is None or not (focus is self or self.isAncestorOf(focus)):
+            return
+        window = self.window()
+        tab = Qt.FocusPolicy.TabFocus.value
+        candidate = focus.nextInFocusChain()
+        seen = 0
+        while candidate is not None and candidate is not focus and seen < 10_000:
+            seen += 1
+            if (
+                candidate is not self
+                and not self.isAncestorOf(candidate)
+                and candidate.window() is window
+                and candidate.isVisible()
+                and candidate.isEnabled()
+                and candidate.focusPolicy().value & tab
+            ):
+                candidate.setFocus(Qt.FocusReason.TabFocusReason)
+                return
+            candidate = candidate.nextInFocusChain()
+        focus.clearFocus()
 
     def _refresh_icon(self) -> None:
         t = theme.tokens_for(self)
@@ -1163,6 +1239,11 @@ class InfoBar(QFrame):
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
+        # Phòng thủ: đang dựng, hay đang hủy mà GC đã dọn thuộc tính Python trong khi đối tượng C++ còn
+        # chờ `deleteLater` và vẫn nhận sự kiện (từng gặp khi `HeightAnimator._widget` giữ mạnh thanh,
+        # tạo vòng tham chiếu; nay animator chỉ giữ tham chiếu yếu): bỏ qua.
+        if "_height" not in self.__dict__:
+            return
         if event.type() in (*_PALETTE_EVENTS, QEvent.Type.DevicePixelRatioChange):
             self._refresh_icon()
             self.update()

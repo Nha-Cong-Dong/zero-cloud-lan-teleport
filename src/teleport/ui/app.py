@@ -164,7 +164,8 @@ không bị hủy ở thread node hay thread đĩa; khôi phục sau `shutdown()
 **Thoát** (`GuiApp.request_quit(confirm=True)`, từ “Thoát” ở khay, phím Thoát, hay đóng cửa sổ khi
 không có khay): còn lượt **gửi** chưa kết thúc (`TransfersController.active_sends()`) thì đưa cửa
 sổ lên trước và mở hộp hỏi lại không chặn (`quit_box`, objectName `quitConfirmBox`, `open()`;
-nút mặc định và Esc là “Không”); đang mở rồi thì chỉ đưa hộp lên trước. Chọn “Thoát” mới thoát.
+nút mặc định và Esc là “Không”; mờ dần khi hiện, `motion.fade_in_on_show`); đang mở rồi thì chỉ đưa
+hộp lên trước. Chọn “Thoát” mới thoát.
 Không hỏi khi `confirm=False` (Ctrl+C), khi chỉ có lượt nhận dở, hay khi phiên hệ điều hành đang
 kết thúc (`commitDataRequest` tới trong `SESSION_END_GRACE_MS` vừa qua — còn chạy sau đó tức là
 tắt máy bị hủy —, hay `isSavingSession()`): `commitDataRequest` còn đóng hộp
@@ -288,6 +289,7 @@ from teleport.ui import (
     i18n,
     icons,
     logo,
+    motion,
     placement,
     receive_dir,
     send,
@@ -861,6 +863,7 @@ class GuiApp(QObject):
             return
         title = quit_confirm_title()
         box = QMessageBox(self.window)
+        motion.fade_in_on_show(box)
         box.setObjectName("quitConfirmBox")
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle(title)

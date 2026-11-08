@@ -33,8 +33,14 @@ module `_wall_now` (đọc lúc gọi). Không có hẹn giờ qua nửa đêm: 
   `text_muted`, căn phải ngang dòng tên); dòng phụ (CAPTION, cắt “…”): NORMAL `text_muted`, BUSY
   `accent_text`, WARNING/DANGER chữ `text` kèm icon `warning` tô `warning`/`danger` ở đầu dòng.
 - Nền: thường trong suốt (thấy `sidebar` của cột); rê chuột trộn 50% `sidebar`/`selected`; hàng được
-  chọn `selected`; bo `RADIUS_CARD`. Tiêu điểm (danh sách có tiêu điểm, hàng hiện hành): viền 2 px
-  `theme.focus_ring_color`. Đang kéo file qua hàng: viền nét đứt 2 px, màu `accent_strong` khi hàng
+  chọn `selected`; bo `RADIUS_CARD`. Ô mang nền của một hàng là `_row_cell` (delegate và view dùng
+  chung). Trong `_ConversationView` nền của hàng được chọn do **view** vẽ (thanh chọn trượt, spec G3):
+  `selection_indicator` (`motion.SlidingRect`, `NORMAL`) trượt tới hàng mới khi người dùng đổi máy
+  (`note_selection_changed`, chỉ khi view đang hiện), nhảy thẳng khi sắp lại, thêm/bớt hàng, đổi dạng
+  thu gọn, đổi cỡ và lần vẽ đầu (`note_layout_changed`); delegate không tô nền hàng được chọn nữa,
+  nhưng vành chấm avatar vẫn theo màu `selected`. Ảnh tĩnh giống hệt khi delegate tô. Tiêu điểm
+  (danh sách có tiêu điểm, hàng hiện hành): viền 2 px `theme.focus_ring_color`. Đang kéo file qua
+  hàng: viền nét đứt 2 px, màu `accent_strong` khi hàng
   không được chọn và `text` khi hàng đang được chọn (không trùng nền chọn), dòng phụ thay bằng
   “Thả để gửi n file” (`accent_text`); n = số URL file cục bộ, không `stat` file nào (không có tổng
   cỡ trong câu). Hàng **không** được chọn còn sáng lên (spec G5 mục 3.2): phủ `accent_subtle` với alpha
@@ -139,7 +145,9 @@ from PySide6.QtGui import (
     QKeyEvent,
     QMouseEvent,
     QPainter,
+    QPaintEvent,
     QPen,
+    QResizeEvent,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -594,6 +602,16 @@ def _role_tone(index: _Index) -> StatusTone:
         return StatusTone.NORMAL
 
 
+def _row_cell(rect: QRectF, compact: bool) -> QRectF:
+    """Ô mang nền của một hàng: dạng đầy đủ là `rect` thu `ROW_GAP/2` trên dưới; thu gọn là ô
+    `COMPACT_CELL` căn giữa."""
+    row = QRectF(rect).adjusted(0, ROW_GAP / 2, 0, -ROW_GAP / 2)
+    if not compact:
+        return row
+    center = row.center()
+    return QRectF(center.x() - COMPACT_CELL / 2, center.y() - COMPACT_CELL / 2, COMPACT_CELL, COMPACT_CELL)
+
+
 def _mix(a: QColor, b: QColor) -> QColor:
     return QColor((a.red() + b.red()) // 2, (a.green() + b.green()) // 2, (a.blue() + b.blue()) // 2)
 
@@ -655,17 +673,10 @@ class ConversationDelegate(QStyledItemDelegate):
         else:
             background = None
         ring = background if background is not None else t.sidebar
+        if selected and isinstance(widget, _ConversationView):
+            background = None  # view vẽ nền hàng được chọn (thanh chọn trượt); vành avatar giữ `ring`
 
-        rect = QRectF(option.rect).adjusted(0, ROW_GAP / 2, 0, -ROW_GAP / 2)
-        if self.compact:
-            cell = QRectF(
-                rect.center().x() - COMPACT_CELL / 2,
-                rect.center().y() - COMPACT_CELL / 2,
-                COMPACT_CELL,
-                COMPACT_CELL,
-            )
-        else:
-            cell = rect
+        cell = _row_cell(QRectF(option.rect), self.compact)
         painter.save()
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -888,6 +899,59 @@ class _ConversationView(QListView):
         self._presence_seen: dict[str, Presence] = {}  # device_id → presence lần cuối thấy
         self._presence_fade: dict[str, tuple[Presence, float]] = {}  # device_id → (cũ, tiến độ)
         self._watched_model: QAbstractItemModel | None = None
+        # Nền hàng được chọn, trượt giữa các hàng (spec G3); vẽ trong paintEvent.
+        self.selection_indicator = motion.SlidingRect(self.viewport(), motion.NORMAL)
+        self._slide_pending = False  # người dùng vừa đổi lựa chọn: lần vẽ tới trượt
+        self._layout_dirty = False  # hàng dời chỗ / đổi cỡ: lần vẽ tới nhảy thẳng
+
+    # -- Thanh chọn -----------------------------------------------------------------------------
+
+    def note_selection_changed(self) -> None:
+        """Lựa chọn đổi: lần vẽ tới trượt nền tới hàng mới (chỉ khi view đang hiện)."""
+        self._slide_pending = self.isVisible()
+        self.viewport().update()
+
+    def note_layout_changed(self) -> None:
+        """Hàng dời chỗ hay đổi cỡ (sắp lại, thêm/bớt, thu gọn): lần vẽ tới nhảy thẳng."""
+        self._layout_dirty = True
+        self.viewport().update()
+
+    def _selected_cell(self) -> QRectF | None:
+        selection = self.selectionModel()
+        if selection is None:
+            return None
+        for index in selection.selectedIndexes():
+            if index.isValid():
+                rect = self.visualRect(index)
+                if rect.isValid():
+                    return _row_cell(QRectF(rect), self._compact_delegate())
+        return None
+
+    def _compact_delegate(self) -> bool:
+        delegate = self.itemDelegate()
+        return bool(getattr(delegate, "compact", False))
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        indicator = self.selection_indicator
+        indicator.move_to(self._selected_cell(), animate=self._slide_pending and not self._layout_dirty)
+        self._slide_pending = False
+        self._layout_dirty = False
+        rect = indicator.rect
+        if rect is not None:
+            t = theme.tokens_for(self)
+            painter = QPainter(self.viewport())
+            try:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(t.selected)
+                painter.drawRoundedRect(rect, theme.RADIUS_CARD, theme.RADIUS_CARD)
+            finally:
+                painter.end()
+        super().paintEvent(event)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._layout_dirty = True
 
     # -- Model ----------------------------------------------------------------------------------
 
@@ -1363,6 +1427,14 @@ class ConversationList(QWidget):
         selection = self.list_view.selectionModel()
         if selection is not None:
             selection.selectionChanged.connect(self._emit_current)
+            selection.selectionChanged.connect(self.list_view.note_selection_changed)
+        for signal in (
+            self.model.layoutChanged,
+            self.model.rowsInserted,
+            self.model.rowsRemoved,
+            self.model.modelReset,
+        ):
+            signal.connect(self.list_view.note_layout_changed)
 
         self.retranslate()
         self._on_rows_changed()
@@ -1479,6 +1551,7 @@ class ConversationList(QWidget):
             button.setMaximumWidth(16777215)  # QWIDGETSIZE_MAX
             button.setFixedHeight(ICON_BUTTON_SIZE)
             self._layout.setAlignment(button, Qt.AlignmentFlag.AlignLeft)
+        self.list_view.note_layout_changed()
         self.list_view.doItemsLayout()
         self.list_view.viewport().update()
         self.updateGeometry()
