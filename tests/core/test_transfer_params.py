@@ -472,7 +472,8 @@ def test_events_for_own_device_are_ignored(tx):
 
 
 def test_constants_match_protocol_text():
-    protocol = (ROOT / "docs" / "protocol.md").read_text(encoding="utf-8")
+    _proto = ROOT / "docs" / "technical" / "protocol.md"
+    protocol = (_proto if _proto.exists() else ROOT / "docs" / "protocol.md").read_text(encoding="utf-8")
     assert f"**Mỗi {transfer.SYNC_EVERY} khối**" in protocol
     assert f"tối đa **{transfer.MAX_QUEUED_OFFERS} `offer` chưa trả lời**" in protocol
     assert f"tối đa **{transfer.MAX_PENDING_DATA} kết nối dữ liệu đang chờ `resume`**" in protocol
@@ -501,7 +502,8 @@ def test_constants_match_protocol_text():
 
 
 def test_architecture_lists_transfer_and_ratelimit_as_done():
-    arch = (ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+    _arch = ROOT / "docs" / "technical" / "architecture.md"
+    arch = (_arch if _arch.exists() else ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
     rows = {line.split("|")[2].strip(" `"): line for line in arch.splitlines() if line.startswith("| core |")}
     assert "ratelimit.py" in rows and rows["ratelimit.py"].rstrip().endswith("✅ |")
     assert rows["transfer.py"].rstrip().endswith("✅ |")

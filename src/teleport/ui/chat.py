@@ -53,13 +53,14 @@ Alert trên bong bóng, không cướp tiêu điểm. Luồng không được m�
 **Gửi**: nút “Gửi file” và phím Chọn file (`_pick_action`, `QAction` `WindowShortcut` trên `ChatView`
 từ `ui.shortcuts`, chỉ bật khi có máy được chọn; widget ẩn thì không chạy) phát
 `pick_files_requested(id)`. Thả file vào bất cứ đâu trong `ChatView` (luồng, màn rỗng, thanh dưới):
-chỉ URL file cục bộ (`send.local_paths`, không `stat`), đang kéo thì `_DropOverlay` viền nét đứt 2 px
-`accent_strong` và “Thả để gửi n file tới X”; thả → `drop_paths`: `send_files_requested(id, paths)`,
-chưa chọn máy → `drop_hint_requested(radar.drop_hint_text())`; phòng hờ: máy có trong model mà
-`radar.can_receive_files` sai thì bỏ qua (trả False). `preview_drop(n)` đi cùng đường (ảnh chụp,
-test). Máy ngoại tuyến vẫn gửi được (lượt chờ kết nối, mvp mục 8); thanh dưới đổi câu gợi ý thành câu
-ngoại tuyến kèm icon `cloud_off`. Bong bóng tạm “Đang chuẩn bị…” (`add_pending` / `remove_pending`)
-hiện từ lúc chọn xong tới khi `transfers.send` trả về; không nằm trong `rows`, `row`, `active_count`.
+chỉ URL file cục bộ (`send.local_paths`, không `stat`), đang kéo thì `ui.drop_overlay.DropOverlay`
+(viền nét đứt 2 px `accent_strong`, “Thả để gửi n file tới X”, mờ dần, spec G5); thả → `drop_paths`:
+`send_files_requested(id, paths)`, chưa chọn máy → `drop_hint_requested(radar.drop_hint_text())`;
+phòng hờ: máy có trong model mà `radar.can_receive_files` sai thì bỏ qua (trả False). `preview_drop(n)`
+đi cùng đường (ảnh chụp, test). Máy ngoại tuyến vẫn gửi được (lượt chờ kết nối, mvp mục 8); thanh
+dưới đổi câu gợi ý thành câu ngoại tuyến kèm icon `cloud_off`. Bong bóng tạm “Đang chuẩn bị…”
+(`add_pending` / `remove_pending`) hiện từ lúc chọn xong tới khi `transfers.send` trả về; không nằm
+trong `rows`, `row`, `active_count`.
 
 **Dán file** (mvp F4): phím Dán (`_paste_action`, phím Dán chuẩn của hệ điều hành, StandardKey Paste;
 `WindowShortcut`, không tự lặp) → `paste_from_clipboard()`: `ChatView` không hiện → None (không làm
@@ -150,7 +151,6 @@ from PySide6.QtCore import (
     QMimeData,
     QObject,
     QPoint,
-    QRectF,
     Qt,
     QTimer,
     Signal,
@@ -168,7 +168,6 @@ from PySide6.QtGui import (
     QKeyEvent,
     QPainter,
     QPaintEvent,
-    QPen,
     QResizeEvent,
     QShowEvent,
 )
@@ -213,6 +212,7 @@ from teleport.ui.chat_bubbles import (
 )
 from teleport.ui.chat_motion import ThreadMotion
 from teleport.ui.conversations import failure_text
+from teleport.ui.drop_overlay import DropOverlay
 from teleport.ui.offer import OfferBook
 from teleport.ui.radar import DeviceListModel, can_receive_files, drop_hint_text
 from teleport.ui.send import printable
@@ -758,6 +758,7 @@ class ChatHeader(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("chatHeader")
+        self._key: str | None = None
         self.avatar = DeviceAvatar(self, diameter=_AVATAR, presence=Presence.OFFLINE, ring="surface")
         self.name_label = QLabel(self)
         self.name_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -783,11 +784,14 @@ class ChatHeader(QWidget):
         layout.addLayout(column, 1)
         layout.addLayout(self.action_row)
 
-    def set_device(self, name: str, status: str, presence: Presence) -> None:
+    def set_device(self, name: str, status: str, presence: Presence, *, key: str | None = None) -> None:
+        """Đổi máy hiện ở đầu luồng; chấm chỉ chuyển màu dần khi `key` trùng lần trước (cùng máy)."""
+        same = key is not None and key == self._key
+        self._key = key
         self.name_label.setText(name)
         self.status_label.setText(status)
         self.status_label.setVisible(bool(status))
-        self.avatar.set_presence(presence)
+        self.avatar.set_presence(presence, animate=same)
         self.setAccessibleName(f"{name}. {status}" if status else name)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -870,45 +874,6 @@ class ChatComposer(QWidget):
             self.update()
 
 
-class _DropOverlay(QWidget):
-    """Lớp phủ khi đang kéo file vào luồng: viền nét đứt 2 px `accent_strong`, câu giữa vùng."""
-
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setObjectName("chatDropOverlay")
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.label = QLabel(self)
-        self.label.setTextFormat(Qt.TextFormat.PlainText)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setWordWrap(True)
-        self.label.setProperty(theme.TONE_PROPERTY, "accent")
-        self.label.setFont(theme.font_for(theme.TextStyle.SECTION, self.label.font()))
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(_MARGIN * 2, _MARGIN * 2, _MARGIN * 2, _MARGIN * 2)
-        layout.addWidget(self.label)
-        self.setVisible(False)
-
-    def text(self) -> str:
-        return self.label.text() if not self.isHidden() else ""
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-        t = theme.tokens_for(self)
-        painter = QPainter(self)
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            background = t.surface
-            background.setAlphaF(0.88)
-            painter.setBrush(background)
-            pen = QPen(t.accent_strong, 2)
-            pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            rect = QRectF(self.rect()).adjusted(_MARGIN / 2, _MARGIN / 2, -_MARGIN / 2, -_MARGIN / 2)
-            painter.drawRoundedRect(rect, theme.RADIUS_BLOCK, theme.RADIUS_BLOCK)
-        finally:
-            painter.end()
-
-
 # ---- ChatView -----------------------------------------------------------------------------------
 
 
@@ -981,7 +946,7 @@ class ChatView(QWidget):
         self.new_button.clicked.connect(self._on_new_clicked)
         self.composer = ChatComposer(self)
         self.composer.send_button.clicked.connect(self._request_pick)
-        self._drop_overlay = _DropOverlay(self)
+        self._drop_overlay = DropOverlay(self)
 
         info_wrap = QVBoxLayout()
         info_wrap.setContentsMargins(_MARGIN, theme.SPACING[2], _MARGIN, 0)
@@ -1509,21 +1474,20 @@ class ChatView(QWidget):
     def preview_drop(self, count: int | None) -> None:
         """Hiện lớp thả như đang kéo `count` file (None: ẩn); cùng đường với kéo thật."""
         if count is None or self._device_id is None:
-            self._drop_overlay.setVisible(False)
+            self._drop_overlay.dismiss()
             return
         name = self._peer(self._device_id, None)
-        self._drop_overlay.label.setText(
+        self._drop_overlay.setGeometry(self.threads.geometry())
+        self._drop_overlay.raise_()
+        self._drop_overlay.show_text(
             texts.fill(
                 QCoreApplication.translate("Chat", "Thả để gửi %n file tới {name}", None, max(0, count)),
                 name=name,
             )
         )
-        self._drop_overlay.setGeometry(self.threads.geometry())
-        self._drop_overlay.raise_()
-        self._drop_overlay.setVisible(True)
 
     @property
-    def drop_overlay(self) -> _DropOverlay:
+    def drop_overlay(self) -> DropOverlay:
         return self._drop_overlay
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -1849,7 +1813,7 @@ class ChatView(QWidget):
         view = self._devices.device(device_id)
         name = self._peer(device_id, None)
         status, presence = self._header_status(view)
-        self.header.set_device(name, status, presence)
+        self.header.set_device(name, status, presence, key=device_id)
         offline = view is not None and not view.online and not view.connected
         if offline:
             hint = texts.fill(

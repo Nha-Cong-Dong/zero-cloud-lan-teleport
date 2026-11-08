@@ -45,7 +45,8 @@ NOT_PAIRED = "Chưa ghép đôi với {p} nên chưa gửi được. Hãy ghép 
 SEND_FAILED = "Không gửi được file tới {p}. Hãy thử lại."
 
 REPLACEMENT = "\ufffd"
-_MVP = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+_MVP_PRODUCT = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+_MVP = _MVP_PRODUCT if _MVP_PRODUCT.exists() else (Path(__file__).resolve().parents[2] / "docs" / "mvp.md")
 
 
 def fill(template: str, **values: str) -> str:

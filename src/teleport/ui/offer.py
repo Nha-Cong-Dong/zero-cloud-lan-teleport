@@ -40,6 +40,8 @@ dòng mất kết nối. Bố cục từ trên xuống (mvp 7.3):
    `fit_height` nới chiều cao theo heightForWidth (cửa sổ cấp cao không tự cao lên);
 5. ô “Luôn nhận từ thiết bị này” (`offerAlways`);
 6. “Từ chối” và “Nhận” căn phải; “Nhận” là nút chính (đậm, tô màu nhấn qua `theme.PRIMARY_PROPERTY`).
+   Cả hai là `buttons.AnimatedButton` (“Nhận” chính, “Từ chối” phụ): đổi màu mượt khi rê/ấn, không có
+   trạng thái đang chạy (hộp đóng ngay khi bấm).
 
 Thứ tự Tab: Đổi… → ô tick → Từ chối → Nhận; tiêu điểm ban đầu ở “Từ chối”. Nút mặc định (Enter),
 Esc và nút X đều là “Từ chối”: nhận file phải là lựa chọn có chủ ý. Đang đổi thư mục nhận
@@ -79,6 +81,7 @@ from PySide6.QtWidgets import (
 from teleport.app.transfers import Direction, OfferReceived
 from teleport.core.transfer import TransferKey
 from teleport.ui import texts, theme
+from teleport.ui.buttons import AnimatedButton
 from teleport.ui.send import printable
 from teleport.ui.texts import fill as _fill
 
@@ -435,9 +438,9 @@ class _Prompt:
         self.always_check.setObjectName("offerAlways")
         self.always_check.setChecked(entry.always)
 
-        self.reject_button = QPushButton()
+        self.reject_button = AnimatedButton()
         self.reject_button.setObjectName("offerReject")
-        self.accept_button = QPushButton()
+        self.accept_button = AnimatedButton(primary=True)
         self.accept_button.setObjectName("offerAccept")
         primary = self.accept_button.font()
         primary.setBold(True)  # nút chính; Enter vẫn là “Từ chối”
