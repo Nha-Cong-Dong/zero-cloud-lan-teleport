@@ -895,7 +895,11 @@ class _ConversationView(QListView):
         self._drop_id: str | None = None  # device_id của hàng đó (chỉ mục bền có thể mất hiệu lực)
         self._drop_count = 0
         self._drag_pos: QPoint | None = None  # vị trí kéo cuối (viewport) khi đang có file kéo qua
-# Nền hàng được chọn, trượt giữa các hàng (spec G3); vẽ trong `paintEvent`.
+        self._drop_glow: dict[str, float] = {}  # device_id → mức sáng ∈ [0, 1] (spec G5 mục 3.2)
+        self._presence_seen: dict[str, Presence] = {}  # device_id → presence lần cuối thấy
+        self._presence_fade: dict[str, tuple[Presence, float]] = {}  # device_id → (cũ, tiến độ)
+        self._watched_model: QAbstractItemModel | None = None
+        # Nền hàng được chọn, trượt giữa các hàng (spec G3); vẽ trong paintEvent.
         self.selection_indicator = motion.SlidingRect(self.viewport(), motion.NORMAL)
         self._slide_pending = False  # người dùng vừa đổi lựa chọn: lần vẽ tới trượt
         self._layout_dirty = False  # hàng dời chỗ / đổi cỡ: lần vẽ tới nhảy thẳng
@@ -948,11 +952,6 @@ class _ConversationView(QListView):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._layout_dirty = True
-
-self._drop_glow: dict[str, float] = {}  # device_id → mức sáng ∈ [0, 1] (spec G5 mục 3.2)
-        self._presence_seen: dict[str, Presence] = {}  # device_id → presence lần cuối thấy
-        self._presence_fade: dict[str, tuple[Presence, float]] = {}  # device_id → (cũ, tiến độ)
-        self._watched_model: QAbstractItemModel | None = None
 
     # -- Model ----------------------------------------------------------------------------------
 
