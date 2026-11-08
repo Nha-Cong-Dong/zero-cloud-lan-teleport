@@ -1081,7 +1081,6 @@ class _ConversationView(QListView):
             on_finished=_glow_finisher(self, device_id),
         )
 
-
     # -- Kéo thả --------------------------------------------------------------------------------
 
     def drop_target(self) -> str | None:
