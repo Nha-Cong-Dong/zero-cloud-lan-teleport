@@ -1005,7 +1005,7 @@ class ChatView(QWidget):
 
     def has_content(self) -> bool:
         """Thông báo đang hiện hay đang chọn một máy (đúng cả khi cửa sổ đang ẩn xuống khay)."""
-        return not self.info_bar.isHidden() or self._device_id is not None
+        return self.info_bar.is_open or self._device_id is not None
 
     def active_count(self) -> int:
         """Số bong bóng của phiên chưa kết thúc, ở mọi luồng."""
@@ -1412,7 +1412,7 @@ class ChatView(QWidget):
 
     def notice_text(self) -> str:
         """Chữ của thông báo đang hiện; không có → “”."""
-        return self.info_bar.title if not self.info_bar.isHidden() else ""
+        return self.info_bar.title if self.info_bar.is_open else ""
 
     def notice_action_text(self) -> str | None:
         """Chữ của nút hành động của thông báo đang hiện; không có → None."""

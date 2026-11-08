@@ -337,7 +337,7 @@ class WaitPairingPage(QWidget):
         self._addresses = shown
         self._rebuild_addresses()
         if shown is not None and not shown:
-            if self._address_warning or self.info_bar.isHidden():  # không đè câu khác đang hiện
+            if self._address_warning or not self.info_bar.is_open:  # không đè câu khác đang hiện
                 self._show_address_warning()
         elif self._address_warning:
             self._address_warning = False
