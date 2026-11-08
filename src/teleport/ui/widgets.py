@@ -54,7 +54,9 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
 - `ChatBubble`: nền `bubble_out` (gửi đi, không viền) / `bubble_in` (nhận vào, viền 1 px `border`);
   ATTENTION viền 2 px `accent_strong`, DANGER viền 2 px `danger`. Hình theo `bubble_path`: bo
   `RADIUS_BUBBLE`, góc dưới phía người gửi bo `RADIUS_BUBBLE_TAIL`. `BubbleRow` đặt bong bóng sát
-  phải (OUT) hay sát trái (IN), rộng tối đa `BUBBLE_MAX_RATIO` bề ngang hàng.
+  phải (OUT) hay sát trái (IN), rộng tối đa `BUBBLE_MAX_RATIO` bề ngang hàng. Móc vẽ chuyển động
+  `motion_paint()` (mặc định `(None, 0.0)`, lớp con ở `ui.chat_bubbles` ghi đè): màu phủ lên nền
+  (viền vẽ lại trên), và độ dày thêm của viền nhấn vẽ thành vòng thứ hai thụt vào trong.
 - `InfoBar`: nền/viền và icon theo mức: INFO `accent_subtle`/`accent_strong`, SUCCESS
   `success_bg`/`success`, WARNING `warning_bg`/`warning`, ERROR `danger_bg`/`danger`; chữ `text`;
   bo `RADIUS_CARD`. Nút hành động nằm ở hàng dưới, thẳng cột chữ (luật PR-1). `accessibleName` bắt
@@ -925,6 +927,11 @@ class ChatBubble(QFrame):
         """Câu tóm tắt cho trình đọc màn hình (ví dụ “Đang gửi phim-4k.mkv, 62%”)."""
         self.setAccessibleName(text)
 
+    def motion_paint(self) -> tuple[QColor | None, float]:
+        """Móc vẽ chuyển động, đọc lúc vẽ: (màu phủ lên nền hay None, độ dày thêm px của viền nhấn).
+        Mặc định `(None, 0.0)`: vẽ y như không có chuyển động (lớp con ở `ui.chat_bubbles` ghi đè)."""
+        return None, 0.0
+
     def retranslate(self) -> None:
         if self._direction is Direction.OUT:
             self.setAccessibleDescription(QCoreApplication.translate("Widgets", "Gửi đi"))
@@ -944,12 +951,24 @@ class ChatBubble(QFrame):
             pen_color, width = None, 0
         inset = width / 2 if width else 0.5
         path = bubble_path(QRectF(self.rect()).adjusted(inset, inset, -inset, -inset), self._direction)
+        tint, extra = self.motion_paint()
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setBrush(t.bubble_out if self._direction is Direction.OUT else t.bubble_in)
             painter.setPen(QPen(pen_color, width) if pen_color is not None else Qt.PenStyle.NoPen)
             painter.drawPath(path)
+            if tint is not None:  # phủ màu lên nền rồi vẽ lại viền cho viền giữ nguyên màu
+                painter.fillPath(path, tint)
+                if pen_color is not None:
+                    painter.strokePath(path, QPen(pen_color, width))
+            if extra > 0 and pen_color is not None and self._emphasis is not BubbleEmphasis.NONE:
+                # Phần dày thêm là vòng thứ hai thụt vào trong: nền và viền gốc không “thở”.
+                ring = width + extra / 2
+                inner = bubble_path(QRectF(self.rect()).adjusted(ring, ring, -ring, -ring), self._direction)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(pen_color, extra))
+                painter.drawPath(inner)
         finally:
             painter.end()
 
