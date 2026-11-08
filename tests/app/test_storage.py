@@ -372,7 +372,7 @@ def test_stdlib_seams_are_called_through_module(storage):
 def test_architecture_doc_states_same_numbers(const, module):
     # Spec mục 4.2: architecture §4 “Thư mục nhận” nắm các số này; code và tài liệu không được lệch.
     value = getattr(importlib.import_module(module), const)
-    _arch = (DOCS / "technical" / "architecture.md")
+    _arch = DOCS / "technical" / "architecture.md"
     text = (_arch if _arch.exists() else DOCS / "architecture.md").read_text(encoding="utf-8")
     found = re.findall(rf"`?{const}`?\s*=\s*`?(\d+)", text)
     assert found, f"architecture.md mục 4 phải ghi `{const}` = <số>"
