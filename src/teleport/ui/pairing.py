@@ -1234,7 +1234,7 @@ class PairingController(QObject):
             self._show_result(functools.partial(device_gone_text, pairing.label))
         elif isinstance(result, ValueError):
             log.warning("ghép đôi: tham số không hợp lệ (%s)", type(result).__name__)
-            self._show_result(functools.partial(_unreachable_text, pairing.target or pairing.label))
+            self._show_result(functools.partial(unreachable_text, pairing.target or pairing.label))
         elif isinstance(result, RuntimeError):
             log.info("ghép đôi: node chưa chạy hoặc đang đóng")
         elif isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
