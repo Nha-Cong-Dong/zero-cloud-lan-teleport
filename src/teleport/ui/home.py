@@ -14,7 +14,8 @@ sẵn đi qua `QCoreApplication.translate("Home", …)` gọi lúc dùng; chỉ 
   `title_label`; hàng `status_icon` 20 px + `status_label` (SECTION); `detail_label`; `hint_label`;
   `first_run` (`ui.first_run.FirstRunForm`, form lần chạy đầu: chỉ hiện ở WELCOME, khi đó dòng trạng
   thái, chi tiết, gợi ý ẩn); `starting_bar` (bận, 160x4, căn trái); hàng nút căn phải `retry_button`,
-  `start_button` (cả hai là nút chính, mỗi lúc chỉ hiện một). Tab: `status_label` → `detail_label` →
+  `start_button` (cả hai là nút chính `buttons.AnimatedButton`, mỗi lúc chỉ hiện một; Đang khởi
+  động đã có `starting_bar` nên nút không dùng trạng thái đang chạy). Tab: `status_label` → `detail_label` →
   `hint_label` → form (ô tên → “Đổi…” → công tắc) → `retry_button` → `start_button`. Không có chữ
   đặt sẵn ngoài tên của `starting_bar` (chữ của form do chính form đặt).
 - `MachineCard` (`machineCard`, chân cột trái): avatar máy này | cột chữ: “Máy này” (CAPTION, muted),
@@ -78,7 +79,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QProgressBar,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QToolTip,
@@ -88,6 +88,7 @@ from PySide6.QtWidgets import (
 
 from teleport.core.display import display_name
 from teleport.ui import icons, shortcuts, texts, theme
+from teleport.ui.buttons import AnimatedButton
 from teleport.ui.first_run import FirstRunForm
 from teleport.ui.send import printable
 from teleport.ui.tray import make_icon
@@ -187,10 +188,10 @@ class StartPanel(QWidget):
         self.starting_bar.setFixedSize(*_STARTING_BAR)
         self.starting_bar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        self.retry_button = QPushButton(self.card)
+        self.retry_button = AnimatedButton("", self.card, primary=True)
         self.retry_button.setObjectName("retryButton")
         self.retry_button.setProperty(theme.PRIMARY_PROPERTY, True)  # màn Lỗi: hành động chính
-        self.start_button = QPushButton(self.card)
+        self.start_button = AnimatedButton("", self.card, primary=True)
         self.start_button.setObjectName("startButton")
         self.start_button.setDefault(True)
         self.start_button.setProperty(theme.PRIMARY_PROPERTY, True)

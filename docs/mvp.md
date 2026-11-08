@@ -375,7 +375,8 @@ Bản giao diện dùng cùng các dòng, khác ở chỗ:
 - Dòng 2 không có nhãn: chỉ có mã, chữ rất lớn, căn giữa. Nhãn “Mã ghép đôi” chỉ dành cho trình đọc màn hình.
 - Dòng 3 là câu cảnh báo bản giao diện ở mục 8, kèm biểu tượng cảnh báo.
 - Dòng 4–6 nhỏ hơn, màu dịu.
-- Dòng 7 thay bằng hai nút “Không trùng” và “Trùng khớp”. Nút mặc định (Enter) là “Không trùng”; Esc hay đóng hộp cũng là “Không trùng”.
+- Dòng 7 thay bằng hai nút “Không trùng” và “Trùng khớp”. Nút mặc định (Enter) là “Không trùng”; trước khi bấm “Trùng khớp”, Esc hay đóng hộp cũng là “Không trùng”.
+- Bấm “Trùng khớp” thì hộp ở lại: nút thành “Đang ghép đôi…” kèm vòng quay nhỏ (tên trợ năng cũng vậy, mô tả “Đã xác nhận mã. Đang chờ máy kia xác nhận.”) và “Không trùng” thành “Đóng”. Đóng hộp lúc này không đổi quyết định đã gửi. Hộp tự đóng khi có kết quả hay hết thời gian xác nhận; kết quả tới sau đó vẫn báo như dòng “Giao diện: ghép đôi xong” ở mục 8.
 - Mã vẽ thành hai nhóm ba ô (khoảng giữa hai nhóm rộng hơn), vẫn là chữ thuần cho trình đọc màn hình.
 - Dưới tên máy kia, trên hai nút: đếm ngược thời gian còn lại để xác nhận, gồm một thanh mảnh ngắn dần và chữ “Còn *43* giây để xác nhận”; từ 10 giây trở xuống chữ đổi màu cảnh báo (thanh vẫn ngắn dần, không chỉ dựa vào màu).
 - Hết thời gian xác nhận thì hộp tự đóng. Phiên kết thúc vì bất kỳ lý do gì thì hộp cũng tự đóng.
