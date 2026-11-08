@@ -158,7 +158,9 @@ def test_layout_regex_is_spec_regex_with_fullmatch(storage, resume_helpers, name
 
 def test_layout_regex_documented_in_architecture(resume_helpers):
     # Dữ liệu mẫu trong docs phải khớp: architecture mục 4 (gạch Bố cục) chép đúng regex của spec.
-    text = (Path(__file__).resolve().parents[2] / "docs" / "architecture.md").read_text(encoding="utf-8")
+    _arch = Path(__file__).resolve().parents[2] / "docs" / "technical" / "architecture.md"
+    _fallback = Path(__file__).resolve().parents[2] / "docs" / "architecture.md"
+    text = (_arch if _arch.exists() else _fallback).read_text(encoding="utf-8")
     assert resume_helpers.LAYOUT_PATTERN in text
 
 

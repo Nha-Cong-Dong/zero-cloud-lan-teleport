@@ -51,7 +51,8 @@ OPEN_SETTINGS = "Mở Cài đặt"
 START = "Bắt đầu"
 NAME_MAX_INPUT = 256  # `ui.settings.NAME_MAX_INPUT` (spec Q5 dùng lại hằng đó)
 
-_MVP = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+_MVP_PRODUCT = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+_MVP = _MVP_PRODUCT if _MVP_PRODUCT.exists() else (Path(__file__).resolve().parents[2] / "docs" / "mvp.md")
 
 
 def f1_notice() -> str:

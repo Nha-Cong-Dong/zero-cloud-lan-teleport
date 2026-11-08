@@ -1193,7 +1193,9 @@ def test_f3_offline_hint_follows_model(qtbot, clock):
 
 def test_f3_offline_hint_in_mvp_doc():
     """9.9: câu thanh dưới ghi vào mvp mục 8 dòng “đã ghép đôi nhưng chưa kết nối”."""
-    doc = (Path(__file__).resolve().parents[2] / "docs" / "mvp.md").read_text(encoding="utf-8")
+    _mvp = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+    _fb = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+    doc = (_mvp if _mvp.exists() else _fb).read_text(encoding="utf-8")
     sample = OFFLINE_HINT.format(name="*PC-Nha*")
     assert sample in doc or OFFLINE_HINT.format(name="PC-Nha") in doc, "câu ngoại tuyến chưa có trong mvp.md"
 

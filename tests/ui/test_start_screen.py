@@ -38,7 +38,8 @@ AUTOSTART_FAILED = (
     "Bạn có thể bật lại trong Cài đặt."
 )
 OPEN_SETTINGS = "Mở Cài đặt"
-_MVP = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+_MVP_PRODUCT = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+_MVP = _MVP_PRODUCT if _MVP_PRODUCT.exists() else (Path(__file__).resolve().parents[2] / "docs" / "mvp.md")
 
 
 def f1_notice() -> str:

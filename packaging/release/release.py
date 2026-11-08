@@ -33,7 +33,8 @@ sys.path.insert(0, str(REPO / "packaging" / "pyinstaller"))
 import third_party  # noqa: E402  (chỉ dùng thư viện chuẩn)
 
 INIT = REPO / "src" / "teleport" / "__init__.py"
-CHANGELOG = REPO / "docs" / "CHANGELOG.md"
+_CHANGELOG_COMMUNITY = REPO / "docs" / "community" / "CHANGELOG.md"
+CHANGELOG = _CHANGELOG_COMMUNITY if _CHANGELOG_COMMUNITY.exists() else (REPO / "docs" / "CHANGELOG.md")
 CONSTRAINTS = REPO / "packaging" / "pyinstaller" / "constraints.txt"
 
 _PEP440 = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:(a|b)0)?")
