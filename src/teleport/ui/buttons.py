@@ -61,6 +61,10 @@ mặc định), nhả nút, h/p về 0. Gọi lại khi đang chạy chỉ đổ
   `set_running(False)` dừng `Loop` và gỡ bộ lọc.
 
 API test: `hover_level()`, `press_level()`, `content_offset()`, `spinner_active()`.
+
+**“Đã chép”** (spec G5): `CopiedFeedback` giữ dạng ✓ “Đã chép” của một nút trong `COPIED_FEEDBACK_MS`
+(không phải hoạt ảnh, nên chạy cả khi tắt hiệu ứng); dùng ở nút “Chép” của `ui.wait_pairing` và nút
+“Chép địa chỉ” của `ui.home.MachineCard`.
 """
 
 from __future__ import annotations
@@ -68,7 +72,7 @@ from __future__ import annotations
 import weakref
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QHideEvent,
@@ -584,3 +588,58 @@ class AnimatedButton(QPushButton):
         painter.restore()
         # Chữ căn giữa trong rect dịch sang phải nửa phần spinner: cả khối spinner + chữ căn giữa.
         return contents.translated((side + gap + 1) // 2, 0)
+
+
+# ---- Phản hồi “đã chép” (spec G5 mục 3.4) -----------------------------------------------------------
+
+COPIED_FEEDBACK_MS = 1500  # ms, nút hiện ✓ “Đã chép” (mvp §7.5); đọc lúc `trigger`, test vá được
+
+
+class CopiedFeedback(QObject):
+    """Phản hồi “đã chép” trên một nút trong `COPIED_FEEDBACK_MS`. Không phải hoạt ảnh: luôn chạy, kể cả
+    khi tắt hiệu ứng hay chế độ tức thì của test (mvp N12: phản hồi trạng thái).
+
+    Con của `button`, lọc sự kiện của nó: nút nhận `Hide` (kể cả tự phát, ví dụ thu nhỏ) → `cancel()`,
+    nên mở lại trang thì nút đã về dạng thường. `QTimer` một lần chỉ chạy trong khoảng hẹn sau
+    `trigger()` (mvp N3). Bên dùng tự vẽ lại nút theo `active` trong **một** hàm, gọi cả khi
+    `active_changed` và khi dịch lại; closure nối vào signal chỉ được giữ tham chiếu yếu tới nút (như
+    `ButtonLevels`).
+    """
+
+    active_changed = Signal(bool)
+
+    def __init__(self, button: QWidget) -> None:
+        super().__init__(button)
+        self._button_ref = weakref.ref(button)
+        self._active = False
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.cancel)
+        button.installEventFilter(self)
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    def trigger(self) -> None:
+        """Bật “đã chép” (phát nếu đổi) và hẹn lại từ đầu `COPIED_FEEDBACK_MS`."""
+        self._timer.start(max(0, int(COPIED_FEEDBACK_MS)))
+        if not self._active:
+            self._active = True
+            self.active_changed.emit(True)
+
+    def cancel(self) -> None:
+        """Đang “đã chép”: dừng hẹn, trở lại dạng thường và phát; không thì thôi."""
+        if not self._active:
+            return
+        self._timer.stop()
+        self._active = False
+        self.active_changed.emit(False)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        # Lúc cây widget bị hủy, PySide có thể đã xóa thuộc tính Python (xem `motion.Loop`).
+        if "_active" not in self.__dict__ or not self.__dict__["_active"] or not isValid(self):
+            return False
+        if event.type() == QEvent.Type.Hide and watched is self._button_ref():
+            self.cancel()
+        return False

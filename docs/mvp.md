@@ -474,7 +474,7 @@ clipboard”; mật khẩu chép từ trình quản lý mật khẩu không đư
 ```
 - Mở bằng nút “Chờ ghép đôi” ở màn Tìm máy mới (mục 7.1); máy này nhận yêu cầu ghép đôi thế nào khi màn hình mở hay đóng: F3.
 - “Đang chờ máy khác gửi yêu cầu ghép đôi.” chỉ hiện khi chế độ chờ ghép đôi đã mở được; không mở được thì hiện câu lỗi ở mục 8.
-- “Địa chỉ”: mọi địa chỉ IPv4 của máy này, kèm `:cổng` khi cổng khác cổng mặc định (protocol mục 2), giống `teleport listen`. Mỗi địa chỉ một hàng, có nút “Chép” chép đúng chuỗi đó. Chưa đọc xong: “Đang lấy địa chỉ…”; đọc xong mà không có địa chỉ nào: câu ở mục 8.
+- “Địa chỉ”: mọi địa chỉ IPv4 của máy này, kèm `:cổng` khi cổng khác cổng mặc định (protocol mục 2), giống `teleport listen`. Mỗi địa chỉ một hàng, có nút “Chép” chép đúng chuỗi đó; bấm thì nút thành ✓ “Đã chép” trong 1,5 giây rồi trở lại. Chưa đọc xong: “Đang lấy địa chỉ…”; đọc xong mà không có địa chỉ nào: câu ở mục 8.
 - Hai dòng “Máy này đang ẩn…” chỉ hiện khi máy này đang ẩn (F10).
 - Có yêu cầu ghép đôi thì lời hỏi hiện theo mục 7.2.
 

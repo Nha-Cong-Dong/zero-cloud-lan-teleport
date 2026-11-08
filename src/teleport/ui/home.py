@@ -50,7 +50,10 @@ icon theo trạng thái. Không thêm luật stylesheet, không `setPalette`.
 `address_label` nhận tiêu điểm bằng Tab (chọn bằng chuột được); `name_label` tên “Máy này”, mô tả là
 tên + chữ huy hiệu. Huy hiệu luôn có chữ (“Sẵn sàng nhận”, “Đang truyền n lượt”, “Không nhận
 file”, “Đã tạm dừng nhận”). Tooltip dựng từ địa chỉ hay đường dẫn đi qua `widgets.safe_tooltip`. Chép địa chỉ:
-clipboard, tooltip “Đã chép địa chỉ …” 2 giây và sự kiện trợ năng Alert (cố gắng tốt nhất). Nút
+clipboard, tooltip “Đã chép địa chỉ …” 2 giây và sự kiện trợ năng Alert (cố gắng tốt nhất); nút đổi
+sang icon ✓ (`checkmark`), nhãn “Đã chép địa chỉ …” trong `buttons.COPIED_FEEDBACK_MS` rồi trở lại
+(`copy_feedback`, `buttons.CopiedFeedback`; chạy cả khi tắt hiệu ứng; nút ẩn hay đổi địa chỉ thì trở
+lại ngay). Nút
 “Đổi…” có tên và tooltip “Đổi thư mục nhận”, mô tả là chữ đầy đủ của thanh; Tab: “Mở thư mục” →
 “Đổi…”. Chữ `save_label` chuyển giữa ba trạng thái thì phát Alert trên `SaveBar` (tên “Thư mục
 nhận”, mô tả là chữ đầy đủ).
@@ -88,7 +91,7 @@ from PySide6.QtWidgets import (
 
 from teleport.core.display import display_name
 from teleport.ui import icons, shortcuts, texts, theme
-from teleport.ui.buttons import AnimatedButton
+from teleport.ui.buttons import AnimatedButton, CopiedFeedback
 from teleport.ui.first_run import FirstRunForm
 from teleport.ui.send import printable
 from teleport.ui.tray import make_icon
@@ -324,6 +327,8 @@ class MachineCard(QFrame):
         self.copy_button.setObjectName("copyAddressButton")
         self.copy_button.clicked.connect(self._copy)
         self.copy_button.setVisible(False)
+        self.copy_feedback = CopiedFeedback(self.copy_button)
+        self.copy_feedback.active_changed.connect(self._render_copy_button)
         self.badge = StatusBadge(self)
         self.badge.setObjectName("machineBadge")
 
@@ -404,7 +409,10 @@ class MachineCard(QFrame):
 
     def set_copy_value(self, value: str | None) -> None:
         """Chuỗi mà “Chép địa chỉ” chép; None thì ẩn nút."""
-        self._copy_value = value or None
+        value = value or None
+        if value != self._copy_value:
+            self.copy_feedback.cancel()
+        self._copy_value = value
         self.copy_button.setVisible(self._copy_value is not None)
 
     def retranslate(self) -> None:
@@ -412,10 +420,21 @@ class MachineCard(QFrame):
         caption = t("Home", "Máy này")
         self.caption_label.setText(caption)
         self.name_label.setAccessibleName(caption)
-        self.copy_button.set_label(t("Home", "Chép địa chỉ"))
+        self._render_copy_button()
         self._update_badge()
 
     # ---- Bên trong -----------------------------------------------------------------------------
+
+    def _render_copy_button(self, *_args: object) -> None:
+        """Dạng “Chép địa chỉ” hay ✓ “Đã chép địa chỉ …” của nút (đổi dạng và dịch lại)."""
+        t = QCoreApplication.translate
+        value = self._copy_value
+        if self.copy_feedback.active and value is not None:
+            self.copy_button.set_icon_name("checkmark")
+            self.copy_button.set_label(texts.fill(t("Home", "Đã chép địa chỉ {address}"), address=value))
+        else:
+            self.copy_button.set_icon_name("copy")
+            self.copy_button.set_label(t("Home", "Chép địa chỉ"))
 
     def _update_name(self) -> None:
         shown = display_name(printable(self._name)) if self._name else ""
@@ -454,6 +473,7 @@ class MachineCard(QFrame):
         clipboard = QGuiApplication.clipboard()
         if clipboard is not None:
             clipboard.setText(value)
+        self.copy_feedback.trigger()
         message = texts.fill(QCoreApplication.translate("Home", "Đã chép địa chỉ {address}"), address=value)
         button = self.copy_button
         QToolTip.showText(

@@ -2546,6 +2546,11 @@
     </message>
     <message>
         <location filename="../wait_pairing.py"/>
+        <source>Đã chép</source>
+        <translation>Copied</translation>
+    </message>
+    <message>
+        <location filename="../wait_pairing.py"/>
         <source>Đã chép địa chỉ {address}</source>
         <translation>Copied address {address}</translation>
     </message>
