@@ -43,7 +43,19 @@ module `_wall_now` (đọc lúc gọi). Không có hẹn giờ qua nửa đêm: 
   hàng: viền nét đứt 2 px, màu `accent_strong` khi hàng
   không được chọn và `text` khi hàng đang được chọn (không trùng nền chọn), dòng phụ thay bằng
   “Thả để gửi n file” (`accent_text`); n = số URL file cục bộ, không `stat` file nào (không có tổng
-  cỡ trong câu).
+  cỡ trong câu). Hàng **không** được chọn còn sáng lên (spec G5 mục 3.2): phủ `accent_subtle` với alpha
+  `g · _DROP_GLOW_MAX` lên nền đang có (trên nền đặc là `blend(nền, accent_subtle, g · MAX)`, trên Mica
+  vẫn đúng), vành chấm avatar `blend(vành, accent_subtle, g · MAX)`; g = `drop_glow(index)` mờ dần
+  `motion.FAST` khi hàng đích đổi. Hàng được chọn không sáng thêm. Viền, câu và `drop_target()` đổi
+  **ngay**, chỉ nền mờ dần. `_DROP_GLOW_MAX = 1.0`: `text`, `accent_text`, `text_muted` ≥ 4,5:1 và
+  `warning`, `danger` ≥ 3:1 trên `blend(sidebar, accent_subtle, MAX)` với mọi màu nhấn × sáng/tối
+  (thấp nhất ≈ 4,8:1, `text_muted` tối; cặp ở `DROP_GLOW_CONTRAST_PAIRS`).
+- Chấm trạng thái chuyển màu (spec G5 mục 3.3): view nhớ presence đã thấy của từng máy
+  (`_presence_seen`); máy đổi presence khi view đang hiện (`dataChanged` có `PRESENCE_ROLE` hay không
+  kèm role, `rowsInserted`, `layoutChanged` khi proxy sắp lại) → `paint_avatar(previous, progress)` chạy
+  `motion.FAST` (`presence_fade(index)`), dạng thu gọn thì vòng BUSY mờ theo. `modelReset` (host mới)
+  và `setModel` chỉ ghi lại, không chạy; `rowsRemoved` quên máy đã mất. View ẩn thì mọi mức sáng và
+  chuyển màu nhảy thẳng tới cuối. Callback đưa vào `motion` chỉ giữ tham chiếu yếu tới view.
 - Dạng thu gọn (`compact`, cột trái chỉ còn avatar): ô bo 48 px quanh avatar mang nền, tiêu điểm, viền
   thả; máy đang truyền thêm vòng 2 px `accent_strong` quanh avatar, có lỗi kết nối thì icon `warning`
   16 px ở góc trên phải (trạng thái không chỉ nói bằng màu, WCAG 1.4.1). Chữ ở tooltip và tên trợ năng.
@@ -94,6 +106,8 @@ import datetime
 import math
 import time
 import unicodedata
+import weakref
+from collections.abc import Callable, Iterable
 from enum import StrEnum
 from typing import Any
 
@@ -127,6 +141,7 @@ from PySide6.QtGui import (
     QFocusEvent,
     QFont,
     QFontMetrics,
+    QHideEvent,
     QKeyEvent,
     QMouseEvent,
     QPainter,
@@ -146,6 +161,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from teleport.app.devices import DeviceView
 from teleport.app.transfers import Direction, TransferResult, TransferStatus
@@ -166,6 +182,7 @@ from teleport.ui.widgets import ICON_BUTTON_SIZE, AvatarKind, IconButton, Presen
 __all__ = [
     "DEVICE_ID_ROLE",
     "DEVICE_ROLE",
+    "DROP_GLOW_CONTRAST_PAIRS",
     "FAILURE_ROLE",
     "MIN_ROW_HEIGHT",
     "PRESENCE_ROLE",
@@ -203,6 +220,15 @@ _WARNING_ICON = 16  # px, icon cảnh báo đầu dòng phụ / góc ô thu gọ
 _WARNING_SOURCE = 20  # px, cỡ có trong `icons.SIZES` (vẽ thu vào ô 16×16)
 _PERCENT_CAP = 99  # chưa xong thì không hiện 100%
 _LIST_SPACING = 4  # px, danh sách → nút “＋”
+_DROP_GLOW_MAX = 1.0  # mức phủ `accent_subtle` khi kéo file qua hàng (tương phản: docstring module)
+# (token chữ/icon, tỉ lệ tối thiểu) trên `blend(sidebar, accent_subtle, _DROP_GLOW_MAX)`.
+DROP_GLOW_CONTRAST_PAIRS: tuple[tuple[str, float], ...] = (
+    ("text", 4.5),
+    ("accent_text", 4.5),
+    ("text_muted", 4.5),
+    ("warning", 3.0),
+    ("danger", 3.0),
+)
 
 _Index = QModelIndex | QPersistentModelIndex
 _ENTER_KEYS = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
@@ -658,12 +684,22 @@ class ConversationDelegate(QStyledItemDelegate):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(background)
                 painter.drawRoundedRect(cell, theme.RADIUS_CARD, theme.RADIUS_CARD)
+            view = widget if isinstance(widget, _ConversationView) else None
+            glow = view.drop_glow(index) * _DROP_GLOW_MAX if view is not None else 0.0
+            if glow > 0.0 and not selected:
+                overlay = QColor(t.accent_subtle)
+                overlay.setAlphaF(overlay.alphaF() * min(1.0, glow))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(overlay)
+                painter.drawRoundedRect(cell, theme.RADIUS_CARD, theme.RADIUS_CARD)
+                ring = theme.blend(ring, t.accent_subtle, glow)
             presence = _role_presence(index)
+            previous, progress = view.presence_fade(index) if view is not None else (None, 1.0)
             dpr = widget.devicePixelRatioF() if widget is not None else 1.0
             if self.compact:
-                self._paint_compact(painter, cell, index, presence, ring, t, dpr)
+                self._paint_compact(painter, cell, index, presence, ring, t, dpr, previous, progress)
             else:
-                self._paint_full(painter, cell, index, presence, ring, t, dpr, drop_count)
+                self._paint_full(painter, cell, index, presence, ring, t, dpr, drop_count, previous, progress)
             if drop_count:
                 pen = QPen(t.text if selected else t.accent_strong, 2)
                 pen.setStyle(Qt.PenStyle.DashLine)
@@ -681,7 +717,14 @@ class ConversationDelegate(QStyledItemDelegate):
 
     @staticmethod
     def _avatar(
-        painter: QPainter, rect: QRectF, presence: Presence, ring: QColor, t: theme.Tokens, dpr: float
+        painter: QPainter,
+        rect: QRectF,
+        presence: Presence,
+        ring: QColor,
+        t: theme.Tokens,
+        dpr: float,
+        previous: Presence | None = None,
+        progress: float = 1.0,
     ) -> None:
         paint_avatar(
             painter,
@@ -692,6 +735,8 @@ class ConversationDelegate(QStyledItemDelegate):
             ring=ring,
             tokens=t,
             dpr=dpr,
+            previous=previous,
+            progress=progress,
         )
 
     @staticmethod
@@ -711,9 +756,11 @@ class ConversationDelegate(QStyledItemDelegate):
         t: theme.Tokens,
         dpr: float,
         drop_count: int,
+        previous: Presence | None = None,
+        progress: float = 1.0,
     ) -> None:
         avatar = QRectF(rect.left() + _PADDING, rect.center().y() - AVATAR_SIZE / 2, AVATAR_SIZE, AVATAR_SIZE)
-        self._avatar(painter, avatar, presence, ring, t, dpr)
+        self._avatar(painter, avatar, presence, ring, t, dpr, previous, progress)
 
         name_metrics = QFontMetrics(self._name_font)
         caption_metrics = QFontMetrics(self._caption_font)
@@ -783,15 +830,26 @@ class ConversationDelegate(QStyledItemDelegate):
         ring: QColor,
         t: theme.Tokens,
         dpr: float,
+        previous: Presence | None = None,
+        progress: float = 1.0,
     ) -> None:
         avatar = QRectF(
             cell.center().x() - AVATAR_SIZE / 2, cell.center().y() - AVATAR_SIZE / 2, AVATAR_SIZE, AVATAR_SIZE
         )
-        if presence is Presence.BUSY:
+        busy = 1.0 if presence is Presence.BUSY else 0.0
+        if previous is not None and previous is not presence and progress < 1.0:
+            # Vào BUSY: vòng hiện dần theo progress; rời BUSY: mờ dần theo 1 − progress.
+            was_busy = 1.0 if previous is Presence.BUSY else 0.0
+            busy = was_busy + (busy - was_busy) * max(0.0, progress)
+        if busy > 0.0:
+            painter.save()
+            if busy < 1.0:
+                painter.setOpacity(painter.opacity() * busy)
             painter.setPen(QPen(t.accent_strong, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(avatar.adjusted(-2, -2, 2, 2))
-        self._avatar(painter, avatar, presence, ring, t, dpr)
+            painter.restore()
+        self._avatar(painter, avatar, presence, ring, t, dpr, previous, progress)
         tone = _role_tone(index)
         if tone in (StatusTone.WARNING, StatusTone.DANGER):
             color = t.danger if tone is StatusTone.DANGER else t.warning
@@ -834,9 +892,10 @@ class _ConversationView(QListView):
         self.setMinimumWidth(COMPACT_CELL)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.DefaultContextMenu)
         self._drop_index = QPersistentModelIndex()  # hàng đang được kéo file qua (tô viền)
+        self._drop_id: str | None = None  # device_id của hàng đó (chỉ mục bền có thể mất hiệu lực)
         self._drop_count = 0
         self._drag_pos: QPoint | None = None  # vị trí kéo cuối (viewport) khi đang có file kéo qua
-        # Nền hàng được chọn, trượt giữa các hàng (spec G3); vẽ trong `paintEvent`.
+# Nền hàng được chọn, trượt giữa các hàng (spec G3); vẽ trong `paintEvent`.
         self.selection_indicator = motion.SlidingRect(self.viewport(), motion.NORMAL)
         self._slide_pending = False  # người dùng vừa đổi lựa chọn: lần vẽ tới trượt
         self._layout_dirty = False  # hàng dời chỗ / đổi cỡ: lần vẽ tới nhảy thẳng
@@ -889,6 +948,140 @@ class _ConversationView(QListView):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._layout_dirty = True
+
+self._drop_glow: dict[str, float] = {}  # device_id → mức sáng ∈ [0, 1] (spec G5 mục 3.2)
+        self._presence_seen: dict[str, Presence] = {}  # device_id → presence lần cuối thấy
+        self._presence_fade: dict[str, tuple[Presence, float]] = {}  # device_id → (cũ, tiến độ)
+        self._watched_model: QAbstractItemModel | None = None
+
+    # -- Model ----------------------------------------------------------------------------------
+
+    def setModel(self, model: QAbstractItemModel | None) -> None:
+        old = self._watched_model
+        if old is not None and isValid(old):
+            for signal, slot in self._model_slots(old):
+                with contextlib.suppress(RuntimeError, TypeError):
+                    signal.disconnect(slot)
+        self._watched_model = None
+        super().setModel(model)
+        if model is not None:
+            for signal, slot in self._model_slots(model):
+                signal.connect(slot)
+            self._watched_model = model
+        self._sync_presence(None, animate=False)
+
+    def _model_slots(self, model: QAbstractItemModel) -> list[tuple[Any, Callable[..., None]]]:
+        return [
+            (model.dataChanged, self._on_data_changed),
+            (model.rowsInserted, self._on_rows_inserted),
+            (model.rowsRemoved, self._on_rows_removed),
+            (model.layoutChanged, self._on_layout_changed),
+            (model.modelReset, self._on_model_reset),
+        ]
+
+    def _on_data_changed(self, top: QModelIndex, bottom: QModelIndex, roles: Any = None) -> None:
+        if roles and PRESENCE_ROLE not in list(roles):
+            return
+        if not top.isValid() or not bottom.isValid():
+            return
+        self._sync_presence(range(top.row(), bottom.row() + 1), animate=True)
+
+    def _on_rows_inserted(self, *_args: object) -> None:
+        self._sync_presence(None, animate=True)
+
+    def _on_rows_removed(self, *_args: object) -> None:
+        self._sync_presence(None, animate=True)
+
+    def _on_layout_changed(self, *_args: object) -> None:
+        self._sync_presence(None, animate=True)
+
+    def _on_model_reset(self) -> None:
+        self._sync_presence(None, animate=False)
+
+    # -- Chấm trạng thái (spec G5 mục 3.3) ------------------------------------------------------
+
+    def presence_fade(self, index: _Index) -> tuple[Presence | None, float]:
+        """(presence cũ, tiến độ) khi chấm của hàng đang chuyển màu; không thì (None, 1.0)."""
+        device_id = index.data(DEVICE_ID_ROLE)
+        fade = self._presence_fade.get(device_id) if isinstance(device_id, str) else None
+        return (fade[0], fade[1]) if fade is not None else (None, 1.0)
+
+    def _sync_presence(self, rows: Iterable[int] | None, *, animate: bool) -> None:
+        """Ghi presence của các hàng `rows` (None: mọi hàng, rồi quên máy không còn)."""
+        model = self.model()
+        count = model.rowCount() if model is not None else 0
+        seen: set[str] = set()
+        for row in range(count) if rows is None else rows:
+            if model is None or not 0 <= row < count:
+                continue
+            index = model.index(row, 0)
+            device_id = index.data(DEVICE_ID_ROLE)
+            if not isinstance(device_id, str):
+                continue
+            seen.add(device_id)
+            presence = _role_presence(index)
+            old = self._presence_seen.get(device_id)
+            self._presence_seen[device_id] = presence
+            if old is None or old is presence:
+                continue
+            token = motion.FAST if animate and self.isVisible() else motion.INSTANT
+            if token is motion.FAST:
+                self._presence_fade[device_id] = (old, 0.0)
+            motion.animate_value(
+                self,
+                0.0,
+                1.0,
+                token,
+                _presence_setter(self, device_id, old),
+                key=f"presence:{device_id}",
+                on_finished=_presence_finisher(self, device_id),
+            )
+        if rows is None:
+            for device_id in [d for d in self._presence_seen if d not in seen]:
+                del self._presence_seen[device_id]
+                self._end_fades(device_id)
+            self.viewport().update()
+
+    def _end_fades(self, device_id: str) -> None:
+        """Nhảy thẳng mọi hoạt ảnh của một máy tới cuối rồi quên nó."""
+        motion.animate_value(self, 1.0, 1.0, motion.INSTANT, _noop, key=f"presence:{device_id}")
+        motion.animate_value(self, 0.0, 0.0, motion.INSTANT, _noop, key=f"dropglow:{device_id}")
+        self._presence_fade.pop(device_id, None)
+        self._drop_glow.pop(device_id, None)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        super().hideEvent(event)
+        if "_drop_glow" not in self.__dict__:  # đang hủy (xem `motion.Loop`)
+            return
+        for device_id in {*self._drop_glow, *self._presence_fade}:
+            motion.animate_value(self, 1.0, 1.0, motion.INSTANT, _noop, key=f"presence:{device_id}")
+            motion.animate_value(self, 0.0, 0.0, motion.INSTANT, _noop, key=f"dropglow:{device_id}")
+        self._drop_glow.clear()
+        self._presence_fade.clear()
+        self._drop_id = None  # hiện lại mà vẫn kéo trên hàng cũ thì `_set_drop` cho hàng sáng lại
+
+    # -- Mức sáng khi kéo qua (spec G5 mục 3.2) -------------------------------------------------
+
+    def drop_glow(self, index: _Index) -> float:
+        """Mức sáng ∈ [0, 1] của hàng vì có file kéo qua (0 khi không có)."""
+        device_id = index.data(DEVICE_ID_ROLE)
+        return self._drop_glow.get(device_id, 0.0) if isinstance(device_id, str) else 0.0
+
+    def _fade_glow(self, device_id: str, end: float) -> None:
+        token = motion.FAST if self.isVisible() else motion.INSTANT
+        # Ghi id ngay (giá trị hiện tại): hoạt ảnh mới chưa phát `valueChanged`, mà `hideEvent` chỉ huỷ
+        # hoạt ảnh của id có trong dict.
+        current = self._drop_glow.setdefault(device_id, 0.0)
+        motion.animate_value(
+            self,
+            current,
+            end,
+            token,
+            _glow_setter(self, device_id),
+            key=f"dropglow:{device_id}",
+            on_finished=_glow_finisher(self, device_id),
+        )
+
 
     # -- Kéo thả --------------------------------------------------------------------------------
 
@@ -979,6 +1172,14 @@ class _ConversationView(QListView):
 
     def _set_drop(self, index: _Index, count: int) -> None:
         persistent = QPersistentModelIndex(index)
+        device_id = persistent.data(DEVICE_ID_ROLE) if persistent.isValid() else None
+        device_id = device_id if isinstance(device_id, str) else None
+        if device_id != self._drop_id:
+            old_id, self._drop_id = self._drop_id, device_id
+            if old_id is not None:
+                self._fade_glow(old_id, 0.0)
+            if device_id is not None:
+                self._fade_glow(device_id, 1.0)
         if persistent == self._drop_index and count == self._drop_count:
             return
         self._drop_index = persistent
@@ -1070,6 +1271,75 @@ class _ConversationView(QListView):
             self.metrics_changed.emit()
         elif event.type() in _PALETTE_EVENTS:
             self.viewport().update()
+
+
+# Callback đưa vào `motion` chỉ giữ tham chiếu yếu tới view (xem sổ đăng ký ở `ui/motion.py`).
+
+
+def _noop(_value: object) -> None:
+    pass
+
+
+def _live(ref: weakref.ref[_ConversationView]) -> _ConversationView | None:
+    view = ref()
+    return view if view is not None and isValid(view) else None
+
+
+def _glow_setter(view: _ConversationView, device_id: str) -> Callable[[Any], None]:
+    ref = weakref.ref(view)
+
+    def set_glow(value: Any) -> None:
+        current = _live(ref)
+        if current is None:
+            return
+        try:
+            level = max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            level = 0.0
+        current._drop_glow[device_id] = level
+        current.viewport().update()
+
+    return set_glow
+
+
+def _glow_finisher(view: _ConversationView, device_id: str) -> Callable[[], None]:
+    ref = weakref.ref(view)
+
+    def finished() -> None:
+        current = _live(ref)
+        if current is not None and current._drop_glow.get(device_id, 0.0) <= 0.0:
+            current._drop_glow.pop(device_id, None)
+
+    return finished
+
+
+def _presence_setter(view: _ConversationView, device_id: str, previous: Presence) -> Callable[[Any], None]:
+    ref = weakref.ref(view)
+
+    def set_progress(value: Any) -> None:
+        current = _live(ref)
+        if current is None:
+            return
+        try:
+            progress = max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            progress = 1.0
+        current._presence_fade[device_id] = (previous, progress)
+        current.viewport().update()
+
+    return set_progress
+
+
+def _presence_finisher(view: _ConversationView, device_id: str) -> Callable[[], None]:
+    ref = weakref.ref(view)
+
+    def finished() -> None:
+        current = _live(ref)
+        if current is not None:
+            current._presence_fade.pop(device_id, None)
+            current.viewport().update()
+
+    return finished
 
 
 def _event_urls(event: QDragEnterEvent | QDragMoveEvent | QDropEvent) -> list[QUrl]:

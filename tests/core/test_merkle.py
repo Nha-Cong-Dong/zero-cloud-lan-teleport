@@ -18,7 +18,8 @@ from hypothesis import strategies as st
 
 from teleport.core.merkle import merkle_root
 
-PROTOCOL_MD = Path(__file__).resolve().parents[2] / "docs" / "protocol.md"
+_PROTO = Path(__file__).resolve().parents[2] / "docs" / "technical" / "protocol.md"
+PROTOCOL_MD = _PROTO if _PROTO.exists() else (Path(__file__).resolve().parents[2] / "docs" / "protocol.md")
 
 
 def h(data: bytes) -> bytes:

@@ -3,6 +3,8 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.hypothesis/
 build/
 dist/
 installer/
@@ -21,5 +23,11 @@ desktop.ini
 .vscode/
 .idea/
 
-# Cấu hình Claude Code trên máy cá nhân
+# Cấu hình AI Assistant & Subagents
+gemini.md
+GEMINI.md
+.gemini/
+.agents/
+subagents/
 .claude/settings.local.json
+.claude/worktrees/

@@ -14,23 +14,43 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
 - **Màu**: nền bong bóng, avatar, chấm, `InfoBar`, vòng tròn của `EmptyState` và đường kẻ của
   `PageHeader` tự vẽ bằng `QPainter`, màu lấy từ `theme.tokens_for(self)` lúc vẽ (không thêm luật
   stylesheet cho `QFrame`/`QWidget` chung, và `bubble_path`/`paint_avatar` dùng lại được trong
-  delegate). Trạng thái tương tác của `IconButton` dùng luật `QToolButton[iconButton="true"]` của
-  `theme.stylesheet`. Màu chữ dùng `QLabel[tone=…]` có sẵn. Không widget nào gọi `setPalette`.
+  delegate). Viền, chữ, tiêu điểm của `IconButton` dùng luật `QToolButton[iconButton="true"]` của
+  `theme.stylesheet`; nền hover/ấn tự vẽ để chuyển dần (dưới). Màu chữ dùng `QLabel[tone=…]` có sẵn.
+  Không widget nào gọi `setPalette`.
+- **Chuyển động** (spec G2, `ui/motion.py`): `IconButton` đổi nền hover/ấn, `ToggleSwitch` trượt núm,
+  `SegmentedControl` trượt khối chọn; chấm của `DeviceAvatar` và `StatusBadge` chuyển màu mờ dần (spec
+  G5). Tắt hiệu ứng hay chế độ tức thì: nhảy thẳng. Trạng thái
+  (`isChecked()`, chữ “Bật/Tắt”, `value()`, tiêu điểm, trạng thái trợ năng) đổi **ngay**, chỉ phần vẽ
+  chạy theo; rảnh thì không hoạt ảnh nào chạy (mvp N3).
 - **Đổi sáng/tối**: widget tự vẽ bắt `PaletteChange` và `ApplicationPaletteChange`, tô lại icon (dựng
   lại pixmap qua `ui/icons.py`) và gọi `update()`.
 
 **Token theo thành phần**
 - `IconButton`: icon 20 px màu `text`, chế độ Disabled `text_muted`; cỡ `ICON_BUTTON_SIZE` (vùng chạm
-  ≥ 24 px, WCAG 2.5.8). `accessibleName` = nhãn, tooltip = nhãn (kèm phím tắt nếu có).
+  ≥ 24 px, WCAG 2.5.8). `accessibleName` = nhãn, tooltip = nhãn (kèm phím tắt nếu có). Hover/ấn: như
+  `buttons.AnimatedButton` (`buttons.ButtonLevels`, `hover_level()` / `press_level()`),
+  `QStyleOptionToolButton` bỏ cờ hover/ấn, nền vẽ **trước** `CC_ToolButton`: chữ nhật bo
+  `RADIUS_CONTROL` phủ cả nút, màu `blend(selected trong suốt, selected, h)` rồi `blend(…, border, p)`
+  (đích bằng màu `:hover` / `:pressed` của QSS). Không có trạng thái đang chạy, không lún. Áp cho mọi
+  `IconButton`.
 - `StatusBadge`: chấm 8 px + chữ CAPTION đậm. SUCCESS chấm `success`, chữ `tone=success`; BUSY chấm
   `accent_strong`, chữ `tone=accent` (`accent_text`); WARNING `warning` / `tone=warning`; MUTED vòng
   rỗng 2 px `offline`, chữ `tone=muted`. Trạng thái luôn có chữ (mvp N12); chữ rỗng thì ẩn badge.
+  Đổi tone khi badge đang hiện: chữ và tên trợ năng đổi ngay, chấm mờ chéo từ kiểu cũ sang kiểu mới
+  (`motion.FAST`, `dot_progress()` ∈ [0, 1]); xong thì vẽ đúng đường tĩnh.
 - `paint_avatar` / `DeviceAvatar`: hình tròn nền `surface_raised`, viền 1 px `border`, icon
   `text_muted`; máy này (`emphasis`) nền `accent`, icon `accent_text`. Ngoại tuyến thì icon mờ
   (opacity 0,6). Chấm góc dưới phải có vành 2 px màu nền phía sau (`ring`): ONLINE `success`, BUSY
   `accent_strong`, OFFLINE vòng 2 px `offline` ruột màu `ring`, NONE không chấm. Chấm lệch ra ngoài
   hình tròn 1 px khi `rect` còn chỗ; `DeviceAvatar` cỡ đúng bằng đường kính nên chấm nằm sát góc.
   Chấm không mang thông tin một mình: bên gọi đưa trạng thái vào tên của hàng/khối.
+  **Chuyển màu chấm** (spec G5 mục 3.3): `paint_avatar(..., previous, progress)` nội suy mô hình
+  `_dot_style` (màu ruột, độ “rỗng” của OFFLINE, alpha cả chấm kể cả vành; NONE mượn màu bên kia với
+  alpha 0) và độ mờ icon; `previous` None, trùng `presence` hay `progress ≥ 1` thì vẽ đúng hình tĩnh
+  (trùng từng điểm ảnh). Chỉ đổi màu, không đổi hình hay cỡ. `DeviceAvatar.set_presence(p, animate=True)`
+  chạy `motion.FAST` khi giá trị đổi và avatar đang hiện (đổi tiếp giữa chừng: chạy lại từ đích cũ,
+  có thể giật nhẹ ≤ 120 ms, chấp nhận), còn lại nhảy thẳng; `presence_progress()`. Callback đưa vào
+  `motion` chỉ giữ tham chiếu yếu tới widget.
 - `ChatBubble`: nền `bubble_out` (gửi đi, không viền) / `bubble_in` (nhận vào, viền 1 px `border`);
   ATTENTION viền 2 px `accent_strong`, DANGER viền 2 px `danger`. Hình theo `bubble_path`: bo
   `RADIUS_BUBBLE`, góc dưới phía người gửi bo `RADIUS_BUBBLE_TAIL`. `BubbleRow` đặt bong bóng sát
@@ -50,7 +70,7 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
 - `EmptyState`: vòng tròn 56 px nền `accent_subtle`, icon `accent_text`; icon có cảnh
   (`illustrations.scene_for_icon`) thì thay vòng tròn bằng `illustration` (`illustrations.Illustration`,
   trang trí, cùng cột, cùng khoảng cách tới tiêu đề); tiêu đề SECTION (font điểm nhấn), mô tả
-  `tone=muted`, nút chính (`PRIMARY_PROPERTY`). Khối rộng tối đa 360 px, căn giữa.
+  `tone=muted`, nút chính (`buttons.AnimatedButton`, `primary=True`). Khối rộng tối đa 360 px, căn giữa.
 - `PageHeader`: nút “Quay lại” (có chữ, tooltip kèm phím BACK của `ui.shortcuts`), tiêu đề SECTION,
   đường kẻ dưới 1 px `border`. Phím Esc do cửa sổ chính bắt (`main_window`), không nằm ở đây.
 - `ToggleSwitch` (spec D2 mục 1.5): `QAbstractButton` checkable, `StrongFocus`, rãnh 40×20 tự vẽ và chữ
@@ -58,9 +78,14 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
   `surface_raised`, viền 1 px `border_strong`, núm `text_muted`. Bật: nền `accent_strong`, núm
   `surface_raised`. Tiêu điểm: vòng 2 px `theme.focus_ring_color` quanh rãnh. Tắt hẳn (disabled): rãnh
   và núm mờ 0,5, chữ màu chữ bị tắt của bảng màu. Space (của `QAbstractButton`) và Enter đảo trạng
-  thái; không hoạt ảnh. `border_strong` (viền khi tắt) và `accent_strong` (nền khi bật) ≥ 3:1 với
-  `surface` ở cả hai chế độ (`TOGGLE_CONTRAST_PAIRS`). Tên và mô tả trợ năng do bên gọi đặt (nhãn
-  và gợi ý của hàng); trạng thái bật/tắt tới trình đọc màn hình qua trạng thái “checked” của nút.
+  thái. Núm trượt (`knob_position()` ∈ [0, 1], `motion.NORMAL`): `checkStateSet` (gọi trong mọi
+  `setChecked`, kể cả khi đang chặn signal) chạy hoạt ảnh khi công tắc đang hiện và không chặn signal,
+  còn lại nhảy thẳng; giữa chừng nền rãnh `blend(surface_raised, accent_strong, k)`, viền
+  `border_strong` mờ dần theo `1 − k`, núm `blend(text_muted, surface_raised, k)`; hai đầu đúng hình
+  tĩnh. Chữ “Bật/Tắt” và trạng thái đổi ngay; vòng tiêu điểm tĩnh. `border_strong` (viền khi tắt)
+  và `accent_strong` (nền khi bật) ≥ 3:1 với `surface` ở cả hai chế độ (`TOGGLE_CONTRAST_PAIRS`). Tên
+  và mô tả trợ năng do bên gọi đặt (nhãn và gợi ý của hàng); trạng thái bật/tắt tới trình đọc màn hình
+  qua trạng thái “checked” của nút.
 - `SettingsRow` (spec D2; dùng ở `ui/settings.py` và `ui/appearance.py`): `QFrame[surface="raised"]`,
   nhãn đậm vừa, gợi ý `tone=muted` xuống dòng, các dòng phụ (`add_line`), control bên phải; hàng hẹp
   tới mức cột chữ còn dưới `LABEL_MIN_WIDTH` thì control xuống hàng dưới (cửa sổ nhỏ nhất không cuộn
@@ -73,7 +98,13 @@ Chỉ có những gì các màn dùng tới. Không có `Card` (đã có `QFrame
 - `SegmentedControl` (spec D6 mục 2.5): khung `QFrame[segmented="true"]` (nền `surface_raised`, viền
   1 px `border_strong`, bo `RADIUS_CONTROL`) chứa các `QRadioButton` mang `segment="first|middle|last"`
   trong một `RovingGroup`. Luật `theme.stylesheet`: nút chưa chọn nền trong suốt (lộ `surface_raised`),
-  chữ `text`, hover nền `selected`; đã chọn nền `accent`, chữ `accent_text`, viền 2 px `accent_strong`;
+  chữ `text`, hover nền `selected`; đã chọn chữ `accent_text` trên **khối chọn** do khung vẽ trong
+  `paintEvent` (nút con vẽ đè): nền `accent`, viền 2 px `accent_strong`, bo `RADIUS_CONTROL − 2`; khung
+  tắt thì nền `selected`, viền `border`. Rect đích là `geometry()` của nút đang chọn, đọc lúc vẽ
+  (`indicator_rect()`). Đổi lựa chọn khi đang hiện: khối trượt từ rect đang vẽ tới đích
+  (`motion.NORMAL`), nút mới chọn mang `SEGMENT_SLIDING_PROPERTY` (chữ `text`) tới khi trượt xong, bị
+  thay, ẩn hay nhảy thẳng; chưa hiện hay tắt hiệu ứng: nhảy thẳng. `value()`, `checked_button()`, tiêu
+  điểm và `value_selected` không chờ khối;
   tiêu điểm viền `focus_ring_color` và chữ gạch chân (như nút chính: ở chế độ tối viền tiêu điểm chỉ
   khác viền nhấn ≈ 1,7:1); ô tròn của radio rộng 0. Viền 2 px luôn có (trong suốt khi thường) nên nút
   không đổi cỡ. Lựa chọn đọc được bằng nền và chữ, không chỉ bằng màu viền; trình đọc màn hình đọc vai
@@ -86,8 +117,10 @@ from __future__ import annotations
 
 import contextlib
 import html
-from collections.abc import Sequence
+import weakref
+from collections.abc import Callable, Sequence
 from enum import StrEnum
+from typing import Any
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
@@ -96,6 +129,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QHideEvent,
     QKeyEvent,
     QKeySequence,
     QPainter,
@@ -116,12 +150,16 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
+    QStyle,
+    QStyleOptionToolButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from teleport.ui import i18n, icons, motion, shortcuts, texts, theme
+from teleport.ui.buttons import AnimatedButton, ButtonLevels, strip_interaction_state
 from teleport.ui.illustrations import Illustration, scene_for_icon
 from teleport.ui.texts import Text
 from teleport.ui.theme import Tokens
@@ -177,6 +215,26 @@ def _set_shown(widget: QWidget, shown: bool) -> None:
     widget.setVisible(shown)
 
 
+def _weak(method: Callable[..., Any]) -> Callable[..., None]:
+    """Bọc phương thức của một QObject bằng tham chiếu yếu (xem sổ đăng ký ở `ui/motion.py`)."""
+    ref = weakref.WeakMethod(method)
+
+    def call(*args: Any) -> None:
+        bound = ref()
+        if bound is not None and isValid(getattr(bound, "__self__", None)):
+            bound(*args)
+
+    return call
+
+
+def _unit(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(1.0, number))
+
+
 def _check_label(label: str) -> None:
     if not label.strip():
         raise ValueError("IconButton cần nhãn không rỗng")
@@ -215,8 +273,15 @@ class IconButton(QToolButton):
             self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             self.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
         self._show_text = show_text
+        self._levels = ButtonLevels(self)
         self.set_label(label)
         self._refresh_icon()
+
+    def hover_level(self) -> float:
+        return self._levels.hover
+
+    def press_level(self) -> float:
+        return self._levels.press
 
     @property
     def icon_name(self) -> str:
@@ -255,12 +320,45 @@ class IconButton(QToolButton):
         t = theme.tokens_for(self)
         self.setIcon(icons.icon(self._icon_name, _ICON_SIZE, t.text, t.text_muted))
 
+    def event(self, event: QEvent) -> bool:
+        levels = self.__dict__.get("_levels")  # None khi đang dựng hay đang hủy
+        if levels is not None:
+            levels.on_event(event)
+        return super().event(event)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        super().hideEvent(event)
+        self._levels.reset()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        opt = QStyleOptionToolButton()
+        self.initStyleOption(opt)
+        opt.state = strip_interaction_state(opt.state)
+        painter = QPainter(self)
+        try:
+            h, p = self._levels.hover, self._levels.press
+            if (h > 0.0 or p > 0.0) and self.isEnabled():
+                t = theme.tokens_for(self)
+                clear = QColor(t.selected)
+                clear.setAlpha(0)
+                color = theme.blend(theme.blend(clear, t.selected, h), t.border, p)
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                painter.drawRoundedRect(QRectF(self.rect()), theme.RADIUS_CONTROL, theme.RADIUS_CONTROL)
+                painter.restore()
+            self.style().drawComplexControl(QStyle.ComplexControl.CC_ToolButton, opt, painter, self)
+        finally:
+            painter.end()
+
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
         if "_show_text" not in self.__dict__:  # đang dựng, hay đang hủy (GC đã dọn thuộc tính Python)
             return
         if event.type() in _PALETTE_EVENTS:
             self._refresh_icon()
+            self.update()
         elif event.type() == QEvent.Type.LanguageChange:
             self.retranslate()
 
@@ -290,6 +388,8 @@ class _BadgeDot(QWidget):
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self.tone = BadgeTone.MUTED
+        self.previous: BadgeTone | None = None  # kiểu cũ khi đang mờ chéo
+        self.progress = 1.0
         self.setFixedSize(_BADGE_DOT, _BADGE_DOT)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -297,22 +397,34 @@ class _BadgeDot(QWidget):
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            rect = QRectF(0, 0, _BADGE_DOT, _BADGE_DOT)
-            if self.tone is BadgeTone.MUTED:
-                painter.setPen(QPen(t.offline, 2))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(rect.adjusted(1, 1, -1, -1))
+            previous, m = self.previous, self.progress
+            if previous is None or previous is self.tone or m >= 1.0:
+                self._paint_tone(painter, self.tone, t)  # đường tĩnh
             else:
-                color = {
-                    BadgeTone.SUCCESS: t.success,
-                    BadgeTone.BUSY: t.accent_strong,
-                    BadgeTone.WARNING: t.warning,
-                }[self.tone]
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(color)
-                painter.drawEllipse(rect)
+                m = max(0.0, m)
+                painter.setOpacity(1.0 - m)
+                self._paint_tone(painter, previous, t)
+                painter.setOpacity(m)
+                self._paint_tone(painter, self.tone, t)
         finally:
             painter.end()
+
+    @staticmethod
+    def _paint_tone(painter: QPainter, tone: BadgeTone, t: Tokens) -> None:
+        rect = QRectF(0, 0, _BADGE_DOT, _BADGE_DOT)
+        if tone is BadgeTone.MUTED:
+            painter.setPen(QPen(t.offline, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(rect.adjusted(1, 1, -1, -1))
+        else:
+            color = {
+                BadgeTone.SUCCESS: t.success,
+                BadgeTone.BUSY: t.accent_strong,
+                BadgeTone.WARNING: t.warning,
+            }[tone]
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(rect)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -348,15 +460,38 @@ class StatusBadge(QWidget):
     def text(self) -> str:
         return self._text
 
+    def dot_progress(self) -> float:
+        """Tiến độ mờ chéo của chấm (1 khi đứng yên)."""
+        return self.dot.progress
+
     def set_status(self, tone: BadgeTone, text: str) -> None:
         """Đặt trạng thái; `text` rỗng thì ẩn cả badge, có chữ thì hiện lại.
 
         Badge chưa có cha thì không tự mở thành cửa sổ riêng (`_set_shown`): đặt vào layout trước rồi
-        mới gọi, hoặc tự `show()`.
+        mới gọi, hoặc tự `show()`. Tone đổi khi badge đang hiện: chấm mờ chéo (`motion.FAST`).
         """
-        self._tone = BadgeTone(tone)
+        new_tone = BadgeTone(tone)
+        old_tone = self._tone
+        visible = self.isVisible()  # trước `_set_shown`
+        self._tone = new_tone
         self._text = text
-        self.dot.tone = self._tone
+        self.dot.tone = new_tone
+        if new_tone is not old_tone:
+            if visible:
+                self.dot.previous = old_tone
+                self.dot.progress = 0.0
+                token = motion.FAST
+            else:
+                token = motion.INSTANT
+            motion.animate_value(
+                self,
+                self.dot.progress,
+                1.0,
+                token,
+                _weak(self._set_dot_progress),
+                key="tone",
+                on_finished=_weak(self._end_dot_fade),
+            )
         self.dot.update()
         self.label.setText(text)
         self.label.setProperty(theme.TONE_PROPERTY, _BADGE_LABEL_TONE[self._tone])
@@ -366,6 +501,15 @@ class StatusBadge(QWidget):
 
     def retranslate(self) -> None:
         """Chữ do bên gọi dịch (`set_status`); không có chữ đặt sẵn."""
+
+    def _set_dot_progress(self, value: Any) -> None:
+        self.dot.progress = _unit(value)
+        self.dot.update()
+
+    def _end_dot_fade(self) -> None:
+        self.dot.previous = None
+        self.dot.progress = 1.0
+        self.dot.update()
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -393,6 +537,21 @@ class AvatarKind(StrEnum):
 _RING_TOKENS = frozenset({"surface", "sidebar", "surface_raised", "selected"})
 
 
+def _dot_style(presence: Presence, tokens: Tokens) -> tuple[QColor, float, float]:
+    """(màu ruột, độ rỗng, alpha) của chấm. NONE: alpha 0, màu ruột do bên chuyển tới/từ quyết định."""
+    if presence is Presence.ONLINE:
+        return QColor(tokens.success), 0.0, 1.0
+    if presence is Presence.BUSY:
+        return QColor(tokens.accent_strong), 0.0, 1.0
+    if presence is Presence.OFFLINE:
+        return QColor(tokens.offline), 1.0, 1.0
+    return QColor(tokens.offline), 0.0, 0.0
+
+
+def _icon_opacity(presence: Presence) -> float:
+    return _OFFLINE_ICON_OPACITY if presence is Presence.OFFLINE else 1.0
+
+
 def paint_avatar(
     painter: QPainter,
     rect: QRectF,
@@ -403,14 +562,32 @@ def paint_avatar(
     ring: QColor,
     tokens: Tokens,
     dpr: float,
+    previous: Presence | None = None,
+    progress: float = 1.0,
 ) -> None:
     """Vẽ avatar (hình tròn, icon loại máy, chấm trạng thái) vào `rect`; dùng chung cho delegate.
 
     Hình tròn đường kính `min(rect.width, rect.height)`, căn giữa `rect`. `ring` là màu nền nằm sau
-    avatar (vành của chấm). Lưu và khôi phục trạng thái của `painter`.
+    avatar (vành của chấm). `previous` / `progress`: đang chuyển màu chấm từ `previous` (xem docstring
+    module); mặc định vẽ hình tĩnh. Lưu và khôi phục trạng thái của `painter`.
     """
     d = min(rect.width(), rect.height())
     if d <= 0:
+        return
+    if previous is not None and Presence(previous) is not presence and progress < 1.0:
+        _paint_avatar_fading(
+            painter,
+            rect,
+            d,
+            kind,
+            Presence(previous),
+            presence,
+            max(0.0, progress),
+            emphasis,
+            ring,
+            tokens,
+            dpr,
+        )
         return
     circle = QRectF(rect.center().x() - d / 2, rect.center().y() - d / 2, d, d)
     painter.save()
@@ -460,6 +637,78 @@ def paint_avatar(
         painter.restore()
 
 
+def _paint_avatar_fading(
+    painter: QPainter,
+    rect: QRectF,
+    d: float,
+    kind: AvatarKind,
+    previous: Presence,
+    presence: Presence,
+    m: float,
+    emphasis: bool,
+    ring: QColor,
+    tokens: Tokens,
+    dpr: float,
+) -> None:
+    """`paint_avatar` giữa lúc chuyển chấm `previous` → `presence` ở mức `m` ∈ [0, 1)."""
+    circle = QRectF(rect.center().x() - d / 2, rect.center().y() - d / 2, d, d)
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        if emphasis:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(tokens.accent)
+            painter.drawEllipse(circle)
+            icon_color = tokens.accent_text
+        else:
+            painter.setPen(QPen(tokens.border, 1))
+            painter.setBrush(tokens.surface_raised)
+            painter.drawEllipse(circle.adjusted(0.5, 0.5, -0.5, -0.5))
+            icon_color = tokens.text_muted
+
+        size = 24 if d >= 44 else 20
+        pm = icons.pixmap(str(AvatarKind(kind)), size, icon_color, dpr)
+        if not pm.isNull():
+            painter.save()
+            start, end = _icon_opacity(previous), _icon_opacity(presence)
+            icon_opacity = start + (end - start) * m
+            if icon_opacity < 1.0:
+                painter.setOpacity(icon_opacity)
+            center = circle.center()
+            painter.drawPixmap(QPointF(center.x() - size / 2, center.y() - size / 2), pm)
+            painter.restore()
+
+        fill_prev, hole_prev, alpha_prev = _dot_style(previous, tokens)
+        fill_cur, hole_cur, alpha_cur = _dot_style(presence, tokens)
+        if previous is Presence.NONE:
+            fill_prev = fill_cur
+        if presence is Presence.NONE:
+            fill_cur = fill_prev
+        alpha = alpha_prev + (alpha_cur - alpha_prev) * m
+        if alpha <= 0.0:
+            return
+        hole = hole_prev + (hole_cur - hole_prev) * m
+        dot = max(9, round(d * 0.29))
+        right = min(circle.right() + 1, rect.right())
+        bottom = min(circle.bottom() + 1, rect.bottom())
+        outer = QRectF(right - dot, bottom - dot, dot, dot)
+        painter.setOpacity(painter.opacity() * alpha)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(ring)
+        painter.drawEllipse(outer)
+        inner = outer.adjusted(2, 2, -2, -2)
+        painter.setBrush(theme.blend(fill_prev, fill_cur, m))
+        painter.drawEllipse(inner)
+        if hole > 0.0:
+            hole_color = QColor(ring)
+            hole_color.setAlphaF(ring.alphaF() * hole)
+            painter.setBrush(hole_color)
+            painter.drawEllipse(inner.adjusted(2, 2, -2, -2))
+    finally:
+        painter.restore()
+
+
 class DeviceAvatar(QWidget):
     """Avatar tròn cỡ cố định; chỉ để trang trí trừ khi bên gọi đặt tên (`set_label`)."""
 
@@ -480,6 +729,8 @@ class DeviceAvatar(QWidget):
         self._diameter = diameter
         self._kind = AvatarKind(kind)
         self._presence = Presence(presence)
+        self._previous: Presence | None = None  # chấm cũ khi đang chuyển màu
+        self._progress = 1.0
         self._emphasis = emphasis
         self._ring = ring
         self.setFixedSize(diameter, diameter)
@@ -514,8 +765,41 @@ class DeviceAvatar(QWidget):
         self._kind = AvatarKind(kind)
         self.update()
 
-    def set_presence(self, presence: Presence) -> None:
-        self._presence = Presence(presence)
+    def set_presence(self, presence: Presence, *, animate: bool = True) -> None:
+        """Đổi chấm; khác giá trị cũ, `animate` và avatar đang hiện thì chuyển màu (`motion.FAST`)."""
+        new = Presence(presence)
+        old = self._presence
+        if new is old:
+            return
+        self._presence = new
+        if animate and self.isVisible():
+            self._previous = old
+            self._progress = 0.0
+            token = motion.FAST
+        else:
+            token = motion.INSTANT
+        motion.animate_value(
+            self,
+            self._progress,
+            1.0,
+            token,
+            _weak(self._set_progress),
+            key="presence",
+            on_finished=_weak(self._end_fade),
+        )
+        self.update()
+
+    def presence_progress(self) -> float:
+        """Tiến độ chuyển màu chấm (1 khi đứng yên)."""
+        return self._progress
+
+    def _set_progress(self, value: Any) -> None:
+        self._progress = _unit(value)
+        self.update()
+
+    def _end_fade(self) -> None:
+        self._previous = None
+        self._progress = 1.0
         self.update()
 
     def set_emphasis(self, emphasis: bool) -> None:
@@ -548,6 +832,8 @@ class DeviceAvatar(QWidget):
                 ring=getattr(t, self._ring),
                 tokens=t,
                 dpr=self.devicePixelRatioF(),
+                previous=self._previous,
+                progress=self._progress,
             )
         finally:
             painter.end()
@@ -1010,7 +1296,7 @@ class EmptyState(QWidget):
             label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
             label.setTextInteractionFlags(_TEXT_FLAGS)
             label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.action_button = QPushButton(self.content)
+        self.action_button = AnimatedButton("", self.content, primary=True)
         self.action_button.setProperty(theme.PRIMARY_PROPERTY, True)
         self.action_button.clicked.connect(self.action_triggered)
 
@@ -1159,8 +1445,40 @@ class ToggleSwitch(QAbstractButton):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.toggled.connect(self._on_toggled)
+        self._knob = 1.0 if self.isChecked() else 0.0
+        self._knob_target = self._knob
+        self.toggled.connect(self._sync_knob)
         self.retranslate()
+
+    def knob_position(self) -> float:
+        """Vị trí núm đang vẽ: 0 = tắt (trái), 1 = bật (phải)."""
+        return self._knob
+
+    def checkStateSet(self) -> None:
+        # Gọi trong `setChecked` và `click()` từ code, kể cả khi đang chặn signal (`toggled` không phát).
+        # Bấm bằng chuột hay Space thì Qt đi qua `QAbstractButtonPrivate::click` (đặt `blockRefresh`) và
+        # bỏ qua hàm này (đã thử: PySide6 6.12), nên `toggled` cũng gọi `_sync_knob`.
+        super().checkStateSet()
+        self._sync_knob()
+
+    def _sync_knob(self, *_args: object) -> None:
+        """Chạy núm tới vị trí của `isChecked()`; đích không đổi thì không làm gì."""
+        target = 1.0 if self.isChecked() else 0.0
+        animated = self.isVisible() and not self.signalsBlocked()
+        if target == self._knob_target and (animated or self._knob == target):
+            return
+        self._knob_target = target
+        token = motion.NORMAL if animated else motion.INSTANT
+        motion.animate_value(self, self._knob, target, token, self._set_knob, key="knob")
+        self.update()
+
+    def _set_knob(self, value: object) -> None:
+        try:
+            knob = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            knob = 1.0 if self.isChecked() else 0.0
+        self._knob = max(0.0, min(1.0, knob))
+        self.update()
 
     def state_text(self) -> str:
         """Chữ đang hiện cạnh rãnh."""
@@ -1194,9 +1512,6 @@ class ToggleSwitch(QAbstractButton):
         self.updateGeometry()
         self.update()
 
-    def _on_toggled(self, _checked: bool) -> None:
-        self.update()
-
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if (
             event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
@@ -1213,7 +1528,6 @@ class ToggleSwitch(QAbstractButton):
         dark = theme.is_dark_palette(QApplication.palette())
         track = self.track_rect()
         radius = track.height() / 2
-        checked = self.isChecked()
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -1226,18 +1540,28 @@ class ToggleSwitch(QAbstractButton):
             painter.save()
             if not self.isEnabled():
                 painter.setOpacity(_TOGGLE_DISABLED_OPACITY)
-            if checked:
+            k = self._knob
+            if k >= 1.0:
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(t.accent_strong)
                 painter.drawRoundedRect(track, radius, radius)
-                knob_color = t.surface_raised
-            else:
+            elif k <= 0.0:
                 painter.setPen(QPen(t.border_strong, 1))
                 painter.setBrush(t.surface_raised)
                 painter.drawRoundedRect(track.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5)
-                knob_color = t.text_muted
+            else:  # đang trượt: nền chuyển dần, viền mờ dần
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(theme.blend(t.surface_raised, t.accent_strong, k))
+                painter.drawRoundedRect(track, radius, radius)
+                edge = QColor(t.border_strong)
+                edge.setAlphaF(edge.alphaF() * (1.0 - k))
+                painter.setPen(QPen(edge, 1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(track.adjusted(0.5, 0.5, -0.5, -0.5), radius - 0.5, radius - 0.5)
+            knob_color = theme.blend(t.text_muted, t.surface_raised, k)
             d = track.height() - 2 * _TOGGLE_KNOB_MARGIN
-            x = track.right() - _TOGGLE_KNOB_MARGIN - d if checked else track.left() + _TOGGLE_KNOB_MARGIN
+            left = track.left() + _TOGGLE_KNOB_MARGIN
+            x = left + (track.right() - _TOGGLE_KNOB_MARGIN - d - left) * k
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(knob_color)
             painter.drawEllipse(QRectF(x, track.top() + _TOGGLE_KNOB_MARGIN, d, d))
@@ -1495,6 +1819,11 @@ class SegmentedControl(QFrame):
             layout.addWidget(button)
             self._roving.add(button)
         self._roving.group.idClicked.connect(self._on_clicked)
+        self._indicator_index = -1  # nút mà khối chọn đang hướng tới
+        self._slide_from: QRectF | None = None  # rect lúc bắt đầu trượt (None: không trượt)
+        self._slide_t = 1.0
+        self._sliding_button: QRadioButton | None = None  # nút mang SEGMENT_SLIDING_PROPERTY
+        self._roving.group.idToggled.connect(self._on_id_toggled)
         self.set_value(self._values[0])
 
     def values(self) -> tuple[object, ...]:
@@ -1532,3 +1861,104 @@ class SegmentedControl(QFrame):
             return
         self._value = value
         self.value_selected.emit(value)
+
+    # ---- Khối chọn -----------------------------------------------------------------------------
+
+    def indicator_rect(self) -> QRectF:
+        """Rect khối chọn đang vẽ (tọa độ của khung); chưa chọn nút nào → rỗng."""
+        index = self._indicator_index
+        buttons = self.buttons()
+        if not 0 <= index < len(buttons):
+            return QRectF()
+        target = QRectF(buttons[index].geometry())
+        start = self._slide_from
+        if start is None:
+            return target
+        t = self._slide_t
+        return QRectF(
+            start.x() + (target.x() - start.x()) * t,
+            start.y() + (target.y() - start.y()) * t,
+            start.width() + (target.width() - start.width()) * t,
+            start.height() + (target.height() - start.height()) * t,
+        )
+
+    def _on_id_toggled(self, _index: int, _checked: bool) -> None:
+        new = self._roving.checked_index()
+        if new == self._indicator_index:
+            return
+        start = self.indicator_rect()
+        old = self._indicator_index
+        self._indicator_index = new
+        self._clear_sliding()
+        if old < 0 or new < 0 or not self.isVisible() or not motion.should_animate() or start.isEmpty():
+            self._jump_indicator()
+            return
+        self._slide_from = start
+        self._slide_t = 0.0
+        if self.isEnabled():
+            button = self.buttons()[new]
+            button.setProperty(theme.SEGMENT_SLIDING_PROPERTY, True)
+            _repolish(button)
+            self._sliding_button = button
+        motion.animate_value(
+            self, 0.0, 1.0, motion.NORMAL, self._set_slide, key="indicator", on_finished=self._end_slide
+        )
+        self.update()
+
+    def _set_slide(self, value: object) -> None:
+        try:
+            t = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            t = 1.0
+        self._slide_t = max(0.0, min(1.0, t))
+        self.update()
+
+    def _jump_indicator(self) -> None:
+        """Khối về thẳng nút đang chọn (dừng hoạt ảnh đang chạy, gỡ property trượt)."""
+        motion.animate_value(
+            self, 1.0, 1.0, motion.INSTANT, self._set_slide, key="indicator", on_finished=self._end_slide
+        )
+
+    def _end_slide(self) -> None:
+        self._slide_from = None
+        self._slide_t = 1.0
+        self._clear_sliding()
+        self.update()
+
+    def _clear_sliding(self) -> None:
+        button = self._sliding_button
+        self._sliding_button = None
+        if button is not None and isValid(button):
+            button.setProperty(theme.SEGMENT_SLIDING_PROPERTY, None)
+            _repolish(button)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        super().hideEvent(event)
+        if self._slide_from is not None or self._sliding_button is not None:
+            self._jump_indicator()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        rect = self.indicator_rect()
+        if rect.isEmpty():
+            return
+        t = theme.tokens_for(self)
+        fill, edge = (t.accent, t.accent_strong) if self.isEnabled() else (t.selected, t.border)
+        radius = max(0, theme.RADIUS_CONTROL - 2)
+        width = 2  # = viền của nút `segment` trong `theme.stylesheet`
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(edge)
+            painter.drawRoundedRect(rect, radius, radius)
+            painter.setBrush(fill)
+            inner = rect.adjusted(width, width, -width, -width)
+            painter.drawRoundedRect(inner, max(0, radius - width), max(0, radius - width))
+        finally:
+            painter.end()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in (*_PALETTE_EVENTS, QEvent.Type.EnabledChange):
+            self.update()

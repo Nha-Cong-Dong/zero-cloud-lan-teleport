@@ -3887,7 +3887,9 @@ async def test_tty_receive_line_is_not_redrawn_while_done_bytes_is_unchanged(
 
 def test_c1_not_receiving_sentence_matches_mvp_section_8():
     """Câu trong test chép đúng dòng mvp §8 (chỗ điền *PC-Nha* là tên máy nhận): tài liệu không lệch."""
-    mvp = (Path(__file__).resolve().parents[1] / "docs" / "mvp.md").read_text(encoding="utf-8")
+    _p = Path(__file__).resolve().parents[1] / "docs" / "product" / "mvp.md"
+    _fb = Path(__file__).resolve().parents[1] / "docs" / "mvp.md"
+    mvp = (_p if _p.exists() else _fb).read_text(encoding="utf-8")
     sample = S_NOT_RECEIVING.format(p="*PC-Nha*")
     assert f"“{sample}”" in mvp
 
@@ -4067,7 +4069,9 @@ async def test_f3a_hidden_sender_prints_new_hidden_warning(pair_dirs, transfer_e
 
 def test_f3a_hidden_warning_sentence_matches_mvp():
     """Câu cảnh báo chế độ ẩn của CLI đã đổi cùng mvp.md (10.5); tài liệu không còn câu cũ."""
-    mvp = (Path(__file__).resolve().parents[1] / "docs" / "mvp.md").read_text(encoding="utf-8")
+    _p = Path(__file__).resolve().parents[1] / "docs" / "product" / "mvp.md"
+    _fb = Path(__file__).resolve().parents[1] / "docs" / "mvp.md"
+    mvp = (_p if _p.exists() else _fb).read_text(encoding="utf-8")
     assert F3A_HIDDEN_TAIL in mvp
     assert F3A_HIDDEN_OLD not in mvp
     assert "hai máy tin cậy cùng ẩn sẽ không tự kết nối được" not in mvp
