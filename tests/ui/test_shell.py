@@ -489,7 +489,9 @@ def test_start_error_text_for_every_code_is_filled(qapp, code):
 
 
 def test_start_error_hints_match_mvp_doc():
-    doc = (Path(__file__).resolve().parents[2] / "docs" / "mvp.md").read_text(encoding="utf-8")
+    _mvp = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+    _fb = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+    doc = (_mvp if _mvp.exists() else _fb).read_text(encoding="utf-8")
     for code, hint in START_ERROR_HINTS.items():
         if code == "receive_dir":
             # Spec-b1b 11.4: giao diện dùng thư mục đã lưu (SAVED), hỏng thì vẫn chạy; dòng mvp mục 8 cũ

@@ -376,7 +376,8 @@ Bản giao diện dùng cùng các dòng, khác ở chỗ:
 - Dòng 2 không có nhãn: chỉ có mã, chữ rất lớn, căn giữa. Nhãn “Mã ghép đôi” chỉ dành cho trình đọc màn hình.
 - Dòng 3 là câu cảnh báo bản giao diện ở mục 8, kèm biểu tượng cảnh báo.
 - Dòng 4–6 nhỏ hơn, màu dịu.
-- Dòng 7 thay bằng hai nút “Không trùng” và “Trùng khớp”. Nút mặc định (Enter) là “Không trùng”; Esc hay đóng hộp cũng là “Không trùng”.
+- Dòng 7 thay bằng hai nút “Không trùng” và “Trùng khớp”. Nút mặc định (Enter) là “Không trùng”; trước khi bấm “Trùng khớp”, Esc hay đóng hộp cũng là “Không trùng”.
+- Bấm “Trùng khớp” thì hộp ở lại: nút thành “Đang ghép đôi…” kèm vòng quay nhỏ (tên trợ năng cũng vậy, mô tả “Đã xác nhận mã. Đang chờ máy kia xác nhận.”) và “Không trùng” thành “Đóng”. Đóng hộp lúc này không đổi quyết định đã gửi. Hộp tự đóng khi có kết quả hay hết thời gian xác nhận; kết quả tới sau đó vẫn báo như dòng “Giao diện: ghép đôi xong” ở mục 8.
 - Mã vẽ thành hai nhóm ba ô (khoảng giữa hai nhóm rộng hơn), vẫn là chữ thuần cho trình đọc màn hình.
 - Dưới tên máy kia, trên hai nút: đếm ngược thời gian còn lại để xác nhận, gồm một thanh mảnh ngắn dần và chữ “Còn *43* giây để xác nhận”; từ 10 giây trở xuống chữ đổi màu cảnh báo (thanh vẫn ngắn dần, không chỉ dựa vào màu).
 - Hết thời gian xác nhận thì hộp tự đóng. Phiên kết thúc vì bất kỳ lý do gì thì hộp cũng tự đóng.
@@ -474,7 +475,7 @@ clipboard”; mật khẩu chép từ trình quản lý mật khẩu không đư
 ```
 - Mở bằng nút “Chờ ghép đôi” ở màn Tìm máy mới (mục 7.1); máy này nhận yêu cầu ghép đôi thế nào khi màn hình mở hay đóng: F3.
 - “Đang chờ máy khác gửi yêu cầu ghép đôi.” chỉ hiện khi chế độ chờ ghép đôi đã mở được; không mở được thì hiện câu lỗi ở mục 8.
-- “Địa chỉ”: mọi địa chỉ IPv4 của máy này, kèm `:cổng` khi cổng khác cổng mặc định (protocol mục 2), giống `teleport listen`. Mỗi địa chỉ một hàng, có nút “Chép” chép đúng chuỗi đó. Chưa đọc xong: “Đang lấy địa chỉ…”; đọc xong mà không có địa chỉ nào: câu ở mục 8.
+- “Địa chỉ”: mọi địa chỉ IPv4 của máy này, kèm `:cổng` khi cổng khác cổng mặc định (protocol mục 2), giống `teleport listen`. Mỗi địa chỉ một hàng, có nút “Chép” chép đúng chuỗi đó; bấm thì nút thành ✓ “Đã chép” trong 1,5 giây rồi trở lại. Chưa đọc xong: “Đang lấy địa chỉ…”; đọc xong mà không có địa chỉ nào: câu ở mục 8.
 - Hai dòng “Máy này đang ẩn…” chỉ hiện khi máy này đang ẩn (F10).
 - Có yêu cầu ghép đôi thì lời hỏi hiện theo mục 7.2.
 

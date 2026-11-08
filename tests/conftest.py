@@ -133,7 +133,10 @@ class _Shard:
 
 
 MiB = 1024 * 1024
-_MVP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "mvp.md")
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MVP_PRODUCT = os.path.join(_ROOT, "docs", "product", "mvp.md")
+_MVP_LEGACY = os.path.join(_ROOT, "docs", "mvp.md")
+_MVP = _MVP_PRODUCT if os.path.exists(_MVP_PRODUCT) else _MVP_LEGACY
 
 
 @pytest.fixture(scope="session")

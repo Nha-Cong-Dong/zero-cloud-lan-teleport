@@ -469,13 +469,15 @@ def test_real_changelog_has_section_for_real_version_tag() -> None:
     tag = _reference_tag(version)
     if tag is None:
         pytest.skip(f"__version__ {version} chưa phải dạng phát hành được")
-    text = (_REPO / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
+    _cl = _REPO / "docs" / "community" / "CHANGELOG.md"
+    text = (_cl if _cl.exists() else _REPO / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
     assert rel.changelog_section(tag, text), f"docs/CHANGELOG.md thiếu mục [{tag[1:]}] - YYYY-MM-DD"
 
 
 def test_contributing_states_the_two_form_examples() -> None:
     """Các ví dụ của luật trong CONTRIBUTING.md khớp ánh xạ của script."""
-    text = (_REPO / "docs" / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    _ct = _REPO / "docs" / "community" / "CONTRIBUTING.md"
+    text = (_ct if _ct.exists() else _REPO / "docs" / "CONTRIBUTING.md").read_text(encoding="utf-8")
     section = text.split("## Phát hành", 1)[1].split("\n## ", 1)[0]
     for needle in ("`v0.1.0-alpha`", "`0.1.0a0`", "`0.3.0b0`", "`v1.0.0` ↔ `1.0.0`"):
         assert needle in section

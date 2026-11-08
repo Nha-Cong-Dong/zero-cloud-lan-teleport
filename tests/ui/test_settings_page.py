@@ -101,7 +101,8 @@ PREFIX = "[x]"
 
 def _mvp_quote(pattern: str) -> str:
     """Câu trong ngoặc “…” của `docs/mvp.md` ngay sau `pattern` (tài liệu là nguồn của câu)."""
-    text = (_DOCS / "mvp.md").read_text(encoding="utf-8")
+    _p = _DOCS / "product" / "mvp.md"
+    text = (_p if _p.exists() else _DOCS / "mvp.md").read_text(encoding="utf-8")
     m = re.search(re.escape(pattern) + r"[^“]*“([^”]+)”", text)
     assert m, f"không thấy câu sau {pattern!r} trong docs/mvp.md"
     return m.group(1)
