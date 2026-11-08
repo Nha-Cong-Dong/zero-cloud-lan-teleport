@@ -37,7 +37,8 @@ integration = pytest.mark.integration
 slow = pytest.mark.slow
 
 LOCAL = "127.0.0.1"
-_MVP = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+_MVP_PRODUCT = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+_MVP = _MVP_PRODUCT if _MVP_PRODUCT.exists() else (Path(__file__).resolve().parents[2] / "docs" / "mvp.md")
 
 # mvp mục 7.1 (spec PR1 “Câu”): nhãn trạng thái ghép đôi của một hàng.
 PAIRED_LABEL = "(đã ghép)"
@@ -237,7 +238,9 @@ def radar(qapp):
 def test_radar_is_listed_in_architecture_ui_row():
     """Spec PR1 “File”: architecture mục 3 dòng `ui` có `radar`; spec B2 (12.31, mục 4 việc #10): có cả
     `ui/conversations.py`."""
-    text = (Path(__file__).resolve().parents[2] / "docs" / "architecture.md").read_text(encoding="utf-8")
+    _arch = Path(__file__).resolve().parents[2] / "docs" / "technical" / "architecture.md"
+    _fb = Path(__file__).resolve().parents[2] / "docs" / "architecture.md"
+    text = (_arch if _arch.exists() else _fb).read_text(encoding="utf-8")
     sec = _section(text, "## 3.")
     assert "radar" in sec, "architecture mục 3 chưa nhắc tới ui/radar.py"
     assert "conversations" in sec, "architecture mục 3 chưa nhắc tới ui/conversations.py"

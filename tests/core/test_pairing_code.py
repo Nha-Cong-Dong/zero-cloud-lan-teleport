@@ -302,7 +302,8 @@ def test_property_bad_fingerprint_text_raises_value_error(fp):
 
 # --- Vector trong docs/protocol.md §5 (phụ lục điểm 17) ----------------------------------------
 
-PROTOCOL_MD = Path(__file__).resolve().parents[2] / "docs" / "protocol.md"
+_PROTO = Path(__file__).resolve().parents[2] / "docs" / "technical" / "protocol.md"
+PROTOCOL_MD = _PROTO if _PROTO.exists() else (Path(__file__).resolve().parents[2] / "docs" / "protocol.md")
 
 
 def _doc_vector() -> dict[str, str]:

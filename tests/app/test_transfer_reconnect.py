@@ -238,7 +238,9 @@ async def test_outage_longer_than_keepalive_then_network_back_finishes_within_n4
 
 def test_n4_threshold_is_read_from_mvp(n4_extra):
     """Ngưỡng dùng ở trên đọc đúng từ hàng N4 của docs/mvp.md (không chép số vào test)."""
-    text = (Path(__file__).resolve().parents[2] / "docs" / "mvp.md").read_text(encoding="utf-8")
+    p = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
+    _fallback = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
+    text = (p if p.exists() else _fallback).read_text(encoding="utf-8")
     row = next(line for line in text.splitlines() if line.startswith("| N4 |"))
     assert f"+ {n4_extra // MiB} MiB" in row
     assert n4_extra % MiB == 0

@@ -151,6 +151,7 @@ from shiboken6 import isValid
 
 from teleport.app.devices import DeviceView, parse_manual_address
 from teleport.ui import motion, texts, theme
+from teleport.ui.buttons import AnimatedButton
 from teleport.ui.illustrations import Illustration, Scene, can_run
 from teleport.ui.radar import (
     DEVICE_ID_ROLE,
@@ -938,7 +939,7 @@ class DiscoverPage(QWidget):
         self.address_edit = _AddressField(self.header)
         self.address_edit.setObjectName("discoverAddress")
         self.address_edit.setFixedWidth(_ADDRESS_WIDTH)
-        self.address_submit = QPushButton(self.header)
+        self.address_submit = AnimatedButton("", self.header, primary=True)
         self.address_submit.setObjectName("discoverAddressSubmit")
         self.address_submit.setProperty(theme.PRIMARY_PROPERTY, True)
         self.address_submit.setEnabled(False)

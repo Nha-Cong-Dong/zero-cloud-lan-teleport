@@ -38,7 +38,8 @@ from teleport.core.filenames import sanitize_filename
 from teleport.core.messages import FileEntry, Offer
 
 REPO = Path(__file__).resolve().parents[2]
-ARCHITECTURE = REPO / "docs" / "architecture.md"
+_ARCH = REPO / "docs" / "technical" / "architecture.md"
+ARCHITECTURE = _ARCH if _ARCH.exists() else (REPO / "docs" / "architecture.md")
 
 TID = "0123456789abcdef0123456789abcdef"
 TID2 = "fedcba9876543210fedcba9876543210"
