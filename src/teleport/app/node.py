@@ -28,7 +28,8 @@ lên/xuống, kết nối được/mất/lỗi, máy đã ghép đôi đổi tê
 `ADDRESS_SAVE_MIN_INTERVAL` cho mỗi thiết bị, không lưu địa chỉ Internet công khai) và đưa vào
 tracker (`LinkTracker.remember`). Lúc khởi động, địa chỉ đã lưu của thiết bị `_auto_target` được
 đưa vào tracker, nên máy đã ghép đôi tự nối lại khi mạng chặn mDNS, kể cả khi máy này đang ẩn.
-`connect_address` (“Kết nối bằng IP…”) thử một địa chỉ cho máy đã ghép đôi và trả `ConnectResult`.
+`connect_address` (“Kết nối bằng IP…”) thử một địa chỉ cho máy đã ghép đôi và trả `ConnectResult`;
+`retry_connect` ([Thử lại]) gọi `LinkTracker.retry_now` rồi trả kết quả của đúng lần thử đó.
 
 mDNS là tùy chọn (`mdns=None`: tắt) và chỉ là gợi ý địa chỉ: kết nối luôn kiểm chứng
 chỉ server với chứng chỉ đã lưu ngay trong bắt tay. Kết nối ra mở xong thì node báo
@@ -697,6 +698,8 @@ class Node:
         self._address_timers: dict[str, asyncio.TimerHandle] = {}
         # `connect_address` đang chờ: device_id → [(ip, cổng, future)], mỗi lời gọi một future.
         self._address_waiters: dict[str, list[tuple[str, int, asyncio.Future[ConnectResult]]]] = {}
+        # `retry_connect` đang chờ: device_id → [(attempt_id, future)], mỗi lời gọi một future.
+        self._retry_waiters: dict[str, list[tuple[int, asyncio.Future[ConnectResult]]]] = {}
 
     # ---- Vòng đời --------------------------------------------------------------------------
 
@@ -1005,6 +1008,7 @@ class Node:
         self._cancel_rename_timers()
         self._cancel_address_timers()
         self._fail_address_waiters()  # cùng khối đồng bộ với `_closing`, trước `await` đầu tiên
+        self._fail_retry_waiters()
         assert self._pairing is not None and self._listener is not None
         listener_closing = False
         transfers = self._transfers
@@ -1669,6 +1673,84 @@ class Node:
                     error = RuntimeError("node đang đóng") if device_ids is None else KeyError(device_id)
                     future.set_exception(error)
 
+    async def retry_connect(self, device_id: str) -> ConnectResult | None:
+        """[Thử lại] của giao diện: như người dùng thao tác (`LinkTracker.retry_now`: gỡ chặn, xóa
+        bộ đếm, thử ngay tới đích hiện có: mDNS, địa chỉ người dùng đưa, địa chỉ đã lưu), rồi chờ
+        kết quả của chính lần thử đó.
+
+        Đã có kết nối điều khiển → `OK` ngay, không gọi tracker. Sau `retry_now` mà không có lần
+        thử nào đang chạy (không có đích) → None ngay. Đang có lần thử sẵn thì chờ lần đó. Có lần
+        thử → chờ `connect_finished` của đúng `attempt_id` đó (kể cả `UNREACHABLE` /
+        `IDENTITY_MISMATCH` tới địa chỉ đã lưu, vốn không phát `ConnectFailed`); lần thử lỗi mà
+        thiết bị đã kết nối qua đường khác, hay có `LinkUp` / `LinkSwitched` → `OK`; quá
+        `2 * OPENING_TIMEOUT + 1` giây (đọc lúc gọi) → `UNREACHABLE` (cả khi lần thử bị tracker
+        hủy mà không kết nối được). Trong lúc chờ: thiết bị thôi tin cậy → KeyError; `close()` →
+        RuntimeError; bị hủy → chỉ thôi chờ, lần thử vẫn chạy. Lỗi tham số như `connect_hint`
+        (node chưa chạy/đang đóng → RuntimeError; không tin cậy → KeyError; máy này → ValueError;
+        `device_id` sai → MessageError). Không đổi `hint`, không lưu gì thêm ngoài đường
+        `_learn_address` sẵn có.
+        """
+        # Từ đây tới lúc đăng ký waiter là một khối đồng bộ: kết quả chỉ tới qua `_link_out`.
+        if not self._running or self._closing or self._links is None or self._store is None:
+            raise RuntimeError("node chưa chạy")
+        assert self._identity is not None
+        validate_device_id(device_id)
+        if device_id == self._identity.device_id:
+            raise ValueError("không thể kết nối tới chính máy này")
+        if self._store.get(device_id) is None:
+            raise KeyError(device_id)
+        if device_id in self._links.connected():
+            return ConnectResult.OK
+        self._apply(self._links.retry_now(device_id, self._now()))
+        attempt_id = self._links.attempting().get(device_id)
+        if attempt_id is None:
+            return None
+        future: asyncio.Future[ConnectResult] = asyncio.get_running_loop().create_future()
+        waiter = (attempt_id, future)
+        self._retry_waiters.setdefault(device_id, []).append(waiter)
+        try:
+            try:
+                async with asyncio.timeout(2 * net_connection.OPENING_TIMEOUT + 1):
+                    return await future
+            except TimeoutError:
+                return ConnectResult.UNREACHABLE
+        finally:
+            waiters = self._retry_waiters.get(device_id)
+            if waiters is not None:
+                with contextlib.suppress(ValueError):
+                    waiters.remove(waiter)
+                if not waiters:
+                    del self._retry_waiters[device_id]
+
+    def _settle_retry_attempt(self, device_id: str, attempt_id: int, result: ConnectResult) -> None:
+        """Lần thử `attempt_id` vừa báo tracker (đồng bộ, ngay sau `connect_finished`).
+
+        Thiết bị đang kết nối (lần này, hay đường khác) → `OK`; lỗi → kết quả của lần thử. `OK`
+        mà thiết bị không kết nối (lần thử cũ, kết nối bị đóng) thì không hoàn tất: lời gọi chờ
+        tiếp tới sự kiện khác hay hết giờ.
+        """
+        if self._links is not None and device_id in self._links.connected():
+            result = ConnectResult.OK
+        elif result is ConnectResult.OK:
+            return
+        self._settle_retry_waiters(device_id, attempt_id, result)
+
+    def _settle_retry_waiters(self, device_id: str, attempt_id: int | None, result: ConnectResult) -> None:
+        """Hoàn tất `retry_connect` đang chờ của thiết bị: mọi lời gọi (`attempt_id=None`) hay chỉ
+        các lời gọi chờ đúng lần thử đó."""
+        for waited, future in self._retry_waiters.get(device_id, []):
+            if not future.done() and (attempt_id is None or waited == attempt_id):
+                future.set_result(result)
+
+    def _fail_retry_waiters(self, device_ids: Iterable[str] | None = None) -> None:
+        """`retry_connect` đang chờ: thiết bị thôi tin cậy → KeyError; node đóng (`None`) → RuntimeError."""
+        ids = list(self._retry_waiters) if device_ids is None else list(device_ids)
+        for device_id in ids:
+            for _, future in self._retry_waiters.pop(device_id, []):
+                if not future.done():
+                    error = RuntimeError("node đang đóng") if device_ids is None else KeyError(device_id)
+                    future.set_exception(error)
+
     # ---- Hủy ghép đôi ----------------------------------------------------------------------
 
     async def unpair(self, device_id: str, *, clear_history: bool = False) -> TrustedDevice:
@@ -1737,6 +1819,7 @@ class Node:
         self._forget_peer_names()
         self._forget_addresses()
         self._fail_address_waiters([d for d in self._address_waiters if self._store.get(d) is None])
+        self._fail_retry_waiters([d for d in self._retry_waiters if self._store.get(d) is None])
         closes = self._apply(self._links.trusted_changed(ids, self._now()))
         if self._mdns is not None:
             try:
@@ -1860,6 +1943,7 @@ class Node:
             self._attempts.pop(attempt_id, None)
             if not self._closing and self._links is not None:
                 self._apply(self._links.connect_finished(device_id, attempt_id, result, None, self._now()))
+                self._settle_retry_attempt(device_id, attempt_id, result)
             return
         # Thành công: không await cho tới khi đăng ký xong. Chứng chỉ server đã được kiểm
         # trong bắt tay, nên IP đó được ưu tiên ở cổng của máy này (protocol §2.3).
@@ -1875,6 +1959,7 @@ class Node:
             self._apply(
                 self._links.connect_finished(device_id, attempt_id, ConnectResult.OK, conn_id, self._now())
             )
+            self._settle_retry_attempt(device_id, attempt_id, ConnectResult.OK)
             if conn_id not in self._conns:
                 return  # lần thử cũ, hoặc luật chống trùng giữ kết nối khác
             log.debug("đã mở kết nối điều khiển %d tới %s", conn_id, device_id[:8])
@@ -1937,6 +2022,8 @@ class Node:
             self._settle_address_waiters(event)
         except Exception:
             log.exception("không hoàn tất được lời gọi connect_address của %s", event.device_id[:8])
+        if isinstance(event, LinkUp | LinkSwitched):
+            self._settle_retry_waiters(event.device_id, None, ConnectResult.OK)
         assert self._registry is not None
         registry = self._registry
         if isinstance(event, LinkSwitched):

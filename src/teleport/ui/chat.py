@@ -105,16 +105,21 @@ thư mục cha); không mở được (kể cả dự phòng `open_url`) → `in
 {phím Dán} để dán file đã chép.” (tên phím từ `ui.shortcuts`), không nút). Đang nạp (kể cả trong
 lúc chờ debounce) thì luồng trống, không chớp màn rỗng; lịch sử lỗi thì hiện luồng với dòng lỗi.
 
+**Thanh theo máy** (spec F3b): `set_device_banner(bar, focus_chain)` đặt một thanh (một lần) giữa
+`header` và `threads`, lề như `info_bar`; `ui.transfers` đặt thanh chẩn đoán kết nối của
+`ui.diagnose` (module này không import `ui.diagnose`). Thanh ẩn thì không chiếm chỗ.
+
 **Bàn phím** (N12; spec B3 mục 9.10): widget nhận Tab của `ChatView` dựng trong `__init__` theo thứ tự
-các ô của `info_bar` → nhãn của `empty_state` → `threads` (điểm dừng Tab duy nhất của luồng,
-`TabFocus`, tắt khi luồng không có bong bóng) → `new_button` → `composer.send_button`. `threads`
-không có `ClickFocus`: bấm thanh cuộn hay chỗ trống trong luồng không kéo tiêu điểm về đó (nhận tiêu
-điểm sẽ cuộn tới bong bóng hiện hành, giật khung cuộn khỏi chỗ đang đọc). Mọi widget dựng lười (luồng,
-bong bóng, nút trong bong bóng, mốc) là `ClickFocus` / `NoFocus`. `threads` nhận tiêu điểm (từ bàn
-phím) thì chuyển sang bong bóng hiện hành (mặc định mới nhất); ↑/↓/Home/End/PageUp/PageDown đổi bong
-bóng hiện hành và cuộn tới nó; Tab từ bong bóng đi qua các nút của chính nó rồi sang `new_button` (nếu
-hiện) hay `send_button`; Shift+Tab từ bong bóng ra widget trước `threads`
-(`ChatThread.focusNextPrevChild`). `scroll_area` có tên trợ năng “Các lượt gửi nhận với X”.
+các ô của `info_bar` → (các ô của thanh theo máy) → nhãn của `empty_state` → `threads` (điểm dừng Tab
+duy nhất của luồng, `TabFocus`, tắt khi luồng không có bong bóng) → `new_button` →
+`composer.send_button`. `threads` không có `ClickFocus`: bấm thanh cuộn hay chỗ trống trong luồng
+không kéo tiêu điểm về đó (nhận tiêu điểm sẽ cuộn tới bong bóng hiện hành, giật khung cuộn khỏi chỗ
+đang đọc). Mọi widget dựng lười (luồng, bong bóng, nút trong bong bóng, mốc) là `ClickFocus` /
+`NoFocus`. `threads` nhận tiêu điểm (từ bàn phím) thì chuyển sang bong bóng hiện hành (mặc định mới
+nhất); ↑/↓/Home/End/PageUp/PageDown đổi bong bóng hiện hành và cuộn tới nó; Tab từ bong bóng đi qua
+các nút của chính nó rồi sang `new_button` (nếu hiện) hay `send_button`; Shift+Tab từ bong bóng ra
+widget trước `threads` (`ChatThread.focusNextPrevChild`). `scroll_area` có tên trợ năng “Các lượt
+gửi nhận với X”.
 
 **Chuyển động** (spec G4, `ui.chat_motion`): mỗi `ChatThread` có một `motion` (`ThreadMotion`, hàng
 nhận hiệu ứng là `_Item.wrapper`); `add` / `add_many` gán `motion` cho bong bóng (`_Bubble`), `remove`
@@ -918,6 +923,7 @@ class ChatView(QWidget):
         self._notice_language = ""  # ngôn ngữ lúc hiện câu đang có
         self._change_depth = 0
         self._changed = False
+        self._device_banner: QWidget | None = None  # thanh theo máy (`set_device_banner`)
 
         # Dựng theo thứ tự Tab (spec B3 mục 9.10): info_bar → empty_state → threads → new_button → nút gửi.
         self.info_bar = InfoBar(self)
@@ -957,6 +963,7 @@ class ChatView(QWidget):
         new_row.addWidget(self.new_button)
         new_row.addStretch(1)
         layout = QVBoxLayout(self)
+        self._layout = layout
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addLayout(info_wrap)
@@ -1025,6 +1032,21 @@ class ChatView(QWidget):
                 self._history_timer.stop()
             self._update_header()
             self._update_page()
+
+    def set_device_banner(self, bar: QWidget, focus_chain: Sequence[QWidget]) -> None:
+        """Đặt thanh theo máy giữa `header` và `threads` (một lần; gọi lần hai → RuntimeError) và nối
+        `focus_chain` vào chuỗi Tab sau `info_bar`, trước `empty_state`."""
+        if self._device_banner is not None:
+            raise RuntimeError("ChatView đã có thanh theo máy")
+        self._device_banner = bar
+        wrap = QVBoxLayout()
+        # Lề như `info_wrap`; thanh ẩn thì layout rỗng, không chiếm chỗ.
+        wrap.setContentsMargins(_MARGIN, theme.SPACING[2], _MARGIN, 0)
+        wrap.addWidget(bar)
+        self._layout.insertLayout(self._layout.indexOf(self.header) + 1, wrap)
+        chain = [self.info_bar.close_button, *focus_chain, self.empty_state.title_label]
+        for first, second in pairwise(chain):
+            QWidget.setTabOrder(first, second)
 
     def focus_composer(self) -> None:
         """Tiêu điểm vào nút “Gửi file” (Enter / bấm đúp ở cột trái)."""
