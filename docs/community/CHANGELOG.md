@@ -6,6 +6,11 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ## [Unreleased]
 
 ### Added
+- Đóng gói đa nền tảng và chuẩn bị phát hành v1.0.0:
+  - Kịch bản đóng gói AppImage trên Linux (`packaging/linux/build-appimage.sh`), file desktop entry XDG (`packaging/linux/io.github.nhacongdong.teleport.desktop`) và tệp AppStream metainfo chuẩn (`packaging/linux/io.github.nhacongdong.teleport.metainfo.xml`).
+  - Kịch bản đóng gói macOS DMG (`packaging/macos/build-dmg.sh`) và mẫu cấu hình bundle `Info.plist.in` (`packaging/macos/Info.plist.in`).
+  - Bộ kịch bản tự động đo đạc sẵn sàng cho đợt đo thiết bị thật D2 (so sánh tốc độ giữa Teleport và chia sẻ thư mục SMB: `tools/bench_d2_smb.py`) và D4 (kiểm tra ghi tệp lên ổ đĩa đích tốc độ chậm USB: `tools/bench_d4_disk.py`).
+  - Tài liệu hướng dẫn sử dụng sản phẩm cho người dùng cuối (`docs/product/huong_dan_su_dung.md`) bằng ngôn ngữ trực quan, thuần Việt, dễ hiểu; hướng dẫn cài đặt, ghép đôi an toàn, gửi nhận tệp dung lượng lớn và xử lý sự cố mạng riêng tư / tường lửa.
 - Kiểm tra độ bền bỉ tự động (mvp N7): bài kiểm tra độ bền bỉ chạy liên tục 100 lượt truyền file trên mạng nội bộ loopback, xen kẽ giữa file nhỏ, file trung bình và file lớn, kiểm tra không có rò rỉ bộ nhớ (tăng trưởng < 2 MiB) và không để sót bất kỳ file tạm nào (`tests/app/test_soak.py`, `docs/technical/benchmark.md` mục 10).
 - Tự động phát hiện và cảnh báo tường lửa: ứng dụng tự động kiểm tra hồ sơ mạng của Windows; khi mạng hiện tại là Mạng công cộng (Public) hoặc tường lửa Windows đang chặn kết nối đến của Teleport, giao diện sẽ hiển thị thanh cảnh báo kèm nút “Mở hướng dẫn” để người dùng mở hộp thoại hướng dẫn cấu hình mạng và tường lửa (mvp mục 8).
 - Hộp thoại hướng dẫn tường lửa (`FirewallGuideDialog`): hướng dẫn người dùng chuyển mạng sang chế độ Riêng tư (Private) và cho phép Teleport qua tường lửa, tích hợp nút mở nhanh Cài đặt mạng và Tường lửa của Windows.

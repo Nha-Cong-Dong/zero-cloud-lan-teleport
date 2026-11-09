@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.nhacongdong.teleport</id>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>ZCL Teleport</name>
+  <summary>Chuyển file dung lượng lớn và đồng bộ văn bản giữa các máy tính trong cùng mạng nội bộ</summary>
+  <summary xml:lang="en">High-speed LAN file transfer and clipboard sync between computers</summary>
+
+  <description>
+    <p>
+      ZCL Teleport giúp chuyển các tệp tin dung lượng rất lớn và đồng bộ văn bản sao chép trực tiếp giữa các máy tính trong cùng một mạng nội bộ. Dữ liệu truyền trực tiếp từ máy sang máy, không qua máy chủ trung gian và tự động tiếp tục khi kết nối được phục hồi.
+    </p>
+    <p xml:lang="en">
+      ZCL Teleport transfers large files and syncs clipboard directly between computers on the same local area network. No intermediate cloud servers, fully private, and automatically resumes on network reconnection.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.nhacongdong.teleport.desktop</launchable>
+
+  <url type="homepage">https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport</url>
+  <url type="bugtracker">https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/issues</url>
+
+  <developer_name>Nguyễn Hoàng Tùng</developer_name>
+
+  <provides>
+    <binary>teleport-gui</binary>
+    <binary>teleport</binary>
+  </provides>
+
+  <releases>
+    <release version="1.0.0" date="2026-11-09">
+      <description>
+        <p>Bản phát hành chính thức 1.0.0 với đầy đủ tính năng truyền file dung lượng lớn, tự nối lại khi đứt mạng, đồng bộ clipboard an toàn và phát hiện tường lửa mạng nội bộ.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+</component>

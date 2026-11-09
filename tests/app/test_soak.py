@@ -49,11 +49,11 @@ async def test_n7_soak_100_consecutive_transfers(transfer_nodes, tmp_path):
 
     # Chuẩn bị trước một số kích cỡ file đa dạng (nhỏ, trung bình, lớn hơn 1 khối)
     file_specs = [
-        ("tiny.txt", 1024),               # 1 KiB
-        ("doc.pdf", 64 * 1024),            # 64 KiB
-        ("photo.jpg", 512 * 1024),         # 512 KiB
-        ("clip.mp4", 1 * MiB + 100),       # > 1 khối (1 MiB)
-        ("archive.zip", 2 * MiB + 5000),   # > 2 khối
+        ("tiny.txt", 1024),  # 1 KiB
+        ("doc.pdf", 64 * 1024),  # 64 KiB
+        ("photo.jpg", 512 * 1024),  # 512 KiB
+        ("clip.mp4", 1 * MiB + 100),  # > 1 khối (1 MiB)
+        ("archive.zip", 2 * MiB + 5000),  # > 2 khối
     ]
     src_files = [make_test_file(net.src, name, sz) for name, sz in file_specs]
     src_hashes = {f.name: sha256_of(f) for f in src_files}

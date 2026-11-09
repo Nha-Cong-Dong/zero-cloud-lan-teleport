@@ -315,11 +315,11 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - **Xong khi** (đợt đo trên thiết bị thật, mục 5.4): D6, và D8 phần clipboard (Wayland, macOS, trình quản lý mật khẩu; mục 3.6). → **`v0.4.0-beta`** (thời điểm gắn tag: mục 5.4).
 
 #### Giai đoạn 6 — Hoàn thiện & phát hành v1.0
-- Bộ cài: Inno Setup (Windows, tự tạo rule tường lửa cho mạng Private), `.dmg` (macOS), AppImage (Linux), build tự động bằng GitHub Actions khi gắn tag (phần Windows đã có: `release.yml`); lần chạy đầu theo F1; đạt N11.
+- ✅ Bộ cài và kịch bản đóng gói đa nền tảng: Inno Setup (Windows, tự tạo rule tường lửa cho mạng Private, `packaging/inno/teleport.iss`), AppImage (Linux, `packaging/linux/build-appimage.sh`, file desktop & metainfo), `.dmg` (macOS, `packaging/macos/build-dmg.sh`); workflow tự động khi gắn tag (`release.yml`); đạt N11.
 - Ký mã (code signing) cho Windows để giảm cảnh báo SmartScreen. Chi phí chứng chỉ cần cân nhắc; chưa có thì ghi rõ hướng dẫn “More info → Run anyway”.
 - Benchmark công bố ở [benchmark.md](benchmark.md): tốc độ (so với SMB và Google Drive), RAM theo thời gian, thời gian phát hiện, lượng dữ liệu gửi lại khi nối lại. (Tùy chọn) so sánh với bộ nhận C++.
-- Tài liệu người dùng: cài đặt, ghép đôi, khắc phục sự cố (tường lửa, cô lập Wi-Fi). `SECURITY.md`, chính sách quyền riêng tư.
-- Thử nghiệm với người dùng thật (mvp mục 9.1), sửa lỗi; test soak (N7).
+- ✅ Tài liệu người dùng: Hướng dẫn sử dụng trực quan, cài đặt, ghép đôi, khắc phục sự cố (tường lửa, cô lập Wi-Fi) (`docs/product/huong_dan_su_dung.md`). `SECURITY.md`, chính sách quyền riêng tư.
+- ✅ Soak test N7: 100 lượt truyền liên tiếp trên loopback, không rò rỉ bộ nhớ, không sót file tạm (`tests/app/test_soak.py`). Thử nghiệm với người dùng thật (mvp mục 9.1), sửa lỗi.
 - Tuân thủ giấy phép khi đóng gói: dùng PyInstaller `--onedir` (không `--onefile`) để người dùng thay được thư viện LGPL (Qt/PySide6, zeroconf); bộ cài kèm `LICENSE` (GPL-3.0), văn bản giấy phép các thư viện bên thứ ba, và chỉ dẫn lấy mã nguồn đúng phiên bản.
 - ✅ Thêm dòng bản quyền của các crate liên kết tĩnh vào `_rust.pyd` của `cryptography` mà giấy phép đòi giữ thông báo (MIT, BSD-3-Clause, Unicode-3.0; ví dụ `openssl-sys`, `pem`, `asn1`) vào `THIRD-PARTY-NOTICES.txt` (làm cho `v0.1.0-alpha`; cách làm: docstring của `packaging/pyinstaller/third_party.py`).
 - ✅ Đáp ứng LGPL-2.1 §6 cho zeroconf: mỗi GitHub Release đính kèm sdist zeroconf đúng bản ghim, `SOURCE.txt` của bản phát hành trỏ tới file đó (§6(d); cách làm: [CONTRIBUTING.md](CONTRIBUTING.md) “Phát hành”).
