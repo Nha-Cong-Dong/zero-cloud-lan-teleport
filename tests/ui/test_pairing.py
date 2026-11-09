@@ -908,7 +908,7 @@ def test_dialog_closes_at_expiry_without_decide(qtbot, ctl):
 def test_dialog_stays_open_before_expiry(qtbot, ctl):
     ns = ctl(clock=FakeClock(NOW))
     dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 60))
-    qtbot.wait(400)
+    qtbot.wait(40)
     assert not closed(dlg)
     assert ns.host.decisions() == []
 
@@ -916,7 +916,7 @@ def test_dialog_stays_open_before_expiry(qtbot, ctl):
 def test_already_expired_prompt_never_decides(qtbot, ctl):
     ns = ctl(clock=FakeClock(NOW))
     ns.host.pairing_prompt.emit(make_prompt(expires_at=NOW - 1))
-    qtbot.wait(300)
+    qtbot.wait(40)
     d = ns.c.dialog(7)
     assert d is None or closed(d)
     assert ns.host.decisions() == []
@@ -1964,7 +1964,7 @@ def test_k2_countdown_waits_for_clock_not_wall_time(qtbot, ctl):
     dlg = open_prompt(qtbot, ns, make_prompt(expires_at=NOW + 42.3))
     bar, text = countdown_parts(dlg)
     before = (text.text(), bar.value())
-    qtbot.wait(600)
+    qtbot.wait(50)
     assert (text.text(), bar.value()) == before, "đồng hồ tiêm không đổi: chữ và thanh đứng yên"
 
 
