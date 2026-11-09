@@ -106,6 +106,29 @@ _VIRTUAL_SUBSTRINGS = (
     "loopback",
     "npcap",
 )
+_TUNNEL_PREFIXES = (
+    "tun",
+    "tap",
+    "wg",
+    "tailscale",
+    "zt",
+    "utun",
+    "ipsec",
+    "ppp",
+)
+_TUNNEL_SUBSTRINGS = (
+    "tap-windows",
+    "wintun",
+    "wireguard",
+    "tailscale",
+    "zerotier",
+    "openvpn",
+    "vpn",
+    "anyconnect",
+    "fortinet",
+    "globalprotect",
+    "pangp",
+)
 _ZERO_NETWORK = ipaddress.IPv4Network("0.0.0.0/8")
 
 
@@ -354,30 +377,49 @@ def is_virtual_interface(names: Iterable[str]) -> bool:
     return False
 
 
+def is_tunnel_interface(names: Iterable[str]) -> bool:
+    """Card mạng có phải card dạng đường hầm (VPN, WireGuard, Tailscale…) không, đoán theo tên."""
+    for name in names:
+        if not isinstance(name, str):
+            continue
+        n = name.casefold().strip()
+        if n.startswith(_TUNNEL_PREFIXES) or any(s in n for s in _TUNNEL_SUBSTRINGS):
+            return True
+    return False
+
+
 def select_local_addresses(
     interfaces: Iterable[InterfaceAddress], preferred: str | None = None
 ) -> tuple[str, ...]:
     """Chọn địa chỉ IPv4 của máy này để quảng bá (protocol mục 2.1).
 
     Ứng viên là địa chỉ qua bộ lọc của `filter_addresses`. Bỏ địa chỉ chỉ nằm trên
-    card ảo, với hai ngoại lệ: luôn giữ `preferred` nếu nó là ứng viên; và nếu mọi
-    ứng viên đều trên card ảo thì dùng tất cả.
+    card ảo, với hai ngoại lệ: luôn giữ `preferred` nếu nó là ứng viên và không phải
+    chỉ nằm trên card dạng đường hầm (VPN); và nếu mọi ứng viên đều trên card ảo thì
+    dùng tất cả.
 
     `preferred` là địa chỉ nguồn của tuyến ra ngoài LAN do `net` cung cấp. Nó được
     giữ dù card trông như card ảo vì máy ra ngoài qua chính card đó (Hyper-V External
-    vSwitch, máy khách Hyper-V). `preferred` đứng đầu, còn lại tăng dần; tối đa
-    `MAX_ADDRESSES`. Thứ tự này chỉ ảnh hưởng gợi ý của `teleport listen` và phép so
-    sánh của `NetworkWatch`; bên nhận sắp lại tăng dần qua `filter_addresses`.
+    vSwitch, máy khách Hyper-V). Ngoại lệ này không áp cho card dạng đường hầm (VPN
+    full-tunnel chiếm tuyến ra ngoài LAN). `preferred` đứng đầu, còn lại tăng dần;
+    tối đa `MAX_ADDRESSES`. Thứ tự này chỉ ảnh hưởng gợi ý của `teleport listen` và
+    bên nhận sắp lại tăng dần qua `filter_addresses`.
     """
     real: dict[ipaddress.IPv4Address, bool] = {}
+    is_tunnel: dict[ipaddress.IPv4Address, bool] = {}
     for iface in interfaces:
         addr = _usable_ipv4(iface.ip)
         if addr is not None:
             real[addr] = real.get(addr, False) or not is_virtual_interface(iface.names)
+            is_tunnel[addr] = is_tunnel.get(addr, True) and is_tunnel_interface(iface.names)
     preferred_addr = _usable_ipv4(preferred)
     if preferred_addr not in real:
         preferred_addr = None
-    kept = [addr for addr, is_real in real.items() if is_real or addr == preferred_addr]
+    kept = [
+        addr
+        for addr, is_real in real.items()
+        if is_real or (addr == preferred_addr and not is_tunnel.get(addr, False))
+    ]
     if not kept:
         kept = list(real)
     ordered = sorted(kept, key=lambda addr: (addr != preferred_addr, addr))
@@ -718,7 +760,7 @@ class NetworkChange(StrEnum):
     """Kết quả một lần `NetworkWatch.sample`."""
 
     NONE = "none"
-    ADDRESSES = "addresses"  # danh sách địa chỉ quảng bá đổi (cả thứ tự)
+    ADDRESSES = "addresses"  # tập địa chỉ quảng bá đổi (không xét thứ tự)
     WOKE = "woke"  # máy vừa thức dậy (hoặc giờ hệ thống bị chỉnh)
 
 
@@ -744,16 +786,18 @@ class NetworkWatch:
     """Phát hiện mạng đổi hoặc máy vừa thức dậy, từ các lần đọc định kỳ (sans-IO).
 
     `app` cứ `interval` giây đọc địa chỉ quảng bá (`local_ipv4_addresses`), đồng hồ
-    monotonic và đồng hồ hệ thống, rồi gọi `sample`. Địa chỉ khác lần trước (cả thứ
-    tự) → `ADDRESSES`; không thì đồng hồ nhảy → `WOKE`: khoảng monotonic giữa hai lần
-    đọc vượt `interval + WAKE_JUMP` (nền tảng mà monotonic chạy trong lúc ngủ, như
-    Windows), hoặc khoảng đồng hồ hệ thống lệch khoảng monotonic quá `WAKE_JUMP`
-    (nền tảng mà monotonic dừng lúc ngủ, như Linux, macOS; cả khi giờ bị chỉnh tay).
+    monotonic và đồng hồ hệ thống, rồi gọi `sample`. Tập địa chỉ khác lần trước
+    (không phân biệt thứ tự) → `ADDRESSES`; không thì đồng hồ nhảy → `WOKE`: khoảng
+    monotonic giữa hai lần đọc vượt `interval + WAKE_JUMP` (nền tảng mà monotonic
+    chạy trong lúc ngủ, như Windows), hoặc khoảng đồng hồ hệ thống lệch khoảng
+    monotonic quá `WAKE_JUMP` (nền tảng mà monotonic dừng lúc ngủ, như Linux, macOS;
+    cả khi giờ bị chỉnh tay).
     """
 
     def __init__(self, addresses: Sequence[str], mono: float, wall: float) -> None:
         """Tham số sai → ValueError / TypeError."""
         self._addresses = _check_address_list(addresses)
+        self._address_set = frozenset(self._addresses)
         self._mono = _check_clock("mono", mono)
         self._wall = _check_clock("wall", wall)
 
@@ -770,8 +814,9 @@ class NetworkWatch:
             raise ValueError("mono không được giảm")
         gap_mono = mono - self._mono
         gap_wall = wall - self._wall
-        changed = items != self._addresses
-        self._addresses, self._mono, self._wall = items, mono, wall
+        item_set = frozenset(items)
+        changed = item_set != self._address_set
+        self._addresses, self._address_set, self._mono, self._wall = items, item_set, mono, wall
         if changed:
             return NetworkChange.ADDRESSES
         if gap_mono > interval + WAKE_JUMP or abs(gap_wall - gap_mono) > WAKE_JUMP:
