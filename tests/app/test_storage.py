@@ -633,12 +633,13 @@ BAD_TRANSFER_IDS = [
 ]
 
 
-@pytest.mark.parametrize("bad", BAD_TRANSFER_IDS)
-def test_create_temp_rejects_bad_transfer_id_without_touching_disk(rd, tmp_path, bad, record_for):
+def test_create_temp_rejects_bad_transfer_id_without_touching_disk(rd, tmp_path, record_for):
     before = snapshot(tmp_path)
-    with pytest.raises(ValueError):
-        rd.create_temp(bad, record_for(ID, [0]))
-    assert snapshot(tmp_path) == before
+    rec = record_for(ID, [0])
+    for bad in BAD_TRANSFER_IDS:
+        with pytest.raises(ValueError):
+            rd.create_temp(bad, rec)
+        assert snapshot(tmp_path) == before
 
 
 @pytest.mark.parametrize(
@@ -1161,9 +1162,9 @@ def test_create_part_over_planted_symlink_raises_and_keeps_victim(rd, tmp_path, 
     assert os.path.islink(temp.path / "0.part")
 
 
-@pytest.mark.parametrize(
-    ("file_index", "size"),
-    [
+def test_create_part_rejects_bad_arguments(rd, record_for):
+    temp = rd.create_temp(ID, record_for(ID, [1]))
+    for file_index, size in [
         (-1, 1),
         (1000, 1),
         (True, 1),
@@ -1177,13 +1178,12 @@ def test_create_part_over_planted_symlink_raises_and_keeps_victim(rd, tmp_path, 
         (0, 1.0),
         (0, "1"),
         (0, None),
-    ],
-)
-def test_create_part_rejects_bad_arguments(rd, file_index, size, record_for):
-    temp = rd.create_temp(ID, record_for(ID, [1]))
-    with pytest.raises(ValueError):
-        temp.create_part(file_index, size)
-    assert os.listdir(temp.path) == ["transfer.json"]  # P3-3a: chỉ có bản ghi lượt, không `.part`/`.state`
+    ]:
+        with pytest.raises(ValueError):
+            temp.create_part(file_index, size)
+        assert os.listdir(temp.path) == [
+            "transfer.json"
+        ]  # P3-3a: chỉ có bản ghi lượt, không `.part`/`.state`
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1255,9 +1255,7 @@ def _bad_write_cases():
     ]
 
 
-@pytest.mark.parametrize("case", _bad_write_cases(), ids=lambda c: c[0])
-def test_write_at_rejects_bad_arguments_and_leaves_file_unchanged(rd, case, record_for):
-    _, index, spec = case
+def test_write_at_rejects_bad_arguments_and_leaves_file_unchanged(rd, record_for):
     size = 2 * BS + 100
     data = payload(size)
     part = rd.create_temp(ID, record_for(ID, {0: size})).create_part(0, size)
@@ -1265,10 +1263,11 @@ def test_write_at_rejects_bad_arguments_and_leaves_file_unchanged(rd, case, reco
     part.write_at(0, data[:BS])
     part.write_at(1, data[BS : 2 * BS])
     before = part.path.read_bytes()
-    bad = b"\n" * spec if isinstance(spec, int) else spec
-    with pytest.raises(ValueError):
-        part.write_at(index, bad)
-    assert part.path.read_bytes() == before
+    for _, index, spec in _bad_write_cases():
+        bad = b"\n" * spec if isinstance(spec, int) else spec
+        with pytest.raises(ValueError):
+            part.write_at(index, bad)
+        assert part.path.read_bytes() == before
     part.write_at(2, data[2 * BS :])  # vẫn dùng được
     assert part.path.read_bytes() == data
 

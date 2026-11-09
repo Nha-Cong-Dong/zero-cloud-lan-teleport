@@ -465,39 +465,39 @@ def test_same_input_gives_same_layout():
         )
 
 
-@pytest.mark.parametrize("seed", range(30))
-def test_adding_one_item_keeps_every_old_slot_and_rect(seed):
+def test_adding_one_item_keeps_every_old_slot_and_rect():
     """T-L2: kết quả lần 1 làm `previous`, thêm một item (ở vị trí bất kỳ) → item cũ giữ slot và rect."""
     from teleport.ui.discover import place_bubbles
 
-    rng = random.Random(seed)
     area, core, size = _roomy()
-    items = [(f"cu-{i}", rng.random() < 0.5) for i in range(rng.randint(1, 7))]
-    first = place_bubbles(area, core, size, items, {})
-    assert first is not None
-    new_items = list(items)
-    new_items.insert(rng.randint(0, len(items)), ("moi", rng.random() < 0.5))
-    second = place_bubbles(area, core, size, new_items, _as_previous(first))
-    assert second is not None
-    for did, _ in items:
-        assert second[did] == first[did], f"{did} bị dời khi thêm máy mới"
+    for seed in range(30):
+        rng = random.Random(seed)
+        items = [(f"cu-{i}", rng.random() < 0.5) for i in range(rng.randint(1, 7))]
+        first = place_bubbles(area, core, size, items, {})
+        assert first is not None
+        new_items = list(items)
+        new_items.insert(rng.randint(0, len(items)), ("moi", rng.random() < 0.5))
+        second = place_bubbles(area, core, size, new_items, _as_previous(first))
+        assert second is not None
+        for did, _ in items:
+            assert second[did] == first[did], f"{did} bị dời khi thêm máy mới"
 
 
-@pytest.mark.parametrize("seed", range(30))
-def test_removing_one_item_keeps_every_other_slot_and_rect(seed):
+def test_removing_one_item_keeps_every_other_slot_and_rect():
     from teleport.ui.discover import place_bubbles
 
-    rng = random.Random(1000 + seed)
     area, core, size = _roomy()
-    items = [(f"cu-{i}", rng.random() < 0.5) for i in range(rng.randint(2, 8))]
-    first = place_bubbles(area, core, size, items, {})
-    assert first is not None
-    gone = rng.randrange(len(items))
-    rest = items[:gone] + items[gone + 1 :]
-    second = place_bubbles(area, core, size, rest, _as_previous(first))
-    assert second is not None
-    for did, _ in rest:
-        assert second[did] == first[did], f"{did} bị dời khi bỏ một máy"
+    for seed in range(30):
+        rng = random.Random(1000 + seed)
+        items = [(f"cu-{i}", rng.random() < 0.5) for i in range(rng.randint(2, 8))]
+        first = place_bubbles(area, core, size, items, {})
+        assert first is not None
+        gone = rng.randrange(len(items))
+        rest = items[:gone] + items[gone + 1 :]
+        second = place_bubbles(area, core, size, rest, _as_previous(first))
+        assert second is not None
+        for did, _ in rest:
+            assert second[did] == first[did], f"{did} bị dời khi bỏ một máy"
 
 
 def test_valid_previous_slot_is_kept_even_outside_preferred_ring():
@@ -615,23 +615,23 @@ def test_paired_devices_get_inner_ring_unpaired_outer():
     assert max(paired) < min(unpaired), f"đã ghép {paired}, chưa ghép {unpaired}"
 
 
-@pytest.mark.parametrize("seed", range(20))
-def test_layout_does_not_depend_on_device_id(seed):
+def test_layout_does_not_depend_on_device_id():
     """T-L4: cùng thứ tự `paired`, khác `device_id` → cùng danh sách slot theo vị trí (không góc băm)."""
     from teleport.ui.discover import place_bubbles
 
-    rng = random.Random(seed)
-    area = QRectF(0, 0, rng.randint(500, 1400), rng.randint(350, 900))
-    c = area.center()
-    core = QRectF(c.x() - 50, c.y() - 45, 100, 90)
-    flags = [rng.random() < 0.5 for _ in range(rng.randint(1, 8))]
-    a = [(hashlib.sha256(f"a{i}".encode()).hexdigest(), p) for i, p in enumerate(flags)]
-    b = [(f"khac-{rng.getrandbits(64):x}-{i}", p) for i, p in enumerate(flags)]
-    ra = place_bubbles(area, core, QSizeF(136, 96), a, {})
-    rb = place_bubbles(area, core, QSizeF(136, 96), b, {})
-    assert (ra is None) == (rb is None)
-    if ra is not None:
-        assert [ra[d] for d, _ in a] == [rb[d] for d, _ in b]
+    for seed in range(20):
+        rng = random.Random(seed)
+        area = QRectF(0, 0, rng.randint(500, 1400), rng.randint(350, 900))
+        c = area.center()
+        core = QRectF(c.x() - 50, c.y() - 45, 100, 90)
+        flags = [rng.random() < 0.5 for _ in range(rng.randint(1, 8))]
+        a = [(hashlib.sha256(f"a{i}".encode()).hexdigest(), p) for i, p in enumerate(flags)]
+        b = [(f"khac-{rng.getrandbits(64):x}-{i}", p) for i, p in enumerate(flags)]
+        ra = place_bubbles(area, core, QSizeF(136, 96), a, {})
+        rb = place_bubbles(area, core, QSizeF(136, 96), b, {})
+        assert (ra is None) == (rb is None)
+        if ra is not None:
+            assert [ra[d] for d, _ in a] == [rb[d] for d, _ in b]
 
 
 def test_too_small_area_gives_none_and_empty_items_give_empty_dict():

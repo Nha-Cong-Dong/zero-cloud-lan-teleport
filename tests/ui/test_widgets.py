@@ -342,21 +342,19 @@ def test_icon_button_property_name():
 # =================================================================================================
 
 
-@pytest.mark.parametrize(
-    "text",
-    ["", "May-A", "<b>x</b>", "a & b <c>", "nháy \"kép\" 'đơn'", "dòng 1\ndòng 2", "<img src=x>"],
-)
-def test_safe_tooltip_matches_spec_formula(text):
+def test_safe_tooltip_matches_spec_formula():
     from teleport.ui import widgets
 
-    assert widgets.safe_tooltip(text) == "<qt>" + html.escape(text).replace("\n", "<br>") + "</qt>"
+    cases = ["", "May-A", "<b>x</b>", "a & b <c>", "nháy \"kép\" 'đơn'", "dòng 1\ndòng 2", "<img src=x>"]
+    for text in cases:
+        assert widgets.safe_tooltip(text) == "<qt>" + html.escape(text).replace("\n", "<br>") + "</qt>"
 
 
-@pytest.mark.parametrize("text", ["<b>x</b>", "a & b", "<i>nghiêng</i> &amp;", "<script>x</script>"])
-def test_safe_tooltip_shows_markup_as_literal_text(text):
+def test_safe_tooltip_shows_markup_as_literal_text():
     from teleport.ui import widgets
 
-    assert _tooltip_plain(widgets.safe_tooltip(text)) == text
+    for text in ["<b>x</b>", "a & b", "<i>nghiêng</i> &amp;", "<script>x</script>"]:
+        assert _tooltip_plain(widgets.safe_tooltip(text)) == text
 
 
 def test_safe_tooltip_keeps_line_breaks():
@@ -1815,19 +1813,19 @@ def _accent_ids() -> tuple[str, ...]:
     return theme.ACCENTS
 
 
-@pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
-@pytest.mark.parametrize("accent", ("mint", "ocean", "violet", "rose", "amber", "graphite"))
-def test_segment_and_toggle_contrast_every_accent(accent, dark):
+def test_segment_and_toggle_contrast_every_accent():
     from teleport.ui import theme, widgets
 
-    assert accent in _accent_ids()
-    t = theme.tokens(dark, accent)
-    for fg, bg, minimum in widgets.SEGMENT_CONTRAST_PAIRS:
-        ratio = theme.contrast_ratio(getattr(t, fg), getattr(t, bg))
-        assert ratio >= minimum, (accent, dark, fg, bg, round(ratio, 2))
-    for fg, bg in widgets.TOGGLE_CONTRAST_PAIRS:
-        ratio = theme.contrast_ratio(getattr(t, fg), getattr(t, bg))
-        assert ratio >= 3.0, (accent, dark, fg, bg, round(ratio, 2))
+    for dark in [False, True]:
+        for accent in ("mint", "ocean", "violet", "rose", "amber", "graphite"):
+            assert accent in _accent_ids()
+            t = theme.tokens(dark, accent)
+            for fg, bg, minimum in widgets.SEGMENT_CONTRAST_PAIRS:
+                ratio = theme.contrast_ratio(getattr(t, fg), getattr(t, bg))
+                assert ratio >= minimum, (accent, dark, fg, bg, round(ratio, 2))
+            for fg, bg in widgets.TOGGLE_CONTRAST_PAIRS:
+                ratio = theme.contrast_ratio(getattr(t, fg), getattr(t, bg))
+                assert ratio >= 3.0, (accent, dark, fg, bg, round(ratio, 2))
 
 
 def test_segmented_control_arrows_select_and_tab_stops_on_checked(qtbot):

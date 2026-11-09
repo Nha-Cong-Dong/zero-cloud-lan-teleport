@@ -150,29 +150,34 @@ CORRUPT = {
 }
 
 
-@pytest.mark.parametrize("kind", list(CORRUPT))
-def test_corrupt_file_load_gives_defaults_with_warning_without_content(cfg, caplog, kind):
+def test_corrupt_file_load_gives_defaults_with_warning_without_content(tmp_path, caplog):
     """ST4 (load): mặc định, có WARNING không chứa nội dung, file không bị đổi."""
     caplog.set_level(logging.DEBUG)
-    raw = write(cfg, CORRUPT[kind])
-    s = Settings.load(cfg)
-    assert s.port is None
-    assert dict(s.extra) == {}
-    assert warnings_of(caplog), "phải có log WARNING khi file hỏng"
-    assert SECRET not in caplog.text
-    assert (cfg / SETTINGS_FILE).read_bytes() == raw
-    assert not (cfg / BACKUP_FILE).exists()
+    for i, kind in enumerate(CORRUPT):
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        caplog.clear()
+        raw = write(cfg, CORRUPT[kind])
+        s = Settings.load(cfg)
+        assert s.port is None
+        assert dict(s.extra) == {}
+        assert warnings_of(caplog), "phải có log WARNING khi file hỏng"
+        assert SECRET not in caplog.text
+        assert (cfg / SETTINGS_FILE).read_bytes() == raw
+        assert not (cfg / BACKUP_FILE).exists()
 
 
-@pytest.mark.parametrize("kind", list(CORRUPT))
-def test_corrupt_file_save_backs_up_original_bytes_first(cfg, kind):
+def test_corrupt_file_save_backs_up_original_bytes_first(tmp_path):
     """ST4 (save): `.bak` đúng từng byte bản cũ, file mới hợp lệ."""
-    raw = write(cfg, CORRUPT[kind])
-    s = Settings.load(cfg)
-    dataclasses.replace(s, port=5555).save(cfg)
-    assert (cfg / BACKUP_FILE).read_bytes() == raw
-    assert on_disk(cfg) == {"version": 1, "port": 5555}
-    assert no_tmp(cfg)
+    for i, kind in enumerate(CORRUPT):
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        raw = write(cfg, CORRUPT[kind])
+        s = Settings.load(cfg)
+        dataclasses.replace(s, port=5555).save(cfg)
+        assert (cfg / BACKUP_FILE).read_bytes() == raw
+        assert on_disk(cfg) == {"version": 1, "port": 5555}
+        assert no_tmp(cfg)
 
 
 def test_file_exactly_at_size_limit_is_not_too_big(cfg):
@@ -199,19 +204,23 @@ def test_unreadable_settings_path_gives_defaults_with_warning(cfg, caplog):
 # --- ST5 ------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bad", ['"47474"', "0", "65536", "-1", "true", "false", "1.5", "47474.0", "[1]"])
-def test_bad_port_is_dropped_with_warning_and_backed_up_on_save(cfg, caplog, bad):
+def test_bad_port_is_dropped_with_warning_and_backed_up_on_save(tmp_path, caplog):
     """ST5: port sai → None + WARNING, khóa bị bỏ; save tạo `.bak`."""
     caplog.set_level(logging.DEBUG)
-    raw = write(cfg, f'{{"version": 1, "port": {bad}, "khac": "giu"}}')
-    s = Settings.load(cfg)
-    assert s.port is None
-    assert "port" not in s.extra
-    assert s.extra.get("khac") == "giu"
-    assert warnings_of(caplog)
-    s.save(cfg)
-    assert (cfg / BACKUP_FILE).read_bytes() == raw
-    assert on_disk(cfg) == {"version": 1, "khac": "giu"}
+    cases = ['"47474"', "0", "65536", "-1", "true", "false", "1.5", "47474.0", "[1]"]
+    for i, bad in enumerate(cases):
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        caplog.clear()
+        raw = write(cfg, f'{{"version": 1, "port": {bad}, "khac": "giu"}}')
+        s = Settings.load(cfg)
+        assert s.port is None
+        assert "port" not in s.extra
+        assert s.extra.get("khac") == "giu"
+        assert warnings_of(caplog)
+        s.save(cfg)
+        assert (cfg / BACKUP_FILE).read_bytes() == raw
+        assert on_disk(cfg) == {"version": 1, "khac": "giu"}
 
 
 def test_null_port_is_none_without_warning_and_no_backup(cfg, caplog):
@@ -226,12 +235,15 @@ def test_null_port_is_none_without_warning_and_no_backup(cfg, caplog):
     assert on_disk(cfg) == {"version": 1}
 
 
-@pytest.mark.parametrize("port", [1, 65535, 47474])
-def test_valid_port_boundaries_load_without_warning(cfg, caplog, port):
+def test_valid_port_boundaries_load_without_warning(tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
-    write(cfg, f'{{"version": 1, "port": {port}}}')
-    assert Settings.load(cfg).port == port
-    assert warnings_of(caplog) == []
+    for i, port in enumerate([1, 65535, 47474]):
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        caplog.clear()
+        write(cfg, f'{{"version": 1, "port": {port}}}')
+        assert Settings.load(cfg).port == port
+        assert warnings_of(caplog) == []
 
 
 def test_missing_version_is_not_corrupt(cfg, caplog):
@@ -261,18 +273,22 @@ def test_newer_version_is_kept_not_an_error(cfg, caplog):
     assert on_disk(cfg) == {"version": 7, "port": 5001, "thiet_bi": {"x": 1}}
 
 
-@pytest.mark.parametrize("bad", ['"1"', "0", "-3", "true", "1.0", "null", "[1]"])
-def test_bad_version_is_dropped_with_warning_and_backed_up(cfg, caplog, bad):
+def test_bad_version_is_dropped_with_warning_and_backed_up(tmp_path, caplog):
     """ST6: `version` không phải int ≥ 1 → WARNING; save tạo `.bak` và ghi `version: 1`."""
     caplog.set_level(logging.DEBUG)
-    raw = write(cfg, f'{{"version": {bad}, "port": 5000}}')
-    s = Settings.load(cfg)
-    assert s.port == 5000
-    assert "version" not in s.extra
-    assert warnings_of(caplog)
-    s.save(cfg)
-    assert (cfg / BACKUP_FILE).read_bytes() == raw
-    assert on_disk(cfg) == {"version": 1, "port": 5000}
+    cases = ['"1"', "0", "-3", "true", "1.0", "null", "[1]"]
+    for i, bad in enumerate(cases):
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        caplog.clear()
+        raw = write(cfg, f'{{"version": {bad}, "port": 5000}}')
+        s = Settings.load(cfg)
+        assert s.port == 5000
+        assert "version" not in s.extra
+        assert warnings_of(caplog)
+        s.save(cfg)
+        assert (cfg / BACKUP_FILE).read_bytes() == raw
+        assert on_disk(cfg) == {"version": 1, "port": 5000}
 
 
 # --- ST7 ------------------------------------------------------------------------------------------
@@ -289,9 +305,9 @@ def test_utf8_bom_is_accepted(cfg, caplog):
 # --- ST8 ------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "kwargs",
-    [
+def test_invalid_construction_raises_value_error():
+    """ST8."""
+    cases = [
         {"port": 0},
         {"port": 70000},
         {"port": 65536},
@@ -304,12 +320,10 @@ def test_utf8_bom_is_accepted(cfg, caplog):
         {"extra": {1: "x"}},
         {"extra": [("a", 1)]},
         {"extra": None},
-    ],
-)
-def test_invalid_construction_raises_value_error(kwargs):
-    """ST8."""
-    with pytest.raises(ValueError):
-        Settings(**kwargs)
+    ]
+    for kwargs in cases:
+        with pytest.raises(ValueError):
+            Settings(**kwargs)
 
 
 def test_valid_construction_and_extra_is_copied():
@@ -606,25 +620,27 @@ BAD_FIELDS = [
 ]
 
 
-@pytest.mark.parametrize(("field", "bad"), BAD_FIELDS, ids=[f"{f}={b[:20]}" for f, b in BAD_FIELDS])
-def test_invalid_field_dropped_with_warning_and_bak_on_next_save(cfg, caplog, field, bad):
+def test_invalid_field_dropped_with_warning_and_bak_on_next_save(cfg, caplog):
     """Trường sai: WARNING chỉ nêu tên trường, bỏ trường đó (về mặc định), trường khác giữ;
     lần `save` sau chép nguyên byte gốc sang `.bak`."""
     caplog.set_level(logging.DEBUG)
-    raw = write(cfg, f'{{"version": 1, "port": 5000, "{field}": {bad}, "khac": "giu"}}')
-    s = Settings.load(cfg)
-    assert s.port == 5000
-    assert s.extra.get("khac") == "giu"
-    assert field not in s.extra
-    assert _normalized(s) == _normalized(Settings(port=5000))
-    warns = warnings_of(caplog)
-    assert warns, "trường sai phải có WARNING"
-    assert any(field in r.getMessage() for r in warns), [r.getMessage() for r in warns]
-    s.save(cfg)
-    assert (cfg / BACKUP_FILE).read_bytes() == raw
-    data = on_disk(cfg)
-    assert field not in data or (field == "devices" and data[field] == {})
-    assert data["khac"] == "giu"
+    for field, bad in BAD_FIELDS:
+        caplog.clear()
+        (cfg / BACKUP_FILE).unlink(missing_ok=True)
+        raw = write(cfg, f'{{"version": 1, "port": 5000, "{field}": {bad}, "khac": "giu"}}')
+        s = Settings.load(cfg)
+        assert s.port == 5000
+        assert s.extra.get("khac") == "giu"
+        assert field not in s.extra
+        assert _normalized(s) == _normalized(Settings(port=5000))
+        warns = warnings_of(caplog)
+        assert warns, "trường sai phải có WARNING"
+        assert any(field in r.getMessage() for r in warns), [r.getMessage() for r in warns]
+        s.save(cfg)
+        assert (cfg / BACKUP_FILE).read_bytes() == raw
+        data = on_disk(cfg)
+        assert field not in data or (field == "devices" and data[field] == {})
+        assert data["khac"] == "giu"
 
 
 def test_valid_and_invalid_device_entries_are_handled_separately(cfg, caplog):
@@ -695,10 +711,10 @@ CONSTRUCT_BAD = [
 ]
 
 
-@pytest.mark.parametrize("kwargs", CONSTRUCT_BAD, ids=[repr(k)[:40] for k in CONSTRUCT_BAD])
-def test_c1_invalid_construction_raises(kwargs):
-    with pytest.raises((ValueError, TypeError)):
-        Settings(**kwargs)
+def test_c1_invalid_construction_raises():
+    for kwargs in CONSTRUCT_BAD:
+        with pytest.raises((ValueError, TypeError)):
+            Settings(**kwargs)
 
 
 def test_c1_invalid_device_value_in_constructor_raises():
@@ -932,38 +948,43 @@ def test_theme_default_none_not_written(cfg):
     assert "theme" not in on_disk(cfg)
 
 
-@pytest.mark.parametrize("value", ["light", "dark"])
-def test_theme_light_dark_roundtrip(cfg, caplog, value):
+def test_theme_light_dark_roundtrip(tmp_path, caplog):
     caplog.set_level(logging.DEBUG)
-    Settings(theme=value).save(cfg)
-    assert on_disk(cfg) == {"version": 1, "theme": value}
-    loaded = Settings.load(cfg)
-    assert loaded.theme == value
-    assert warnings_of(caplog) == []
-    # Đọc rồi ghi lại ra đúng byte (không đổi gì khi không có gì đổi).
-    first = (cfg / SETTINGS_FILE).read_bytes()
-    loaded.save(cfg)
-    assert (cfg / SETTINGS_FILE).read_bytes() == first
-    assert not (cfg / BACKUP_FILE).exists()
+    for i, value in enumerate(["light", "dark"]):
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        caplog.clear()
+        Settings(theme=value).save(cfg)
+        assert on_disk(cfg) == {"version": 1, "theme": value}
+        loaded = Settings.load(cfg)
+        assert loaded.theme == value
+        assert warnings_of(caplog) == []
+        # Đọc rồi ghi lại ra đúng byte (không đổi gì khi không có gì đổi).
+        first = (cfg / SETTINGS_FILE).read_bytes()
+        loaded.save(cfg)
+        assert (cfg / SETTINGS_FILE).read_bytes() == first
+        assert not (cfg / BACKUP_FILE).exists()
 
 
-@pytest.mark.parametrize(
-    "bad", ['"system"', '"Light"', '"DARK"', '""', '" dark"', "1", "true", "[]", '{"a": 1}']
-)
-def test_theme_system_string_or_other_value_dropped_with_warning(cfg, caplog, bad):
+def test_theme_system_string_or_other_value_dropped_with_warning(tmp_path, caplog):
     """`"system"` hay giá trị lạ trong file: bỏ trường (về None = theo HĐH) + WARNING nêu tên trường,
     không nêu giá trị; trường khác giữ; lần ghi sau sinh `.bak` (spec-d6 mục 12 ý 9)."""
     caplog.set_level(logging.DEBUG)
-    raw = write(cfg, f'{{"version": 1, "language": "vi", "accent": "ocean", "theme": {bad}}}')
-    s = Settings.load(cfg)
-    assert s.theme is None
-    assert "theme" not in s.extra
-    assert (s.language, s.accent) == ("vi", "ocean")
-    warns = warnings_of(caplog)
-    assert any("theme" in r.getMessage() for r in warns), [r.getMessage() for r in warns]
-    s.save(cfg)
-    assert (cfg / BACKUP_FILE).read_bytes() == raw
-    assert on_disk(cfg) == {"version": 1, "language": "vi", "accent": "ocean"}
+    cases = ['"system"', '"Light"', '"DARK"', '""', '" dark"', "1", "true", "[]", '{"a": 1}']
+    for i, bad in enumerate(cases):
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        caplog.clear()
+        raw = write(cfg, f'{{"version": 1, "language": "vi", "accent": "ocean", "theme": {bad}}}')
+        s = Settings.load(cfg)
+        assert s.theme is None
+        assert "theme" not in s.extra
+        assert (s.language, s.accent) == ("vi", "ocean")
+        warns = warnings_of(caplog)
+        assert any("theme" in r.getMessage() for r in warns), [r.getMessage() for r in warns]
+        s.save(cfg)
+        assert (cfg / BACKUP_FILE).read_bytes() == raw
+        assert on_disk(cfg) == {"version": 1, "language": "vi", "accent": "ocean"}
 
 
 def test_theme_null_in_file_is_none_without_warning(cfg, caplog):
@@ -992,40 +1013,46 @@ def test_accent_default_none_not_written(cfg):
     assert "accent" not in on_disk(cfg)
 
 
-@pytest.mark.parametrize("accent", ["ocean", "tuong_lai_9", "a" + "b" * 31])
-def test_accent_unknown_well_formed_id_kept_on_save(cfg, caplog, accent):
+def test_accent_unknown_well_formed_id_kept_on_save(tmp_path, caplog):
     """Mã đúng dạng (kể cả mã bản này không biết, ví dụ của bản sau) giữ nguyên khi đọc và ghi lại;
     không WARNING, không `.bak`."""
     caplog.set_level(logging.DEBUG)
-    write(cfg, json.dumps({"version": 1, "accent": accent}))
-    s = Settings.load(cfg)
-    assert s.accent == accent
-    assert "accent" not in s.extra
-    assert warnings_of(caplog) == []
-    dataclasses.replace(s, theme="dark").save(cfg)
-    assert on_disk(cfg) == {"version": 1, "theme": "dark", "accent": accent}
-    assert not (cfg / BACKUP_FILE).exists()
-    assert Settings(accent=accent).accent == accent
+    for i, accent in enumerate(["ocean", "tuong_lai_9", "a" + "b" * 31]):
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        caplog.clear()
+        write(cfg, json.dumps({"version": 1, "accent": accent}))
+        s = Settings.load(cfg)
+        assert s.accent == accent
+        assert "accent" not in s.extra
+        assert warnings_of(caplog) == []
+        dataclasses.replace(s, theme="dark").save(cfg)
+        assert on_disk(cfg) == {"version": 1, "theme": "dark", "accent": accent}
+        assert not (cfg / BACKUP_FILE).exists()
+        assert Settings(accent=accent).accent == accent
 
 
-@pytest.mark.parametrize("bad", ACCENT_BAD_VALUE, ids=[repr(b)[:20] for b in ACCENT_BAD_VALUE])
-def test_accent_rejects_bad_form(cfg, caplog, bad):
-    with pytest.raises(ValueError):
-        Settings(accent=bad)
-    caplog.set_level(logging.DEBUG)
-    raw = write(cfg, json.dumps({"version": 1, "theme": "light", "accent": bad}))
-    s = Settings.load(cfg)
-    assert s.accent is None and s.theme == "light"
-    assert any("accent" in r.getMessage() for r in warnings_of(caplog))
-    s.save(cfg)
-    assert (cfg / BACKUP_FILE).read_bytes() == raw
-    assert on_disk(cfg) == {"version": 1, "theme": "light"}
+def test_accent_rejects_bad_form(tmp_path, caplog):
+    for i, bad in enumerate(ACCENT_BAD_VALUE):
+        with pytest.raises(ValueError):
+            Settings(accent=bad)
+        cfg = tmp_path / f"cfg_{i}"
+        cfg.mkdir()
+        caplog.clear()
+        caplog.set_level(logging.DEBUG)
+        raw = write(cfg, json.dumps({"version": 1, "theme": "light", "accent": bad}))
+        s = Settings.load(cfg)
+        assert s.accent is None and s.theme == "light"
+        assert any("accent" in r.getMessage() for r in warnings_of(caplog))
+        s.save(cfg)
+        assert (cfg / BACKUP_FILE).read_bytes() == raw
+        assert on_disk(cfg) == {"version": 1, "theme": "light"}
 
 
-@pytest.mark.parametrize("bad", [5, True, b"ocean", ["ocean"], 1.5])
-def test_accent_rejects_bad_type(bad):
-    with pytest.raises(TypeError):
-        Settings(accent=bad)
+def test_accent_rejects_bad_type():
+    for bad in [5, True, b"ocean", ["ocean"], 1.5]:
+        with pytest.raises(TypeError):
+            Settings(accent=bad)
 
 
 def test_old_file_without_theme_accent_defaults(cfg, caplog):

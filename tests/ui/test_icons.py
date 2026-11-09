@@ -124,10 +124,10 @@ def test_spec_lists_43_names_and_48_files():
     assert len(ALL_PAIRS) == 48
 
 
-@pytest.mark.parametrize(("name", "size"), ALL_PAIRS, ids=[f"{n}-{s}" for n, s in ALL_PAIRS])
-def test_every_spec_icon_has_its_svg_file(name, size):
-    path = icons_dir() / f"{name}_{size}_regular.svg"
-    assert path.is_file(), f"thiếu {path}"
+def test_every_spec_icon_has_its_svg_file():
+    for name, size in ALL_PAIRS:
+        path = icons_dir() / f"{name}_{size}_regular.svg"
+        assert path.is_file(), f"thiếu {path}"
 
 
 def test_icons_dir_has_exactly_the_spec_svgs_and_license():
@@ -149,14 +149,14 @@ _EXTERNAL_URL = re.compile(r"url\(\s*['\"]?\s*(?!#)", re.IGNORECASE)
 _EVENT_ATTR = re.compile(r"\son[a-z]+\s*=", re.IGNORECASE)
 
 
-@pytest.mark.parametrize("path", svg_paths(), ids=lambda p: p.name)
-def test_svg_has_no_active_or_external_content(path):
-    text = path.read_text(encoding="utf-8")
-    assert not _FORBIDDEN_TAGS.search(text), _FORBIDDEN_TAGS.search(text)
-    for _quote, target in _HREF.findall(text):
-        assert target.strip().startswith("#"), f"href ra ngoài: {target!r}"
-    assert not _EXTERNAL_URL.search(text), "url(...) không trỏ vào chính file"
-    assert not _EVENT_ATTR.search(text), "thuộc tính sự kiện on*="
+def test_svg_has_no_active_or_external_content():
+    for path in svg_paths():
+        text = path.read_text(encoding="utf-8")
+        assert not _FORBIDDEN_TAGS.search(text), _FORBIDDEN_TAGS.search(text)
+        for _quote, target in _HREF.findall(text):
+            assert target.strip().startswith("#"), f"href ra ngoài: {target!r}"
+        assert not _EXTERNAL_URL.search(text), "url(...) không trỏ vào chính file"
+        assert not _EVENT_ATTR.search(text), "thuộc tính sự kiện on*="
     # Không DOCTYPE/ENTITY (XXE, “billion laughs”), và là XML hợp lệ với gốc <svg>.
     assert "<!DOCTYPE" not in text.upper()
     assert "<!ENTITY" not in text.upper()
@@ -197,15 +197,15 @@ def test_sizes_match_spec(icons):
 
 
 @pytest.mark.parametrize("dpr", [1.0, 2.0])
-@pytest.mark.parametrize(("name", "size"), ALL_PAIRS, ids=[f"{n}-{s}" for n, s in ALL_PAIRS])
-def test_pixmap_renders_non_empty_at_physical_size(icons, name, size, dpr):
+def test_pixmap_renders_non_empty_at_physical_size(icons, dpr):
     color = QColor("#1E7F61")
-    pm = icons.pixmap(name, size, color, dpr)
-    assert not pm.isNull()
-    physical = round(size * dpr)
-    assert (pm.width(), pm.height()) == (physical, physical)
-    assert pm.devicePixelRatio() == pytest.approx(dpr)
-    assert_tinted(pm, color, f"{name}_{size}@{dpr}")
+    for name, size in ALL_PAIRS:
+        pm = icons.pixmap(name, size, color, dpr)
+        assert not pm.isNull()
+        physical = round(size * dpr)
+        assert (pm.width(), pm.height()) == (physical, physical)
+        assert pm.devicePixelRatio() == pytest.approx(dpr)
+        assert_tinted(pm, color, f"{name}_{size}@{dpr}")
 
 
 def test_pixmap_default_dpr_is_1(icons):

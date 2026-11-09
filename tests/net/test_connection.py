@@ -440,18 +440,18 @@ async def _call_open(kind: str, ids, addresses, port, **overrides):
     )
 
 
-@pytest.mark.parametrize("kind", ["pairing", "control"])
-@pytest.mark.parametrize("addresses", BAD_ADDRESSES, ids=repr)
-async def test_open_rejects_bad_addresses_before_io(no_io, ids, kind, addresses):
-    with pytest.raises(ValueError):
-        await _call_open(kind, ids, addresses, 47474)
+async def test_open_rejects_bad_addresses_before_io(no_io, ids):
+    for kind in ("pairing", "control"):
+        for addresses in BAD_ADDRESSES:
+            with pytest.raises(ValueError):
+                await _call_open(kind, ids, addresses, 47474)
 
 
-@pytest.mark.parametrize("kind", OPEN_KINDS)
-@pytest.mark.parametrize("port", [0, 65536, -1, True, False, "47474", 47474.0, None], ids=repr)
-async def test_open_rejects_bad_port_before_io(no_io, ids, kind, port):
-    with pytest.raises(ValueError):
-        await _call_open(kind, ids, [LOCAL], port)
+async def test_open_rejects_bad_port_before_io(no_io, ids):
+    for kind in OPEN_KINDS:
+        for port in [0, 65536, -1, True, False, "47474", 47474.0, None]:
+            with pytest.raises(ValueError):
+                await _call_open(kind, ids, [LOCAL], port)
 
 
 @pytest.mark.parametrize("kind", OPEN_KINDS)
@@ -503,12 +503,12 @@ BAD_EXPECTED_PEMS = {
 }
 
 
-@pytest.mark.parametrize("expected", list(BAD_EXPECTED_PEMS.values()), ids=list(BAD_EXPECTED_PEMS))
-async def test_open_control_rejects_bad_expected_cert_pem_before_io(no_io, ids, expected):
+async def test_open_control_rejects_bad_expected_cert_pem_before_io(no_io, ids):
     """`docs/protocol.md` mục 2.1: `expected_cert_pem` qua `peer_cert_from_pem`; lỗi (kể cả
     InvalidCertificate) → ValueError, trước mọi I/O."""
-    with pytest.raises(ValueError):
-        await _call_open("control", ids, [LOCAL], 47474, expected=expected)
+    for expected in BAD_EXPECTED_PEMS.values():
+        with pytest.raises(ValueError):
+            await _call_open("control", ids, [LOCAL], 47474, expected=expected)
 
 
 def test_open_control_has_no_expected_fingerprint_parameter():
