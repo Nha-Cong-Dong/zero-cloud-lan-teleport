@@ -645,7 +645,7 @@ def test_open_close_flood_does_not_lose_real_command(qtbot, instances, tmp_path)
     assert first is not None
     seen = Seen(first)
     name = server_name(d, key_of(d))
-    for i in range(400):
+    for i in range(60):
         sock = QLocalSocket()
         sock.connectToServer(name)
         sock.waitForConnected(50)

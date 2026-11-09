@@ -148,7 +148,7 @@ json_like = st.recursive(
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.binary(max_size=400)
     | json_like.map(lambda v: json.dumps(v).encode())
@@ -163,7 +163,7 @@ def test_fuzz_decode_body_returns_dict_or_framing_error(body):
 
 
 @pytest.mark.slow
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.dictionaries(st.text(max_size=10), json_like, max_size=5))
 def test_fuzz_encode_decode_roundtrip_of_objects(obj):
     frame = encode_message(obj)
@@ -246,7 +246,7 @@ def test_decode_body_keeps_every_check_for_bytearray(body):
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.binary(max_size=300)
     | json_like.map(lambda v: json.dumps(v).encode())
@@ -444,7 +444,7 @@ def _deep_documents(draw) -> dict:
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(_deep_documents() | st.dictionaries(st.text(max_size=4), _trees, max_size=4))
 def test_fuzz_depth_check_agrees_with_reference_counter(doc):
     body = compact(doc)

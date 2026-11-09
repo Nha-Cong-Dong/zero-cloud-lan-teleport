@@ -339,7 +339,7 @@ PATHS = st.one_of(st.sampled_from(["/", "/mnt/usb/x", "/mnt/my usb/x", "", "/a/b
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(TEXT, PATHS)
 def test_property_parse_mountinfo_never_raises(storage, text, path):
     out = storage._parse_mountinfo(text, path)

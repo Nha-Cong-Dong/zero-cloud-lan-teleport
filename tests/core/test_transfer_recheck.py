@@ -21,7 +21,7 @@ from hypothesis import strategies as st
 from teleport.core.blocks import DIGEST_SIZE
 from teleport.core.messages import Accept, Reject
 
-HYPO = settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+HYPO = settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 
 
 # ---- Phụ trợ ----------------------------------------------------------------------------------

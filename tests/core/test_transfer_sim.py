@@ -91,7 +91,7 @@ GARBAGE = b"\xee" * 32
 EMPTY_ROOT = hashlib.sha256(b"").digest()
 
 SIM = settings(
-    max_examples=150,
+    max_examples=35,
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
 )

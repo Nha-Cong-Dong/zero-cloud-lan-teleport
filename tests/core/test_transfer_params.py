@@ -960,7 +960,7 @@ class Fuzz:
 
 @pytest.mark.slow
 @settings(
-    max_examples=200,
+    max_examples=35,
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
 )

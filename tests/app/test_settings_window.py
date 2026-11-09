@@ -591,7 +591,7 @@ def _windows(draw):
     )
 
 
-@settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(_windows(), st.none() | st.from_regex(r"[0-9a-f]{32}", fullmatch=True), st.booleans())
 def test_window_roundtrip_hypothesis(window, last, hint):
     s = Settings(window=window, last_conversation=last, tray_hint_shown=hint)

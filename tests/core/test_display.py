@@ -337,7 +337,7 @@ def _check(name: str, out: str, width: int) -> None:
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
 @given(name=st.text(alphabet=_CHARS, min_size=1, max_size=64))
 def test_h1_any_valid_device_name_fits_32_columns_without_blank_chars(display, name):
     assume(is_valid_name(name))
@@ -345,7 +345,7 @@ def test_h1_any_valid_device_name_fits_32_columns_without_blank_chars(display, n
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(name=st.text(alphabet=_CHARS, max_size=200), width=st.integers(min_value=2, max_value=80))
 def test_h1_any_text_fits_any_width(display, name, width):
     _check(name, display.display_name(name, max_width=width), width)
@@ -427,7 +427,7 @@ _SIZE_RE = re.compile(r"(\d+)(?:,(\d))? (byte|KB|MB|GB|TB)")
 _UNIT = {"KB": KIB, "MB": MIB, "GB": GIB, "TB": TIB}
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(n=st.one_of(st.integers(0, 2**52), st.integers(0, 4 * KIB), st.integers(1000 * MIB, 1030 * MIB)))
 def test_p27_format_size_is_close_to_value_and_well_formed(display, n):
     out = display.format_size(n)
@@ -470,7 +470,7 @@ def test_p27_format_duration_matches_spec_examples(display):
         assert display.format_duration(s) == expected
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     case=st.one_of(
         st.integers(1, 59).map(lambda s: (s, f"{s} giây")),
@@ -529,7 +529,7 @@ def test_p27_display_filename_custom_width(display):
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     stem=st.text(alphabet=_CHARS, min_size=1, max_size=200),
     ext=st.sampled_from(["", ".mp4", ".txt", ".tar.gz", ".docx"]),

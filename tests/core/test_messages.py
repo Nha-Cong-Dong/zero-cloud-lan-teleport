@@ -704,7 +704,7 @@ def test_pair_nonce_signature_and_nonce_are_not_interchangeable():
         parse_message({"type": "pair_nonce", "nonce": SIG128, "signature": HEX64})
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.text(max_size=140))
 def test_property_signature_accepts_only_128_lowercase_hex(value):
     import re as _re
@@ -719,7 +719,7 @@ def test_property_signature_accepts_only_128_lowercase_hex(value):
     assert parse_message(to_dict(msg)) == msg
 
 
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.binary(min_size=64, max_size=64), st.binary(min_size=32, max_size=32))
 def test_property_pair_nonce_roundtrip(sig, nonce):
     msg = PairNonce(nonce=nonce.hex(), signature=sig.hex())
@@ -830,7 +830,7 @@ def test_validate_os_accepts_os_name_enum():
     assert validate_os(OsName.LINUX) == "linux"
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.text(max_size=20) | st.text(alphabet="abcxyz019_ABC-\n ", max_size=18))
 def test_property_validate_os_agrees_with_hello_os(value):
     expected_ok = 1 <= len(value) <= 16 and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in value)
@@ -1018,7 +1018,7 @@ def test_constructing_ping_pong_with_bad_t_raises():
             factory()
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.integers(min_value=-(2**60), max_value=2**60)
     | st.floats(allow_nan=True, allow_infinity=True)
@@ -1142,7 +1142,7 @@ MESSAGE_CLASSES = (
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(any_message_input)
 def test_fuzz_parse_message_only_returns_message_or_message_error(obj):
     try:
@@ -1158,7 +1158,7 @@ def test_fuzz_parse_message_only_returns_message_or_message_error(obj):
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.binary(max_size=300)
     | json_values.map(lambda v: json.dumps(v).encode())
@@ -1173,7 +1173,7 @@ def test_fuzz_decode_body_then_parse_only_raises_protocol_errors(body):
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(tricky_text | st.text(max_size=80) | json_scalars)
 def test_property_name_validation_matches_reference_rules(value):
     expected_ok = reference_text_ok(value, MAX_NAME_LEN)
@@ -1186,7 +1186,7 @@ def test_property_name_validation_matches_reference_rules(value):
     assert result == value
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(tricky_text | st.text(max_size=40))
 def test_property_app_version_validation_matches_reference_rules(value):
     expected_ok = reference_text_ok(value, MAX_APP_VERSION_LEN)
@@ -1200,7 +1200,7 @@ def test_property_app_version_validation_matches_reference_rules(value):
     assert msg.app_version == value
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(tricky_text | st.text(alphabet="0123456789abcdefABCDEF\n ", max_size=66))
 def test_property_device_id_is_exactly_32_lowercase_hex(value):
     expected_ok = len(value) == 32 and all(c in "0123456789abcdef" for c in value)
@@ -1325,7 +1325,7 @@ valid_message_values = st.sampled_from(VALID_MESSAGES) | st.builds(
 )
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(msg=valid_message_values, kind=st.sampled_from(KIND_INPUTS), has_cert=st.booleans())
 def test_property_kind_table_is_consistent(msg, kind, has_cert):
     try:

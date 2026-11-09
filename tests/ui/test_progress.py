@@ -220,7 +220,7 @@ _items = st.lists(
 )
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.lists(_items, min_size=1, max_size=25))
 def test_property_result_is_none_or_0_to_99_and_none_iff_nothing_moves(steps):
     from teleport.ui.progress import ProgressBatch

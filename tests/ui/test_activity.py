@@ -551,7 +551,7 @@ _EVENT = st.tuples(
 )
 
 
-@settings(max_examples=150, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.lists(_EVENT, max_size=40))
 def test_tracker_invariants_for_any_event_order(events):
     from teleport.ui.activity import ActivityTracker

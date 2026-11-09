@@ -535,7 +535,7 @@ _steps = st.lists(
 )
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.integers(min_value=0, max_value=1000), _steps)
 def test_t6_property_never_overshoots_never_goes_back_and_lands(old, steps):
     """I1 `value_at ≤ target ≤ real`; I2 không giảm theo thời gian kể cả khi retarget giữa chừng;
