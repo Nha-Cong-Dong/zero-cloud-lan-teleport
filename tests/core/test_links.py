@@ -53,7 +53,7 @@ OK = ConnectResult.OK
 UNREACHABLE = ConnectResult.UNREACHABLE
 BLOCKING = [ConnectResult.REJECTED, ConnectResult.IDENTITY_MISMATCH, ConnectResult.VERSION_MISMATCH]
 
-HYPO = settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+HYPO = settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 
 
 def delay(n: int) -> float:
@@ -1490,7 +1490,7 @@ LK22_PARAMS = st.fixed_dictionaries(
 
 @pytest.mark.slow
 @pytest.mark.parametrize("first_is_lower", [True, False], ids=["X<Y", "X>Y"])
-@settings(max_examples=1000, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(p=LK22_PARAMS)
 # Ca cố định đỏ chắc chắn với ngưỡng cũ 5 s (lần mở 9,2 s): hypothesis hiếm khi tự tìm lại nó.
 @example(

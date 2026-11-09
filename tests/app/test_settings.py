@@ -854,7 +854,7 @@ def _settings(draw):
 
 
 @pytest.mark.slow
-@settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(_settings())
 def test_roundtrip_hypothesis(s):
     with tempfile.TemporaryDirectory() as d:

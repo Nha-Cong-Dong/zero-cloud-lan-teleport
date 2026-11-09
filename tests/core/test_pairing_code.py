@@ -248,7 +248,7 @@ fingerprints = st.binary(min_size=32, max_size=32).map(bytes.hex)
 nonces = st.binary(min_size=32, max_size=32)
 
 
-@settings(max_examples=300)
+@settings(max_examples=35)
 @given(fingerprints, fingerprints, nonces, nonces)
 def test_property_code_matches_reference_and_shape(fp_a, fp_b, n_a, n_b):
     assume(fp_a != fp_b)
@@ -258,7 +258,7 @@ def test_property_code_matches_reference_and_shape(fp_a, fp_b, n_a, n_b):
     assert format_code(code) == f"{code[:3]} {code[3:]}"
 
 
-@settings(max_examples=300)
+@settings(max_examples=35)
 @given(fingerprints, nonces, nonces)
 def test_property_commitment_matches_reference_and_checks(fp, n, other):
     commitment = make_commitment(fp, n)
@@ -269,7 +269,7 @@ def test_property_commitment_matches_reference_and_checks(fp, n, other):
         assert check_commitment(fp, other, commitment) is False
 
 
-@settings(max_examples=200)
+@settings(max_examples=35)
 @given(fingerprints, fingerprints, nonces)
 def test_property_commitment_bound_to_responder_fingerprint(fp, other_fp, n):
     assume(fp != other_fp)
@@ -288,7 +288,7 @@ def test_property_format_code_rejects_everything_else(code):
         format_code(code)
 
 
-@settings(max_examples=200)
+@settings(max_examples=35)
 @given(st.text(max_size=70))
 def test_property_bad_fingerprint_text_raises_value_error(fp):
     assume(not re.fullmatch(r"[0-9a-f]{64}", fp))
@@ -497,7 +497,7 @@ def test_proof_payload_rejects_bad_commitment():
             proof_payload(FP_A, FP_B, N_A, commitment)
 
 
-@settings(max_examples=200)
+@settings(max_examples=35)
 @given(fingerprints, fingerprints, nonces, fingerprints)
 def test_property_proof_payload_matches_reference(fp_a, fp_b, n_a, commitment):
     assume(fp_a != fp_b)

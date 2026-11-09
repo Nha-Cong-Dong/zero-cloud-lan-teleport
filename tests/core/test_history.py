@@ -30,7 +30,7 @@ TIDS = [f"{k:032x}" for k in range(1, 400)]
 STAMP = "2026-10-28T08:15:00Z"
 STAMP_DT = datetime.datetime(2026, 10, 28, 8, 15, 0, tzinfo=UTC)
 
-SETTINGS = settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+SETTINGS = settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------

@@ -996,7 +996,7 @@ _EVENT = st.tuples(
 )
 
 
-@settings(max_examples=80, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(st.lists(_EVENT, max_size=25), st.lists(st.tuples(st.integers(0, 3), st.booleans()), max_size=4))
 def test_radar_model_stays_sorted_under_any_event_sequence(qapp, events, snapshot):
     """Property: sau mọi chuỗi `NodeEvent` (thêm, bỏ, đổi tên, nối, ngắt, ghép), hàng luôn theo

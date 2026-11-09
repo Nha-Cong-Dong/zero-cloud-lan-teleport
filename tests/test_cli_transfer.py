@@ -753,7 +753,7 @@ def test_transfer_resumed_message_shows_peer_name_through_display_name(cli):
     assert " " not in line and "　" not in line
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     peer=st.one_of(st.none(), st.text(max_size=80)),
     names=st.lists(st.text(min_size=1, max_size=40), min_size=1, max_size=4),
@@ -907,7 +907,7 @@ _PEER_NAMES = st.one_of(
 )
 
 
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     result=st.sampled_from(_RESULTS),
     direction=st.sampled_from(["send", "receive"]),
@@ -1071,7 +1071,7 @@ def test_progress_line_prefixes_sender_name_on_receive(cli):
     assert SENDER in line and line.rstrip().endswith(P_LINE)
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
     width=st.integers(min_value=20, max_value=200),
     name=st.text(

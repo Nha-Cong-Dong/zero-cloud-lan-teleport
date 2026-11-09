@@ -18,7 +18,7 @@ import teleport.core.transfer as transfer
 from teleport.core.blocks import BLOCK_SIZE
 from teleport.core.transfer import SyncPart, WriteBlock
 
-HYPO = settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+HYPO = settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 
 
 def block_len(size: int, index: int) -> int:

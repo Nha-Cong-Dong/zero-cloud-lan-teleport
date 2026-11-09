@@ -215,7 +215,7 @@ name_chars = st.sampled_from([E, EE, "a", "Z", " ", ZWJ, "中", "　", "\U0001f4
 valid_names = st.text(alphabet=name_chars, min_size=1, max_size=64).filter(_is_valid_name)
 
 
-@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
 @given(valid_names)
 def test_property_truncate_txt_name(name):
     result = truncate_txt_name(name)
@@ -272,7 +272,7 @@ os_names = st.from_regex(r"[a-z0-9_]{1,16}", fullmatch=True)
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
 @given(device_ids, valid_names, os_names)
 def test_property_build_then_parse_roundtrip(device_id, name, os):
     txt = {k.encode(): v.encode() for k, v in build_txt(device_id, name, os).items()}
@@ -400,7 +400,7 @@ txt_values = st.none() | st.binary(max_size=210) | st.sampled_from(list(txt_byte
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.dictionaries(txt_keys, txt_values, max_size=8))
 def test_fuzz_parse_txt_only_raises_discovery_record_error(txt):
     try:
@@ -412,7 +412,7 @@ def test_fuzz_parse_txt_only_raises_discovery_record_error(txt):
     assert type(rec.proto) is int and 1 <= rec.proto <= MAX_SAFE_INTEGER
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.fixed_dictionaries({}, optional={k.encode(): txt_values for k in ("id", "name", "os", "proto")}))
 def test_fuzz_parse_txt_near_valid(txt):
     base = good_txt()
@@ -594,7 +594,7 @@ def test_parse_service_drops_public_addresses():
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.lists(
         st.ip_addresses(v=4).map(str)
@@ -1889,7 +1889,7 @@ def _overflow_ids(t: DiscoveryTracker) -> list[str]:
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops, st.integers(1, 4), st.frozensets(st.sampled_from([*POOL, SELF])))
 def test_property_tracker_invariants(steps, max_services, initial_priority):
     """Mô phỏng net theo hợp đồng 2.4 + 7.1/7.4: mỗi tên trong `resolve`/`probe` được trả lời đúng

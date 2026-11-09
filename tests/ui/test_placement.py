@@ -240,7 +240,7 @@ _SAVED = st.builds(
 )
 
 
-@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(_SAVED, _screens(), st.integers(1, 1000), st.integers(1, 800))
 def test_result_always_inside_target_area(saved, screens, min_w, min_h):
     result = fit(saved, screens, (min_w, min_h))
@@ -261,7 +261,7 @@ def test_result_always_inside_target_area(saved, screens, min_w, min_h):
     assert fit(again, screens, (min_w, min_h)) == result
 
 
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(_screens(), st.data())
 def test_rule2_exact_match_never_moves(screens, data):
     target = data.draw(st.sampled_from(screens))

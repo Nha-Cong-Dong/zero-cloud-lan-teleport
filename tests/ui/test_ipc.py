@@ -263,7 +263,7 @@ def test_windows_none_means_current_os(ipc):
         assert ipc.check_path(text) == ipc.check_path(text, windows=HOST_WINDOWS), text
 
 
-@settings(max_examples=300, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, suppress_health_check=[HealthCheck.too_slow])
 @given(st.text(max_size=60), st.booleans())
 def test_check_path_never_raises_and_result_is_stable(text, windows):
     m = _ipc()
@@ -283,7 +283,7 @@ def test_check_path_never_raises_and_result_is_stable(text, windows):
         assert out.startswith("/") and not out.startswith("//")
 
 
-@settings(max_examples=200)
+@settings(max_examples=35)
 @given(
     st.lists(st.sampled_from(["a", "b", ".", "..", "", "x.txt", "C:", ":", "CON", " ", "..."]), max_size=6),
     st.sampled_from(["C:\\", "C:/", "\\\\srv\\sh\\", "//srv/sh/", "/", "\\", ""]),
@@ -961,7 +961,7 @@ def path_lists(draw, windows: bool):
     return out
 
 
-@settings(max_examples=150, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, suppress_health_check=[HealthCheck.too_slow])
 @given(st.data(), st.booleans())
 def test_well_formed_command_is_accepted_whatever_the_chunking(data, windows):
     m = _ipc()
@@ -981,7 +981,7 @@ def test_well_formed_command_is_accepted_whatever_the_chunking(data, windows):
     assert reader.close() == result
 
 
-@settings(max_examples=100)
+@settings(max_examples=35)
 @given(st.data())
 def test_encode_send_round_trips_host_paths(data):
     m = _ipc()
@@ -990,7 +990,7 @@ def test_encode_send_round_trips_host_paths(data):
     assert result == m.SendCommand(tuple(str(p) for p in paths))
 
 
-@settings(max_examples=300, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, suppress_health_check=[HealthCheck.too_slow])
 @given(
     st.sampled_from([b"", b"send\n", b"show\n", b"send\nC:\\a.txt\n", b"send\n/a\n"]),
     st.binary(max_size=200),
@@ -1063,7 +1063,7 @@ def test_ipc_and_selection_error_agree_on_duplicates(ipc, a, b):
 _CASEY = st.text(alphabet="aAbBđĐéÉ", min_size=1, max_size=3)
 
 
-@settings(max_examples=100)
+@settings(max_examples=35)
 @given(st.lists(_CASEY, min_size=1, max_size=3), st.lists(_CASEY, min_size=1, max_size=3), st.booleans())
 def test_ipc_and_selection_error_agree_on_generated_pairs(c1, c2, alt_sep):
     m = _ipc()

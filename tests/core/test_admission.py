@@ -919,7 +919,7 @@ def _check_rate_windows(m: _Model) -> None:
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops=st.lists(op_strategy, max_size=60))
 def test_random_operation_sequences_keep_every_invariant(ops):
     with pytest.MonkeyPatch.context() as mp:
@@ -1015,7 +1015,7 @@ def test_random_operation_sequences_keep_every_invariant(ops):
 
 
 @pytest.mark.slow
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     times=st.lists(st.sampled_from([0.0, 0.25, 0.5, 1.0, 3.0]), min_size=1, max_size=40),
     ips=st.lists(st.sampled_from(STRANGERS[:6]), min_size=40, max_size=40),

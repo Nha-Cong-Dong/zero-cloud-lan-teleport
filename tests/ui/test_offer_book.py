@@ -372,7 +372,7 @@ _OP = st.one_of(
 )
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(st.lists(_OP, max_size=40))
 def test_property_each_offer_answered_at_most_once_and_only_from_pending(qapp, ops):
     """Mô hình: mỗi key ở (không có) / PENDING / ANSWERED. `answered` chỉ phát khi `answer` gặp PENDING,

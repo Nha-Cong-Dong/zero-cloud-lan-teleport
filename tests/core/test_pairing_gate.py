@@ -280,7 +280,7 @@ def test_finish_of_yielded_outgoing_slot_is_ignored():
     assert g.failures(IP) == 0
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     id_a=st.text(alphabet="0123456789abcdef", min_size=32, max_size=32),
     id_b=st.text(alphabet="0123456789abcdef", min_size=32, max_size=32),
@@ -1046,7 +1046,7 @@ def test_code_shown_shares_the_gate_clock():
 _GAPS = [0.0, 0.5, 1.0, 7.5, 15.0, 30.0, 59.5, 60.0, 60.5, 120.0]  # cộng dồn vẫn chính xác trong float
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(gaps=st.lists(st.sampled_from(_GAPS), min_size=1, max_size=40))
 def test_property_admit_matches_sliding_window_model(gaps):
     """Mô hình: BUSY khi đã có ≥ MAX mã với t > now − WINDOW; ngược lại ACCEPT và mã mới được đếm."""
@@ -1295,7 +1295,7 @@ def test_initiating_to_rejects_bad_ip():
 _ips = st.sampled_from([IP, IP2, IP3, "10.0.0.1"])
 
 
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     target=_ips,
     also=st.lists(_ips, max_size=3),

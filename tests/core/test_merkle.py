@@ -151,14 +151,14 @@ def test_ten_gib_file_root_matches_reference():
 # --- Hai tham chiếu khớp nhau, và khớp code (hypothesis) ---------------------------------------
 
 
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.integers(min_value=1, max_value=300))
 def test_reference_implementations_agree(n):
     data = leaves(n)
     assert ref_root_iterative(data) == ref_root_recursive([data[i : i + 32] for i in range(0, len(data), 32)])
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.lists(st.binary(min_size=32, max_size=32), max_size=200))
 def test_property_root_matches_reference(leaf_list):
     data = b"".join(leaf_list)

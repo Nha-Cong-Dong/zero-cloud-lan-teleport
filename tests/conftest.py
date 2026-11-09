@@ -102,13 +102,28 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.skip(reason="TELEPORT_SKIP_MDNS=1"))
 
 
+# Trọng số thời gian bổ sung cho các tệp test giao diện nặng (nhiều socket, hẹn giờ, hoạt ảnh)
+# để phân bổ tải đồng đều giữa các phần (shard) trên máy chủ kiểm thử.
+_HEAVY_FILE_WEIGHTS: dict[str, int] = {
+    "test_gui_transfer.py": 150,
+    "test_chat.py": 120,
+    "test_single_instance.py": 100,
+    "test_pair_then_send.py": 100,
+    "test_snapshots.py": 100,
+    "test_start_screen.py": 80,
+    "test_wait_pairing.py": 80,
+    "test_main_window.py": 80,
+}
+
+
 class _Shard:
     @pytest.hookimpl(trylast=True)
     def pytest_collection_modifyitems(self, config: pytest.Config, items: list[pytest.Item]) -> None:
         """`TELEPORT_SHARD=i/n` (1 ≤ i ≤ n): chỉ chạy phần thứ i trong n phần, chia theo file để mọi test
-        của một file ở cùng một phần. Chia tham lam theo số test (file nhiều test trước, vào phần đang ít
-        nhất; hòa thì theo đường dẫn), nên cùng bộ test thì cùng cách chia trên mọi máy. `trylast` để chia
-        sau khi `-m`/`-k` đã lọc. CI dùng để chạy song song các phần tuần tự (architecture.md mục 6)."""
+        của một file ở cùng một phần. Chia tham lam theo trọng số test và độ nặng thời gian (file nặng trước,
+        vào phần đang ít nhất; hòa thì theo đường dẫn), nên cùng bộ test thì cùng cách chia trên mọi máy.
+        `trylast` để chia sau khi `-m`/`-k` đã lọc. CI dùng để chạy song song các phần tuần tự
+        (architecture.md mục 6)."""
         spec = os.environ.get("TELEPORT_SHARD", "")
         if not spec:
             return
@@ -122,9 +137,14 @@ class _Shard:
         counts = collections.Counter(files)
         load = [0] * total
         owner: dict[str, int] = {}
-        for path in sorted(counts, key=lambda p: (-counts[p], p)):
+
+        def _weight(p: str) -> int:
+            base_name = os.path.basename(p)
+            return counts[p] + _HEAVY_FILE_WEIGHTS.get(base_name, 0)
+
+        for path in sorted(counts, key=lambda p: (-_weight(p), p)):
             owner[path] = load.index(min(load))
-            load[owner[path]] += counts[path]
+            load[owner[path]] += _weight(path)
         keep = [item for item, f in zip(items, files, strict=True) if owner[f] == index - 1]
         dropped = [item for item, f in zip(items, files, strict=True) if owner[f] != index - 1]
         if dropped:

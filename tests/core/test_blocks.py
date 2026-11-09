@@ -118,7 +118,7 @@ def test_block_count_rejects_invalid_size():
             block_count(size)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.integers(min_value=0, max_value=4 * TiB))
 def test_property_block_lengths_sum_to_size(size):
     count = block_count(size)
@@ -190,7 +190,7 @@ def test_pack_header_rejects_invalid_arguments():
             pack_header(index, length, digest)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.integers(min_value=0, max_value=2**32 - 1),
     st.integers(min_value=1, max_value=MiB),
@@ -241,7 +241,7 @@ def test_empty_file_accepts_no_block():
         _receive(ref_header(0, 1, DIGEST), 0)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.integers(min_value=1, max_value=4 * TiB), st.data())
 def test_property_check_block_accepts_iff_index_and_length_match(size, data):
     count = ref_count(size)

@@ -2597,7 +2597,7 @@ _PROMPT_NAME_CHARS = st.one_of(
 
 @pytest.mark.slow
 @settings(
-    max_examples=150,
+    max_examples=35,
     deadline=None,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )

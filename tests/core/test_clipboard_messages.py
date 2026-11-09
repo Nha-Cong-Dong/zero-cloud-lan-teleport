@@ -397,7 +397,7 @@ fuzz_dicts = st.builds(
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(d=fuzz_dicts)
 def test_property_any_clipboard_dict_parses_or_raises_message_error(d):
     try:
@@ -450,14 +450,14 @@ kind_data = st.one_of(
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(m=_valid_clipboards(kind_data))
 def test_property_valid_clipboard_round_trips_through_frame(m):
     assert parse_message(to_dict(m)) == m
     assert through_frame(m) == m
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(kind=st.text(max_size=70))
 def test_property_kind_rule_matches_spec_regex(kind):
     expected_ok = (

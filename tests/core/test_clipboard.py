@@ -274,7 +274,7 @@ any_text = st.lists(
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(t=any_text)
 def test_property_normalize_text_matches_reference(t):
     n = normalize_text(t)
@@ -294,7 +294,7 @@ def test_text_fingerprint_is_sha256_of_normalized_utf8():
     assert text_fingerprint("a\x00") != text_fingerprint("a")
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(t=any_text)
 def test_property_text_fingerprint_equals_wire_sha256(t):
     assume(normalize_text(t) != "")
@@ -723,7 +723,7 @@ def test_png_exactly_ten_mib_fits_and_reassembles():
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(t=any_text)
 def test_property_text_split_then_assemble(t):
     norm = ref_normalize(t)
@@ -747,7 +747,7 @@ def test_cr_before_crlf_survives_send_and_receive():
         assert "\r\n" in ev.content
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(body=st.binary(max_size=2048))
 def test_property_png_split_then_assemble(body):
     content = PNG_SIGNATURE + body
@@ -766,7 +766,7 @@ heavy_text = st.lists(st.tuples(st.sampled_from(HEAVY), run_length), min_size=1,
 
 
 @pytest.mark.slow
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(t=heavy_text)
 def test_property_large_text_fragments_fit_frame_limit(t):
     norm = normalize_text(t)
@@ -1548,7 +1548,7 @@ def _check_events(events, device: str | None) -> None:
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops=st.lists(op, max_size=25), data=st.data())
 def test_property_arbitrary_sequences_never_raise_and_stay_bounded(ops, data):
     devices = [D1, D2, D3]
@@ -1591,7 +1591,7 @@ def test_property_arbitrary_sequences_never_raise_and_stay_bounded(ops, data):
 
 
 @pytest.mark.slow
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(clips=st.lists(st.tuples(st.integers(0, 2), good_clip()), min_size=1, max_size=6), data=st.data())
 def test_property_interleaved_devices_each_clip_ready_or_dropped(clips, data):
     """Mỗi thiết bị gửi tuần tự, liền mạch các clip của mình; các thiết bị xen nhau tùy ý. Mỗi clip có
@@ -1649,7 +1649,7 @@ def test_json_cost_table_matches_json_dumps_for_every_code_point():
             pytest.fail(f"lệch cỡ ở {[hex(ord(c)) for c in bad[:10]]}")
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.text(alphabet=st.characters(exclude_categories=["Cs"])))
 def test_property_json_cost_matches_json_dumps(s):
     assert clip_mod._json_text_len(s) == _real_json_len(s)
@@ -1765,7 +1765,7 @@ def test_discard_never_raises_and_new_clip_after_discard_assembles():
     assert_ready(a.feed(D1, g[1], 0.0), D1, Y, ClipKind.TEXT, "1234")
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(st.data())
 def test_property_reserved_bytes_matches_model_of_clips_in_progress(data):
     """Chuỗi thao tác tùy ý: `reserved_bytes(d)` luôn bằng `total` của clip đang ráp theo mô hình

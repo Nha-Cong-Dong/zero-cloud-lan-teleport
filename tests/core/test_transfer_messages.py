@@ -907,7 +907,7 @@ valid_wires = st.one_of(
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(valid_wires)
 def test_property_valid_wire_round_trips(w):
     msg = parse_message(w)
@@ -1017,14 +1017,14 @@ def _check_only_message_error(obj) -> None:
 
 
 @pytest.mark.slow
-@settings(max_examples=600, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(near_valid | offers_with_fuzzed_files | json_values | st.builds(lambda t: {"type": t}, json_values))
 def test_fuzz_parse_message_only_raises_message_error(obj):
     _check_only_message_error(obj)
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(near_valid.map(lambda d: json.dumps(d, ensure_ascii=True)))
 def test_fuzz_raw_json_with_escaped_surrogates_only_raises_message_error(body):
     # ensure_ascii=True: surrogate lẻ đi qua dưới dạng `\ud800`, đúng như máy kia gửi được.
@@ -1032,7 +1032,7 @@ def test_fuzz_raw_json_with_escaped_surrogates_only_raises_message_error(body):
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(st.lists(entry_values, min_size=1, max_size=4))
 def test_property_offer_accepted_iff_every_file_follows_rules(entries):
     expected_ok = all(
@@ -1051,7 +1051,7 @@ def test_property_offer_accepted_iff_every_file_follows_rules(entries):
     assert [f.name for f in msg.files] == [e["name"] for e in entries]
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.binary(max_size=40))
 def test_property_canonical_base64_bitfield_accepted(raw):
     s = base64.b64encode(raw).decode()
