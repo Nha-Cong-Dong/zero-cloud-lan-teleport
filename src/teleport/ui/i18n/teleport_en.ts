@@ -716,6 +716,64 @@
     </message>
 </context>
 <context>
+    <name>Firewall</name>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>1. Đổi mạng sang Mạng riêng tư (Private):</source>
+        <translation>1. Switch network to Private network:</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>2. Cho phép Teleport qua Tường lửa:</source>
+        <translation>2. Allow Teleport through Firewall:</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Hướng dẫn cấu hình tường lửa</source>
+        <translation>Firewall configuration guide</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Mở Cài đặt Tường lửa Windows → Cho phép ứng dụng qua tường lửa → tìm Teleport và đánh dấu Cho phép trên mạng Riêng tư.</source>
+        <translation>Open Windows Defender Firewall → Allow an app through firewall → find Teleport and check Allow on Private networks.</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Mở Cài đặt mạng</source>
+        <translation>Open Network Settings</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Mở Tường lửa</source>
+        <translation>Open Firewall</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Mở hướng dẫn</source>
+        <translation>Open guide</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Tường lửa của Windows hoặc mạng công cộng có thể đang chặn các máy tính khác kết nối tới Teleport trên máy này.</source>
+        <translation>Windows Firewall or a public network may be blocking other computers from connecting to Teleport on this machine.</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Tường lửa của Windows đang chặn Teleport nhận kết nối.</source>
+        <translation>Windows Firewall is blocking Teleport from receiving connections.</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Vào Cài đặt Windows → Mạng &amp; Internet → Wi-Fi (hoặc Ethernet) → chọn mạng đang kết nối → chuyển sang Mạng riêng tư.</source>
+        <translation>Open Windows Settings → Network &amp; internet → Wi-Fi (or Ethernet) → select connected network → switch to Private network.</translation>
+    </message>
+    <message>
+        <location filename="../firewall.py"/>
+        <source>Đóng</source>
+        <translation>Close</translation>
+    </message>
+</context>
+<context>
     <name>FirstRun</name>
     <message>
         <location filename="../first_run.py"/>
