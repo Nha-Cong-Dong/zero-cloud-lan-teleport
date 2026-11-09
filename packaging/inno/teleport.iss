@@ -101,6 +101,7 @@ vi.DeleteUserData=Xóa luôn cài đặt, danh tính máy và danh sách thiết
 vi.DeleteUserDataFailed=Không xóa hết được thư mục %1. Bạn có thể tự xóa phần còn lại.
 vi.UserDataInUse=Teleport vẫn đang chạy trên máy này (bản cài khác hoặc bản zip) nên chưa xóa thư mục %1. Hãy thoát Teleport rồi tự xóa thư mục này nếu muốn.
 vi.UserDataCheckFailed=Không kiểm được Teleport còn chạy hay không nên chưa xóa thư mục %1. Hãy thoát Teleport rồi tự xóa thư mục này nếu muốn.
+vi.SendToComment=Gửi file tới một máy đã ghép đôi bằng ZCL Teleport
 ; TODO E1 (sau buổi demo): bản tiếng Anh của các message trên, bỏ comment khi bật ngôn ngữ "en".
 ; en.AppRunning=Teleport is running. Quit Teleport (right-click the tray icon → Quit), then click Retry.
 ; en.AppRunningAborted=Teleport is still running. Quit Teleport (right-click the tray icon → Quit), then run the installer again.
@@ -110,6 +111,7 @@ vi.UserDataCheckFailed=Không kiểm được Teleport còn chạy hay không n�
 ; en.DeleteUserDataFailed=Could not delete all of %1. You can delete the rest yourself.
 ; en.UserDataInUse=Teleport is still running on this computer (another installed copy or the zip version), so folder %1 was not deleted. Quit Teleport, then delete the folder yourself if you want.
 ; en.UserDataCheckFailed=Could not check whether Teleport is still running, so folder %1 was not deleted. Quit Teleport, then delete the folder yourself if you want.
+; en.SendToComment=Send files to a paired device with ZCL Teleport
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -131,6 +133,11 @@ Source: "licenses\InnoSetup-6.7.3-license.txt"; DestDir: "{app}\licenses"; DestN
 [Icons]
 Name: "{autoprograms}\ZCL Teleport"; Filename: "{app}\Teleport.exe"
 Name: "{autodesktop}\ZCL Teleport"; Filename: "{app}\Teleport.exe"; Tasks: desktopicon
+; Gửi tới › ZCL Teleport trong File Explorer: Explorer tự nối các đường dẫn đã chọn sau --send (app chỉ
+; mở hộp chọn máy, không tự gửi). {usersendto} là thư mục SendTo của tài khoản chạy bộ cài, kể cả ở chế
+; độ admin (UsedUserAreasWarning=no ở trên): tài khoản khác trên máy không có lối tắt này. Inno ghi lối
+; tắt vào nhật ký gỡ nên gỡ cài tự xóa; không cần [InstallDelete] (tên không đổi giữa các bản).
+Name: "{usersendto}\ZCL Teleport"; Filename: "{app}\Teleport.exe"; Parameters: "--send"; Comment: "{cm:SendToComment}"
 
 [Run]
 ; runasoriginaluser: bản cài admin vẫn mở app bằng tài khoản người dùng, không chạy app với quyền admin.

@@ -9,7 +9,9 @@ thì cả module bị bỏ qua. Chạy riêng:
 Các ca:
 
 - (a) `/CURRENTUSER` cài rồi gỡ silent vào `/DIR=<tmp_path>`: cài đủ file, không tạo rule tường lửa,
-  không ghi giá trị Run, gỡ xong không còn gì (thư mục cài, khóa `{AppId}_is1`, lối tắt Start Menu),
+  không ghi giá trị Run, có lối tắt Gửi tới `%APPDATA%\\Microsoft\\Windows\\SendTo\\ZCL Teleport.lnk`
+  trỏ `{app}\\Teleport.exe` với tham số `--send` (spec-f5 mục 2.7), gỡ xong không còn gì (thư mục cài,
+  khóa `{AppId}_is1`, lối tắt Start Menu, lối tắt Gửi tới),
   không đụng `%APPDATA%\\Teleport` khi silent; gỡ chỉ xóa `Run\\Teleport` (và `StartupApproved`) khi
   dữ liệu trỏ vào đúng `{app}\\Teleport.exe`; cài đè dọn `{app}\\_internal`.
 - (b) Chỉ khi tiến trình test đang elevated: `/ALLUSERS` tạo hai rule `Teleport (TCP-In)` /
@@ -274,6 +276,32 @@ def shortcuts(dirs: list[Path]) -> set[Path]:
     return found
 
 
+SENDTO_LINK_NAME = "ZCL Teleport.lnk"  # spec-f5 mục 2.7: `{usersendto}\\ZCL Teleport`
+
+
+def sendto_link() -> Path:
+    """Lối tắt Gửi tới của tài khoản đang chạy test (`{usersendto}` của bản cài `/CURRENTUSER`)."""
+    return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "SendTo" / SENDTO_LINK_NAME
+
+
+def read_link(link: Path) -> tuple[str, str]:
+    """(đích, tham số) của một `.lnk`, đọc bằng `WScript.Shell` (chỉ đọc, không ghi gì)."""
+    script = (
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:TELEPORT_LNK); "
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+        "ConvertTo-Json @{t = $s.TargetPath; a = $s.Arguments}"
+    )
+    p = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        timeout=60,
+        check=True,
+        env={**os.environ, "TELEPORT_LNK": str(link)},
+    )
+    data = json.loads(p.stdout.decode("utf-8-sig"))
+    return str(data["t"]), str(data["a"])
+
+
 def desktop_shortcuts() -> set[Path]:
     dirs = [Path(os.environ["USERPROFILE"]) / "Desktop"]
     if public := os.environ.get("PUBLIC"):
@@ -288,6 +316,26 @@ def desktop_shortcuts() -> set[Path]:
 def not_already_installed() -> None:
     if installed_anywhere():
         pytest.skip(f"khóa {APP_ID}_is1 đã có ở HKCU/HKLM: máy đang cài Teleport, không thử cài đè")
+
+
+@pytest.fixture(autouse=True)
+def sendto_link_guard() -> Iterator[None]:
+    """Mọi lần cài/gỡ đều ghi rồi xóa `{usersendto}\\ZCL Teleport.lnk` thật của tài khoản đang chạy test.
+    Máy đã có lối tắt đó (bản cài thật, người dùng tự tạo) thì sao lưu nội dung + mtime trước test và
+    khôi phục sau test, kể cả khi test hỏng."""
+    link = sendto_link()
+    saved: tuple[bytes, int] | None = None
+    if link.is_file():
+        saved = (link.read_bytes(), link.stat().st_mtime_ns)
+    try:
+        yield
+    finally:
+        if saved is not None:
+            data, mtime = saved
+            if not link.is_file() or link.read_bytes() != data:
+                link.parent.mkdir(parents=True, exist_ok=True)
+                link.write_bytes(data)
+            os.utime(link, ns=(mtime, mtime))
 
 
 def file_stats(root: Path) -> dict[str, tuple[int, int]]:
@@ -457,6 +505,11 @@ def test_currentuser_silent_install_and_uninstall_leave_nothing(inst: Install, u
     run_before = query_value(winreg.HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE)
     menu_before = shortcuts(start_menu_dirs())
     desktop_before = desktop_shortcuts()
+    # Lối tắt Gửi tới có tên cố định; bản có sẵn của người dùng được `sendto_link_guard` (tự dùng) sao lưu
+    # và khôi phục, nên ở đây xóa nó đi để kiểm đúng lối tắt do bộ cài tạo.
+    sendto = sendto_link()
+    sendto.unlink(missing_ok=True)
+    check_sendto = True
 
     inst.install_ok("/CURRENTUSER")
 
@@ -473,6 +526,11 @@ def test_currentuser_silent_install_and_uninstall_leave_nothing(inst: Install, u
     new_menu = shortcuts(start_menu_dirs()) - menu_before
     assert new_menu, "phải có lối tắt Start Menu (D5)"
     assert desktop_shortcuts() == desktop_before, "lối tắt Desktop là task mặc định tắt (D5)"
+    if check_sendto:
+        assert sendto.is_file(), f"phải có lối tắt Gửi tới {sendto} (spec-f5 mục 2.7)"
+        target, arguments = read_link(sendto)
+        assert os.path.normcase(target) == os.path.normcase(str(inst.exe)), target
+        assert arguments == "--send", f"lối tắt Gửi tới phải chạy với --send, thấy {arguments!r}"
     assert query_value(winreg.HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE) == run_before, (
         "bộ cài không được ghi Run (không có task autostart, D7)"
     )
@@ -493,6 +551,8 @@ def test_currentuser_silent_install_and_uninstall_leave_nothing(inst: Install, u
 
     wait_for(lambda: not inst.app.exists(), "thư mục cài bị xóa (dirifempty {app})")
     assert not (shortcuts(start_menu_dirs()) & new_menu), "gỡ phải xóa lối tắt Start Menu"
+    if check_sendto:
+        wait_for(lambda: not sendto.exists(), "gỡ xóa lối tắt Gửi tới (spec-f5 mục 2.7)")
     assert query_value(winreg.HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE) == run_before
     # user_data_guard kiểm %APPDATA%\Teleport còn nguyên (silent luôn giữ dữ liệu, D9).
 

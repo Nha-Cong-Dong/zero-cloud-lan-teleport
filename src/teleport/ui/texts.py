@@ -307,6 +307,16 @@ def device_name_notice() -> str:
     )
 
 
+def presence_online() -> str:
+    """Trạng thái bằng chữ của một máy đang trực tuyến (`conversations.is_online`)."""
+    return QCoreApplication.translate("Texts", "Trực tuyến")
+
+
+def presence_offline() -> str:
+    """Trạng thái bằng chữ của một máy ngoại tuyến."""
+    return QCoreApplication.translate("Texts", "Ngoại tuyến")
+
+
 def os_label(code: str | None) -> str | None:
     """Tên hệ điều hành để hiện (`windows` → “Windows”); mã lạ hay None → None (không hiện)."""
     return _OS_LABELS.get(code or "")

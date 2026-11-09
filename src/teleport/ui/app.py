@@ -1,10 +1,11 @@
 """Điểm vào `teleport-gui`: tham số, một bản mỗi thư mục cấu hình, ráp cửa sổ + khay + node.
 
 Luồng khởi động (spec P4-3 mục 4): phân tích tham số (`--config-dir D`, `--background`,
-`--selftest`); thư mục cấu hình = `--config-dir` › `TELEPORT_HOME` › `paths.config_dir()`, tuyệt
-đối; dựng `QApplication` (`setQuitOnLastWindowClosed(False)`); i18n theo ngôn ngữ đã lưu, font điểm
-nhấn (`ui.fonts.install`, lỗi thì dùng font hệ thống), chế độ màu và màu nhấn đã lưu
-(`theme.set_preference`, trước khi dựng cửa sổ nào nên không nháy màu); `SingleInstance.acquire`;
+`--selftest`, `--send FILE…`); thư mục cấu hình = `--config-dir` › `TELEPORT_HOME` ›
+`paths.config_dir()`, tuyệt đối; dựng `QApplication` (`setQuitOnLastWindowClosed(False)`); i18n theo
+ngôn ngữ đã lưu, font điểm nhấn (`ui.fonts.install`, lỗi thì dùng font hệ thống), chế độ màu và màu
+nhấn đã lưu (`theme.set_preference`, trước khi dựng cửa sổ nào nên không nháy màu); kiểm `--send`
+(“Gửi từ File Explorer”, bên dưới); `SingleInstance.acquire`;
 log ra file (bên dưới); `GuiApp` dựng cửa sổ, khay, rồi chạy node trong `bridge.NodeHost` nếu máy
 đã có `device.crt`. Áp hình học cửa sổ đã lưu (bên dưới), rồi hiện cửa sổ trừ khi `--background`, có
 khay và node đang khởi động; `app.exec()`.
@@ -141,15 +142,52 @@ thread khác), gỡ khi `main` trả về; lỗi lan ra khỏi `main` được g
 thư mục hay file log thì chỉ ghi WARNING ra stderr (nếu có), app vẫn chạy.
 
 **Một bản mỗi thư mục cấu hình** (`SingleInstance`): bản GUI giữ `<config_dir>/gui.lock` suốt đời
-tiến trình (không giữ trước `node.lock` được: trên Windows hai fd cùng tiến trình chặn nhau), rồi
-mới `QLocalServer.listen(server_name(config_dir))`. Nhờ giữ `gui.lock` nên được phép
-`removeServer` socket cũ (Unix). `acquire` lặp tới `wait` giây: lấy được `gui.lock` (thử trước)
-thì mở server; khóa bị giữ mà nối được server thì gửi đúng `b"show\\n"` và trả None (bản kia hiện
-cửa sổ); hết hạn → TimeoutError (`main` báo “đang tắt hoặc chưa phản hồi”).
-Server coi dữ liệu từ tiến trình khác là không tin cậy: đọc tối đa
-`IPC_MAX_BYTES` byte trong `IPC_READ_TIMEOUT_MS`, khớp đúng lệnh thì phát `show_requested`, khác
-thì bỏ qua, luôn đóng kết nối; tối đa `IPC_MAX_CONNECTIONS` kết nối cùng lúc. `listen()` lỗi thì
-chỉ ghi WARNING (vẫn chỉ một bản nhờ `gui.lock`).
+tiến trình (không giữ trước `node.lock` được: trên Windows hai fd cùng tiến trình chặn nhau). Mỗi lần
+lấy được khóa, bản đó tạo một `<config_dir>/gui.key` **mới** (`GUI_KEY_BYTES` byte của `secrets`, ghi
+bằng `write_atomic`, POSIX 0o600) rồi mới `QLocalServer.listen(server_name(config_dir, key))`: tên
+server đổi mỗi lần chạy và chứa bí mật nằm trong thư mục cấu hình của chính người dùng, nên tiến trình
+không đọc được thư mục đó không đoán trước được tên để chiếm chỗ. Tên vẫn liệt kê được (named pipe
+trên Windows) sau khi bản thật đã mở instance đầu của pipe, với quyền truy cập chỉ của người dùng
+(`UserAccessOption`). Trước `listen`, bản giữ khóa thử nối tới tên đó: nối được (có kẻ chiếm sẵn) thì
+tạo khóa mới và thử lại, tối đa `_LISTEN_ATTEMPTS` lần; hết thì WARNING, xóa `gui.key` và không mở
+server (vẫn chỉ một bản nhờ `gui.lock`). Nhờ giữ `gui.lock` nên được phép `removeServer` socket cũ (Unix).
+`acquire(config_dir, wait, *, message=SHOW_COMMAND)` lặp tới `wait` giây: lấy được `gui.lock` (thử
+trước) thì mở server; khóa bị giữ thì đọc `gui.key` (chưa có, không đọc được, sai độ dài → coi như
+chưa nối được, thử lại), nối được server thì gửi `message` (lệnh `show`; `--send` thì lệnh `send`).
+Lệnh chỉ coi là đã tới khi server **đóng** kết nối trong `IPC_ACK_TIMEOUT_MS` (server luôn đóng sau
+khi quyết định, hạn đọc `IPC_READ_TIMEOUT_MS` ngắn hơn); không thì thử nối lại tới hết `wait`. Tới
+rồi thì trả None (bản kia xử lý); hết hạn → TimeoutError (`main` báo “đang tắt hoặc chưa phản hồi”).
+Bản khác đời (tên server tính khác, hay chưa có `gui.key`) thì không nối được, nên cũng ra hộp “chưa
+phản hồi”. Trước khi gửi lệnh, trên Windows bên gửi gọi `AllowSetForegroundWindow(ASFW_ANY)` để bản
+đang chạy được đưa cửa sổ lên trước (lỗi chỉ ghi DEBUG).
+Server coi dữ liệu từ tiến trình khác là không tin cậy: mỗi kết nối một `ipc.IpcReader` (định
+dạng, trần, luật đường dẫn ở docstring `ui.ipc`), bộ đệm đọc của socket `IPC_MAX_BYTES + 1`, hạn
+`IPC_READ_TIMEOUT_MS` cho **cả lệnh** tính từ lúc nhận kết nối; kết nối đã đóng (hay lỗi) lúc nhận
+hoặc trong lúc đọc thì quyết định ngay (dữ liệu còn trong bộ đệm vẫn được đọc), không giữ chỗ trọn
+hạn. Có quyết định thì đóng kết nối trước rồi mới phát `show_requested` hay
+`send_requested(tuple[Path, ...])`. Lệnh sai luật bị bỏ cả lệnh và chỉ ghi DEBUG mã lý do
+(`ipc.DropReason`; hết hạn là `timeout`), không bao giờ ghi byte hay đường dẫn nhận được (mvp N9; lệnh
+`send` chỉ ghi số file). Tối đa `IPC_MAX_CONNECTIONS` kết nối cùng lúc. `listen()` lỗi thì chỉ ghi
+WARNING (vẫn chỉ một bản nhờ `gui.lock`).
+
+**Gửi từ File Explorer** (đợt F, mục F5, mở rộng mvp F4; Gửi tới › ZCL Teleport chạy
+`Teleport.exe --send <file>…`): `--send` rỗng thì như mở bình thường. Có đường dẫn thì `_run`, sau
+`i18n.install` và **trước** `SingleInstance.acquire`, chạy `ipc.prepare_send(…, cwd=os.getcwd())` rồi
+`ipc.encode_send`; sai → hộp lỗi `send_args_head` + `send_args_hint` (chữ thuần, đúng ngôn ngữ đã
+lưu) và `EXIT_USAGE`, không lấy khóa, không nối bản đang chạy. Đã có bản đang chạy: gửi lệnh `send`
+rồi thoát 0. Chưa: bản này chạy như thường (`--send` luôn hiện cửa sổ, kể cả khi có `--background`)
+và gọi `GuiApp.open_send_picker` ngay sau `start()`. Phía bản đang chạy, `send_requested` →
+`_on_send_requested`: như lệnh `show` (đưa cửa sổ lên; đang ERROR thì chạy lại node) rồi
+`open_send_picker`; đang có hộp gửi hay yêu cầu chờ thì không đưa cửa sổ lên nữa (hộp tự đưa lên,
+có giới hạn tần suất, `ui.send_picker`). Hộp và luật yêu cầu chờ ở `ui.send_picker` (`GuiApp.send_picker`):
+`set_ready(True)` ở `_on_devices` của host hiện tại (sau `devices.reset`, cả khi đọc lỗi),
+`set_ready(False)` ngay trước khi dựng `NodeHost` mới, `start_failed` → `discard_pending` +
+`set_ready(False)`, Thoát và `shutdown` → `close_all`. Bấm Gửi (`send_confirmed`) → `_on_picker_send`:
+đưa cửa sổ lên, `open_conversation(máy)`, rồi `TransfersController.request_send(máy, file)` (cùng
+đường gửi của “Gửi file…” ở khay: kiểm chưa ghép đôi / bị chặn, bong bóng “Đang chuẩn bị…”, kiểm file
+trên `DiskExecutor`); máy vừa bị hủy ghép đôi (`open_conversation` False) → câu
+`send.not_paired_message` ở thanh thông báo của luồng chat, không gửi. “Tìm máy mới” của hộp rỗng →
+trang DISCOVER như mục cùng tên ở khay.
 
 **Địa chỉ máy này** (dòng “Địa chỉ: …” của cửa sổ chính): lúc `started` đọc ngay một lần
 `(Node.local_addresses(), Node.port)` bằng `NodeHost.submit` (không chạm Node trên thread Qt), rồi
@@ -226,7 +264,9 @@ mục “Giao diện” (`ui.appearance.AppearanceSection`) và đổi chủ đ�
 hành) bằng `theme.set_preference`, chạy khay một vòng (`_tray_ok`: các setter trạng thái, một
 thông báo clipboard (dấu CLIPBOARD), mỗi `TrayBadge` vẽ ra pixmap 32 px không rỗng, menu con với một
 máy giả, đủ bốn mục), dựng `OfferBook`, một `OfferPanel` và một hộp hỏi nhận file có `offerAlways`
-(`OfferPrompts.preview`: dựng, không hiện; không quyết định). Khi
+(`OfferPrompts.preview`: dựng, không hiện; không quyết định), dựng một `SendPickerDialog` với hai
+file giả và một máy giả (không hiện; Gửi chưa bật) và chạy một vòng `ipc.encode_send` →
+`ipc.IpcReader`. `--selftest` bỏ qua `--send`. Khi
 chạy từ bản đóng gói (`sys.frozen`) thì kiểm thêm `QFontInfo(font_for(SECTION)).styleName()` là
 “Medium” và của TITLE là “Bold” (instance thật của font variable, không đậm giả).
 
@@ -256,6 +296,7 @@ import hashlib
 import logging
 import logging.handlers
 import os
+import secrets
 import signal
 import sys
 import threading
@@ -288,6 +329,7 @@ from teleport.ui import (
     fonts,
     i18n,
     icons,
+    ipc,
     logo,
     motion,
     placement,
@@ -310,6 +352,7 @@ from teleport.ui.offer import OfferBook, OfferPrompts
 from teleport.ui.pairing import PairingController, repair_offline_text
 from teleport.ui.radar import DeviceListModel
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
+from teleport.ui.send_picker import SendPickerController, SendPickerDialog
 from teleport.ui.settings import Section, SettingsController, SettingsPage, autostart_state_hint
 from teleport.ui.transfers import TransfersController
 from teleport.ui.tray import ClipNotice, ClipNoticeKind, SendTarget, Tray, TrayBadge, make_icon
@@ -328,10 +371,14 @@ AUMID_ICON_FILE = "aumid-icon.png"
 AUMID_ICON_SIZE = 256
 
 GUI_LOCK_FILE = "gui.lock"
-SHOW_COMMAND = b"show\n"
-IPC_MAX_BYTES = 16
-IPC_READ_TIMEOUT_MS = 1000
+GUI_KEY_FILE = "gui.key"  # bí mật trong tên server IPC (docstring module)
+GUI_KEY_BYTES = 32
+SHOW_COMMAND = ipc.SHOW_COMMAND
+IPC_MAX_BYTES = ipc.MAX_BYTES  # trần cả lệnh (định dạng ở `ui.ipc`)
+IPC_READ_TIMEOUT_MS = 1000  # hạn đọc cả lệnh, tính từ lúc nhận kết nối
+IPC_ACK_TIMEOUT_MS = 2500  # client chờ server đóng kết nối (lệnh đã tới); > IPC_READ_TIMEOUT_MS
 IPC_MAX_CONNECTIONS = 4
+SEND_PATH_HINT_MAX = 120  # ký tự tối đa của đường dẫn trong câu lỗi `--send` (cắt giữa)
 JOIN_TIMEOUT = 5.0  # giây chờ thread node sau `exec()`
 QUIT_GRACE = 5.0  # giây cộng thêm `close_time_limit()` cho QTimer dự phòng lúc thoát
 LOG_DIR = "logs"
@@ -347,9 +394,10 @@ SESSION_END_GRACE_MS = 30_000
 open_url: Callable[[QUrl], object] = QDesktopServices.openUrl
 
 _CONNECT_TIMEOUT_MS = 200
-_ACK_TIMEOUT_MS = 1500  # client chờ server đọc lệnh rồi đóng kết nối
+_LISTEN_ATTEMPTS = 3  # số khóa mới thử khi tên server đã bị chiếm (docstring module)
 _ACQUIRE_RETRY_MS = 100
 _SIGNAL_POLL_MS = 200
+_ASFW_ANY = -1  # `AllowSetForegroundWindow(ASFW_ANY)`: (DWORD)-1
 
 log = logging.getLogger(__name__)
 
@@ -357,45 +405,118 @@ log = logging.getLogger(__name__)
 # ---- Một bản mỗi thư mục cấu hình ----------------------------------------------------------
 
 
-def server_name(config_dir: Path) -> str:
-    """Tên `QLocalServer` của thư mục cấu hình: ổn định, không lộ đường dẫn, riêng mỗi người dùng.
+def server_name(config_dir: Path, key: bytes | None = None) -> str:
+    """Tên `QLocalServer` của thư mục cấu hình: ổn định, không lộ đường dẫn, riêng mỗi người dùng,
+    không đoán được khi không đọc được `gui.key`.
 
-    `"teleport-" + sha256(f"{user}\\0{norm}")[:24]`, `norm = normcase(realpath(config_dir))` (Windows:
-    không phân biệt hoa thường, bỏ `\\` cuối). `getpass.getuser()` lỗi thì `user = ""`.
+    `"teleport-" + sha256(user \\0 norm \\0 key)[:24]` (hex), `user` và `norm` mã hóa UTF-8
+    (`surrogatepass`), `norm = normcase(realpath(config_dir))` (Windows: không phân biệt hoa thường, bỏ
+    `\\` cuối). `getpass.getuser()` lỗi thì `user = ""`. `key` None: đọc `gui.key` của `config_dir`
+    (`read_key`); chưa có hay hỏng thì tính với khóa rỗng — tên đó không bản nào lắng nghe (bản giữ
+    `gui.lock` luôn có khóa `GUI_KEY_BYTES` byte), chỉ để công cụ và test tính tên không cần khóa.
     """
+    if key is None:
+        key = read_key(config_dir) or b""
     try:
         user = getpass.getuser()
     except Exception:
         user = ""
     norm = os.path.normcase(os.path.realpath(os.fspath(config_dir)))
-    digest = hashlib.sha256(f"{user}\0{norm}".encode("utf-8", "surrogatepass")).hexdigest()
-    return "teleport-" + digest[:24]
+    material = f"{user}\0{norm}\0".encode("utf-8", "surrogatepass") + key
+    return "teleport-" + hashlib.sha256(material).hexdigest()[:24]
 
 
-def _send_show(name: str) -> bool:
-    """Nối tới bản đang chạy và gửi lệnh `show`; True nếu nối được.
+def read_key(config_dir: Path) -> bytes | None:
+    """Khóa trong `<config_dir>/gui.key`; chưa có, không đọc được hay sai độ dài → None."""
+    try:
+        data = (Path(config_dir) / GUI_KEY_FILE).read_bytes()
+    except OSError:
+        return None
+    return data if len(data) == GUI_KEY_BYTES else None
 
-    Gửi xong thì chờ server tự đóng kết nối (tối đa `_ACK_TIMEOUT_MS`) trong một vòng sự kiện con,
-    không tự ngắt ngay: đóng ống trước khi server kịp đọc thì Windows bỏ mất dữ liệu. Chờ bằng vòng
-    sự kiện (không `waitForDisconnected`) để server cùng tiến trình (test) vẫn chạy được.
+
+def _new_key(config_dir: Path) -> bytes:
+    """Bản giữ `gui.lock`: khóa mới mỗi lần (ghi nguyên tử, 0o600). Không ghi được → OSError."""
+    key = secrets.token_bytes(GUI_KEY_BYTES)
+    write_atomic(Path(config_dir) / GUI_KEY_FILE, key)
+    return key
+
+
+def _name_taken(name: str) -> bool:
+    """Đã có server lắng nghe tên `name` (kẻ chiếm chỗ): nối thử rồi ngắt ngay, không gửi gì."""
+    sock = QLocalSocket()
+    try:
+        sock.connectToServer(name)
+        return bool(sock.waitForConnected(_CONNECT_TIMEOUT_MS))
+    finally:
+        sock.abort()
+        sock.deleteLater()
+
+
+def _allow_foreground() -> None:
+    """Windows: cho bản đang chạy giành tiêu điểm khi nhận lệnh (`AllowSetForegroundWindow`). Lỗi → DEBUG."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    try:
+        if not ctypes.windll.user32.AllowSetForegroundWindow(_ASFW_ANY):
+            log.debug("AllowSetForegroundWindow lỗi %d", ctypes.GetLastError())
+    except Exception as e:
+        log.debug("không gọi được AllowSetForegroundWindow: %s", type(e).__name__)
+
+
+def _send_command(name: str, data: bytes) -> bool:
+    """Nối tới bản đang chạy và gửi một lệnh (`ui.ipc`); True chỉ khi lệnh đã tới.
+
+    “Đã tới” là server **đóng** kết nối trong `IPC_ACK_TIMEOUT_MS` (server luôn đóng sau khi quyết
+    định); nối được mà server không đóng (hàng chờ bị chiếm, server treo) → False, `acquire` thử lại.
+    Chờ trong một vòng sự kiện con, không tự ngắt ngay: đóng ống trước khi server kịp đọc thì Windows
+    bỏ mất dữ liệu. Chờ bằng vòng sự kiện (không `waitForDisconnected`) để server cùng tiến trình
+    (test) vẫn chạy được, và để Qt ghi nốt phần lệnh chưa ghi hết.
     """
     sock = QLocalSocket()
+    closed: list[bool] = []
     try:
         sock.connectToServer(name)
         if not sock.waitForConnected(_CONNECT_TIMEOUT_MS):
             return False
+        _allow_foreground()
         loop = QEventLoop()
-        sock.disconnected.connect(loop.quit)
-        sock.errorOccurred.connect(loop.quit)
-        QTimer.singleShot(_ACK_TIMEOUT_MS, loop.quit)
-        sock.write(SHOW_COMMAND)
+
+        def on_closed() -> None:
+            closed.append(True)
+            loop.quit()
+
+        def on_error(error: QLocalSocket.LocalSocketError) -> None:
+            if (
+                error == QLocalSocket.LocalSocketError.PeerClosedError
+            ):  # server đóng (có thể trước `disconnected`)
+                closed.append(True)
+            loop.quit()
+
+        sock.disconnected.connect(on_closed)
+        sock.errorOccurred.connect(on_error)
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(loop.quit)
+        timer.start(IPC_ACK_TIMEOUT_MS)
+        sock.write(data)
         sock.flush()
         if sock.state() == QLocalSocket.LocalSocketState.ConnectedState:
             loop.exec()
-        return True
+        else:
+            closed.append(True)
+        timer.stop()
+        return bool(closed)
     finally:
         sock.abort()
         sock.deleteLater()
+
+
+def _send_show(name: str) -> bool:
+    """Gửi lệnh `show` (`_send_command`)."""
+    return _send_command(name, SHOW_COMMAND)
 
 
 def _pause(milliseconds: int) -> None:
@@ -406,29 +527,34 @@ def _pause(milliseconds: int) -> None:
 
 
 class SingleInstance(QObject):
-    """Giữ `gui.lock` và server nhận lệnh `show` của bản GUI đang chạy cho một thư mục cấu hình."""
+    """Giữ `gui.lock` và server nhận lệnh `show` / `send` của bản GUI đang chạy cho một thư mục cấu hình."""
 
     show_requested = Signal()
+    send_requested = Signal(object)  # tuple[Path, ...] đã qua luật của `ui.ipc`
 
     def __init__(self, lock: NodeLock, name: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._lock = lock
         self._name = name
         self._server: QLocalServer | None = None
-        self._clients: dict[QLocalSocket, bytearray] = {}
+        self._clients: dict[QLocalSocket, ipc.IpcReader] = {}
 
     @classmethod
-    def acquire(cls, config_dir: Path, wait: float = 3.0) -> SingleInstance | None:
-        """Thành bản duy nhất của `config_dir`, hoặc báo bản đang chạy hiện cửa sổ (trả None).
+    def acquire(
+        cls, config_dir: Path, wait: float = 3.0, *, message: bytes = SHOW_COMMAND
+    ) -> SingleInstance | None:
+        """Thành bản duy nhất của `config_dir`, hoặc gửi `message` cho bản đang chạy (trả None).
 
-        Mỗi vòng thử lấy `gui.lock` **trước**: được thì `removeServer` + `listen` và trả bản này;
-        chỉ khi khóa đang bị giữ mới nối tới server để gửi `show`. Làm ngược lại thì một người dùng
-        khác dựng trước pipe/socket cùng tên là đủ làm GUI tưởng đã có bản khác rồi thoát (từ chối
-        dịch vụ cục bộ); `gui.lock` nằm trong thư mục cấu hình của chính người dùng nên không giả được.
-        Hết `wait` giây mà không được gì → TimeoutError. Không tạo/khóa được `gui.lock` → OSError.
+        Mỗi vòng thử lấy `gui.lock` **trước**: được thì tạo `gui.key` mới (tên chưa ai lắng nghe,
+        `_fresh_name`), `removeServer` + `listen` và trả bản này; chỉ khi khóa đang bị giữ mới đọc
+        `gui.key` và nối tới server để gửi `message` (tới khi server đóng kết nối, `_send_command`).
+        Làm ngược lại thì một người dùng khác dựng trước pipe/socket cùng tên là đủ làm GUI tưởng đã
+        có bản khác rồi thoát (từ chối dịch vụ cục bộ); `gui.lock` nằm trong thư mục cấu hình của chính
+        người dùng nên không giả được. Hết `wait` giây mà không được gì → TimeoutError (lần thử cuối bắt
+        đầu trước hạn có thể chờ thêm tới một lần nối và một `IPC_ACK_TIMEOUT_MS`).
+        Không tạo/khóa được `gui.lock` hay không ghi được `gui.key` → OSError (đã nhả khóa).
         """
         config_dir = Path(config_dir)
-        name = server_name(config_dir)
         deadline = time.monotonic() + max(0.0, wait)
         while True:
             lock = NodeLock(config_dir, GUI_LOCK_FILE)
@@ -437,17 +563,40 @@ class SingleInstance(QObject):
             except NodeLockedError:
                 pass
             else:
+                try:
+                    name = cls._fresh_name(config_dir)  # khóa mới, trước `listen`
+                except OSError:
+                    lock.release()
+                    raise
+                if name is None:  # mọi tên thử đều đã bị chiếm
+                    log.warning("không mở được kênh nhận lệnh từ bản Teleport khác: tên đã bị chiếm")
+                    try:  # để bản thứ hai không gửi lệnh tới kẻ đang chiếm tên của khóa cuối
+                        (config_dir / GUI_KEY_FILE).unlink(missing_ok=True)
+                    except OSError:
+                        log.debug("không xóa được gui.key", exc_info=True)
+                    return cls(lock, "")
                 instance = cls(lock, name)
                 instance._listen()
                 return instance
-            if _send_show(name):
+            peer_key = read_key(config_dir)
+            if peer_key is not None and _send_command(server_name(config_dir, peer_key), message):
                 return None
             if time.monotonic() >= deadline:
                 raise TimeoutError("một bản Teleport khác giữ gui.lock nhưng không trả lời")
             _pause(_ACQUIRE_RETRY_MS)
 
+    @staticmethod
+    def _fresh_name(config_dir: Path) -> str | None:
+        """Tên server với một khóa mới chưa ai lắng nghe; `_LISTEN_ATTEMPTS` lần đều bị chiếm → None."""
+        for _ in range(_LISTEN_ATTEMPTS):
+            name = server_name(config_dir, _new_key(config_dir))
+            if not _name_taken(name):
+                return name
+        return None
+
     @property
     def name(self) -> str:
+        """Tên server (rỗng khi không mở được vì tên bị chiếm)."""
         return self._name
 
     @property
@@ -485,7 +634,7 @@ class SingleInstance(QObject):
 
         Hàng chờ của `QLocalServer` cũng giới hạn ở `IPC_MAX_CONNECTIONS` (`setMaxPendingConnections`):
         đầy thì bên nối tới không nối được và thử lại sau, nên kết nối im lặng không chiếm chỗ mãi
-        (mỗi kết nối đã nhận bị ngắt sau `IPC_READ_TIMEOUT_MS`).
+        (mỗi kết nối đã nhận bị ngắt sau `IPC_READ_TIMEOUT_MS`, tính cho cả lệnh).
         """
         server = self._server
         while (
@@ -495,29 +644,51 @@ class SingleInstance(QObject):
             if sock is None:
                 break
             sock.setReadBufferSize(IPC_MAX_BYTES + 1)
-            self._clients[sock] = bytearray()
+            self._clients[sock] = ipc.IpcReader()
             timer = QTimer(sock)
             timer.setSingleShot(True)
-            timer.timeout.connect(functools.partial(self._drop, sock))
+            timer.timeout.connect(functools.partial(self._expire, sock))
             timer.start(IPC_READ_TIMEOUT_MS)
             sock.readyRead.connect(functools.partial(self._on_ready_read, sock, False))
             sock.disconnected.connect(functools.partial(self._on_ready_read, sock, True))
-            self._on_ready_read(sock, False)
+            sock.errorOccurred.connect(functools.partial(self._on_socket_error, sock))
+            # Đã đóng hay lỗi lúc nhận (`disconnected` đã phát trước khi nối): quyết định ngay, không giữ
+            # chỗ trọn `IPC_READ_TIMEOUT_MS` (tan-cong F5: mở/đóng liên tục làm kênh bận cả phút).
+            alive = sock.state() == QLocalSocket.LocalSocketState.ConnectedState and sock.isValid()
+            self._on_ready_read(sock, not alive)
 
     def _on_ready_read(self, sock: QLocalSocket, final: bool) -> None:
-        buffer = self._clients.get(sock)
-        if buffer is None:
+        reader = self._clients.get(sock)
+        if reader is None:
             return
-        buffer += bytes(sock.read(IPC_MAX_BYTES + 1 - len(buffer)).data())
-        if len(buffer) > IPC_MAX_BYTES:
-            self._drop(sock)
+        decision: ipc.Decision | None = None
+        while decision is None and sock.bytesAvailable() > 0:
+            data = bytes(sock.read(IPC_MAX_BYTES + 1).data())
+            if not data:
+                break
+            decision = reader.feed(data)
+        if decision is None and final:
+            decision = reader.close()
+        if decision is None:
             return
-        if not (final or b"\n" in buffer or len(buffer) == IPC_MAX_BYTES):
-            return
-        matched = bytes(buffer) == SHOW_COMMAND
-        self._drop(sock)
-        if matched:
+        self._drop(sock)  # đóng kết nối trước khi phát signal
+        if isinstance(decision, ipc.Dropped):
+            log.debug("bỏ một lệnh từ bản Teleport khác: %s", decision.reason.value)
+        elif isinstance(decision, ipc.SendCommand):
+            log.debug("nhận lệnh gửi %d file từ bản Teleport khác", len(decision.paths))
+            self.send_requested.emit(tuple(Path(p) for p in decision.paths))
+        else:
             self.show_requested.emit()
+
+    def _on_socket_error(self, sock: QLocalSocket, *_error: object) -> None:
+        """Lỗi socket (thường là máy kia đã đóng): đọc nốt bộ đệm rồi quyết định ngay."""
+        self._on_ready_read(sock, True)
+
+    def _expire(self, sock: QLocalSocket) -> None:
+        """Hết `IPC_READ_TIMEOUT_MS` mà chưa có quyết định: bỏ lệnh."""
+        if sock in self._clients:
+            log.debug("bỏ một lệnh từ bản Teleport khác: %s", ipc.DropReason.TIMEOUT.value)
+            self._drop(sock)
 
     def _drop(self, sock: QLocalSocket) -> None:
         if self._clients.pop(sock, None) is None:
@@ -690,8 +861,12 @@ class GuiApp(QObject):
         discover.view_preference_changed.connect(self._on_view_preference)
         self.pairing.notice.connect(discover.show_notice)
         self._wire_wait_pairing()
+        self.send_picker = SendPickerController(self.window, self)
+        self.send_picker.send_confirmed.connect(self._on_picker_send)
+        self.send_picker.discover_requested.connect(self._on_tray_discover)
         if instance is not None:
             instance.show_requested.connect(self._on_show_requested)
+            instance.send_requested.connect(self._on_send_requested)
 
     @property
     def quitting(self) -> bool:
@@ -758,6 +933,7 @@ class GuiApp(QObject):
         if options.clipboard is None and self._clipboard_factory is not None:
             backend = self._clipboard_factory(self)
             options = replace(options, clipboard=backend)
+        self.send_picker.set_ready(False)  # node mới: hộp gửi chờ ảnh chụp `devices()` của nó
         host = NodeHost(options, self)
         if isinstance(backend, QtClipboardBackend):  # backend riêng của host này: dọn khi host dừng
             host.stopped.connect(backend.dispose)
@@ -810,6 +986,7 @@ class GuiApp(QObject):
         self.receive_dir_controller.close_all()
         self.pairing.close_all()
         self.settings.close_all()
+        self.send_picker.close_all()
         self.window.hide()
         self.tray.hide()
         self._quit_timer.start(int((app_node.close_time_limit() + QUIT_GRACE) * 1000))
@@ -834,6 +1011,7 @@ class GuiApp(QObject):
         self.receive_dir_controller.close_all()
         self.pairing.close_all()
         self.settings.shutdown()
+        self.send_picker.close_all()
         if self._instance is not None:
             self._instance.stop_listening()
         deadline = time.monotonic() + JOIN_TIMEOUT
@@ -1194,10 +1372,12 @@ class GuiApp(QObject):
         wanted, self._restore_conversation = self._restore_conversation, None
         if isinstance(result, BaseException):
             log.warning("không đọc được danh sách thiết bị: %s", type(result).__name__)
+            self.send_picker.set_ready(True)  # hộp gửi vẫn mở được (danh sách cập nhật sống)
             return
         self.window.devices.reset(result)
         if wanted is not None:
             self.window.conversations.select_device(wanted)  # không còn → False, hàng 0 giữ nguyên
+        self.send_picker.set_ready(True)
 
     def _on_radar_view(self, host: NodeHost, result: str | BaseException | None) -> None:
         """`radar_view` đã lưu; bỏ nếu host cũ, đang thoát, hay người dùng vừa tự chọn dạng."""
@@ -1296,6 +1476,8 @@ class GuiApp(QObject):
             return
         self._stop_addresses()
         self._reset_pause()
+        self.send_picker.discard_pending()  # yêu cầu gửi đang chờ node bị bỏ, không báo
+        self.send_picker.set_ready(False)
         if code != StartError.LOCKED:
             log.warning("node không khởi động được: %s", code)
         choice = self._first_run
@@ -1327,6 +1509,36 @@ class GuiApp(QObject):
         self.window.bring_to_front()
         if self.window.view_state is ViewState.ERROR:
             self.start_node()
+
+    # ---- Gửi từ File Explorer (đợt F, mục F5) -------------------------------------------------
+
+    def open_send_picker(self, paths: Sequence[Path]) -> None:
+        """Mở hộp “Gửi n file tới…” cho `paths` (hay giữ chờ tới khi node sẵn sàng); không tự gửi."""
+        if self._quitting:
+            return
+        self.send_picker.request(paths)
+
+    def _on_send_requested(self, paths: object) -> None:
+        """Lệnh `send` từ bản mở sau: như lệnh `show`, rồi mở hộp gửi."""
+        if self._quitting or not isinstance(paths, tuple):
+            return
+        picker = self.send_picker
+        if picker.dialog is None and picker.pending is None:  # bận: hộp tự đưa lên, có giới hạn tần suất
+            self.window.bring_to_front()
+            if self.window.view_state is ViewState.ERROR:
+                self.start_node()
+        self.open_send_picker(paths)
+
+    def _on_picker_send(self, device_id: str, paths: object) -> None:
+        """Bấm Gửi ở hộp gửi: mở cuộc trò chuyện rồi gửi qua đường gửi chung (`request_send`)."""
+        if self._quitting or not isinstance(paths, tuple):
+            return
+        self.window.bring_to_front()
+        if not self.window.open_conversation(device_id):  # máy vừa bị hủy ghép đôi
+            log.debug("hộp gửi: máy nhận không còn trong danh sách cuộc trò chuyện")
+            self.transfers.view.show_notice(send.not_paired_message(self._peer_label(device_id)))
+            return
+        self.transfers.request_send(device_id, list(paths))
 
     def _on_hidden_to_tray(self) -> None:
         """Thu cửa sổ xuống khay: chưa từng báo thì bóng thoại “vẫn chạy ở khay” (đang tạm dừng nhận thì
@@ -1617,6 +1829,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--selftest", action="store_true", help="dựng giao diện rồi thoát (kiểm tra bản build)"
     )
+    parser.add_argument(
+        "--send",
+        nargs="*",
+        metavar="FILE",
+        help="mở hộp gửi các file này tới một máy đã ghép đôi (không tự gửi)",
+    )
     return parser
 
 
@@ -1767,6 +1985,34 @@ def _offer_selftest() -> bool:
     return ok and not answered and not prompts.keys()
 
 
+def _send_picker_ok(window: MainWindow) -> bool:
+    """Phần “Gửi từ File Explorer” của `--selftest`: một vòng `encode_send` → `IpcReader`, rồi dựng
+    `SendPickerDialog` với hai file giả và một máy giả (không hiện; Gửi chưa bật), đóng."""
+    root = "C:\\Teleport" if os.name == "nt" else "/Teleport"
+    files = ipc.prepare_send(["a.txt", "b.txt"], cwd=root)
+    decision = ipc.IpcReader().feed(ipc.encode_send(files))
+    if not isinstance(decision, ipc.SendCommand) or tuple(Path(p) for p in decision.paths) != files:
+        log.error("selftest: lệnh send không đọc lại được")
+        return False
+    view = DeviceView(
+        "0" * 64, "Teleport", None, paired=True, online=True, connected=False, addresses=(), port=None
+    )
+    window.devices.reset((view,))
+    dialog = SendPickerDialog(files, window.conversations.model, window)
+    ok = (
+        dialog.files_view.count() == len(files)
+        and dialog.device_ids() == [view.device_id]
+        and dialog.selected_device() is None
+        and not dialog.send_button.isEnabled()
+    )
+    dialog.reject()
+    dialog.deleteLater()
+    window.devices.reset(())
+    if not ok:
+        log.error("selftest: hộp gửi file sai")
+    return ok
+
+
 def _tray_ok(tray: Tray) -> bool:
     """Phần khay của `--selftest` (spec D4 mục 14.17): một vòng setter, mỗi dấu vẽ ra được, menu con."""
     tray.set_running(True)
@@ -1830,6 +2076,7 @@ def _selftest(app: QApplication) -> int:
             or transfers.view.rows()
             or controller.choose(window)
             or not _offer_selftest()
+            or not _send_picker_ok(window)
         ):
             return EXIT_ERROR
         app.processEvents()
@@ -1840,6 +2087,46 @@ def _selftest(app: QApplication) -> int:
     except Exception:
         log.exception("selftest lỗi")
         return EXIT_ERROR
+
+
+def send_args_head() -> str:
+    """Câu chính của hộp lỗi khi tham số `--send` không dùng được."""
+    return QCoreApplication.translate("GuiApp", "Không mở được hộp gửi file.")
+
+
+def _middle_cut(text: str, limit: int) -> str:
+    """`text` dài quá `limit` ký tự thì cắt ở giữa, chèn “…” (kết quả đúng `limit` ký tự)."""
+    if len(text) <= limit:
+        return text
+    keep = max(0, limit - 1)
+    head = keep // 2
+    return text[:head] + "…" + text[len(text) - (keep - head) :]
+
+
+def send_args_hint(kind: ipc.SendArgsErrorKind, path: str | None = None) -> str:
+    """Câu gợi ý của hộp lỗi `--send`. `path` (BAD_PATH) qua `send.printable`, cắt giữa còn
+    ≤ `SEND_PATH_HINT_MAX` ký tự."""
+    t = QCoreApplication.translate
+    if kind is ipc.SendArgsErrorKind.TOO_MANY:
+        return send.too_many_text()
+    if kind is ipc.SendArgsErrorKind.TOO_LARGE:
+        return t("GuiApp", "Bạn chọn quá nhiều file một lần. Hãy chọn ít file hơn rồi gửi lại.")
+    shown = _middle_cut(send.printable(path or ""), SEND_PATH_HINT_MAX)
+    return texts.fill(
+        t(
+            "GuiApp",
+            "{path} không phải đường dẫn đầy đủ tới một file. Hãy chọn file trong File Explorer rồi gửi lại.",
+        ),
+        path=shown,
+    )
+
+
+def _current_dir() -> str:
+    """Thư mục hiện hành để nối đường dẫn tương đối của `--send`; lỗi (thư mục đã bị xóa) → ""."""
+    try:
+        return os.getcwd()
+    except OSError:
+        return ""
 
 
 def _error_box(head: str, hints: list[str]) -> None:
@@ -1903,14 +2190,35 @@ def main(argv: list[str] | None = None) -> int:
         gc_guard.stop()
 
 
-def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
-    """Phần của `main` sau khi có `QApplication` (ngoài `--selftest`), chạy trong `GcGuard`."""
+def _run(
+    app: QApplication,
+    args: argparse.Namespace,
+    config_dir: Path,
+    send_paths: tuple[Path, ...] | None = None,
+) -> int:
+    """Phần của `main` sau khi có `QApplication` (ngoài `--selftest`), chạy trong `GcGuard`.
+
+    `send_paths`: đường dẫn `--send` đã kiểm sẵn; None thì kiểm `args.send` ở đây, sau `i18n.install`
+    và trước khi lấy khóa (docstring module, “Gửi từ File Explorer”)."""
     saved = _saved_settings(config_dir)
     i18n.install(app, saved.language)
     fonts.install()  # lỗi thì `theme.font_for` rơi về font hệ thống
     theme.set_preference(app, theme.mode_from_setting(saved.theme), saved.accent)
+    message: bytes | None = None  # None: lệnh `show` mặc định của `acquire`
     try:
-        instance = SingleInstance.acquire(config_dir)
+        if send_paths is None and getattr(args, "send", None):
+            send_paths = ipc.prepare_send(args.send, cwd=_current_dir())
+        if send_paths:
+            message = ipc.encode_send(send_paths)
+    except ipc.SendArgsError as e:
+        log.debug("tham số --send không dùng được: %s", e.kind.value)  # không ghi đường dẫn (mvp N9)
+        _error_box(send_args_head(), [send_args_hint(e.kind, e.path)])
+        return EXIT_USAGE
+    try:
+        if message is None:
+            instance = SingleInstance.acquire(config_dir)
+        else:
+            instance = SingleInstance.acquire(config_dir, message=message)
     except TimeoutError:  # trước OSError: TimeoutError là lớp con của OSError
         log.error("một bản Teleport khác đang chạy với %s nhưng không trả lời", config_dir)
         _error_box(*texts.not_responding())
@@ -1919,16 +2227,19 @@ def _run(app: QApplication, args: argparse.Namespace, config_dir: Path) -> int:
         _error_box(*texts.config_dir_unusable_at_launch(f"{config_dir}\n{e.strerror or e}"))
         return EXIT_ERROR
     if instance is None:
-        return EXIT_OK  # bản đang chạy đã hiện cửa sổ
+        return EXIT_OK  # bản đang chạy đã hiện cửa sổ (và mở hộp gửi khi có `--send`)
 
     file_log = _attach_file_log(config_dir)  # sau `acquire`: chỉ bản duy nhất ghi và xoay file
     _register_app_user_model_id(config_dir)  # cũng chỉ bản duy nhất, trước bóng thoại đầu tiên
     restore_excepthooks = errorlog.install_excepthooks()
     try:
-        controller = GuiApp(app, config_dir, instance, background=args.background, saved=saved)
+        background = bool(args.background) and not send_paths  # `--send` luôn hiện cửa sổ
+        controller = GuiApp(app, config_dir, instance, background=background, saved=saved)
         restore_sigint = _install_sigint(controller)
         try:
             controller.start()
+            if send_paths:
+                controller.open_send_picker(send_paths)
             app.exec()
         finally:
             restore_sigint()
