@@ -26,6 +26,24 @@ Viết từ spec, không từ code:
   không vùng cuộn nào đang hiện có thanh cuộn ngang, và mọi nút/nhãn một dòng (`QLabel` đúng lớp, không
   xuống dòng) đang hiện có `sizeHint().width() ≤ width()` (chữ không bị cắt). Đo bằng bố cục Qt (không
   đo pixel ảnh) nên vững trên `offscreen`.
+- **Cảnh** (`SCENES`) và **hộp thoại** (`DIALOGS`) dựng ở `tests/ui_scenes.py` (spec E1 mục 2.5), dùng
+  chung với `tests/ui/test_a11y.py`. Hộp thoại (spec E1 mục 2.2): không chữ Việt như cửa sổ; ở cỡ của
+  chính nó (sau `adjustSize`) rộng ≤ `WIDTH` và không nút/nhãn một dòng nào bị cắt (`_overflow` trừ
+  điều kiện cỡ cửa sổ).
+- **Quét tĩnh chữ Việt** (spec E1 mục 2.2): mọi chuỗi literal có chữ Việt trong `ui/**/*.py` chỉ nằm
+  trong tham số của lời gọi dịch (trực tiếp hay bí danh, cùng bộ trích ở trên), docstring (và chuỗi đứng
+  riêng làm câu lệnh), lời gọi log (`log.…`, `logger.…`, `logging.…`), exception sau `raise`, hay đúng
+  “Tiếng Việt”. Chú thích không có trong `ast`. Miễn thêm, có lý do ở `_LOG_HELPERS`: hàm phụ chỉ ghi
+  log, hàm dựng exception ở mọi chỗ, thông điệp `assert`. Miễn theo từng (file, chuỗi nguyên văn), không
+  theo cả file: `VIETNAMESE_EXEMPT` (vĩnh viễn, có lý do) và `VIETNAMESE_KNOWN_GAPS` (mã E1c-n); mỗi mục
+  phải vẫn còn trong nguồn (`test_vietnamese_exemptions_still_exist`).
+- **`KNOWN_GAPS`** (spec E1 mục 2.5): chỉ cảnh mới, lỗi ở file của PR song song, `xfail(strict=True)` kèm
+  mã việc sau: `FITS_KNOWN_GAPS` (tràn chữ) và `VIETNAMESE_KNOWN_GAPS` (quét tĩnh). Mục
+  `FITS_KNOWN_GAPS` chỉ lộ ra khi chữ thân đo bằng font thay thế (spec E1 mục 2.6): nền `offscreen` và
+  chữ thân không có font thật nào (`QFontInfo` trả family rỗng; tiến trình chưa nạp font điểm nhấn). Fixture
+  autouse `_fits_known_gap_xfail` gắn `xfail(strict=True)` lúc chạy, chỉ trong trạng thái đó
+  (`body_font_is_fallback`); ngoài nó (Windows thật, hay offscreen sau khi một test đã gọi
+  `fonts.install()`) hai cảnh chạy như test thường và phải xanh. Đối chứng ở cuối file.
 - `available_languages()` có `"en"`; `i18n.loadable("en")`; locale hệ điều hành `en_GB`/`en_US` → `en`;
   đổi vi → en → vi lúc chạy: chữ trên cửa sổ đổi rồi trở lại đúng như cũ.
 - `ui.app._assets_ok()` bắt `.qm` hỏng: gói `teleport.ui` (bản chép trong `tmp_path`, giả qua
@@ -40,7 +58,6 @@ Giả định: `.ts`/`.qm` nằm ở `<gói teleport.ui>/i18n/teleport_en.{ts,qm
 from __future__ import annotations
 
 import ast
-import hashlib
 import importlib.util
 import re
 import shutil
@@ -53,6 +70,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt
+from ui_scenes import DIALOGS, SCENES
 
 # Chữ cái có dấu của tiếng Việt (như `tests/ui/test_i18n_theme.py`).
 VIETNAMESE = re.compile(
@@ -63,7 +81,6 @@ ALLOWED_VIETNAMESE = {"Tiếng Việt"}  # tên tự gọi của ngôn ngữ ngu
 # Từ tiếng Anh có dấu trùng chữ cái tiếng Việt (“café”): bỏ trước khi tìm chữ Việt.
 ENGLISH_ACCENTED = re.compile(r"\bcaf[ée]s?\b", re.IGNORECASE)
 WIDTH, HEIGHT = 720, 460
-RECEIVE_DIR = Path("C:/Users/Minh/Downloads/Teleport")
 NUMERUS_FORMS = 2
 
 Key = tuple[str, str, str]  # (ngữ cảnh, nguồn, disambiguation; "" = không có)
@@ -368,6 +385,216 @@ def test_percent_n_only_in_numerus_calls(extracted):
     assert bad == []
 
 
+# ---- Quét tĩnh chữ Việt ngoài `translate` (spec E1 mục 2.2) ---------------------------------------
+
+_LOG_OBJECTS = {"log", "logger", "_log", "logging"}
+_LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+# Miễn thêm ngoài danh sách của spec (rủi ro mục 6: miễn mới phải có lý do):
+# - hàm phụ chỉ đưa chuỗi vào `log.warning` (`settings._warn`, `TransfersController._log_error`): như lời
+#   gọi log;
+# - dựng exception thật (builtin hay `_NON_BUILTIN_EXCEPTIONS`, không theo đuôi tên) ở bất cứ đâu (không
+#   chỉ sau `raise`: `RuntimeError(...)` truyền cho `on_done`): giao diện
+#   không hiện `str(e)`, `ui/errorlog.py` chỉ ghi tên loại lỗi;
+# - thông điệp của `assert`: chỉ hiện khi lỗi lập trình.
+_LOG_HELPERS = {"_warn", "_log_error"}
+
+
+# Lớp exception không phải builtin mà `ui` dựng (tên cụ thể, không theo đuôi tên: một hàm giao diện kiểu
+# `setError("…")` không được miễn): `asyncio.CancelledError` / `concurrent.futures.CancelledError`.
+_NON_BUILTIN_EXCEPTIONS = {"CancelledError"}
+
+
+def _is_exception_name(name: str) -> bool:
+    """Tên là exception builtin (lớp con `BaseException` resolve được từ `builtins`) hay trong
+    `_NON_BUILTIN_EXCEPTIONS`."""
+    import builtins
+
+    obj = getattr(builtins, name, None)
+    return (isinstance(obj, type) and issubclass(obj, BaseException)) or name in _NON_BUILTIN_EXCEPTIONS
+
+
+def _is_exception_constructor(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+    return _is_exception_name(name)
+
+
+def _is_log_helper_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+    if name in _LOG_HELPERS:
+        return True
+    # functools.partial(self._log_error, "…")
+    return (
+        name == "partial"
+        and bool(node.args)
+        and isinstance(node.args[0], ast.Attribute | ast.Name)
+        and getattr(node.args[0], "attr", getattr(node.args[0], "id", "")) in _LOG_HELPERS
+    )
+
+
+class _TranslateCalls(_Visitor):
+    """Bộ trích của test, ghi thêm nút lời gọi dịch nhận ra được (trực tiếp hay qua bí danh)."""
+
+    def __init__(self, where: str, out: Extracted) -> None:
+        super().__init__(where, out)
+        self.calls: list[ast.Call] = []
+
+    def _call(self, call: ast.Call, stack: Stack) -> None:
+        func = call.func
+        if _is_translate_attr(func) or (isinstance(func, ast.Name) and self._visible(func.id, stack)):
+            self.calls.append(call)
+        super()._call(call, stack)
+
+
+def _is_log_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return False
+    owner = node.func.value
+    return node.func.attr in _LOG_METHODS and isinstance(owner, ast.Name) and owner.id in _LOG_OBJECTS
+
+
+def vietnamese_literal_nodes(tree: ast.AST) -> list[tuple[int, str]]:
+    """(dòng, chuỗi) của mọi literal có chữ Việt **không** nằm ở chỗ được phép: tham số của lời gọi dịch;
+    docstring (và chuỗi đứng riêng làm câu lệnh); lời gọi log; exception sau `raise`; đúng “Tiếng Việt”.
+    Chú thích không có trong `ast` nên tự được bỏ qua. Chưa trừ các mục miễn theo chuỗi (dưới)."""
+    visitor = _TranslateCalls("", Extracted())
+    visitor.visit_scope(tree, [])
+    allowed: set[int] = set()
+
+    def allow(root: ast.AST) -> None:
+        allowed.update(id(n) for n in ast.walk(root))
+
+    for call in visitor.calls:
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            allow(arg)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            allow(node.value)  # docstring, chuỗi đứng riêng
+        elif isinstance(node, ast.Raise) and node.exc is not None:
+            allow(node.exc)
+        elif _is_log_call(node) or _is_log_helper_call(node) or _is_exception_constructor(node):
+            allow(node)
+        elif isinstance(node, ast.Assert) and node.msg is not None:
+            allow(node.msg)
+    bad = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)) or id(node) in allowed:
+            continue
+        if node.value in ALLOWED_VIETNAMESE or not _has_vietnamese(node.value):
+            continue
+        bad.append((node.lineno, node.value))
+    return bad
+
+
+def vietnamese_literals(where: str, tree: ast.AST) -> list[str]:
+    """`vietnamese_literal_nodes` dạng `file:dòng: 'chuỗi'` để báo lỗi."""
+    return [f"{where}:{line}: {text[:60]!r}" for line, text in vietnamese_literal_nodes(tree)]
+
+
+# Miễn vĩnh viễn, theo (file trong `ui/`, chuỗi nguyên văn), không miễn cả file: chuỗi không bao giờ hiện
+# trên giao diện.
+_LOG_FILE_TEXT = "nội dung file log: câu nối chuỗi lỗi (như traceback của Python), không hiện trên giao diện"
+VIETNAMESE_EXEMPT: dict[tuple[str, str], str] = {
+    ("errorlog.py", "Lỗi trên là nguyên nhân trực tiếp của lỗi sau:"): _LOG_FILE_TEXT,
+    ("errorlog.py", "Trong lúc xử lý lỗi trên thì lỗi sau xảy ra:"): _LOG_FILE_TEXT,
+}
+
+# KNOWN_GAPS của quét tĩnh (spec E1 mục 2.5): lỗi thật ở file thuộc PR song song, E1 không được sửa. Mỗi mục
+# là (file, chuỗi nguyên văn) → mã việc sau. `test_vietnamese_exemptions_still_exist` bắt buộc mỗi chuỗi
+# miễn vẫn còn bị quét bắt: sửa xong ở nguồn thì test đó đỏ, đòi xóa mục miễn (strict, không giấu lỗi).
+_E1C_3 = (
+    "E1c-3: help argparse của `teleport-gui --help` (console) chưa dịch; file chủ `ui/app.py` (PR song song)"
+)
+VIETNAMESE_KNOWN_GAPS: dict[tuple[str, str], str] = {
+    ("app.py", "Teleport: gửi file trong mạng LAN."): _E1C_3,
+    ("app.py", "thư mục cấu hình (mặc định: TELEPORT_HOME hoặc thư mục của hệ điều hành)"): _E1C_3,
+    ("app.py", "chỉ hiện ở khay hệ thống (khi khởi động cùng máy)"): _E1C_3,
+    ("app.py", "dựng giao diện rồi thoát (kiểm tra bản build)"): _E1C_3,
+}
+
+
+def _ui_vietnamese_literals() -> list[tuple[str, int, str]]:
+    """(file trong `ui/`, dòng, chuỗi) quét được ở mọi `ui/**/*.py`, chưa trừ miễn."""
+    root = _ui_dir()
+    out: list[tuple[str, int, str]] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+        where = path.relative_to(root).as_posix()
+        out += [(where, line, text) for line, text in vietnamese_literal_nodes(tree)]
+    return out
+
+
+def test_vietnamese_literal_scan_allows_only_listed_places():
+    """Đối chứng cho test dưới: chuỗi Việt trong `setText("…")`, f-string, phép gán bị bắt; trong lời gọi
+    dịch (trực tiếp, bí danh), docstring, log, `raise`, “Tiếng Việt” thì không."""
+    code = (
+        '"""Tài liệu của module."""\n'
+        "import logging\n"
+        "from PySide6.QtCore import QCoreApplication\n"
+        "log = logging.getLogger(__name__)\n"
+        "def f(label, n):\n"
+        '    """Hàm có docstring tiếng Việt."""\n'
+        "    t = QCoreApplication.translate\n"
+        '    label.setText(QCoreApplication.translate("A", "Đã gửi"))\n'
+        '    label.setText(t("A", "Đã nhận {n}").format(n=n))\n'
+        '    log.warning("không mở được %s", n)\n'
+        '    combo = ["Tiếng Việt", "English"]\n'
+        "    if n < 0:\n"
+        '        raise ValueError(f"số âm: {n}")\n'
+        '    label.setText("Chưa dịch")\n'
+        '    label.setToolTip(f"Còn {n} giây")\n'
+        '    title = "Cài đặt"\n'
+        '    host.call(f, _warn("lưu cài đặt"))\n'
+        '    host.call(f, functools.partial(self._log_error, "hủy lượt"))\n'
+        '    on_done(RuntimeError("chưa có node"))\n'
+        '    assert n, "phải có số"\n'
+        '    label.setText(str(n) + " giây")\n'
+        "    return combo, title\n"
+    )
+    bad = vietnamese_literals("x.py", ast.parse(code))
+    assert sorted({int(b.split(":", 2)[1]) for b in bad}) == [14, 15, 16, 21], bad
+
+
+def test_exception_exemption_is_only_for_real_exception_classes():
+    """Miễn “dựng exception” chỉ cho lớp exception thật: `RuntimeError(...)`, `asyncio.CancelledError(...)`;
+    không cho hàm giao diện có tên tận cùng Error/Exception như `label.setError("…")`."""
+
+    def call(src: str) -> ast.AST:
+        return ast.parse(src, mode="eval").body
+
+    assert _is_exception_constructor(call('RuntimeError("lỗi")'))
+    assert _is_exception_constructor(call('asyncio.CancelledError("hủy")'))
+    assert not _is_exception_constructor(call('self.name_field.setError("Hãy nhập tên")'))
+    assert not _is_exception_constructor(call('showException("Lỗi")'))
+    assert not _is_exception_constructor(call('MyDialogError("Lỗi")'))
+
+
+def test_ui_sources_have_no_untranslated_vietnamese_literals():
+    """Spec E1 mục 2.2: chuỗi literal có chữ Việt trong `ui/**/*.py` chỉ nằm ở chỗ được phép."""
+    exempt = VIETNAMESE_EXEMPT.keys() | VIETNAMESE_KNOWN_GAPS.keys()
+    bad = [
+        f"{where}:{line}: {text[:60]!r}"
+        for where, line, text in _ui_vietnamese_literals()
+        if (where, text) not in exempt
+    ]
+    assert bad == []
+
+
+def test_vietnamese_exemptions_still_exist():
+    """Mỗi mục `VIETNAMESE_EXEMPT`/`VIETNAMESE_KNOWN_GAPS` vẫn đúng là một chuỗi quét bắt được ở đúng file
+    đó. Đỏ ở đây = chuỗi đã sửa hay dời (vd. E1c-3 đã dịch): xóa mục miễn, đừng giữ chỗ miễn thừa."""
+    found = {(where, text) for where, _line, text in _ui_vietnamese_literals()}
+    stale = sorted((VIETNAMESE_EXEMPT.keys() | VIETNAMESE_KNOWN_GAPS.keys()) - found)
+    assert stale == []
+    assert not VIETNAMESE_EXEMPT.keys() & VIETNAMESE_KNOWN_GAPS.keys()
+    assert all(reason.startswith("E1c-") for reason in VIETNAMESE_KNOWN_GAPS.values())
+
+
 # =================================================================================================
 # .ts
 # =================================================================================================
@@ -512,284 +739,6 @@ def test_numerus_strings_render_count_in_english(qapp, back_to_source, ts):
 # =================================================================================================
 
 
-def _device(name: str, *, paired: bool, online: bool = True, connected: bool = False, os_name="windows"):
-    from teleport.app.devices import DeviceView
-
-    return DeviceView(
-        device_id=hashlib.sha256(name.encode()).hexdigest()[:32],
-        name=name,
-        os=os_name if online else None,
-        paired=paired,
-        online=online,
-        connected=connected,
-        addresses=("192.168.1.20",) if online else (),
-        port=47474 if online else None,
-    )
-
-
-def _window(qtbot):
-    from teleport.ui.main_window import MainWindow
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    return window
-
-
-def _running(qtbot, views=()):
-    window = _window(qtbot)
-    window.devices.reset(list(views))
-    window.show_running("Laptop-Minh", RECEIVE_DIR)
-    window.set_addresses(["192.168.1.15"], None)
-    return window
-
-
-def _some_devices():
-    return [
-        _device("PC-Nha", paired=True, connected=True),
-        _device("MacBook-Lan", paired=True, os_name="macos"),
-        _device("Ubuntu-Lab", paired=True, online=False),
-        _device("Laptop-Khach", paired=False),
-    ]
-
-
-def scene_welcome(qtbot):
-    window = _window(qtbot)
-    window.show_welcome("Laptop-Minh")
-    return window
-
-
-def scene_starting(qtbot):
-    window = _window(qtbot)
-    window.show_starting()
-    return window
-
-
-def scene_running_empty(qtbot):
-    return _running(qtbot)
-
-
-def scene_running_unavailable(qtbot):
-    window = _window(qtbot)
-    window.show_running("Laptop-Minh", None, Path("E:/Teleport"))
-    window.set_addresses(["192.168.1.15"], None)
-    return window
-
-
-def _chat(window, views, device):
-    """`ChatView` đặt vào khung phải như `TransfersController` (spec B3), đang mở luồng của `device`."""
-    from teleport.ui.chat import ChatView
-
-    view = ChatView(window.devices, window.transfers_area)
-    layout = window.transfers_area.layout()
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.addWidget(view)
-    view.content_changed.connect(lambda: window.set_transfer_summary(view.has_content(), view.active_count()))
-    window.conversations.current_changed.connect(view.set_device)
-    view.set_device_names({v.device_id: v.name for v in views})
-    view.set_receive_dir(RECEIVE_DIR)
-    view.history_needed.connect(lambda device_id: view.load_history(device_id, []))
-    assert window.open_conversation(device.device_id)
-    view.set_device(device.device_id)
-    return view
-
-
-def _transfer(device_id: str, direction: str, i: int, status: str, name: str, size: int, done: int = 0):
-    from teleport.core.messages import FileEntry
-    from teleport.core.transfer import Direction, TransferInfo, TransferKey, TransferStatus
-
-    return TransferInfo(
-        key=TransferKey(device_id, Direction(direction), f"{i:032x}"),
-        status=TransferStatus(status),
-        files=(FileEntry(name, size, 1_700_000_000_000),),
-        names=(name,),
-        file_index=0,
-        done_bytes=done,
-        total_bytes=size,
-        unsynced_bytes=0,
-    )
-
-
-def _finished(info, result: str):
-    from teleport.app.transfers import TransferFinished, TransferResult
-
-    return TransferFinished(
-        info=info, result=TransferResult(result), by_peer=False, reason=None, file_index=0, reject=None
-    )
-
-
-def _history(device, i: int, direction: str, name: str, result: str, days_ago: int):
-    import datetime
-
-    from teleport.core.history import HistoryEntry
-    from teleport.core.transfer import Direction
-
-    at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days_ago)
-    return HistoryEntry(
-        direction=Direction(direction),
-        device_id=device.device_id,
-        device_name=device.name,
-        transfer_id=f"{i:032x}",
-        file_count=1,
-        total_bytes=420 * 2**20,
-        done_bytes=420 * 2**20 if result == "done" else 0,
-        names=(name,),
-        result=result,
-        finished_at=at,
-        saved_path=str(RECEIVE_DIR / name) if direction == "receive" and result == "done" else None,
-    )
-
-
-def scene_conversation(qtbot):
-    """Luồng chat (spec B3) của máy đang chọn có đủ loại bong bóng: lịch sử (xong, lỗi, đã từ chối, hôm
-    qua và một năm trước), nhận xong (“Hiện trong thư mục”), gửi lỗi có “Gửi lại”, đang gửi (tốc độ, còn …),
-    đang chờ, bong bóng tạm “Đang chuẩn bị…”, dòng mốc, nút “↓ Mới” và thông báo có nút hành động."""
-    from teleport.app.transfers import FileDone, TransferProgress, TransferStatusChanged
-    from teleport.ui import texts
-
-    views = _some_devices()
-    window = _running(qtbot, views)
-    nha = views[0]
-    view = _chat(window, views, nha)
-    view._history_timer.stop()
-    view.history_needed.disconnect()
-    view.history_needed.connect(
-        lambda device_id: view.load_history(
-            device_id,
-            [
-                _history(nha, 1, "receive", "slide.pptx", "done", 400),
-                _history(nha, 2, "send", "old-movie.mkv", "rejected_user", 1),
-                _history(nha, 3, "receive", "music.mp3", "disk_failed", 1),
-            ],
-        )
-    )
-    view._request_history()
-    received = _transfer(
-        nha.device_id, "receive", 10, "verifying", "photos.zip", 1_800 * 2**20, 1_800 * 2**20
-    )
-    view.handle(TransferStatusChanged(received))
-    view.handle(FileDone(received.key, 0, "photos.zip", RECEIVE_DIR / "photos.zip"))
-    view.handle(_finished(received, "done"))
-    report = _transfer(nha.device_id, "send", 11, "transferring", "report.pdf", 4 * 2**20, 2**20)
-    view.handle(TransferStatusChanged(report))
-    view.handle(_finished(report, "source_changed"))
-    view.set_resendable(report.key, True)
-    size = 18 * 2**30
-    sending = _transfer(nha.device_id, "send", 12, "transferring", "movie-4k.mkv", size, size // 2)
-    view.handle(TransferStatusChanged(sending))
-    view.handle(TransferProgress(sending, 94 * 2**20, 60.0, shown_bytes=sending.done_bytes, idle_seconds=0.0))
-    waiting = _transfer(nha.device_id, "receive", 13, "waiting", "contract.docx", 2**20)
-    view.handle(TransferStatusChanged(waiting))
-    view.add_pending(nha.device_id, [Path("C:/Users/Minh/Videos/slides.pptx")])
-    view._set_new_count(2)  # như khi đã cuộn lên rồi có lượt mới
-    view.show_notice(texts.menu_open, texts.retry, lambda: None)  # câu dựng bằng hàm: dịch lại được
-    thread = view.thread_for(nha.device_id)
-    assert thread is not None and len(thread.history_bubbles()) == 3 and len(view.rows()) == 4
-    return window
-
-
-def scene_chat_offline(qtbot):
-    """Máy đã ghép đôi đang ngoại tuyến: lượt gửi chờ kết nối, câu ngoại tuyến ở thanh dưới."""
-    from teleport.app.transfers import TransferStatusChanged
-
-    views = _some_devices()
-    window = _running(qtbot, views)
-    lab = views[2]
-    view = _chat(window, views, lab)
-    view.set_connected(lab.device_id, False)
-    view.handle(TransferStatusChanged(_transfer(lab.device_id, "send", 20, "waiting", "demo.mp4", 3 * 2**30)))
-    return window
-
-
-def scene_chat_empty(qtbot):
-    """Máy chưa có lượt nào: màn rỗng “Kéo file vào đây để gửi cho X”."""
-    views = _some_devices()
-    window = _running(qtbot, views)
-    view = _chat(window, views, views[1])
-    view._history_timer.stop()
-    view._request_history()
-    return window
-
-
-def _error_scene(code: str):
-    def build(qtbot):
-        window = _window(qtbot)
-        window.show_error(code, "C:/Teleport\n[WinError 5] Access is denied" if code == "config_dir" else "")
-        return window
-
-    return build
-
-
-def _discover_scene(views_factory):
-    def build(qtbot):
-        from teleport.ui.main_window import Page
-
-        window = _running(qtbot, views_factory())
-        assert window.open_page(Page.DISCOVER)
-        return window
-
-    return build
-
-
-def scene_address_entry(qtbot):
-    window = _running(qtbot)
-    assert window.open_address_entry()
-    return window
-
-
-def _settings_scene(section_name: str):
-    def build(qtbot):
-        from teleport.app import autostart
-        from teleport.app.settings import DeviceSettings
-        from teleport.ui.main_window import Page
-        from teleport.ui.settings import Section, SettingsPage, SettingsSnapshot
-
-        views = _some_devices()
-        window = _running(qtbot, views)
-        page = SettingsPage(window.devices, window.pages)
-        window.add_page(Page.SETTINGS, page)
-        page.set_values(
-            SettingsSnapshot(
-                name="Laptop-Minh",
-                visible=section_name != "privacy",  # mục Riêng tư: máy đang ẩn
-                rate_limit=20 * 1024 * 1024,
-                temp_retention_days=None,
-                language=None,
-                autostart=True,
-                devices={v.device_id: DeviceSettings(ask_before_receive=True) for v in views if v.paired},
-            )
-        )
-        page.set_language(None, ("en", "vi"))
-        page.set_autostart(autostart.AutostartState.ON)
-        page.set_receive_dir(RECEIVE_DIR)
-        page.set_change_available(True)
-        page.set_loaded(True)
-        assert window.open_page(Page.SETTINGS)
-        page.show_section(Section(section_name))
-        return window
-
-    return build
-
-
-SETTINGS_SECTIONS = ("general", "appearance", "privacy", "devices", "transfer", "advanced")
-START_ERRORS = ("locked", "config_dir", "identity", "trust_store", "receive_dir", "port", "other")
-
-SCENES = {
-    "welcome": scene_welcome,
-    "starting": scene_starting,
-    "running_empty": scene_running_empty,
-    "running_unavailable": scene_running_unavailable,
-    "conversation": scene_conversation,
-    "chat_offline": scene_chat_offline,
-    "chat_empty": scene_chat_empty,
-    "discover": _discover_scene(_some_devices),
-    "discover_empty": _discover_scene(list),
-    "discover_list": _discover_scene(lambda: [_device(f"PC-{i}", paired=False) for i in range(9)]),
-    "address_entry": scene_address_entry,
-    **{f"error_{code}": _error_scene(code) for code in START_ERRORS},
-    **{f"settings_{name}": _settings_scene(name) for name in SETTINGS_SECTIONS},
-}
-
-
 def _strings(root) -> list[tuple[str, str]]:
     """(chỗ, chữ) của mọi widget trong `root`, kể cả đang ẩn: chữ, tooltip, trợ năng, placeholder, combo,
     dữ liệu của danh sách, hành động (menu)."""
@@ -879,6 +828,33 @@ def _show(window, qapp, width: int = WIDTH, height: int = HEIGHT) -> None:
     window.show()
     for _ in range(3):  # hàng đổi bố cục theo bề ngang cần thêm lượt layout (như test_snapshots)
         qapp.processEvents()
+
+
+# Cảnh mới của spec E1 mục 2.2 → widget (objectName) phải đang hiện sau khi hiện cửa sổ: cảnh dựng đúng
+# trạng thái nó mang tên (không thì test English của cảnh đó xanh mà không kiểm gì).
+NEW_SCENE_MARKERS = {
+    "welcome_name_error": "firstRunNameError",
+    "welcome_dir_error": "firstRunDirError",
+    "welcome_no_autostart": "firstRunAutostartState",
+    "wait_pairing": "waitPairingCopy",
+    "wait_pairing_hidden": "waitPairingHidden",
+    "settings_devices_empty": "trustedEmpty",
+    "discover_notice": "discoverInfo",
+    "chat_offer": "offerPanel",
+    "chat_clipboard_note": "clipboardNote",
+}
+
+
+@pytest.mark.parametrize("scene", list(NEW_SCENE_MARKERS))
+def test_new_scene_shows_its_state(qtbot, qapp, back_to_source, scene):
+    from PySide6.QtWidgets import QWidget
+
+    window = SCENES[scene](qtbot)
+    _show(window, qapp)
+    marked = window.findChildren(QWidget, NEW_SCENE_MARKERS[scene])
+    assert any(w.isVisible() for w in marked), f"{scene}: không thấy {NEW_SCENE_MARKERS[scene]} đang hiện"
+    if scene == "wait_pairing":
+        assert not any(w.isVisible() for w in window.findChildren(QWidget, "waitPairingHidden"))
 
 
 @pytest.mark.parametrize("scene", list(SCENES))
@@ -979,13 +955,150 @@ def test_overflow_check_detects_clipped_button_and_label(qtbot, qapp):
     assert any(p.startswith("nhãn") for p in problems), problems
 
 
-@pytest.mark.parametrize("scene", list(SCENES))
+# KNOWN_GAPS của `test_english_fits_720x460` (spec E1 mục 2.5): chỉ cảnh mới của E1, lỗi ở file thuộc PR
+# song song (E1 không sửa). Cảnh → (objectName, kiểm nào, file chủ, mã việc sau). `xfail(strict=True)`: sửa
+# xong thì test XPASS → đỏ, đòi xóa mục.
+#
+# Hai mục dưới chỉ lộ ra khi chữ thân đo bằng font thay thế (spec E1 mục 2.6): nền `offscreen` không có
+# font hệ thống, và trước khi tiến trình nạp font điểm nhấn (`fonts.install`) thì chữ thân không có font
+# thật nào, đo rộng gần gấp đôi. Sau khi một test bất kỳ đã nạp font điểm nhấn, chữ thân dùng font đó (cả
+# sau `fonts._reset()`, Qt giữ kết quả chọn font) và hai cảnh vừa khung; trên `QT_QPA_PLATFORM=windows`
+# (font thật) hai cảnh cũng vừa. Nên xfail gắn lúc chạy (`_fits_known_gap_xfail`) theo đúng trạng thái làm
+# lỗi lộ ra (`body_font_is_fallback`), không gắn lúc thu thập; ngoài trạng thái đó hai cảnh là test thường
+# và phải xanh. Vẫn strict trong trạng thái đó: hết tràn thì XPASS → đỏ, đòi xóa mục.
+FITS_KNOWN_GAPS: dict[str, str] = {
+    "chat_offer": (
+        "E1c-1: chỉ khi chữ thân dùng font thay thế (offscreen, chưa nạp font điểm nhấn): ô `offerAlways` "
+        "(OfferPanel) bị cắt chữ English (“Always accept from this device”); kiểm: nút/ô một dòng "
+        "sizeHint ≤ width; file chủ `ui/chat_bubbles.py` (G4/F5); Windows thật xanh"
+    ),
+    "chat_clipboard_note": (
+        "E1c-2: chỉ khi chữ thân dùng font thay thế (offscreen, chưa nạp font điểm nhấn): nhãn "
+        "`clipboardNoteTitle` không xuống dòng nên luồng chat cuộn ngang ở English; kiểm: vùng cuộn không "
+        "cuộn ngang; file chủ `ui/chat_bubbles.py` (G4/F5); Windows thật xanh"
+    ),
+}
+
+
+def body_font_is_fallback() -> bool:
+    """Trạng thái làm E1c-1/E1c-2 lộ ra, đọc từ trạng thái thật của Qt lúc chạy: nền `offscreen` và chữ
+    thân (`QGuiApplication.font()`) không có font thật nào (`QFontInfo` trả family rỗng: offscreen trên
+    Windows không thấy font hệ thống, và tiến trình chưa nạp font điểm nhấn). Offscreen trên Linux/macOS có
+    font hệ thống thật nên không rơi vào đây: ở đó hai cảnh là test thường. Đo bằng `QFontInfo` (font Qt
+    thật sự dùng để dàn chữ), không bằng cờ `fonts._installed`, vì `fonts._reset()` xóa cờ mà Qt vẫn giữ
+    font đã chọn."""
+    from PySide6.QtGui import QFontInfo, QGuiApplication
+
+    if QGuiApplication.platformName() != "offscreen":
+        return False
+    return QFontInfo(QGuiApplication.font()).family() == ""
+
+
+@pytest.fixture(autouse=True)
+def _fits_known_gap_xfail(request):
+    """Gắn `xfail(strict=True)` cho cảnh của `FITS_KNOWN_GAPS` trong `test_english_fits_720x460` khi
+    `body_font_is_fallback()`; ngoài trạng thái đó để test chạy thật (phải PASS)."""
+    if request.node.originalname != "test_english_fits_720x460":
+        return
+    scene = request.node.callspec.params.get("scene")
+    if scene not in FITS_KNOWN_GAPS:
+        return
+    request.getfixturevalue("qapp")
+    if body_font_is_fallback():
+        request.node.add_marker(
+            pytest.mark.xfail(raises=AssertionError, strict=True, reason=FITS_KNOWN_GAPS[scene])
+        )
+
+
+def _fits_params() -> list:
+    return [pytest.param(name, id=name) for name in SCENES]
+
+
+def test_fits_known_gaps_name_existing_new_scenes():
+    """Mục `FITS_KNOWN_GAPS` chỉ cho cảnh có thật và là cảnh mới của E1 (spec E1: không miễn cảnh cũ)."""
+    assert set(FITS_KNOWN_GAPS) <= set(SCENES)
+    assert set(FITS_KNOWN_GAPS) <= set(NEW_SCENE_MARKERS)
+    assert all(reason.startswith("E1c-") for reason in FITS_KNOWN_GAPS.values())
+
+
+@pytest.mark.parametrize("scene", _fits_params())
 def test_english_fits_720x460(qtbot, qapp, back_to_source, scene):
     """Rủi ro mục 8: English dài hơn; ở cỡ nhỏ nhất không cuộn ngang, không cắt chữ nút/nhãn."""
     _english(back_to_source, qapp)
     window = SCENES[scene](qtbot)
     _show(window, qapp)
     assert _overflow(window) == []
+
+
+# ---- Hộp thoại (spec E1 mục 2.2) -------------------------------------------------------------
+
+
+def _show_dialog(dialog, qapp) -> None:
+    """Hộp ở cỡ của chính nó: hiện (không lên màn hình), `adjustSize`, cho bố cục chạy xong."""
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+    dialog.show()
+    for _ in range(3):
+        qapp.processEvents()
+    dialog.adjustSize()
+    for _ in range(3):
+        qapp.processEvents()
+
+
+def _dialog_overflow(dialog) -> list[str]:
+    """`_overflow` trừ điều kiện cỡ cửa sổ 720×460 (hộp có cỡ riêng), cộng bề ngang hộp ≤ `WIDTH`."""
+    problems = [p for p in _overflow(dialog) if not p.startswith("cửa sổ ")]
+    if dialog.width() > WIDTH:
+        problems.append(f"hộp rộng {dialog.width()} px > {WIDTH} px")
+    return problems
+
+
+@pytest.mark.parametrize("dialog", list(DIALOGS))
+def test_dialog_shows_vietnamese_before_english(qtbot, qapp, back_to_source, dialog):
+    """Đối chứng: ở chuỗi nguồn, bộ đọc chữ thấy chữ Việt ở mọi hộp."""
+    box = DIALOGS[dialog](qtbot)
+    _show_dialog(box, qapp)
+    assert _vietnamese(_strings(box))
+
+
+@pytest.mark.parametrize("when", ["before_build", "live_switch"])
+@pytest.mark.parametrize("dialog", list(DIALOGS))
+def test_english_dialog_shows_no_vietnamese(qtbot, qapp, back_to_source, dialog, when):
+    """Spec E1 mục 2.2: hộp thoại English không còn chữ Việt, dựng sau khi đổi hay đổi lúc đang mở."""
+    i18n = back_to_source
+    if when == "before_build":
+        _english(i18n, qapp)
+    box = DIALOGS[dialog](qtbot)
+    _show_dialog(box, qapp)
+    if when == "live_switch":
+        _english(i18n, qapp)
+    assert _vietnamese(_strings(box)) == []
+
+
+def test_dialog_overflow_check_ignores_window_size_but_not_clipping(qtbot, qapp):
+    """Đối chứng cho test dưới: hộp nhỏ hơn 720×460 không bị báo; nút bị ép hẹp vẫn bị báo."""
+    from PySide6.QtWidgets import QDialog, QPushButton, QVBoxLayout
+
+    box = QDialog()
+    qtbot.addWidget(box)
+    layout = QVBoxLayout(box)
+    layout.addWidget(QPushButton("OK"))
+    _show_dialog(box, qapp)
+    assert _dialog_overflow(box) == []
+    clipped = QPushButton("Choose receive folder and many more words")
+    clipped.setFixedWidth(40)
+    layout.addWidget(clipped)
+    for _ in range(3):
+        qapp.processEvents()
+    assert any(p.startswith("nút") for p in _dialog_overflow(box))
+
+
+@pytest.mark.parametrize("dialog", list(DIALOGS))
+def test_english_dialog_fits_its_own_size(qtbot, qapp, back_to_source, dialog):
+    """Spec E1 mục 2.2: ở cỡ của chính nó (sau `adjustSize`) hộp rộng ≤ 720 px, không cắt chữ nút/nhãn."""
+    _english(back_to_source, qapp)
+    box = DIALOGS[dialog](qtbot)
+    _show_dialog(box, qapp)
+    assert _dialog_overflow(box) == []
 
 
 # ---- Đổi lúc chạy ----------------------------------------------------------------------------
@@ -1061,3 +1174,35 @@ def test_assets_ok_rejects_broken_qm(qapp, ui_package_copy, back_to_source, garb
     assert "en" in i18n.available_languages()
     assert i18n.loadable("en") is False
     assert ui_app._assets_ok() is False
+
+
+# Đặt cuối file: test này nạp font điểm nhấn (đổi font chữ thân của cả tiến trình), để theo thứ tự file
+# các test 720×460 ở trên vẫn đo trong trạng thái chưa nạp.
+def test_fits_known_gap_condition_follows_real_font_state(qapp):
+    """Đối chứng của điều kiện xfail: (1) nền không phải `offscreen` → luôn False; (2) trên `offscreen`,
+    khi điều kiện là True thì chữ mẫu của E1c-1 đo bằng font chữ thân rộng hơn hẳn khi đo bằng font điểm
+    nhấn (đúng là font thay thế); sau `fonts.install()` điều kiện là False, và vẫn False sau
+    `fonts._reset()` (Qt giữ font đã chọn, hai cảnh vừa khung, nên phải chạy như test thường)."""
+    from PySide6.QtGui import QFont, QFontMetrics, QGuiApplication
+
+    from teleport.ui import fonts, theme
+
+    if QGuiApplication.platformName() != "offscreen":
+        assert body_font_is_fallback() is False
+        return
+    sample = "Always accept from this device"
+    if body_font_is_fallback():
+        body = QFontMetrics(QGuiApplication.font()).horizontalAdvance(sample)
+        accent = QFont(QGuiApplication.font())
+        was_installed = fonts._installed
+        fonts.install()
+        accent.setFamilies([theme.ACCENT_FAMILY])
+        assert body > QFontMetrics(accent).horizontalAdvance(sample), (
+            "điều kiện True mà chữ thân không rộng hơn"
+        )
+        if not was_installed:
+            fonts._reset()
+    fonts.install()
+    assert body_font_is_fallback() is False
+    fonts._reset()
+    assert body_font_is_fallback() is False

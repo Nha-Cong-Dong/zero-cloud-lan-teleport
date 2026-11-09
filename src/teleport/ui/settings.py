@@ -27,7 +27,7 @@ nhận / thư mục đã lưu hỏng), “Mở” (chỉ khi có thư mục nh�
 **Hàng** (`widgets.SettingsRow`, `QFrame[surface="raised"]`, bo `RADIUS_CARD`): nhãn đậm vừa, gợi ý
 màu dịu xuống dòng, control bên phải; hàng hẹp tới mức cột chữ còn dưới `widgets.LABEL_MIN_WIDTH` thì control
 xuống hàng dưới (cửa sổ `MIN_SIZE` không cuộn ngang). Control mang tên trợ năng = nhãn hàng và mô tả =
-gợi ý.
+gợi ý. Hàng thiết bị tin cậy có bố cục riêng (xem **Danh sách thiết bị**).
 
 **Số** (spec D2 mục 9.1, không viết cứng): ngưỡng dọn tạm mặc định = `storage.TEMP_RETENTION / 86400`
 (đọc lúc dùng), khoảng `settings.MIN_RETENTION_DAYS`–`MAX_RETENTION_DAYS`; tốc độ hiện theo MB/s
@@ -47,6 +47,11 @@ của model như `DiscoverPage._sync`; chỉ máy `paired`, sắp NFC(tên).case
 ngoại tuyến vẫn hiện; hàng dùng lại theo `device_id`. Hàng đang có tiêu điểm bị bỏ → tiêu điểm sang
 hàng kế, không có thì hàng trước, không còn thì nút của màn rỗng. Tên qua `texts.peer_label`,
 chữ thuần, tooltip qua `widgets.safe_tooltip`; tên trợ năng của hàng “{tên}, {HĐH}, {trạng thái}”.
+Bố cục hàng (`TrustedDeviceRow`) chọn kiểu đầu tiên vừa bề ngang thật, không theo ngưỡng cứng: một dòng
+`[avatar tên/chi tiết | Hỏi… | Đồng bộ… | Hủy ghép đôi…]` khi cột tên còn ≥ `widgets.LABEL_MIN_WIDTH`;
+ô và nút xuống một dòng dưới tên, thụt thẳng cột chữ, khi tổng `sizeHint` của chúng vừa; không thì xếp
+dọc dưới tên, mỗi control một dòng, căn trái. Nhờ vậy chữ dài của ngôn ngữ khác (English) không làm
+cửa sổ `MIN_SIZE` cuộn ngang hay cắt chữ; thứ tự Tab không đổi theo kiểu.
 
 **Bàn phím** (mvp N12): Tab: Quay lại → `nav` → thanh thông báo (khi hiện) → control của mục đang mở
 (mục Giao diện: trong mỗi nhóm chỉ phần tử đang chọn nhận Tab, mũi tên đi giữa các phần tử) → hàng
@@ -185,6 +190,7 @@ from teleport.ui.appearance import section_title as appearance_title
 from teleport.ui.radar import DeviceListModel
 from teleport.ui.send import printable
 from teleport.ui.widgets import (
+    LABEL_MIN_WIDTH,
     DeviceAvatar,
     EmptyState,
     InfoBar,
@@ -201,7 +207,6 @@ log = logging.getLogger(__name__)
 NAV_WIDTH = 184  # px, cột chọn mục
 SECTION_MARGIN = theme.SPACING[4]  # 24 px, lề nội dung của mỗi mục
 ROW_SPACING = theme.SPACING[1]  # 8 px, khoảng giữa hai hàng
-DEVICE_ROW_WIDE = 560  # px: hàng thiết bị hẹp hơn thì ô và nút xuống hàng dưới
 SPIN_COMMIT_MS = 600  # ms không đổi sau khi bấm mũi tên thì chốt giá trị ô số
 MB = 1024 * 1024  # byte của “MB” trong ô tốc độ
 RATE_MIN_MB = 0.1
@@ -217,6 +222,7 @@ _NAV_PILL_HEIGHT = 16  # px
 _NAV_PILL_RADIUS = 1.5  # px
 _NAV_PILL_INSET = 2  # px, từ mép item (nằm trên viền trong suốt 2 px)
 _AVATAR = 32  # px
+_ACTIONS_INDENT = _AVATAR + theme.SPACING[2]  # px, lề trái của ô và nút dưới tên (thẳng cột chữ)
 _PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
 _FIT_PASSES = 4  # số lượt tối đa tính lại chiều cao bảng Phím tắt tới khi đứng yên
 _TABLE_ROW_PADDING = 6  # px, trên và dưới chữ mỗi hàng của bảng Phím tắt
@@ -578,9 +584,27 @@ class _DecimalSpin(QDoubleSpinBox):
         return super().valueFromText(self._normalized(text))
 
 
+class _RowShape(StrEnum):
+    """Kiểu bố cục của `TrustedDeviceRow`, từ rộng tới hẹp (docstring module, **Danh sách thiết bị**)."""
+
+    ONE_LINE = "one_line"  # [đầu hàng | ô, ô, nút] một dòng
+    BELOW = "below"  # ô, ô, nút một dòng dưới tên
+    STACKED = "stacked"  # ô, ô, nút mỗi cái một dòng dưới tên
+
+
 class TrustedDeviceRow(QFrame):
     """Một máy đã ghép đôi: avatar, tên, “HĐH · trạng thái”, “Hỏi trước khi nhận”, “Đồng bộ
-    clipboard”, “Hủy ghép đôi…”."""
+    clipboard”, “Hủy ghép đôi…”.
+
+    Bố cục tự chọn kiểu đầu tiên vừa bề ngang thật (`_RowShape`): một dòng khi cột tên còn ít nhất
+    `widgets.LABEL_MIN_WIDTH`; không thì ô và nút xuống một dòng dưới tên (thụt `_ACTIONS_INDENT`) khi
+    tổng `sizeHint` của chúng cộng khoảng cách và lề thụt vừa; không thì xếp dọc, mỗi control một dòng,
+    căn trái, không giãn ngang. Tính lại khi đổi cỡ, sau `retranslate` (gồm `LanguageChange`),
+    `FontChange`, `StyleChange` và `LayoutRequest` (con polish lại đổi `sizeHint`); chỉ đổi hướng
+    của `_box` và `_actions`, không dựng lại widget nên tiêu điểm và thứ tự Tab (Hỏi → Đồng bộ →
+    Hủy ghép đôi) giữ nguyên. Bề ngang dành cho nội dung trừ cả viền QFrame lẫn lề `_box`
+    (`_chrome_width`). `minimumSizeHint` là bề ngang của kiểu xếp dọc: hàng đang ở kiểu rộng không ép
+    vùng cuộn rộng theo, nên co cửa sổ luôn tới `resizeEvent` để đổi kiểu (không kẹt ở cuộn ngang)."""
 
     ask_toggled = Signal(str, bool)
     clipboard_toggled = Signal(str, bool)
@@ -593,7 +617,7 @@ class TrustedDeviceRow(QFrame):
         # Không cao hơn cần: QBoxLayout chia chỗ thừa cho hàng có nhãn xuống dòng (heightForWidth).
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self._view = view
-        self._narrow: bool | None = None
+        self._shape: _RowShape | None = None
         self.avatar = DeviceAvatar(self, diameter=_AVATAR, ring="surface_raised")
         self.name_label = _ElidedLabel(Qt.TextElideMode.ElideRight, self)
         self.name_label.setObjectName("trustedDeviceName")
@@ -629,21 +653,20 @@ class TrustedDeviceRow(QFrame):
         self._head.setSpacing(theme.SPACING[2])
         self._head.addWidget(self.avatar, 0, Qt.AlignmentFlag.AlignVCenter)
         self._head.addLayout(text, 1)
-        self._actions = QHBoxLayout()
+        self._actions = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self._actions.setContentsMargins(0, 0, 0, 0)
         self._actions.setSpacing(theme.SPACING[2])
         self._actions.addWidget(self.ask_checkbox)
         self._actions.addWidget(self.clipboard_checkbox)
         self._actions.addWidget(self.unpair_button)
         self._actions.addStretch(0)
-        # Rộng: [đầu hàng | ô, nút] một hàng; hẹp: ô và nút xuống dưới, thẳng cột chữ.
+        # Kiểu bố cục (`_RowShape`) chỉ đổi hướng của `_box` và `_actions` (`_place_actions`).
         self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
         self._box.setContentsMargins(theme.SPACING[2], theme.SPACING[1], theme.SPACING[3], theme.SPACING[1])
         self._box.setSpacing(theme.SPACING[3])
         self._box.addLayout(self._head, 1)
         self._box.addLayout(self._actions, 0)
-        self._place_actions()
-        self.set_view(view)
+        self.set_view(view)  # `retranslate` đặt chữ rồi chọn kiểu bố cục
 
     @property
     def device_id(self) -> str:
@@ -697,20 +720,61 @@ class TrustedDeviceRow(QFrame):
         self.ask_checkbox.setAccessibleDescription(summary)
         self.clipboard_checkbox.setAccessibleDescription(summary)
         self.unpair_button.setAccessibleDescription(summary)
+        self._place_actions()  # chữ mới đổi `sizeHint` của ô và nút
+
+    def _action_hints(self) -> list[int]:
+        return [w.sizeHint().width() for w in self.focus_widgets() if not w.isHidden()]
+
+    def _shape_for_width(self, width: int) -> _RowShape:
+        """Kiểu đầu tiên vừa bề ngang `width` của hàng (chỉ phụ thuộc `width` và `sizeHint` control).
+
+        Trừ cả viền QFrame (`frameWidth`, 1 px với `surface="raised"` của theme) lẫn lề `_box`: đó là
+        chỗ thật `_box` được cấp."""
+        inner = width - self._chrome_width()
+        hints = self._action_hints()
+        actions = sum(hints) + theme.SPACING[2] * max(len(hints) - 1, 0)
+        name_column = inner - _AVATAR - self._head.spacing() - theme.SPACING[3] - actions
+        if name_column >= LABEL_MIN_WIDTH:
+            return _RowShape.ONE_LINE
+        if _ACTIONS_INDENT + actions <= inner:
+            return _RowShape.BELOW
+        return _RowShape.STACKED
 
     def _place_actions(self) -> None:
-        narrow = self.width() < DEVICE_ROW_WIDE
-        if narrow == self._narrow:
+        shape = self._shape_for_width(self.width())
+        if shape is self._shape:
             return
-        self._narrow = narrow
-        if narrow:
-            self._box.setDirection(QBoxLayout.Direction.TopToBottom)
-            self._box.setSpacing(theme.SPACING[1])
-            self._actions.setContentsMargins(_AVATAR + theme.SPACING[2], 0, 0, 0)
-        else:
+        self._shape = shape
+        if shape is _RowShape.ONE_LINE:
             self._box.setDirection(QBoxLayout.Direction.LeftToRight)
             self._box.setSpacing(theme.SPACING[3])
             self._actions.setContentsMargins(0, 0, 0, 0)
+        else:
+            self._box.setDirection(QBoxLayout.Direction.TopToBottom)
+            self._box.setSpacing(theme.SPACING[1])
+            self._actions.setContentsMargins(_ACTIONS_INDENT, 0, 0, 0)
+        stacked = shape is _RowShape.STACKED
+        self._actions.setDirection(
+            QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
+        )
+        self._actions.setSpacing(theme.SPACING[1] if stacked else theme.SPACING[2])
+        # Xếp dọc: căn trái để ô và nút không giãn ngang hết hàng.
+        align = Qt.AlignmentFlag.AlignLeft if stacked else Qt.AlignmentFlag(0)
+        for widget in self.focus_widgets():
+            self._actions.setAlignment(widget, align)
+        self.updateGeometry()
+
+    def _chrome_width(self) -> int:
+        """Bề ngang hàng không dành cho nội dung `_box`: viền QFrame hai bên cộng lề trái/phải."""
+        margins = self._box.contentsMargins()
+        return 2 * self.frameWidth() + margins.left() + margins.right()
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        widest = max(self._action_hints(), default=0)
+        head = _AVATAR + self._head.spacing() + self.name_label.minimumSizeHint().width()
+        width = self._chrome_width() + max(head, _ACTIONS_INDENT + widest)
+        return QSize(width, hint.height())
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -718,8 +782,20 @@ class TrustedDeviceRow(QFrame):
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
-        if event.type() == QEvent.Type.LanguageChange:
+        kind = event.type()
+        if kind == QEvent.Type.LanguageChange:
             self.retranslate()
+        elif kind in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._place_actions()
+
+    def event(self, event: QEvent) -> bool:
+        handled = super().event(event)
+        # Con polish lại (sau StyleChange/FontChange) gọi `updateGeometry`, gửi `LayoutRequest` tới
+        # hàng: `sizeHint` mới có thể đổi kiểu. Không lặp: `_place_actions` chỉ `updateGeometry` khi
+        # kiểu đổi, và `updateGeometry` của hàng gửi `LayoutRequest` tới cha, không tới chính nó.
+        if event.type() == QEvent.Type.LayoutRequest:
+            self._place_actions()
+        return handled
 
 
 # ---- Ảnh chụp cài đặt --------------------------------------------------------------------------
@@ -2267,15 +2343,10 @@ class SettingsController(QObject):
         box.setObjectName("clearHistoryBox")
         box.setIcon(QMessageBox.Icon.Warning)
         box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setWindowTitle(clear_history_title())
-        box.setAccessibleName(clear_history_title())
-        box.setText(clear_history_question())
-        accept = box.addButton(
-            QCoreApplication.translate("Settings", "Xóa lịch sử"), QMessageBox.ButtonRole.DestructiveRole
-        )
-        decline = box.addButton(
-            QCoreApplication.translate("Settings", "Không"), QMessageBox.ButtonRole.RejectRole
-        )
+        accept = box.addButton("", QMessageBox.ButtonRole.DestructiveRole)
+        decline = box.addButton("", QMessageBox.ButtonRole.RejectRole)
+        _translate_clear_history_box(box)
+        box.installEventFilter(self)  # đổi ngôn ngữ lúc hộp đang mở
         box.setDefaultButton(decline)
         box.setEscapeButton(decline)
         generation = self._generation
@@ -2429,6 +2500,13 @@ class SettingsController(QObject):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if (
+            event.type() == QEvent.Type.LanguageChange
+            and isinstance(watched, QMessageBox)
+            and watched is self._confirm_box
+        ):
+            _translate_clear_history_box(watched)
+            return False
+        if (
             watched is self.page
             and event.type() == QEvent.Type.Show
             and not event.spontaneous()
@@ -2436,6 +2514,20 @@ class SettingsController(QObject):
         ):
             self.refresh()
         return False
+
+
+def _translate_clear_history_box(box: QMessageBox) -> None:
+    """Chữ của hộp xác nhận “Xóa toàn bộ lịch sử” theo ngôn ngữ hiện tại (dựng và `LanguageChange`)."""
+    title = clear_history_title()
+    box.setWindowTitle(title)
+    box.setAccessibleName(title)
+    box.setText(clear_history_question())
+    for button in box.buttons():
+        role = box.buttonRole(button)
+        if role == QMessageBox.ButtonRole.DestructiveRole:
+            button.setText(QCoreApplication.translate("Settings", "Xóa lịch sử"))
+        elif role == QMessageBox.ButtonRole.RejectRole:
+            button.setText(QCoreApplication.translate("Settings", "Không"))
 
 
 def _apply_theme(mode: theme.Mode, accent: str | None) -> None:

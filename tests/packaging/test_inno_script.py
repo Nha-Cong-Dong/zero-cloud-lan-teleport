@@ -471,6 +471,48 @@ def test_start_menu_shortcut_always_and_desktop_is_unchecked_task(iss: Iss) -> N
         assert "unchecked" in tasks[name].get("flags", "").lower(), "task Desktop mặc định không chọn (D5)"
 
 
+SENDTO_COMMENT = "Gửi file tới một máy đã ghép đôi bằng ZCL Teleport"  # spec-f5 mục 2.7
+
+
+def custom_message(iss: Iss, value: str) -> str:
+    """`{cm:Ten}` → chữ của `vi.Ten` trong `[CustomMessages]`; chuỗi thường giữ nguyên."""
+    m = re.fullmatch(r"\{cm:(\w+)\}", value.strip())
+    if m is None:
+        return value
+    wanted = f"vi.{m.group(1)}".lower()
+    for line in iss.lines("CustomMessages"):
+        key, sep, text = line.partition("=")
+        if sep and key.strip().lower() == wanted:
+            return text.strip()
+    raise AssertionError(f"thiếu vi.{m.group(1)} trong [CustomMessages]")
+
+
+def sendto_entries(iss: Iss) -> list[dict[str, str]]:
+    return [e for e in iss.entries("Icons") if e.get("name", "").lower().startswith("{usersendto}")]
+
+
+def test_sendto_shortcut_opens_app_with_send_flag(iss: Iss) -> None:
+    """spec-f5 mục 2.7: Gửi tới › ZCL Teleport chạy `{app}\\Teleport.exe --send` (Explorer nối đường dẫn)."""
+    [entry] = sendto_entries(iss)
+    assert entry["name"].lower() == r"{usersendto}\zcl teleport"
+    assert entry.get("filename", "").lower() == APP_EXE
+    assert entry.get("parameters") == "--send", "chỉ đúng cờ --send, Explorer tự nối các file sau đó"
+
+
+def test_sendto_shortcut_is_always_created_and_has_vietnamese_comment(iss: Iss) -> None:
+    [entry] = sendto_entries(iss)
+    assert "tasks" not in entry and "check" not in entry, "lối tắt Gửi tới không phụ thuộc task hay điều kiện"
+    assert custom_message(iss, entry.get("comment", "")) == SENDTO_COMMENT
+
+
+def test_sendto_shortcut_not_deleted_by_hand_in_uninstall_sections(iss: Iss) -> None:
+    """Gỡ cài để Inno tự xóa lối tắt trong `[Icons]`; không có lệnh xóa tay nào trỏ vào SendTo (có thể
+    đụng lối tắt khác của người dùng)."""
+    for section in ("UninstallDelete", "InstallDelete"):
+        for line in iss.lines(section):
+            assert "sendto" not in line.lower(), f"[{section}] không được đụng thư mục SendTo: {line}"
+
+
 def test_no_autostart_task_and_no_run_value_written(iss: Iss) -> None:
     for task in iss.entries("Tasks"):
         blob = (task.get("name", "") + " " + task.get("description", "")).lower()
