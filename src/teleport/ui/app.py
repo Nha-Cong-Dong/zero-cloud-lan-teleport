@@ -317,6 +317,7 @@ from teleport.app import autostart
 from teleport.app import node as app_node
 from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipOutcome
 from teleport.app.devices import DeviceView
+from teleport.app.firewall import FirewallIssue, check_firewall_status
 from teleport.app.node import NodeEvent
 from teleport.app.settings import Settings, WindowGeometry
 from teleport.app.transfers import Direction, FileEntry, OfferReceived, TransferKey, TransferUpdate
@@ -345,6 +346,7 @@ from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.chat_bubbles import OfferPanel
 from teleport.ui.clipboard_qt import QtClipboardBackend
 from teleport.ui.conversations import is_online
+from teleport.ui.firewall import firewall_blocked_notice_text, firewall_guide_action_text, open_firewall_guide
 from teleport.ui.first_run import FirstRunChoice, TextSource
 from teleport.ui.gcguard import GcGuard
 from teleport.ui.main_window import MainWindow, Page, ViewState
@@ -392,6 +394,8 @@ SESSION_END_GRACE_MS = 30_000
 
 # Seam: mở URL (thư mục nhận) bằng ứng dụng mặc định của hệ điều hành; đọc lúc gọi.
 open_url: Callable[[QUrl], object] = QDesktopServices.openUrl
+check_firewall_status_fn: Callable[[], FirewallIssue] = check_firewall_status
+open_firewall_guide_fn: Callable[[QWidget | None], object] = open_firewall_guide
 
 _CONNECT_TIMEOUT_MS = 200
 _LISTEN_ATTEMPTS = 3  # số khóa mới thử khi tên server đã bị chiếm (docstring module)
@@ -774,6 +778,7 @@ class GuiApp(QObject):
         self._quit_box: QMessageBox | None = None
         self._address_job: SubmitJob | None = None
         self._receive_dir_notice: texts.Text | None = None  # câu cuối app hiện ở dải về thư mục nhận
+        self._firewall_notice: texts.Text | None = None
         self._settings_dir_notice: str | None = None  # câu lỗi thư mục nhận đang ở trang Cài đặt
         self._view_chosen = False  # người dùng đã bấm đổi dạng hiển thị kể từ lần `started` gần nhất
         self.host: NodeHost | None = None
@@ -1116,6 +1121,40 @@ class GuiApp(QObject):
         addresses, port = result
         self.window.set_addresses(addresses, port)
         self.wait_pairing.set_addresses(addresses, port)
+        self._check_firewall()
+
+    def _check_firewall(self) -> None:
+        """Kiểm tra tường lửa ngầm trên Windows (mvp mục 8), báo qua dải thông báo nếu bị chặn."""
+        if sys.platform != "win32" and check_firewall_status_fn is check_firewall_status:
+            return
+
+        def worker() -> None:
+            issue = check_firewall_status_fn()
+            QTimer.singleShot(0, lambda: self._on_firewall_checked(issue))
+
+        threading.Thread(target=worker, daemon=True, name="firewall-check").start()
+
+    def _on_firewall_checked(self, issue: FirewallIssue) -> None:
+        if self._quitting:
+            return
+        if issue in (FirewallIssue.PUBLIC_NETWORK, FirewallIssue.BLOCKED):
+            text = firewall_blocked_notice_text
+
+            def on_action() -> None:
+                open_firewall_guide_fn(self.window)
+
+            self._firewall_notice = text
+            self.transfers.view.show_notice(
+                text,
+                firewall_guide_action_text,
+                on_action,
+                level=InfoLevel.WARNING,
+            )
+        else:
+            if self._firewall_notice is not None:
+                if self.transfers.view.notice_text() == texts.resolve(self._firewall_notice):
+                    self.transfers.view.hide_notice()
+                self._firewall_notice = None
 
     # ---- Slot ----------------------------------------------------------------------------------
 

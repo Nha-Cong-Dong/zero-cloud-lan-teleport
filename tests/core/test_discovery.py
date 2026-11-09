@@ -723,6 +723,40 @@ def test_is_virtual_interface_no_names_is_not_virtual():
     assert is_virtual_interface([]) is False
 
 
+TUNNEL_NAMES = [
+    "tun0",
+    "wg0",
+    "tailscale0",
+    "ztabc",
+    "utun3",
+    "TAP-Windows Adapter V9",
+    "WireGuard Tunnel",
+    "ZeroTier Virtual Port",
+    "Cisco AnyConnect Secure Mobility Client",
+    "Wintun Userspace Tunnel",
+]
+NON_TUNNEL_VIRTUAL_NAMES = [
+    "vEthernet (WSL)",
+    "Hyper-V Virtual Ethernet Adapter",
+    "docker0",
+    "br-1a2b",
+    "veth12",
+    "virbr0",
+    "vmnet8",
+    "vboxnet0",
+    "bridge0",
+]
+
+
+def test_is_tunnel_interface():
+    for name in TUNNEL_NAMES:
+        assert core_discovery.is_tunnel_interface([name]) is True
+    for name in NON_TUNNEL_VIRTUAL_NAMES:
+        assert core_discovery.is_tunnel_interface([name]) is False
+    for name in REAL_NAMES:
+        assert core_discovery.is_tunnel_interface([name]) is False
+
+
 # --- select_local_addresses ----------------------------------------------------------------------
 
 
@@ -756,6 +790,19 @@ def test_select_external_vswitch_keeps_only_preferred_lan_address():
     assert select_local_addresses([WSL_HYPERV, EXTERNAL_VSWITCH], preferred="192.168.1.20") == (
         "192.168.1.20",
     )
+
+
+TAILSCALE = iface("100.64.0.1", "tailscale0", "Tailscale Tunnel")
+
+
+def test_select_drops_tunnel_interface_even_when_preferred():
+    # VPN full-tunnel chiếm tuyến ra ngoài LAN: không giữ làm preferred khi có card thật
+    assert select_local_addresses([WIFI, TAILSCALE], preferred="100.64.0.1") == ("192.168.1.10",)
+
+
+def test_select_falls_back_to_tunnel_when_only_tunnels_exist():
+    # Chỉ có card tunnel thì vẫn dùng (fallback)
+    assert select_local_addresses([TAILSCALE], preferred="100.64.0.1") == ("100.64.0.1",)
 
 
 def test_select_external_vswitch_without_preferred_uses_all_ascending():
@@ -2092,18 +2139,26 @@ def test_nw1_nothing_changed_is_none():
     [
         (NW_A, NW_AB),  # thêm
         (NW_AB, NW_A),  # bớt
-        (NW_AB, tuple(reversed(NW_AB))),  # chỉ đổi thứ tự
         (NW_A, ()),  # mất hết
         ((), NW_A),  # có lại
         (NW_A, ("192.168.1.6",)),  # đổi
     ],
-    ids=["them", "bot", "thu_tu", "mat_het", "co_lai", "doi"],
+    ids=["them", "bot", "mat_het", "co_lai", "doi"],
 )
 def test_nw2_address_change_is_addresses(before, after):
     w = nw(before)
     assert w.sample(after, 105.0, NW_WALL + 5, interval=NW_INTERVAL) == "addresses"
     # Giá trị mới được lưu: lần đo sau không đổi gì → NONE.
     assert w.sample(after, 110.0, NW_WALL + 10, interval=NW_INTERVAL) == "none"
+
+
+def test_nw_order_only_change_is_none():
+    """Chỉ đổi thứ tự ưu tiên địa chỉ (tập hợp không đổi) thì không coi là đổi mạng."""
+    w = nw(NW_AB)
+    assert (
+        w.sample(tuple(reversed(NW_AB)), 105.0, NW_WALL + 5, interval=NW_INTERVAL)
+        == core_discovery.NetworkChange.NONE
+    )
 
 
 def test_nw2_address_change_wins_over_clock_jump():
