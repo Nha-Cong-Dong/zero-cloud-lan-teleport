@@ -102,17 +102,22 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.skip(reason="TELEPORT_SKIP_MDNS=1"))
 
 
-# Trọng số thời gian bổ sung cho các tệp test giao diện nặng (nhiều socket, hẹn giờ, hoạt ảnh)
+# Trọng số thời gian cho các tệp test giao diện nặng (nhiều socket, hẹn giờ, chụp ảnh)
 # để phân bổ tải đồng đều giữa các phần (shard) trên máy chủ kiểm thử.
 _HEAVY_FILE_WEIGHTS: dict[str, int] = {
-    "test_gui_transfer.py": 150,
-    "test_chat.py": 120,
-    "test_single_instance.py": 100,
-    "test_pair_then_send.py": 100,
-    "test_snapshots.py": 100,
-    "test_start_screen.py": 80,
-    "test_wait_pairing.py": 80,
-    "test_main_window.py": 80,
+    "test_chat.py": 400,
+    "test_snapshots.py": 350,
+    "test_translations.py": 300,
+    "test_gui_transfer.py": 300,
+    "test_pair_then_send.py": 250,
+    "test_discover.py": 200,
+    "test_diagnose.py": 200,
+    "test_single_instance.py": 150,
+    "test_start_screen.py": 150,
+    "test_wait_pairing.py": 150,
+    "test_main_window.py": 150,
+    "test_a11y.py": 100,
+    "test_ipc.py": 100,
 }
 
 

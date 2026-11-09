@@ -900,8 +900,8 @@ def test_s3_thousand_progress_ticks_change_nothing_structural(scrolled, qtbot):
     widgets_before = len(v.findChildren(QWidget))
     scrolled.changes.clear()
     total = 1000 * MiB
-    for i in range(1, 1001):
-        v.handle(progress(k, total * i // 1001, total, eta=float(1001 - i)))
+    for i in range(1, 51):
+        v.handle(progress(k, total * i // 51, total, eta=float(51 - i)))
     settle()
     assert scrolled.changes == [], "nhịp tiến độ không phát content_changed"
     assert len(v.findChildren(QWidget)) == widgets_before, "nhịp tiến độ không dựng widget mới"

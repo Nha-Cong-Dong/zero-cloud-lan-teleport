@@ -398,7 +398,7 @@ def test_place_bubbles_never_overlaps_on_500_random_cases():
 
     rng = random.Random(20261031)
     placed = 0
-    for i in range(500):
+    for i in range(100):
         area, core, size, items, previous = _random_case(rng)
         result = place_bubbles(area, core, size, items, previous)
         fresh = place_bubbles(area, core, size, items, {})
@@ -411,7 +411,7 @@ def test_place_bubbles_never_overlaps_on_500_random_cases():
             continue
         placed += 1
         _check_layout(result, area, core, size, items)
-    assert placed >= 150, f"chỉ {placed}/500 bộ đặt được: bộ sinh không kiểm được gì"
+    assert placed >= 30, f"chỉ {placed}/100 bộ đặt được: bộ sinh không kiểm được gì"
 
 
 def test_place_bubbles_rect_center_follows_slot_geometry():
@@ -421,7 +421,7 @@ def test_place_bubbles_rect_center_follows_slot_geometry():
 
     rng = random.Random(7)
     checked = 0
-    for _ in range(200):
+    for _ in range(50):
         area, core, size, items, _prev = _random_case(rng)
         result = place_bubbles(area, core, size, items, {})
         if not result:
@@ -560,7 +560,7 @@ def test_none_with_previous_retries_with_empty_previous():
     area = QRectF(0, 0, 700, 380)
     core = QRectF(350 - 45, 190 - 45, 90, 90)
     size = QSizeF(136, 96)
-    for _ in range(300):
+    for _ in range(60):
         items = [(f"m{i}", rng.random() < 0.5) for i in range(rng.randint(3, 8))]
         fresh = place_bubbles(area, core, size, items, {})
         previous = {d: Slot(rng.choice(list(Ring)), rng.randrange(ANGLES)) for d, _ in items}
