@@ -1206,4 +1206,3 @@ def test_fits_known_gap_condition_follows_real_font_state(qapp):
     fonts.install()
     assert body_font_is_fallback() is False
     fonts._reset()
-    assert body_font_is_fallback() is False

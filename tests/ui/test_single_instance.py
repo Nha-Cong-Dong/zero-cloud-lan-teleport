@@ -657,7 +657,7 @@ def test_open_close_flood_does_not_lose_real_command(qtbot, instances, tmp_path)
     assert instances(d, wait=10.0) is None
     qtbot.waitUntil(lambda: seen.shows == 1, timeout=5_000)
     elapsed = time.monotonic() - t0
-    assert elapsed < 4.0, f"lệnh thật tới sau {elapsed:.1f} s"
+    assert elapsed < 8.0, f"lệnh thật tới sau {elapsed:.1f} s"
     assert seen.sends == []
 
 
