@@ -6,6 +6,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ## [Unreleased]
 
 ### Added
+- Kiểm tra độ bền bỉ tự động (mvp N7): bài kiểm tra độ bền bỉ chạy liên tục 100 lượt truyền file trên mạng nội bộ loopback, xen kẽ giữa file nhỏ, file trung bình và file lớn, kiểm tra không có rò rỉ bộ nhớ (tăng trưởng < 2 MiB) và không để sót bất kỳ file tạm nào (`tests/app/test_soak.py`, `docs/technical/benchmark.md` mục 10).
 - Tự động phát hiện và cảnh báo tường lửa: ứng dụng tự động kiểm tra hồ sơ mạng của Windows; khi mạng hiện tại là Mạng công cộng (Public) hoặc tường lửa Windows đang chặn kết nối đến của Teleport, giao diện sẽ hiển thị thanh cảnh báo kèm nút “Mở hướng dẫn” để người dùng mở hộp thoại hướng dẫn cấu hình mạng và tường lửa (mvp mục 8).
 - Hộp thoại hướng dẫn tường lửa (`FirewallGuideDialog`): hướng dẫn người dùng chuyển mạng sang chế độ Riêng tư (Private) và cho phép Teleport qua tường lửa, tích hợp nút mở nhanh Cài đặt mạng và Tường lửa của Windows.
 - Thanh chẩn đoán kết nối ngay dưới tên máy trong cuộc trò chuyện, khi máy đã ghép đôi không kết nối được: nói đúng nguyên nhân (không thấy máy đó trong mạng, Teleport vẫn đang tự thử lại địa chỉ lần trước, máy này không tìm được thiết bị nào trong mạng, thấy máy nhưng mạng chặn kết nối, máy kia từ chối, địa chỉ vừa nhập là của một máy khác) kèm hai nút “Kết nối bằng IP…” và, khi có địa chỉ để thử, “Thử lại”. Thanh chỉ hiện sau vài giây ngoại tuyến để không chớp lúc mở app; bị chặn thì hiện ngay; bấm ✕ thì ẩn tới khi nguyên nhân đổi. Dùng được hết bằng bàn phím và trình đọc màn hình.

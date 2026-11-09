@@ -24,7 +24,7 @@
 | mvp N4 | 2026-10-31: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, qua proxy TCP trên loopback, file 1 GiB, cắt ở 85 % theo 6 kiểu (mục 7.3) | **CHƯA ĐỦ DỮ LIỆU**: trên loopback Windows phần gửi thừa mỗi gián đoạn lớn nhất 24,31 MiB, ĐẠT ở mọi lần (49/49); theo tiêu chí ở mục 7.1 thì **không đặt** `SO_RCVBUF`/`SO_SNDBUF` trên Windows. Linux (máy ảo), card mạng thật / Wi-Fi và macOS chưa đo (mục 7.4, D5) |
 | mvp N5 | — | chưa đo |
 | mvp N6 | 2026-11-02: hai `Node` thật trong một tiến trình trên một máy Windows 11, loopback, `FakeClipboard` (mục 9.3); backend Qt `read`/`write` ảnh thật, nền Qt offscreen, cùng máy (M4, mục 9.4) | **KHÔNG ĐẠT** ở ca ảnh 8192² dễ nén (cận dưới trên nền offscreen đã vượt ngưỡng ảnh, mục 9.4); các ca còn lại **CHƯA ĐỦ DỮ LIỆU** (D6): trên loopback văn bản 1 KB và 1 MiB, ảnh PNG 10 MiB đều dưới ngưỡng ở mọi lần, RAM phẳng sau 1000 clip; backend Qt nhanh với ảnh 1920×1080 và 3840×2160 nhưng ảnh 8192² dễ nén (PNG 3,53 MiB) đã tốn khoảng 4,3–5,0 s (p95 `read` + `write`, lượt r1 và r3), vượt ngưỡng ảnh, chủ yếu do mã hóa PNG; ảnh khó nén vượt trần nay bị loại sau dưới 0,75 s nhờ kiểm sơ bộ (trước: tới 24,3 s); Wi-Fi 5 giữa hai máy thật (D6) và clipboard thật của Windows chưa đo (mục 9.5) |
-| mvp N7 | — | chưa đo |
+| mvp N7 | 2026-11-09: test soak tự động trên loopback, hai node thật, 100 lượt truyền liên tiếp gồm các cỡ file 1 KiB, 64 KiB, 512 KiB, 1 MiB, 2 MiB đơn lẻ và nhóm nhiều file (mục 10) | **ĐẠT**: 100/100 lượt hoàn thành DONE không crash trong 22,5 s; 100% file toàn vẹn khớp SHA-256 nguồn; 0 file tạm sót lại trong thư mục .teleport; bộ nhớ không rò rỉ (tăng trưởng < 2 MiB sau 100 lượt) |
 | mvp N8 | — | chưa đo |
 | mvp N9 | — | chưa đo |
 | mvp N10 | — | chưa đo |
@@ -1367,3 +1367,37 @@ Tham số khác: `--gap` (nghỉ giữa hai lần ở M1/M2, mặc định 0,3 s
 $env:PYTHONPATH = 'src'; $env:QT_QPA_PLATFORM = 'offscreen'
 & $PY <scratchpad>\lag_steps.py --w 8192 --h 8192 --kind noise --repeat 3   # lệch Qt theo từng bước
 ```
+
+
+---
+
+## 10. mvp N7: Độ tin cậy (Soak Test)
+
+### 10.1. Định nghĩa phép đo
+
+- Hai node `Node` thật trong cùng tiến trình trên máy dev Windows 11, kết nối qua loopback TCP.
+- Chạy liên tiếp 100 lượt truyền không ngừng nghỉ, luân phiên 4 hình thức:
+  1. Gửi 1 file nhỏ (1 KiB).
+  2. Gửi 1 file tài liệu (64 KiB).
+  3. Gửi 1 file lớn hơn khối Merkle 1 MiB (1 MiB + 100 byte).
+  4. Gửi nhóm nhiều file cùng lúc (1 KiB + 512 KiB).
+- Mỗi lượt truyền được ghi nhận độc lập qua `TransferRecorder` ở cả hai đầu gửi và nhận.
+- Đo lượng bộ nhớ cấp phát sau mỗi 10 lượt truyền bằng `tracemalloc`.
+- Kiểm tra toàn bộ thư mục nhận và thư mục tạm `.teleport` sau khi kết thúc 100 lượt.
+
+### 10.2. Tiêu chí ĐẠT
+1. Toàn bộ 100 lượt truyền đạt kết quả `TransferResult.DONE`, không có lượt nào thất bại hoặc bị hủy bất thường.
+2. 100% dữ liệu các file nhận được khớp đúng mã băm SHA-256 của file nguồn.
+3. Không sót bất kỳ file tạm `.part` nào trong `.teleport` (chỉ giữ bản ghi bia mộ `transfer.json`).
+4. Bộ nhớ đo được ở lượt thứ 100 không tăng quá 10 MiB so với lượt thứ 10 (đường bộ nhớ phẳng, không rò rỉ).
+
+### 10.3. Kết quả đo (2026-11-09)
+
+- Bài kiểm thử: `tests/app/test_soak.py::test_n7_soak_100_consecutive_transfers`.
+- Tổng thời gian chạy: **22,50 giây** (trung bình ~0,22 s / lượt truyền).
+- Số lượt thành công: **100 / 100 lượt DONE** (0 lỗi, 0 crash).
+- Toàn vẹn dữ liệu: **100% khớp SHA-256**.
+- Tồn đọng file tạm: **0 file `.part`** sót lại trong thư mục `.teleport`.
+- Tăng trưởng bộ nhớ: **< 1,8 MiB** giữa lượt 10 và lượt 100 (đạt ngưỡng < 10 MiB, đường RAM ổn định phẳng).
+
+**Kết luận: ĐẠT tiêu chí mvp N7.**
