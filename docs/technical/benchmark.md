@@ -20,7 +20,7 @@
 |---|---|---|
 | mvp N1 | 2026-11-05: hai máy Windows thật (11 ↔ 10) qua Wi-Fi 2,4 GHz, cùng điểm phát (mục 3.6); trước đó 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged (mục 3.3) | **ĐẠT trên hai máy thật qua Wi-Fi** cho phần xuất hiện, thoát app và mất mạng đột ngột (tắt Wi-Fi, app bị giết); máy **ngủ** thật, mạng dây và kịch bản mất gói ở hai lần resolve đầu chưa đo (mục 3.4) |
 | mvp N2 | 2026-10-29/30: đo tay qua giao diện, hai máy Windows thật qua Wi-Fi 2,4 GHz, một file 1,89 GiB (mục 5.4) | **CHƯA ĐỦ DỮ LIỆU**: lần đo tay cho tỉ số khoảng 0,96 nhưng không theo phương pháp mục 5.1 (1 lần Teleport, 2 lần SMB, một cỡ file, bấm giờ tay); lượt đo theo mục 5.1 và mạng dây chưa đo (mục 5.3) |
-| mvp N3 | 2026-11-05: 10 GiB qua Wi-Fi 2,4 GHz giữa hai máy Windows thật, RAM hai phía, 1 lần (mục 4.10). 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8). 2026-10-28: trước/sau thay đổi ghi trạng thái nối lại bền, 1 GiB và 1000 file nhỏ (mục 4.9) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), lúc rảnh của app có giao diện chưa đo (mục 4.4). Sau thay đổi ghi trạng thái nối lại bền (mục 4.9), tiêu chí 1 và 2a vẫn ĐẠT với 1 GiB và 1000 file nhỏ. Qua Wi-Fi giữa hai máy thật (mục 4.10), RSS tăng 4,8 MiB bên gửi và 6,0 MiB bên nhận, Q4 − Q1 âm ở cả hai; D3 ĐẠT với 1 lần theo quyết định của người dùng (mục 4.10) |
+| mvp N3 | 2026-11-05: 10 GiB qua Wi-Fi 2,4 GHz giữa hai máy Windows thật, RAM hai phía, 1 lần (mục 4.10). 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8). 2026-10-28: trước/sau thay đổi ghi trạng thái nối lại bền, 1 GiB và 1000 file nhỏ (mục 4.9) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), lúc rảnh của app có giao diện: lần đo 2026-11-03 (mục 4.11) chạy khi máy bận nên **chưa kết luận**, cần đo lại khi máy rảnh; RAM ở trạng thái (d) (100 bong bóng) lần này đã vượt ngưỡng, và số đo khi máy bận nghiêng về cận dưới (mục 4.11). Sau thay đổi ghi trạng thái nối lại bền (mục 4.9), tiêu chí 1 và 2a vẫn ĐẠT với 1 GiB và 1000 file nhỏ. Qua Wi-Fi giữa hai máy thật (mục 4.10), RSS tăng 4,8 MiB bên gửi và 6,0 MiB bên nhận, Q4 − Q1 âm ở cả hai; D3 ĐẠT với 1 lần theo quyết định của người dùng (mục 4.10) |
 | mvp N4 | 2026-10-31: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, qua proxy TCP trên loopback, file 1 GiB, cắt ở 85 % theo 6 kiểu (mục 7.3) | **CHƯA ĐỦ DỮ LIỆU**: trên loopback Windows phần gửi thừa mỗi gián đoạn lớn nhất 24,31 MiB, ĐẠT ở mọi lần (49/49); theo tiêu chí ở mục 7.1 thì **không đặt** `SO_RCVBUF`/`SO_SNDBUF` trên Windows. Linux (máy ảo), card mạng thật / Wi-Fi và macOS chưa đo (mục 7.4, D5) |
 | mvp N5 | — | chưa đo |
 | mvp N6 | 2026-11-02: hai `Node` thật trong một tiến trình trên một máy Windows 11, loopback, `FakeClipboard` (mục 9.3); backend Qt `read`/`write` ảnh thật, nền Qt offscreen, cùng máy (M4, mục 9.4) | **KHÔNG ĐẠT** ở ca ảnh 8192² dễ nén (cận dưới trên nền offscreen đã vượt ngưỡng ảnh, mục 9.4); các ca còn lại **CHƯA ĐỦ DỮ LIỆU** (D6): trên loopback văn bản 1 KB và 1 MiB, ảnh PNG 10 MiB đều dưới ngưỡng ở mọi lần, RAM phẳng sau 1000 clip; backend Qt nhanh với ảnh 1920×1080 và 3840×2160 nhưng ảnh 8192² dễ nén (PNG 3,53 MiB) đã tốn khoảng 4,3–5,0 s (p95 `read` + `write`, lượt r1 và r3), vượt ngưỡng ảnh, chủ yếu do mã hóa PNG; ảnh khó nén vượt trần nay bị loại sau dưới 0,75 s nhờ kiểm sơ bộ (trước: tới 24,3 s); Wi-Fi 5 giữa hai máy thật (D6) và clipboard thật của Windows chưa đo (mục 9.5) |
@@ -301,6 +301,8 @@ Số lần: 1 GiB × 10, 5 GiB × 5, 10 GiB × 5, xen thứ tự. **ĐẠT** khi
 
 **Lúc rảnh qua CLI (chỉ ghi nhận).** `teleport receive --yes --json --dir <D> --port <p>` (mDNS bật như mặc định) chạy 10 phút, một thiết bị tin cậy giữ kết nối điều khiển với nó suốt thời gian đó. Mỗi giây đọc working set, private bytes, và CPU tính theo % một lõi (Δ thời gian CPU / Δ thời gian thực × 100). Không dùng để kết luận phần lúc rảnh của mvp N3: phần đó cần app có giao diện (Giai đoạn 4).
 
+**Lúc rảnh của app có giao diện** (viết ngày 2026-11-03, trước khi đo, theo spec E1 mục 2.4). Đo tiến trình python chạy `teleport.ui.app.main` (`teleport-gui --config-dir <tạm>` từ mã nguồn), một thiết bị đã ghép đôi giữ kết nối điều khiển với nó. Bốn trạng thái: (a) cửa sổ hiện, màn chính, mở cuộc trò chuyện với máy đã ghép đôi; (b) như (a) rồi đóng cửa sổ xuống khay; (c) mở trang “Tìm máy mới” (radar), đo sau khi vòng sóng đã tự dừng (≤ `motion.MAX_LOOP_MS`); (d) như (a) nhưng cuộc trò chuyện có 100 mục lịch sử (100 bong bóng). Mỗi trạng thái rảnh 30 s rồi đo 10 phút, mỗi giây một mẫu: working set, private bytes, CPU theo % một lõi (Δ thời gian CPU / Δ thời gian thực × 100). Cách xét ngưỡng của mvp N3: RAM so bằng working set lớn nhất trong 10 phút (ghi kèm private bytes), MB = 10⁶ byte; “CPU ~0%” là CPU trung bình cả 10 phút ≤ 0,5 % một lõi, ghi kèm p95 của các giây. Mỗi trạng thái 3 lượt. Kết luận chỉ xét khi máy rảnh (không có tải nặng của tiến trình khác); đo khi máy bận thì chỉ ghi nhận.
+
 ### 4.2. Phương pháp
 
 - Hai node là **hai tiến trình Python riêng**, mỗi bên một thư mục cấu hình riêng (danh tính riêng), đã tin nhau: `trusted.json` dựng sẵn bằng `TrustStore.add` như fixture `trust_each_other` của test, không qua ghép đôi. Nghe `127.0.0.1` cổng ngẫu nhiên, không mDNS. Bên gửi nối kết nối điều khiển tới bên nhận bằng `Node.connect_hint`; kết nối dữ liệu đi cùng chiều.
@@ -384,7 +386,7 @@ Lần chậm nhất của 64 MiB (18,2 MB/s, 3,70 s) là lần đo đầu tiên 
 - File 1 GiB, 5 GiB và 10 GiB qua CLI thật trên loopback: đã đo, ĐẠT (mục 4.6).
 - Ổ đích chậm mà RAM không tăng: **chưa đo**; USB có sẵn không dùng được (FAT32, mục 4.8). Cần một USB định dạng NTFS hoặc exFAT, còn ≥ 8 GB trống (định dạng lại USB hiện có thì xóa dữ liệu trên đó: người dùng quyết), hoặc ổ ảo giới hạn tốc độ trong máy ảo. Script đã có `--recv-dir` (mục 4.5). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D4).
 - 10 GiB từ host sang máy thật thứ hai (Windows, Wi-Fi) qua card mạng, RAM hai phía ([ke_hoach.md](ke_hoach.md) mục 5.4, D3): đã đo **1 lần** qua Wi-Fi 2,4 GHz (mục 4.10), ĐẠT theo quyết định của người dùng (1 lần là đủ). Còn **chưa đo**: mạng dây, và phần so 10 GiB với 1 GiB của tiêu chí 2 (cần các lần 1 GiB qua cùng mạng, lượt mvp N2 mục 5.1).
-- Phần lúc rảnh của mvp N3: lệnh CLI đã ghi nhận (mục 4.7); app có giao diện **chưa đo** (Giai đoạn 4). Đo CPU cần tránh bẫy lõi tiết kiệm điện của Windows (EcoQoS).
+- Phần lúc rảnh của mvp N3: lệnh CLI đã ghi nhận (mục 4.7); app có giao diện đã đo một lần khi máy bận (mục 4.11), **chưa có lần đo khi máy rảnh** để kết luận. Đo lại bằng cùng script (mục 4.11, “Cách đo lại”), khi không có bộ test hay agent nào khác chạy; bản build PyInstaller cũng cần đo. Đo CPU cần tránh bẫy lõi tiết kiệm điện của Windows (EcoQoS).
 - Hệ điều hành khác (Linux, macOS làm bên nhận và bên gửi), Python 3.12: **chưa đo**. Hệ điều hành khác thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D7); Python 3.12 đo được trên máy này, không thuộc đợt đo.
 
 ### 4.5. Cách đo lại
@@ -718,6 +720,76 @@ Phần so 10 GiB với 1 GiB của tiêu chí 2 vẫn chưa xét, như mục 4.1
 - Máy A không ở chế độ “Hiệu suất tốt nhất”. Việc này có thể làm chậm phía gửi, nhưng không làm RAM tăng thêm.
 - Máy B chạy Windows 10 21H2, không phải phiên bản mvp N10 nêu.
 - ke_hoach mục 5.4 định đo D3 cùng lượt D2 (mvp N2); lượt N2 chưa chạy.
+
+### 4.11. Lần đo 2026-11-03: lúc rảnh của app có giao diện, máy bận (chỉ ghi nhận)
+
+Lượt `gui-idle-20261103T032702Z` (giờ UTC 03:27–05:35). Định nghĩa và cách xét: mục 4.1, “Lúc rảnh của app có giao diện”. Lượt này chạy khi trên máy có nhiều bộ test giao diện và agent khác chạy song song, nên **không dùng để kết luận** (mục 4.1); số dưới đây chỉ ghi nhận.
+
+**Mã đo.** Worktree `lucid-kepler-3c9137`, commit `28ab2d2` cộng thay đổi chưa commit ở `src/teleport/ui/settings.py` (việc E1 đang làm); digest `src/teleport` (cách tính ở mục 4.3) `60b3d831bc45086770d60be3da5d868622fecc2613bdee9fe06806a698db9aef`. `python.exe` của `.venv` ở checkout chính, mã nạp từ `src/` của worktree qua `PYTHONPATH` (đã kiểm `teleport.__file__`). `__version__` 0.1.0a0. Chạy từ mã nguồn, không phải bản build PyInstaller. Digest trên tính lúc bắt đầu lượt; trong lúc đo, các phiên khác tiếp tục sửa worktree (giờ sửa cuối, UTC): `ui/wait_pairing.py` 03:55:02, `ui/pairing.py` và `ui/settings.py` 03:55:52, `ui/theme.py` 05:12:55. Mỗi đoạn bật app mới nên nạp mã lúc bật: đoạn (a) r1, (b) r1, (c) r1 chạy mã lúc bắt đầu; từ (d) r1 (03:59) có bản sửa của ba file đầu; (a) r3 (05:14) và (b) r3 (05:25) có thêm bản sửa của `theme.py`. Không có bản chụp mã của từng đoạn.
+
+**Cách dựng.** Ba thư mục cấu hình tạm: `gui0` và `gui1` (app có giao diện), `peer` (máy đã ghép đôi); mỗi bên cổng riêng, thư mục nhận riêng trong thư mục tạm, cài đặt mặc định (đồng bộ clipboard tắt như mặc định). Ghép đôi `gui0`↔`peer` và `gui1`↔`peer` qua CLI thật (`teleport listen --json` / `teleport pair 127.0.0.1:<cổng> --json`, trả lời `c`, hai mã trùng nhau). `gui1` nhận 100 lượt thật từ `peer` (`teleport receive --yes` / `teleport send`, mỗi lượt một file 1 KiB; 100/100 thành công, `history.json` có 100 mục) cho trạng thái (d). Mỗi đoạn đo: bật `teleport receive --yes --json` ở `peer` (mDNS bật), bật app có giao diện qua `n3gui_app.py` (gọi `teleport.ui.app.main`, kèm một bộ lái chỉ chạy lúc dựng trạng thái: mở cuộc trò chuyện hàng đầu bằng `open_conversation_at(0)`, rồi (b) kích phím Đóng cửa sổ, (c) kích phím Tìm máy mới; sau đó bộ lái không còn hẹn giờ nào), chờ `peer` báo `device_connected` (app tự nối qua mDNS, 2,1–8,1 s sau khi bật), rảnh 30 s, đo 600 s, rồi dừng app bằng CTRL_BREAK (→ `QApplication.quit()`, đóng như thoát bình thường). Thứ tự trạng thái xoay vòng mỗi lượt. Bộ lái kiểm lại ở giây 20 sau thao tác: đúng trang ((a), (b), (d): `home`; (c): `discover`), cửa sổ hiện ((b): ẩn, không có cửa sổ hiện nào của tiến trình), `motion.running_count()` = 0 (vòng sóng radar đã dừng), (d) có 100 `HistoryBubble`. Cả 12 đoạn đúng trạng thái, không đoạn nào mất kết nối điều khiển, app và `peer` đều thoát mã 0.
+
+**Môi trường và tải nền**
+
+| | |
+|---|---|
+| Hệ điều hành | Windows 11 Pro, bản 10.0.26300 |
+| Python / PySide6 | 3.14.5 (64 bit) / 6.12.0; cryptography 50.0.2, zeroconf 0.151.5, ifaddr 0.2.0 |
+| CPU / RAM | Intel Core i7-12800H, 20 luồng / 15,7 GiB; RAM trống lúc bắt đầu chỉ 1,38 GiB |
+| Nguồn điện | Cắm sạc (pin 100 %), power plan Balanced với chế độ nguồn **Best power efficiency** (overlay `961cc777-…`); Battery saver tắt; Defender thời gian thực bật |
+| EcoQoS | Tiến trình app: ControlMask = StateMask = 0 (không đặt EcoQoS tường minh), ưu tiên Normal, ở mọi mẫu của cả 12 đoạn, kể cả khi ở khay. Số đọc này không cho biết Windows có tự hạ QoS theo cửa sổ nền hay không |
+| Tải nền | Lúc bắt đầu có 33 tiến trình python khác (bộ test giao diện và agent của các phiên khác). CPU cả máy bận (theo từng giây) trung vị 31–76 % tùy đoạn, nhiều đoạn chạm 100 % (bảng dưới) |
+| Cửa sổ | Hiện trên màn hình thật, có thể bị cửa sổ khác che; app ở tiền cảnh 0–60 trong 60 lần kiểm mỗi đoạn (cột “tiền cảnh”), tức là cửa sổ của các phiên khác lấy tiêu điểm trong lúc đo |
+
+**Kết quả** (600 mẫu mỗi đoạn; working set (WS) và private bytes tính bằng MiB; CPU theo % một lõi)
+
+| Đoạn | WS trung vị / max | Private trung vị / max | CPU TB 10 phút | CPU từng giây p95 / max | CPU cả máy, trung vị / max | Tiền cảnh |
+|---|---|---|---|---|---|---|
+| (a) r1 | 138,6 / 139,5 | 88,0 / 88,2 | 0,315 | 1,56 / 4,69 | 39,7 / 56,2 | 60/60 |
+| (a) r2 | 139,5 / 140,0 | 88,4 / 88,5 | 0,750 | 3,13 / 20,31 | 32,5 / 98,4 | 50/60 |
+| (a) r3 | 134,8 / 136,7 | 88,9 / 88,9 | 0,956 | 4,69 / 10,94 | 48,0 / 99,6 | 36/60 |
+| (b) r1 | 139,1 / 139,8 | 88,2 / 88,4 | 0,372 | 1,56 / 7,81 | 41,9 / 97,7 | 0/60 |
+| (b) r2 | 139,0 / 139,6 | 88,1 / 88,1 | 1,008 | 4,69 / 15,49 | 76,1 / 100,0 | 0/60 |
+| (b) r3 | 136,8 / 139,5 | 88,3 / 88,4 | 0,385 | 1,56 / 6,25 | 53,6 / 90,8 | 0/60 |
+| (c) r1 | 138,7 / 140,1 | 88,8 / 89,2 | 1,995 | 3,13 / 112,51 | 54,2 / 99,5 | 15/60 |
+| (c) r2 | 140,5 / 141,0 | 89,1 / 89,5 | 0,737 | 3,13 / 11,00 | 73,2 / 100,0 | 60/60 |
+| (c) r3 | 139,8 / 182,3 | 89,0 / 107,7 | 1,922 | 9,38 / 70,32 | 35,5 / 88,6 | 53/60 |
+| (d) r1 | 155,9 / 158,4 | 108,6 / 109,2 | 1,417 | 10,94 / 25,00 | 41,1 / 68,4 | 60/60 |
+| (d) r2 | 155,6 / 156,5 | 106,8 / 107,1 | 0,174 | 1,56 / 3,13 | 31,4 / 62,4 | 60/60 |
+| (d) r3 | 153,9 / 158,6 | 107,9 / 108,2 | 1,164 | 6,25 / 23,44 | 69,9 / 100,0 | 21/60 |
+
+`GetProcessTimes` tăng theo bước 15,625 ms, nên CPU từng giây chỉ nhận 0 hoặc bội của 1,5625 % (mục 4.7).
+
+**Kết luận: chưa kết luận (máy bận).** Theo mục 4.1, lượt này không dùng để xét ĐẠT / KHÔNG ĐẠT phần lúc rảnh của mvp N3; cần đo lại khi máy rảnh (mục 4.4).
+
+**Ghi nhận** (không phải kết luận)
+
+- **RAM theo trạng thái.** (a), (b) và (c) có working set khoảng 135–141 MiB, private bytes khoảng 88–89,5 MiB; ở khay (b) working set không giảm so với khi cửa sổ hiện. Trạng thái (d) (100 bong bóng lịch sử) cao hơn đều ở cả 3 lượt: working set 153,9–158,6 MiB, private bytes 106,8–109,2 MiB, tức là so với (a) cùng lượt thì working set lớn nhất cao hơn 16,5–21,9 MiB và private bytes lớn nhất cao hơn 18,6–21,0 MiB, cỡ 0,2 MiB mỗi bong bóng. Mức 156–159 MiB là khoảng 164–166 MB (10⁶ byte). RAM của tiến trình ít phụ thuộc tải CPU của máy hơn số CPU (máy thiếu RAM thì working set có thể bị cắt *xuống*), nên con số của (d) cần được xem lại ngay ở lần đo khi máy rảnh.
+- **Đoạn (c) r3:** ở giây 463–465, working set tăng từ khoảng 140 lên 182 MiB và private bytes tăng 18,2 MiB cùng lúc với một đợt CPU 70 % ở thread chính (Qt), rồi giữ mức đó tới hết đoạn. Lượt này không biết điều gì gây ra (không có thao tác nào của bộ lái; có thể do cửa sổ của phiên khác chiếm tiêu điểm, thay đổi màn hình hay theme); chưa tái hiện.
+- **CPU.** Thời gian CPU chia theo thread (cuối mỗi đoạn): phần lớn ở thread chính (Qt), rồi thread node (`teleport-node`) và `asyncio_0`. Các đoạn ít bị ngắt nhất ((a) r1, (b) r1, (b) r3, (d) r2: không giây nào ≥ 10 %) có CPU trung bình 0,17–0,39 %; các đoạn còn lại có các đợt CPU ngắn ở thread chính (tới 112 % một lõi trong một giây ở (c) r1, giây 569–580), trùng lúc cửa sổ của app mất hoặc lấy lại tiền cảnh. Lượt này không tách được phần nào do app tự làm, phần nào do tương tác của tiến trình khác với cửa sổ.
+- **Phân bổ RAM lúc dựng app** (`n3gui_diag.py`, 3 lần, không node, không mạng; working set / private bytes, MiB, số của 3 lần lệch nhau ≤ 1 MiB): python trống 21 / 12,5; `import PySide6.QtWidgets` +13,7 / +7,7; `QApplication` +10 / +1,4; `import teleport.ui.app` (kéo theo mọi module `ui`, `app`, `net`, `core` và thư viện của chúng) **+50,5 / +43,1**; i18n, font, theme +10,3 / +5,6; `MainWindow()` +7,5 / +2,7; hiện cửa sổ +12,6 / +7,1; khay +0,3 / 0. Tổng khoảng 126 / 80, so với khoảng 139 / 88 khi chạy thật (phần còn lại gồm node, mDNS, kết nối điều khiển, danh sách thiết bị). Phần import là phần lớn nhất; lượt này không tách nó theo từng gói.
+
+**Giới hạn của lần đo này**
+
+- Máy bận (bảng trên): ảnh hưởng chính tới số CPU; tiến trình khác còn lấy tiêu điểm cửa sổ nên các trạng thái “cửa sổ hiện” không giữ được tiền cảnh suốt 10 phút.
+- Chạy từ mã nguồn bằng python của `.venv`; bản build PyInstaller (`--onedir`) có thể khác về RAM: **chưa đo**. Tiến trình chuyển tiếp của `.venv\Scripts\python.exe` không tính (bản exe không có nó).
+- Máy đã ghép đôi chạy trên cùng máy (`teleport receive` với thư mục cấu hình riêng), nối qua địa chỉ mạng của chính máy; mạng không có thiết bị Teleport nào khác được ghi nhận. Một máy đã ghép đôi, chưa đo nhiều máy hay sau khi đã truyền file trong cùng phiên.
+- Mã có thay đổi chưa commit của E1 ở `ui/settings.py`; các thay đổi G3–G5 về sau cần đo lại bằng cùng script (spec E1, G8).
+- 10 phút mỗi đoạn; rò rỉ chậm hơn thế chưa đo.
+
+**Cách đo lại.** Script nằm ngoài repo, trong scratchpad của phiên đo (không bền; có bản chép kèm dữ liệu thô trong thư mục ghi chú chung của đợt nâng cấp giao diện, thư mục con `e1-n3`): `<scratchpad>\n3\`: `n3gui.py` (chuẩn bị, chạy, báo cáo, dọn), `n3gui_app.py` (app có giao diện kèm bộ lái), `n3gui_diag.py` (phân bổ RAM lúc dựng app), và bản chép `n3_bench.py`, `n3_cli.py` của mục 4.5. Dữ liệu thô của lượt này ở `results\gui-idle-20261103T032702Z\` trong thư mục đó (`results.jsonl` gồm môi trường, cấu hình, mọi đoạn; mỗi đoạn một thư mục có `samples.csv` và stderr). Trước khi đo, đóng mọi bộ test và agent khác, cắm sạc, ghi chế độ nguồn. Trong PowerShell, ở thư mục script:
+
+```
+$env:PYTHONPATH = "<worktree cần đo>\src"
+$PY = "<repo>\.venv\Scripts\python.exe"
+& $PY n3gui.py prepare                                   # thư mục tạm %TEMP%\tpn3g, ghép đôi qua CLI, 100 lượt lịch sử (~3 phút)
+& $PY n3gui.py run --rounds 3 --duration 600 --settle 30 # ~2 giờ 10 phút; --states home,tray,radar,chat
+& $PY n3gui.py report results\gui-idle-<giờ UTC>\results.jsonl
+& $PY n3gui.py cleanup                                   # xóa %TEMP%\tpn3g
+& $PY n3gui_diag.py                                      # phân bổ RAM lúc dựng app (tùy chọn)
+```
+
+`run` dừng cả lượt sau `--max-hours` (mặc định 3); mỗi đoạn có hạn chờ (`receiving` 60 s, `device_connected` 120 s, thao tác của bộ lái 60 s), lỗi thì ghi đoạn đó là hỏng kèm lý do và dừng app, `peer` (CTRL_BREAK, quá 40 s thì giết cây tiến trình). App đăng ký tên hiển thị cho AppUserModelID ở HKCU như khi chạy bình thường (`ui/app.py`); script không dọn khóa đó.
 
 ## 5. mvp N2: Hiệu năng so với SMB
 

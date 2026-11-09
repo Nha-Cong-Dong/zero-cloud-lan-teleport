@@ -982,6 +982,35 @@ def _translate_result_buttons(box: QMessageBox) -> None:
         button.setAccessibleName(text)
 
 
+def _translate_result_box(box: QMessageBox, text: str) -> None:
+    """Tiêu đề, tên trợ năng và câu của hộp kết quả theo ngôn ngữ hiện tại."""
+    box.setWindowTitle(title())
+    box.setAccessibleName(title())
+    box.setText(text)
+
+
+def _translate_unpair_box(box: QMessageBox, label: str) -> None:
+    """Chữ của hộp xác nhận hủy ghép đôi theo ngôn ngữ hiện tại; `label` đã qua `texts.peer_label`."""
+    box.setWindowTitle(unpair_title())
+    box.setAccessibleName(unpair_title())
+    box.setText(unpair_confirm_text(label))
+    check = box.checkBox()
+    if check is not None:
+        check.setText(unpair_clear_history_text())
+        check.setAccessibleName(unpair_clear_history_text())
+    for button in box.buttons():
+        role = box.buttonRole(button)
+        if role == QMessageBox.ButtonRole.DestructiveRole:
+            button.setText(unpair_accept_text())
+        elif role == QMessageBox.ButtonRole.RejectRole:
+            button.setText(unpair_decline_text())
+
+
+def _outcome_fn(result: PairingFinished, target: str | None) -> Callable[[], str]:
+    """Câu kết quả dựng lúc gọi (theo ngôn ngữ hiện tại); chỉ dùng khi `outcome_text` có câu."""
+    return lambda: outcome_text(result, target=target) or ""
+
+
 def _set_result_buttons(box: QMessageBox, retry: _RetryTarget | None) -> None:
     """Dựng lại hàng nút của hộp kết quả: [Thử lại] [Đóng] khi có `retry`, không thì OK."""
     for button in box.buttons():
@@ -1066,6 +1095,8 @@ class PairingController(QObject):
         self._progress_closing = False  # đóng hộp tiến độ bằng code, không phải người dùng hủy
         self._result_box: QMessageBox | None = None
         self._result_retry: _RetryTarget | None = None  # đích “Thử lại” của câu đang ở hộp kết quả
+        self._result_text: Callable[[], str] = str  # dựng lại câu của hộp kết quả khi đổi ngôn ngữ
+        self._unpair_label = ""  # tên máy (đã qua peer_label) của hộp xác nhận hủy ghép đôi
         self._retry_clicked: tuple[QMessageBox, _RetryTarget] | None = None  # đã bấm, chờ hộp đóng
         self._unpair_box: QMessageBox | None = None
         self._unpair_names: dict[str, str] = {}  # device_id → tên đã qua peer_label
@@ -1144,7 +1175,7 @@ class PairingController(QObject):
         if self._host is None:
             return False
         if self._pairing is not None:
-            self._show_result(busy_text())
+            self._show_result(busy_text)
             return False
         if not view.online or not view.addresses or view.port is None:
             return False
@@ -1167,7 +1198,7 @@ class PairingController(QObject):
         if self._host is None:
             return False
         if self._pairing is not None:
-            self._show_result(busy_text())
+            self._show_result(busy_text)
             return False
         pairing = _Pairing(self._generation, f"{ip}:{port}", None, (), ip=ip, port=port)
         self._start(pairing, lambda node: node.pairing.pair_with([ip], port))
@@ -1200,10 +1231,10 @@ class PairingController(QObject):
             and (pairing.device_id is None or result.peer_device_id == pairing.device_id),
         )
         if result is None:
-            self._show_result(device_gone_text(pairing.label))
+            self._show_result(functools.partial(device_gone_text, pairing.label))
         elif isinstance(result, ValueError):
             log.warning("ghép đôi: tham số không hợp lệ (%s)", type(result).__name__)
-            self._show_result(unreachable_text(pairing.target or pairing.label))
+            self._show_result(functools.partial(unreachable_text, pairing.target or pairing.label))
         elif isinstance(result, RuntimeError):
             log.info("ghép đôi: node chưa chạy hoặc đang đóng")
         elif isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
@@ -1229,7 +1260,7 @@ class PairingController(QObject):
             # trước khi hiện mã: người dùng đã bấm ghép đôi nên vẫn báo, bằng câu của vai khởi xướng.
             replaced = dataclasses.replace(result, role=Role.INITIATOR)
             retry = _retry_from_pairing(pairing, result.code_shown) if result.outcome in _RETRYABLE else None
-            self._show_result(outcome_text(replaced, target=pairing.target) or "", retry=retry)
+            self._show_result(_outcome_fn(replaced, pairing.target), retry=retry)
         # Còn lại (PairingFinished): đã báo qua `pairing_finished` (tới trước on_done).
 
     def _connect_hint(self, generation: int, device_id: str, hint: tuple[str, int]) -> None:
@@ -1323,10 +1354,9 @@ class PairingController(QObject):
             self._close_progress()
         self.finished.emit(result)
         target = pairing.target if (pairing is not None and matched) else None
-        text = outcome_text(result, target=target)
-        if text is not None:
+        if outcome_text(result, target=target) is not None:
             self._show_result(
-                text,
+                _outcome_fn(result, target),
                 ok=result.outcome is PairingOutcome.PAIRED,
                 retry=self._retry_for(result, pairing if matched else None),
             )
@@ -1394,16 +1424,15 @@ class PairingController(QObject):
         self._close_unpair_box()
         box = _new_box(self._message_parent(), self._unpair_finished)
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle(unpair_title())
-        box.setAccessibleName(unpair_title())
-        box.setText(unpair_confirm_text(label))
-        check = QCheckBox(unpair_clear_history_text())
+        check = QCheckBox()
         check.setObjectName("unpairClearHistory")
         check.setChecked(True)
-        check.setAccessibleName(unpair_clear_history_text())
         box.setCheckBox(check)
-        accept = box.addButton(unpair_accept_text(), QMessageBox.ButtonRole.DestructiveRole)
-        decline = box.addButton(unpair_decline_text(), QMessageBox.ButtonRole.RejectRole)
+        accept = box.addButton("", QMessageBox.ButtonRole.DestructiveRole)
+        decline = box.addButton("", QMessageBox.ButtonRole.RejectRole)
+        self._unpair_label = label
+        _translate_unpair_box(box, label)
+        box.installEventFilter(self)  # đổi ngôn ngữ lúc hộp đang mở
         box.setDefaultButton(decline)
         box.setEscapeButton(decline)
         generation = self._generation
@@ -1439,14 +1468,14 @@ class PairingController(QObject):
                 self.devices_changed.emit(result)
                 if clear_history:
                     self.history_cleared.emit(device_id)
-                self._show_result(unpaired_text(label), ok=True)
+                self._show_result(functools.partial(unpaired_text, label), ok=True)
             elif isinstance(result, KeyError):
                 # Đã bị hủy trước đó: vẫn đọc lại danh sách để radar đúng.
                 self._host.call(lambda node: node.devices(), self._devices_done(generation))
-                self._show_result(unpaired_text(label), ok=True)
+                self._show_result(functools.partial(unpaired_text, label), ok=True)
             elif isinstance(result, Exception):
                 log.error("hủy ghép đôi lỗi: %s", type(result).__name__)
-                self._show_result(unpair_failed_text(label))
+                self._show_result(functools.partial(unpair_failed_text, label))
             # CancelledError: host đang dừng, không báo.
 
         host.submit(run, done)
@@ -1470,8 +1499,13 @@ class PairingController(QObject):
 
     # ---- Hộp kết quả và dọn dẹp --------------------------------------------------------------
 
-    def _show_result(self, text: str, *, ok: bool = False, retry: _RetryTarget | None = None) -> None:
+    def _show_result(
+        self, text_fn: Callable[[], str], *, ok: bool = False, retry: _RetryTarget | None = None
+    ) -> None:
         """Báo một câu kết quả và phát `message`.
+
+        `text_fn` dựng câu theo ngôn ngữ hiện tại: hộp kết quả gọi lại nó khi đổi ngôn ngữ lúc đang
+        mở (`eventFilter`), cùng tiêu đề và tên trợ năng.
 
         `ok` (thành công): không mở hộp; đóng hộp lỗi đang mở (câu cũ không còn đúng) rồi phát
         `notice`; không có cửa sổ Teleport nào đang được dùng (`window_visible`) thì báo thêm bằng
@@ -1479,6 +1513,7 @@ class PairingController(QObject):
         dùng lại (câu mới thay câu cũ; hàng nút dựng lại theo `retry`: có thì [Thử lại] [Đóng], không
         thì OK).
         """
+        text = text_fn()
         if ok:
             old, self._result_box = self._result_box, None
             self._result_retry = None
@@ -1496,13 +1531,12 @@ class PairingController(QObject):
         fresh = box is None or not box.isVisible()
         if box is None:
             box = _new_box(self._message_parent(), self._result_finished)
-            box.setWindowTitle(title())
-            box.setAccessibleName(title())
             box.buttonClicked.connect(functools.partial(self._result_clicked, box))
             box.installEventFilter(self)
             self._result_box = box
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setText(text)
+        self._result_text = text_fn
+        _translate_result_box(box, text)
         self._result_retry = retry
         _set_result_buttons(box, retry)
         if fresh:
@@ -1537,20 +1571,21 @@ class PairingController(QObject):
             return
         busy = self.busy
         if busy:
-            self._show_result(busy_text())
+            self._show_result(busy_text)
             return
         view = None if target.device_id is None else self._device_lookup(target.device_id)
         if view is None or not self.pair_device(view):
-            self._show_result(device_gone_text(target.label))
+            self._show_result(functools.partial(device_gone_text, target.label))
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        """Đổi ngôn ngữ: dịch lại chữ các nút “Thử lại” / “Đóng” của hộp kết quả."""
-        if (
-            event.type() == QEvent.Type.LanguageChange
-            and isinstance(watched, QMessageBox)
-            and watched is self._result_box
-        ):
-            _translate_result_buttons(watched)
+        """Đổi ngôn ngữ lúc hộp đang mở: dịch lại hộp kết quả (tiêu đề, câu, nút “Thử lại” / “Đóng”)
+        và hộp xác nhận hủy ghép đôi (tiêu đề, câu, ô, nút)."""
+        if event.type() == QEvent.Type.LanguageChange and isinstance(watched, QMessageBox):
+            if watched is self._result_box:
+                _translate_result_box(watched, self._result_text())
+                _translate_result_buttons(watched)
+            elif watched is self._unpair_box:
+                _translate_unpair_box(watched, self._unpair_label)
         return super().eventFilter(watched, event)
 
     def _close_boxes(self, *, include_result: bool) -> None:

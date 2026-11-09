@@ -387,6 +387,7 @@ class WaitPairingPage(QWidget):
         for label, button, feedback in zip(
             self.address_labels, self.copy_buttons, self.copy_feedbacks, strict=True
         ):
+            label.setAccessibleName(address_caption)
             self._label_copy_button(button, label.text(), feedback.active)
         self._align_copy_buttons()
 
