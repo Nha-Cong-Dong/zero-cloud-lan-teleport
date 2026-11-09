@@ -11,6 +11,9 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Nội bộ: `Node.retry_connect` thử kết nối lại ngay tới đích hiện có (như người dùng thao tác) và trả kết quả của đúng lần thử đó, cho nút “Thử lại”.
 
 ### Changed
+- Giám sát mạng thông minh hơn (`NetworkWatch`): so sánh tập hợp địa chỉ mạng thay vì so sánh thứ tự; khi các card mạng đổi thứ tự ưu tiên mà tập địa chỉ giữ nguyên thì không khởi động lại dịch vụ tìm kiếm mDNS không cần thiết và không ngắt kết nối điều khiển giữa các máy.
+- Lọc card mạng ảo dạng đường hầm: loại trừ các card VPN, WireGuard, Tailscale khỏi ngoại lệ địa chỉ nguồn ưu tiên khi máy có card mạng thật, ngăn trường hợp VPN chiếm tuyến làm lộ địa chỉ ảo ra mạng nội bộ.
+- Tinh gọn nhật ký lỗi kết nối: hạ mức ghi nhật ký khi máy khác ngắt kết nối bất ngờ trong lúc đang nhận kết nối mới xuống mức thông tin chi tiết (DEBUG), loại bỏ hoàn toàn các dòng cảnh báo gây nhiễu log.
 - README viết lại cho bản `v0.1.0-alpha`: link tới trang giới thiệu sản phẩm, ảnh chụp giao diện, mục “Bắt đầu nhanh” (tải và kiểm file từ trang Release, SmartScreen, tường lửa), cột cho biết tính năng nào đã có trong bản alpha, đoạn tóm tắt bằng tiếng Anh, câu hỏi thường gặp gọn hơn; con số và chi tiết giao thức nay chỉ trỏ tới tài liệu nguồn trong `docs/`.
 
 ## [0.1.0-alpha] - 2026-11-05
