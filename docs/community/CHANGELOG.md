@@ -224,6 +224,9 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Lời hỏi `[c/k]` của `listen`, `pair` và `receive` được in lại khi có dòng khác in chen giữa lúc đang chờ trả lời.
 
 ### Fixed
+- Cài đặt → Thiết bị tin cậy không còn cuộn ngang hay cắt chữ khi dùng tiếng Anh ở cỡ cửa sổ nhỏ nhất: ô “Hỏi trước khi nhận”, “Đồng bộ clipboard” và nút “Hủy ghép đôi…” tự xuống dòng dưới tên máy, hoặc xếp dọc, khi không đủ chỗ trên một hàng.
+- Đổi ngôn ngữ khi đang mở hộp báo kết quả ghép đôi, hộp “Hủy ghép đôi”, hộp “Xóa toàn bộ lịch sử” hay trang “Chờ ghép đôi” thì chữ và tên cho trình đọc màn hình trong đó cũng đổi theo.
+- Nhãn chọn được bằng bàn phím (tên máy, dòng trạng thái, gợi ý ở trang Tìm máy mới…), danh sách máy và bảng phím tắt có vòng tiêu điểm khi được chọn bằng phím Tab.
 - Khi máy nhận chờ kết nối dữ liệu quá lâu rồi kết nối mới tới, kết nối đang nhận tốt không còn bị cắt và xin lại từ đầu vòng; mạng chậm không còn làm lượt truyền chững lại nhiều lần.
 - Máy gửi báo `complete` cho file không có trong một lượt nhận đã xong thì nhận `cancel{error}` như đặc tả, thay vì bị bỏ qua im lặng.
 - Clipboard nhận thành nhiều mảnh rất nhỏ không còn tốn RAM gấp nhiều lần kích thước của nó.
