@@ -111,27 +111,27 @@ def _vietnamese(qapp) -> None:
 # =================================================================================================
 
 
-@pytest.mark.parametrize("trim", [False, True])
-@pytest.mark.parametrize("size", SIZES)
-def test_format_size_vietnamese_equals_core(qapp, size, trim):
+def test_format_size_vietnamese_equals_core(qapp):
     from teleport.ui import texts
 
-    assert texts.format_size(size, trim=trim) == core_format_size(size, trim=trim)
+    for trim in (False, True):
+        for size in SIZES:
+            assert texts.format_size(size, trim=trim) == core_format_size(size, trim=trim)
 
 
-@pytest.mark.parametrize("trim", [False, True])
-@pytest.mark.parametrize("size", SIZES)
-def test_format_size_english_uses_point_and_plural_bytes(qapp, size, trim):
+def test_format_size_english_uses_point_and_plural_bytes(qapp):
     from teleport.ui import texts
 
     _english(qapp)
-    vi = core_format_size(size, trim=trim)
-    en = texts.format_size(size, trim=trim)
-    assert "," not in en
-    if size < 1024:
-        assert en == (f"{size} byte" if size == 1 else f"{size} bytes")
-    else:
-        assert en == vi.replace(",", ".")
+    for trim in (False, True):
+        for size in SIZES:
+            vi = core_format_size(size, trim=trim)
+            en = texts.format_size(size, trim=trim)
+            assert "," not in en
+            if size < 1024:
+                assert en == (f"{size} byte" if size == 1 else f"{size} bytes")
+            else:
+                assert en == vi.replace(",", ".")
 
 
 @pytest.mark.parametrize(
@@ -162,11 +162,11 @@ def test_format_size_rejects_like_core(qapp):
         texts.format_size(1.5)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("seconds", DURATIONS)
-def test_format_duration_vietnamese_equals_core(qapp, seconds):
+def test_format_duration_vietnamese_equals_core(qapp):
     from teleport.ui import texts
 
-    assert texts.format_duration(seconds) == core_format_duration(seconds)
+    for seconds in DURATIONS:
+        assert texts.format_duration(seconds) == core_format_duration(seconds)
 
 
 @pytest.mark.parametrize(

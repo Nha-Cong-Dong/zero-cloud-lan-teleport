@@ -747,16 +747,16 @@ def _bad_calls(objs: dict, now: float) -> dict:
 METHODS = ["admit", "anonymous", "trusted", "control_opened", "control_closed", "is_priority"]
 
 
-@pytest.mark.parametrize("method", METHODS)
-@pytest.mark.parametrize("bad_now", [*BAD_NOW, 9.75], ids=["nan", "inf", "-inf", "backwards"])
-def test_bad_now_raises_value_error_and_changes_nothing(method, bad_now):
-    gate, objs = _prepared_gate()
-    twin, twin_objs = _prepared_gate()
-    before = snapshot(gate)
-    with pytest.raises(ValueError):
-        _bad_calls(objs, bad_now)[method](gate)
-    assert snapshot(gate) == before
-    assert _follow_up(gate, objs) == _follow_up(twin, twin_objs)
+def test_bad_now_raises_value_error_and_changes_nothing():
+    for method in METHODS:
+        for bad_now in [*BAD_NOW, 9.75]:
+            gate, objs = _prepared_gate()
+            twin, twin_objs = _prepared_gate()
+            before = snapshot(gate)
+            with pytest.raises(ValueError):
+                _bad_calls(objs, bad_now)[method](gate)
+            assert snapshot(gate) == before
+            assert _follow_up(gate, objs) == _follow_up(twin, twin_objs)
 
 
 @pytest.mark.parametrize("method", METHODS)

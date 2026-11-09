@@ -274,9 +274,8 @@ def test_check_rejects_unmappable_localpyc(
 _UCRT_SRC = r"C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk\17.0.20-101\x64\bin"
 
 
-@pytest.mark.parametrize(
-    "dest",
-    [
+def test_drop_ucrt_removes_universal_crt() -> None:
+    cases = [
         "api-ms-win-crt-runtime-l1-1-0.dll",
         "API-MS-WIN-core-file-l1-1-0.dll",
         "api-ms-win-core-kernel32-legacy-l1-1-1.dll",
@@ -284,18 +283,16 @@ _UCRT_SRC = r"C:\hostedtoolcache\windows\Java_Temurin-Hotspot_jdk\17.0.20-101\x6
         "UCRTBASE.DLL",
         "sub/dir/api-ms-win-crt-stdio-l1-1-0.dll",
         "sub\\ucrtbase.dll",
-    ],
-)
-def test_drop_ucrt_removes_universal_crt(dest: str) -> None:
-    entry = (dest, f"{_UCRT_SRC}\\{dest}", "BINARY")
-    kept, dropped = tp.drop_ucrt([entry])
-    assert kept == []
-    assert dropped == [dest]
+    ]
+    for dest in cases:
+        entry = (dest, f"{_UCRT_SRC}\\{dest}", "BINARY")
+        kept, dropped = tp.drop_ucrt([entry])
+        assert kept == []
+        assert dropped == [dest]
 
 
-@pytest.mark.parametrize(
-    "dest",
-    [
+def test_drop_ucrt_keeps_other_files() -> None:
+    for dest in [
         "vcruntime140.dll",
         "vcruntime140_1.dll",
         "python312.dll",
@@ -312,13 +309,11 @@ def test_drop_ucrt_removes_universal_crt(dest: str) -> None:
         "api-ms-win-eventing-provider-l1-1-0.dll",
         "my-api-ms-win-crt-runtime-l1-1-0.dll",
         "ucrtbase.dll/evil.dll",
-    ],
-)
-def test_drop_ucrt_keeps_other_files(dest: str) -> None:
-    entry = (dest, f"C:\\Python312\\{dest}", "BINARY")
-    kept, dropped = tp.drop_ucrt([entry])
-    assert kept == [entry]
-    assert dropped == []
+    ]:
+        entry = (dest, f"C:\\Python312\\{dest}", "BINARY")
+        kept, dropped = tp.drop_ucrt([entry])
+        assert kept == [entry]
+        assert dropped == []
 
 
 def test_drop_ucrt_keeps_order_of_remaining_entries() -> None:
@@ -478,9 +473,8 @@ def test_audit_rejects_python_embedded_component_with_disallowed_license(
 # --------------------------------------------------------- 3. spdx_compatible
 
 
-@pytest.mark.parametrize(
-    "expression",
-    [
+def test_spdx_accepts_compatible_expression() -> None:
+    for expression in [
         "MIT",
         "Apache-2.0 OR BSD-3-Clause",
         "(MIT OR Apache-2.0) AND Unicode-3.0",
@@ -491,15 +485,12 @@ def test_audit_rejects_python_embedded_component_with_disallowed_license(
         "Apache-2.0 OR MIT AND GPL-2.0-only",
         "GPL-2.0-only AND MIT OR Apache-2.0",
         "Apache-2.0 WITH LLVM-exception OR GPL-2.0-only",
-    ],
-)
-def test_spdx_accepts_compatible_expression(expression: str) -> None:
-    assert tp.spdx_compatible(expression) is True
+    ]:
+        assert tp.spdx_compatible(expression) is True
 
 
-@pytest.mark.parametrize(
-    "expression",
-    [
+def test_spdx_rejects_incompatible_expression() -> None:
+    for expression in [
         "GPL-2.0-only",
         "LGPL-2.1-or-later",
         "LGPL-2.1-only",
@@ -511,15 +502,13 @@ def test_spdx_accepts_compatible_expression(expression: str) -> None:
         "(MIT OR Apache-2.0) AND GPL-2.0-only",
         "MIT WITH LLVM-exception",
         "mit",
-    ],
-)
-def test_spdx_rejects_incompatible_expression(expression: str) -> None:
-    assert _accepted(expression) is False
+    ]:
+        assert _accepted(expression) is False
 
 
-@pytest.mark.parametrize(
-    "expression",
-    [
+def test_spdx_rejects_malformed_expression() -> None:
+    # Biểu thức hỏng: chấp nhận cả hai cách đóng cổng (ném LicenseAuditError hoặc trả False).
+    for expression in [
         "",
         "   ",
         "(MIT OR Apache-2.0",
@@ -533,11 +522,8 @@ def test_spdx_rejects_incompatible_expression(expression: str) -> None:
         "AND",
         "MIT Apache-2.0",
         "MIT WITH",
-    ],
-)
-def test_spdx_rejects_malformed_expression(expression: str) -> None:
-    # Biểu thức hỏng: chấp nhận cả hai cách đóng cổng (ném LicenseAuditError hoặc trả False).
-    assert _accepted(expression) is False
+    ]:
+        assert _accepted(expression) is False
 
 
 _GOOD_IDS = ("MIT", "Apache-2.0", "BSD-3-Clause", "Apache-2.0 WITH LLVM-exception")
@@ -1197,9 +1183,8 @@ def test_release_tag_accepts_release_tag_forms(monkeypatch: pytest.MonkeyPatch, 
     assert tp.release_tag() == tag
 
 
-@pytest.mark.parametrize(
-    "tag",
-    [
+def test_release_tag_rejects_malformed_or_injected_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    for tag in [
         "v0.1.0-alpha; rm -rf /",
         "v0.1.0-alpha;rm",
         "v0.1.0-alpha && calc",
@@ -1221,12 +1206,10 @@ def test_release_tag_accepts_release_tag_forms(monkeypatch: pytest.MonkeyPatch, 
         "main",
         "refs/tags/v0.1.0-alpha",
         "v١.0.0",  # chữ số Ả Rập
-    ],
-)
-def test_release_tag_rejects_malformed_or_injected_value(monkeypatch: pytest.MonkeyPatch, tag: str) -> None:
-    monkeypatch.setenv("TELEPORT_RELEASE_TAG", tag)
-    with pytest.raises(LicenseAuditError):
-        tp.release_tag()
+    ]:
+        monkeypatch.setenv("TELEPORT_RELEASE_TAG", tag)
+        with pytest.raises(LicenseAuditError):
+            tp.release_tag()
 
 
 @pytest.mark.parametrize("tag", ["v01.0.0", "v1.00.0", "v1.0.01"])

@@ -522,15 +522,17 @@ def _results_not_done():
     return [r.value for r in TransferResult if r not in (TransferResult.DONE, TransferResult.SUSPENDED)]
 
 
-@pytest.mark.parametrize("direction", ["send", "receive"])
-@pytest.mark.parametrize("result", _results_not_done())
-def test_progress_bar_hidden_when_finished_not_done(view, direction, result):
-    k = tkey(direction)
-    view.handle(progress(k, 4 * 2**20))
-    row = view.row(k)
-    assert row.progress_bar.isVisibleTo(row), "tiền đề: lượt đang chạy có thanh"
-    view.handle(finished(k, result))
-    assert not row.progress_bar.isVisibleTo(row), f"{result}: thanh tiến độ phải ẩn"
+def test_progress_bar_hidden_when_finished_not_done(view):
+    idx = 0
+    for direction in ("send", "receive"):
+        for result in _results_not_done():
+            idx += 1
+            k = tkey(direction, transfer_id=f"{idx:032x}")
+            view.handle(progress(k, 4 * 2**20))
+            row = view.row(k)
+            assert row.progress_bar.isVisibleTo(row), "tiền đề: lượt đang chạy có thanh"
+            view.handle(finished(k, result))
+            assert not row.progress_bar.isVisibleTo(row), f"{result}: thanh tiến độ phải ẩn"
 
 
 @pytest.mark.parametrize("direction", ["send", "receive"])

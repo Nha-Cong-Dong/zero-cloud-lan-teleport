@@ -147,13 +147,13 @@ LAYOUT_BAD = [
 ]
 
 
-@pytest.mark.parametrize("name", LAYOUT_GOOD + LAYOUT_BAD, ids=repr)
-def test_layout_regex_is_spec_regex_with_fullmatch(storage, resume_helpers, name):
+def test_layout_regex_is_spec_regex_with_fullmatch(storage, resume_helpers):
     # spec-p3 mục 2.2; spec-p3-3a mục 2.2: luôn `fullmatch` (`$` của `match` khớp trước `\n` cuối).
-    expected = resume_helpers.LAYOUT_RE.fullmatch(name) is not None
-    assert expected is (name in LAYOUT_GOOD)
     pattern = storage._LAYOUT_RE
-    assert (pattern.fullmatch(name) is not None) is expected
+    for name in LAYOUT_GOOD + LAYOUT_BAD:
+        expected = resume_helpers.LAYOUT_RE.fullmatch(name) is not None
+        assert expected is (name in LAYOUT_GOOD)
+        assert (pattern.fullmatch(name) is not None) is expected
 
 
 def test_layout_regex_documented_in_architecture(resume_helpers):
@@ -213,12 +213,12 @@ BAD_NAMES = [
 ]
 
 
-@pytest.mark.parametrize("name", BAD_NAMES, ids=repr)
-def test_write_atomic_in_rejects_names_outside_layout(storage, temp, resume_helpers, tmp_path, name):
+def test_write_atomic_in_rejects_names_outside_layout(storage, temp, resume_helpers, tmp_path):
     before = resume_helpers.snapshot(tmp_path)
-    with pytest.raises(ValueError):
-        storage._write_atomic_in(temp, name, [b"x"])
-    assert resume_helpers.snapshot(tmp_path) == before
+    for name in BAD_NAMES:
+        with pytest.raises(ValueError):
+            storage._write_atomic_in(temp, name, [b"x"])
+        assert resume_helpers.snapshot(tmp_path) == before
 
 
 # ---------------------------------------------------------------------------------------------

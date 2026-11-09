@@ -614,21 +614,21 @@ def test_peer_lines_known_name_differs_adds_rename_line():
     ]
 
 
-@pytest.mark.parametrize("key", sorted(EVIL_NAMES))
-def test_peer_lines_use_peer_label_for_names(key):
+def test_peer_lines_use_peer_label_for_names():
     from teleport.ui.pairing import peer_lines
 
-    name = EVIL_NAMES[key]
-    known = "Cuㅤ" + name
-    lines = peer_lines(make_prompt(name=name, known=known))
-    assert lines == [
-        fill(LINE_PEER, name=label(name), id8=PEER_ID[:8], address="192.168.1.5"),
-        fill(LINE_KNOWN, id8=PEER_ID[:8], known=label(known)),
-        fill(LINE_RENAME, name=label(name)),
-    ]
-    for line in lines:
-        assert "\n" not in line, "tên có xuống dòng không được tách dòng (peer_label đổi thành U+FFFD)"
-        assert "ㅤ" not in line, "ký tự trống U+3164 phải hiện thành ·"
+    for key in sorted(EVIL_NAMES):
+        name = EVIL_NAMES[key]
+        known = "Cuㅤ" + name
+        lines = peer_lines(make_prompt(name=name, known=known))
+        assert lines == [
+            fill(LINE_PEER, name=label(name), id8=PEER_ID[:8], address="192.168.1.5"),
+            fill(LINE_KNOWN, id8=PEER_ID[:8], known=label(known)),
+            fill(LINE_RENAME, name=label(name)),
+        ]
+        for line in lines:
+            assert "\n" not in line, "tên có xuống dòng không được tách dòng (peer_label đổi thành U+FFFD)"
+            assert "ㅤ" not in line, "ký tự trống U+3164 phải hiện thành ·"
 
 
 def test_peer_lines_fill_values_in_one_pass():
@@ -674,26 +674,27 @@ def _none_expected(outcome: str, role: str, shown: bool) -> bool:
     return outcome == "cancelled" or (outcome in _FAILURES and role == "responder" and not shown)
 
 
-@pytest.mark.parametrize(("outcome", "role", "shown"), _outcome_cases())
-def test_outcome_text_for_every_outcome_role_and_code_shown(outcome, role, shown):
+def test_outcome_text_for_every_outcome_role_and_code_shown():
     """Xong khi (3): mỗi `PairingOutcome` có câu; None chỉ ở các ca hợp đồng mục 3 nói None."""
     from teleport.ui.pairing import outcome_text
 
-    port = 47474 if role == "initiator" else None
-    result = make_finished(outcome, role=role, port=port, code_shown=shown, known="MacBook cu")
-    text = outcome_text(result)
-    if _none_expected(outcome, role, shown):
-        assert text is None
-        return
-    assert text is not None, "outcome này phải có câu"
-    expected = expected_outcome(result)
-    if outcome == "identity_conflict" and role == "initiator":
-        assert text.startswith(expected), text
-        rest = text[len(expected) :]
-        assert rest.strip() == OUT_CONFLICT_HINT and "\n" in rest, "gợi ý hủy ghép đôi nằm ở dòng riêng"
-    else:
-        assert text == expected
-    assert "teleport listen" not in text and "`" not in text, "câu GUI không gợi ý lệnh CLI"
+    for p in _outcome_cases():
+        outcome, role, shown = p.values
+        port = 47474 if role == "initiator" else None
+        result = make_finished(outcome, role=role, port=port, code_shown=shown, known="MacBook cu")
+        text = outcome_text(result)
+        if _none_expected(outcome, role, shown):
+            assert text is None
+            continue
+        assert text is not None, "outcome này phải có câu"
+        expected = expected_outcome(result)
+        if outcome == "identity_conflict" and role == "initiator":
+            assert text.startswith(expected), text
+            rest = text[len(expected) :]
+            assert rest.strip() == OUT_CONFLICT_HINT and "\n" in rest, "gợi ý hủy ghép đôi nằm ở dòng riêng"
+        else:
+            assert text == expected
+        assert "teleport listen" not in text and "`" not in text, "câu GUI không gợi ý lệnh CLI"
 
 
 def test_outcome_text_uses_target_when_port_unknown():
@@ -720,15 +721,15 @@ def test_outcome_text_name_fallback_order():
     assert outcome_text(r) == fill(OUT_NOT_READY, x="192.168.1.5")
 
 
-@pytest.mark.parametrize("key", sorted(EVIL_NAMES))
-def test_outcome_text_names_go_through_peer_label(key):
+def test_outcome_text_names_go_through_peer_label():
     from teleport.ui.pairing import outcome_text
 
-    name = EVIL_NAMES[key]
-    r = make_finished("timeout", name=name, code_shown=True)
-    assert outcome_text(r) == fill(OUT_NOT_DONE, x=label(name))
-    r = make_finished("paired", device=make_device(name))
-    assert outcome_text(r) == fill(OUT_PAIRED, x=label(name))
+    for key in sorted(EVIL_NAMES):
+        name = EVIL_NAMES[key]
+        r = make_finished("timeout", name=name, code_shown=True)
+        assert outcome_text(r) == fill(OUT_NOT_DONE, x=label(name))
+        r = make_finished("paired", device=make_device(name))
+        assert outcome_text(r) == fill(OUT_PAIRED, x=label(name))
 
 
 # =================================================================================================
@@ -1016,36 +1017,41 @@ def test_visible_window_does_not_notify(qtbot, ctl):
 # =================================================================================================
 
 
-@pytest.mark.parametrize(("outcome", "role", "shown"), _outcome_cases())
-def test_finished_shows_outcome_text_in_result_box(qtbot, ctl, outcome, role, shown):
+@pytest.mark.parametrize("role", ["initiator", "responder"])
+@pytest.mark.parametrize("shown", [False, True])
+def test_finished_shows_outcome_text_in_result_box(qtbot, ctl, role, shown):
+    from teleport.app.pairing import PairingOutcome
     from teleport.ui.pairing import outcome_text
 
-    ns = ctl()
-    port = 47474 if role == "initiator" else None
-    r = make_finished(outcome, role=role, port=port, code_shown=shown, known="Cu", sid=40)
-    ns.host.pairing_finished.emit(r)
-    qtbot.wait(20)
-    ns.host.run_calls()
-    qtbot.wait(20)
-    text = outcome_text(r)
-    if text is None:
-        assert ns.rec.messages == []
-        box = ns.c.result_box
-        assert box is None or not box.isVisible()
-    elif outcome == "paired":
-        # PR-7 B4: thành công không mở hộp, chỉ phát `notice` (dải thông báo) và `message`.
-        assert ns.rec.messages == [text]
-        assert ns.c.result_box is None
-    else:
-        assert ns.rec.messages == [text]
-        box = ns.c.result_box
-        assert box is not None and box.isVisible()
-        assert text in texts_of(box)
-        assert all_plain(box)
-        assert box.windowModality() == Qt.WindowModality.NonModal
-        if sys.platform != "darwin":
-            assert box.windowTitle() == TITLE
-    assert ns.rec.finished == [r]
+    for outcome_enum in PairingOutcome:
+        outcome = outcome_enum.value
+        ns = ctl()
+        port = 47474 if role == "initiator" else None
+        r = make_finished(outcome, role=role, port=port, code_shown=shown, known="Cu", sid=40)
+        ns.host.pairing_finished.emit(r)
+        qtbot.wait(5)
+        ns.host.run_calls()
+        qtbot.wait(5)
+        text = outcome_text(r)
+        if text is None:
+            assert ns.rec.messages == []
+            box = ns.c.result_box
+            assert box is None or not box.isVisible()
+        elif outcome == "paired":
+            # PR-7 B4: thành công không mở hộp, chỉ phát `notice` (dải thông báo) và `message`.
+            assert ns.rec.messages == [text]
+            assert ns.c.result_box is None
+        else:
+            assert ns.rec.messages == [text]
+            box = ns.c.result_box
+            assert box is not None and box.isVisible()
+            assert text in texts_of(box)
+            assert all_plain(box)
+            assert box.windowModality() == Qt.WindowModality.NonModal
+            if sys.platform != "darwin":
+                assert box.windowTitle() == TITLE
+        assert ns.rec.finished == [r]
+        ns.c.close_all()
 
 
 def test_flood_of_failed_results_reuses_one_result_box(qtbot, ctl, ui_helpers):

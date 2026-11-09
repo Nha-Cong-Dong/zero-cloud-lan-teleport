@@ -515,6 +515,7 @@ VIETNAMESE_KNOWN_GAPS: dict[tuple[str, str], str] = {
     ("app.py", "thư mục cấu hình (mặc định: TELEPORT_HOME hoặc thư mục của hệ điều hành)"): _E1C_3,
     ("app.py", "chỉ hiện ở khay hệ thống (khi khởi động cùng máy)"): _E1C_3,
     ("app.py", "dựng giao diện rồi thoát (kiểm tra bản build)"): _E1C_3,
+    ("app.py", "mở hộp gửi các file này tới một máy đã ghép đôi (không tự gửi)"): _E1C_3,
 }
 
 

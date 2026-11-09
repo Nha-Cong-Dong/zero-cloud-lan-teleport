@@ -155,24 +155,23 @@ def test_abort_reason_values():
 # --- Round-trip --------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("msg", VALID_MESSAGES, ids=lambda m: type(m).__name__)
-def test_roundtrip_to_dict_then_parse(msg):
-    d = to_dict(msg)
-    assert d["type"] == EXPECTED_TYPE[type(msg)]
-    assert parse_message(d) == msg
+def test_roundtrip_to_dict_then_parse():
+    for msg in VALID_MESSAGES:
+        d = to_dict(msg)
+        assert d["type"] == EXPECTED_TYPE[type(msg)]
+        assert parse_message(d) == msg
 
 
-@pytest.mark.parametrize("msg", VALID_MESSAGES, ids=lambda m: type(m).__name__)
-def test_roundtrip_through_framing(msg):
-    frame = encode_message(to_dict(msg))
-    assert parse_message(decode_body(frame[4:])) == msg
+def test_roundtrip_through_framing():
+    for msg in VALID_MESSAGES:
+        frame = encode_message(to_dict(msg))
+        assert parse_message(decode_body(frame[4:])) == msg
 
 
-@pytest.mark.parametrize("type_name", list(valid_dicts()))
-def test_wire_dict_parses_and_serializes_back_exactly(type_name):
-    wire = valid_dicts()[type_name]
-    msg = parse_message(wire)
-    assert to_dict(msg) == wire
+def test_wire_dict_parses_and_serializes_back_exactly():
+    for wire in valid_dicts().values():
+        msg = parse_message(wire)
+        assert to_dict(msg) == wire
 
 
 def test_parse_returns_expected_dataclass():
@@ -183,12 +182,11 @@ def test_parse_returns_expected_dataclass():
     assert to_dict(PairConfirm()) == {"type": "pair_confirm"}
 
 
-@pytest.mark.parametrize("type_name", list(valid_dicts()))
-def test_unknown_fields_are_ignored(type_name):
-    wire = valid_dicts()[type_name]
-    noisy = {**wire, "extra": 1, "z": {"nested": [1, 2]}, "TYPE": "khác"}
-    assert parse_message(noisy) == parse_message(wire)
-    assert "extra" not in to_dict(parse_message(noisy))
+def test_unknown_fields_are_ignored():
+    for wire in valid_dicts().values():
+        noisy = {**wire, "extra": 1, "z": {"nested": [1, 2]}, "TYPE": "khác"}
+        assert parse_message(noisy) == parse_message(wire)
+        assert "extra" not in to_dict(parse_message(noisy))
 
 
 def test_parse_does_not_mutate_input():
@@ -217,16 +215,15 @@ def test_messages_are_frozen(msg, field):
 # --- Khung message: không phải dict, thiếu type, type sai --------------------------------------
 
 
-@pytest.mark.parametrize("obj", [None, [], ["hello"], "hello", 1, 1.5, True, b"{}", ({"type": "hello"},)])
-def test_non_dict_raises_message_error_not_unknown_type(obj):
-    with pytest.raises(MessageError) as exc:
-        parse_message(obj)
-    assert not isinstance(exc.value, UnknownMessageType)
+def test_non_dict_raises_message_error_not_unknown_type():
+    for obj in [None, [], ["hello"], "hello", 1, 1.5, True, b"{}", ({"type": "hello"},)]:
+        with pytest.raises(MessageError) as exc:
+            parse_message(obj)
+        assert not isinstance(exc.value, UnknownMessageType)
 
 
-@pytest.mark.parametrize(
-    "obj",
-    [
+def test_missing_or_non_string_type_is_message_error_not_unknown():
+    cases = [
         {},
         {"protocol": 1},
         {"type": None},
@@ -235,27 +232,24 @@ def test_non_dict_raises_message_error_not_unknown_type(obj):
         {"type": ["hello"]},
         {"type": {"x": "hello"}},
         {"type": b"hello"},
-    ],
-)
-def test_missing_or_non_string_type_is_message_error_not_unknown(obj):
-    with pytest.raises(MessageError) as exc:
-        parse_message(obj)
-    assert not isinstance(exc.value, UnknownMessageType)
+    ]
+    for obj in cases:
+        with pytest.raises(MessageError) as exc:
+            parse_message(obj)
+        assert not isinstance(exc.value, UnknownMessageType)
 
 
 # `pair_challenge` thuộc luồng ghép đôi cũ (bên khởi xướng cam kết trước), nay đã bỏ.
-@pytest.mark.parametrize(
-    "type_name", ["foo", "new_message", "hello2", "pair_requests", "pair_challenge", "pair_commitment"]
-)
-def test_unknown_type_string_raises_unknown_message_type(type_name):
-    with pytest.raises(UnknownMessageType):
-        parse_message({"type": type_name})
+def test_unknown_type_string_raises_unknown_message_type():
+    for type_name in ["foo", "new_message", "hello2", "pair_requests", "pair_challenge", "pair_commitment"]:
+        with pytest.raises(UnknownMessageType):
+            parse_message({"type": type_name})
 
 
-@pytest.mark.parametrize("type_name", ["HELLO", "Hello", " hello", "hello ", ""])
-def test_type_is_case_and_space_sensitive(type_name):
-    with pytest.raises(MessageError):
-        parse_message({**valid_dicts()["hello"], "type": type_name})
+def test_type_is_case_and_space_sensitive():
+    for type_name in ["HELLO", "Hello", " hello", "hello ", ""]:
+        with pytest.raises(MessageError):
+            parse_message({**valid_dicts()["hello"], "type": type_name})
 
 
 # --- Thiếu trường / sai kiểu -------------------------------------------------------------------
@@ -268,17 +262,17 @@ def _missing_field_cases():
                 yield pytest.param(type_name, field, id=f"{type_name}-{field}")
 
 
-@pytest.mark.parametrize(("type_name", "field"), list(_missing_field_cases()))
-def test_missing_field_raises(type_name, field):
-    wire = valid_dicts()[type_name]
-    del wire[field]
-    with pytest.raises(MessageError):
-        parse_message(wire)
+def test_missing_field_raises():
+    for param in _missing_field_cases():
+        type_name, field = param.values
+        wire = valid_dicts()[type_name]
+        del wire[field]
+        with pytest.raises(MessageError):
+            parse_message(wire)
 
 
-@pytest.mark.parametrize(
-    ("type_name", "field", "value"),
-    [
+def test_wrong_field_type_or_value_raises():
+    cases = [
         ("hello", "protocol", "1"),
         ("hello", "protocol", True),
         ("hello", "protocol", False),
@@ -318,12 +312,11 @@ def test_missing_field_raises(type_name, field):
         ("pair_abort", "reason", 1),
         ("pair_abort", "reason", ["user"]),
         ("pair_abort", "reason", True),
-    ],
-)
-def test_wrong_field_type_or_value_raises(type_name, field, value):
-    wire = {**valid_dicts()[type_name], field: value}
-    with pytest.raises(MessageError):
-        parse_message(wire)
+    ]
+    for type_name, field, value in cases:
+        wire = {**valid_dicts()[type_name], field: value}
+        with pytest.raises(MessageError):
+            parse_message(wire)
 
 
 @pytest.mark.parametrize("protocol", [1, 2, 99, 2**40])
@@ -341,9 +334,8 @@ def test_valid_device_id_returned_unchanged(value):
     assert validate_device_id(value) == value
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
+def test_invalid_device_id_rejected():
+    for value in [
         DEVICE_ID.upper(),
         "A" + DEVICE_ID[1:],
         DEVICE_ID[:31],
@@ -360,11 +352,9 @@ def test_valid_device_id_returned_unchanged(value):
         None,
         123,
         DEVICE_ID.encode(),
-    ],
-)
-def test_invalid_device_id_rejected(value):
-    with pytest.raises(MessageError):
-        validate_device_id(value)
+    ]:
+        with pytest.raises(MessageError):
+            validate_device_id(value)
 
 
 def test_invalid_device_id_in_hello_rejected():
@@ -428,29 +418,29 @@ VALID_NAMES = [
 ]
 
 
-@pytest.mark.parametrize("value", INVALID_NAMES, ids=repr)
-def test_invalid_name_rejected(value):
-    with pytest.raises(MessageError):
-        validate_device_name(value)
+def test_invalid_name_rejected():
+    for value in INVALID_NAMES:
+        with pytest.raises(MessageError):
+            validate_device_name(value)
 
 
-@pytest.mark.parametrize("value", INVALID_NAMES, ids=repr)
-def test_invalid_name_rejected_in_hello(value):
-    with pytest.raises(MessageError):
-        parse_message({**valid_dicts()["hello"], "name": value})
+def test_invalid_name_rejected_in_hello():
+    for value in INVALID_NAMES:
+        with pytest.raises(MessageError):
+            parse_message({**valid_dicts()["hello"], "name": value})
 
 
-@pytest.mark.parametrize("value", VALID_NAMES, ids=repr)
-def test_valid_name_returned_unchanged(value):
-    result = validate_device_name(value)
-    assert result == value
-    assert len(result) == len(value)  # không chuẩn hóa NFC
+def test_valid_name_returned_unchanged():
+    for value in VALID_NAMES:
+        result = validate_device_name(value)
+        assert result == value
+        assert len(result) == len(value)  # không chuẩn hóa NFC
 
 
-@pytest.mark.parametrize("value", VALID_NAMES, ids=repr)
-def test_valid_name_roundtrips_in_hello(value):
-    msg = Hello(protocol=1, device_id=DEVICE_ID, name=value, app_version="1", os="windows")
-    assert parse_message(to_dict(msg)).name == value
+def test_valid_name_roundtrips_in_hello():
+    for value in VALID_NAMES:
+        msg = Hello(protocol=1, device_id=DEVICE_ID, name=value, app_version="1", os="windows")
+        assert parse_message(to_dict(msg)).name == value
 
 
 def test_name_is_not_nfc_normalized():
@@ -465,14 +455,21 @@ def test_valid_app_version(value):
     assert parse_message({**valid_dicts()["hello"], "app_version": value}).app_version == value
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["", " 1.0", "1.0 ", "v" * 33, "🚀" * 33, "1.0\x00", "1.0\u202e", "1\u2028", "\ufeff1.0", "1\ud800"],
-    ids=repr,
-)
-def test_invalid_app_version(value):
-    with pytest.raises(MessageError):
-        parse_message({**valid_dicts()["hello"], "app_version": value})
+def test_invalid_app_version():
+    for value in [
+        "",
+        " 1.0",
+        "1.0 ",
+        "v" * 33,
+        "🚀" * 33,
+        "1.0\x00",
+        "1.0\u202e",
+        "1\u2028",
+        "\ufeff1.0",
+        "1\ud800",
+    ]:
+        with pytest.raises(MessageError):
+            parse_message({**valid_dicts()["hello"], "app_version": value})
 
 
 # --- cert --------------------------------------------------------------------------------------
@@ -488,9 +485,8 @@ def test_cert_at_limit_is_accepted():
     assert parse_message({"type": "pair_request", "cert": cert}).cert == cert
 
 
-@pytest.mark.parametrize(
-    "cert",
-    [
+def test_invalid_cert_rejected():
+    for cert in [
         _cert_of_length(MAX_CERT_PEM_LEN + 1),
         _cert_of_length(100_000),
         "",
@@ -501,12 +497,9 @@ def test_cert_at_limit_is_accepted():
         "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
         "-----begin certificate-----\nAAAA\n",
         "-----BEGIN CERTIFICATE----",
-    ],
-    ids=lambda c: repr(c[:30]) + f"…len={len(c)}",
-)
-def test_invalid_cert_rejected(cert):
-    with pytest.raises(MessageError):
-        parse_message({"type": "pair_request", "cert": cert})
+    ]:
+        with pytest.raises(MessageError):
+            parse_message({"type": "pair_request", "cert": cert})
 
 
 def test_cert_only_checks_shape_not_content():
@@ -600,26 +593,26 @@ BAD_HEX64 = [
 ]
 
 
-@pytest.mark.parametrize("value", BAD_HEX64, ids=repr)
 @pytest.mark.parametrize(
     ("type_name", "field"),
     [("pair_commit", "commitment"), ("pair_nonce", "nonce"), ("pair_reveal", "nonce")],
 )
-def test_bad_hex64_field_rejected(type_name, field, value):
+def test_bad_hex64_field_rejected(type_name, field):
     # Các trường khác đúng (pair_nonce có chữ ký hợp lệ): lỗi chỉ do trường đang thử.
-    with pytest.raises(MessageError) as exc:
-        parse_message({**valid_dicts()[type_name], field: value})
-    assert not isinstance(exc.value, UnknownMessageType)
+    for value in BAD_HEX64:
+        with pytest.raises(MessageError) as exc:
+            parse_message({**valid_dicts()[type_name], field: value})
+        assert not isinstance(exc.value, UnknownMessageType)
 
 
-@pytest.mark.parametrize("value", BAD_HEX64, ids=repr)
 @pytest.mark.parametrize(
     ("cls", "field"), [(PairCommit, "commitment"), (PairNonce, "nonce"), (PairReveal, "nonce")]
 )
-def test_bad_hex64_rejected_when_constructing(cls, field, value):
+def test_bad_hex64_rejected_when_constructing(cls, field):
     extra = {"signature": SIG128} if cls is PairNonce else {}
-    with pytest.raises(MessageError):
-        cls(**{field: value, **extra})
+    for value in BAD_HEX64:
+        with pytest.raises(MessageError):
+            cls(**{field: value, **extra})
 
 
 @pytest.mark.parametrize("value", ["0" * 64, "f" * 64, HEX64, HEX64_B])
@@ -653,17 +646,17 @@ BAD_SIG128 = [
 NON_STRING_SIG = [None, 0, 12345, True, bytes(64), bytes.fromhex(SIG128), [SIG128], {"r": 1}, 1.5]
 
 
-@pytest.mark.parametrize("value", BAD_SIG128, ids=repr)
-def test_pair_nonce_bad_signature_rejected_on_parse(value):
-    with pytest.raises(MessageError) as exc:
-        parse_message({**valid_dicts()["pair_nonce"], "signature": value})
-    assert not isinstance(exc.value, UnknownMessageType)
+def test_pair_nonce_bad_signature_rejected_on_parse():
+    for value in BAD_SIG128:
+        with pytest.raises(MessageError) as exc:
+            parse_message({**valid_dicts()["pair_nonce"], "signature": value})
+        assert not isinstance(exc.value, UnknownMessageType)
 
 
-@pytest.mark.parametrize("value", BAD_SIG128, ids=repr)
-def test_pair_nonce_bad_signature_rejected_when_constructing(value):
-    with pytest.raises(MessageError):
-        PairNonce(nonce=HEX64, signature=value)
+def test_pair_nonce_bad_signature_rejected_when_constructing():
+    for value in BAD_SIG128:
+        with pytest.raises(MessageError):
+            PairNonce(nonce=HEX64, signature=value)
 
 
 @pytest.mark.parametrize("value", NON_STRING_SIG, ids=repr)
@@ -737,11 +730,11 @@ def test_property_pair_nonce_roundtrip(sig, nonce):
 # --- reason ------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("reason", ["user", "busy", "timeout", "invalid", "new_reason", "a", "a" * 32, "_"])
-def test_valid_reason(reason):
-    msg = parse_message({"type": "pair_abort", "reason": reason})
-    assert msg.reason == reason
-    assert type(msg.reason) is str  # phụ lục điểm 4: str thuần, không phải AbortReason
+def test_valid_reason():
+    for reason in ["user", "busy", "timeout", "invalid", "new_reason", "a", "a" * 32, "_"]:
+        msg = parse_message({"type": "pair_abort", "reason": reason})
+        assert msg.reason == reason
+        assert type(msg.reason) is str  # phụ lục điểm 4: str thuần, không phải AbortReason
 
 
 def test_parsed_standard_reason_compares_equal_to_enum():
@@ -750,9 +743,8 @@ def test_parsed_standard_reason_compares_equal_to_enum():
     assert type(msg.reason) is str
 
 
-@pytest.mark.parametrize(
-    "reason",
-    [
+def test_invalid_reason():
+    for reason in [
         "",
         "USER",
         "User",
@@ -765,27 +757,29 @@ def test_parsed_standard_reason_compares_equal_to_enum():
         "ü",
         "người_dùng",
         "user\x00",
-    ],
-    ids=repr,
-)
-def test_invalid_reason(reason):
-    with pytest.raises(MessageError):
-        parse_message({"type": "pair_abort", "reason": reason})
+    ]:
+        with pytest.raises(MessageError):
+            parse_message({"type": "pair_abort", "reason": reason})
 
 
-@pytest.mark.parametrize("value", ["windows", "macos", "linux", "freebsd", "x", "a" * 16, "os_2"])
-def test_valid_os(value):
-    assert parse_message({**valid_dicts()["hello"], "os": value}).os == value
+def test_valid_os():
+    for value in ["windows", "macos", "linux", "freebsd", "x", "a" * 16, "os_2"]:
+        assert parse_message({**valid_dicts()["hello"], "os": value}).os == value
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["", "Windows", "a" * 17, "mac os", "linux\n", "\uff57\uff49\uff4e", "win-11", "macos\u200b"],
-    ids=repr,
-)
-def test_invalid_os(value):
-    with pytest.raises(MessageError):
-        parse_message({**valid_dicts()["hello"], "os": value})
+def test_invalid_os():
+    for value in [
+        "",
+        "Windows",
+        "a" * 17,
+        "mac os",
+        "linux\n",
+        "\uff57\uff49\uff4e",
+        "win-11",
+        "macos\u200b",
+    ]:
+        with pytest.raises(MessageError):
+            parse_message({**valid_dicts()["hello"], "os": value})
 
 
 def test_os_enum_becomes_plain_str():
@@ -819,17 +813,17 @@ INVALID_OS = [
 ]
 
 
-@pytest.mark.parametrize("value", VALID_OS)
-def test_validate_os_returns_valid_value_unchanged(value):
-    result = validate_os(value)
-    assert result == value
-    assert isinstance(result, str)
+def test_validate_os_returns_valid_value_unchanged():
+    for value in VALID_OS:
+        result = validate_os(value)
+        assert result == value
+        assert isinstance(result, str)
 
 
-@pytest.mark.parametrize("value", INVALID_OS, ids=repr)
-def test_validate_os_rejects_invalid_value(value):
-    with pytest.raises(MessageError):
-        validate_os(value)
+def test_validate_os_rejects_invalid_value():
+    for value in INVALID_OS:
+        with pytest.raises(MessageError):
+            validate_os(value)
 
 
 def test_validate_os_accepts_os_name_enum():
@@ -858,9 +852,8 @@ def test_property_validate_os_agrees_with_hello_os(value):
 # --- Tạo tay dataclass với giá trị sai ---------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "factory",
-    [
+def test_constructing_dataclass_with_bad_value_raises():
+    for factory in [
         lambda: Hello(protocol=0, device_id=DEVICE_ID, name="PC", app_version="1", os="windows"),
         lambda: Hello(protocol=True, device_id=DEVICE_ID, name="PC", app_version="1", os="windows"),
         lambda: Hello(protocol="1", device_id=DEVICE_ID, name="PC", app_version="1", os="windows"),
@@ -883,11 +876,9 @@ def test_property_validate_os_agrees_with_hello_os(value):
         lambda: PairAbort(reason="USER"),
         lambda: PairAbort(reason=""),
         lambda: PairAbort(reason=None),
-    ],
-)
-def test_constructing_dataclass_with_bad_value_raises(factory):
-    with pytest.raises(MessageError):
-        factory()
+    ]:
+        with pytest.raises(MessageError):
+            factory()
 
 
 # --- control_open / ping / pong (PR2, protocol.md §3.2–3.3) -----------------------------------
@@ -927,12 +918,12 @@ def test_max_safe_integer_is_2_pow_53_minus_1():
 
 
 @timed_classes
-@pytest.mark.parametrize("value", BAD_T, ids=repr)
-def test_bad_t_in_wire_dict_raises_message_error(cls, value):
-    with pytest.raises(MessageError) as exc:
-        parse_message({"type": EXPECTED_TYPE[cls], "t": value})
-    # type đã biết: lỗi là message hỏng, không phải type lạ.
-    assert not isinstance(exc.value, UnknownMessageType)
+def test_bad_t_in_wire_dict_raises_message_error(cls):
+    for value in BAD_T:
+        with pytest.raises(MessageError) as exc:
+            parse_message({"type": EXPECTED_TYPE[cls], "t": value})
+        # type đã biết: lỗi là message hỏng, không phải type lạ.
+        assert not isinstance(exc.value, UnknownMessageType)
 
 
 @timed_classes
@@ -956,13 +947,11 @@ def test_json_negative_zero_is_valid_t_zero(cls):
 
 
 @timed_classes
-@pytest.mark.parametrize(
-    "literal", ["1e3", "1.0", "0.0", "-0.0", "1E0", "true", "null", '"5"', "9007199254740992"]
-)
-def test_t_non_integer_or_out_of_range_from_json_raises(cls, literal):
-    body = f'{{"type":"{EXPECTED_TYPE[cls]}","t":{literal}}}'.encode()
-    with pytest.raises(MessageError):
-        parse_message(decode_body(body))
+def test_t_non_integer_or_out_of_range_from_json_raises(cls):
+    for literal in ["1e3", "1.0", "0.0", "-0.0", "1E0", "true", "null", '"5"', "9007199254740992"]:
+        body = f'{{"type":"{EXPECTED_TYPE[cls]}","t":{literal}}}'.encode()
+        with pytest.raises(MessageError):
+            parse_message(decode_body(body))
 
 
 @timed_classes
@@ -1011,9 +1000,8 @@ class _IntSubclass(enum.IntEnum):
     ONE = 1
 
 
-@pytest.mark.parametrize(
-    "factory",
-    [
+def test_constructing_ping_pong_with_bad_t_raises():
+    for factory in [
         lambda: Ping(t=-1),
         lambda: Ping(t=True),
         lambda: Ping(t=False),
@@ -1025,11 +1013,9 @@ class _IntSubclass(enum.IntEnum):
         lambda: Pong(t=-1),
         lambda: Pong(t=True),
         lambda: Ping(t=_IntSubclass.ONE),  # lớp con của int ngoài bool cũng bị từ chối
-    ],
-)
-def test_constructing_ping_pong_with_bad_t_raises(factory):
-    with pytest.raises(MessageError):
-        factory()
+    ]:
+        with pytest.raises(MessageError):
+            factory()
 
 
 @settings(max_examples=300, deadline=None)
@@ -1298,21 +1284,21 @@ def test_control_open_without_cert_is_wrong_kind():
 NON_OPENING_MESSAGES = [m for m in VALID_MESSAGES if not isinstance(m, (PairRequest, ControlOpen))]
 
 
-@pytest.mark.parametrize("has_cert", [False, True])
-@pytest.mark.parametrize("msg", NON_OPENING_MESSAGES, ids=lambda m: type(m).__name__)
-def test_any_other_message_cannot_open_a_connection(msg, has_cert):
-    with pytest.raises(WrongConnectionKind):
-        opening_kind(msg, has_client_cert=has_cert)
+def test_any_other_message_cannot_open_a_connection():
+    for has_cert in (False, True):
+        for msg in NON_OPENING_MESSAGES:
+            with pytest.raises(WrongConnectionKind):
+                opening_kind(msg, has_client_cert=has_cert)
 
 
 @pytest.mark.parametrize("kind", KIND_INPUTS, ids=repr)
-@pytest.mark.parametrize("msg", VALID_MESSAGES, ids=lambda m: type(m).__name__)
-def test_check_message_kind_follows_table(kind, msg):
-    if msg.TYPE in EXPECTED_ALLOWED[str(kind)]:
-        assert check_message_kind(kind, msg) is None
-    else:
-        with pytest.raises(WrongConnectionKind):
-            check_message_kind(kind, msg)
+def test_check_message_kind_follows_table(kind):
+    for msg in VALID_MESSAGES:
+        if msg.TYPE in EXPECTED_ALLOWED[str(kind)]:
+            assert check_message_kind(kind, msg) is None
+        else:
+            with pytest.raises(WrongConnectionKind):
+                check_message_kind(kind, msg)
 
 
 def test_check_message_kind_error_is_catchable_as_message_error():

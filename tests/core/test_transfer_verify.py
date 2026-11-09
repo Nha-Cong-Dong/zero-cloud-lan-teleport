@@ -255,35 +255,32 @@ def test_reread_done_without_pending_reread_is_ignored(tx):
     assert r.call("finalized", tx.PEER, r.T, 0, "f0.bin") == []
 
 
-@pytest.mark.parametrize(
-    ("bad", "root"),
-    [
-        ([1, 1], None),
-        ([2, 1], None),
-        ([-1], None),
-        ([True], None),
-        ([1.0], None),
-        ({1}, None),
-        ("1", None),
-        (None, None),
-        ([], None),
-        ([1], b"\x00" * 32),
-        ([], b"\x00" * 31),
-        ([], "00" * 32),
-    ],
-)
-@pytest.mark.parametrize("known", [True, False])
-def test_reread_done_static_param_errors(tx, bad, root, known):
-    r = tx.Recv(tx.entries(3))
-    r.accept()
-    if known:
-        full_and_synced(tx, r)
-        r.complete(0)
-    T = r.T if known else tx.T3
-    before = tx.snapshot(r.e)
-    with pytest.raises(ValueError):
-        r.e.reread_done(tx.PEER, T, 0, bad, root, r.now + 1)
-    assert tx.snapshot(r.e) == before
+def test_reread_done_static_param_errors(tx):
+    for known in (True, False):
+        r = tx.Recv(tx.entries(3))
+        r.accept()
+        if known:
+            full_and_synced(tx, r)
+            r.complete(0)
+        T = r.T if known else tx.T3
+        before = tx.snapshot(r.e)
+        for bad, root in [
+            ([1, 1], None),
+            ([2, 1], None),
+            ([-1], None),
+            ([True], None),
+            ([1.0], None),
+            ({1}, None),
+            ("1", None),
+            (None, None),
+            ([], None),
+            ([1], b"\x00" * 32),
+            ([], b"\x00" * 31),
+            ([], "00" * 32),
+        ]:
+            with pytest.raises(ValueError):
+                r.e.reread_done(tx.PEER, T, 0, bad, root, r.now + 1)
+            assert tx.snapshot(r.e) == before
 
 
 def test_reread_done_bad_beyond_file_is_error_only_when_matching(tx):

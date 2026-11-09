@@ -274,22 +274,23 @@ def test_accent_ids_match_theme():
 # =================================================================================================
 
 
-@pytest.mark.parametrize("accent", ACCENT_IDS)
-@pytest.mark.parametrize("name", SCENE_NAMES)
-def test_paint_scene_draws_accent_and_differs_light_dark(name, accent):
+def test_paint_scene_draws_accent_and_differs_light_dark():
     from teleport.ui import theme
 
-    images = {}
-    for dark in (False, True):
-        tok = theme.tokens(dark, accent)
-        image = painted(scene(name), CANVAS, tok, 1.0, tok.surface)
-        assert has_color(image, tok.accent_strong, 6), (
-            f"{name}/{accent}/{'tối' if dark else 'sáng'}: không có điểm màu accent_strong"
-        )
-        unlike = count_unlike(image, tok.surface)
-        assert unlike >= 200, f"{name}/{accent}: ảnh gần như trống ({unlike} điểm khác nền)"
-        images[dark] = image
-    assert max_channel_diff(images[False], images[True]) > 16, f"{name}/{accent}: sáng = tối"
+    for name in SCENE_NAMES:
+        sc = scene(name)
+        for accent in ACCENT_IDS:
+            images = {}
+            for dark in (False, True):
+                tok = theme.tokens(dark, accent)
+                image = painted(sc, CANVAS, tok, 1.0, tok.surface)
+                assert has_color(image, tok.accent_strong, 6), (
+                    f"{name}/{accent}/{'tối' if dark else 'sáng'}: không có điểm màu accent_strong"
+                )
+                unlike = count_unlike(image, tok.surface)
+                assert unlike >= 200, f"{name}/{accent}: ảnh gần như trống ({unlike} điểm khác nền)"
+                images[dark] = image
+            assert max_channel_diff(images[False], images[True]) > 16, f"{name}/{accent}: sáng = tối"
 
 
 @pytest.mark.parametrize("name", SCENE_NAMES)
@@ -304,29 +305,35 @@ def test_paint_scene_colors_follow_accent(name):
     assert not has_color(image_b, a.accent_strong, 1), "ảnh màu rose còn điểm accent_strong của mint"
 
 
-@pytest.mark.parametrize("name", SCENE_NAMES)
-@pytest.mark.parametrize(
-    ("raw", "clamped"),
-    [(-1.0, 0.0), (-1e9, 0.0), (-1e-9, 0.0), (2.0, 1.0), (1e9, 1.0), (1.0 + 1e-9, 1.0)],
-)
-def test_paint_scene_clamps_progress(name, raw, clamped):
+def test_paint_scene_clamps_progress():
     """`progress` ngoài [0, 1] không ném và vẽ như giá trị đã kẹp."""
     from teleport.ui import theme
 
     tok = theme.tokens(True)
-    got = painted(scene(name), CANVAS, tok, raw, tok.surface)
-    want = painted(scene(name), CANVAS, tok, clamped, tok.surface)
-    assert max_channel_diff(got, want) == 0
+    for name in SCENE_NAMES:
+        sc = scene(name)
+        for raw, clamped in [
+            (-1.0, 0.0),
+            (-1e9, 0.0),
+            (-1e-9, 0.0),
+            (2.0, 1.0),
+            (1e9, 1.0),
+            (1.0 + 1e-9, 1.0),
+        ]:
+            got = painted(sc, CANVAS, tok, raw, tok.surface)
+            want = painted(sc, CANVAS, tok, clamped, tok.surface)
+            assert max_channel_diff(got, want) == 0
 
 
-@pytest.mark.parametrize("name", SCENE_NAMES)
-@pytest.mark.parametrize("raw", [math.inf, -math.inf, math.nan])
-def test_paint_scene_non_finite_progress_does_not_raise(name, raw):
+def test_paint_scene_non_finite_progress_does_not_raise():
     """Tiêu chí 1: `progress` ngoài [0, 1] không ném, kể cả vô cực / NaN (spec không nói vẽ khung nào)."""
     from teleport.ui import theme
 
     tok = theme.tokens(False)
-    painted(scene(name), CANVAS, tok, raw, tok.surface)
+    for name in SCENE_NAMES:
+        sc = scene(name)
+        for raw in (math.inf, -math.inf, math.nan):
+            painted(sc, CANVAS, tok, raw, tok.surface)
 
 
 @pytest.mark.parametrize("name", SCENE_NAMES)
@@ -383,17 +390,17 @@ def test_contrast_pairs_cover_detail_on_accent_subtle():
     )
 
 
-@MODES
-@pytest.mark.parametrize("accent", ACCENT_IDS)
-def test_contrast_pairs_every_accent(accent, dark):
+def test_contrast_pairs_every_accent():
     from teleport.ui import theme
 
-    t = theme.tokens(dark, accent)
-    for fg, bg, minimum in _pairs():
-        a, b = getattr(t, fg), getattr(t, bg)
-        ratio = theme.contrast_ratio(a, b)
-        assert ratio >= minimum, (accent, dark, fg, bg, round(ratio, 2))
-        assert wcag_ratio(a, b) >= minimum - 0.01, (accent, dark, fg, bg)
+    for dark in (False, True):
+        for accent in ACCENT_IDS:
+            t = theme.tokens(dark, accent)
+            for fg, bg, minimum in _pairs():
+                a, b = getattr(t, fg), getattr(t, bg)
+                ratio = theme.contrast_ratio(a, b)
+                assert ratio >= minimum, (accent, dark, fg, bg, round(ratio, 2))
+                assert wcag_ratio(a, b) >= minimum - 0.01, (accent, dark, fg, bg)
 
 
 # =================================================================================================

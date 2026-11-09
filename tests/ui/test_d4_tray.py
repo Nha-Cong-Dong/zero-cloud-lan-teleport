@@ -222,44 +222,45 @@ def test_tray_badge_values():
     ]  # + D5
 
 
-@pytest.mark.parametrize(("running", "active", "paused", "unavailable"), STATES, ids=STATE_IDS)
-def test_tray_badge_follows_priority_table(running, active, paused, unavailable):
+def test_tray_badge_follows_priority_table():
     from teleport.ui.tray import TrayBadge, TrayState, tray_badge
 
-    state = TrayState(running=running, active=active, paused=paused, unavailable=unavailable)
-    assert tray_badge(state) is TrayBadge(expected_badge(running, active, paused, unavailable))
+    for running, active, paused, unavailable in STATES:
+        state = TrayState(running=running, active=active, paused=paused, unavailable=unavailable)
+        assert tray_badge(state) is TrayBadge(expected_badge(running, active, paused, unavailable))
 
 
-@pytest.mark.parametrize(("running", "active", "paused", "unavailable"), STATES, ids=STATE_IDS)
-def test_tray_tooltip_vi_follows_table(qapp, running, active, paused, unavailable):
+def test_tray_tooltip_vi_follows_table(qapp):
     from teleport.ui.tray import TrayState, tray_tooltip
 
-    state = TrayState(running=running, active=active, paused=paused, unavailable=unavailable)
-    assert tray_tooltip(state) == expected_tooltip(running, active, paused, unavailable)
+    for running, active, paused, unavailable in STATES:
+        state = TrayState(running=running, active=active, paused=paused, unavailable=unavailable)
+        assert tray_tooltip(state) == expected_tooltip(running, active, paused, unavailable)
 
 
-@pytest.mark.parametrize(("running", "active", "paused", "unavailable"), STATES, ids=STATE_IDS)
-def test_tray_tooltip_en_follows_table(qapp, running, active, paused, unavailable):
+def test_tray_tooltip_en_follows_table(qapp):
     from teleport.ui import i18n
     from teleport.ui.tray import TrayState, tray_tooltip
 
     i18n.set_language("en")
-    state = TrayState(running=running, active=active, paused=paused, unavailable=unavailable)
-    assert tray_tooltip(state) == expected_tooltip(running, active, paused, unavailable, "en")
+    for running, active, paused, unavailable in STATES:
+        state = TrayState(running=running, active=active, paused=paused, unavailable=unavailable)
+        assert tray_tooltip(state) == expected_tooltip(running, active, paused, unavailable, "en")
 
 
-@pytest.mark.parametrize("lang", ["vi", "en"])
-@pytest.mark.parametrize("active", [0, 1, 99, 999, 99_999])
-def test_tray_tooltip_within_budget_every_combination(qapp, lang, active):
+def test_tray_tooltip_within_budget_every_combination(qapp):
     """14.18: toàn tooltip ≤ 100 ký tự ở VN và EN, kể cả số lượt rất lớn."""
     from teleport.ui import i18n
     from teleport.ui.tray import TrayState, tray_tooltip
 
-    if lang == "en":
-        i18n.set_language("en")
-    for running, paused, unavailable in itertools.product((False, True), repeat=3):
-        tip = tray_tooltip(TrayState(running=running, active=active, paused=paused, unavailable=unavailable))
-        assert len(tip) <= TOOLTIP_BUDGET, (lang, active, paused, unavailable, len(tip), tip)
+    for lang in ("vi", "en"):
+        i18n.set_language(lang)
+        for active in (0, 1, 99, 999, 99_999):
+            for running, paused, unavailable in itertools.product((False, True), repeat=3):
+                tip = tray_tooltip(
+                    TrayState(running=running, active=active, paused=paused, unavailable=unavailable)
+                )
+                assert len(tip) <= TOOLTIP_BUDGET, (lang, active, paused, unavailable, len(tip), tip)
 
 
 def test_tray_tooltip_is_translated_at_call_time(qapp):

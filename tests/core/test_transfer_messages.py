@@ -159,21 +159,20 @@ def ref_int_ok(value: object, lo: int, hi: int) -> bool:
 # --- Round-trip trên dây -----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", list(valid_dicts()))
-def test_wire_dict_parses_to_expected_class_and_serializes_back_exactly(name):
-    w = valid_dicts()[name]
-    msg = parse_message(w)
-    assert type(msg) is EXPECTED_CLASS[w["type"]]
-    assert w["type"] == msg.TYPE
-    # to_dict không thêm trường (kể cả `null` cho trường tùy chọn) và giữ đúng thứ tự file.
-    assert as_wire(msg) == w
-    assert parse_message(to_dict(msg)) == msg
+def test_wire_dict_parses_to_expected_class_and_serializes_back_exactly():
+    for w in valid_dicts().values():
+        msg = parse_message(w)
+        assert type(msg) is EXPECTED_CLASS[w["type"]]
+        assert w["type"] == msg.TYPE
+        # to_dict không thêm trường (kể cả `null` cho trường tùy chọn) và giữ đúng thứ tự file.
+        assert as_wire(msg) == w
+        assert parse_message(to_dict(msg)) == msg
 
 
-@pytest.mark.parametrize("name", list(valid_dicts()))
-def test_round_trip_through_framing(name):
-    msg = parse_message(valid_dicts()[name])
-    assert parse_message(decode_body(encode_message(to_dict(msg))[4:])) == msg
+def test_round_trip_through_framing():
+    for w in valid_dicts().values():
+        msg = parse_message(w)
+        assert parse_message(decode_body(encode_message(to_dict(msg))[4:])) == msg
 
 
 @pytest.mark.parametrize("type_name", sorted(NEW_TYPES))
@@ -182,11 +181,10 @@ def test_new_types_are_known(type_name):
     assert_rejected({"type": type_name})
 
 
-@pytest.mark.parametrize("name", list(valid_dicts()))
-def test_unknown_fields_are_ignored(name):
-    w = valid_dicts()[name]
-    assert parse_message({**w, "extra": 1, "z": {"a": [1]}}) == parse_message(w)
-    assert "extra" not in to_dict(parse_message({**w, "extra": 1}))
+def test_unknown_fields_are_ignored():
+    for w in valid_dicts().values():
+        assert parse_message({**w, "extra": 1, "z": {"a": [1]}}) == parse_message(w)
+        assert "extra" not in to_dict(parse_message({**w, "extra": 1}))
 
 
 def test_unknown_fields_inside_file_entry_are_ignored():
@@ -223,9 +221,8 @@ def test_offer_files_are_file_entries_and_offer_can_be_built_by_hand():
     assert as_wire(by_hand) == valid_dicts()["offer_many"]
 
 
-@pytest.mark.parametrize(
-    "factory",
-    [
+def test_constructing_file_entry_or_offer_with_bad_value_raises():
+    factories = [
         lambda: FileEntry(name="x" * 256, size=0, mtime=0),
         lambda: FileEntry(name="a\x00", size=0, mtime=0),
         lambda: FileEntry(name="\ud800", size=0, mtime=0),
@@ -235,11 +232,10 @@ def test_offer_files_are_file_entries_and_offer_can_be_built_by_hand():
         lambda: FileEntry(name="a", size=0, mtime=True),
         lambda: Offer(transfer_id=TID, block_size=BLOCK, files=()),
         lambda: Offer(transfer_id=TID, block_size=BLOCK + 1, files=(FileEntry(name="a", size=0, mtime=0),)),
-    ],
-)
-def test_constructing_file_entry_or_offer_with_bad_value_raises(factory):
-    with pytest.raises(MessageError):
-        factory()
+    ]
+    for factory in factories:
+        with pytest.raises(MessageError):
+            factory()
 
 
 def test_flat_messages_can_be_built_by_hand():
@@ -255,9 +251,9 @@ def test_flat_messages_can_be_built_by_hand():
     )
 
 
-@pytest.mark.parametrize(
-    "factory",
-    [
+def test_constructing_by_hand_with_bad_value_raises():
+    # Như mọi message (messages.py): kiểm ở __post_init__, nên tạo tay sai cũng bị chặn.
+    factories = [
         lambda: DataOpen(transfer_id=TID.upper(), file_index=0, resume_seq=1),
         lambda: DataOpen(transfer_id=TID, file_index=-1, resume_seq=1),
         lambda: DataOpen(transfer_id=TID, file_index=0, resume_seq=0),
@@ -266,12 +262,10 @@ def test_flat_messages_can_be_built_by_hand():
         lambda: Cancel(transfer_id=TID, reason="USER"),
         lambda: Complete(transfer_id=TID, file_index=0, merkle_root=HEX64.upper()),
         lambda: Resume(transfer_id=TID, file_index=0, seq=2**53, bitfield=""),
-    ],
-)
-def test_constructing_by_hand_with_bad_value_raises(factory):
-    # Như mọi message (messages.py): kiểm ở __post_init__, nên tạo tay sai cũng bị chặn.
-    with pytest.raises(MessageError):
-        factory()
+    ]
+    for factory in factories:
+        with pytest.raises(MessageError):
+            factory()
 
 
 # --- Thiếu trường ------------------------------------------------------------------------------
@@ -284,18 +278,19 @@ def _missing_field_cases():
                 yield pytest.param(name, field, id=f"{name}-{field}")
 
 
-@pytest.mark.parametrize(("name", "field"), list(_missing_field_cases()))
-def test_missing_field_rejected(name, field):
-    w = valid_dicts()[name]
-    del w[field]
-    assert_rejected(w)
+def test_missing_field_rejected():
+    for param in _missing_field_cases():
+        name, field = param.values
+        w = valid_dicts()[name]
+        del w[field]
+        assert_rejected(w)
 
 
-@pytest.mark.parametrize("field", ["name", "size", "mtime"])
-def test_file_entry_missing_field_rejected(field):
-    entry = file_entry()
-    del entry[field]
-    assert_rejected(offer_with([entry]))
+def test_file_entry_missing_field_rejected():
+    for field in ["name", "size", "mtime"]:
+        entry = file_entry()
+        del entry[field]
+        assert_rejected(offer_with([entry]))
 
 
 # --- transfer_id -------------------------------------------------------------------------------
@@ -318,12 +313,10 @@ BAD_TRANSFER_IDS = [
 ]
 
 
-@pytest.mark.parametrize("value", BAD_TRANSFER_IDS, ids=repr)
-@pytest.mark.parametrize(
-    "name", ["data_open", "offer", "accept", "reject_user", "resume", "complete", "verified", "cancel"]
-)
-def test_bad_transfer_id_rejected(name, value):
-    assert_rejected(wire(name, transfer_id=value))
+def test_bad_transfer_id_rejected():
+    for name in ["data_open", "offer", "accept", "reject_user", "resume", "complete", "verified", "cancel"]:
+        for value in BAD_TRANSFER_IDS:
+            assert_rejected(wire(name, transfer_id=value))
 
 
 # --- Số nguyên: file_index, seq, resume_seq, size, mtime, block_size ----------------------------
@@ -339,99 +332,107 @@ FILE_INDEX_FIELDS = [
 ]
 
 
-@pytest.mark.parametrize("value", [0, 1, 999])
-@pytest.mark.parametrize(("name", "field"), FILE_INDEX_FIELDS)
-def test_valid_file_index_accepted(name, field, value):
-    msg = parse_message(wire(name, **{field: value}))
-    assert getattr(msg, field) == value
-    assert type(getattr(msg, field)) is int
+def test_valid_file_index_accepted():
+    for name, field in FILE_INDEX_FIELDS:
+        for value in [0, 1, 999]:
+            msg = parse_message(wire(name, **{field: value}))
+            assert getattr(msg, field) == value
+            assert type(getattr(msg, field)) is int
 
 
-@pytest.mark.parametrize("value", [-1, -(2**53), 1000, 2**32, *NOT_INTS], ids=repr)
-@pytest.mark.parametrize(("name", "field"), FILE_INDEX_FIELDS)
-def test_bad_file_index_rejected(name, field, value):
+def test_bad_file_index_rejected():
     # protocol §3.3: `file_index` là số nguyên 0 … 999 (offer có tối đa 1000 file).
-    assert_rejected(wire(name, **{field: value}))
+    for name, field in FILE_INDEX_FIELDS:
+        for value in [-1, -(2**53), 1000, 2**32, *NOT_INTS]:
+            assert_rejected(wire(name, **{field: value}))
 
 
 SEQ_FIELDS = [("resume", "seq"), ("data_open", "resume_seq")]
 
 
-@pytest.mark.parametrize("value", [1, 2, MAX_INT])
-@pytest.mark.parametrize(("name", "field"), SEQ_FIELDS)
-def test_valid_seq_accepted(name, field, value):
-    assert getattr(parse_message(wire(name, **{field: value})), field) == value
+def test_valid_seq_accepted():
+    for value in [1, 2, MAX_INT]:
+        for name, field in SEQ_FIELDS:
+            assert getattr(parse_message(wire(name, **{field: value})), field) == value
 
 
-@pytest.mark.parametrize("value", [0, -1, 2**53, 2**53 + 1, 10**100, *NOT_INTS], ids=repr)
-@pytest.mark.parametrize(("name", "field"), SEQ_FIELDS)
-def test_bad_seq_rejected(name, field, value):
+def test_bad_seq_rejected():
     # protocol §3.3: `seq`, `resume_seq` là số nguyên JSON 1 … 2⁵³ − 1.
-    assert_rejected(wire(name, **{field: value}))
+    for name, field in SEQ_FIELDS:
+        for value in [0, -1, 2**53, 2**53 + 1, 10**100, *NOT_INTS]:
+            assert_rejected(wire(name, **{field: value}))
 
 
-@pytest.mark.parametrize("literal", ["1e3", "1.0", "true", "null", '"1"', "9007199254740992", "-0.0"])
-def test_seq_from_raw_json_non_integer_rejected(literal):
-    body = f'{{"type":"resume","transfer_id":"{TID}","file_index":0,"seq":{literal},"bitfield":""}}'
-    assert_rejected(decode_body(body.encode()))
+def test_seq_from_raw_json_non_integer_rejected():
+    for literal in ["1e3", "1.0", "true", "null", '"1"', "9007199254740992", "-0.0"]:
+        body = f'{{"type":"resume","transfer_id":"{TID}","file_index":0,"seq":{literal},"bitfield":""}}'
+        assert_rejected(decode_body(body.encode()))
 
 
-@pytest.mark.parametrize("value", [0, 1, BLOCK, MAX_SIZE])
-def test_valid_size_accepted(value):
-    assert parse_message(offer_with([file_entry(size=value)])).files[0].size == value
+def test_valid_size_accepted():
+    for value in [0, 1, BLOCK, MAX_SIZE]:
+        assert parse_message(offer_with([file_entry(size=value)])).files[0].size == value
 
 
-@pytest.mark.parametrize("value", [-1, MAX_SIZE + 1, 2**53, 10**30, *NOT_INTS], ids=repr)
-def test_bad_size_rejected(value):
-    assert_rejected(offer_with([file_entry(size=value)]))
+def test_bad_size_rejected():
+    for value in [-1, MAX_SIZE + 1, 2**53, 10**30, *NOT_INTS]:
+        assert_rejected(offer_with([file_entry(size=value)]))
 
 
-@pytest.mark.parametrize("value", [0, 1, 1_700_000_000_000, MAX_INT])
-def test_valid_mtime_accepted(value):
-    assert parse_message(offer_with([file_entry(mtime=value)])).files[0].mtime == value
+def test_valid_mtime_accepted():
+    for value in [0, 1, 1_700_000_000_000, MAX_INT]:
+        assert parse_message(offer_with([file_entry(mtime=value)])).files[0].mtime == value
 
 
-@pytest.mark.parametrize("value", [-1, -1_700_000_000_000, 2**53, 2**64, *NOT_INTS], ids=repr)
-def test_bad_mtime_rejected(value):
+def test_bad_mtime_rejected():
     # 6f: `mtime` mili giây Unix nguyên 0…2⁵³−1 (bên gửi ép âm về 0; bên nhận vẫn kiểm).
-    assert_rejected(offer_with([file_entry(mtime=value)]))
+    for value in [-1, -1_700_000_000_000, 2**53, 2**64, *NOT_INTS]:
+        assert_rejected(offer_with([file_entry(mtime=value)]))
 
 
 def test_block_size_exactly_one_mib_accepted():
     assert parse_message(valid_dicts()["offer"]).block_size == 1_048_576
 
 
-@pytest.mark.parametrize(
-    "value",
-    [0, 1, 1_048_575, 1_048_577, 2 * BLOCK, BLOCK // 2, -BLOCK, 1_048_576.0, True, "1048576", None],
-    ids=repr,
-)
-def test_block_size_other_than_one_mib_rejected(value):
-    assert_rejected(wire("offer", block_size=value))
+def test_block_size_other_than_one_mib_rejected():
+    for value in [
+        0,
+        1,
+        1_048_575,
+        1_048_577,
+        2 * BLOCK,
+        BLOCK // 2,
+        -BLOCK,
+        1_048_576.0,
+        True,
+        "1048576",
+        None,
+    ]:
+        assert_rejected(wire("offer", block_size=value))
 
 
 # --- files: số lượng, kiểu ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("count", [1, 2, 999, 1000])
-def test_file_count_within_limit_accepted(count):
-    msg = parse_message(offer_with([file_entry(f"f{i}") for i in range(count)]))
-    assert len(msg.files) == count
+def test_file_count_within_limit_accepted():
+    for count in [1, 2, 999, 1000]:
+        msg = parse_message(offer_with([file_entry(f"f{i}") for i in range(count)]))
+        assert len(msg.files) == count
 
 
-@pytest.mark.parametrize("count", [0, 1001, 5000])
-def test_file_count_outside_1_to_1000_rejected(count):
-    assert_rejected(offer_with([file_entry(f"f{i}") for i in range(count)]))
+def test_file_count_outside_1_to_1000_rejected():
+    for count in [0, 1001, 5000]:
+        assert_rejected(offer_with([file_entry(f"f{i}") for i in range(count)]))
 
 
-@pytest.mark.parametrize("files", [None, "a.txt", 1, {"name": "a"}, {"0": file_entry()}, True], ids=repr)
-def test_files_not_a_list_rejected(files):
-    assert_rejected(wire("offer", files=files))
+def test_files_not_a_list_rejected():
+    for files in [None, "a.txt", 1, {"name": "a"}, {"0": file_entry()}, True]:
+        assert_rejected(wire("offer", files=files))
 
 
-@pytest.mark.parametrize("entry", [None, "a.txt", 1, [], ["a.txt", 1, 2], True], ids=repr)
-def test_file_entry_not_an_object_rejected(entry):
-    assert_rejected(offer_with([file_entry(), entry]))
+def test_file_entry_not_an_object_rejected():
+    for entry in [None, "a.txt", 1, [], ["a.txt", 1, 2], True]:
+        assert_rejected(offer_with([file_entry(), entry]))
 
 
 def test_duplicate_names_in_offer_accepted():
@@ -472,12 +473,12 @@ ACCEPTED_NAMES = [
 ]
 
 
-@pytest.mark.parametrize("name", ACCEPTED_NAMES, ids=repr)
-def test_dangerous_but_well_formed_names_are_accepted_unchanged(name):
-    msg = parse_message(offer_with([file_entry(name)]))
-    assert msg.files[0].name == name
-    assert len(msg.files[0].name) == len(name)  # không chuẩn hóa, không làm sạch
-    assert parse_message(to_dict(msg)) == msg
+def test_dangerous_but_well_formed_names_are_accepted_unchanged():
+    for name in ACCEPTED_NAMES:
+        msg = parse_message(offer_with([file_entry(name)]))
+        assert msg.files[0].name == name
+        assert len(msg.files[0].name) == len(name)  # không chuẩn hóa, không làm sạch
+        assert parse_message(to_dict(msg)) == msg
 
 
 def test_empty_name_is_accepted_at_message_level():
@@ -511,9 +512,9 @@ REJECTED_NAMES = [
 ]
 
 
-@pytest.mark.parametrize("name", REJECTED_NAMES, ids=repr)
-def test_bad_name_rejected(name):
-    assert_rejected(offer_with([file_entry(name)]))
+def test_bad_name_rejected():
+    for name in REJECTED_NAMES:
+        assert_rejected(offer_with([file_entry(name)]))
 
 
 @pytest.mark.parametrize("escape", ["\\ud800", "\\udfff", "a\\ud83db", "\\u0000", "\\u001b", "\\u007f"])
@@ -535,11 +536,11 @@ def test_one_bad_file_rejects_whole_offer():
 # --- reject ------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("reason", ["user", "busy", "not_receiving", "new_reason", "a", "a" * 32, "_"])
-def test_reject_reason_without_extra_fields_accepted(reason):
-    msg = parse_message(wire("reject_user", reason=reason))
-    assert msg.reason == reason
-    assert type(msg.reason) is str
+def test_reject_reason_without_extra_fields_accepted():
+    for reason in ["user", "busy", "not_receiving", "new_reason", "a", "a" * 32, "_"]:
+        msg = parse_message(wire("reject_user", reason=reason))
+        assert msg.reason == reason
+        assert type(msg.reason) is str
 
 
 def test_reject_not_receiving_is_valid():
@@ -549,13 +550,22 @@ def test_reject_not_receiving_is_valid():
     assert as_wire(msg) == valid_dicts()["reject_not_receiving"]
 
 
-@pytest.mark.parametrize(
-    "reason",
-    ["", "USER", "User", "a" * 33, "user\n", " user", "no-space", "user1", "ü", None, 1, ["user"]],
-    ids=repr,
-)
-def test_reject_bad_reason_rejected(reason):
-    assert_rejected(wire("reject_user", reason=reason))
+def test_reject_bad_reason_rejected():
+    for reason in [
+        "",
+        "USER",
+        "User",
+        "a" * 33,
+        "user\n",
+        " user",
+        "no-space",
+        "user1",
+        "ü",
+        None,
+        1,
+        ["user"],
+    ]:
+        assert_rejected(wire("reject_user", reason=reason))
 
 
 def test_reject_no_space_values():
@@ -563,16 +573,16 @@ def test_reject_no_space_values():
     assert (msg.needed, msg.available) == (10, 3)
 
 
-@pytest.mark.parametrize("field", ["needed", "available"])
-@pytest.mark.parametrize("value", [-1, 2**53, *NOT_INTS], ids=repr)
-def test_reject_no_space_bad_amount_rejected(field, value):
-    assert_rejected(wire("reject_no_space", **{field: value}))
+def test_reject_no_space_bad_amount_rejected():
+    for field in ["needed", "available"]:
+        for value in [-1, 2**53, *NOT_INTS]:
+            assert_rejected(wire("reject_no_space", **{field: value}))
 
 
-@pytest.mark.parametrize(("needed", "available"), [(0, 0), (MAX_INT, 0), (1, MAX_INT)])
-def test_reject_no_space_amount_range_accepted(needed, available):
-    msg = parse_message(wire("reject_no_space", needed=needed, available=available))
-    assert (msg.needed, msg.available) == (needed, available)
+def test_reject_no_space_amount_range_accepted():
+    for needed, available in [(0, 0), (MAX_INT, 0), (1, MAX_INT)]:
+        msg = parse_message(wire("reject_no_space", needed=needed, available=available))
+        assert (msg.needed, msg.available) == (needed, available)
 
 
 def test_reject_file_too_large_values():
@@ -582,68 +592,61 @@ def test_reject_file_too_large_values():
     assert msg.max_size == FAT32_MAX
 
 
-@pytest.mark.parametrize("field", ["file_index", "max_size"])
-def test_reject_file_too_large_requires_index_and_max_size(field):
-    w = valid_dicts()["reject_file_too_large"]
-    del w[field]
-    assert_rejected(w)
+def test_reject_file_too_large_requires_index_and_max_size():
+    for field in ["file_index", "max_size"]:
+        w = valid_dicts()["reject_file_too_large"]
+        del w[field]
+        assert_rejected(w)
 
 
-@pytest.mark.parametrize("value", [-1, 2**53, *NOT_INTS], ids=repr)
-def test_reject_file_too_large_bad_max_size_rejected(value):
-    assert_rejected(wire("reject_file_too_large", max_size=value))
+def test_reject_file_too_large_bad_max_size_rejected():
+    for value in [-1, 2**53, *NOT_INTS]:
+        assert_rejected(wire("reject_file_too_large", max_size=value))
 
 
-@pytest.mark.parametrize("value", [0, 1, FAT32_MAX, MAX_SIZE, MAX_INT])
-def test_reject_file_too_large_max_size_range_accepted(value):
-    assert parse_message(wire("reject_file_too_large", max_size=value)).max_size == value
+def test_reject_file_too_large_max_size_range_accepted():
+    for value in [0, 1, FAT32_MAX, MAX_SIZE, MAX_INT]:
+        assert parse_message(wire("reject_file_too_large", max_size=value)).max_size == value
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [("needed", 5), ("available", 0), ("max_size", FAT32_MAX), ("file_index", 0)],
-)
-@pytest.mark.parametrize("reason", ["user", "busy", "not_receiving", "new_reason"])
-def test_reject_attached_field_for_other_reason_accepted_when_valid(reason, field, value):
+def test_reject_attached_field_for_other_reason_accepted_when_valid():
     # protocol §3.3: trường kèm theo được vắng mặt với lý do khác, có mặt thì phải đúng luật.
-    msg = parse_message(wire("reject_user", reason=reason, **{field: value}))
-    assert msg.reason == reason
-    assert parse_message(to_dict(msg)) == msg
+    for reason in ["user", "busy", "not_receiving", "new_reason"]:
+        for field, value in [("needed", 5), ("available", 0), ("max_size", FAT32_MAX), ("file_index", 0)]:
+            msg = parse_message(wire("reject_user", reason=reason, **{field: value}))
+            assert msg.reason == reason
+            assert parse_message(to_dict(msg)) == msg
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
+def test_reject_attached_field_for_other_reason_still_validated():
+    cases = [
         ("needed", -1),
         ("needed", "5"),
         ("available", 1.0),
         ("max_size", True),
         ("file_index", 1000),
         ("file_index", -1),
-    ],
-)
-@pytest.mark.parametrize("reason", ["user", "busy", "not_receiving", "new_reason"])
-def test_reject_attached_field_for_other_reason_still_validated(reason, field, value):
-    assert_rejected(wire("reject_user", reason=reason, **{field: value}))
+    ]
+    for field, value in cases:
+        for reason in ["user", "busy", "not_receiving", "new_reason"]:
+            assert_rejected(wire("reject_user", reason=reason, **{field: value}))
 
 
-@pytest.mark.parametrize("field", ["needed", "available", "max_size", "file_index"])
-@pytest.mark.parametrize("base", ["reject_user", "reject_no_space", "reject_file_too_large"])
-def test_reject_optional_field_null_rejected(base, field):
+def test_reject_optional_field_null_rejected():
     # protocol §3.3: trường tùy chọn mang `null` là sai, như mọi trường sai kiểu.
-    assert_rejected(wire(base, **{field: None}))
+    for base in ["reject_user", "reject_no_space", "reject_file_too_large"]:
+        for field in ["needed", "available", "max_size", "file_index"]:
+            assert_rejected(wire(base, **{field: None}))
 
 
 # --- cancel ------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "reason", ["user", "source_changed", "unknown_transfer", "error", "expired", "new_reason", "a" * 32]
-)
-def test_cancel_reason_accepted(reason):
-    msg = parse_message(wire("cancel", reason=reason))
-    assert msg.reason == reason
-    assert as_wire(msg) == wire("cancel", reason=reason)
+def test_cancel_reason_accepted():
+    for reason in ["user", "source_changed", "unknown_transfer", "error", "expired", "new_reason", "a" * 32]:
+        msg = parse_message(wire("cancel", reason=reason))
+        assert msg.reason == reason
+        assert as_wire(msg) == wire("cancel", reason=reason)
 
 
 def test_cancel_reason_enum_round_trip():
@@ -658,43 +661,48 @@ def test_cancel_reason_enum_round_trip():
         assert parse_message(as_wire(msg)) == msg
 
 
-@pytest.mark.parametrize("reason", ["", "ERROR", "a" * 33, "error\n", "source-changed", None, 0], ids=repr)
-def test_cancel_bad_reason_rejected(reason):
-    assert_rejected(wire("cancel", reason=reason))
+def test_cancel_bad_reason_rejected():
+    for reason in ["", "ERROR", "a" * 33, "error\n", "source-changed", None, 0]:
+        assert_rejected(wire("cancel", reason=reason))
 
 
 # --- complete.merkle_root ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "value",
-    [HEX64.upper(), HEX64[:63], HEX64 + "0", HEX64[:63] + "\n", "０" * 64, "", None, 0, bytes(32), [HEX64]],
-    ids=repr,
-)
-def test_bad_merkle_root_rejected(value):
-    assert_rejected(wire("complete", merkle_root=value))
+def test_bad_merkle_root_rejected():
+    for value in [
+        HEX64.upper(),
+        HEX64[:63],
+        HEX64 + "0",
+        HEX64[:63] + "\n",
+        "０" * 64,
+        "",
+        None,
+        0,
+        bytes(32),
+        [HEX64],
+    ]:
+        assert_rejected(wire("complete", merkle_root=value))
 
 
 # --- resume.bitfield ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["", "gA==", "AAAA", "/w==", "+/8=", FOUR_TIB_BITFIELD],
-    ids=["empty", "1", "3", "slash", "plus", "4TiB"],
-)
-def test_well_formed_bitfield_accepted(value):
-    assert parse_message(wire("resume", bitfield=value)).bitfield == value
+def test_well_formed_bitfield_accepted():
+    for value in ["", "gA==", "AAAA", "/w==", "+/8=", FOUR_TIB_BITFIELD]:
+        assert parse_message(wire("resume", bitfield=value)).bitfield == value
 
 
-@pytest.mark.parametrize("value", [None, 0, [], {"b": 1}, b"gA==", True], ids=repr)
-def test_non_string_bitfield_rejected(value):
-    assert_rejected(wire("resume", bitfield=value))
+def test_non_string_bitfield_rejected():
+    for value in [None, 0, [], {"b": 1}, b"gA==", True]:
+        assert_rejected(wire("resume", bitfield=value))
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
+def test_non_canonical_base64_bitfield_rejected():
+    """protocol §3.3: `bitfield` là base64 chuẩn RFC 4648 §4 có `=` đệm, đúng dạng bộ mã hóa chuẩn
+    sinh ra (không khoảng trắng, không xuống dòng, bit đệm bằng 0). Độ dài so với số khối thì
+    tầng message không biết (kiểm ở `Bitfield.from_base64`)."""
+    for value in [
         "!!!!",
         "gA=",
         "gA",  # thiếu `=` đệm
@@ -707,14 +715,8 @@ def test_non_string_bitfield_rejected(value):
         "gB==",  # bit đệm khác 0: không phải dạng bộ mã hóa chuẩn sinh ra
         "AB==",
         "AAB=",
-    ],
-    ids=repr,
-)
-def test_non_canonical_base64_bitfield_rejected(value):
-    """protocol §3.3: `bitfield` là base64 chuẩn RFC 4648 §4 có `=` đệm, đúng dạng bộ mã hóa chuẩn
-    sinh ra (không khoảng trắng, không xuống dòng, bit đệm bằng 0). Độ dài so với số khối thì
-    tầng message không biết (kiểm ở `Bitfield.from_base64`)."""
-    assert_rejected(wire("resume", bitfield=value))
+    ]:
+        assert_rejected(wire("resume", bitfield=value))
 
 
 def test_bitfield_larger_than_any_valid_file_rejected():
@@ -781,20 +783,23 @@ def test_data_allows_no_json_message_after_opening():
     assert allowed_types(ConnectionKind.DATA) == frozenset()
 
 
-@pytest.mark.parametrize("name", SAMPLE_TRANSFER_MESSAGES)
-def test_transfer_message_valid_on_control_only(name):
-    msg = parse_message(valid_dicts()[name])
-    assert check_message_kind(ConnectionKind.CONTROL, msg) is None
-    for kind in (ConnectionKind.PAIRING, ConnectionKind.DATA):
-        with pytest.raises(WrongConnectionKind):
-            check_message_kind(kind, msg)
+def test_transfer_message_valid_on_control_only():
+    for param in SAMPLE_TRANSFER_MESSAGES:
+        name = param.values[0]
+        msg = parse_message(valid_dicts()[name])
+        assert check_message_kind(ConnectionKind.CONTROL, msg) is None
+        for kind in (ConnectionKind.PAIRING, ConnectionKind.DATA):
+            with pytest.raises(WrongConnectionKind):
+                check_message_kind(kind, msg)
 
 
-@pytest.mark.parametrize("name", SAMPLE_TRANSFER_MESSAGES)
-@pytest.mark.parametrize("has_cert", [False, True])
-def test_transfer_message_cannot_open_a_connection(name, has_cert):
-    with pytest.raises(WrongConnectionKind):
-        opening_kind(parse_message(valid_dicts()[name]), has_client_cert=has_cert)
+def test_transfer_message_cannot_open_a_connection():
+    for param in SAMPLE_TRANSFER_MESSAGES:
+        name = param.values[0]
+        msg = parse_message(valid_dicts()[name])
+        for has_cert in (False, True):
+            with pytest.raises(WrongConnectionKind):
+                opening_kind(msg, has_client_cert=has_cert)
 
 
 def test_data_open_with_client_cert_opens_data():

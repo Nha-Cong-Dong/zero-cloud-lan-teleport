@@ -84,9 +84,9 @@ def test_parse_manual_address_uses_default_port_argument():
 # --- DV2 ------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
+def test_parse_manual_address_rejects():
+    """DV2."""
+    for text in [
         "",
         "   ",
         "localhost",
@@ -121,12 +121,9 @@ def test_parse_manual_address_uses_default_port_argument():
         "1.2.3.4:80a",
         "1.2.3.4:" + "1" * 200,
         "1" * 10_000,
-    ],
-)
-def test_parse_manual_address_rejects(text):
-    """DV2."""
-    with pytest.raises(ValueError):
-        parse_manual_address(text)
+    ]:
+        with pytest.raises(ValueError):
+            parse_manual_address(text)
 
 
 @pytest.mark.parametrize("value", [None, b"1.2.3.4", 1234, ["1.2.3.4"]])

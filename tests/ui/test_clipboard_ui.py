@@ -984,12 +984,14 @@ LONG_PLAIN = "PC-Nha-" + "x" * 25  # 32 cột chữ thường
 
 @pytest.mark.parametrize("lang", ["vi", "en"])
 @pytest.mark.parametrize("kind", ["received", "write_failed", "too_large"])
-@pytest.mark.parametrize("warning", ["paused", "unavailable"])
-@pytest.mark.parametrize("active", [0, 2, 999])
-@pytest.mark.parametrize(
-    "name", [LONG_PLAIN, EMOJI_16, EMOJI_LONG, MN_SUPPLEMENTARY], ids=["plain", "emoji16", "long", "mn"]
-)
-def test_tooltip_warning_line_is_never_cut(qapp, lang, kind, warning, active, name):
+def test_tooltip_warning_line_is_never_cut(qapp, lang, kind):
+    for warning in ["paused", "unavailable"]:
+        for active in [0, 2, 999]:
+            for name in [LONG_PLAIN, EMOJI_16, EMOJI_LONG, MN_SUPPLEMENTARY]:
+                _check_tooltip_warning_line_is_never_cut(qapp, lang, kind, warning, active, name)
+
+
+def _check_tooltip_warning_line_is_never_cut(qapp, lang, kind, warning, active, name):
     """Dòng “Không nhận file: …” / “Đã tạm dừng…” luôn còn nguyên câu; quá ngân sách thì rút gọn / bỏ dòng
     clipboard trước, rồi dòng “Đang truyền”."""
     from PySide6.QtCore import QCoreApplication

@@ -292,16 +292,16 @@ def test_receive_dir_missing_failure_cancels_with_error_and_removes_nothing(tx):
     assert r.e.info(r.key) is None
 
 
-@pytest.mark.parametrize("how", ["omitted", "none", "disk"])
-@pytest.mark.parametrize("op", list(DiskOp))
-def test_storage_failed_detail_defaults_to_disk(tx, op, how):
-    r = tx.Recv(tx.entries(2))
-    r.accept()
-    kw = {"omitted": {}, "none": {"detail": None}, "disk": {"detail": FailureDetail.DISK}}[how]
-    acts = _storage_failed(tx, r, op, **kw)
-    assert tx.sent(acts) == [Cancel(transfer_id=r.T, reason="error")]
-    assert tx.one(tx.ended(acts), object).detail == FailureDetail.DISK
-    assert bool(tx.of(acts, RemoveTemp)) == (op != DiskOp.CREATE_TEMP)
+def test_storage_failed_detail_defaults_to_disk(tx):
+    for op in DiskOp:
+        for how in ("omitted", "none", "disk"):
+            r = tx.Recv(tx.entries(2))
+            r.accept()
+            kw = {"omitted": {}, "none": {"detail": None}, "disk": {"detail": FailureDetail.DISK}}[how]
+            acts = _storage_failed(tx, r, op, **kw)
+            assert tx.sent(acts) == [Cancel(transfer_id=r.T, reason="error")]
+            assert tx.one(tx.ended(acts), object).detail == FailureDetail.DISK
+            assert bool(tx.of(acts, RemoveTemp)) == (op != DiskOp.CREATE_TEMP)
 
 
 _BAD_DETAILS = [
@@ -324,24 +324,25 @@ _BAD_DETAILS = [
 ]
 
 
-@pytest.mark.parametrize(("detail", "op"), _BAD_DETAILS)
-def test_storage_failed_bad_detail_raises_and_keeps_state(tx, detail, op):
+def test_storage_failed_bad_detail_raises_and_keeps_state(tx):
     """A4: chỉ nhận `None`, `DISK`, `TEMP_EXISTS`, `RECEIVE_DIR_MISSING` (hai cái sau chỉ đi với
     `CREATE_TEMP`).
 
     Mọi tham số khác đều hợp lệ (đúng thiết bị, đúng lượt đang chạy, `op` hợp lệ), nên lỗi chỉ có
     thể đến từ `detail`; sau đó lượt vẫn sống và lời gọi hợp lệ vẫn kết thúc được nó.
     """
-    r = tx.Recv(tx.entries(2))
-    r.accept()
-    before = tx.snapshot(r.e)
-    info = r.e.info(r.key)
-    with pytest.raises(ValueError):
-        _storage_failed(tx, r, op, detail=detail)
-    assert tx.snapshot(r.e) == before
-    assert r.e.info(r.key) == info
-    acts = _storage_failed(tx, r, op)
-    assert tx.one(tx.ended(acts), object).detail == FailureDetail.DISK
+    for param in _BAD_DETAILS:
+        detail, op = param.values
+        r = tx.Recv(tx.entries(2))
+        r.accept()
+        before = tx.snapshot(r.e)
+        info = r.e.info(r.key)
+        with pytest.raises(ValueError):
+            _storage_failed(tx, r, op, detail=detail)
+        assert tx.snapshot(r.e) == before
+        assert r.e.info(r.key) == info
+        acts = _storage_failed(tx, r, op)
+        assert tx.one(tx.ended(acts), object).detail == FailureDetail.DISK
 
 
 def test_remove_temp_is_last_disk_action_of_transfer(tx):

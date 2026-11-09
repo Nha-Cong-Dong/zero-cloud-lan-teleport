@@ -426,14 +426,14 @@ def _activity_cases():
     return cases
 
 
-@pytest.mark.parametrize(("result", "direction", "template"), _activity_cases())
-def test_activity_text_table(result, direction, template):
+def test_activity_text_table():
     from teleport.ui.conversations import activity_text
 
-    one = activity_text(last(result, direction=direction, count=1, first="bao-cao.pdf"))
-    assert one == template.replace("{what}", "bao-cao.pdf")
-    many = activity_text(last(result, direction=direction, count=3, first="bao-cao.pdf"))
-    assert many == template.replace("{what}", "3 file")
+    for result, direction, template in _activity_cases():
+        one = activity_text(last(result, direction=direction, count=1, first="bao-cao.pdf"))
+        assert one == template.replace("{what}", "bao-cao.pdf")
+        many = activity_text(last(result, direction=direction, count=3, first="bao-cao.pdf"))
+        assert many == template.replace("{what}", "3 file")
 
 
 def test_activity_text_single_file_without_name_counts_files():

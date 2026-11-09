@@ -1,0 +1,150 @@
+# Tự động đóng gói và xuất bản bản phát hành mới nhất (nightly) cho Windows mỗi khi push lên nhánh main.
+name: Build Teleport & Nightly Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    name: Package Teleport Windows & Publish Nightly
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      QT_QPA_PLATFORM: offscreen
+      INNO_VERSION: "6.7.3"
+      INNO_URL: https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+      INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            packaging/pyinstaller/requirements.txt
+            packaging/pyinstaller/constraints.txt
+
+      - name: Lấy thông tin phiên bản
+        id: info
+        shell: pwsh
+        run: |
+          python packaging/release/release.py info >> $env:GITHUB_OUTPUT
+          $sha7 = $env:GITHUB_SHA.Substring(0, 7)
+          "sha7=$sha7" >> $env:GITHUB_OUTPUT
+          $ver = python -c "import teleport; print(teleport.__version__)"
+          $numeric = python -c "
+          import teleport
+          from packaging.version import Version
+          release = list(Version(teleport.__version__).release)
+          assert len(release) <= 4, release
+          print('.'.join(str(n) for n in release + [0] * (4 - len(release))))
+          "
+          "version_clean=$ver" >> $env:GITHUB_OUTPUT
+          "version_numeric=$numeric" >> $env:GITHUB_OUTPUT
+          Write-Host "Phien ban: $ver ($numeric) - Commit: $sha7"
+
+      - name: Cài đặt dependencies và công cụ build
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt -c packaging/pyinstaller/constraints.txt
+
+      - name: Đóng gói PyInstaller GUI
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/pyinstaller/teleport-gui.spec
+
+      - name: Cài đặt Inno Setup chính thức
+        shell: pwsh
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_VERSION.exe"
+          $dir = Join-Path $env:RUNNER_TEMP "inno-$env:INNO_VERSION"
+          Invoke-WebRequest -Uri $env:INNO_URL -OutFile $setup
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          if ($hash -ne $env:INNO_SHA256) { throw "SHA-256 cua Inno Setup khong khop: $hash" }
+          $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', "/DIR=`"$dir`"")
+          if ($p.ExitCode -ne 0) { throw "Cai Inno Setup that bai" }
+          $iscc = Join-Path $dir 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) { throw "Khong tim thay $iscc" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Biên dịch bộ cài đặt Inno Setup
+        shell: pwsh
+        run: |
+          & $env:ISCC `
+            "/DAppVersion=${{ steps.info.outputs.version_clean }}" `
+            "/DAppVersionNumeric=${{ steps.info.outputs.version_numeric }}" `
+            "/DSourceDir=$PWD\dist\teleport-gui" `
+            "/O$PWD\installer" `
+            packaging\inno\teleport.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC that bai" }
+
+      - name: Đóng gói tài nguyên phát hành
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.info.outputs.version_clean }}"
+          $outDir = "${{ github.workspace }}\out"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          # 1. Bộ cài Installer .exe
+          $setupFiles = Get-ChildItem -Path "installer/*.exe"
+          if ($setupFiles.Count -gt 0) {
+            $setupExe = $setupFiles[0]
+            Copy-Item $setupExe.FullName (Join-Path $outDir "teleport-setup-$ver-x64.exe")
+            Copy-Item $setupExe.FullName (Join-Path $outDir "teleport-setup-latest-x64.exe")
+          }
+
+          # 2. Bản chạy ngay Portable GUI .zip
+          $zipVer = Join-Path $outDir "teleport-gui-$ver-windows-x64.zip"
+          $zipLatest = Join-Path $outDir "teleport-gui-latest-windows-x64.zip"
+          (cd dist && Compress-Archive -Path "teleport-gui" -DestinationPath $zipVer -CompressionLevel Optimal)
+          Copy-Item $zipVer $zipLatest
+
+          # 3. Tạo SHA256SUMS.txt
+          $shaFile = Join-Path $outDir "SHA256SUMS.txt"
+          Get-ChildItem $outDir -File | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)" | Out-File -FilePath $shaFile -Append -Encoding ascii
+          }
+          Get-Content $shaFile
+
+      - name: Upload Artifact kiểm tra
+        uses: actions/upload-artifact@v4
+        with:
+          name: teleport-nightly-windows
+          path: out/
+          retention-days: 14
+
+      - name: Xuất bản lên GitHub Releases (Nightly)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Write-Host "Dang cap nhat ban phat hanh nightly tren GitHub Releases..."
+          $tag = "nightly"
+          $files = Get-ChildItem -Path "out/*" | ForEach-Object { $_.FullName }
+
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag da ton tai, dang ghi de tep moi..."
+            gh release upload $tag $files --clobber
+          } else {
+            Write-Host "Tao moi ban phat hanh $tag..."
+            gh release create $tag $files `
+              --title "ZCL Teleport (Bản mới nhất)" `
+              --notes "Bản tự động đóng gói mới nhất từ nhánh main. Cập nhật commit: ${{ steps.info.outputs.sha7 }}" `
+              --prerelease
+          }

@@ -178,10 +178,10 @@ def test_new_tracker_is_empty():
     assert t.tick(100.0) == []
 
 
-@pytest.mark.parametrize("own", ["xyz", "", "A" * 32, "0" * 31, None, 5])
-def test_constructor_rejects_bad_own_id(own):
-    with pytest.raises(ValueError):  # MessageError là ValueError; đặc tả không nói rõ lớp nào
-        LinkTracker(own)
+def test_constructor_rejects_bad_own_id():
+    for own in ["xyz", "", "A" * 32, "0" * 31, None, 5]:
+        with pytest.raises(ValueError):  # MessageError là ValueError; đặc tả không nói rõ lớp nào
+            LinkTracker(own)
 
 
 def test_connected_and_attempting_return_copies():
@@ -263,18 +263,19 @@ def _bad_calls(ar: int) -> list[tuple[str, Callable[[LinkTracker], object], type
 _BAD_NAMES = [name for name, _, _ in _bad_calls(1)]
 
 
-@pytest.mark.parametrize("case", _BAD_NAMES)
-def test_lk1_bad_arguments_raise_and_leave_state_unchanged(case):
-    t, ar = _lk1_state()
-    call, exc = next((fn, e) for name, fn, e in _bad_calls(ar) if name == case)
-    before = (t.connected(), t.attempting(), t.next_wakeup())
-    with pytest.raises(exc):
-        call(t)
-    assert (t.connected(), t.attempting(), t.next_wakeup()) == before
-    # Lời gọi lỗi không được làm đồng hồ nhích lên: `now` = 1.5 (≥ 1.0 của lần gọi hợp lệ cuối) vẫn hợp lệ.
-    assert t.tick(1.5) == []
-    acts, _ = tick_to_wakeup(t)
-    assert the_connect(acts).device_id == Q
+def test_lk1_bad_arguments_raise_and_leave_state_unchanged():
+    for case in _BAD_NAMES:
+        t, ar = _lk1_state()
+        call, exc = next((fn, e) for name, fn, e in _bad_calls(ar) if name == case)
+        before = (t.connected(), t.attempting(), t.next_wakeup())
+        with pytest.raises(exc):
+            call(t)
+        assert (t.connected(), t.attempting(), t.next_wakeup()) == before
+        # Lời gọi lỗi không được làm đồng hồ nhích lên:
+        # `now` = 1.5 (≥ 1.0 của lần gọi hợp lệ cuối) vẫn hợp lệ.
+        assert t.tick(1.5) == []
+        acts, _ = tick_to_wakeup(t)
+        assert the_connect(acts).device_id == Q
 
 
 def test_lk1_result_accepts_string_value():
@@ -2088,18 +2089,17 @@ def _l2_bad_hint_calls() -> list[tuple[str, Callable[[LinkTracker], object], typ
     ]
 
 
-@pytest.mark.parametrize("case", [name for name, _, _ in _l2_bad_hint_calls()])
-def test_l2_bad_hint_arguments_raise_and_leave_state_unchanged(case):
-    t, _ar = _lk1_state()  # Q đang chờ lịch (2.0), R đang thử, PEER đang kết nối; `now` cuối 1.0
-    call, exc = next((fn, e) for name, fn, e in _l2_bad_hint_calls() if name == case)
-    before = (t.connected(), t.attempting(), t.next_wakeup())
-    with pytest.raises(exc):
-        call(t)
-    assert (t.connected(), t.attempting(), t.next_wakeup()) == before
-    # Lần thử kế của Q vẫn dùng địa chỉ mDNS cũ (hint sai không được nhớ), `now` không nhích lên.
-    assert t.tick(1.5) == []
-    c = the_connect(t.tick(2.0))
-    assert (c.device_id, c.addresses, c.port) == (Q, ADDR, PORT)
+def test_l2_bad_hint_arguments_raise_and_leave_state_unchanged():
+    for _name, call, exc in _l2_bad_hint_calls():
+        t, _ar = _lk1_state()  # Q đang chờ lịch (2.0), R đang thử, PEER đang kết nối; `now` cuối 1.0
+        before = (t.connected(), t.attempting(), t.next_wakeup())
+        with pytest.raises(exc):
+            call(t)
+        assert (t.connected(), t.attempting(), t.next_wakeup()) == before
+        # Lần thử kế của Q vẫn dùng địa chỉ mDNS cũ (hint sai không được nhớ), `now` không nhích lên.
+        assert t.tick(1.5) == []
+        c = the_connect(t.tick(2.0))
+        assert (c.device_id, c.addresses, c.port) == (Q, ADDR, PORT)
 
 
 def test_l2_hint_for_own_device_is_ignored():
@@ -2328,17 +2328,16 @@ def _l3_bad_hold_calls() -> list[tuple[str, Callable[[LinkTracker], object], typ
     ]
 
 
-@pytest.mark.parametrize("case", [name for name, _, _ in _l3_bad_hold_calls()])
-def test_l3_bad_hold_arguments_raise_and_leave_state_unchanged(case):
-    t, _ar = _lk1_state()
-    call, exc = next((fn, e) for name, fn, e in _l3_bad_hold_calls() if name == case)
-    before = (t.connected(), t.attempting(), t.next_wakeup())
-    with pytest.raises(exc):
-        call(t)
-    assert (t.connected(), t.attempting(), t.next_wakeup()) == before
-    # Q không bị “giữ”: mDNS báo đi thì lịch bị xóa như cũ.
-    assert t.device_gone(Q, 1.5) == []
-    assert t.next_wakeup() is None
+def test_l3_bad_hold_arguments_raise_and_leave_state_unchanged():
+    for _name, call, exc in _l3_bad_hold_calls():
+        t, _ar = _lk1_state()
+        before = (t.connected(), t.attempting(), t.next_wakeup())
+        with pytest.raises(exc):
+            call(t)
+        assert (t.connected(), t.attempting(), t.next_wakeup()) == before
+        # Q không bị “giữ”: mDNS báo đi thì lịch bị xóa như cũ.
+        assert t.device_gone(Q, 1.5) == []
+        assert t.next_wakeup() is None
 
 
 # --- L4: hypothesis, một tracker với hint/hold ------------------------------------------------------------
@@ -3685,39 +3684,34 @@ def _l15_bad_remember_calls() -> list[tuple[str, Callable[[LinkTracker], object]
     ]
 
 
-@pytest.mark.parametrize("case", [name for name, _, _ in _l15_bad_remember_calls()])
-def test_l15_bad_remember_arguments_raise_and_leave_state_unchanged(case):
-    t, _ar = _lk1_state()  # Q đang chờ lịch (2.0), R đang thử, PEER đang kết nối; `now` cuối 1.0
-    call, exc = next((fn, e) for name, fn, e in _l15_bad_remember_calls() if name == case)
-    before = (t.connected(), t.attempting(), t.next_wakeup())
-    with pytest.raises(exc):
-        call(t)
-    assert (t.connected(), t.attempting(), t.next_wakeup()) == before
-    assert t.tick(1.5) == [], "`now` không được nhích lên"
-    c = the_connect(t.tick(2.0))
-    assert (c.device_id, c.addresses, c.port) == (Q, ADDR, PORT)
+def test_l15_bad_remember_arguments_raise_and_leave_state_unchanged():
+    for case, _, _ in _l15_bad_remember_calls():
+        t, _ar = _lk1_state()  # Q đang chờ lịch (2.0), R đang thử, PEER đang kết nối; `now` cuối 1.0
+        call, exc = next((fn, e) for name, fn, e in _l15_bad_remember_calls() if name == case)
+        before = (t.connected(), t.attempting(), t.next_wakeup())
+        with pytest.raises(exc):
+            call(t)
+        assert (t.connected(), t.attempting(), t.next_wakeup()) == before
+        assert t.tick(1.5) == [], "`now` không được nhích lên"
+        c = the_connect(t.tick(2.0))
+        assert (c.device_id, c.addresses, c.port) == (Q, ADDR, PORT)
 
 
-@pytest.mark.parametrize(
-    "args",
-    [("192.168.001.5", SPORT, 1.0), (SIP, 0, 1.0), (SIP, SPORT, math.inf)],
-    ids=["ip", "cong", "now"],
-)
-def test_l15_bad_remember_is_not_kept(args):
-    t = tracker(PEER)
-    with pytest.raises((TypeError, ValueError)):
-        t.remember(PEER, *args)
-    assert t.network_changed(10.0) == [] and t.retry_now(PEER, 11.0) == [] and t.tick(1000.0) == []
+def test_l15_bad_remember_is_not_kept():
+    for args in [("192.168.001.5", SPORT, 1.0), (SIP, 0, 1.0), (SIP, SPORT, math.inf)]:
+        t = tracker(PEER)
+        with pytest.raises((TypeError, ValueError)):
+            t.remember(PEER, *args)
+        assert t.network_changed(10.0) == [] and t.retry_now(PEER, 11.0) == [] and t.tick(1000.0) == []
 
 
 # --- L16: check_endpoint ------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "ip, port", [("192.168.1.5", 47474), ("127.0.0.1", 1), ("169.254.1.1", 65535), ("8.8.8.8", 47474)]
-)
-def test_l16_check_endpoint_accepts_host_addresses(ip, port):
-    assert links.check_endpoint(ip, port) == (ip, port)
+def test_l16_check_endpoint_accepts_host_addresses():
+    cases = [("192.168.1.5", 47474), ("127.0.0.1", 1), ("169.254.1.1", 65535), ("8.8.8.8", 47474)]
+    for ip, port in cases:
+        assert links.check_endpoint(ip, port) == (ip, port)
 
 
 _L16_BAD_IPS = [
@@ -3738,20 +3732,16 @@ _L16_BAD_IPS = [
 ]
 
 
-@pytest.mark.parametrize("ip", [v for v, _ in _L16_BAD_IPS], ids=[i for _, i in _L16_BAD_IPS])
-def test_l16_check_endpoint_rejects_bad_ip(ip):
-    with pytest.raises(ValueError):
-        links.check_endpoint(ip, 47474)
+def test_l16_check_endpoint_rejects_bad_ip():
+    for ip, _ in _L16_BAD_IPS:
+        with pytest.raises(ValueError):
+            links.check_endpoint(ip, 47474)
 
 
-@pytest.mark.parametrize(
-    "port",
-    [0, 65536, -1, True, False, 47474.0, "47474", None],
-    ids=["0", "65536", "-1", "true", "false", "float", "chuoi", "none"],
-)
-def test_l16_check_endpoint_rejects_bad_port(port):
-    with pytest.raises(ValueError):
-        links.check_endpoint("192.168.1.5", port)
+def test_l16_check_endpoint_rejects_bad_port():
+    for port in [0, 65536, -1, True, False, 47474.0, "47474", None]:
+        with pytest.raises(ValueError):
+            links.check_endpoint("192.168.1.5", port)
 
 
 def test_l16_check_endpoint_error_message_does_not_contain_value():
@@ -3886,9 +3876,8 @@ def test_l19_unreachable_hint_without_saved_keeps_hint():
 # --- L20: is_saveable ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "ip, expected",
-    [
+def test_l20_is_saveable():
+    cases = [
         ("8.8.8.8", False),
         ("1.1.1.1", False),
         ("192.168.1.5", True),
@@ -3897,11 +3886,10 @@ def test_l19_unreachable_hint_without_saved_keeps_hint():
         ("169.254.1.1", True),
         ("127.0.0.1", True),
         ("100.64.0.1", True),
-    ],
-)
-def test_l20_is_saveable(ip, expected):
-    assert links.is_saveable(ip) is expected
-    assert expected is (not ipaddress.IPv4Address(ip).is_global), "bảng tự kiểm với định nghĩa ở 10.4"
+    ]
+    for ip, expected in cases:
+        assert links.is_saveable(ip) is expected
+        assert expected is (not ipaddress.IPv4Address(ip).is_global), "bảng tự kiểm với định nghĩa ở 10.4"
 
 
 def test_l20_remember_global_address_is_refused_and_not_kept():
