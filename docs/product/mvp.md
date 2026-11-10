@@ -817,7 +817,7 @@ Rủi ro kỹ thuật và thực thi: [ke_hoach.md](ke_hoach.md) mục 8.
 |---|---|---|
 | Wi-Fi công cộng/văn phòng chặn thiết bị nói chuyện với nhau | Không dùng được ở quán cà phê, khách sạn | Phát hiện và báo rõ; gợi ý hotspot |
 | SmartScreen / antivirus cảnh báo app chưa ký; macOS Gatekeeper chặn app chưa ký (macOS 15 phải mở Cài đặt hệ thống mới chạy được) | Người dùng sợ, không cài; khó đạt mục 9.1 (≥ 90% tự cài được) | Ký mã nếu có ngân sách (ke_hoach mục 9); hướng dẫn rõ từng bước |
-| Cạnh tranh: LocalSend, KDE Connect, Nearby Share | Khó nổi bật | Tập trung vào nối lại theo khối, file cực lớn, clipboard |
+| Cạnh tranh từ các giải pháp truyền file khác | Khó nổi bật | Tập trung vào nối lại theo khối, file cực lớn, clipboard |
 | Trễ tiến độ (làm một mình) | v1.0 kéo dài | Hoãn sang sau v1.0 theo thứ tự: công cụ C++/Java → bộ cài macOS/Linux → clipboard ảnh. Không cắt nối lại/toàn vẹn (F6, F7) và an toàn khi nhận (F4). Hoãn mục nào thì sửa mục 4 và mục 12 tương ứng |
 
 ---

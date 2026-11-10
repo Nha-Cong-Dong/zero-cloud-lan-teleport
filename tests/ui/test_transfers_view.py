@@ -9,7 +9,7 @@ Spec B3 (mục 2, 9.7, 9.8): widget danh sách cũ đã gỡ; luật theo từng
 `rows()` cũ trước. Test bố cục của danh sách cũ (gợi ý rỗng, dải thông báo riêng) đã bỏ: `ChatView` dùng
 `InfoBar` (9.7) và `EmptyState` (9b.21), có test riêng trong `test_chat.py`.
 
-Đã cập nhật theo chỉnh câu chữ của điều phối (2026-10-29, kiểu AirDrop/LocalSend, thắng spec pha 1):
+Đã cập nhật theo chỉnh câu chữ của điều phối (2026-10-29, kiểu trực quan, thắng spec pha 1):
 `status_label` là nhãn ngắn (“Đang gửi”, “Đang nhận”, “Đang chờ”, “Đang nối lại…”, “Đang kiểm tra”,
 “Xong ✓”, “Lỗi”, “Đã hủy”); câu chờ cụ thể, câu lỗi mvp mục 8 và tiến độ nằm ở `detail_label`. Nhãn ngắn
 kiểm theo ý nghĩa (không so nguyên văn); câu lỗi mục 8 so nguyên văn.

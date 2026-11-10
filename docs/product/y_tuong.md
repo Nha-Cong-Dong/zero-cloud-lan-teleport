@@ -119,13 +119,13 @@ Thứ tự chính thức và các câu hỏi còn mở: [ke_hoach.md](ke_hoach.m
 
 ---
 
-## 8. Khác biệt so với giải pháp sẵn có
+## 8. Điểm mạnh và tính độc đáo
 
-Các ứng dụng gần nhất là **LocalSend**, **KDE Connect** và **Nearby Share**. Teleport không cố làm nhiều hơn, mà tập trung làm tốt hơn ở ba điểm:
+ZCL Teleport tập trung tối ưu sâu vào ba điểm cốt lõi:
 
-- **File cực lớn và rớt mạng:** nối lại theo từng khối, chỉ gửi phần thiếu, kể cả sau khi tắt app nhận; kiểm tra toàn vẹn bằng Merkle root.
-- **Clipboard chung** giữa các máy tin cậy, bật riêng từng máy.
-- **Không tài khoản, không cloud** mà vẫn chống được giả mạo nhờ ghép đôi bằng mã 6 số.
+- **File cực lớn và rớt mạng:** tự động nối lại theo từng khối, chỉ truyền tiếp phần còn thiếu, kể cả sau khi tắt ứng dụng nhận; kiểm tra toàn vẹn bằng Merkle root.
+- **Đồng bộ nội dung sao chép (Clipboard):** chia sẻ nhanh giữa các máy tin cậy, bật riêng từng máy.
+- **Không tài khoản, không trung gian qua mạng:** dữ liệu đi trực tiếp nội bộ giữa hai máy, chống giả mạo nhờ ghép đôi bằng mã 6 số.
 
 ---
 
