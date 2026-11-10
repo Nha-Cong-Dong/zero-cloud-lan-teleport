@@ -680,10 +680,11 @@ class ConversationDelegate(QStyledItemDelegate):
         painter.save()
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            presence = _role_presence(index)
             if background is not None:
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(background)
-                painter.drawRoundedRect(cell, theme.RADIUS_CARD, theme.RADIUS_CARD)
+                painter.drawRoundedRect(cell, theme.RADIUS_BLOCK, theme.RADIUS_BLOCK)
             view = widget if isinstance(widget, _ConversationView) else None
             glow = view.drop_glow(index) * _DROP_GLOW_MAX if view is not None else 0.0
             if glow > 0.0 and not selected:
@@ -691,9 +692,8 @@ class ConversationDelegate(QStyledItemDelegate):
                 overlay.setAlphaF(overlay.alphaF() * min(1.0, glow))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(overlay)
-                painter.drawRoundedRect(cell, theme.RADIUS_CARD, theme.RADIUS_CARD)
+                painter.drawRoundedRect(cell, theme.RADIUS_BLOCK, theme.RADIUS_BLOCK)
                 ring = theme.blend(ring, t.accent_subtle, glow)
-            presence = _role_presence(index)
             previous, progress = view.presence_fade(index) if view is not None else (None, 1.0)
             dpr = widget.devicePixelRatioF() if widget is not None else 1.0
             if self.compact:
@@ -705,11 +705,11 @@ class ConversationDelegate(QStyledItemDelegate):
                 pen.setStyle(Qt.PenStyle.DashLine)
                 painter.setPen(pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), theme.RADIUS_CARD, theme.RADIUS_CARD)
+                painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), theme.RADIUS_BLOCK, theme.RADIUS_BLOCK)
             elif focused:
                 painter.setPen(QPen(theme.focus_ring_color(dark), 2))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), theme.RADIUS_CARD, theme.RADIUS_CARD)
+                painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), theme.RADIUS_BLOCK, theme.RADIUS_BLOCK)
         finally:
             painter.restore()
 
@@ -761,6 +761,10 @@ class ConversationDelegate(QStyledItemDelegate):
     ) -> None:
         avatar = QRectF(rect.left() + _PADDING, rect.center().y() - AVATAR_SIZE / 2, AVATAR_SIZE, AVATAR_SIZE)
         self._avatar(painter, avatar, presence, ring, t, dpr, previous, progress)
+
+        painter.save()
+        if presence is Presence.OFFLINE and not drop_count:
+            painter.setOpacity(0.65)
 
         name_metrics = QFontMetrics(self._name_font)
         caption_metrics = QFontMetrics(self._caption_font)
@@ -820,6 +824,7 @@ class ConversationDelegate(QStyledItemDelegate):
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
             caption_metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(max(0.0, line.width()))),
         )
+        painter.restore()
 
     def _paint_compact(
         self,
@@ -944,7 +949,7 @@ class _ConversationView(QListView):
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(t.selected)
-                painter.drawRoundedRect(rect, theme.RADIUS_CARD, theme.RADIUS_CARD)
+                painter.drawRoundedRect(rect, theme.RADIUS_BLOCK, theme.RADIUS_BLOCK)
             finally:
                 painter.end()
         super().paintEvent(event)

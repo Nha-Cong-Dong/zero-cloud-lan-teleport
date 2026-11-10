@@ -671,6 +671,7 @@ def _button(parent: QWidget) -> QPushButton:
     button.setAutoDefault(False)
     button.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # Tab do `ui.chat` (roving tabindex)
     button.setVisible(False)
+    button.setProperty("bubbleAction", True)
     return button
 
 
@@ -1255,13 +1256,19 @@ class TransferBubble(_Bubble):
         self.set_emphasis(emphasis)
         if kind is Kind.DONE:
             self.status_icon.set_icon("checkmark", "success")
+            set_tone(self.status_label, "success")
         elif kind is Kind.ERROR:
             self.status_icon.set_icon("warning", "danger")
+            set_tone(self.status_label, "danger")
         elif kind is Kind.CANCELLED:
-            self.status_icon.set_icon("dismiss", "text_muted")
+            self.status_icon.set_icon("dismiss", "danger")
+            set_tone(self.status_label, "danger")
+        elif kind in (Kind.ACTIVE, Kind.RECONNECTING):
+            self.status_icon.set_icon(None)
+            set_tone(self.status_label, "accent")
         else:
             self.status_icon.set_icon(None)
-        set_tone(self.status_label, "accent" if kind in (Kind.ACTIVE, Kind.RECONNECTING) else None)
+            set_tone(self.status_label, None)
         set_tone(self.detail_label, None if kind is Kind.ERROR else "muted")
         self.status_label.setText(status)
         self.detail_label.setText(detail)
@@ -1442,12 +1449,15 @@ class HistoryBubble(_Bubble):
         if result is TransferResult.DONE:
             status = t("Chat", "Đã lưu") if self.key.direction is Direction.RECEIVE else t("Chat", "Đã gửi")
             self.status_icon.set_icon("checkmark", "success")
+            set_tone(self.status_label, "success")
         else:
             status = t("Transfers", "Lỗi") if result is None else result_status(result)
             if self.kind is Kind.ERROR:
                 self.status_icon.set_icon("warning", "danger")
+                set_tone(self.status_label, "danger")
             else:
-                self.status_icon.set_icon("dismiss", "text_muted")
+                self.status_icon.set_icon("dismiss", "danger")
+                set_tone(self.status_label, "danger")
         self.status_label.setText(status)
         self.detail_label.setVisible(False)
         open_text = t("Chat", "Hiện trong thư mục")

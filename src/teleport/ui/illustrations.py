@@ -284,8 +284,29 @@ def _paint_not_paired(painter: QPainter, t: theme.Tokens, p: float) -> None:
     if plus > 0:
         with _Layer(painter, plus, 0.0, 1.0):
             center = QPointF(80.0, y)
-            painter.setPen(_pen(t.accent_strong, 2.0))
+            # Biểu trưng tai mèo cách điệu từ Logo Teleport
+            ear_l = QPainterPath()
+            ear_l.moveTo(center.x() - 8.0, center.y() - 6.0)
+            ear_l.lineTo(center.x() - 6.0, center.y() - 13.0)
+            ear_l.lineTo(center.x() - 3.0, center.y() - 9.0)
+            ear_r = QPainterPath()
+            ear_r.moveTo(center.x() + 3.0, center.y() - 9.0)
+            ear_r.lineTo(center.x() + 6.0, center.y() - 13.0)
+            ear_r.lineTo(center.x() + 8.0, center.y() - 6.0)
+            painter.setPen(_pen(t.accent_strong, 1.8))
             painter.setBrush(t.surface_raised)
+            painter.drawPath(ear_l)
+            painter.drawPath(ear_r)
+
+            # Sóng tín hiệu tai phải từ Logo Teleport
+            wave = QPainterPath()
+            wave.arcMoveTo(QRectF(center.x() + 4.0, center.y() - 18.0, 8.0, 8.0), 30.0)
+            wave.arcTo(QRectF(center.x() + 4.0, center.y() - 18.0, 8.0, 8.0), 30.0, 75.0)
+            painter.setPen(_pen(t.danger, 1.8))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(wave)
+
+            painter.setPen(_pen(t.accent_strong, 2.0))
             painter.drawEllipse(center, 10.0, 10.0)
             arm = 4.5
             painter.drawLine(QPointF(center.x() - arm, center.y()), QPointF(center.x() + arm, center.y()))

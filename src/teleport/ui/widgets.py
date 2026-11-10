@@ -1316,6 +1316,7 @@ class EmptyState(QWidget):
             label.setTextInteractionFlags(_TEXT_FLAGS)
             label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.action_button = AnimatedButton("", self.content, primary=True)
+        self.action_button.setObjectName("emptyActionButton")
         self.action_button.setProperty(theme.PRIMARY_PROPERTY, True)
         self.action_button.clicked.connect(self.action_triggered)
 
