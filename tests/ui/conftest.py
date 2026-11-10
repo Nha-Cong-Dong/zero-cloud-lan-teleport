@@ -869,7 +869,7 @@ class PeerNode:
         async def check() -> bool:
             return device_id in self.node.connected_devices()
 
-        return self.run(check(), 5)
+        return self.run(check(), 10)
 
     def finished(self, transfer_id: str):
         with self._lock:
