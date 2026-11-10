@@ -194,23 +194,23 @@ class Tokens:
 # (sáng, tối) cho từng token trung tính; cùng `_ACCENTS[mã]`, thiếu hay thừa tên so với `Tokens` thì
 # `tokens()` ném TypeError.
 _TOKENS: dict[str, tuple[str, str]] = {
-    "surface": ("#FBF6EC", "#1E1A16"),
-    "surface_raised": ("#FFFDF8", "#2D2721"),
-    "sidebar": ("#F3EBDC", "#25201B"),
-    "selected": ("#E9DFCB", "#3A3229"),
-    "border": ("#E2D6C2", "#3D352C"),
-    "border_strong": ("#8C7B62", "#857761"),
-    "text": ("#2A251E", "#F2EBDF"),
-    "text_muted": ("#665B4D", "#B8AC9A"),
-    "bubble_in": ("#FFFDF8", "#2D2721"),
-    "track": ("#E7DECD", "#3D352C"),
-    "offline": ("#897E6F", "#9A8E7D"),
-    "success": ("#256B42", "#6CD49A"),
-    "success_bg": ("#E1F1E6", "#1F3A2A"),
-    "warning": ("#8A5A00", "#F0C46C"),
-    "warning_bg": ("#FBEFD5", "#45381F"),
-    "danger": ("#A8361F", "#F2A38C"),
-    "danger_bg": ("#FBE6DD", "#4A2A22"),
+    "surface": ("#FAF7F2", "#1E1F2C"),
+    "surface_raised": ("#FFFFFF", "#27293A"),
+    "sidebar": ("#F4EFEA", "#181924"),
+    "selected": ("#E8E0D5", "#35384D"),
+    "border": ("#E6DFD5", "#3A3D54"),
+    "border_strong": ("#786958", "#7E84A8"),
+    "text": ("#241E1A", "#F5ECE0"),
+    "text_muted": ("#665B4E", "#B2B8CE"),
+    "bubble_in": ("#FFFFFF", "#27293A"),
+    "track": ("#E8E0D5", "#3A3D54"),
+    "offline": ("#75685B", "#8E96B0"),
+    "success": ("#1B6E4E", "#85EDCA"),
+    "success_bg": ("#E5F8F0", "#1B3B2E"),
+    "warning": ("#8A5A00", "#F3C77C"),
+    "warning_bg": ("#FBEFD5", "#3D3019"),
+    "danger": ("#B5384D", "#FDAAB3"),
+    "danger_bg": ("#FDECEE", "#422329"),
 }
 
 # Bảy token nhấn (sáng, tối) của từng bộ màu nhấn, theo bảng spec D6 mục 2.3; `bubble_out` =
@@ -537,6 +537,25 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f"{icon_button}:focus {{ border-color: {ring}; }}",
         f"{icon_button}:disabled {{ color: {t.text_muted.name()}; }}",
         f"{icon_button}::menu-indicator {{ image: none; width: 0px; }}",
+        f'QToolButton#addDeviceButton {{ background: transparent; border: 1px solid {t.border_strong.name()};'
+        f' border-radius: {RADIUS_BLOCK}px; padding: 2px 4px; color: {t.text.name()}; }}',
+        f'QToolButton#addDeviceButton:hover {{ background: {t.selected.name()}; border-color: {edge}; }}',
+        f'QToolButton#addDeviceButton:pressed {{ background: {t.border.name()}; }}',
+        f'QToolButton#addDeviceButton:focus {{ border-color: {ring}; }}',
+        f'QPushButton[bubbleAction="true"] {{ background: transparent; border: 1px solid {t.border.name()};'
+        f' border-radius: {RADIUS_CONTROL}px; padding: 2px 10px; color: {t.text.name()}; }}',
+        f'QPushButton[bubbleAction="true"]:hover {{ background: {t.selected.name()}; border-color: {t.border_strong.name()}; }}',
+        f'QPushButton[bubbleAction="true"]:pressed {{ background: {t.border.name()}; }}',
+        f'QPushButton[bubbleAction="true"]:focus {{ border-color: {ring}; }}',
+        f'#emptyActionButton {{ background-color: {colors["normal"][1].name()}; color: {colors["normal"][0].name()};'
+        f' border: 2px solid {edge}; border-radius: 18px; padding: 6px 24px; font-weight: 600; }}',
+        f'#emptyActionButton:hover {{ background-color: {colors["hover"][1].name()}; border-color: {ring}; }}',
+        f'#emptyActionButton:pressed {{ background-color: {colors["pressed"][1].name()}; }}',
+        f'QToolButton#chatSendButton {{ background: {colors["normal"][1].name()}; color: {colors["normal"][0].name()};'
+        f' border: 2px solid {edge}; border-radius: {RADIUS_BLOCK}px; padding: 4px 14px; font-weight: 600; }}',
+        f'QToolButton#chatSendButton:hover {{ background: {colors["hover"][1].name()}; }}',
+        f'QToolButton#chatSendButton:pressed {{ background: {colors["pressed"][1].name()}; }}',
+        f'QToolButton#chatSendButton:focus {{ border-color: {ring}; }}',
     ]
     tones = {
         "muted": t.text_muted,
