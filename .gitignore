@@ -23,8 +23,16 @@ desktop.ini
 .vscode/
 .idea/
 
-# Cấu hình AI Assistant cục bộ
+# Cấu hình AI Assistant & Subagents
+gemini.md
+GEMINI.md
+CLAUDE.md
+AGENTS.md
 .gemini/
+.claude/
+.agent/
+.agents/
+agents/
 subagents/
-.claude/settings.local.json
-.claude/worktrees/
+*.agent.md
+scratch/
