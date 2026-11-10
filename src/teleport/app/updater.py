@@ -248,13 +248,15 @@ def apply_update_installer(
     launch = launcher or _launcher
     cmd = [str(installer_path)]
     if silent and installer_path.suffix.lower() == ".exe":
-        cmd.extend([
-            "/VERYSILENT",
-            "/SUPPRESSMSGBOXES",
-            "/NORESTART",
-            "/CLOSEAPPLICATIONS",
-            "/RESTARTAPPLICATIONS",
-        ])
+        cmd.extend(
+            [
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART",
+                "/CLOSEAPPLICATIONS",
+                "/RESTARTAPPLICATIONS",
+            ]
+        )
 
     try:
         return launch(cmd)
