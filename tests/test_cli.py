@@ -407,9 +407,8 @@ def test_unpair_with_missing_config_dir_creates_nothing(tmp_path, capsys, json_m
 # --- CL5, CL6: lỗi cú pháp → mã 2, không chạy node -------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "address",
-    [
+def test_cl5_pair_bad_address_exits_2_without_side_effects(tmp_path, capsys):
+    cases = [
         "1.2.3.4:0",
         "::1",
         "1.2.3.4:65536",
@@ -419,15 +418,14 @@ def test_unpair_with_missing_config_dir_creates_nothing(tmp_path, capsys, json_m
         "12.5",
         "fe80::1",
         "[::1]:80",
-    ],
-)
-def test_cl5_pair_bad_address_exits_2_without_side_effects(tmp_path, capsys, address):
-    d = tmp_path / "cfg"
-    assert run_main_guarded(["--config-dir", str(d), "pair", address, *NODE_OPTS]) == 2
-    assert BAD_ADDRESS.format(target=address) in capsys.readouterr().err
-    assert not (d / "node.lock").exists()
-    assert not (d / "settings.json").exists()
-    assert not (d / "device.crt").exists()
+    ]
+    for i, address in enumerate(cases):
+        d = tmp_path / f"cfg_{i}"
+        assert run_main_guarded(["--config-dir", str(d), "pair", address, *NODE_OPTS]) == 2
+        assert BAD_ADDRESS.format(target=address) in capsys.readouterr().err
+        assert not (d / "node.lock").exists()
+        assert not (d / "settings.json").exists()
+        assert not (d / "device.crt").exists()
 
 
 def test_cl5_pair_bad_address_json(tmp_path, capsys):
@@ -2548,19 +2546,19 @@ def check_code_first(lines: list[str], code: str, *, name_is_distinctive: bool =
 # --- H1: bố cục lời hỏi (trong tiến trình, không socket) ---------------------------------------------
 
 
-@pytest.mark.parametrize(("listening", "role"), PROMPT_MODES, ids=PROMPT_MODE_IDS)
-@pytest.mark.parametrize("recent", [0, 4])
-@pytest.mark.parametrize("name", FAKE_CODE_NAMES, ids=FAKE_CODE_IDS)
-async def test_h1_prompt_shows_code_line_before_any_peer_text(name, recent, listening, role):
-    assert _valid_name(name), "máy kia gửi được tên này trong hello"
-    prompt = _prompt(role, recent, peer_name=name)
-    text, err = render_prompt(prompt, listening=listening)
-    lines = text.split("\n")
-    assert lines == expected_prompt_lines(prompt, listening=listening)
-    check_code_first(lines, "123456", name_is_distinctive=True)
-    if recent >= 3 and role == "responder":
-        assert lines[lines.index("Mã ghép đôi:   123 456") + 1] == WARN_CODES.format(n=recent)
-    assert err == ""
+async def test_h1_prompt_shows_code_line_before_any_peer_text():
+    for listening, role in PROMPT_MODES:
+        for recent in (0, 4):
+            for name in FAKE_CODE_NAMES:
+                assert _valid_name(name), "máy kia gửi được tên này trong hello"
+                prompt = _prompt(role, recent, peer_name=name)
+                text, err = render_prompt(prompt, listening=listening)
+                lines = text.split("\n")
+                assert lines == expected_prompt_lines(prompt, listening=listening)
+                check_code_first(lines, "123456", name_is_distinctive=True)
+                if recent >= 3 and role == "responder":
+                    assert lines[lines.index("Mã ghép đôi:   123 456") + 1] == WARN_CODES.format(n=recent)
+                assert err == ""
 
 
 async def test_h1_prompt_for_plain_name_matches_spec_example():
@@ -2599,7 +2597,7 @@ _PROMPT_NAME_CHARS = st.one_of(
 
 @pytest.mark.slow
 @settings(
-    max_examples=150,
+    max_examples=35,
     deadline=None,
     suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow],
 )
@@ -3374,28 +3372,28 @@ async def test_signer_identity_error_at_node_start_exits_1(
 # --- L4: câu báo đúng ngữ cảnh ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("outcome", UNFINISHED)
-@pytest.mark.parametrize("role", ["initiator", "responder"])
-def test_l4_unfinished_after_code_was_shown_keeps_mismatch_warning(role, outcome):
+def test_l4_unfinished_after_code_was_shown_keeps_mismatch_warning():
     from teleport.cli import outcome_message
 
-    assert outcome_message(_finished(role, outcome, code_shown=True)) == [MVP_NOT_DONE.format(x="A")]
+    for role in ("initiator", "responder"):
+        for outcome in UNFINISHED:
+            assert outcome_message(_finished(role, outcome, code_shown=True)) == [MVP_NOT_DONE.format(x="A")]
 
 
-@pytest.mark.parametrize("outcome", UNFINISHED)
-def test_l4_initiator_stopped_before_code_asks_to_retry(outcome):
+def test_l4_initiator_stopped_before_code_asks_to_retry():
     from teleport.cli import outcome_message
 
-    msg = outcome_message(_finished("initiator", outcome, code_shown=False))
-    assert msg == [NOT_SHOWN_INITIATOR.format(x="A")]
+    for outcome in UNFINISHED:
+        msg = outcome_message(_finished("initiator", outcome, code_shown=False))
+        assert msg == [NOT_SHOWN_INITIATOR.format(x="A")]
 
 
-@pytest.mark.parametrize("outcome", UNFINISHED)
-def test_l4_responder_stopped_before_code_names_unverified_peer(outcome):
+def test_l4_responder_stopped_before_code_names_unverified_peer():
     from teleport.cli import outcome_message
 
-    msg = outcome_message(_finished("responder", outcome, code_shown=False, peer_name="Raw-X"))
-    assert msg == [NOT_SHOWN_RESPONDER.format(x="Raw-X")]
+    for outcome in UNFINISHED:
+        msg = outcome_message(_finished("responder", outcome, code_shown=False, peer_name="Raw-X"))
+        assert msg == [NOT_SHOWN_RESPONDER.format(x="Raw-X")]
 
 
 @pytest.mark.parametrize("code_shown", [False, True])

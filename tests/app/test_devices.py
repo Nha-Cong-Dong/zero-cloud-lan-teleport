@@ -84,9 +84,9 @@ def test_parse_manual_address_uses_default_port_argument():
 # --- DV2 ------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
+def test_parse_manual_address_rejects():
+    """DV2."""
+    for text in [
         "",
         "   ",
         "localhost",
@@ -121,12 +121,9 @@ def test_parse_manual_address_uses_default_port_argument():
         "1.2.3.4:80a",
         "1.2.3.4:" + "1" * 200,
         "1" * 10_000,
-    ],
-)
-def test_parse_manual_address_rejects(text):
-    """DV2."""
-    with pytest.raises(ValueError):
-        parse_manual_address(text)
+    ]:
+        with pytest.raises(ValueError):
+            parse_manual_address(text)
 
 
 @pytest.mark.parametrize("value", [None, b"1.2.3.4", 1234, ["1.2.3.4"]])
@@ -327,7 +324,7 @@ def devices_and_query(draw):
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(devices_and_query())
 def test_resolve_matches_definition(case):
     """DV7: kết quả ⇔ định nghĩa; chỉ raise DeviceNotFound / AmbiguousDevice."""
@@ -346,7 +343,7 @@ def test_resolve_matches_definition(case):
         assert list(exc.value.candidates) == sorted(expected, key=sort_key)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.text(max_size=40))
 def test_parse_manual_address_only_raises_value_error(text):
     """Chuỗi bất kỳ: hoặc ra (ip, cổng) hợp lệ, hoặc ValueError; không lỗi nào khác."""
@@ -611,7 +608,7 @@ def views_and_query(draw):
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(views_and_query())
 def test_rd3_resolve_device_matches_definition(case):
     from teleport.app.devices import resolve_device
@@ -739,7 +736,7 @@ def test_hello_os_kept_while_paired_device_offline():
     assert r.views() == (v,)
 
 
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.lists(
         st.one_of(

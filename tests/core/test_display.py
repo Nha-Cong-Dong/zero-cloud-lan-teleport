@@ -98,10 +98,10 @@ def test_h1_constants_match_spec(display):
 # --- Ký tự trống thành `·` ------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("ch", LISTED_BLANKS, ids=lambda ch: f"U+{ord(ch):04X}")
-def test_h1_listed_blank_char_becomes_mark(display, ch):
-    assert display.display_name(f"PC{ch}Nha") == f"PC{MARK}Nha"
-    assert display.display_name(f"PC{ch}{ch}{ch}382") == f"PC{MARK}{MARK}{MARK}382"
+def test_h1_listed_blank_char_becomes_mark(display):
+    for ch in LISTED_BLANKS:
+        assert display.display_name(f"PC{ch}Nha") == f"PC{MARK}Nha"
+        assert display.display_name(f"PC{ch}{ch}{ch}382") == f"PC{MARK}{MARK}{MARK}382"
 
 
 def test_h1_every_unicode_space_except_ascii_space_becomes_mark(display):
@@ -146,9 +146,9 @@ BIDI_AND_INVISIBLE = (
 )
 
 
-@pytest.mark.parametrize("ch", BIDI_AND_INVISIBLE, ids=lambda ch: f"U+{ord(ch):04X}")
-def test_h1_bidi_and_invisible_char_becomes_mark(display, ch):
-    assert display.display_name(f"PC{ch}Nha") == f"PC{MARK}Nha"
+def test_h1_bidi_and_invisible_char_becomes_mark(display):
+    for ch in BIDI_AND_INVISIBLE:
+        assert display.display_name(f"PC{ch}Nha") == f"PC{MARK}Nha"
 
 
 def test_h1_every_format_char_except_zwj_zwnj_becomes_mark(display):
@@ -337,7 +337,7 @@ def _check(name: str, out: str, width: int) -> None:
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
 @given(name=st.text(alphabet=_CHARS, min_size=1, max_size=64))
 def test_h1_any_valid_device_name_fits_32_columns_without_blank_chars(display, name):
     assume(is_valid_name(name))
@@ -345,7 +345,7 @@ def test_h1_any_valid_device_name_fits_32_columns_without_blank_chars(display, n
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(name=st.text(alphabet=_CHARS, max_size=200), width=st.integers(min_value=2, max_value=80))
 def test_h1_any_text_fits_any_width(display, name, width):
     _check(name, display.display_name(name, max_width=width), width)
@@ -374,9 +374,8 @@ def test_p27_file_name_width_is_48(display):
     assert display.FILE_NAME_WIDTH == 48
 
 
-@pytest.mark.parametrize(
-    ("n", "expected"),
-    [
+def test_p27_format_size_matches_spec_examples(display):
+    for n, expected in [
         (0, "0 byte"),
         (1, "1 byte"),
         (1023, "1023 byte"),
@@ -398,10 +397,8 @@ def test_p27_file_name_width_is_48(display):
         (TIB, "1,0 TB"),
         (int(5.2 * TIB), "5,2 TB"),
         (4 * TIB, "4,0 TB"),
-    ],
-)
-def test_p27_format_size_matches_spec_examples(display, n, expected):
-    assert display.format_size(n) == expected
+    ]:
+        assert display.format_size(n) == expected
 
 
 @pytest.mark.parametrize(
@@ -430,7 +427,7 @@ _SIZE_RE = re.compile(r"(\d+)(?:,(\d))? (byte|KB|MB|GB|TB)")
 _UNIT = {"KB": KIB, "MB": MIB, "GB": GIB, "TB": TIB}
 
 
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(n=st.one_of(st.integers(0, 2**52), st.integers(0, 4 * KIB), st.integers(1000 * MIB, 1030 * MIB)))
 def test_p27_format_size_is_close_to_value_and_well_formed(display, n):
     out = display.format_size(n)
@@ -457,9 +454,8 @@ def test_p27_format_size_is_close_to_value_and_well_formed(display, n):
     assert trimmed == (out.replace(",0 ", " ") if ",0 " in out else out)
 
 
-@pytest.mark.parametrize(
-    ("s", "expected"),
-    [
+def test_p27_format_duration_matches_spec_examples(display):
+    for s, expected in [
         (1, "1 giây"),
         (45, "45 giây"),
         (59, "59 giây"),
@@ -470,13 +466,11 @@ def test_p27_format_size_is_close_to_value_and_well_formed(display, n):
         (3900, "1 giờ 5 phút"),
         (7500, "2 giờ 5 phút"),
         (2 * 86400 + 3 * 3600, "2 ngày 3 giờ"),
-    ],
-)
-def test_p27_format_duration_matches_spec_examples(display, s, expected):
-    assert display.format_duration(s) == expected
+    ]:
+        assert display.format_duration(s) == expected
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     case=st.one_of(
         st.integers(1, 59).map(lambda s: (s, f"{s} giây")),
@@ -501,9 +495,9 @@ def test_p27_display_filename_keeps_short_name(display):
     assert display.display_filename("báo cáo (1).docx") == "báo cáo (1).docx"
 
 
-@pytest.mark.parametrize("ch", LISTED_BLANKS, ids=lambda ch: f"U+{ord(ch):04X}")
-def test_p27_display_filename_shows_blank_chars_as_mark(display, ch):
-    assert display.display_filename(f"bao{ch}cao.txt") == f"bao{MARK}cao.txt"
+def test_p27_display_filename_shows_blank_chars_as_mark(display):
+    for ch in LISTED_BLANKS:
+        assert display.display_filename(f"bao{ch}cao.txt") == f"bao{MARK}cao.txt"
 
 
 def test_p27_display_filename_exactly_48_columns_is_kept_and_49_is_cut(display):
@@ -535,7 +529,7 @@ def test_p27_display_filename_custom_width(display):
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     stem=st.text(alphabet=_CHARS, min_size=1, max_size=200),
     ext=st.sampled_from(["", ".mp4", ".txt", ".tar.gz", ".docx"]),

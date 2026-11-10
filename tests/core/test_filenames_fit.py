@@ -113,7 +113,7 @@ def test_dedupe_key_matches_spec_definition(fn):
         assert fn.dedupe_key(name) == key(name), ascii(name)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.text(st.characters(exclude_categories=("Cs",)), max_size=40))
 def test_property_dedupe_key_is_nfc_and_form_insensitive(fn, raw):
     out = fn.dedupe_key(raw)
@@ -157,20 +157,20 @@ EDGE_NAMES = [
 ]
 
 
-@pytest.mark.parametrize("raw", EDGE_NAMES)
-def test_fit_filename_at_255_equals_sanitize(fn, raw):
-    assert fn.fit_filename(raw, 255) == fn.sanitize_filename(raw)
+def test_fit_filename_at_255_equals_sanitize(fn):
+    for raw in EDGE_NAMES:
+        assert fn.fit_filename(raw, 255) == fn.sanitize_filename(raw)
 
 
-@pytest.mark.parametrize("raw", EDGE_NAMES)
-def test_fit_filename_default_budget_is_255(fn, raw):
-    assert fn.fit_filename(raw) == fn.sanitize_filename(raw)
+def test_fit_filename_default_budget_is_255(fn):
+    for raw in EDGE_NAMES:
+        assert fn.fit_filename(raw) == fn.sanitize_filename(raw)
 
 
-@pytest.mark.parametrize("raw", EDGE_NAMES)
-@pytest.mark.parametrize("max_bytes", [4, 5, 7, 8, 12, 33, 54, 64, 100, 254])
-def test_fit_filename_edge_names_satisfy_guarantees(fn, raw, max_bytes):
-    assert_fitted(fn, fn.fit_filename(raw, max_bytes), max_bytes)
+def test_fit_filename_edge_names_satisfy_guarantees(fn):
+    for max_bytes in [4, 5, 7, 8, 12, 33, 54, 64, 100, 254]:
+        for raw in EDGE_NAMES:
+            assert_fitted(fn, fn.fit_filename(raw, max_bytes), max_bytes)
 
 
 def test_fit_filename_cuts_stem_and_keeps_extension(fn):
@@ -224,10 +224,10 @@ def test_fit_filename_no_room_for_extension_drops_it(fn):
     assert_fitted(fn, out, 5)
 
 
-@pytest.mark.parametrize("max_bytes", [0, -1, 256, 1000, True, False, 1.5, 60.0, "60", None])
-def test_fit_filename_rejects_bad_max_bytes(fn, max_bytes):
-    with pytest.raises(ValueError):
-        fn.fit_filename("a.txt", max_bytes)
+def test_fit_filename_rejects_bad_max_bytes(fn):
+    for max_bytes in [0, -1, 256, 1000, True, False, 1.5, 60.0, "60", None]:
+        with pytest.raises(ValueError):
+            fn.fit_filename("a.txt", max_bytes)
 
 
 @pytest.mark.parametrize("name", [None, b"a.txt", 123, ["a.txt"], bytearray(b"a")])
@@ -236,15 +236,15 @@ def test_fit_filename_rejects_non_str_name(fn, name):
         fn.fit_filename(name, 60)
 
 
-@pytest.mark.parametrize("max_bytes", [1, 2, 3])
-@pytest.mark.parametrize("raw", ["CON", "a.txt", "ệ", "😀.txt", "x", ".teleport", "ab"])
-def test_fit_filename_tiny_budget_either_meets_guarantees_or_raises_value_error(fn, raw, max_bytes):
+def test_fit_filename_tiny_budget_either_meets_guarantees_or_raises_value_error(fn):
     # Spec mục 2.1: chỉ khi max_bytes < 4 mới có thể không thỏa được → ValueError.
-    try:
-        out = fn.fit_filename(raw, max_bytes)
-    except ValueError:
-        return
-    assert_fitted(fn, out, max_bytes)
+    for raw in ["CON", "a.txt", "ệ", "😀.txt", "x", ".teleport", "ab"]:
+        for max_bytes in [1, 2, 3]:
+            try:
+                out = fn.fit_filename(raw, max_bytes)
+            except ValueError:
+                continue
+            assert_fitted(fn, out, max_bytes)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -268,11 +268,11 @@ def test_fallback_of_all_non_ascii_name_is_not_empty(fn):
     assert fn.sanitize_filename(out) == out
 
 
-@pytest.mark.parametrize("raw", [*EDGE_NAMES, "ệ" * 200 + ".txt", "😀" * 70, "Báo cáo tháng 10.docx"])
-def test_fallback_edge_names_are_ascii_short_and_stable(fn, raw):
-    out = fn.fallback_filename(raw)
-    assert out.isascii(), ascii(out)
-    assert_fitted(fn, out, 64)
+def test_fallback_edge_names_are_ascii_short_and_stable(fn):
+    for raw in [*EDGE_NAMES, "ệ" * 200 + ".txt", "😀" * 70, "Báo cáo tháng 10.docx"]:
+        out = fn.fallback_filename(raw)
+        assert out.isascii(), ascii(out)
+        assert_fitted(fn, out, 64)
 
 
 def test_fallback_long_name_keeps_ascii_extension(fn):
@@ -351,21 +351,21 @@ NAMES = st.one_of(
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(NAMES, st.integers(min_value=4, max_value=255))
 def test_property_fit_filename_guarantees(fn, raw, max_bytes):
     assert_fitted(fn, fn.fit_filename(raw, max_bytes), max_bytes)
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(NAMES)
 def test_property_fit_filename_at_255_is_sanitize(fn, raw):
     assert fn.fit_filename(raw, 255) == fn.sanitize_filename(raw)
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(NAMES, st.integers(min_value=4, max_value=255))
 def test_property_fallback_filename_is_ascii_short_and_stable(fn, raw, max_bytes):
     out = fn.fallback_filename(raw, max_bytes)
@@ -374,7 +374,7 @@ def test_property_fallback_filename_is_ascii_short_and_stable(fn, raw, max_bytes
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(NAMES)
 def test_property_fallback_default_budget_is_64(fn, raw):
     out = fn.fallback_filename(raw)

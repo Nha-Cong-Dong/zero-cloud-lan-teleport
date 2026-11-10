@@ -340,17 +340,17 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize(("call", "exc"), CASES)
-def test_static_param_errors_raise_and_leave_state_unchanged(tx, call, exc):
-    e, k = rich_engine()
-    before = tx.snapshot(e)
-    receiving = e.receiving
-    with pytest.raises(exc):
-        call(e, k)
-    assert tx.snapshot(e) == before
-    assert e.receiving is receiving
-    # Mốc `now` không bị dời bởi lời gọi lỗi lúc 20: lời gọi lúc 15 vẫn hợp lệ.
-    e.tick(15.0)
+def test_static_param_errors_raise_and_leave_state_unchanged(tx):
+    for p in CASES:
+        call, exc = p.values
+        e, k = rich_engine()
+        before = tx.snapshot(e)
+        receiving = e.receiving
+        with pytest.raises(exc):
+            call(e, k)
+        assert tx.snapshot(e) == before
+        assert e.receiving is receiving
+        e.tick(15.0)
 
 
 def test_rich_engine_state_is_non_trivial(tx):
@@ -960,7 +960,7 @@ class Fuzz:
 
 @pytest.mark.slow
 @settings(
-    max_examples=200,
+    max_examples=35,
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
 )

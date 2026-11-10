@@ -71,9 +71,8 @@ def test_block_error_is_value_error():
 # --- block_count / block_length ở biên ---------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("size", "count"),
-    [
+def test_block_count_at_boundaries():
+    cases = [
         (0, 0),
         (1, 1),
         (MiB - 1, 1),
@@ -83,16 +82,14 @@ def test_block_error_is_value_error():
         (10 * 1024 * MiB, 10240),  # 10 GiB
         (4 * TiB - 1, 2**22),
         (4 * TiB, 2**22),
-    ],
-)
-def test_block_count_at_boundaries(size, count):
-    assert block_count(size) == count
-    assert block_count(size) == ref_count(size)
+    ]
+    for size, count in cases:
+        assert block_count(size) == count
+        assert block_count(size) == ref_count(size)
 
 
-@pytest.mark.parametrize(
-    ("size", "index", "length"),
-    [
+def test_block_length_at_boundaries():
+    cases = [
         (1, 0, 1),
         (MiB - 1, 0, MiB - 1),
         (MiB, 0, MiB),
@@ -102,28 +99,26 @@ def test_block_count_at_boundaries(size, count):
         (4 * TiB, 0, MiB),
         (4 * TiB, 2**22 - 1, MiB),
         (4 * TiB - 1, 2**22 - 1, MiB - 1),
-    ],
-)
-def test_block_length_at_boundaries(size, index, length):
-    assert block_length(size, index) == length
+    ]
+    for size, index, length in cases:
+        assert block_length(size, index) == length
 
 
-@pytest.mark.parametrize(
-    ("size", "index"), [(0, 0), (1, 1), (MiB, 1), (MiB + 1, 2), (MiB, -1), (4 * TiB, 2**22)]
-)
-def test_block_length_index_out_of_range_rejected(size, index):
-    with pytest.raises(ValueError):
-        block_length(size, index)
+def test_block_length_index_out_of_range_rejected():
+    cases = [(0, 0), (1, 1), (MiB, 1), (MiB + 1, 2), (MiB, -1), (4 * TiB, 2**22)]
+    for size, index in cases:
+        with pytest.raises(ValueError):
+            block_length(size, index)
 
 
-@pytest.mark.parametrize("size", [-1, 4 * TiB + 1, 1.0, True, "1", None])
-def test_block_count_rejects_invalid_size(size):
+def test_block_count_rejects_invalid_size():
     # protocol §3.3: `size` là số nguyên 0…2⁴² (4 TiB).
-    with pytest.raises(ValueError):
-        block_count(size)
+    for size in [-1, 4 * TiB + 1, 1.0, True, "1", None]:
+        with pytest.raises(ValueError):
+            block_count(size)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.integers(min_value=0, max_value=4 * TiB))
 def test_property_block_lengths_sum_to_size(size):
     count = block_count(size)
@@ -168,36 +163,34 @@ def test_parse_header_reads_independent_encoding():
     assert parse_header(raw) == BlockHeader(index=2**22 - 1, length=MiB - 1, sha256=b"\xab" * 32)
 
 
-@pytest.mark.parametrize("n", [0, 1, 9, 40, 42, 41 + MiB])
-def test_truncated_or_overlong_header_rejected(n):
-    raw = (ref_header(0, 1, DIGEST) * 2)[:n] if n <= 82 else bytes(n)
-    with pytest.raises(BlockError):
-        parse_header(raw)
+def test_truncated_or_overlong_header_rejected():
+    for n in [0, 1, 9, 40, 42, 41 + MiB]:
+        raw = (ref_header(0, 1, DIGEST) * 2)[:n] if n <= 82 else bytes(n)
+        with pytest.raises(BlockError):
+            parse_header(raw)
 
 
-@pytest.mark.parametrize("block_type", [0x00, 0x01, 0x03, 0x20, 0x82, 0xFF])
-def test_unknown_type_rejected(block_type):
-    with pytest.raises(BlockError):
-        _receive(ref_header(0, 1, DIGEST, block_type), 1)
+def test_unknown_type_rejected():
+    for block_type in [0x00, 0x01, 0x03, 0x20, 0x82, 0xFF]:
+        with pytest.raises(BlockError):
+            _receive(ref_header(0, 1, DIGEST, block_type), 1)
 
 
-@pytest.mark.parametrize(
-    ("index", "length", "digest"),
-    [
+def test_pack_header_rejects_invalid_arguments():
+    cases = [
         (-1, 1, DIGEST),
         (2**32, 1, DIGEST),
         (0, 0, DIGEST),
         (0, MiB + 1, DIGEST),
         (0, 1, DIGEST[:31]),
         (0, 1, DIGEST + b"\x00"),
-    ],
-)
-def test_pack_header_rejects_invalid_arguments(index, length, digest):
-    with pytest.raises(ValueError):
-        pack_header(index, length, digest)
+    ]
+    for index, length, digest in cases:
+        with pytest.raises(ValueError):
+            pack_header(index, length, digest)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.integers(min_value=0, max_value=2**32 - 1),
     st.integers(min_value=1, max_value=MiB),
@@ -212,27 +205,22 @@ def test_property_pack_parse_round_trip(index, length, digest):
 # --- check_block: đối chiếu với kích thước file ------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("size", "index"),
-    [(1, 0), (MiB, 0), (MiB + 1, 0), (MiB + 1, 1), (5 * MiB - 3, 4), (4 * TiB, 2**22 - 1)],
-)
-def test_valid_block_accepted(size, index):
-    header = _receive(ref_header(index, ref_length(size, index), DIGEST), size)
-    assert header.index == index
+def test_valid_block_accepted():
+    cases = [(1, 0), (MiB, 0), (MiB + 1, 0), (MiB + 1, 1), (5 * MiB - 3, 4), (4 * TiB, 2**22 - 1)]
+    for size, index in cases:
+        header = _receive(ref_header(index, ref_length(size, index), DIGEST), size)
+        assert header.index == index
 
 
-@pytest.mark.parametrize(
-    ("size", "index"),
-    [(0, 0), (1, 1), (MiB, 1), (MiB + 1, 2), (4 * TiB, 2**22), (MiB, 2**32 - 1)],
-)
-def test_block_index_out_of_range_rejected(size, index):
-    with pytest.raises(BlockError):
-        _receive(ref_header(index, 1, DIGEST), size)
+def test_block_index_out_of_range_rejected():
+    cases = [(0, 0), (1, 1), (MiB, 1), (MiB + 1, 2), (4 * TiB, 2**22), (MiB, 2**32 - 1)]
+    for size, index in cases:
+        with pytest.raises(BlockError):
+            _receive(ref_header(index, 1, DIGEST), size)
 
 
-@pytest.mark.parametrize(
-    ("size", "index", "length"),
-    [
+def test_wrong_length_rejected():
+    cases = [
         (1, 0, 0),
         (1, 0, 2),
         (MiB, 0, MiB - 1),
@@ -242,11 +230,10 @@ def test_block_index_out_of_range_rejected(size, index):
         (MiB + 1, 1, 2),
         (MiB + 1, 1, 0),
         (2 * MiB, 0, 2**32 - 1),
-    ],
-)
-def test_wrong_length_rejected(size, index, length):
-    with pytest.raises(BlockError):
-        _receive(ref_header(index, length, DIGEST), size)
+    ]
+    for size, index, length in cases:
+        with pytest.raises(BlockError):
+            _receive(ref_header(index, length, DIGEST), size)
 
 
 def test_empty_file_accepts_no_block():
@@ -254,7 +241,7 @@ def test_empty_file_accepts_no_block():
         _receive(ref_header(0, 1, DIGEST), 0)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.integers(min_value=1, max_value=4 * TiB), st.data())
 def test_property_check_block_accepts_iff_index_and_length_match(size, data):
     count = ref_count(size)

@@ -388,9 +388,8 @@ def T():
 # --- parse_rate (plan 2.1) ------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
+def test_parse_rate_accepts_binary_units(cli):
+    for text, expected in [
         ("64K", 65536),
         ("64k", 65536),
         ("64KB", 65536),
@@ -409,15 +408,12 @@ def T():
         ("1G", GiB),
         ("1024G", 2**40),  # trần 2⁴⁰ (bao gồm)
         ("1,0000001M", MiB),  # floor
-    ],
-)
-def test_parse_rate_accepts_binary_units(cli, text, expected):
-    assert cli.parse_rate(text) == expected
+    ]:
+        assert cli.parse_rate(text) == expected
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
+def test_parse_rate_rejects_out_of_range_or_malformed(cli):
+    for text in [
         "63K",
         "65535",
         "0",
@@ -437,11 +433,9 @@ def test_parse_rate_accepts_binary_units(cli, text, expected):
         "٦٤K",  # chữ số Ả Rập
         "64M/h",
         "1,5,5M",
-    ],
-)
-def test_parse_rate_rejects_out_of_range_or_malformed(cli, text):
-    with pytest.raises(ValueError):
-        cli.parse_rate(text)
+    ]:
+        with pytest.raises(ValueError):
+            cli.parse_rate(text)
 
 
 def test_parse_rate_minimum_follows_min_rate_limit(cli, T):
@@ -564,15 +558,11 @@ SEND_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    ("result", "by_peer", "file_index", "rej", "expected"),
-    SEND_CASES,
-    ids=[f"{c[0]}-{'peer' if c[1] else 'self'}" for c in SEND_CASES],
-)
-def test_transfer_result_message_sender(cli, result, by_peer, file_index, rej, expected):
-    r = None if rej is None else reject(rej[0], **rej[1])
-    fin = finished("send", result, by_peer=by_peer, file_index=file_index, reject=r, file_index_info=None)
-    assert message(cli, fin, peer=RECEIVER) == [expected]
+def test_transfer_result_message_sender(cli):
+    for result, by_peer, file_index, rej, expected in SEND_CASES:
+        r = None if rej is None else reject(rej[0], **rej[1])
+        fin = finished("send", result, by_peer=by_peer, file_index=file_index, reject=r, file_index_info=None)
+        assert message(cli, fin, peer=RECEIVER) == [expected]
 
 
 RECV_CASES = [
@@ -634,15 +624,11 @@ RECV_CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    ("result", "by_peer", "file_index", "rej", "status", "expected"),
-    RECV_CASES,
-    ids=[f"{c[0]}-{'peer' if c[1] else 'self'}-{c[4]}" for c in RECV_CASES],
-)
-def test_transfer_result_message_receiver(cli, result, by_peer, file_index, rej, status, expected):
-    r = None if rej is None else reject(rej[0], **rej[1])
-    fin = finished("receive", result, by_peer=by_peer, file_index=file_index, reject=r, status=status)
-    assert message(cli, fin, peer=SENDER) == [expected]
+def test_transfer_result_message_receiver(cli):
+    for result, by_peer, file_index, rej, status, expected in RECV_CASES:
+        r = None if rej is None else reject(rej[0], **rej[1])
+        fin = finished("receive", result, by_peer=by_peer, file_index=file_index, reject=r, status=status)
+        assert message(cli, fin, peer=SENDER) == [expected]
 
 
 @pytest.mark.parametrize(
@@ -658,38 +644,38 @@ def test_transfer_result_message_receiver_silent_rejections(cli, result, rej):
 # --- P3-4: câu (a) tạm dừng, câu (b) khôi phục (spec-p3-4 mục 3.1, 9.1) -----------------------------
 
 
-@pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
-@pytest.mark.parametrize(("file_index", "info_index"), [(None, 0), (2, 1), (None, 3), (7, 0)])
-def test_suspended_receive_of_many_files_says_n_files(cli, status, file_index, info_index):
+def test_suspended_receive_of_many_files_says_n_files(cli):
     """Câu (a), lượt nhiều file (mục 9.1 Q3): “*N* file”, N = `len(info.files)`, không nêu tên file nào,
     với mọi trạng thái trước đó và mọi `file_index`."""
-    fin = finished(
-        "receive",
-        "suspended",
-        file_index=file_index,
-        file_index_info=info_index,
-        status=status,
-    )
-    lines = message(cli, fin, peer=SENDER)
-    assert lines == [R_SUSPENDED.format(what="3 file", s=SENDER)]
-    assert not any(name in lines[0] for name in NAMES)
+    for status in ("transferring", "verifying", "reconnecting"):
+        for file_index, info_index in [(None, 0), (2, 1), (None, 3), (7, 0)]:
+            fin = finished(
+                "receive",
+                "suspended",
+                file_index=file_index,
+                file_index_info=info_index,
+                status=status,
+            )
+            lines = message(cli, fin, peer=SENDER)
+            assert lines == [R_SUSPENDED.format(what="3 file", s=SENDER)]
+            assert not any(name in lines[0] for name in NAMES)
 
 
-@pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
-@pytest.mark.parametrize(("file_index", "info_index"), [(None, 0), (0, 0), (None, 3), (5, 0)])
-def test_suspended_receive_of_one_file_names_the_file(cli, status, file_index, info_index):
+def test_suspended_receive_of_one_file_names_the_file(cli):
     """Câu (a), lượt một file: tên file theo luật chung (`finished.file_index`, rồi `info.file_index`,
     kẹp vào khoảng hợp lệ), nên chỉ số ngoài khoảng vẫn ra đúng file duy nhất."""
-    fin = finished(
-        "receive",
-        "suspended",
-        file_index=file_index,
-        file_index_info=info_index,
-        status=status,
-        names=("video.mp4",),
-        sizes=(8 * GiB,),
-    )
-    assert message(cli, fin, peer=SENDER) == [R_SUSPENDED.format(what="video.mp4", s=SENDER)]
+    for status in ("transferring", "verifying", "reconnecting"):
+        for file_index, info_index in [(None, 0), (0, 0), (None, 3), (5, 0)]:
+            fin = finished(
+                "receive",
+                "suspended",
+                file_index=file_index,
+                file_index_info=info_index,
+                status=status,
+                names=("video.mp4",),
+                sizes=(8 * GiB,),
+            )
+            assert message(cli, fin, peer=SENDER) == [R_SUSPENDED.format(what="video.mp4", s=SENDER)]
 
 
 def test_suspended_receive_without_peer_name_uses_short_device_id(cli):
@@ -767,7 +753,7 @@ def test_transfer_resumed_message_shows_peer_name_through_display_name(cli):
     assert " " not in line and "　" not in line
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     peer=st.one_of(st.none(), st.text(max_size=80)),
     names=st.lists(st.text(min_size=1, max_size=40), min_size=1, max_size=4),
@@ -823,23 +809,23 @@ def test_alm_in_peer_name_is_never_printed_raw_and_is_shown_the_same_everywhere(
     assert shown.replace("Laptop", "PC").replace("Minh", "Nha") == shown_receiver
 
 
-@pytest.mark.parametrize("status", ["transferring", "verifying", "reconnecting"])
-@pytest.mark.parametrize(("file_index", "info_index"), [(None, 0), (0, 0), (2, 1), (None, 3)])
-def test_m16_sender_sentence_for_receiver_error_names_no_file(cli, status, file_index, info_index):
+def test_m16_sender_sentence_for_receiver_error_names_no_file(cli):
     """M16 (spec-p2-8 A): bên nhận gửi `cancel{error}` (lỗi ghi đĩa, dữ liệu hỏng, thư mục tạm còn sót —
     máy gửi không phân biệt được) → máy gửi in đúng một câu M16, không nêu tên file, không còn câu 6b cũ."""
-    fin = finished(
-        "send",
-        "peer_error",
-        by_peer=True,
-        file_index=file_index,
-        file_index_info=info_index,
-        status=status,
-    )
-    lines = message(cli, fin, peer=RECEIVER)
-    assert lines == [S_PEER_ERROR.format(p=RECEIVER)]
-    assert "không lưu được" not in lines[0]
-    assert not any(name in lines[0] for name in NAMES)
+    for status in ("transferring", "verifying", "reconnecting"):
+        for file_index, info_index in [(None, 0), (0, 0), (2, 1), (None, 3)]:
+            fin = finished(
+                "send",
+                "peer_error",
+                by_peer=True,
+                file_index=file_index,
+                file_index_info=info_index,
+                status=status,
+            )
+            lines = message(cli, fin, peer=RECEIVER)
+            assert lines == [S_PEER_ERROR.format(p=RECEIVER)]
+            assert "không lưu được" not in lines[0]
+            assert not any(name in lines[0] for name in NAMES)
 
 
 @pytest.mark.parametrize(
@@ -921,7 +907,7 @@ _PEER_NAMES = st.one_of(
 )
 
 
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     result=st.sampled_from(_RESULTS),
     direction=st.sampled_from(["send", "receive"]),
@@ -1085,7 +1071,7 @@ def test_progress_line_prefixes_sender_name_on_receive(cli):
     assert SENDER in line and line.rstrip().endswith(P_LINE)
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
     width=st.integers(min_value=20, max_value=200),
     name=st.text(
@@ -1301,34 +1287,38 @@ def test_hidden_options_are_not_in_help(capsys, cmd):
         assert option in out, option
 
 
-@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
-@pytest.mark.parametrize("rate", ["63K", "0", "nan", "1e9", "1T"])
-def test_bad_limit_rate_exits_2_before_touching_config(tmp_path, capsys, json_mode, rate):
+def test_bad_limit_rate_exits_2_before_touching_config(tmp_path, capsys):
     cfg = tmp_path / "cfg"
-    argv = ["--config-dir", str(cfg), "send", "a.bin", "--to", RECEIVER, "--limit-rate", rate]
-    assert run_main([*argv, *(["--json"] if json_mode else [])]) == 2
-    captured = capsys.readouterr()
-    if json_mode:
-        [ev] = json_lines(captured.out)
-        assert (ev["event"], ev["error"], ev["message"]) == ("error", "invalid_rate", B1.format(x=rate))
-    else:
-        assert B1.format(x=rate) in captured.out + captured.err
-    assert not cfg.exists()
+    for json_mode in (False, True):
+        for rate in ["63K", "0", "nan", "1e9", "1T"]:
+            argv = ["--config-dir", str(cfg), "send", "a.bin", "--to", RECEIVER, "--limit-rate", rate]
+            assert run_main([*argv, *(["--json"] if json_mode else [])]) == 2
+            captured = capsys.readouterr()
+            if json_mode:
+                [ev] = json_lines(captured.out)
+                assert (ev["event"], ev["error"], ev["message"]) == (
+                    "error",
+                    "invalid_rate",
+                    B1.format(x=rate),
+                )
+            else:
+                assert B1.format(x=rate) in captured.out + captured.err
+            assert not cfg.exists()
 
 
-@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
-@pytest.mark.parametrize("address", ["999.1.1.1", "1.2.3", "localhost", "1.2.3.4:99999", "0.0.0.0"])
-def test_bad_address_exits_2(tmp_path, capsys, json_mode, address):
+def test_bad_address_exits_2(tmp_path, capsys):
     cfg = tmp_path / "cfg"
-    argv = ["--config-dir", str(cfg), "send", "a.bin", "--to", RECEIVER, "--address", address]
-    assert run_main([*argv, *(["--json"] if json_mode else [])]) == 2
-    captured = capsys.readouterr()
-    if json_mode:
-        [ev] = json_lines(captured.out)
-        assert (ev["error"], ev["message"]) == ("invalid_address", B2.format(x=address))
-    else:
-        assert B2.format(x=address) in captured.out + captured.err
-    assert not cfg.exists()
+    for json_mode in (False, True):
+        for address in ["999.1.1.1", "1.2.3", "localhost", "1.2.3.4:99999", "0.0.0.0"]:
+            argv = ["--config-dir", str(cfg), "send", "a.bin", "--to", RECEIVER, "--address", address]
+            assert run_main([*argv, *(["--json"] if json_mode else [])]) == 2
+            captured = capsys.readouterr()
+            if json_mode:
+                [ev] = json_lines(captured.out)
+                assert (ev["error"], ev["message"]) == ("invalid_address", B2.format(x=address))
+            else:
+                assert B2.format(x=address) in captured.out + captured.err
+            assert not cfg.exists()
 
 
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])

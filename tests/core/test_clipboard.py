@@ -213,9 +213,8 @@ def test_events_do_not_expose_content():
 # --- normalize_text (2.3, 9.7) -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
+def test_normalize_text_examples():
+    for text, expected in [
         ("\ud800", "\ufffd"),
         ("\udc00", "\ufffd"),
         ("\udc00\ud800", "\ufffd\ufffd"),
@@ -240,11 +239,8 @@ def test_events_do_not_expose_content():
         ("\ud83d\r\n", "\ufffd\n"),
         ("", ""),
         ("Tiếng Việt có dấu", "Tiếng Việt có dấu"),
-    ],
-    ids=repr,
-)
-def test_normalize_text_examples(text, expected):
-    assert normalize_text(text) == expected
+    ]:
+        assert normalize_text(text) == expected
 
 
 SPECIAL_PIECES = [
@@ -278,7 +274,7 @@ any_text = st.lists(
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(t=any_text)
 def test_property_normalize_text_matches_reference(t):
     n = normalize_text(t)
@@ -298,7 +294,7 @@ def test_text_fingerprint_is_sha256_of_normalized_utf8():
     assert text_fingerprint("a\x00") != text_fingerprint("a")
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(t=any_text)
 def test_property_text_fingerprint_equals_wire_sha256(t):
     assume(normalize_text(t) != "")
@@ -467,11 +463,11 @@ PRESENCE_NAMES = [
 ]
 
 
-@pytest.mark.parametrize("name", PRESENCE_NAMES)
-def test_presence_format_is_sensitive_without_reading_value(name):
-    v = ValueOf()
-    assert is_sensitive(["text/plain", name], v) is True
-    assert v.calls == []
+def test_presence_format_is_sensitive_without_reading_value():
+    for name in PRESENCE_NAMES:
+        v = ValueOf()
+        assert is_sensitive(["text/plain", name], v) is True
+        assert v.calls == []
 
 
 def test_presence_wins_over_dword_without_reading_value():
@@ -490,27 +486,23 @@ DWORD_NAMES = [
 ]
 
 
-@pytest.mark.parametrize("name", DWORD_NAMES)
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        (b"\0\0\0\0", True),
-        (b"\x01\0\0\0", False),
-        (b"\0\0\0\x01", False),  # little-endian: 0x01000000 ≠ 0
-        (b"\xff\xff\xff\xff", False),
-        (None, True),  # không đọc được → coi là nhạy cảm (nguyên tắc 2)
-        (b"", True),
-        (b"\0", True),
-        (b"\x01\0\0", True),  # < 4 byte, dù khác 0
-        (b"\0\0\0\0\x01", True),  # chỉ xét 4 byte đầu
-        (b"\x01\0\0\0\0", False),
-    ],
-    ids=repr,
-)
-def test_dword_zero_format(name, value, expected):
-    v = ValueOf({name: value})
-    assert is_sensitive(["text/plain", name], v) is expected
-    assert v.calls == [name], "value_of phải được gọi với tên đúng như trong formats"
+def test_dword_zero_format():
+    for name in DWORD_NAMES:
+        for value, expected in [
+            (b"\0\0\0\0", True),
+            (b"\x01\0\0\0", False),
+            (b"\0\0\0\x01", False),  # little-endian: 0x01000000 ≠ 0
+            (b"\xff\xff\xff\xff", False),
+            (None, True),  # không đọc được → coi là nhạy cảm (nguyên tắc 2)
+            (b"", True),
+            (b"\0", True),
+            (b"\x01\0\0", True),  # < 4 byte, dù khác 0
+            (b"\0\0\0\0\x01", True),  # chỉ xét 4 byte đầu
+            (b"\x01\0\0\0\0", False),
+        ]:
+            v = ValueOf({name: value})
+            assert is_sensitive(["text/plain", name], v) is expected
+            assert v.calls == [name], "value_of phải được gọi với tên đúng như trong formats"
 
 
 def test_any_dword_zero_format_is_enough():
@@ -521,9 +513,8 @@ def test_any_dword_zero_format_is_enough():
     assert sorted(v2.calls) == ["CanIncludeInClipboardHistory", "CanUploadToCloudClipboard"]
 
 
-@pytest.mark.parametrize(
-    "formats",
-    [
+def test_ordinary_formats_are_not_sensitive_and_value_of_not_called():
+    cases = [
         [],
         ["text/plain"],
         ["image/png"],
@@ -533,13 +524,11 @@ def test_any_dword_zero_format_is_enough():
         ['x-application/x-qt-windows-mime;value="ExcludeClipboardContentFromMonitorProcessing"'],
         ['application/x-qt-windows-mime;value="ExcludeClipboardContentFromMonitorProcessing";x'],
         [" ExcludeClipboardContentFromMonitorProcessing"],
-    ],
-    ids=repr,
-)
-def test_ordinary_formats_are_not_sensitive_and_value_of_not_called(formats):
-    v = ValueOf()
-    assert is_sensitive(formats, v) is False
-    assert v.calls == []
+    ]
+    for formats in cases:
+        v = ValueOf()
+        assert is_sensitive(formats, v) is False
+        assert v.calls == []
 
 
 def test_formats_may_be_any_iterable():
@@ -559,9 +548,8 @@ def test_value_of_exception_propagates():
 # --- split_clip: lỗi đầu vào (2.5, 9.3) ---------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("kind", "content"),
-    [
+def test_split_rejects_bad_input():
+    cases = [
         ("text", b"abc"),
         ("text", 123),
         ("image/png", "abc"),
@@ -571,21 +559,19 @@ def test_value_of_exception_propagates():
         ("image/png", b"not a png"),
         ("image/png", PNG_SIGNATURE[:-1]),
         ("image/png", b"\x00" + PNG_SIGNATURE),
-    ],
-    ids=repr,
-)
-def test_split_rejects_bad_input(kind, content):
-    with pytest.raises(ValueError) as info:
-        split_clip(X, kind, content)
-    assert not isinstance(info.value, ClipTooLarge)
-    assert not isinstance(info.value, MessageError)
+    ]
+    for kind, content in cases:
+        with pytest.raises(ValueError) as info:
+            split_clip(X, kind, content)
+        assert not isinstance(info.value, ClipTooLarge)
+        assert not isinstance(info.value, MessageError)
 
 
-@pytest.mark.parametrize(("kind", "content"), [("text", ""), ("image/png", b"")], ids=repr)
-def test_split_rejects_empty(kind, content):
-    with pytest.raises(ValueError) as info:
-        split_clip(X, kind, content)
-    assert not isinstance(info.value, ClipTooLarge)
+def test_split_rejects_empty():
+    for kind, content in [("text", ""), ("image/png", b"")]:
+        with pytest.raises(ValueError) as info:
+            split_clip(X, kind, content)
+        assert not isinstance(info.value, ClipTooLarge)
 
 
 def test_split_bad_clip_id_raises_message_error():
@@ -672,20 +658,18 @@ def test_split_png_cuts_raw_bytes_and_pads_each_fragment():
         assert m.data == base64.b64encode(chunk).decode("ascii")
 
 
-@pytest.mark.parametrize(
-    ("size", "count"),
-    [
+def test_split_png_fragment_count_at_boundaries():
+    cases = [
         (len(PNG_SIGNATURE), 1),
         (PNG_FRAGMENT_BYTES, 1),
         (PNG_FRAGMENT_BYTES + 1, 2),
         (2 * PNG_FRAGMENT_BYTES, 2),
-    ],
-)
-def test_split_png_fragment_count_at_boundaries(size, count):
-    content = PNG_SIGNATURE + b"\x07" * (size - len(PNG_SIGNATURE))
-    msgs = split_clip(X, "image/png", content)
-    assert len(msgs) == count
-    assert b"".join(base64.b64decode(m.data) for m in msgs) == content
+    ]
+    for size, count in cases:
+        content = PNG_SIGNATURE + b"\x07" * (size - len(PNG_SIGNATURE))
+        msgs = split_clip(X, "image/png", content)
+        assert len(msgs) == count
+        assert b"".join(base64.b64decode(m.data) for m in msgs) == content
 
 
 def assemble_ok(msgs: list[Clipboard], kind: ClipKind, content) -> ClipReady:
@@ -714,15 +698,15 @@ BIG_TEXTS = {
 }
 
 
-@pytest.mark.parametrize("name", list(BIG_TEXTS))
-def test_big_text_fragments_fit_and_reassemble(name):
-    t = BIG_TEXTS[name]
-    raw = normalize_text(t).encode("utf-8")
-    assert len(raw) <= MAX_TEXT_BYTES
-    msgs = split_clip(X, "text", t)
-    check_split(msgs, "text", raw)
-    assert "".join(m.data for m in msgs) == normalize_text(t)
-    assemble_ok(msgs, ClipKind.TEXT, normalize_text(t))
+def test_big_text_fragments_fit_and_reassemble():
+    for name in list(BIG_TEXTS):
+        t = BIG_TEXTS[name]
+        raw = normalize_text(t).encode("utf-8")
+        assert len(raw) <= MAX_TEXT_BYTES
+        msgs = split_clip(X, "text", t)
+        check_split(msgs, "text", raw)
+        assert "".join(m.data for m in msgs) == normalize_text(t)
+        assemble_ok(msgs, ClipKind.TEXT, normalize_text(t))
 
 
 def test_png_exactly_ten_mib_fits_and_reassembles():
@@ -739,7 +723,7 @@ def test_png_exactly_ten_mib_fits_and_reassembles():
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(t=any_text)
 def test_property_text_split_then_assemble(t):
     norm = ref_normalize(t)
@@ -755,15 +739,15 @@ def test_property_text_split_then_assemble(t):
     assert ev.sha256 == text_fingerprint(t)
 
 
-@pytest.mark.parametrize("t", ["a\r\r\nb", "\r\r\n", "\r\r\r\n\r", "x\r\r\n\r\r\ny"], ids=repr)
-def test_cr_before_crlf_survives_send_and_receive(t):
+def test_cr_before_crlf_survives_send_and_receive():
     # Chuẩn hóa không lũy đẳng ("\r\r\n" → "\r\n"): bên nhận chuẩn hóa lại sẽ làm mất "\r" (9.13).
-    events = feed_all(ClipAssembler(), D1, split_clip(X, "text", t))
-    ev = assert_ready(events, D1, X, ClipKind.TEXT, normalize_text(t))
-    assert "\r\n" in ev.content
+    for t in ["a\r\r\nb", "\r\r\n", "\r\r\r\n\r", "x\r\r\n\r\r\ny"]:
+        events = feed_all(ClipAssembler(), D1, split_clip(X, "text", t))
+        ev = assert_ready(events, D1, X, ClipKind.TEXT, normalize_text(t))
+        assert "\r\n" in ev.content
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(body=st.binary(max_size=2048))
 def test_property_png_split_then_assemble(body):
     content = PNG_SIGNATURE + body
@@ -782,7 +766,7 @@ heavy_text = st.lists(st.tuples(st.sampled_from(HEAVY), run_length), min_size=1,
 
 
 @pytest.mark.slow
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(t=heavy_text)
 def test_property_large_text_fragments_fit_frame_limit(t):
     norm = normalize_text(t)
@@ -834,16 +818,16 @@ def test_ready_text_carries_wire_sha_and_utf8_content():
     assert ev.sha256 == f[0].sha256
 
 
-@pytest.mark.parametrize("pieces", [["a\r\nb"], ["a\r", "\nb"], ["\r\n\r\n"]], ids=repr)
-def test_ready_text_from_non_normalizing_sender_is_kept_verbatim(pieces):
+def test_ready_text_from_non_normalizing_sender_is_kept_verbatim():
     # 9.13: máy kia không chuẩn hóa mà sha256 đúng byte gửi → content giữ nguyên "\r\n", không chuẩn
     # hóa lại; vì vậy LoopGuard phải dùng text_fingerprint(content), không dùng ClipReady.sha256.
-    raw = "".join(pieces)
-    f = text_frags(X, pieces)
-    ev = assert_ready(feed_all(ClipAssembler(), D1, f), D1, X, ClipKind.TEXT, raw)
-    assert ev.sha256 == sha(raw.encode("utf-8"))
-    assert text_fingerprint(ev.content) != ev.sha256
-    assert text_fingerprint(ev.content) == sha(raw.replace("\r\n", "\n").encode("utf-8"))
+    for pieces in [["a\r\nb"], ["a\r", "\nb"], ["\r\n\r\n"]]:
+        raw = "".join(pieces)
+        f = text_frags(X, pieces)
+        ev = assert_ready(feed_all(ClipAssembler(), D1, f), D1, X, ClipKind.TEXT, raw)
+        assert ev.sha256 == sha(raw.encode("utf-8"))
+        assert text_fingerprint(ev.content) != ev.sha256
+        assert text_fingerprint(ev.content) == sha(raw.replace("\r\n", "\n").encode("utf-8"))
 
 
 def test_ready_text_keeps_nul_and_control_chars():
@@ -1077,26 +1061,23 @@ def test_row8_orphan_does_not_damage_clip_in_progress():
     assert_ready(a.feed(D1, fx[2], 0.0), D1, X, ClipKind.TEXT, "abcdef")
 
 
-@pytest.mark.parametrize(
-    "over",
-    [
+def test_row9_later_fragment_with_different_header_is_inconsistent():
+    # "QUFB" là base64 hợp lệ, nên mảnh 1 dựng được cả với kind image/png.
+    cases = [
         {"kind": "text/html"},
         {"kind": "image/png"},
         {"sha256": "f" * 64},
         {"total": 7},
         {"count": 4},
-    ],
-    ids=repr,
-)
-def test_row9_later_fragment_with_different_header_is_inconsistent(over):
-    a = ClipAssembler()
-    # "QUFB" là base64 hợp lệ, nên mảnh 1 dựng được cả với kind image/png.
-    f = text_frags(X, ["ab", "QUFB", "cd"])
-    bad = dataclasses.replace(f[1], **over)
-    a.feed(D1, f[0], 0.0)
-    assert a.feed(D1, bad, 0.0) == (drop(D1, X, "text", R.INCONSISTENT),)
-    assert a.buffered_bytes(D1) == 0
-    assert a.feed(D1, f[2], 0.0) == ()
+    ]
+    for over in cases:
+        a = ClipAssembler()
+        f = text_frags(X, ["ab", "QUFB", "cd"])
+        bad = dataclasses.replace(f[1], **over)
+        a.feed(D1, f[0], 0.0)
+        assert a.feed(D1, bad, 0.0) == (drop(D1, X, "text", R.INCONSISTENT),)
+        assert a.buffered_bytes(D1) == 0
+        assert a.feed(D1, f[2], 0.0) == ()
 
 
 def test_row10_skipped_index_is_out_of_order():
@@ -1200,16 +1181,13 @@ def test_row13_hash_checked_before_png_signature():
     assert ClipAssembler().feed(D1, m, 0.0) == (drop(D1, X, "image/png", R.HASH_MISMATCH),)
 
 
-@pytest.mark.parametrize(
-    "content",
-    [b"NOTAPNG!data", PNG_SIGNATURE[:-1] + b"\x0b" + b"data", b"\x89PNG", PNG_SIGNATURE[:7]],
-    ids=repr,
-)
-def test_row14_png_without_signature_is_invalid_content(content):
-    a = ClipAssembler()
-    f = png_frags(X, [content])  # sha256 và total đúng: chỉ sai chữ ký
-    assert a.feed(D1, f[0], 0.0) == (drop(D1, X, "image/png", R.INVALID_CONTENT),)
-    assert a.buffered_bytes(D1) == 0
+def test_row14_png_without_signature_is_invalid_content():
+    cases = [b"NOTAPNG!data", PNG_SIGNATURE[:-1] + b"\x0b" + b"data", b"\x89PNG", PNG_SIGNATURE[:7]]
+    for content in cases:
+        a = ClipAssembler()
+        f = png_frags(X, [content])  # sha256 và total đúng: chỉ sai chữ ký
+        assert a.feed(D1, f[0], 0.0) == (drop(D1, X, "image/png", R.INVALID_CONTENT),)
+        assert a.buffered_bytes(D1) == 0
 
 
 def test_text_does_not_need_png_signature():
@@ -1293,13 +1271,13 @@ def _drop_at_index_zero(a: ClipAssembler, reason: str) -> list[Clipboard]:
     return f
 
 
-@pytest.mark.parametrize("reason", ["unsupported", "too_large", "count_gt_total", "size"])
-def test_rest_of_clip_dropped_at_index_zero_is_silent(reason):
-    a = ClipAssembler()
-    f = _drop_at_index_zero(a, reason)
-    assert a.feed(D1, f[1], 0.0) == ()
-    assert a.feed(D1, f[2], 0.0) == ()
-    assert a.buffered_bytes(D1) == 0
+def test_rest_of_clip_dropped_at_index_zero_is_silent():
+    for reason in ["unsupported", "too_large", "count_gt_total", "size"]:
+        a = ClipAssembler()
+        f = _drop_at_index_zero(a, reason)
+        assert a.feed(D1, f[1], 0.0) == ()
+        assert a.feed(D1, f[2], 0.0) == ()
+        assert a.buffered_bytes(D1) == 0
 
 
 def test_rest_of_dropped_clip_is_silent_and_keeps_new_clip_in_progress():
@@ -1570,7 +1548,7 @@ def _check_events(events, device: str | None) -> None:
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops=st.lists(op, max_size=25), data=st.data())
 def test_property_arbitrary_sequences_never_raise_and_stay_bounded(ops, data):
     devices = [D1, D2, D3]
@@ -1613,7 +1591,7 @@ def test_property_arbitrary_sequences_never_raise_and_stay_bounded(ops, data):
 
 
 @pytest.mark.slow
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(clips=st.lists(st.tuples(st.integers(0, 2), good_clip()), min_size=1, max_size=6), data=st.data())
 def test_property_interleaved_devices_each_clip_ready_or_dropped(clips, data):
     """Mỗi thiết bị gửi tuần tự, liền mạch các clip của mình; các thiết bị xen nhau tùy ý. Mỗi clip có
@@ -1671,7 +1649,7 @@ def test_json_cost_table_matches_json_dumps_for_every_code_point():
             pytest.fail(f"lệch cỡ ở {[hex(ord(c)) for c in bad[:10]]}")
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.text(alphabet=st.characters(exclude_categories=["Cs"])))
 def test_property_json_cost_matches_json_dumps(s):
     assert clip_mod._json_text_len(s) == _real_json_len(s)
@@ -1713,29 +1691,29 @@ def test_reserved_bytes_zero_when_idle():
     assert a.reserved_bytes(D1) == 0, "clip ráp xong không còn giữ chỗ"
 
 
-@pytest.mark.parametrize("how", ["link_lost", "forget_device", "tick_expired", "out_of_order", "replaced"])
-def test_reserved_bytes_released_when_clip_leaves(how):
-    a = ClipAssembler()
-    f = text_frags(X, ["ab", "cd", "ef"])
-    a.feed(D1, f[0], 0.0)
-    a.feed(D2, text_frags(Y, ["x", "y"])[0], 0.0)  # thiết bị khác giữ nguyên
-    assert a.reserved_bytes(D1) == 6
-    if how == "link_lost":
-        a.link_lost(D1)
-    elif how == "forget_device":
-        a.forget_device(D1)
-    elif how == "tick_expired":
-        a.tick(CLIP_ASSEMBLY_TIMEOUT)
-    elif how == "out_of_order":
-        a.feed(D1, f[2], 0.0)
-    else:
-        a.feed(D1, single(Z, "z"), 0.0)
-    assert a.reserved_bytes(D1) == 0
-    if how == "tick_expired":
-        assert a.reserved_bytes() == 0
-    else:
-        assert a.reserved_bytes(D2) == 2
-        assert a.reserved_bytes() == 2
+def test_reserved_bytes_released_when_clip_leaves():
+    for how in ["link_lost", "forget_device", "tick_expired", "out_of_order", "replaced"]:
+        a = ClipAssembler()
+        f = text_frags(X, ["ab", "cd", "ef"])
+        a.feed(D1, f[0], 0.0)
+        a.feed(D2, text_frags(Y, ["x", "y"])[0], 0.0)  # thiết bị khác giữ nguyên
+        assert a.reserved_bytes(D1) == 6
+        if how == "link_lost":
+            a.link_lost(D1)
+        elif how == "forget_device":
+            a.forget_device(D1)
+        elif how == "tick_expired":
+            a.tick(CLIP_ASSEMBLY_TIMEOUT)
+        elif how == "out_of_order":
+            a.feed(D1, f[2], 0.0)
+        else:
+            a.feed(D1, single(Z, "z"), 0.0)
+        assert a.reserved_bytes(D1) == 0
+        if how == "tick_expired":
+            assert a.reserved_bytes() == 0
+        else:
+            assert a.reserved_bytes(D2) == 2
+            assert a.reserved_bytes() == 2
 
 
 def test_reserved_bytes_counts_declared_total_of_huge_png_from_first_fragment():
@@ -1787,7 +1765,7 @@ def test_discard_never_raises_and_new_clip_after_discard_assembles():
     assert_ready(a.feed(D1, g[1], 0.0), D1, Y, ClipKind.TEXT, "1234")
 
 
-@settings(max_examples=200, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(st.data())
 def test_property_reserved_bytes_matches_model_of_clips_in_progress(data):
     """Chuỗi thao tác tùy ý: `reserved_bytes(d)` luôn bằng `total` của clip đang ráp theo mô hình

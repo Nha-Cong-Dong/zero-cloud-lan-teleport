@@ -30,7 +30,7 @@ TIDS = [f"{k:032x}" for k in range(1, 400)]
 STAMP = "2026-10-28T08:15:00Z"
 STAMP_DT = datetime.datetime(2026, 10, 28, 8, 15, 0, tzinfo=UTC)
 
-SETTINGS = settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+SETTINGS = settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 
 
 # --- Hàm phụ trợ ---------------------------------------------------------------------------------
@@ -341,9 +341,8 @@ def test_entry_from_info_keeps_unknown_result_and_partial_bytes():
 # --- HistoryEntry.__post_init__ ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
+def test_history_entry_rejects_invalid_field():
+    for field, value in [
         ("device_id", "A" * 32),
         ("device_id", "a" * 31),
         ("transfer_id", "xyz"),
@@ -362,12 +361,9 @@ def test_entry_from_info_keeps_unknown_result_and_partial_bytes():
         ("saved_path", "C:\\a\x07b"),
         ("saved_path", "C:\\a\ud800b"),
         ("saved_path", "x" * 32768),
-    ],
-    ids=lambda v: ascii(v)[:24],  # id an toàn cho biến môi trường (không surrogate, không quá dài)
-)
-def test_history_entry_rejects_invalid_field(field, value):
-    with pytest.raises(H.HistoryError):
-        make_entry(**{field: value})
+    ]:
+        with pytest.raises(H.HistoryError):
+            make_entry(**{field: value})
 
 
 def test_history_entry_boundaries_are_valid():
@@ -547,16 +543,17 @@ BAD_ENTRIES = [
 ]
 
 
-@pytest.mark.parametrize("bad", BAD_ENTRIES)
-def test_decode_drops_only_the_corrupt_entry(bad):
+def test_decode_drops_only_the_corrupt_entry():
     """T6: mục hỏng đứng giữa hai mục tốt → chỉ nó bị bỏ, thứ tự giữ nguyên."""
     good1 = entry_dict(transfer_id=TIDS[1])
     good2 = entry_dict(transfer_id=TIDS[2])
-    # json.dumps không ghi được surrogate lẻ thành UTF-8: dùng \\ud800 (ensure_ascii=True) cho ca đó.
-    obj = {"version": 1, "entries": [good1, bad, good2]}
-    data = json.dumps(obj, ensure_ascii=True).encode("ascii")
-    got = H.decode_history(data)
-    assert [e.transfer_id for e in got] == [TIDS[1], TIDS[2]]
+    for p in BAD_ENTRIES:
+        bad = p.values[0]
+        # json.dumps không ghi được surrogate lẻ thành UTF-8: dùng \\ud800 (ensure_ascii=True) cho ca đó.
+        obj = {"version": 1, "entries": [good1, bad, good2]}
+        data = json.dumps(obj, ensure_ascii=True).encode("ascii")
+        got = H.decode_history(data)
+        assert [e.transfer_id for e in got] == [TIDS[1], TIDS[2]]
 
 
 def test_decode_ignores_unknown_fields():

@@ -126,28 +126,28 @@ def test_available_never_exceeds_burst_after_long_idle():
     assert b.available(1e9) == 2_000
 
 
-@pytest.mark.parametrize("rate", ["1", None, True, False, [1]])
-def test_rejects_rate_of_wrong_type(rate):
-    with pytest.raises(TypeError):
-        TokenBucket(rate)
+def test_rejects_rate_of_wrong_type():
+    for rate in ["1", None, True, False, [1]]:
+        with pytest.raises(TypeError):
+            TokenBucket(rate)
 
 
-@pytest.mark.parametrize("rate", [0, 0.0, -1, -0.5, math.nan, math.inf, -math.inf])
-def test_rejects_rate_not_positive_finite(rate):
-    with pytest.raises(ValueError):
-        TokenBucket(rate)
+def test_rejects_rate_not_positive_finite():
+    for rate in [0, 0.0, -1, -0.5, math.nan, math.inf, -math.inf]:
+        with pytest.raises(ValueError):
+            TokenBucket(rate)
 
 
-@pytest.mark.parametrize("burst", ["1", None, True, False])
-def test_rejects_burst_of_wrong_type(burst):
-    with pytest.raises(TypeError):
-        TokenBucket(100.0, burst)
+def test_rejects_burst_of_wrong_type():
+    for burst in ["1", None, True, False]:
+        with pytest.raises(TypeError):
+            TokenBucket(100.0, burst)
 
 
-@pytest.mark.parametrize("burst", [0, 0.5, 0.999, -1, math.nan, math.inf])
-def test_rejects_burst_below_one_or_not_finite(burst):
-    with pytest.raises(ValueError):
-        TokenBucket(100.0, burst)
+def test_rejects_burst_below_one_or_not_finite():
+    for burst in [0, 0.5, 0.999, -1, math.nan, math.inf]:
+        with pytest.raises(ValueError):
+            TokenBucket(100.0, burst)
 
 
 def test_accepts_burst_of_exactly_one():
@@ -166,14 +166,14 @@ def _state(b: TokenBucket) -> tuple[float, float, float]:
     return b.available(5.0), b.available(6.0), b.delay(1_000, 5.0)
 
 
-@pytest.mark.parametrize("n", [0, -1, 1_001, True, False, 1.0, "1", None])
-@pytest.mark.parametrize("method", ["delay", "take"])
-def test_rejects_n_not_int_in_one_to_burst(method, n):
-    b = _bucket_after_take()
-    before = _state(b)
-    with pytest.raises(ValueError):
-        getattr(b, method)(n, 5.0)
-    assert _state(b) == before
+def test_rejects_n_not_int_in_one_to_burst():
+    for method in ["delay", "take"]:
+        for n in [0, -1, 1_001, True, False, 1.0, "1", None]:
+            b = _bucket_after_take()
+            before = _state(b)
+            with pytest.raises(ValueError):
+                getattr(b, method)(n, 5.0)
+            assert _state(b) == before
 
 
 def test_n_above_float_burst_is_rejected():
@@ -183,36 +183,36 @@ def test_n_above_float_burst_is_rejected():
         b.delay(1_001, 0.0)
 
 
-@pytest.mark.parametrize("now", ["5", None, [5.0]])
-@pytest.mark.parametrize("method", ["available", "delay", "take"])
-def test_rejects_now_that_is_not_a_number(method, now):
-    b = _bucket_after_take()
-    before = _state(b)
-    args = (now,) if method == "available" else (1, now)
-    with pytest.raises(TypeError):
-        getattr(b, method)(*args)
-    assert _state(b) == before
+def test_rejects_now_that_is_not_a_number():
+    for method in ["available", "delay", "take"]:
+        for now in ["5", None, [5.0]]:
+            b = _bucket_after_take()
+            before = _state(b)
+            args = (now,) if method == "available" else (1, now)
+            with pytest.raises(TypeError):
+                getattr(b, method)(*args)
+            assert _state(b) == before
 
 
-@pytest.mark.parametrize("now", [math.nan, math.inf, -math.inf])
-@pytest.mark.parametrize("method", ["available", "delay", "take"])
-def test_rejects_now_not_finite(method, now):
-    b = _bucket_after_take()
-    before = _state(b)
-    args = (now,) if method == "available" else (1, now)
-    with pytest.raises(ValueError):
-        getattr(b, method)(*args)
-    assert _state(b) == before
+def test_rejects_now_not_finite():
+    for method in ["available", "delay", "take"]:
+        for now in [math.nan, math.inf, -math.inf]:
+            b = _bucket_after_take()
+            before = _state(b)
+            args = (now,) if method == "available" else (1, now)
+            with pytest.raises(ValueError):
+                getattr(b, method)(*args)
+            assert _state(b) == before
 
 
-@pytest.mark.parametrize("method", ["available", "delay", "take"])
-def test_rejects_now_before_last_take(method):
-    b = _bucket_after_take()
-    before = _state(b)
-    args = (4.999,) if method == "available" else (1, 4.999)
-    with pytest.raises(ValueError):
-        getattr(b, method)(*args)
-    assert _state(b) == before
+def test_rejects_now_before_last_take():
+    for method in ["available", "delay", "take"]:
+        b = _bucket_after_take()
+        before = _state(b)
+        args = (4.999,) if method == "available" else (1, 4.999)
+        with pytest.raises(ValueError):
+            getattr(b, method)(*args)
+        assert _state(b) == before
 
 
 def test_rejects_non_finite_now_even_before_first_take():
@@ -246,13 +246,13 @@ def test_huge_int_rate_or_burst_raises_only_spec_errors(kwargs):
     b.delay(1, 1.0)
 
 
-@pytest.mark.parametrize("method", ["available", "delay", "take"])
-def test_huge_int_now_raises_only_spec_errors_and_keeps_state(method):
+def test_huge_int_now_raises_only_spec_errors_and_keeps_state():
     """`now` là `int` quá lớn cho `float`: chỉ `TypeError`/`ValueError`, trạng thái giữ nguyên (spec 2.1)."""
-    b = _bucket_after_take()
-    before = _state(b)
-    args = (HUGE,) if method == "available" else (1, HUGE)
-    try:
-        getattr(b, method)(*args)
-    except (TypeError, ValueError):
-        assert _state(b) == before
+    for method in ["available", "delay", "take"]:
+        b = _bucket_after_take()
+        before = _state(b)
+        args = (HUGE,) if method == "available" else (1, HUGE)
+        try:
+            getattr(b, method)(*args)
+        except (TypeError, ValueError):
+            assert _state(b) == before

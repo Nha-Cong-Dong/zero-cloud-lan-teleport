@@ -551,26 +551,27 @@ def test_entry_with_key_cert_sign_cert_rejected_and_file_untouched(cfg, make_cer
     assert sorted(p.name for p in cfg.iterdir()) == [TRUSTED_FILE]
 
 
-@pytest.mark.parametrize("case", CORRUPT_IDS)
-def test_corrupt_file_raises_and_is_left_untouched(cfg, peer, make_peer, ca_true_peer, case):
-    obj = _corrupt_cases(peer, make_peer(), ca_true_peer)[case]
-    if case == "json-hong":
-        before = write_store(cfg, None, raw='{"version": 1, "devices": [')
-    elif case == "rong":
-        before = write_store(cfg, None, raw="")
-    else:
-        before = write_store(cfg, obj)
-    mtime = (cfg / TRUSTED_FILE).stat().st_mtime_ns
+def test_corrupt_file_raises_and_is_left_untouched(cfg, peer, make_peer, ca_true_peer):
+    cases = _corrupt_cases(peer, make_peer(), ca_true_peer)
+    for case in CORRUPT_IDS:
+        obj = cases[case]
+        if case == "json-hong":
+            before = write_store(cfg, None, raw='{"version": 1, "devices": [')
+        elif case == "rong":
+            before = write_store(cfg, None, raw="")
+        else:
+            before = write_store(cfg, obj)
+        mtime = (cfg / TRUSTED_FILE).stat().st_mtime_ns
 
-    with pytest.raises(TrustStoreError):
-        TrustStore.load(cfg)
-    # Lần hai vẫn lỗi: file không bị tự sửa, xóa hay tạo lại.
-    with pytest.raises(TrustStoreError):
-        TrustStore.load(cfg)
+        with pytest.raises(TrustStoreError):
+            TrustStore.load(cfg)
+        # Lần hai vẫn lỗi: file không bị tự sửa, xóa hay tạo lại.
+        with pytest.raises(TrustStoreError):
+            TrustStore.load(cfg)
 
-    assert (cfg / TRUSTED_FILE).read_bytes() == before
-    assert (cfg / TRUSTED_FILE).stat().st_mtime_ns == mtime
-    assert sorted(p.name for p in cfg.iterdir()) == [TRUSTED_FILE]
+        assert (cfg / TRUSTED_FILE).read_bytes() == before
+        assert (cfg / TRUSTED_FILE).stat().st_mtime_ns == mtime
+        assert sorted(p.name for p in cfg.iterdir()) == [TRUSTED_FILE]
 
 
 def test_duplicate_device_id_with_different_certs_rejected(cfg, make_cert):
@@ -990,35 +991,34 @@ _S3_BAD = [
 ]
 
 
-@pytest.mark.parametrize("bad, secret", [(b, s) for b, s, _ in _S3_BAD], ids=[i for _, _, i in _S3_BAD])
-def test_s3_invalid_last_address_drops_only_that_field_and_warns_without_value(
-    cfg, peer, make_peer, caplog, bad, secret
-):
+def test_s3_invalid_last_address_drops_only_that_field_and_warns_without_value(cfg, peer, make_peer, caplog):
     good, broken = make_peer(), peer
-    entries = [
-        entry(good, "A", last_address={"ip": "10.0.0.7", "port": 50123}),
-        entry(broken, "B", last_address=bad),
-    ]
-    write_store(cfg, {"version": 1, "devices": entries})
-    with caplog.at_level(logging.WARNING, logger=STORE_LOGGER):
-        store = TrustStore.load(cfg)
-    a, b = store.get(good.device_id), store.get(broken.device_id)
-    assert a is not None and b is not None, "cả hai mục vẫn nạp"
-    assert a.last_address == ("10.0.0.7", 50123), "mục khác giữ nguyên"
-    assert b.last_address is None
-    assert (b.name, b.fingerprint, b.cert_pem, b.paired_at) == (
-        "B",
-        broken.fingerprint,
-        broken.pem,
-        NOW_TRUNC,
-    )
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1, [r.getMessage()[:200] for r in caplog.records]
-    text = warnings[0].getMessage()
-    assert "mục 1" in text and "last_address" in text, text[:200]
-    if secret is not None:
-        assert secret not in text, f"WARNING không được chứa giá trị: {text[:200]!r}"
-    assert len(text) < 200
+    for bad, secret, _ in _S3_BAD:
+        caplog.clear()
+        entries = [
+            entry(good, "A", last_address={"ip": "10.0.0.7", "port": 50123}),
+            entry(broken, "B", last_address=bad),
+        ]
+        write_store(cfg, {"version": 1, "devices": entries})
+        with caplog.at_level(logging.WARNING, logger=STORE_LOGGER):
+            store = TrustStore.load(cfg)
+        a, b = store.get(good.device_id), store.get(broken.device_id)
+        assert a is not None and b is not None, "cả hai mục vẫn nạp"
+        assert a.last_address == ("10.0.0.7", 50123), "mục khác giữ nguyên"
+        assert b.last_address is None
+        assert (b.name, b.fingerprint, b.cert_pem, b.paired_at) == (
+            "B",
+            broken.fingerprint,
+            broken.pem,
+            NOW_TRUNC,
+        )
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, [r.getMessage()[:200] for r in caplog.records]
+        text = warnings[0].getMessage()
+        assert "mục 1" in text and "last_address" in text, text[:200]
+        if secret is not None:
+            assert secret not in text, f"WARNING không được chứa giá trị: {text[:200]!r}"
+        assert len(text) < 200
 
 
 def test_s3_next_write_cleans_invalid_field(cfg, peer, make_peer):
@@ -1114,9 +1114,12 @@ def test_s5_set_last_address_unknown_device_raises_key_error(cfg, peer, make_pee
     assert (cfg / TRUSTED_FILE).read_bytes() == before
 
 
-@pytest.mark.parametrize(
-    "ip, port",
-    [
+def test_s5_set_last_address_invalid_value_raises_value_error(cfg, peer):
+    store = TrustStore.load(cfg)
+    store.add(peer, "PC", now=NOW)
+    store.set_last_address(peer.device_id, "10.0.0.7", 50123)
+    before = (cfg / TRUSTED_FILE).read_bytes()
+    for ip, port in [
         ("::1", PORT),
         ("0.0.0.0", PORT),
         ("224.0.0.251", PORT),
@@ -1130,32 +1133,11 @@ def test_s5_set_last_address_unknown_device_raises_key_error(cfg, peer, make_pee
         (IP, True),
         (IP, 47474.0),
         (IP, "47474"),
-    ],
-    ids=[
-        "ipv6",
-        "unspecified",
-        "multicast",
-        "broadcast",
-        "so-0-dau",
-        "thieu-o",
-        "ip-none",
-        "ip-bytes",
-        "port-0",
-        "port-65536",
-        "port-true",
-        "port-float",
-        "port-chuoi",
-    ],
-)
-def test_s5_set_last_address_invalid_value_raises_value_error(cfg, peer, ip, port):
-    store = TrustStore.load(cfg)
-    store.add(peer, "PC", now=NOW)
-    store.set_last_address(peer.device_id, "10.0.0.7", 50123)
-    before = (cfg / TRUSTED_FILE).read_bytes()
-    with pytest.raises(ValueError):
-        store.set_last_address(peer.device_id, ip, port)
-    assert (cfg / TRUSTED_FILE).read_bytes() == before
-    assert store.get(peer.device_id).last_address == ("10.0.0.7", 50123)
+    ]:
+        with pytest.raises(ValueError):
+            store.set_last_address(peer.device_id, ip, port)
+        assert (cfg / TRUSTED_FILE).read_bytes() == before
+        assert store.get(peer.device_id).last_address == ("10.0.0.7", 50123)
 
 
 def test_s5_set_last_address_write_failure_raises_and_keeps_ram(cfg, peer, monkeypatch):

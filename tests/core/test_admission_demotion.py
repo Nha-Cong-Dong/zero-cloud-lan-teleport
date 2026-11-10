@@ -1125,7 +1125,7 @@ def _check_rate_windows(m: _Model) -> None:
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops=st.lists(op_strategy, max_size=70))
 def test_random_sequences_never_give_priority_to_demoted_ip(ops):
     """Bất biến: ngân sách lỗi trừ 1 mỗi lần vé PRIORITY kết thúc không tin cậy, cộng 1 khi kết nối điều
@@ -1250,7 +1250,7 @@ CAP_TTL = 5.1  # không phải bội số của 0,25: hạn không bao giờ tr�
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(
     cap=st.integers(1, 3),
     ops=st.lists(

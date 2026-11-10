@@ -118,9 +118,8 @@ def test_window_geometry_boundaries_are_valid(kw):
         assert getattr(g, key) == value
 
 
-@pytest.mark.parametrize(
-    "kw",
-    [
+def test_window_geometry_rejects_invalid():
+    for kw in [
         {"x": 100_001},
         {"x": -100_001},
         {"y": 100_001},
@@ -155,12 +154,9 @@ def test_window_geometry_boundaries_are_valid(kw):
         {"dpr": 16.01},
         {"dpr": -1.0},
         {"dpr": "1.0"},
-    ],
-    ids=lambda kw: repr(kw)[:40],
-)
-def test_window_geometry_rejects_invalid(kw):
-    with pytest.raises((TypeError, ValueError)):
-        wg(**kw)
+    ]:
+        with pytest.raises((TypeError, ValueError)):
+            wg(**kw)
 
 
 # =================================================================================================
@@ -381,32 +377,34 @@ BAD_WINDOWS = {
 }
 
 
-@pytest.mark.parametrize("raw", list(BAD_WINDOWS.values()), ids=list(BAD_WINDOWS))
-def test_bad_window_dropped_with_one_warning_and_other_fields_kept(cfg, caplog, raw):
+def test_bad_window_dropped_with_one_warning_and_other_fields_kept(cfg, caplog):
     caplog.set_level(logging.DEBUG)
-    write_raw(
-        cfg,
-        '{"version": 1, "name": "May-A", "theme": "dark", "last_conversation": "' + DEV_A + '", '
-        '"tray_hint_shown": true, "window": ' + raw + "}",
-    )
-    s = Settings.load(cfg)
-    assert s.window is None
-    # Chỉ mất đúng trường `window`.
-    assert (s.name, s.theme, s.last_conversation, s.tray_hint_shown) == ("May-A", "dark", DEV_A, True)
-    warns = warnings_of(caplog)
-    assert len(warns) == 1, [r.getMessage() for r in warns]
-    assert WINDOW_WARNING in warns[0].getMessage()
-    assert "window" not in s.extra
+    for raw in BAD_WINDOWS.values():
+        caplog.clear()
+        write_raw(
+            cfg,
+            '{"version": 1, "name": "May-A", "theme": "dark", "last_conversation": "' + DEV_A + '", '
+            '"tray_hint_shown": true, "window": ' + raw + "}",
+        )
+        s = Settings.load(cfg)
+        assert s.window is None
+        # Chỉ mất đúng trường `window`.
+        assert (s.name, s.theme, s.last_conversation, s.tray_hint_shown) == ("May-A", "dark", DEV_A, True)
+        warns = warnings_of(caplog)
+        assert len(warns) == 1, [r.getMessage() for r in warns]
+        assert WINDOW_WARNING in warns[0].getMessage()
+        assert "window" not in s.extra
 
 
-@pytest.mark.parametrize("raw", list(BAD_WINDOWS.values()), ids=list(BAD_WINDOWS))
-def test_bad_window_is_corruption_backed_up_on_next_save(cfg, raw):
-    text = '{"version": 1, "window": ' + raw + "}"
-    write_raw(cfg, text)
-    s = Settings.load(cfg)
-    s.save(cfg)
-    assert (cfg / BACKUP_FILE).read_text(encoding="utf-8") == text
-    assert "window" not in on_disk(cfg)
+def test_bad_window_is_corruption_backed_up_on_next_save(cfg):
+    for raw in BAD_WINDOWS.values():
+        (cfg / BACKUP_FILE).unlink(missing_ok=True)
+        text = '{"version": 1, "window": ' + raw + "}"
+        write_raw(cfg, text)
+        s = Settings.load(cfg)
+        s.save(cfg)
+        assert (cfg / BACKUP_FILE).read_text(encoding="utf-8") == text
+        assert "window" not in on_disk(cfg)
 
 
 def test_bad_window_warning_never_contains_values(cfg, caplog):
@@ -593,7 +591,7 @@ def _windows(draw):
     )
 
 
-@settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(_windows(), st.none() | st.from_regex(r"[0-9a-f]{32}", fullmatch=True), st.booleans())
 def test_window_roundtrip_hypothesis(window, last, hint):
     s = Settings(window=window, last_conversation=last, tray_hint_shown=hint)

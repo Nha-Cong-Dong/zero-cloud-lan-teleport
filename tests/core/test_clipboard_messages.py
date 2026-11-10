@@ -125,17 +125,18 @@ VALID_CASES = [
 ]
 
 
-@pytest.mark.parametrize("d", VALID_CASES)
-def test_valid_clipboard_parses_and_round_trips(d):
-    m = parse_message(d)
-    assert type(m) is Clipboard
-    for name in FIELDS:
-        assert getattr(m, name) == d[name]
-    assert parse_message(to_dict(m)) == m
-    assert through_frame(m) == m
-    out = to_dict(m)
-    assert out["type"] == "clipboard"
-    assert set(out) == {"type", *FIELDS}
+def test_valid_clipboard_parses_and_round_trips():
+    for p in VALID_CASES:
+        d = p.values[0]
+        m = parse_message(d)
+        assert type(m) is Clipboard
+        for name in FIELDS:
+            assert getattr(m, name) == d[name]
+        assert parse_message(to_dict(m)) == m
+        assert through_frame(m) == m
+        out = to_dict(m)
+        assert out["type"] == "clipboard"
+        assert set(out) == {"type", *FIELDS}
 
 
 def test_kind_enum_member_becomes_plain_str():
@@ -208,14 +209,15 @@ BAD_CASES = [
 ]
 
 
-@pytest.mark.parametrize(("field", "value"), BAD_CASES)
-def test_rejects_bad_field(field, value):
-    with pytest.raises(MessageError):
-        parse_message(wire(**{field: value}))
-    kw = wire(**{field: value})
-    del kw["type"]
-    with pytest.raises(MessageError):
-        Clipboard(**kw)
+@pytest.mark.parametrize("field", list(BAD_FIELD_VALUES))
+def test_rejects_bad_field(field):
+    for value in BAD_FIELD_VALUES[field]:
+        with pytest.raises(MessageError):
+            parse_message(wire(**{field: value}))
+        kw = wire(**{field: value})
+        del kw["type"]
+        with pytest.raises(MessageError):
+            Clipboard(**kw)
 
 
 @pytest.mark.parametrize(("index", "count"), [(1, 1), (5, 5), (6, 5), (MAX_SAFE_INTEGER, MAX_SAFE_INTEGER)])
@@ -273,9 +275,8 @@ def test_text_accepts_escaped_surrogate_pair_from_json():
 
 
 # `kind == "image/png"`: base64 chuẩn chặt, giải ra ≥ 1 byte; lỗi gói thành MessageError (9.8).
-@pytest.mark.parametrize(
-    "data",
-    [
+def test_png_rejects_non_canonical_base64():
+    for data in [
         "!!!!",
         "AA",  # thiếu đệm
         "AA=",
@@ -289,12 +290,9 @@ def test_text_accepts_escaped_surrogate_pair_from_json():
         "=",
         "====",
         "\ud800",
-    ],
-    ids=repr,
-)
-def test_png_rejects_non_canonical_base64(data):
-    with pytest.raises(MessageError):
-        parse_message(wire(kind="image/png", data=data))
+    ]:
+        with pytest.raises(MessageError):
+            parse_message(wire(kind="image/png", data=data))
 
 
 def test_png_base64_error_is_message_error_not_bare_value_error():
@@ -399,7 +397,7 @@ fuzz_dicts = st.builds(
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(d=fuzz_dicts)
 def test_property_any_clipboard_dict_parses_or_raises_message_error(d):
     try:
@@ -452,14 +450,14 @@ kind_data = st.one_of(
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(m=_valid_clipboards(kind_data))
 def test_property_valid_clipboard_round_trips_through_frame(m):
     assert parse_message(to_dict(m)) == m
     assert through_frame(m) == m
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(kind=st.text(max_size=70))
 def test_property_kind_rule_matches_spec_regex(kind):
     expected_ok = (

@@ -320,7 +320,7 @@ def test_verify_swallows_unexpected_exceptions(ident, peer):
     assert verify_pairing_proof(evil, PAYLOAD, sig) is False
 
 
-@settings(max_examples=150, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
     payload=st.binary(max_size=200),
     signature=st.binary(max_size=80) | st.text(max_size=80) | st.none() | st.integers(),

@@ -15,6 +15,7 @@ Thư mục này chứa toàn bộ tài liệu hướng dẫn, kế hoạch, đ�
 | [mvp.md](product/mvp.md) | Danh sách tính năng, tiêu chí hoàn thành, các giới hạn kỹ thuật | Khi bổ sung tính năng hoặc tiêu chuẩn chất lượng |
 | [ke_hoach.md](product/ke_hoach.md) | Lộ trình từng giai đoạn, tiến độ thực tế, kế hoạch kiểm thử thực tế | Khi hoàn thành giai đoạn hoặc cập nhật thiết kế |
 | [hieu_du_an.md](product/hieu_du_an.md) | Giải thích cách thức hoạt động qua ví dụ trực quan, dễ hiểu | Khi quy trình kết nối hoặc truyền file thay đổi |
+| [huong_dan_su_dung.md](product/huong_dan_su_dung.md) | Hướng dẫn sử dụng trực quan, cài đặt, ghép đôi và khắc phục sự cố | Khi phát hành bản mới hoặc cập nhật giao diện |
 
 ### Nhóm 2: Kỹ Thuật & Cấu Trúc (`docs/technical/`)
 

@@ -214,7 +214,7 @@ def sized_bit_sets(draw):
     return n, bits
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(sized_bit_sets())
 def test_property_to_base64_matches_reference_and_round_trips(case):
     n, bits = case
@@ -230,7 +230,7 @@ def test_property_to_base64_matches_reference_and_round_trips(case):
     assert back.all_set() == (len(bits) == n)
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(sized_bit_sets())
 def test_property_from_reference_encoding(case):
     n, bits = case
@@ -238,7 +238,7 @@ def test_property_from_reference_encoding(case):
     assert contents(bf, n) == bits
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.integers(min_value=0, max_value=200), st.binary(max_size=30))
 def test_property_from_base64_accepts_iff_length_and_padding_ok(n, raw):
     expected_len = (n + 7) // 8

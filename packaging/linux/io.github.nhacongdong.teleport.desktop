@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=ZCL Teleport
+GenericName=LAN File Transfer
+Comment=Chuyển file dung lượng lớn và đồng bộ văn bản trong mạng nội bộ
+Exec=teleport-gui %U
+Icon=teleport
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;Utility;
+StartupNotify=true
+StartupWMClass=teleport-gui
+Keywords=teleport;lan;file;transfer;clipboard;p2p;
+MimeType=x-scheme-handler/teleport;

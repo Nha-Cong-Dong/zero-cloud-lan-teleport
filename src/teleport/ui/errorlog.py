@@ -125,8 +125,22 @@ def install_excepthooks() -> Callable[[], None]:
 
 def loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
     """Handler lỗi của loop asyncio: không ghi `message` hay `repr` trong `context` (có thể chứa
-    tham số của callback, đường dẫn), chỉ ghi tên loại lỗi và traceback."""
+    tham số của callback, đường dẫn), chỉ ghi tên loại lỗi và traceback.
+
+    Lỗi client reset giữa SYN và accept (WinError 64 / 'Accept failed on a socket') được hạ xuống
+    mức DEBUG để tránh làm nhiễu log khi mạng chập chờn hoặc khi có nhiều kết nối thử.
+    """
     exc = context.get("exception")
+    msg = context.get("message")
+    is_accept_reset = msg == "Accept failed on a socket" or (
+        isinstance(exc, OSError) and getattr(exc, "winerror", None) == 64
+    )
+    if is_accept_reset:
+        log.debug(
+            "accept socket bị client đóng trước khi hoàn tất: %s",
+            error_name(type(exc)) if exc is not None else "không rõ",
+        )
+        return
     if isinstance(exc, BaseException):
         log.error(
             "lỗi không bắt được trong loop asyncio: %s\n%s",

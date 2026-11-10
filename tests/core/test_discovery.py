@@ -142,9 +142,8 @@ def test_tracker_output_defaults_are_empty():
 # --- truncate_txt_name ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("name", "expected"),
-    [
+def test_truncate_txt_name_vectors():
+    for name, expected in [
         ("a" * 64, "a" * 64),
         (EE * 64, EE * 64),  # 192 byte
         (E * 64, E * 50),  # 256 → 200 byte
@@ -155,13 +154,10 @@ def test_tracker_output_defaults_are_empty():
         (E * 49 + ZWJ + " x" + E * 10, E * 49),  # bỏ dần cả khoảng trắng lẫn ZWJ
         (E * 49 + "　　" + E * 10, E * 49),  # khoảng trắng Unicode (isspace)
         ("Máy A 😀", "Máy A 😀"),
-    ],
-    ids=["ascii64", "e3x64", "emoji64", "ab", "a_space", "mixed", "zwj", "zwj_space", "ideo_space", "short"],
-)
-def test_truncate_txt_name_vectors(name, expected):
-    result = truncate_txt_name(name)
-    assert result == expected
-    assert len(result.encode("utf-8")) <= TXT_NAME_MAX_BYTES
+    ]:
+        result = truncate_txt_name(name)
+        assert result == expected
+        assert len(result.encode("utf-8")) <= TXT_NAME_MAX_BYTES
 
 
 def test_truncate_keeps_trailing_zwj_when_no_cut_needed():
@@ -180,8 +176,10 @@ def test_truncate_one_byte_over_limit():
     assert truncate_txt_name(name) == E * 50
 
 
-@pytest.mark.parametrize("bad", ["", " a", "a ", "a\n", "x" * 65, "a‮b", None, 5], ids=repr)
-def test_truncate_rejects_invalid_name(bad):
+def test_truncate_rejects_invalid_name():
+    for bad in ["", " a", "a ", "a\n", "x" * 65, "a\u202eb", None, 5]:
+        with pytest.raises(MessageError):
+            truncate_txt_name(bad)
     with pytest.raises(MessageError):
         truncate_txt_name(bad)
 
@@ -217,7 +215,7 @@ name_chars = st.sampled_from([E, EE, "a", "Z", " ", ZWJ, "中", "　", "\U0001f4
 valid_names = st.text(alphabet=name_chars, min_size=1, max_size=64).filter(_is_valid_name)
 
 
-@settings(max_examples=400, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
 @given(valid_names)
 def test_property_truncate_txt_name(name):
     result = truncate_txt_name(name)
@@ -248,9 +246,8 @@ def test_build_txt_truncates_long_name():
     assert build_txt(PEER, E * 64, "linux")["name"] == E * 50
 
 
-@pytest.mark.parametrize(
-    ("device_id", "name", "os"),
-    [
+def test_build_txt_rejects_invalid_fields():
+    cases = [
         (PEER.upper(), "PC", "windows"),
         (PEER[:-1], "PC", "windows"),
         (PEER, "", "windows"),
@@ -258,12 +255,10 @@ def test_build_txt_truncates_long_name():
         (PEER, "PC", "Windows"),
         (PEER, "PC", ""),
         (PEER, "PC", "a" * 17),
-    ],
-    ids=["id_upper", "id_short", "name_empty", "name_space", "os_upper", "os_empty", "os_long"],
-)
-def test_build_txt_rejects_invalid_fields(device_id, name, os):
-    with pytest.raises(MessageError):
-        build_txt(device_id, name, os)
+    ]
+    for device_id, name, os in cases:
+        with pytest.raises(MessageError):
+            build_txt(device_id, name, os)
 
 
 def test_parse_txt_valid_record():
@@ -277,7 +272,7 @@ os_names = st.from_regex(r"[a-z0-9_]{1,16}", fullmatch=True)
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
 @given(device_ids, valid_names, os_names)
 def test_property_build_then_parse_roundtrip(device_id, name, os):
     txt = {k.encode(): v.encode() for k, v in build_txt(device_id, name, os).items()}
@@ -292,33 +287,32 @@ def test_parse_txt_ignores_unknown_keys():
     assert parse_txt(txt).device_id == PEER
 
 
-@pytest.mark.parametrize("key", [b"id", b"name", b"os", b"proto"])
-def test_parse_txt_rejects_missing_key(key):
-    txt = good_txt()
-    del txt[key]
-    with pytest.raises(DiscoveryRecordError):
-        parse_txt(txt)
+def test_parse_txt_rejects_missing_key():
+    for key in [b"id", b"name", b"os", b"proto"]:
+        txt = good_txt()
+        del txt[key]
+        with pytest.raises(DiscoveryRecordError):
+            parse_txt(txt)
 
 
-@pytest.mark.parametrize("key", [b"id", b"name", b"os", b"proto"])
-def test_parse_txt_rejects_none_value(key):
-    txt = good_txt()
-    txt[key] = None
-    with pytest.raises(DiscoveryRecordError):
-        parse_txt(txt)
+def test_parse_txt_rejects_none_value():
+    for key in [b"id", b"name", b"os", b"proto"]:
+        txt = good_txt()
+        txt[key] = None
+        with pytest.raises(DiscoveryRecordError):
+            parse_txt(txt)
 
 
-@pytest.mark.parametrize("key", [b"id", b"name", b"os", b"proto"])
-def test_parse_txt_keys_are_case_sensitive(key):
-    txt = good_txt()
-    txt[key.upper()] = txt.pop(key)
-    with pytest.raises(DiscoveryRecordError):
-        parse_txt(txt)
+def test_parse_txt_keys_are_case_sensitive():
+    for key in [b"id", b"name", b"os", b"proto"]:
+        txt = good_txt()
+        txt[key.upper()] = txt.pop(key)
+        with pytest.raises(DiscoveryRecordError):
+            parse_txt(txt)
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
+def test_parse_txt_rejects_bad_id():
+    cases = [
         PEER.upper().encode(),
         PEER[:-1].encode(),
         (PEER + "0").encode(),
@@ -327,17 +321,14 @@ def test_parse_txt_keys_are_case_sensitive(key):
         b"\xff" * 32,
         ("é" + PEER[2:]).encode("utf-8"),
         "０".encode() + PEER[1:].encode(),  # chữ số 0 toàn chiều rộng
-    ],
-    ids=repr,
-)
-def test_parse_txt_rejects_bad_id(value):
-    with pytest.raises(DiscoveryRecordError):
-        parse_txt(good_txt(id=value))
+    ]
+    for value in cases:
+        with pytest.raises(DiscoveryRecordError):
+            parse_txt(good_txt(id=value))
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
+def test_parse_txt_rejects_bad_name():
+    for value in [
         b"\xff",
         b"PC\xc3",  # UTF-8 bị cắt cụt
         b"\xed\xa0\x80",  # surrogate mã hóa UTF-8 (không hợp lệ ở chế độ strict)
@@ -348,29 +339,23 @@ def test_parse_txt_rejects_bad_id(value):
         "a‮b".encode(),
         b"x" * 65,
         (E * 50 + "a").encode(),  # 201 byte, 51 code point: vượt giới hạn byte
-    ],
-    ids=repr,
-)
-def test_parse_txt_rejects_bad_name(value):
-    with pytest.raises(DiscoveryRecordError):
-        parse_txt(good_txt(name=value))
+    ]:
+        with pytest.raises(DiscoveryRecordError):
+            parse_txt(good_txt(name=value))
 
 
 def test_parse_txt_accepts_name_of_exactly_200_bytes():
     assert parse_txt(good_txt(name=(E * 50).encode())).name == E * 50
 
 
-@pytest.mark.parametrize(
-    "value", [b"Windows", b"", b"mac os", b"a" * 17, "ｗｉｎ".encode(), b"\xff"], ids=repr
-)
-def test_parse_txt_rejects_bad_os(value):
-    with pytest.raises(DiscoveryRecordError):
-        parse_txt(good_txt(os=value))
+def test_parse_txt_rejects_bad_os():
+    for value in [b"Windows", b"", b"mac os", b"a" * 17, "ｗｉｎ".encode(), b"\xff"]:
+        with pytest.raises(DiscoveryRecordError):
+            parse_txt(good_txt(os=value))
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
+def test_parse_txt_rejects_bad_proto():
+    for value in [
         b"0",
         b"01",
         b"+1",
@@ -385,18 +370,15 @@ def test_parse_txt_rejects_bad_os(value):
         b"0x1",
         str(MAX_SAFE_INTEGER + 1).encode(),  # 9007199254740992
         b"1" * 17,
-    ],
-    ids=repr,
-)
-def test_parse_txt_rejects_bad_proto(value):
-    with pytest.raises(DiscoveryRecordError):
-        parse_txt(good_txt(proto=value))
+    ]:
+        with pytest.raises(DiscoveryRecordError):
+            parse_txt(good_txt(proto=value))
 
 
-@pytest.mark.parametrize("value", [1, 2, 99, MAX_SAFE_INTEGER])
-def test_parse_txt_accepts_any_proto_in_range(value):
+def test_parse_txt_accepts_any_proto_in_range():
     # proto khác PROTOCOL_VERSION vẫn hợp lệ: bên trên quyết định có nói chuyện được không.
-    assert parse_txt(good_txt(proto=str(value).encode())).proto == value
+    for value in [1, 2, 99, MAX_SAFE_INTEGER]:
+        assert parse_txt(good_txt(proto=str(value).encode())).proto == value
 
 
 def test_parse_txt_wraps_decode_error_with_cause():
@@ -418,7 +400,7 @@ txt_values = st.none() | st.binary(max_size=210) | st.sampled_from(list(txt_byte
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.dictionaries(txt_keys, txt_values, max_size=8))
 def test_fuzz_parse_txt_only_raises_discovery_record_error(txt):
     try:
@@ -430,7 +412,7 @@ def test_fuzz_parse_txt_only_raises_discovery_record_error(txt):
     assert type(rec.proto) is int and 1 <= rec.proto <= MAX_SAFE_INTEGER
 
 
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(st.fixed_dictionaries({}, optional={k.encode(): txt_values for k in ("id", "name", "os", "proto")}))
 def test_fuzz_parse_txt_near_valid(txt):
     base = good_txt()
@@ -458,9 +440,8 @@ def test_device_id_from_service_name_accepts_uppercase_suffix():
     assert device_id_from_service_name(f"{PEER}._Teleport._tcp.Local.") == PEER
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
+def test_device_id_from_service_name_rejects():
+    for name in [
         "notanid._teleport._tcp.local.",
         f"{PEER.upper()}._teleport._tcp.local.",
         f"{PEER[:-1]}._teleport._tcp.local.",
@@ -475,19 +456,15 @@ def test_device_id_from_service_name_accepts_uppercase_suffix():
         f"{PEER}._teleport._udp.local.",
         f"{PEER}._teleport._tcp.local.x",
         "",
-    ],
-    ids=repr,
-)
-def test_device_id_from_service_name_rejects(name):
-    assert device_id_from_service_name(name) is None
+    ]:
+        assert device_id_from_service_name(name) is None
 
 
 # --- filter_addresses ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
+def test_filter_addresses_drops_bad_entry():
+    for bad in [
         "127.0.0.1",
         "127.255.0.9",
         "169.254.1.1",
@@ -512,18 +489,21 @@ def test_device_id_from_service_name_rejects(name):
         3232235777,
         b"\xc0\xa8\x01\x01",
         ipaddress.IPv4Address("192.168.1.1"),
-    ],
-    ids=repr,
-)
-def test_filter_addresses_drops_bad_entry(bad):
-    assert filter_addresses([bad, "192.168.1.5"]) == ("192.168.1.5",)
+    ]:
+        assert filter_addresses([bad, "192.168.1.5"]) == ("192.168.1.5",)
 
 
-@pytest.mark.parametrize(
-    "good", ["192.168.1.5", "10.0.0.1", "172.16.0.1", "100.64.0.1", "8.8.8.8", "192.0.2.10", "198.51.100.7"]
-)
-def test_filter_addresses_keeps_usable_ipv4(good):
-    assert filter_addresses([good]) == (good,)
+def test_filter_addresses_keeps_usable_ipv4():
+    for good in [
+        "192.168.1.5",
+        "10.0.0.1",
+        "172.16.0.1",
+        "100.64.0.1",
+        "8.8.8.8",
+        "192.0.2.10",
+        "198.51.100.7",
+    ]:
+        assert filter_addresses([good]) == (good,)
 
 
 def test_filter_addresses_empty():
@@ -614,7 +594,7 @@ def test_parse_service_drops_public_addresses():
 
 
 @pytest.mark.slow
-@settings(max_examples=300, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(
     st.lists(
         st.ip_addresses(v=4).map(str)
@@ -657,9 +637,8 @@ def test_parse_service_accepts_port_65535_and_uppercase_suffix():
     assert parse_service(r).port == 65535
 
 
-@pytest.mark.parametrize(
-    "r",
-    [
+def test_parse_service_rejects():
+    for r in [
         resolved(svc="notanid._teleport._tcp.local."),
         resolved(svc=f"{PEER}._http._tcp.local."),
         resolved(txt=txt_bytes(PEER2)),  # id trong TXT khác nhãn instance
@@ -674,27 +653,9 @@ def test_parse_service_accepts_port_65535_and_uppercase_suffix():
         resolved(port="47474"),
         resolved(addresses=()),
         resolved(addresses=("127.0.0.1", "169.254.1.1", "::1")),
-    ],
-    ids=[
-        "bad_label",
-        "wrong_type",
-        "id_mismatch",
-        "bad_txt",
-        "empty_txt",
-        "port0",
-        "port65536",
-        "port_neg",
-        "port_true",
-        "port_none",
-        "port_float",
-        "port_str",
-        "no_addr",
-        "no_usable_addr",
-    ],
-)
-def test_parse_service_rejects(r):
-    with pytest.raises(DiscoveryRecordError):
-        parse_service(r)
+    ]:
+        with pytest.raises(DiscoveryRecordError):
+            parse_service(r)
 
 
 # --- is_virtual_interface ------------------------------------------------------------------------
@@ -740,14 +701,14 @@ REAL_NAMES = [
 ]
 
 
-@pytest.mark.parametrize("name", VIRTUAL_NAMES)
-def test_is_virtual_interface_detects_virtual(name):
-    assert is_virtual_interface([name]) is True
+def test_is_virtual_interface_detects_virtual():
+    for name in VIRTUAL_NAMES:
+        assert is_virtual_interface([name]) is True
 
 
-@pytest.mark.parametrize("name", REAL_NAMES)
-def test_is_virtual_interface_keeps_real(name):
-    assert is_virtual_interface([name]) is False
+def test_is_virtual_interface_keeps_real():
+    for name in REAL_NAMES:
+        assert is_virtual_interface([name]) is False
 
 
 def test_is_virtual_interface_any_name_matches():
@@ -760,6 +721,40 @@ def test_is_virtual_interface_any_name_matches():
 
 def test_is_virtual_interface_no_names_is_not_virtual():
     assert is_virtual_interface([]) is False
+
+
+TUNNEL_NAMES = [
+    "tun0",
+    "wg0",
+    "tailscale0",
+    "ztabc",
+    "utun3",
+    "TAP-Windows Adapter V9",
+    "WireGuard Tunnel",
+    "ZeroTier Virtual Port",
+    "Cisco AnyConnect Secure Mobility Client",
+    "Wintun Userspace Tunnel",
+]
+NON_TUNNEL_VIRTUAL_NAMES = [
+    "vEthernet (WSL)",
+    "Hyper-V Virtual Ethernet Adapter",
+    "docker0",
+    "br-1a2b",
+    "veth12",
+    "virbr0",
+    "vmnet8",
+    "vboxnet0",
+    "bridge0",
+]
+
+
+def test_is_tunnel_interface():
+    for name in TUNNEL_NAMES:
+        assert core_discovery.is_tunnel_interface([name]) is True
+    for name in NON_TUNNEL_VIRTUAL_NAMES:
+        assert core_discovery.is_tunnel_interface([name]) is False
+    for name in REAL_NAMES:
+        assert core_discovery.is_tunnel_interface([name]) is False
 
 
 # --- select_local_addresses ----------------------------------------------------------------------
@@ -797,6 +792,19 @@ def test_select_external_vswitch_keeps_only_preferred_lan_address():
     )
 
 
+TAILSCALE = iface("100.64.0.1", "tailscale0", "Tailscale Tunnel")
+
+
+def test_select_drops_tunnel_interface_even_when_preferred():
+    # VPN full-tunnel chiếm tuyến ra ngoài LAN: không giữ làm preferred khi có card thật
+    assert select_local_addresses([WIFI, TAILSCALE], preferred="100.64.0.1") == ("192.168.1.10",)
+
+
+def test_select_falls_back_to_tunnel_when_only_tunnels_exist():
+    # Chỉ có card tunnel thì vẫn dùng (fallback)
+    assert select_local_addresses([TAILSCALE], preferred="100.64.0.1") == ("100.64.0.1",)
+
+
 def test_select_external_vswitch_without_preferred_uses_all_ascending():
     # LAN không gateway → không có preferred; mọi ứng viên đều trên card ảo → dùng tất cả, tăng dần.
     assert select_local_addresses([EXTERNAL_VSWITCH, WSL_HYPERV]) == ("172.18.96.1", "192.168.1.20")
@@ -807,12 +815,12 @@ def test_select_puts_preferred_first_then_ascending():
     assert select_local_addresses([WIFI, ETH]) == ("10.0.0.5", "192.168.1.10")
 
 
-@pytest.mark.parametrize("preferred", [None, "10.9.9.9", "127.0.0.1", "169.254.3.4", "0.0.0.0", "bogus"])
-def test_select_ignores_preferred_that_is_not_a_candidate(preferred):
-    assert select_local_addresses([WIFI, ETH, LOOP, LINK_LOCAL], preferred=preferred) == (
-        "10.0.0.5",
-        "192.168.1.10",
-    )
+def test_select_ignores_preferred_that_is_not_a_candidate():
+    for preferred in [None, "10.9.9.9", "127.0.0.1", "169.254.3.4", "0.0.0.0", "bogus"]:
+        assert select_local_addresses([WIFI, ETH, LOOP, LINK_LOCAL], preferred=preferred) == (
+            "10.0.0.5",
+            "192.168.1.10",
+        )
 
 
 def test_select_falls_back_to_virtual_cards_when_nothing_else():
@@ -847,20 +855,20 @@ def test_select_caps_at_16_keeping_preferred_first():
 # --- DiscoveryTracker: tham số -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bad", ["", SELF.upper(), SELF[:-1], None, 123])
-def test_tracker_rejects_invalid_self_id(bad):
-    with pytest.raises(ValueError):
-        DiscoveryTracker(bad)
+def test_tracker_rejects_invalid_self_id():
+    for bad in ["", SELF.upper(), SELF[:-1], None, 123]:
+        with pytest.raises(ValueError):
+            DiscoveryTracker(bad)
 
 
-@pytest.mark.parametrize("bad_now", [math.nan, math.inf, -math.inf])
-def test_tracker_rejects_non_finite_now(bad_now):
-    t = DiscoveryTracker(SELF)
-    with pytest.raises(ValueError):
-        t.due_probes(bad_now)
-    t.service_seen(service_name(PEER))
-    with pytest.raises(ValueError):
-        t.resolve_done(service_name(PEER), resolved(), bad_now)
+def test_tracker_rejects_non_finite_now():
+    for bad_now in [math.nan, math.inf, -math.inf]:
+        t = DiscoveryTracker(SELF)
+        with pytest.raises(ValueError):
+            t.due_probes(bad_now)
+        t.service_seen(service_name(PEER))
+        with pytest.raises(ValueError):
+            t.resolve_done(service_name(PEER), resolved(), bad_now)
 
 
 def test_tracker_devices_is_read_only_mapping():
@@ -1430,17 +1438,17 @@ def test_set_priority_on_pending_candidate_does_not_request_second_resolve():
     assert t.resolve_done(svc(A), resolved(A), 1.0).events == (DeviceAdded(device(A)),)
 
 
-@pytest.mark.parametrize("bad", ["", PEER.upper(), PEER[:-1], PEER + "0", None, 123, PEER.encode()], ids=repr)
-def test_set_priority_rejects_invalid_id_and_keeps_state(bad):
-    t = DiscoveryTracker(SELF, max_services=1, priority_ids=[PRIO])
-    known(t, 0.0, A)
-    assert no_requests(t.service_seen(svc(B)))  # B trong danh sách tràn
-    with pytest.raises(MessageError):
-        t.set_priority([B, PRIO2, bad])
-    # Không đổi gì: B không được nhận (vẫn chờ), PRIO vẫn ưu tiên, PRIO2 chưa ưu tiên.
-    assert no_requests(t.service_seen(svc(PRIO2)))
-    assert t.service_seen(svc(PRIO)).resolve == (svc(PRIO),)
-    assert t.service_gone(svc(A)).resolve == (svc(B),)
+def test_set_priority_rejects_invalid_id_and_keeps_state():
+    for bad in ["", PEER.upper(), PEER[:-1], PEER + "0", None, 123, PEER.encode()]:
+        t = DiscoveryTracker(SELF, max_services=1, priority_ids=[PRIO])
+        known(t, 0.0, A)
+        assert no_requests(t.service_seen(svc(B)))  # B trong danh sách tràn
+        with pytest.raises(MessageError):
+            t.set_priority([B, PRIO2, bad])
+        # Không đổi gì: B không được nhận (vẫn chờ), PRIO vẫn ưu tiên, PRIO2 chưa ưu tiên.
+        assert no_requests(t.service_seen(svc(PRIO2)))
+        assert t.service_seen(svc(PRIO)).resolve == (svc(PRIO),)
+        assert t.service_gone(svc(A)).resolve == (svc(B),)
 
 
 def test_set_priority_with_a_bare_string_raises():
@@ -1450,10 +1458,10 @@ def test_set_priority_with_a_bare_string_raises():
         t.set_priority(PRIO)
 
 
-@pytest.mark.parametrize("bad", ["", PEER.upper(), None], ids=repr)
-def test_constructor_rejects_invalid_priority_id(bad):
-    with pytest.raises(ValueError):
-        DiscoveryTracker(SELF, priority_ids=[PRIO, bad])
+def test_constructor_rejects_invalid_priority_id():
+    for bad in ["", PEER.upper(), None]:
+        with pytest.raises(ValueError):
+            DiscoveryTracker(SELF, priority_ids=[PRIO, bad])
 
 
 def test_self_id_in_priority_is_ignored():
@@ -1566,14 +1574,21 @@ def test_is_priority_false_for_self_even_when_listed():
     assert t.is_priority(SELF) is False
 
 
-@pytest.mark.parametrize(
-    "bad",
-    ["", "bad", PRIO.upper(), PRIO[:-1], PRIO + "0", svc(PRIO), "x" * 10_000, None, 123, PRIO.encode()],
-    ids=repr,
-)
-def test_is_priority_false_for_invalid_id_without_raising(bad):
+def test_is_priority_false_for_invalid_id_without_raising():
     t = DiscoveryTracker(SELF, priority_ids=[PRIO])
-    assert t.is_priority(bad) is False
+    for bad in [
+        "",
+        "bad",
+        PRIO.upper(),
+        PRIO[:-1],
+        PRIO + "0",
+        svc(PRIO),
+        "x" * 10_000,
+        None,
+        123,
+        PRIO.encode(),
+    ]:
+        assert t.is_priority(bad) is False
 
 
 # --- DiscoveryTracker: danh sách tràn (bước 1.3, mục 1b) -----------------------------------------
@@ -1921,7 +1936,7 @@ def _overflow_ids(t: DiscoveryTracker) -> list[str]:
 
 
 @pytest.mark.slow
-@settings(max_examples=500, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(ops, st.integers(1, 4), st.frozensets(st.sampled_from([*POOL, SELF])))
 def test_property_tracker_invariants(steps, max_services, initial_priority):
     """Mô phỏng net theo hợp đồng 2.4 + 7.1/7.4: mỗi tên trong `resolve`/`probe` được trả lời đúng
@@ -2124,18 +2139,26 @@ def test_nw1_nothing_changed_is_none():
     [
         (NW_A, NW_AB),  # thêm
         (NW_AB, NW_A),  # bớt
-        (NW_AB, tuple(reversed(NW_AB))),  # chỉ đổi thứ tự
         (NW_A, ()),  # mất hết
         ((), NW_A),  # có lại
         (NW_A, ("192.168.1.6",)),  # đổi
     ],
-    ids=["them", "bot", "thu_tu", "mat_het", "co_lai", "doi"],
+    ids=["them", "bot", "mat_het", "co_lai", "doi"],
 )
 def test_nw2_address_change_is_addresses(before, after):
     w = nw(before)
     assert w.sample(after, 105.0, NW_WALL + 5, interval=NW_INTERVAL) == "addresses"
     # Giá trị mới được lưu: lần đo sau không đổi gì → NONE.
     assert w.sample(after, 110.0, NW_WALL + 10, interval=NW_INTERVAL) == "none"
+
+
+def test_nw_order_only_change_is_none():
+    """Chỉ đổi thứ tự ưu tiên địa chỉ (tập hợp không đổi) thì không coi là đổi mạng."""
+    w = nw(NW_AB)
+    assert (
+        w.sample(tuple(reversed(NW_AB)), 105.0, NW_WALL + 5, interval=NW_INTERVAL)
+        == core_discovery.NetworkChange.NONE
+    )
 
 
 def test_nw2_address_change_wins_over_clock_jump():

@@ -191,28 +191,7 @@ async def test_service_accepting_maps_to_gate(service_parts):
         await svc.close()
 
 
-@pytest.mark.parametrize(
-    ("addresses", "port"),
-    [
-        ("127.0.0.1", 47474),
-        (b"127.0.0.1", 47474),
-        ([], 47474),
-        (["localhost"], 47474),
-        (["0.0.0.0"], 47474),
-        (["224.0.0.251"], 47474),
-        (["255.255.255.255"], 47474),
-        (["01.2.3.4"], 47474),
-        (["127.0.0.1", "0.0.0.0"], 47474),
-        ([f"10.0.0.{i}" for i in range(1, 18)], 47474),
-        ([None], 47474),
-        (["127.0.0.1"], 0),
-        (["127.0.0.1"], 65536),
-        (["127.0.0.1"], True),
-        (["127.0.0.1"], "47474"),
-        (["127.0.0.1"], 47474.0),
-    ],
-)
-async def test_pair_with_validates_arguments_before_io(service_parts, monkeypatch, addresses, port):
+async def test_pair_with_validates_arguments_before_io(service_parts, monkeypatch):
     """3.1 bước 1: sai → ValueError trước mọi I/O và trước khi giữ slot; không gọi on_finished."""
     from teleport.app import pairing as app_pairing
 
@@ -223,10 +202,28 @@ async def test_pair_with_validates_arguments_before_io(service_parts, monkeypatc
         monkeypatch.setattr(app_pairing, "open_pairing", no_io)
     svc = make_service(service_parts)
     try:
-        with pytest.raises(ValueError):
-            await svc.pair_with(addresses, port)
-        assert service_parts[3] == []
-        assert svc.gate.active is None
+        for addresses, port in [
+            ("127.0.0.1", 47474),
+            (b"127.0.0.1", 47474),
+            ([], 47474),
+            (["localhost"], 47474),
+            (["0.0.0.0"], 47474),
+            (["224.0.0.251"], 47474),
+            (["255.255.255.255"], 47474),
+            (["01.2.3.4"], 47474),
+            (["127.0.0.1", "0.0.0.0"], 47474),
+            ([f"10.0.0.{i}" for i in range(1, 18)], 47474),
+            ([None], 47474),
+            (["127.0.0.1"], 0),
+            (["127.0.0.1"], 65536),
+            (["127.0.0.1"], True),
+            (["127.0.0.1"], "47474"),
+            (["127.0.0.1"], 47474.0),
+        ]:
+            with pytest.raises(ValueError):
+                await svc.pair_with(addresses, port)
+            assert service_parts[3] == []
+            assert svc.gate.active is None
     finally:
         await svc.close()
 

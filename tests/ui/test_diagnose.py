@@ -481,32 +481,30 @@ def test_constants_and_enums_match_spec():
     }
 
 
-@pytest.mark.parametrize(
-    ("ip", "port", "expected"),
-    [
-        ("192.168.1.5", 47474, "192.168.1.5"),
-        ("192.168.1.5", 47475, "192.168.1.5:47475"),
-        ("127.0.0.1", 1, "127.0.0.1:1"),
-        ("10.0.0.2", 65535, "10.0.0.2:65535"),
-    ],
-)
-def test_format_address_omits_only_the_default_port(ip, port, expected):
+def test_format_address_omits_only_the_default_port():
     from teleport.net.connection import DEFAULT_PORT
     from teleport.ui import diagnose as mod
 
     assert DEFAULT_PORT == 47474
-    assert mod.format_address(ip, port) == expected
+    cases = [
+        ("192.168.1.5", 47474, "192.168.1.5"),
+        ("192.168.1.5", 47475, "192.168.1.5:47475"),
+        ("127.0.0.1", 1, "127.0.0.1:1"),
+        ("10.0.0.2", 65535, "10.0.0.2:65535"),
+    ]
+    for ip, port, expected in cases:
+        assert mod.format_address(ip, port) == expected
 
 
-@pytest.mark.parametrize("fn_name", sorted(SPEC_TEXTS))
-def test_text_functions_return_spec_sentences(fn_name):
+def test_text_functions_return_spec_sentences():
     from teleport.ui import diagnose as mod
     from teleport.ui import texts
 
-    values = {"name": "PC-Nha", "address": "192.0.2.9:5000"}
-    args = [values[a] for a in SPEC_ARGS[fn_name]]
-    expected = texts.fill(SPEC_TEXTS[fn_name], **{a: values[a] for a in SPEC_ARGS[fn_name]})
-    assert getattr(mod, fn_name)(*args) == expected
+    for fn_name in sorted(SPEC_TEXTS):
+        values = {"name": "PC-Nha", "address": "192.0.2.9:5000"}
+        args = [values[a] for a in SPEC_ARGS[fn_name]]
+        expected = texts.fill(SPEC_TEXTS[fn_name], **{a: values[a] for a in SPEC_ARGS[fn_name]})
+        assert getattr(mod, fn_name)(*args) == expected
 
 
 def test_pairing_unreachable_text_is_public():
@@ -547,68 +545,73 @@ def _expect(d, cause, level, urgent, can_retry, can_ip, result=None):
     assert d.result == (None if result is None else ConnectResult(result)), d
 
 
-@pytest.mark.parametrize("discovery", [None, True, False])
-@pytest.mark.parametrize("failure", [None, *((r, h) for r in _RESULTS for h in (False, True))])
-def test_diagnose_row1_none_when_no_view_unpaired_or_connected(failure, discovery):
-    _expect(_diag(None, failure, discovery), "none", None, None, None, None)
-    _expect(_diag(dview(paired=False, online=True), failure, discovery), "none", None, None, None, None)
-    _expect(_diag(dview(paired=False, last=LAST), failure, discovery), "none", None, None, None, None)
-    _expect(_diag(dview(online=True, connected=True), failure, discovery), "none", None, None, None, None)
-    _expect(_diag(dview(connected=True, last=LAST), failure, discovery), "none", None, None, None, None)
+def test_diagnose_row1_none_when_no_view_unpaired_or_connected():
+    for discovery in (None, True, False):
+        for failure in [None, *((r, h) for r in _RESULTS for h in (False, True))]:
+            _expect(_diag(None, failure, discovery), "none", None, None, None, None)
+            _expect(
+                _diag(dview(paired=False, online=True), failure, discovery), "none", None, None, None, None
+            )
+            _expect(_diag(dview(paired=False, last=LAST), failure, discovery), "none", None, None, None, None)
+            _expect(
+                _diag(dview(online=True, connected=True), failure, discovery), "none", None, None, None, None
+            )
+            _expect(
+                _diag(dview(connected=True, last=LAST), failure, discovery), "none", None, None, None, None
+            )
 
 
-@pytest.mark.parametrize("discovery", [None, True, False])
-@pytest.mark.parametrize("online", [False, True])
-@pytest.mark.parametrize("last", [None, LAST])
-@pytest.mark.parametrize(
-    "failure", [*((r, False) for r in _BLOCKING_FALSE), *((r, True) for r in _BLOCKING_TRUE)]
-)
-def test_diagnose_row2_blocked(failure, online, last, discovery):
-    d = _diag(dview(online=online, last=last), failure, discovery)
-    _expect(d, "blocked", "error", True, True, True, result=failure[0])
+def test_diagnose_row2_blocked():
+    failures = [*((r, False) for r in _BLOCKING_FALSE), *((r, True) for r in _BLOCKING_TRUE)]
+    for discovery in (None, True, False):
+        for online in (False, True):
+            for last in (None, LAST):
+                for failure in failures:
+                    d = _diag(dview(online=online, last=last), failure, discovery)
+                    _expect(d, "blocked", "error", True, True, True, result=failure[0])
 
 
-@pytest.mark.parametrize("discovery", [None, True, False])
-@pytest.mark.parametrize("online", [False, True])
-@pytest.mark.parametrize("last", [None, LAST])
-def test_diagnose_row3_wrong_address_has_no_retry(online, last, discovery):
-    d = _diag(dview(online=online, last=last), ("identity_mismatch", True), discovery)
-    _expect(d, "wrong_address", "warning", True, False, True)
+def test_diagnose_row3_wrong_address_has_no_retry():
+    for discovery in (None, True, False):
+        for online in (False, True):
+            for last in (None, LAST):
+                d = _diag(dview(online=online, last=last), ("identity_mismatch", True), discovery)
+                _expect(d, "wrong_address", "warning", True, False, True)
 
 
-@pytest.mark.parametrize("discovery", [None, True, False])
-@pytest.mark.parametrize("last", [None, LAST])
-def test_diagnose_row4_isolated_when_online_and_auto_unreachable(last, discovery):
-    d = _diag(dview(online=True, last=last), ("unreachable", False), discovery)
-    _expect(d, "isolated", "warning", True, True, True)
+def test_diagnose_row4_isolated_when_online_and_auto_unreachable():
+    for discovery in [None, True, False]:
+        for last in [None, LAST]:
+            d = _diag(dview(online=True, last=last), ("unreachable", False), discovery)
+            _expect(d, "isolated", "warning", True, True, True)
 
 
-@pytest.mark.parametrize("discovery", [None, True, False])
-@pytest.mark.parametrize("failure", [None, ("unreachable", True)])
-def test_diagnose_row5_online_without_blocking_failure_is_none(failure, discovery):
+def test_diagnose_row5_online_without_blocking_failure_is_none():
     # H1: lỗi UNREACHABLE từ địa chỉ vừa nhập (from_hint) không thành ISOLATED.
-    _expect(_diag(dview(online=True, last=LAST), failure, discovery), "none", None, None, None, None)
+    for discovery in [None, True, False]:
+        for failure in [None, ("unreachable", True)]:
+            _expect(_diag(dview(online=True, last=LAST), failure, discovery), "none", None, None, None, None)
 
 
-@pytest.mark.parametrize("failure", [None, ("unreachable", False), ("unreachable", True)])
-@pytest.mark.parametrize(("last", "can_retry"), [(None, False), (LAST, True)])
-def test_diagnose_row6_mdns_down(failure, last, can_retry):
-    d = _diag(dview(last=last), failure, False)
-    _expect(d, "mdns_down", "warning", False, can_retry, True)
+def test_diagnose_row6_mdns_down():
+    for failure in [None, ("unreachable", False), ("unreachable", True)]:
+        for last, can_retry in [(None, False), (LAST, True)]:
+            d = _diag(dview(last=last), failure, False)
+            _expect(d, "mdns_down", "warning", False, can_retry, True)
 
 
-@pytest.mark.parametrize("discovery", [None, True])
-@pytest.mark.parametrize("failure", [None, ("unreachable", False), ("unreachable", True)])
-def test_diagnose_row7_reconnecting_with_saved_address(failure, discovery):
-    d = _diag(dview(last=LAST), failure, discovery)
-    _expect(d, "reconnecting", "info", False, True, True)
+def test_diagnose_row7_reconnecting_with_saved_address():
+    for discovery in [None, True]:
+        for failure in [None, ("unreachable", False), ("unreachable", True)]:
+            d = _diag(dview(last=LAST), failure, discovery)
+            _expect(d, "reconnecting", "info", False, True, True)
 
 
-@pytest.mark.parametrize("discovery", [None, True])
-@pytest.mark.parametrize("failure", [None, ("unreachable", False), ("unreachable", True)])
-def test_diagnose_row8_not_seen_without_address(failure, discovery):
-    d = _diag(dview(), failure, discovery)
-    _expect(d, "not_seen", "info", False, False, True)
+def test_diagnose_row8_not_seen_without_address():
+    for discovery in [None, True]:
+        for failure in [None, ("unreachable", False), ("unreachable", True)]:
+            d = _diag(dview(), failure, discovery)
+            _expect(d, "not_seen", "info", False, False, True)
 
 
 # =================================================================================================

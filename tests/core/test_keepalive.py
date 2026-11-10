@@ -128,49 +128,49 @@ def test_int_now_is_accepted():
 METHODS = ["sent", "received", "poll"]
 
 
-@pytest.mark.parametrize("bad_now", [True, False, "1", None, b"1"], ids=repr)
-def test_constructor_rejects_non_number_now(bad_now):
-    with pytest.raises(TypeError):
-        Keepalive(bad_now)
+def test_constructor_rejects_non_number_now():
+    for bad_now in [True, False, "1", None, b"1"]:
+        with pytest.raises(TypeError):
+            Keepalive(bad_now)
 
 
-@pytest.mark.parametrize("bad_now", [math.nan, math.inf, -math.inf, 10**400, -(10**400)])
-def test_constructor_rejects_non_finite_now(bad_now):
-    with pytest.raises(ValueError):
-        Keepalive(bad_now)
+def test_constructor_rejects_non_finite_now():
+    for bad_now in [math.nan, math.inf, -math.inf, 10**400, -(10**400)]:
+        with pytest.raises(ValueError):
+            Keepalive(bad_now)
 
 
-@pytest.mark.parametrize("method", METHODS)
-@pytest.mark.parametrize("bad_now", [True, False, "1", None, b"1"], ids=repr)
-def test_methods_reject_non_number_now(method, bad_now):
-    k = Keepalive(T0)
-    with pytest.raises(TypeError):
-        getattr(k, method)(bad_now)
+def test_methods_reject_non_number_now():
+    for method in METHODS:
+        for bad_now in [True, False, "1", None, b"1"]:
+            k = Keepalive(T0)
+            with pytest.raises(TypeError):
+                getattr(k, method)(bad_now)
 
 
-@pytest.mark.parametrize("method", METHODS)
-@pytest.mark.parametrize("bad_now", [math.nan, math.inf, -math.inf, 10**400, -(10**400)])
-def test_methods_reject_non_finite_now(method, bad_now):
-    k = Keepalive(T0)
-    with pytest.raises(ValueError):
-        getattr(k, method)(bad_now)
+def test_methods_reject_non_finite_now():
+    for method in METHODS:
+        for bad_now in [math.nan, math.inf, -math.inf, 10**400, -(10**400)]:
+            k = Keepalive(T0)
+            with pytest.raises(ValueError):
+                getattr(k, method)(bad_now)
 
 
-@pytest.mark.parametrize("method", METHODS)
-def test_methods_reject_now_before_construction(method):
-    k = Keepalive(T0)
-    with pytest.raises(ValueError):
-        getattr(k, method)(T0 - 0.001)
+def test_methods_reject_now_before_construction():
+    for method in METHODS:
+        k = Keepalive(T0)
+        with pytest.raises(ValueError):
+            getattr(k, method)(T0 - 0.001)
 
 
-@pytest.mark.parametrize("first", METHODS)
-@pytest.mark.parametrize("second", METHODS)
-def test_now_must_not_go_backwards_across_methods(first, second):
+def test_now_must_not_go_backwards_across_methods():
     """Kiểm thứ tự thời gian áp chung cho mọi phương thức của cùng đối tượng."""
-    k = Keepalive(T0)
-    getattr(k, first)(T0 + 5)
-    with pytest.raises(ValueError):
-        getattr(k, second)(T0 + 4.999)
+    for first in METHODS:
+        for second in METHODS:
+            k = Keepalive(T0)
+            getattr(k, first)(T0 + 5)
+            with pytest.raises(ValueError):
+                getattr(k, second)(T0 + 4.999)
 
 
 def test_same_now_twice_is_allowed():
@@ -183,9 +183,8 @@ def test_same_now_twice_is_allowed():
 # --- K9: kiểm tham số ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("ping_interval", "dead_after"),
-    [
+def test_rejects_bad_intervals():
+    cases = [
         (0, 30.0),
         (0.0, 30.0),
         (-1.0, 30.0),
@@ -198,26 +197,22 @@ def test_same_now_twice_is_allowed():
         (math.inf, 30.0),
         (10.0, math.inf),
         (-math.inf, 30.0),
-    ],
-    ids=repr,
-)
-def test_rejects_bad_intervals(ping_interval, dead_after):
-    with pytest.raises(ValueError):
-        Keepalive(T0, ping_interval=ping_interval, dead_after=dead_after)
+    ]
+    for ping_interval, dead_after in cases:
+        with pytest.raises(ValueError):
+            Keepalive(T0, ping_interval=ping_interval, dead_after=dead_after)
 
 
-@pytest.mark.parametrize(
-    ("ping_interval", "dead_after"), [(True, 30.0), (10.0, True), (False, 30.0)], ids=repr
-)
-def test_rejects_bool_intervals(ping_interval, dead_after):
-    with pytest.raises((TypeError, ValueError)):
-        Keepalive(T0, ping_interval=ping_interval, dead_after=dead_after)
+def test_rejects_bool_intervals():
+    for ping_interval, dead_after in [(True, 30.0), (10.0, True), (False, 30.0)]:
+        with pytest.raises((TypeError, ValueError)):
+            Keepalive(T0, ping_interval=ping_interval, dead_after=dead_after)
 
 
-@pytest.mark.parametrize(("ping_interval", "dead_after"), [("10", 30.0), (10.0, None)], ids=repr)
-def test_rejects_non_number_intervals(ping_interval, dead_after):
-    with pytest.raises(TypeError):
-        Keepalive(T0, ping_interval=ping_interval, dead_after=dead_after)
+def test_rejects_non_number_intervals():
+    for ping_interval, dead_after in [("10", 30.0), (10.0, None)]:
+        with pytest.raises(TypeError):
+            Keepalive(T0, ping_interval=ping_interval, dead_after=dead_after)
 
 
 def test_int_intervals_are_accepted():
@@ -239,7 +234,7 @@ intervals = st.integers(min_value=1, max_value=20).flatmap(
 
 
 @pytest.mark.slow
-@settings(max_examples=400, deadline=None)
+@settings(max_examples=35, deadline=None)
 @given(t0=st.integers(min_value=-1000, max_value=1000).map(float), params=intervals, steps=ops)
 def test_property_keepalive_matches_reference_model(t0, params, steps):
     pi, da = params

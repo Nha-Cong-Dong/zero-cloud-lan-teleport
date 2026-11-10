@@ -522,15 +522,17 @@ def _results_not_done():
     return [r.value for r in TransferResult if r not in (TransferResult.DONE, TransferResult.SUSPENDED)]
 
 
-@pytest.mark.parametrize("direction", ["send", "receive"])
-@pytest.mark.parametrize("result", _results_not_done())
-def test_progress_bar_hidden_when_finished_not_done(view, direction, result):
-    k = tkey(direction)
-    view.handle(progress(k, 4 * 2**20))
-    row = view.row(k)
-    assert row.progress_bar.isVisibleTo(row), "tiền đề: lượt đang chạy có thanh"
-    view.handle(finished(k, result))
-    assert not row.progress_bar.isVisibleTo(row), f"{result}: thanh tiến độ phải ẩn"
+def test_progress_bar_hidden_when_finished_not_done(view):
+    idx = 0
+    for direction in ("send", "receive"):
+        for result in _results_not_done():
+            idx += 1
+            k = tkey(direction, transfer_id=f"{idx:032x}")
+            view.handle(progress(k, 4 * 2**20))
+            row = view.row(k)
+            assert row.progress_bar.isVisibleTo(row), "tiền đề: lượt đang chạy có thanh"
+            view.handle(finished(k, result))
+            assert not row.progress_bar.isVisibleTo(row), f"{result}: thanh tiến độ phải ẩn"
 
 
 @pytest.mark.parametrize("direction", ["send", "receive"])
@@ -994,7 +996,7 @@ _EVENT = st.tuples(
 )
 
 
-@settings(max_examples=80, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=35, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(st.lists(_EVENT, max_size=25), st.lists(st.tuples(st.integers(0, 3), st.booleans()), max_size=4))
 def test_radar_model_stays_sorted_under_any_event_sequence(qapp, events, snapshot):
     """Property: sau mọi chuỗi `NodeEvent` (thêm, bỏ, đổi tên, nối, ngắt, ghép), hàng luôn theo

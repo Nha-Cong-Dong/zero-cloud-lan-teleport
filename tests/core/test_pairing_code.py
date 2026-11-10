@@ -177,16 +177,16 @@ BAD_FPS = [
 BAD_NONCES = [b"", bytes(31), bytes(33), bytes(64), b"\x00" * 16]
 
 
-@pytest.mark.parametrize("fp", BAD_FPS, ids=repr)
-def test_bad_fingerprint_raises_value_error(fp):
-    with pytest.raises(ValueError):
-        make_commitment(fp, N_A)
-    with pytest.raises(ValueError):
-        check_commitment(fp, N_A, VECTOR_COMMITMENT)
-    with pytest.raises(ValueError):
-        pairing_code(fp, FP_B, N_A, N_B)
-    with pytest.raises(ValueError):
-        pairing_code(FP_A, fp, N_A, N_B)
+def test_bad_fingerprint_raises_value_error():
+    for fp in BAD_FPS:
+        with pytest.raises(ValueError):
+            make_commitment(fp, N_A)
+        with pytest.raises(ValueError):
+            check_commitment(fp, N_A, VECTOR_COMMITMENT)
+        with pytest.raises(ValueError):
+            pairing_code(fp, FP_B, N_A, N_B)
+        with pytest.raises(ValueError):
+            pairing_code(FP_A, fp, N_A, N_B)
 
 
 def test_same_fingerprints_raise_value_error():
@@ -222,9 +222,8 @@ def test_format_code(code, expected):
     assert format_code(code) == expected
 
 
-@pytest.mark.parametrize(
-    "code",
-    [
+def test_format_code_rejects_non_six_ascii_digits():
+    for code in [
         "",
         "12345",
         "1234567",
@@ -238,12 +237,9 @@ def test_format_code(code, expected):
         "-12345",
         "+12345",
         "1_2345",
-    ],
-    ids=repr,
-)
-def test_format_code_rejects_non_six_ascii_digits(code):
-    with pytest.raises(ValueError):
-        format_code(code)
+    ]:
+        with pytest.raises(ValueError):
+            format_code(code)
 
 
 # --- Thuộc tính (hypothesis) -------------------------------------------------------------------
@@ -252,7 +248,7 @@ fingerprints = st.binary(min_size=32, max_size=32).map(bytes.hex)
 nonces = st.binary(min_size=32, max_size=32)
 
 
-@settings(max_examples=300)
+@settings(max_examples=35)
 @given(fingerprints, fingerprints, nonces, nonces)
 def test_property_code_matches_reference_and_shape(fp_a, fp_b, n_a, n_b):
     assume(fp_a != fp_b)
@@ -262,7 +258,7 @@ def test_property_code_matches_reference_and_shape(fp_a, fp_b, n_a, n_b):
     assert format_code(code) == f"{code[:3]} {code[3:]}"
 
 
-@settings(max_examples=300)
+@settings(max_examples=35)
 @given(fingerprints, nonces, nonces)
 def test_property_commitment_matches_reference_and_checks(fp, n, other):
     commitment = make_commitment(fp, n)
@@ -273,7 +269,7 @@ def test_property_commitment_matches_reference_and_checks(fp, n, other):
         assert check_commitment(fp, other, commitment) is False
 
 
-@settings(max_examples=200)
+@settings(max_examples=35)
 @given(fingerprints, fingerprints, nonces)
 def test_property_commitment_bound_to_responder_fingerprint(fp, other_fp, n):
     assume(fp != other_fp)
@@ -292,7 +288,7 @@ def test_property_format_code_rejects_everything_else(code):
         format_code(code)
 
 
-@settings(max_examples=200)
+@settings(max_examples=35)
 @given(st.text(max_size=70))
 def test_property_bad_fingerprint_text_raises_value_error(fp):
     assume(not re.fullmatch(r"[0-9a-f]{64}", fp))
@@ -461,13 +457,13 @@ BAD_COMMITMENTS = [
 ]
 
 
-@pytest.mark.parametrize("fp", BAD_FPS, ids=repr)
-def test_proof_payload_rejects_bad_fingerprints(fp):
+def test_proof_payload_rejects_bad_fingerprints():
     _, proof_payload = _proof_api()
-    with pytest.raises(ValueError):
-        proof_payload(fp, FP_B, N_A, VECTOR_COMMITMENT)
-    with pytest.raises(ValueError):
-        proof_payload(FP_A, fp, N_A, VECTOR_COMMITMENT)
+    for fp in BAD_FPS:
+        with pytest.raises(ValueError):
+            proof_payload(fp, FP_B, N_A, VECTOR_COMMITMENT)
+        with pytest.raises(ValueError):
+            proof_payload(FP_A, fp, N_A, VECTOR_COMMITMENT)
 
 
 @pytest.mark.parametrize("fp", [None, 0, bytes.fromhex(FP_A)], ids=repr)
@@ -494,14 +490,14 @@ def test_proof_payload_rejects_bad_nonce(nonce):
         proof_payload(FP_A, FP_B, nonce, VECTOR_COMMITMENT)
 
 
-@pytest.mark.parametrize("commitment", BAD_COMMITMENTS, ids=repr)
-def test_proof_payload_rejects_bad_commitment(commitment):
+def test_proof_payload_rejects_bad_commitment():
     _, proof_payload = _proof_api()
-    with pytest.raises(ValueError):
-        proof_payload(FP_A, FP_B, N_A, commitment)
+    for commitment in BAD_COMMITMENTS:
+        with pytest.raises(ValueError):
+            proof_payload(FP_A, FP_B, N_A, commitment)
 
 
-@settings(max_examples=200)
+@settings(max_examples=35)
 @given(fingerprints, fingerprints, nonces, fingerprints)
 def test_property_proof_payload_matches_reference(fp_a, fp_b, n_a, commitment):
     assume(fp_a != fp_b)

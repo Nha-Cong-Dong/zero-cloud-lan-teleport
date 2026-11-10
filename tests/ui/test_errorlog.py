@@ -414,6 +414,23 @@ def test_loop_handler_context_without_exception_logs_error_without_message(file_
     _assert_no_secret(text)
 
 
+def test_loop_handler_downgrades_accept_failed_to_debug(file_log, caplog):
+    """Lỗi accept socket khi client reset (WinError 64) hạ xuống DEBUG, không có dòng ERROR."""
+    from teleport.ui.errorlog import loop_exception_handler
+
+    loop = asyncio.new_event_loop()
+    try:
+        exc = OSError(64, "The specified network name is no longer available")
+        exc.winerror = 64
+        with caplog.at_level(logging.DEBUG):
+            loop_exception_handler(loop, {"message": "Accept failed on a socket", "exception": exc})
+    finally:
+        loop.close()
+    text = file_log.read()
+    assert _error_lines(text) == [], "không được ghi ERROR cho accept failed"
+    assert any("accept socket bị client đóng" in r.message for r in caplog.records)
+
+
 # =================================================================================================
 # 5. Khôi phục hook, KeyboardInterrupt
 # =================================================================================================

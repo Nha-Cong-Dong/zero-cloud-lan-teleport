@@ -1147,24 +1147,24 @@ def test_probe_tick_default_constant():
 TIME_PARAMS = ["probe_interval", "resolve_timeout", "probe_tick"]
 
 
-@pytest.mark.parametrize("param", TIME_PARAMS)
-@pytest.mark.parametrize("good", [0.05, 1, 1e-9, 1e9], ids=repr)
-def test_time_params_accept_positive_finite_number(param, good):
-    MdnsDiscovery(interfaces=LOOPBACK, **{param: good})
+def test_time_params_accept_positive_finite_number():
+    for param in TIME_PARAMS:
+        for good in [0.05, 1, 1e-9, 1e9]:
+            MdnsDiscovery(interfaces=LOOPBACK, **{param: good})
 
 
-@pytest.mark.parametrize("param", TIME_PARAMS)
-@pytest.mark.parametrize("bad", [0, 0.0, -0.0, -1, -0.5, math.inf, -math.inf, math.nan], ids=repr)
-def test_time_params_reject_non_positive_or_non_finite_with_value_error(param, bad):
-    with pytest.raises(ValueError):
-        MdnsDiscovery(interfaces=LOOPBACK, **{param: bad})
+def test_time_params_reject_non_positive_or_non_finite_with_value_error():
+    for param in TIME_PARAMS:
+        for bad in [0, 0.0, -0.0, -1, -0.5, math.inf, -math.inf, math.nan]:
+            with pytest.raises(ValueError):
+                MdnsDiscovery(interfaces=LOOPBACK, **{param: bad})
 
 
-@pytest.mark.parametrize("param", TIME_PARAMS)
-@pytest.mark.parametrize("bad", ["3", True, False, None, [1], b"3"], ids=repr)
-def test_time_params_reject_non_number_with_type_error(param, bad):
-    with pytest.raises(TypeError):
-        MdnsDiscovery(interfaces=LOOPBACK, **{param: bad})
+def test_time_params_reject_non_number_with_type_error():
+    for param in TIME_PARAMS:
+        for bad in ["3", True, False, None, [1], b"3"]:
+            with pytest.raises(TypeError):
+                MdnsDiscovery(interfaces=LOOPBACK, **{param: bad})
 
 
 @pytest.mark.slow

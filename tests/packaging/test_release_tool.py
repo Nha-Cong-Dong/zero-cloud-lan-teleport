@@ -106,9 +106,8 @@ def test_tag_for_version_follows_two_form_rule(version: str, tag: str) -> None:
     assert rel.tag_for_version(version) == tag
 
 
-@pytest.mark.parametrize(
-    "version",
-    [
+def test_tag_for_version_rejects_forms_outside_rule() -> None:
+    for version in [
         "0.1.0rc1",
         "0.1.0rc0",
         "0.1.0a1",
@@ -138,11 +137,9 @@ def test_tag_for_version_follows_two_form_rule(version: str, tag: str) -> None:
         "1.0.٠",  # chữ số Ả Rập: không phải chữ số ASCII
         "1٠.0.0",
         "1.2٣.0",
-    ],
-)
-def test_tag_for_version_rejects_forms_outside_rule(version: str) -> None:
-    with pytest.raises(ReleaseError):
-        rel.tag_for_version(version)
+    ]:
+        with pytest.raises(ReleaseError):
+            rel.tag_for_version(version)
 
 
 @given(
@@ -191,9 +188,8 @@ def test_check_tag_accepts_matching_tag(tag: str, version: str) -> None:
     rel.check_tag(tag, version)
 
 
-@pytest.mark.parametrize(
-    ("tag", "version"),
-    [
+def test_check_tag_rejects_tag_that_does_not_match_version() -> None:
+    for tag, version in [
         ("v0.1.0a0", "0.1.0a0"),  # tag theo dạng PEP 440
         ("0.1.0-alpha", "0.1.0a0"),  # thiếu v
         ("V0.1.0-alpha", "0.1.0a0"),
@@ -207,11 +203,9 @@ def test_check_tag_accepts_matching_tag(tag: str, version: str) -> None:
         ("v1.0.0", "1.0.0.post1"),
         ("v0.1.0-rc", "0.1.0rc1"),
         ("", "1.0.0"),
-    ],
-)
-def test_check_tag_rejects_tag_that_does_not_match_version(tag: str, version: str) -> None:
-    with pytest.raises(ReleaseError):
-        rel.check_tag(tag, version)
+    ]:
+        with pytest.raises(ReleaseError):
+            rel.check_tag(tag, version)
 
 
 def test_main_check_tag_exits_0_on_match(fake_version, capsys: pytest.CaptureFixture[str]) -> None:
