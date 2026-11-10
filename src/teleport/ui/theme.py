@@ -537,25 +537,29 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f"{icon_button}:focus {{ border-color: {ring}; }}",
         f"{icon_button}:disabled {{ color: {t.text_muted.name()}; }}",
         f"{icon_button}::menu-indicator {{ image: none; width: 0px; }}",
-        f'QToolButton#addDeviceButton {{ background: transparent; border: 1px solid {t.border_strong.name()};'
-        f' border-radius: {RADIUS_BLOCK}px; padding: 2px 4px; color: {t.text.name()}; }}',
-        f'QToolButton#addDeviceButton:hover {{ background: {t.selected.name()}; border-color: {edge}; }}',
-        f'QToolButton#addDeviceButton:pressed {{ background: {t.border.name()}; }}',
-        f'QToolButton#addDeviceButton:focus {{ border-color: {ring}; }}',
+        f"QToolButton#addDeviceButton {{ background: transparent; border: 1px solid {t.border_strong.name()};"
+        f" border-radius: {RADIUS_BLOCK}px; padding: 2px 4px; color: {t.text.name()}; }}",
+        f"QToolButton#addDeviceButton:hover {{ background: {t.selected.name()}; border-color: {edge}; }}",
+        f"QToolButton#addDeviceButton:pressed {{ background: {t.border.name()}; }}",
+        f"QToolButton#addDeviceButton:focus {{ border-color: {ring}; }}",
         f'QPushButton[bubbleAction="true"] {{ background: transparent; border: 1px solid {t.border.name()};'
-        f' border-radius: {RADIUS_CONTROL}px; padding: 2px 10px; color: {t.text.name()}; }}',
-        f'QPushButton[bubbleAction="true"]:hover {{ background: {t.selected.name()}; border-color: {t.border_strong.name()}; }}',
+        f" border-radius: {RADIUS_CONTROL}px; padding: 2px 10px; color: {t.text.name()}; }}",
+        f'QPushButton[bubbleAction="true"]:hover {{ background: {t.selected.name()};'
+        f" border-color: {t.border_strong.name()}; }}",
         f'QPushButton[bubbleAction="true"]:pressed {{ background: {t.border.name()}; }}',
         f'QPushButton[bubbleAction="true"]:focus {{ border-color: {ring}; }}',
-        f'#emptyActionButton {{ background-color: {colors["normal"][1].name()}; color: {colors["normal"][0].name()};'
-        f' border: 2px solid {edge}; border-radius: 18px; padding: 6px 24px; font-weight: 600; }}',
-        f'#emptyActionButton:hover {{ background-color: {colors["hover"][1].name()}; border-color: {ring}; }}',
-        f'#emptyActionButton:pressed {{ background-color: {colors["pressed"][1].name()}; }}',
-        f'QToolButton#chatSendButton {{ background: {colors["normal"][1].name()}; color: {colors["normal"][0].name()};'
-        f' border: 2px solid {edge}; border-radius: {RADIUS_BLOCK}px; padding: 4px 14px; font-weight: 600; }}',
-        f'QToolButton#chatSendButton:hover {{ background: {colors["hover"][1].name()}; }}',
-        f'QToolButton#chatSendButton:pressed {{ background: {colors["pressed"][1].name()}; }}',
-        f'QToolButton#chatSendButton:focus {{ border-color: {ring}; }}',
+        f"#emptyActionButton {{ background-color: {colors['normal'][1].name()};"
+        f" color: {colors['normal'][0].name()}; border: 2px solid {edge}; border-radius: 18px;"
+        " padding: 6px 24px; font-weight: 600; }",
+        f"#emptyActionButton:hover {{ background-color: {colors['hover'][1].name()};"
+        f" border-color: {ring}; }}",
+        f"#emptyActionButton:pressed {{ background-color: {colors['pressed'][1].name()}; }}",
+        f"QToolButton#chatSendButton {{ background: {colors['normal'][1].name()};"
+        f" color: {colors['normal'][0].name()}; border: 2px solid {edge};"
+        f" border-radius: {RADIUS_BLOCK}px; padding: 4px 14px; font-weight: 600; }}",
+        f"QToolButton#chatSendButton:hover {{ background: {colors['hover'][1].name()}; }}",
+        f"QToolButton#chatSendButton:pressed {{ background: {colors['pressed'][1].name()}; }}",
+        f"QToolButton#chatSendButton:focus {{ border-color: {ring}; }}",
     ]
     tones = {
         "muted": t.text_muted,
