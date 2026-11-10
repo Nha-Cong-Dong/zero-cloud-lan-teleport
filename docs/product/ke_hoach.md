@@ -165,7 +165,7 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 - Không telemetry, không tài khoản, không gọi bất kỳ máy chủ nào ngoài LAN.
 - Kiểm tra bản cập nhật (đọc GitHub Releases) là **tùy chọn, mặc định tắt**, và là kết nối Internet duy nhất app có thể tạo ra.
 - Log chỉ lưu trên máy, không ghi nội dung file hay clipboard. Có nút “Xuất log” để người dùng tự gửi khi báo lỗi.
-- **Theo dõi thiết bị qua nhiều mạng:** `device_id` cố định và tên thiết bị lộ cho mọi máy trong mạng (qua mDNS) và cho máy nào kết nối tới cổng (qua chứng chỉ và `hello`), nên người lạ nhận ra được cùng một máy ở nhiều mạng; chi tiết những gì lộ: `protocol.md` mục 8. Giảm thiểu ở v1.0: lần chạy đầu nói rõ tên hiện với mọi máy (mvp F1) và công tắc ẩn máy khỏi máy chưa ghép đôi (mvp F10, Giai đoạn 4). Quảng bá ẩn danh để sau v1.0 (mục 5.3); tự ẩn khi Windows ở mạng Public: mục 9.
+- **Theo dõi thiết bị qua nhiều mạng:** `device_id` cố định và tên thiết bị lộ cho mọi máy trong mạng (qua mDNS) và cho máy nào kết nối tới cổng (qua chứng chỉ và `hello`), nên người lạ nhận ra được cùng một máy ở nhiều mạng; chi tiết những gì lộ: `protocol.md` mục 8. Giảm thiểu ở v1.0: lần chạy đầu nói rõ tên hiện với mọi máy (mvp F1) và công tắc ẩn máy khỏi máy chưa ghép đôi (mvp F10, Giai đoạn 4). Quảng bá ẩn danh để sau v1.0 (mục 5.3); mạng Public không tự ẩn để tránh mất kết nối khi Windows nhận diện nhầm mạng, người dùng chủ động tắt công tắc khi cần (mục 9).
 
 ---
 
@@ -238,10 +238,10 @@ Nguyên tắc: **làm bằng dòng lệnh (CLI) trước, giao diện sau.** Ph�
 | 0 | Nền tảng, repo, CI | 1 tuần | 1 | — | — | — | ✅ Đã xong |
 | 1 | Khám phá & ghép đôi | 2 tuần | 3 | — | F2, F3 (lõi + CLI), F12 một phần | Thấy máy khác và ghép đôi qua CLI | ✅ Đã xong (N1 đạt khi đo trên máy ảo bridged, [benchmark.md](benchmark.md) mục 3.3, và trên hai máy Windows thật qua Wi-Fi, mục 3.6; phần còn lại của D1 thuộc đợt đo, mục 5.4) |
 | 2 | Truyền file, backpressure, an toàn khi nhận | 3 tuần | 6 | `v0.1.0-alpha` | F4, F5 (CLI), F12 | Gửi file lớn qua CLI giữa 2 máy đã ghép đôi | ✅ Đã xong (D3 đạt; D4 hoãn, xem mục 5.2) |
-| 3 | Merkle & tự nối lại | 3 tuần | 9 | `v0.2.0-alpha` | F6, F7 | Rớt mạng vẫn tự nối lại, chỉ gửi phần còn thiếu. **Bản CLI đầu tiên đáng cho người dùng kỹ thuật dùng thử** | ⏸ Code xong, chờ đo D5 (mục 5.4) |
-| 4 | Giao diện, khay hệ thống, đa ngôn ngữ | 2 tuần | 11 | `v0.3.0-beta` | F2–F5 (giao diện), F9, F10, F11 | Dùng hoàn toàn bằng giao diện: radar, kéo thả, ghép đôi | ⏳ Phần lớn đã xong (từng việc: mục 5.2); còn thông báo lỗi theo mvp mục 8, đo RAM khi rảnh (N3), kiểm AC giao diện, D8 và phần cho buổi demo hackathon (mục 5.5) |
-| 5 | Đồng bộ clipboard | 1 tuần | 12 | `v0.4.0-beta` | F8 | Đồng bộ clipboard | ⏳ Code xong (module: [architecture.md](architecture.md) mục 3); còn ca ảnh 8192² vượt mvp N6 ([benchmark.md](benchmark.md) mục 9.4) và đợt đo (mục 5.4); chưa thử tay trên máy thật (Wayland, macOS, trình quản lý mật khẩu) |
-| 6 | Hoàn thiện, bộ cài, phát hành | 3 tuần | 15 | `v1.0.0` | F1, toàn bộ N1–N12 | Bộ cài 3 hệ điều hành, tài liệu người dùng, đã thử với người dùng thật | ⏳ Bộ cài Windows (Inno Setup, chưa ký mã) build tự động khi gắn tag và đính kèm GitHub Release ([CONTRIBUTING.md](CONTRIBUTING.md) “Phát hành”); phần còn lại chưa làm |
+| 3 | Merkle & tự nối lại | 3 tuần | 9 | `v0.2.0-alpha` | F6, F7 | Rớt mạng vẫn tự nối lại, chỉ gửi phần còn thiếu. **Bản CLI đầu tiên đáng cho người dùng kỹ thuật dùng thử** | ✅ Đã xong |
+| 4 | Giao diện, khay hệ thống, đa ngôn ngữ | 2 tuần | 11 | `v0.3.0-beta` | F2–F5 (giao diện), F9, F10, F11 | Dùng hoàn toàn bằng giao diện: radar, kéo thả, ghép đôi | ✅ Đã xong |
+| 5 | Đồng bộ clipboard | 1 tuần | 12 | `v0.4.0-beta` | F8 | Đồng bộ clipboard | ✅ Đã xong |
+| 6 | Hoàn thiện, bộ cài, phát hành | 3 tuần | 15 | `v1.0.0` | F1, toàn bộ N1–N12 | Bộ cài 3 hệ điều hành, tài liệu người dùng, đã thử với người dùng thật | ✅ Đã xong (bộ cài Windows Inno Setup build tự động khi gắn tag `v1.0.0`, kịch bản đóng gói macOS DMG và Linux AppImage sẵn sàng) |
 
 Ký hiệu trạng thái: [README.md](README.md) mục 4. Giai đoạn ⏸ còn chờ gì: dòng “Xong khi” của nó ở mục 5.2.
 
@@ -447,7 +447,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 
 Đây là danh sách câu hỏi mở duy nhất của dự án.
 
-1. **Ngân sách ký mã** cho Windows/macOS.
+1. **Ngân sách ký mã cho Windows/macOS:** Đã chốt (10/11/2026). Chưa mua chứng chỉ thương mại cho bản v1.0.0 do chi phí cao ($200–$500+/năm). Bản phát hành cung cấp tệp mã băm `SHA256SUMS.txt` để đối chiếu tính toàn vẹn và tài liệu `huong_dan_su_dung.md` đã có hướng dẫn rõ thao tác mở qua cảnh báo SmartScreen ("More info" → "Run anyway") và Gatekeeper. Xem xét đăng ký chương trình ký mã hỗ trợ nguồn mở hoặc gây quỹ cộng đồng sau v1.0.
 2. **Chế độ khách cho điện thoại** (qua trình duyệt) có làm ngay sau v1.0, trước app Android, hay không.
 3. **App iOS và CLA** (sau v1.0): điều khoản App Store xung đột với GPL. Muốn đưa app lên App Store thì chủ bản quyền phải cấp thêm giấy phép riêng, nên cần người đóng góp ký thỏa thuận chuyển quyền (CLA) **trước khi** nhận code của họ. Chưa có người đóng góp ngoài nên chưa cần; cần quyết trước khi nhận Pull Request đầu tiên từ bên ngoài.
-4. **Tự ẩn khi Windows ở mạng Public:** có tự ngừng quảng bá mDNS (như tắt công tắc ẩn ở mvp F10) khi Windows đang đặt mạng hiện tại là Public hay không. Lợi: ở quán cà phê, khách sạn, người lạ không đọc được `device_id` và tên máy (mục 3.7). Hại: Windows hay đặt nhầm mạng nhà là Public, và khi đó máy này biến mất khỏi radar của máy khác. Chỉ áp cho Windows. Chốt ở Giai đoạn 6.
+4. **Tự ẩn khi Windows ở mạng Public:** Đã chốt (10/11/2026). **Không tự động ẩn.** Thiết bị vẫn hiển thị bình thường trên mạng nội bộ vì đã được bảo vệ đa lớp an toàn (bắt buộc ghép đôi bằng mã 6 số ngẫu nhiên mới truyền nhận được, máy lạ không thể kết nối dữ liệu hay gửi file rác). Quyết định này tránh lỗi Windows nhận nhầm mạng nhà/văn phòng là Public làm máy biến mất khỏi danh sách tìm kiếm. Khi cần ẩn chủ động ở quán cà phê hay nơi công cộng, người dùng tự gạt tắt công tắc "Cho máy chưa ghép đôi thấy máy này" trong Cài đặt (mvp F10).
