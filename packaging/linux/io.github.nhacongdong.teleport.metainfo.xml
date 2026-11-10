@@ -29,7 +29,7 @@
   </provides>
 
   <releases>
-    <release version="1.0.0" date="2026-11-09">
+    <release version="1.0.0" date="2026-11-10">
       <description>
         <p>Bản phát hành chính thức 1.0.0 với đầy đủ tính năng truyền file dung lượng lớn, tự nối lại khi đứt mạng, đồng bộ clipboard an toàn và phát hiện tường lửa mạng nội bộ.</p>
       </description>

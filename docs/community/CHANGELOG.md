@@ -5,11 +5,14 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-10
+
 ### Added
-- Đóng gói đa nền tảng và chuẩn bị phát hành v1.0.0:
+- Đóng gói đa nền tảng và phát hành chính thức v1.0.0:
+  - Bộ cài đặt tự động cho Windows 10/11 64-bit (`teleport-setup-1.0.0-x64.exe`), bản đóng gói giao diện chạy ngay (`teleport-gui-1.0.0-windows-x64.zip`) và bản dòng lệnh (`teleport-cli-1.0.0-windows-x64.zip`).
   - Kịch bản đóng gói AppImage trên Linux (`packaging/linux/build-appimage.sh`), file desktop entry XDG (`packaging/linux/io.github.nhacongdong.teleport.desktop`) và tệp AppStream metainfo chuẩn (`packaging/linux/io.github.nhacongdong.teleport.metainfo.xml`).
   - Kịch bản đóng gói macOS DMG (`packaging/macos/build-dmg.sh`) và mẫu cấu hình bundle `Info.plist.in` (`packaging/macos/Info.plist.in`).
-  - Bộ kịch bản tự động đo đạc sẵn sàng cho đợt đo thiết bị thật D2 (so sánh tốc độ giữa Teleport và chia sẻ thư mục SMB: `tools/bench_d2_smb.py`) và D4 (kiểm tra ghi tệp lên ổ đĩa đích tốc độ chậm USB: `tools/bench_d4_disk.py`).
+  - Bộ kịch bản tự động đo đạc tốc độ truyền thực tế (`tools/bench_d2_smb.py`) và kiểm tra ghi tệp lên ổ đĩa đích tốc độ chậm (`tools/bench_d4_disk.py`).
   - Tài liệu hướng dẫn sử dụng sản phẩm cho người dùng cuối (`docs/product/huong_dan_su_dung.md`) bằng ngôn ngữ trực quan, thuần Việt, dễ hiểu; hướng dẫn cài đặt, ghép đôi an toàn, gửi nhận tệp dung lượng lớn và xử lý sự cố mạng riêng tư / tường lửa.
 - Kiểm tra độ bền bỉ tự động (mvp N7): bài kiểm tra độ bền bỉ chạy liên tục 100 lượt truyền file trên mạng nội bộ loopback, xen kẽ giữa file nhỏ, file trung bình và file lớn, kiểm tra không có rò rỉ bộ nhớ (tăng trưởng < 2 MiB) và không để sót bất kỳ file tạm nào (`tests/app/test_soak.py`, `docs/technical/benchmark.md` mục 10).
 - Tự động phát hiện và cảnh báo tường lửa: ứng dụng tự động kiểm tra hồ sơ mạng của Windows; khi mạng hiện tại là Mạng công cộng (Public) hoặc tường lửa Windows đang chặn kết nối đến của Teleport, giao diện sẽ hiển thị thanh cảnh báo kèm nút “Mở hướng dẫn” để người dùng mở hộp thoại hướng dẫn cấu hình mạng và tường lửa (mvp mục 8).
@@ -22,7 +25,8 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - Giám sát mạng thông minh hơn (`NetworkWatch`): so sánh tập hợp địa chỉ mạng thay vì so sánh thứ tự; khi các card mạng đổi thứ tự ưu tiên mà tập địa chỉ giữ nguyên thì không khởi động lại dịch vụ tìm kiếm mDNS không cần thiết và không ngắt kết nối điều khiển giữa các máy.
 - Lọc card mạng ảo dạng đường hầm: loại trừ các card VPN, WireGuard, Tailscale khỏi ngoại lệ địa chỉ nguồn ưu tiên khi máy có card mạng thật, ngăn trường hợp VPN chiếm tuyến làm lộ địa chỉ ảo ra mạng nội bộ.
 - Tinh gọn nhật ký lỗi kết nối: hạ mức ghi nhật ký khi máy khác ngắt kết nối bất ngờ trong lúc đang nhận kết nối mới xuống mức thông tin chi tiết (DEBUG), loại bỏ hoàn toàn các dòng cảnh báo gây nhiễu log.
-- README viết lại cho bản `v0.1.0-alpha`: link tới trang giới thiệu sản phẩm, ảnh chụp giao diện, mục “Bắt đầu nhanh” (tải và kiểm file từ trang Release, SmartScreen, tường lửa), cột cho biết tính năng nào đã có trong bản alpha, đoạn tóm tắt bằng tiếng Anh, câu hỏi thường gặp gọn hơn; con số và chi tiết giao thức nay chỉ trỏ tới tài liệu nguồn trong `docs/`.
+- Chốt chính sách hiển thị trên mạng công cộng (Public Network): thiết bị vẫn hiển thị bình thường để tránh lỗi mất kết nối khi Windows nhận diện nhầm mạng nhà/văn phòng là mạng công cộng; người dùng chủ động tắt công tắc ẩn danh trong Cài đặt khi cần.
+- Cập nhật `README.md` và hệ thống tài liệu cho bản phát hành chính thức `v1.0.0`.
 
 ## [0.1.0-alpha] - 2026-11-05
 

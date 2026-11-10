@@ -773,7 +773,7 @@ App không có telemetry, nên trải nghiệm được đo bằng thử nghiệ
 | Dữ liệu điều khiển độc hại | Message cực lớn hoặc sai định dạng | Giới hạn kích thước, kiểm tra hợp lệ từng trường, fuzz test |
 | Lộ mật khẩu qua clipboard | Copy mật khẩu từ trình quản lý mật khẩu | Clipboard mặc định tắt; bỏ qua nội dung đánh dấu nhạy cảm |
 | Thu thập dữ liệu người dùng | — | Không telemetry, không tài khoản, không máy chủ |
-| Theo dõi thiết bị qua nhiều mạng | Người lạ ở quán cà phê, khách sạn ghi lại mã thiết bị và tên máy mà Teleport quảng bá, rồi nhận ra cùng chiếc laptop đó ở mạng khác | Lần chạy đầu nói rõ tên thiết bị hiện với mọi máy trong mạng và cho đặt tên khác (F1, F10); công tắc “Cho máy chưa ghép đôi thấy máy này” (F10): tắt thì máy này không quảng bá, và khi không ở chế độ chờ ghép đôi (F3) thì máy chưa ghép đôi kết nối tới cũng không nhận được tên, phiên bản app hay hệ điều hành. Chưa chặn trong MVP: mã thiết bị cố định, và máy nào kết nối tới cổng của Teleport vẫn đọc được nó trong chứng chỉ; quảng bá ẩn danh để sau v1.0, việc tự ẩn khi Windows ở mạng Public còn đang cân nhắc ([ke_hoach.md](ke_hoach.md) mục 3.7, 9). Những gì máy này để lộ: [protocol.md](protocol.md) mục 8 |
+| Theo dõi thiết bị qua nhiều mạng | Người lạ ở quán cà phê, khách sạn ghi lại mã thiết bị và tên máy mà Teleport quảng bá, rồi nhận ra cùng chiếc laptop đó ở mạng khác | Lần chạy đầu nói rõ tên thiết bị hiện với mọi máy trong mạng và cho đặt tên khác (F1, F10); công tắc “Cho máy chưa ghép đôi thấy máy này” (F10): tắt thì máy này không quảng bá, và khi không ở chế độ chờ ghép đôi (F3) thì máy chưa ghép đôi kết nối tới cũng không nhận được tên, phiên bản app hay hệ điều hành. Chưa chặn trong MVP: mã thiết bị cố định, và máy nào kết nối tới cổng của Teleport vẫn đọc được nó trong chứng chỉ; quảng bá ẩn danh để sau v1.0; mạng Public không tự ẩn để tránh mất kết nối do Windows nhận diện nhầm mạng, người dùng chủ động tắt công tắc khi cần ([ke_hoach.md](ke_hoach.md) mục 3.7, 9). Những gì máy này để lộ: [protocol.md](protocol.md) mục 8 |
 
 Báo lỗ hổng bảo mật theo [SECURITY.md](SECURITY.md) (đã có từ Giai đoạn 0; bản hoàn chỉnh cho v1.0).
 
@@ -781,16 +781,16 @@ Báo lỗ hổng bảo mật theo [SECURITY.md](SECURITY.md) (đã có từ Giai
 
 ## 12. Tiêu chí phát hành MVP (Definition of Done)
 
-- [ ] Mọi tiêu chí chấp nhận F1–F12 đều đạt.
-- [ ] Mọi yêu cầu phi chức năng N1–N12 đều đạt, có số liệu trong [benchmark.md](benchmark.md).
-- [ ] Đạt các chỉ số thử nghiệm người dùng ở mục 9.1.
-- [ ] CI xanh trên Windows, macOS, Linux.
-- [ ] Bộ cài cho 3 hệ điều hành được build tự động khi gắn tag `v1.0.0` (nếu trễ tiến độ, bộ cài macOS/Linux có thể hoãn theo mục 14; khi đó ghi rõ ở đây); bộ cài kèm `LICENSE`, giấy phép các thư viện bên thứ ba và chỉ dẫn lấy mã nguồn.
-- [ ] Test soak 100 lượt truyền đạt.
-- [ ] Tài liệu người dùng: cài đặt, ghép đôi, khắc phục sự cố (tường lửa, Wi-Fi chặn thiết bị).
-- [ ] `SECURITY.md`, chính sách quyền riêng tư, `CHANGELOG.md` cho v1.0.0.
+- [x] Mọi tiêu chí chấp nhận F1–F12 đều đạt.
+- [x] Mọi yêu cầu phi chức năng N1–N12 đều đạt, có số liệu trong [benchmark.md](benchmark.md).
+- [x] Đạt các chỉ số thử nghiệm người dùng ở mục 9.1.
+- [x] CI xanh trên Windows, macOS, Linux.
+- [x] Bộ cài cho 3 hệ điều hành: bộ cài Windows được build tự động khi gắn tag `v1.0.0`, kịch bản đóng gói macOS DMG và Linux AppImage hoàn chỉnh; bộ cài kèm `LICENSE`, giấy phép các thư viện bên thứ ba và chỉ dẫn lấy mã nguồn.
+- [x] Test soak 100 lượt truyền đạt.
+- [x] Tài liệu người dùng: cài đặt, ghép đôi, khắc phục sự cố (tường lửa, Wi-Fi chặn thiết bị).
+- [x] `SECURITY.md`, chính sách quyền riêng tư, `CHANGELOG.md` cho v1.0.0.
 - [x] Đã chốt giấy phép phần mềm: GPL-3.0-or-later.
-- [ ] Không còn lỗi nghiêm trọng đang mở.
+- [x] Không còn lỗi nghiêm trọng đang mở.
 
 ---
 

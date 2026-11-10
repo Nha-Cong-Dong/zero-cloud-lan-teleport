@@ -12,14 +12,14 @@
 [![Giấy phép](https://img.shields.io/badge/gi%E1%BA%A5y%20ph%C3%A9p-GPL--3.0-blue)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 
-**[Trang giới thiệu](https://nha-cong-dong.github.io/teleport-site/)** · **[Tải bản thử nghiệm](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
+**[Trang giới thiệu](https://nha-cong-dong.github.io/teleport-site/)** · **[Tải bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
 
 </div>
 
 > **Giới thiệu:** ZCL Teleport giúp bạn chuyển các file dung lượng rất lớn và đồng bộ nội dung sao chép giữa các máy tính trong cùng một mạng nội bộ nhanh chóng, bảo mật trực tiếp giữa hai máy mà không đi qua máy chủ bên ngoài hay thu thập thông tin người dùng. Khi đường truyền bị ngắt giữa chừng, ứng dụng tự động gửi tiếp phần còn lại ngay khi kết nối trở lại.
 
 > [!NOTE]
-> **Teleport đang trong giai đoạn thử nghiệm.** Bản đầu tiên là `v0.1.0-alpha` cho Windows. Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
+> **Phiên bản chính thức `v1.0.0` đã sẵn sàng.** Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
 
 ---
 
@@ -64,7 +64,7 @@ Chi tiết nguyên tắc thiết kế: [docs/product/y_tuong.md](docs/product/y_
 
 Tiêu chí chi tiết cho từng tính năng: [docs/product/mvp.md](docs/product/mvp.md).
 
-| Tính năng | Mô tả chi tiết | Bản Alpha |
+| Tính năng | Mô tả chi tiết | Trạng thái |
 |---|---|:---:|
 | **Tự tìm máy trong mạng** | Mở ứng dụng là nhìn thấy ngay các máy khác đang mở Teleport gần bạn. Nếu mạng chặn tìm tự động, có thể nhập địa chỉ máy để kết nối. | Hoàn thành |
 | **Ghép đôi một lần duy nhất** | Lần đầu kết nối, hai máy hiển thị cùng một mã 6 chữ số để xác nhận. Sau đó hai máy sẽ tự nhận ra nhau. | Hoàn thành |
@@ -76,7 +76,7 @@ Tiêu chí chi tiết cho từng tính năng: [docs/product/mvp.md](docs/product
 | **Tùy biến linh hoạt** | Đổi tên máy, đổi thư mục lưu file nhận, ẩn danh khỏi máy lạ, đổi giao diện sáng/tối. | Hoàn thành |
 | **Hỗ trợ hai ngôn ngữ** | Tiếng Việt và Tiếng Anh. | Hoàn thành |
 | **Hỗ trợ dòng lệnh** | Cung cấp lệnh điều khiển cho người thích thao tác nhanh hoặc tự động hóa công việc. | Hoàn thành |
-| **Bộ cài đặt dễ dùng** | Cài đặt nhanh chóng cho Windows; các hệ điều hành khác đang được hoàn thiện. | Đang phát triển |
+| **Bộ cài đặt dễ dùng** | Bộ cài đặt tiêu chuẩn cho Windows cùng kịch bản đóng gói đa nền tảng. | Hoàn thành |
 
 <table>
 <tr>
@@ -220,10 +220,10 @@ Tiến độ chi tiết từng giai đoạn được cập nhật tại [docs/pr
 
 - **Giai đoạn 1:** Nền tảng kết nối trực tiếp, tìm kiếm máy trong mạng và cơ chế ghép đôi an toàn (Đã hoàn thành).
 - **Giai đoạn 2 (`v0.1.0-alpha`):** Chuyển file dung lượng lớn trực tiếp giữa hai máy đã ghép đôi trên Windows (Đã phát hành).
-- **Giai đoạn 3:** Hoàn thiện cơ chế tự động gửi tiếp dữ liệu khi ngắt kết nối kéo dài.
-- **Giai đoạn 4:** Hoàn thiện giao diện đồ họa, tối ưu khay hệ thống, ngôn ngữ Tiếng Việt và Tiếng Anh.
-- **Giai đoạn 5:** Hoàn thiện tính năng đồng bộ nội dung sao chép an toàn.
-- **Bản chính thức (`v1.0.0`):** Đóng gói bộ cài đặt tiêu chuẩn, mở rộng hỗ trợ các nền tảng khác.
+- **Giai đoạn 3:** Hoàn thiện cơ chế tự động gửi tiếp dữ liệu khi ngắt kết nối kéo dài (Đã hoàn thành).
+- **Giai đoạn 4:** Hoàn thiện giao diện đồ họa, tối ưu khay hệ thống, ngôn ngữ Tiếng Việt và Tiếng Anh (Đã hoàn thành).
+- **Giai đoạn 5:** Hoàn thiện tính năng đồng bộ nội dung sao chép an toàn (Đã hoàn thành).
+- **Bản chính thức (`v1.0.0`):** Đóng gói bộ cài đặt tiêu chuẩn, tài liệu người dùng và kịch bản đa nền tảng (Đã hoàn thành).
 
 ---
 
