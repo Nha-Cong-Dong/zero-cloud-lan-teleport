@@ -39,6 +39,8 @@ Fixture chính:
   xóa tập backdrop đang theo dõi; spec G7). Test giả Windows 11 bằng cách vá đè seam của module.
 - `real_motion`: test xin khi cần hoạt ảnh chạy thật: tắt chế độ tức thì và vá
   `motion.animations_enabled` thành `lambda: True`. Chỉ kiểm giá trị cuối, không giá trị giữa chừng.
+- `fake_firewall_status` (tự dùng): vá `ui.app.check_firewall_status_fn` thành `NONE` (không kiểm
+  tra tường lửa thật của máy), tránh dải thông báo tường lửa làm sai lệch các test giao diện chung.
 """
 
 from __future__ import annotations
@@ -452,6 +454,24 @@ def fake_default_receive_dir(monkeypatch, tmp_path) -> Path:
     default = tmp_path / "nhan-mac-dinh"
     monkeypatch.setattr(paths, "default_receive_dir", lambda: default)
     return default
+
+
+@pytest.fixture(autouse=True)
+def fake_firewall_status(monkeypatch):
+    """Mọi test ui: `check_firewall_status_fn` trả về `NONE` mặc định.
+
+    Tránh trường hợp môi trường chạy test (nhất là máy ảo Windows Server trên CI hay máy Windows
+    thật chưa có quy tắc tường lửa) hiện dải thông báo cảnh báo tường lửa làm sai lệch các phép kiểm
+    tra giao diện không liên quan đến tường lửa. Test riêng về tường lửa có thể tự vá lại seam này.
+    """
+    try:
+        from teleport.app.firewall import FirewallIssue
+        from teleport.ui import app
+    except Exception:
+        yield
+        return
+    monkeypatch.setattr(app, "check_firewall_status_fn", lambda: FirewallIssue.NONE)
+    yield
 
 
 @pytest.fixture
