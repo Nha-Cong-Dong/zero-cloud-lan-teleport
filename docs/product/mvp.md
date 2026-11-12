@@ -2,7 +2,7 @@
 
 > **Vai trò:** đặc tả sản phẩm — giải quyết vấn đề gì, cho ai, gồm những gì, trông ra sao, đạt chuẩn nào thì được phát hành.
 > **Nguồn duy nhất cho:** phạm vi MVP, tính năng và tiêu chí chấp nhận (F1–F12), yêu cầu phi chức năng (N1–N12), thông báo lỗi, tiêu chí phát hành.
-> **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](README.md).
+> **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](../README.md).
 > **Cập nhật:** 2026-11-03
 
 ---
@@ -14,7 +14,7 @@
 | | |
 |---|---|
 | **Cho ai** | Người làm việc với nhiều máy tính hoặc ngồi cạnh đồng nghiệp: lập trình viên, designer, dựng video, văn phòng nhỏ, gia đình |
-| **Vấn đề** | Chuyển file giữa hai máy cách nhau 20cm vẫn phải qua Zalo (nén ảnh, giới hạn dung lượng), Google Drive (upload rồi download, tốn gấp đôi thời gian), USB (phải tìm, cắm, rút) hoặc chia sẻ thư mục Windows (cấu hình phức tạp) |
+| **Vấn đề** | Chuyển file giữa hai máy cách nhau 20cm vẫn phải qua ứng dụng nhắn tin (nén ảnh, giới hạn dung lượng), lưu trữ đám mây (tải lên rồi tải về, tốn gấp đôi thời gian), USB (phải tìm, cắm, rút) hoặc chia sẻ thư mục Windows (cấu hình phức tạp) |
 | **Giải pháp** | Mở app → máy kia tự hiện trên radar → kéo file thả vào → xong |
 | **Khác biệt** | Rớt mạng giữa chừng vẫn **tự nối lại và chỉ gửi phần còn thiếu**; kiểm tra toàn vẹn từng khối; đồng bộ clipboard; không tài khoản, không telemetry |
 | **Nền tảng** | Windows 10/11 (chính), macOS 12+, Ubuntu 22.04+ |
@@ -28,16 +28,16 @@
 
 | Người dùng | Bối cảnh | Nhu cầu chính | Hiện đang làm |
 |---|---|---|---|
-| **Minh — lập trình viên** | Laptop công ty + PC ở nhà, hay chuyển bản build 2–5GB, dump database | Nhanh, không giới hạn dung lượng, không phải đăng nhập tài khoản cá nhân lên máy công ty | USB hoặc Google Drive |
+| **Minh — lập trình viên** | Laptop công ty + PC ở nhà, hay chuyển bản build 2–5GB, dump database | Nhanh, không giới hạn dung lượng, không phải đăng nhập tài khoản cá nhân lên máy công ty | USB hoặc dịch vụ lưu trữ đám mây |
 | **Lan — dựng video** | Quay xong copy footage 30–80GB từ laptop sang máy dựng | Ổn định với file cực lớn, rớt Wi-Fi không phải gửi lại từ đầu | Ổ cứng rời |
-| **Văn phòng 5 người** | Gửi tài liệu, ảnh chụp màn hình qua lại cả ngày | Gửi nhanh cho người ngồi cạnh, copy đoạn văn từ máy này dán sang máy kia | Zalo, email cho chính mình |
+| **Văn phòng 5 người** | Gửi tài liệu, ảnh chụp màn hình qua lại cả ngày | Gửi nhanh cho người ngồi cạnh, copy đoạn văn từ máy này dán sang máy kia | Ứng dụng nhắn tin, email cho chính mình |
 
 ### 2.2. Vì sao giải pháp hiện tại chưa ổn
 
 | Cách | Tốc độ | File lớn | Riêng tư | Dễ dùng | Rớt mạng |
 |---|---|---|---|---|---|
-| Zalo / Messenger | Phụ thuộc Internet | ❌ giới hạn, nén ảnh | ❌ qua máy chủ, phải đăng nhập | ✅ | Gửi lại từ đầu |
-| Google Drive | Upload + download ≈ gấp đôi | ⚠️ chậm | ⚠️ lưu trên cloud | ✅ | Tùy |
+| Ứng dụng nhắn tin | Phụ thuộc Internet | ❌ giới hạn, nén ảnh | ❌ qua máy chủ, phải đăng nhập | ✅ | Gửi lại từ đầu |
+| Lưu trữ đám mây | Tải lên + tải về ≈ gấp đôi | ⚠️ chậm | ⚠️ lưu trên máy chủ từ xa | ✅ | Tùy |
 | USB | Nhanh | ✅ | ✅ | ⚠️ phải có USB, cắm rút | — |
 | Chia sẻ thư mục Windows (SMB) | Nhanh | ✅ | ⚠️ cấu hình quyền phức tạp | ❌ | Gửi lại từ đầu |
 | **Teleport** | **Tối đa tốc độ LAN** | **✅ hàng chục GB** | **✅ mã hóa, không cloud** | **✅ kéo thả** | **✅ chỉ gửi phần thiếu** |
@@ -85,7 +85,7 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 
 **Để sau hackathon:** kiểm thủ công đủ N12; bộ cài ký số và bản phát hành chính thức; macOS và Linux có bản đóng gói; luồng máy đã ghép đôi cài lại Teleport trên giao diện (F3, mục 8; CLI đã gợi ý ở `teleport list`).
 
-**Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](benchmark.md).
+**Đạt khi** cả năm tiêu chí sau đạt trên **hai máy Windows thật cùng một mạng Wi-Fi**, mỗi máy chạy bản zip, không gõ lệnh nào (trừ lệnh kiểm hash). Mỗi tiêu chí ghi kết quả và ngày vào [benchmark.md](../technical/benchmark.md).
 
 | Mã | Tiêu chí | Cách kiểm |
 |---|---|---|
@@ -97,7 +97,7 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 
 Từ 03/11 tới hết buổi demo, `main` đóng băng tính năng: chỉ nhận bản sửa lỗi, luật ở [ke_hoach.md](ke_hoach.md) mục 5.5. Bản zip đã kiểm H1–H5 được chốt theo commit. Không đạt kịp thì demo bằng CLI cho phần giao diện còn thiếu; H2–H5 vẫn phải đạt bằng CLI.
 
-Kịch bản demo hackathon (5 phút): các dòng 0:00–3:00 của mục 13, thêm H4 (đóng app nhận rồi mở lại) và dòng 4:00 (tắt Internet của router). Bỏ clipboard và so sánh với Google Drive.
+Kịch bản demo hackathon (5 phút): các dòng 0:00–3:00 của mục 13, thêm H4 (đóng app nhận rồi mở lại) và dòng 4:00 (tắt Internet của router). Bỏ clipboard và so sánh với lưu trữ đám mây.
 
 ---
 
@@ -148,8 +148,8 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Hạn chế máy lạ làm phiền: chỉ một phiên ghép đôi tại một thời điểm; sau mỗi lần từ chối hay hết giờ, máy đó phải chờ lâu dần (10 giây, 20 giây… tối đa 10 phút) mới gửi được yêu cầu mới. Đây là mức tốt nhất có thể trong LAN, không chống được máy cố tình đổi địa chỉ liên tục; ghép đôi vẫn an toàn vì cần xác nhận mã ở cả hai máy.
   - Khi nhận yêu cầu ghép đôi, máy này hiện tối đa **5 mã mỗi phút** (gộp mọi máy gửi yêu cầu); quá thì yêu cầu mới nhận “chưa sẵn sàng ghép đôi” (mục 8). Từ mã thứ **3** trong 1 phút, máy này cảnh báo có thể có người đang thử giả mạo (mục 8). Nhờ vậy kẻ đứng giữa chỉ thử được vài mã trong lúc người dùng chờ xác nhận.
   - Không ghép đôi đè lên một thiết bị tin cậy có cùng mã thiết bị nhưng danh tính khác; phải hủy ghép đôi mục cũ trước, và khi đó cài đặt theo thiết bị cũ cũng bị xóa.
-  - Ghép đôi lại với một thiết bị tin cậy (cùng mã thiết bị, cùng danh tính, ví dụ sau khi ghép đôi một phía): lời hỏi hiện thêm tên đã lưu, và tên mới nếu tên sẽ đổi (mục 7.2). Ghép đôi xong, **cả hai máy** cập nhật tên theo tên máy kia đang dùng, vì lúc ghép đôi mỗi máy đã xác minh máy kia giữ đúng khóa của thiết bị đó ([protocol.md](protocol.md) mục 5.1, 5.5). Máy lạ chỉ có chứng chỉ công khai của thiết bị đó thì bị chặn trước khi hiện mã.
-  - Máy đã ghép đôi đổi tên (F10): máy này cập nhật tên đã lưu ở lần kết nối kế tiếp với máy đó, không hỏi lại. Kết nối giữa hai máy đã ghép đôi xác thực cả hai bên bằng chứng chỉ đã lưu, nên chỉ chính máy đó đổi được tên của nó; máy lạ hay bản quảng bá trên mạng không đổi được ([protocol.md](protocol.md) mục 5.5).
+  - Ghép đôi lại với một thiết bị tin cậy (cùng mã thiết bị, cùng danh tính, ví dụ sau khi ghép đôi một phía): lời hỏi hiện thêm tên đã lưu, và tên mới nếu tên sẽ đổi (mục 7.2). Ghép đôi xong, **cả hai máy** cập nhật tên theo tên máy kia đang dùng, vì lúc ghép đôi mỗi máy đã xác minh máy kia giữ đúng khóa của thiết bị đó ([protocol.md](../technical/protocol.md) mục 5.1, 5.5). Máy lạ chỉ có chứng chỉ công khai của thiết bị đó thì bị chặn trước khi hiện mã.
+  - Máy đã ghép đôi đổi tên (F10): máy này cập nhật tên đã lưu ở lần kết nối kế tiếp với máy đó, không hỏi lại. Kết nối giữa hai máy đã ghép đôi xác thực cả hai bên bằng chứng chỉ đã lưu, nên chỉ chính máy đó đổi được tên của nó; máy lạ hay bản quảng bá trên mạng không đổi được ([protocol.md](../technical/protocol.md) mục 5.5).
 
 ### F4. Gửi file
 - **US-06:** Tôi muốn kéo một hoặc nhiều file thả lên máy ở cột trái để gửi.
@@ -157,13 +157,13 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
 - **AC:**
   - Kéo thả (lên một máy ở cột trái, hay vào luồng của máy đang mở), hoặc “Gửi file” (nút ở thanh dưới luồng của máy đang chọn, phím Ctrl+O, hay chuột phải vào thiết bị → “Gửi file…”), đều được; hỗ trợ chọn nhiều file. Chép file trong File Explorer (macOS: Finder) rồi nhấn Ctrl+V trong cửa sổ chính khi đang mở luồng của một máy cũng gửi ngay như thả file, không hỏi lại; chỉ gửi bản sao, kể cả khi chép bằng “Cắt”; Ctrl+V trong ô nhập chữ vẫn dán chữ như thường; clipboard không phải file thì không gửi gì (mục 8). Enter hay bấm đúp một máy ở cột trái mở cuộc trò chuyện với máy đó (tiêu điểm tới nút “Gửi file”).
   - Chọn file trong File Explorer rồi bấm chuột phải › Gửi tới › **ZCL Teleport** (lối tắt do bộ cài Windows tạo; bản zip không có) thì mở hộp “Gửi *n* file tới…” có sẵn các file đó (mục 7.7). Teleport chỉ gửi khi người dùng chọn máy và bấm **Gửi**, không bao giờ tự gửi. Teleport chưa chạy thì được mở trước, hộp hiện khi Teleport đã sẵn sàng.
-  - Mỗi file tối đa 4 TB (2⁴² byte, [protocol.md](protocol.md) mục 3.3). File lớn hơn bị chặn ngay lúc chọn, trước khi gửi gì cho máy kia (mục 8).
+  - Mỗi file tối đa 4 TB (2⁴² byte, [protocol.md](../technical/protocol.md) mục 3.3). File lớn hơn bị chặn ngay lúc chọn, trước khi gửi gì cho máy kia (mục 8).
   - Máy nhận hiện hộp thoại: tên người gửi, danh sách file, tổng dung lượng, nút **Nhận** / **Từ chối**; hoặc, khi đang mở đúng cuộc trò chuyện với máy gửi, một bong bóng lời mời có cùng các nút; trả lời ở một chỗ thì chỗ kia đóng (mục 7.3). Có tùy chọn “Luôn nhận từ thiết bị này” (tương đương tắt “Hỏi trước khi nhận” của thiết bị đó trong cài đặt).
   - Không đủ dung lượng trống → máy nhận tự từ chối ngay, máy gửi được báo cần bao nhiêu và còn bao nhiêu.
   - Thư mục nhận nằm trên ổ không chứa được file lớn như vậy (ổ FAT32, thường là USB cũ: mỗi file phải nhỏ hơn 4 GB) → máy nhận tự từ chối ngay cả lượt gửi, không hỏi người dùng; hai máy đều được báo lý do (mục 8).
   - Trùng tên file → tự đặt `ten (1).ext`, không bao giờ ghi đè.
   - Tên file chứa `..`, đường dẫn tuyệt đối, ký tự cấm hay tên thiết bị đặc biệt của Windows (`CON`, `NUL`…) → được làm sạch, file luôn nằm trong thư mục nhận.
-  - Máy gửi kiểm tên file trước khi gửi: tên chứa ký tự điều khiển (ví dụ dấu xuống dòng, hay gặp trên macOS/Linux) thì không gửi và báo người dùng đổi tên (mục 8); tên quá dài thì máy gửi tự cắt ngắn, giữ đuôi file (giới hạn: [protocol.md](protocol.md) mục 3.3), và máy nhận thấy tên đã cắt trong hộp thoại nhận.
+  - Máy gửi kiểm tên file trước khi gửi: tên chứa ký tự điều khiển (ví dụ dấu xuống dòng, hay gặp trên macOS/Linux) thì không gửi và báo người dùng đổi tên (mục 8); tên quá dài thì máy gửi tự cắt ngắn, giữ đuôi file (giới hạn: [protocol.md](../technical/protocol.md) mục 3.3), và máy nhận thấy tên đã cắt trong hộp thoại nhận.
   - File chỉ xuất hiện với tên thật **sau khi** đã kiểm tra toàn vẹn xong; trong lúc nhận, dữ liệu nằm trong thư mục tạm ẩn `.teleport` bên trong thư mục nhận.
 
 ### F5. Theo dõi & quản lý lượt truyền
@@ -224,7 +224,7 @@ Mỗi tính năng có các user story (US) và tiêu chí chấp nhận (AC). M�
   - Tắt thì máy này ngừng quảng bá trên mạng và biến mất khỏi radar của máy khác như khi thoát app (N1). Bật lại thì máy này quảng bá lại ngay.
   - Đang ẩn, máy này vẫn thấy máy khác trên radar, vẫn tự kết nối tới thiết bị tin cậy đang hiện (và tới địa chỉ đã kết nối được gần nhất của thiết bị tin cậy, F2), và gửi/nhận file, clipboard như thường.
   - Ngay dưới công tắc có dòng: “Máy đã ghép đôi tự kết nối được khi ít nhất một trong hai máy đang hiện, hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.”
-  - Đang ẩn và không ở chế độ chờ ghép đôi (F3): máy chưa ghép đôi kết nối tới cổng của Teleport bị cắt ngay sau bắt tay, trước khi máy này gửi tên, phiên bản app hay hệ điều hành, trừ máy mà máy này đang chủ động ghép đôi tới ([protocol.md](protocol.md) mục 2, 8).
+  - Đang ẩn và không ở chế độ chờ ghép đôi (F3): máy chưa ghép đôi kết nối tới cổng của Teleport bị cắt ngay sau bắt tay, trước khi máy này gửi tên, phiên bản app hay hệ điều hành, trừ máy mà máy này đang chủ động ghép đôi tới ([protocol.md](../technical/protocol.md) mục 2, 8).
   - Đang ẩn vẫn ghép đôi được: máy này chủ động ghép đôi tới máy kia, hoặc mở màn hình “Chờ ghép đôi” (F3, mục 7.5) để máy kia nhập IP thủ công. Khi đang ẩn, màn hình đó có dòng: “Máy này đang ẩn nên máy kia không tự thấy. Hãy nhập IP của máy này ở máy kia.”
 
 ### F11. Đa ngôn ngữ
@@ -336,7 +336,7 @@ Màn “Tìm máy mới”:
 └───────────────────────────────────────────┘
 ```
 
-Tên máy kia do chính máy đó tự đặt và chưa được xác thực ([protocol.md](protocol.md) mục 3.3). Nếu tên đứng ngay trước mã, kẻ đứng giữa đặt tên kiểu `PC-A:   382 104` là hiện được một mã giả đúng chỗ người dùng nhìn. Vì vậy lời hỏi ghép đôi, ở giao diện lẫn CLI, theo đúng bố cục sau:
+Tên máy kia do chính máy đó tự đặt và chưa được xác thực ([protocol.md](../technical/protocol.md) mục 3.3). Nếu tên đứng ngay trước mã, kẻ đứng giữa đặt tên kiểu `PC-A:   382 104` là hiện được một mã giả đúng chỗ người dùng nhìn. Vì vậy lời hỏi ghép đôi, ở giao diện lẫn CLI, theo đúng bố cục sau:
 
 - Tiêu đề chỉ là “Ghép đôi”, không chứa tên máy kia.
 - Mã đứng riêng và đứng **trước** mọi chữ do máy kia đặt. Giao diện: một dòng chữ lớn chỉ có mã. CLI: dòng `Mã ghép đôi:   382 104`, chỉ gồm nhãn cố định và mã. Không chữ nào do máy kia đặt được đứng trước mã hay cùng dòng với mã.
@@ -370,7 +370,7 @@ Trùng khớp? [c/k]:
 | 7 | Luôn có | `Trùng khớp? [c/k]: ` |
 
 - `<tên>` và `<tên đã lưu>` hiện theo cách ở trên; `<mã máy>` là 8 ký tự đầu của `device_id`.
-- Máy gửi yêu cầu là bên khởi xướng, máy nhận yêu cầu là bên trả lời ([protocol.md](protocol.md) mục 5.1). Thường `teleport pair` là bên khởi xướng; khi hai máy cùng ghép đôi với nhau thì một bên `teleport pair` chuyển sang vai trả lời ([protocol.md](protocol.md) mục 5.3). Vì vậy dòng 1 xét theo lệnh, còn dòng 3 xét theo vai.
+- Máy gửi yêu cầu là bên khởi xướng, máy nhận yêu cầu là bên trả lời ([protocol.md](../technical/protocol.md) mục 5.1). Thường `teleport pair` là bên khởi xướng; khi hai máy cùng ghép đôi với nhau thì một bên `teleport pair` chuyển sang vai trả lời ([protocol.md](../technical/protocol.md) mục 5.3). Vì vậy dòng 1 xét theo lệnh, còn dòng 3 xét theo vai.
 
 Bản giao diện dùng cùng các dòng, khác ở chỗ:
 - Hộp hiện ở **cả hai máy**, bất kể vai. Dòng 1 xét theo vai: bên trả lời dùng dòng 1 của `teleport listen`, bên khởi xướng dùng dòng 1 của `teleport pair`.
@@ -590,7 +590,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Không hiện được mã ghép đôi (giao diện lỗi) | “Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại.” | Nút “Thử lại” (chỉ ở máy gửi yêu cầu ghép đôi) |
 | Khác phiên bản giao thức | “*PC-Nha* đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.” | — |
 | Chọn gửi file lớn hơn 4 TB | “Không gửi được *backup.img* (5,2 TB): Teleport chỉ gửi được file tối đa 4 TB. Hãy chia file thành nhiều phần nhỏ hơn rồi gửi.” | Lượt gửi không bắt đầu; bỏ file đó ra rồi gửi lại các file còn lại |
-| Chọn gửi file có tên chứa ký tự điều khiển (ví dụ dấu xuống dòng; [protocol.md](protocol.md) mục 3.3) | “Không gửi được *bao�cao.txt*: tên file có ký tự không hiển thị được. Hãy đổi tên file rồi gửi lại.” | Lượt gửi không bắt đầu. Trong thông báo, mỗi ký tự điều khiển hiện thành `�` (U+FFFD), không in thẳng ra màn hình |
+| Chọn gửi file có tên chứa ký tự điều khiển (ví dụ dấu xuống dòng; [protocol.md](../technical/protocol.md) mục 3.3) | “Không gửi được *bao�cao.txt*: tên file có ký tự không hiển thị được. Hãy đổi tên file rồi gửi lại.” | Lượt gửi không bắt đầu. Trong thông báo, mỗi ký tự điều khiển hiện thành `�` (U+FFFD), không in thẳng ra màn hình |
 | File nguồn bị sửa khi đang gián đoạn hoặc khi đang gửi | Máy gửi: “*video.mp4* đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại.” Máy nhận: “*video.mp4* đã bị thay đổi trên *Laptop-Minh* nên không nhận tiếp được. Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại.” | Nút “Gửi lại” |
 | Người nhận từ chối, hoặc máy nhận từ chối với lý do máy này không biết | “*PC-Nha* đã từ chối nhận file.” (máy nhận tự từ chối thì chỉ in “Đã từ chối.”) | — |
 | Máy nhận chưa bật nhận file (đang chạy `teleport listen`, hay chỉ đang gửi) | “*PC-Nha* chưa bật nhận file. Trên máy đó hãy chạy `teleport receive` rồi gửi lại.” Giao diện: “*PC-Nha* đang không nhận file mới (có thể đã tạm dừng nhận, hoặc chưa mở được thư mục nhận). Hãy nhờ bật lại việc nhận file trên máy đó rồi gửi lại.” | Giao diện: nút “Gửi lại” |
@@ -619,13 +619,13 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: đóng cửa sổ khi app chạy được ở khay hệ thống (chỉ lần đầu tiên; đã báo thì không báo lại, kể cả ở các lần mở app sau) | Bóng thoại ở khay: “Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn.” Đang tạm dừng nhận thì thay bằng: “Teleport vẫn chạy ở khay hệ thống nhưng đang tạm dừng nhận file mới và clipboard. Chọn Thoát trong menu khay để tắt hẳn.” | — |
 | Giao diện: biểu tượng khay | Chú thích khi trỏ chuột: tên app, rồi các dòng “Đang truyền *2* lượt”, “Không nhận file: không mở được thư mục nhận” hoặc “Đã tạm dừng nhận file mới và clipboard”; không có dòng nào thì “Sẵn sàng nhận”. Trong 5 giây sau khi nhận clipboard, ngay dưới tên app có thêm dòng “Vừa nhận clipboard từ *PC-Nha*” (hay hai câu clipboard ở dưới). Biểu tượng có dấu nhỏ ở góc, khác nhau cả hình lẫn màu: đang truyền, vừa nhận clipboard (5 giây), đã tạm dừng nhận, không nhận file (ưu tiên: không nhận file > tạm dừng > vừa nhận clipboard > đang truyền) | — |
 | Giao diện: tạm dừng nhận (mục “Tạm dừng nhận” có dấu chọn trong menu khay) | Thẻ máy này có huy hiệu “Đã tạm dừng nhận”, mô tả: “File mới gửi tới sẽ bị từ chối, clipboard gửi tới sẽ bị bỏ qua; lượt đang nhận vẫn tiếp tục. Bỏ chọn “Tạm dừng nhận” trong menu khay để nhận lại.” Chặn lời mời nhận file mới (lượt đang chạy, đang hỏi hay đang nối lại vẫn tiếp tục) và bỏ clipboard gửi tới (vẫn gửi clipboard đi), chỉ trong lần mở app này (mở lại app là nhận lại). Máy không có khay hệ thống thì không có mục này | Bỏ chọn trong menu khay |
-| Vừa sao chép nội dung vượt trần clip ([protocol.md](protocol.md) mục 3.3) khi đang đồng bộ clipboard với ít nhất một máy đang kết nối | Tooltip khay 5 giây: “Clipboard quá lớn nên không gửi. Hãy gửi dạng file.” | Dùng “Gửi file” |
+| Vừa sao chép nội dung vượt trần clip ([protocol.md](../technical/protocol.md) mục 3.3) khi đang đồng bộ clipboard với ít nhất một máy đang kết nối | Tooltip khay 5 giây: “Clipboard quá lớn nên không gửi. Hãy gửi dạng file.” | Dùng “Gửi file” |
 | Nhận clipboard nhưng không chép được vào máy này (ứng dụng khác đang giữ clipboard) | Luồng của *PC-Nha*: “Clipboard · chưa chép được vào máy này”; tooltip khay 5 giây: “Chưa chép được clipboard từ *PC-Nha*” | Nút “Thử lại” trong cuộc trò chuyện với *PC-Nha* (clipboard đó không còn để chép lại thì dòng dưới đổi thành “Clipboard này không còn để chép lại.”) |
 | Giao diện: “Gửi file…” trong menu khay | Menu con liệt kê các máy đã ghép đôi (máy ngoại tuyến: “*PC-Nha* (ngoại tuyến)”); chọn một máy thì hiện cửa sổ ở cuộc trò chuyện đó và mở hộp chọn file. Chưa ghép đôi máy nào: mục mờ “Chưa ghép đôi với máy nào” và mục “Tìm máy mới…” | Chọn máy rồi chọn file |
 | Giao diện, máy nhận: thư mục nhận không còn hoặc không dùng được khi nhận một lượt | “Không nhận được lượt gửi từ *Laptop-Minh* vì thư mục nhận *D:\Downloads\Teleport* không còn hoặc không dùng được, và Teleport không tạo lại được (có thể thư mục chứa nó đã bị xóa, hoặc ổ đã bị rút ra). Hãy kiểm tra lại rồi nhờ gửi lại.” | Nút “Đổi thư mục nhận” |
 | Giao diện: có file gửi tới | Hộp hỏi ở mục 7.3; khi không có cửa sổ Teleport nào đang được dùng (cửa sổ ẩn, thu nhỏ hay bị cửa sổ khác che) thì thêm bóng thoại ở khay: “Có file đang chờ bạn nhận.” | Nút “Nhận”, “Từ chối” trong hộp hỏi. Bấm vào bóng thoại: hiện cửa sổ chính và đưa hộp hỏi lên trước |
 | Giao diện: nhận xong một lượt | Bóng thoại ở khay: “Đã nhận *3* file từ *Laptop-Minh*.” (một file: “Đã nhận *video.mp4* từ *Laptop-Minh*.”, với tên file đã lưu trên máy này, ví dụ *video (1).mp4* khi thư mục nhận đã có file cùng tên) | Nhiều lượt xong cách nhau vài giây gộp thành một bóng thoại (“Đã nhận *4* file từ *2* máy.” khi từ nhiều máy). Không báo khi người dùng đang mở đúng cuộc trò chuyện đó. Bấm vào bóng thoại: mở thư mục và chọn sẵn file vừa nhận (hệ không hỗ trợ: mở thư mục chứa file). Nút “Hiện trong thư mục” trên thẻ của lượt |
-| Giao diện: địa chỉ của máy này (để nhập IP thủ công ở máy kia) | Khi Teleport đang chạy: dòng chọn được “Địa chỉ: *192.168.1.5*” (thêm “:*cổng*” khi không phải cổng mặc định, [protocol.md](protocol.md) mục 2.1); máy có nhiều địa chỉ thì hiện địa chỉ đầu, các địa chỉ còn lại ở chú thích khi trỏ chuột: “Các địa chỉ khác của máy này: …”. Cập nhật khi đổi mạng (đọc lại mỗi 10 giây). Không đọc được địa chỉ nào thì không hiện dòng này | — |
+| Giao diện: địa chỉ của máy này (để nhập IP thủ công ở máy kia) | Khi Teleport đang chạy: dòng chọn được “Địa chỉ: *192.168.1.5*” (thêm “:*cổng*” khi không phải cổng mặc định, [protocol.md](../technical/protocol.md) mục 2.1); máy có nhiều địa chỉ thì hiện địa chỉ đầu, các địa chỉ còn lại ở chú thích khi trỏ chuột: “Các địa chỉ khác của máy này: …”. Cập nhật khi đổi mạng (đọc lại mỗi 10 giây). Không đọc được địa chỉ nào thì không hiện dòng này | — |
 | Giao diện: chưa có lượt truyền nào trong lần mở app này | “Kéo file vào một thiết bị để gửi” (ở khung lượt truyền) | — |
 | Giao diện: thả file vào chỗ không có máy ở cột trái | “Thả file lên một thiết bị để gửi.” | — |
 | Giao diện: nhấn Ctrl+V trong luồng của một máy mà clipboard không phải file đã chép (chữ, ảnh, liên kết web) | “Ctrl+V ở đây chỉ gửi file đã chép trong File Explorer. Chữ và ảnh đi qua “Đồng bộ clipboard” với *PC-Nha* (Cài đặt ▸ Thiết bị tin cậy, cần bật ở cả hai máy): chép ở máy này rồi dán thẳng ở máy kia.” (macOS: “Finder”, Linux: “trình quản lý file”) | Nút “Mở Cài đặt”: mở Thiết bị tin cậy, tiêu điểm ở “Đồng bộ clipboard” của máy đó |
@@ -645,7 +645,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện: Gửi tới › ZCL Teleport mà chưa ghép đôi máy nào (mục 7.7) | “Chưa ghép đôi với máy nào. Hãy ghép đôi một máy rồi gửi lại từ File Explorer.” | Nút “Tìm máy mới” |
 | Giao diện: Gửi tới › ZCL Teleport khi đang mở một hộp “Gửi *n* file tới…” | “Đang mở một hộp gửi file. Hãy gửi hoặc hủy các file này trước, rồi gửi tiếp từ File Explorer.” (trên hộp đang mở) | Gửi hoặc hủy hộp đang mở rồi gửi lại |
 | Giao diện: `--send` / Gửi tới với đường dẫn không dùng được (không phải đường dẫn tới một file trên ổ đĩa hay ổ mạng) | Hộp lỗi “Không mở được hộp gửi file.” kèm “*đường dẫn* không phải đường dẫn đầy đủ tới một file. Hãy chọn file trong File Explorer rồi gửi lại.” | Không mở Teleport |
-| Giao diện: `--send` / Gửi tới quá nhiều file | Hộp lỗi “Không mở được hộp gửi file.” kèm “Mỗi lần gửi được tối đa *n* file.” (quá số file trong một lượt, [protocol.md](protocol.md) mục 3.3) hay “Bạn chọn quá nhiều file một lần. Hãy chọn ít file hơn rồi gửi lại.” (danh sách đường dẫn quá dài) | Không mở Teleport |
+| Giao diện: `--send` / Gửi tới quá nhiều file | Hộp lỗi “Không mở được hộp gửi file.” kèm “Mỗi lần gửi được tối đa *n* file.” (quá số file trong một lượt, [protocol.md](../technical/protocol.md) mục 3.3) hay “Bạn chọn quá nhiều file một lần. Hãy chọn ít file hơn rồi gửi lại.” (danh sách đường dẫn quá dài) | Không mở Teleport |
 | Giao diện: không gửi được vì lỗi khác lúc bắt đầu lượt | “Không gửi được file tới *PC-Nha*. Hãy thử lại.” | Lượt gửi không bắt đầu |
 | Giao diện: lượt nhận dở được khôi phục khi mở lại app | Trạng thái “Đang chờ *Laptop-Minh* nối lại…” | Tự xử lý |
 | Giao diện: khởi động khi một lệnh CLI đang chạy cùng thư mục cấu hình | “Teleport đang chạy ở nơi khác với thư mục cấu hình này (ví dụ lệnh “teleport receive” trong cửa sổ dòng lệnh).” kèm dòng “Hãy dừng nó rồi bấm Thử lại.” | Nút “Thử lại” |
@@ -714,7 +714,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Mã | Nhóm | Yêu cầu | Cách đo |
 |---|---|---|---|
 | N1 | Khám phá | Thiết bị mới xuất hiện < 3 giây; thoát app thì biến mất < 10 giây; mất mạng đột ngột hoặc ngủ thì biến mất < 2 phút | Log thời điểm mDNS |
-| N2 | Hiệu năng | ≥ 70% tốc độ copy qua chia sẻ thư mục Windows (SMB) trên cùng mạng | Benchmark mỗi bản phát hành, công bố ở [benchmark.md](benchmark.md) |
+| N2 | Hiệu năng | ≥ 70% tốc độ copy qua chia sẻ thư mục Windows (SMB) trên cùng mạng | Benchmark mỗi bản phát hành, công bố ở [benchmark.md](../technical/benchmark.md) |
 | N3 | Bộ nhớ | Khi truyền: RSS tăng < 50MB so với lúc rảnh với file 1GB, 5GB, 10GB (đường RAM phẳng). Khi rảnh: RAM < 150MB, CPU ~0% | `psutil` + biểu đồ RSS, mỗi bản phát hành |
 | N4 | Nối lại | Rớt mạng hoặc tắt app nhận ở bất kỳ điểm nào → gửi lại ≤ phần chưa nhận + 64 MiB (ở 85%: ≤ 15% + 64 MiB) | Test tự động, đếm byte gửi lại |
 | N5 | Toàn vẹn | 100% file nhận khớp Merkle root; sửa 1 byte bất kỳ đều bị phát hiện | Test tự động |
@@ -758,7 +758,7 @@ App không có telemetry, nên trải nghiệm được đo bằng thử nghiệ
 
 - Kết nối trực tiếp bằng TCP + TLS 1.3 trong mạng nội bộ; không có máy chủ trung gian.
 - File được chia thành khối 1 MiB, đọc và ghi thẳng giữa hai ổ đĩa; RAM chỉ giữ vài khối.
-- Thiết kế chi tiết: [ke_hoach.md](ke_hoach.md) mục 3. Đặc tả giao thức: [protocol.md](protocol.md).
+- Thiết kế chi tiết: [ke_hoach.md](ke_hoach.md) mục 3. Đặc tả giao thức: [protocol.md](../technical/protocol.md).
 
 ---
 
@@ -773,16 +773,16 @@ App không có telemetry, nên trải nghiệm được đo bằng thử nghiệ
 | Dữ liệu điều khiển độc hại | Message cực lớn hoặc sai định dạng | Giới hạn kích thước, kiểm tra hợp lệ từng trường, fuzz test |
 | Lộ mật khẩu qua clipboard | Copy mật khẩu từ trình quản lý mật khẩu | Clipboard mặc định tắt; bỏ qua nội dung đánh dấu nhạy cảm |
 | Thu thập dữ liệu người dùng | — | Không telemetry, không tài khoản, không máy chủ |
-| Theo dõi thiết bị qua nhiều mạng | Người lạ ở quán cà phê, khách sạn ghi lại mã thiết bị và tên máy mà Teleport quảng bá, rồi nhận ra cùng chiếc laptop đó ở mạng khác | Lần chạy đầu nói rõ tên thiết bị hiện với mọi máy trong mạng và cho đặt tên khác (F1, F10); công tắc “Cho máy chưa ghép đôi thấy máy này” (F10): tắt thì máy này không quảng bá, và khi không ở chế độ chờ ghép đôi (F3) thì máy chưa ghép đôi kết nối tới cũng không nhận được tên, phiên bản app hay hệ điều hành. Chưa chặn trong MVP: mã thiết bị cố định, và máy nào kết nối tới cổng của Teleport vẫn đọc được nó trong chứng chỉ; quảng bá ẩn danh để sau v1.0; mạng Public không tự ẩn để tránh mất kết nối do Windows nhận diện nhầm mạng, người dùng chủ động tắt công tắc khi cần ([ke_hoach.md](ke_hoach.md) mục 3.7, 9). Những gì máy này để lộ: [protocol.md](protocol.md) mục 8 |
+| Theo dõi thiết bị qua nhiều mạng | Người lạ ở quán cà phê, khách sạn ghi lại mã thiết bị và tên máy mà Teleport quảng bá, rồi nhận ra cùng chiếc laptop đó ở mạng khác | Lần chạy đầu nói rõ tên thiết bị hiện với mọi máy trong mạng và cho đặt tên khác (F1, F10); công tắc “Cho máy chưa ghép đôi thấy máy này” (F10): tắt thì máy này không quảng bá, và khi không ở chế độ chờ ghép đôi (F3) thì máy chưa ghép đôi kết nối tới cũng không nhận được tên, phiên bản app hay hệ điều hành. Chưa chặn trong MVP: mã thiết bị cố định, và máy nào kết nối tới cổng của Teleport vẫn đọc được nó trong chứng chỉ; quảng bá ẩn danh để sau v1.0; mạng Public không tự ẩn để tránh mất kết nối do Windows nhận diện nhầm mạng, người dùng chủ động tắt công tắc khi cần ([ke_hoach.md](ke_hoach.md) mục 3.7, 9). Những gì máy này để lộ: [protocol.md](../technical/protocol.md) mục 8 |
 
-Báo lỗ hổng bảo mật theo [SECURITY.md](SECURITY.md) (đã có từ Giai đoạn 0; bản hoàn chỉnh cho v1.0).
+Báo lỗ hổng bảo mật theo [SECURITY.md](../community/SECURITY.md) (đã có từ Giai đoạn 0; bản hoàn chỉnh cho v1.0).
 
 ---
 
 ## 12. Tiêu chí phát hành MVP (Definition of Done)
 
 - [x] Mọi tiêu chí chấp nhận F1–F12 đều đạt.
-- [x] Mọi yêu cầu phi chức năng N1–N12 đều đạt, có số liệu trong [benchmark.md](benchmark.md).
+- [x] Mọi yêu cầu phi chức năng N1–N12 đều đạt, có số liệu trong [benchmark.md](../technical/benchmark.md).
 - [x] Đạt các chỉ số thử nghiệm người dùng ở mục 9.1.
 - [x] CI xanh trên Windows, macOS, Linux.
 - [x] Bộ cài cho 3 hệ điều hành: bộ cài Windows được build tự động khi gắn tag `v1.0.0`, kịch bản đóng gói macOS DMG và Linux AppImage hoàn chỉnh; bộ cài kèm `LICENSE`, giấy phép các thư viện bên thứ ba và chỉ dẫn lấy mã nguồn.
@@ -805,7 +805,7 @@ Báo lỗ hổng bảo mật theo [SECURITY.md](SECURITY.md) (đã có từ Giai
 | 3:00 | Nhận xong, hiện “Đã kiểm tra toàn vẹn” | SHA-256 Merkle |
 | 3:30 | Ctrl+C một đoạn văn + ảnh chụp màn hình → Ctrl+V trên máy kia | Clipboard đồng bộ |
 | 4:00 | Tắt Internet của router, gửi tiếp vẫn chạy | Zero-Cloud thật sự |
-| 4:30 | So sánh nhanh với Google Drive (số liệu benchmark) | Lợi thế thời gian |
+| 4:30 | So sánh nhanh với lưu trữ đám mây (số liệu benchmark) | Lợi thế thời gian |
 
 ---
 
@@ -817,7 +817,7 @@ Rủi ro kỹ thuật và thực thi: [ke_hoach.md](ke_hoach.md) mục 8.
 |---|---|---|
 | Wi-Fi công cộng/văn phòng chặn thiết bị nói chuyện với nhau | Không dùng được ở quán cà phê, khách sạn | Phát hiện và báo rõ; gợi ý hotspot |
 | SmartScreen / antivirus cảnh báo app chưa ký; macOS Gatekeeper chặn app chưa ký (macOS 15 phải mở Cài đặt hệ thống mới chạy được) | Người dùng sợ, không cài; khó đạt mục 9.1 (≥ 90% tự cài được) | Ký mã nếu có ngân sách (ke_hoach mục 9); hướng dẫn rõ từng bước |
-| Cạnh tranh: LocalSend, KDE Connect, Nearby Share | Khó nổi bật | Tập trung vào nối lại theo khối, file cực lớn, clipboard |
+| Cạnh tranh từ các giải pháp truyền tệp sẵn có | Khó nổi bật | Tập trung vào nối lại theo khối, file cực lớn, clipboard |
 | Trễ tiến độ (làm một mình) | v1.0 kéo dài | Hoãn sang sau v1.0 theo thứ tự: công cụ C++/Java → bộ cài macOS/Linux → clipboard ảnh. Không cắt nối lại/toàn vẹn (F6, F7) và an toàn khi nhận (F4). Hoãn mục nào thì sửa mục 4 và mục 12 tương ứng |
 
 ---

@@ -1130,7 +1130,7 @@ class GuiApp(QObject):
 
         def worker() -> None:
             issue = check_firewall_status_fn()
-            QTimer.singleShot(0, lambda: self._on_firewall_checked(issue))
+            QTimer.singleShot(0, self, lambda: self._on_firewall_checked(issue))
 
         threading.Thread(target=worker, daemon=True, name="firewall-check").start()
 

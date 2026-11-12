@@ -1,7 +1,7 @@
 # Ý tưởng — Zero-Cloud LAN Teleport
 
 > **Vai trò:** ý tưởng và tầm nhìn sản phẩm — vì sao làm, cho ai, trải nghiệm mong muốn, cách tiếp cận ở mức cao, các nguyên tắc dùng để ra quyết định.
-> **Không chứa:** con số yêu cầu, tiêu chí chấp nhận → [mvp.md](mvp.md). Thiết kế kỹ thuật, lộ trình → [ke_hoach.md](ke_hoach.md). Thuật ngữ và bản đồ tài liệu → [README.md](README.md).
+> **Không chứa:** con số yêu cầu, tiêu chí chấp nhận → [mvp.md](mvp.md). Thiết kế kỹ thuật, lộ trình → [ke_hoach.md](ke_hoach.md). Thuật ngữ và bản đồ tài liệu → [README.md](../README.md).
 > **Bản đầu tiên** (WebRTC, điện thoại ↔ laptop) đã được điều chỉnh; những gì đã đổi xem mục 9.
 > **Cập nhật:** 2026-10-23
 
@@ -17,8 +17,8 @@
 
 Hai máy tính nằm cách nhau 20cm, dùng chung một cục Wi-Fi, mà chuyển một file 2GB (video, bản build, bộ dữ liệu) hay một đoạn văn bản, một ảnh chụp màn hình sang máy kia vẫn rất ức chế:
 
-* **Ứng dụng nhắn tin (Zalo/Messenger):** ảnh bị nén mờ, file lớn bị chặn, hoặc phải đăng nhập tài khoản cá nhân lên máy lạ, tiềm ẩn rủi ro bảo mật.
-* **Lưu trữ đám mây (Google Drive):** upload lên máy chủ ở xa rồi download về, tốn gấp đôi băng thông và thời gian dù hai máy nằm sát nhau.
+* **Ứng dụng nhắn tin thông thường:** ảnh bị nén mờ, file lớn bị chặn, hoặc phải đăng nhập tài khoản cá nhân lên máy lạ, tiềm ẩn rủi ro bảo mật.
+* **Lưu trữ đám mây qua mạng Internet:** tải lên máy chủ ở xa rồi tải về, tốn gấp đôi băng thông và thời gian dù hai máy nằm sát nhau.
 * **USB / ổ cứng rời:** phải có sẵn, cắm, chép, rút; dễ quên, dễ mất.
 * **Chia sẻ thư mục Windows (SMB):** nhanh nhưng cấu hình quyền phức tạp, rớt mạng là gửi lại từ đầu.
 
@@ -121,7 +121,7 @@ Thứ tự chính thức và các câu hỏi còn mở: [ke_hoach.md](ke_hoach.m
 
 ## 8. Khác biệt so với giải pháp sẵn có
 
-Các ứng dụng gần nhất là **LocalSend**, **KDE Connect** và **Nearby Share**. Teleport không cố làm nhiều hơn, mà tập trung làm tốt hơn ở ba điểm:
+So với các giải pháp truyền tệp thông thường, Teleport không cố làm nhiều hơn, mà tập trung làm tốt hơn ở ba điểm:
 
 - **File cực lớn và rớt mạng:** nối lại theo từng khối, chỉ gửi phần thiếu, kể cả sau khi tắt app nhận; kiểm tra toàn vẹn bằng Merkle root.
 - **Clipboard chung** giữa các máy tin cậy, bật riêng từng máy.

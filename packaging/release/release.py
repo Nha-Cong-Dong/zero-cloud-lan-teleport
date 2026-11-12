@@ -9,9 +9,10 @@ Chạy từ gốc repo, chỉ cần thư viện chuẩn của Python (không cà
 
 - Phiên bản chỉ lấy từ `__version__` trong `src/teleport/__init__.py` (đọc bằng `ast`). Luật hai dạng số
   (tag SemVer `v0.1.0-alpha` ↔ PEP 440 `0.1.0a0`, beta `-beta` ↔ `b0`, bản thường bằng nhau) ở
-  `docs/CONTRIBUTING.md`, mục “Phát hành”; dạng nào ngoài luật đó (rc, a1, dev, post, local) đều bị từ chối.
-- `notes`: nội dung Release là mục `## [<số SemVer>] - YYYY-MM-DD` của `docs/CHANGELOG.md`, cộng các dòng
-  cố định ở `FIXED_NOTES`. Không có mục đó thì dừng (`--allow-missing` chỉ dành cho chạy khô).
+  `docs/community/CONTRIBUTING.md`, mục “Phát hành”; dạng nào ngoài luật đó (rc, a1, dev, post, local)
+  đều bị từ chối.
+- `notes`: nội dung Release là mục `## [<số SemVer>] - YYYY-MM-DD` của `docs/community/CHANGELOG.md`,
+  cộng các dòng cố định ở `FIXED_NOTES`. Không có mục đó thì dừng (`--allow-missing` chỉ dành cho chạy khô).
 - `fetch-sources`: tải sdist của thư viện LGPL (`LGPL_SDISTS` trong `packaging/pyinstaller/third_party.py`)
   từ PyPI, kiểm SHA-256 và kiểm phiên bản trùng bản ghim trong `constraints.txt`.
 

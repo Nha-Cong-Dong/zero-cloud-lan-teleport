@@ -11,6 +11,7 @@ Không dùng Qt hay event loop: hàm đồng bộ, an toàn khi gọi từ bất
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -51,18 +52,48 @@ class FirewallIssue(StrEnum):
 def parse_netsh_currentprofile(text: str) -> FirewallIssue:
     """Phân tích kết quả lệnh `netsh advfirewall show currentprofile`."""
     lower = text.lower()
-    if "public profile" in lower and "state" in lower:
+    is_public = "public profile" in lower or "mạng công cộng" in lower or "hồ sơ công cộng" in lower
+    if is_public:
         for line in text.splitlines():
             line_strip = line.strip().lower()
-            if line_strip.startswith("state") and "on" in line_strip:
+            if line_strip.startswith(("state", "trạng thái")) and (
+                "on" in line_strip or "bật" in line_strip or "1" in line_strip
+            ):
                 return FirewallIssue.PUBLIC_NETWORK
     return FirewallIssue.NONE
+
+
+def split_netsh_rules(text: str) -> list[str]:
+    """Tách danh sách quy tắc tường lửa từ đầu ra của netsh thành từng khối riêng biệt."""
+    # Thử tách theo tiêu đề phân cách có đường gạch ngang (chuẩn Windows netsh)
+    blocks = [b.strip() for b in re.split(r"\n(?=[^\n]+:\s+[^\n]+\n[-=]{10,})", text) if b.strip()]
+    if len(blocks) > 1:
+        return blocks
+    # Dự phòng: tách theo dòng bắt đầu bằng 'Rule Name' / 'Tên quy tắc'
+    alt_blocks = [
+        b.strip()
+        for b in re.split(r"\n(?=(?:Rule Name|Tên quy tắc)\s*:)", text, flags=re.IGNORECASE)
+        if b.strip()
+    ]
+    if len(alt_blocks) > 1:
+        return alt_blocks
+    return [text] if text.strip() else []
 
 
 def parse_netsh_rule(text: str) -> bool:
     """True nếu tìm thấy quy tắc chặn (Action: Block) cho kết nối đến (Inbound)."""
     lower = text.lower()
-    return bool("action" in lower and "block" in lower and ("direction" in lower or "dir" in lower))
+    is_block = ("action" in lower and "block" in lower) or ("hành động" in lower and "chặn" in lower)
+    is_inbound = "direction" in lower or "dir" in lower or "hướng" in lower or "in" in lower
+    if is_block and is_inbound:
+        for line in text.splitlines():
+            line_s = line.strip().lower()
+            if line_s.startswith(("enabled", "đã bật", "kích hoạt")) and (
+                "no" in line_s or "không" in line_s or "0" in line_s
+            ):
+                return False
+        return True
+    return False
 
 
 def check_firewall_status(runner: _CommandRunner | None = None) -> FirewallIssue:
@@ -83,9 +114,9 @@ def check_firewall_status(runner: _CommandRunner | None = None) -> FirewallIssue
 
         # 2. Kiểm tra xem có quy tắc chặn riêng cho Teleport hay không
         rule_out = run(["netsh", "advfirewall", "firewall", "show", "rule", "name=all", "dir=in"])
-        # Nếu có quy tắc Teleport và quy tắc đó chặn
-        if "teleport" in rule_out.lower() and parse_netsh_rule(rule_out):
-            return FirewallIssue.BLOCKED
+        for block in split_netsh_rules(rule_out):
+            if "teleport" in block.lower() and parse_netsh_rule(block):
+                return FirewallIssue.BLOCKED
 
     except Exception:
         log.debug("khong the kiem tra tuong lua he dieu hanh", exc_info=True)

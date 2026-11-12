@@ -107,12 +107,12 @@ class FirewallGuideDialog(QDialog):
 
         self.header_label = _plain_label("firewallHeaderLabel", self)
         self.step1_title_label = _plain_label("firewallStep1TitleLabel", self)
-        self.step1_title_label.setStyleSheet("font-weight: bold;")
+        self.step1_title_label.setFont(theme.font_for(theme.TextStyle.SECTION, self.step1_title_label.font()))
         self.step1_body_label = _plain_label("firewallStep1BodyLabel", self)
         self.step1_body_label.setProperty(theme.TONE_PROPERTY, "muted")
 
         self.step2_title_label = _plain_label("firewallStep2TitleLabel", self)
-        self.step2_title_label.setStyleSheet("font-weight: bold;")
+        self.step2_title_label.setFont(theme.font_for(theme.TextStyle.SECTION, self.step2_title_label.font()))
         self.step2_body_label = _plain_label("firewallStep2BodyLabel", self)
         self.step2_body_label.setProperty(theme.TONE_PROPERTY, "muted")
 
