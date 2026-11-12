@@ -1,6 +1,6 @@
 # Hiểu dự án qua một ví dụ
 
-Ghi chú tôi viết để tự hiểu dự án bằng lời đơn giản. Bạn đọc thấy chỗ nào chưa đúng hay chưa rõ thì cứ nhận xét và hỏi lại tôi. Đặc tả chính xác nằm ở [protocol.md](protocol.md) (ghép đôi: mục 5; truyền file: mục 3, 4) và [architecture.md](architecture.md).
+Ghi chú tôi viết để tự hiểu dự án bằng lời đơn giản. Bạn đọc thấy chỗ nào chưa đúng hay chưa rõ thì cứ nhận xét và hỏi lại tôi. Đặc tả chính xác nằm ở [protocol.md](../technical/protocol.md) (ghép đôi: mục 5; truyền file: mục 3, 4) và [architecture.md](../technical/architecture.md).
 
 **Ví dụ có 2 máy A và máy B. Giả sử máy A muốn gửi 1 file video 10 GB cho máy B.**
 

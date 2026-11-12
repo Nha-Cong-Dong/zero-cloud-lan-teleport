@@ -68,6 +68,10 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/pyinstaller/teleport-gui.spec
 
+      - name: Test khói trên exe (pytest -m frozen)
+        run: |
+          python -m pytest -q -m frozen tests/packaging/test_frozen_gui.py
+
       - name: Cài đặt Inno Setup chính thức
         shell: pwsh
         run: |
@@ -93,6 +97,19 @@ jobs:
             "/O$PWD\installer" `
             packaging\inno\teleport.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC that bai" }
+
+      - name: Kiểm tra cỡ bộ cài đặt (< 80 MB)
+        shell: pwsh
+        run: |
+          $setups = Get-ChildItem -Path "installer/*.exe"
+          if ($setups.Count -eq 0) { throw "Khong tim thay bo cai trong installer/" }
+          $size = $setups[0].Length
+          Write-Host "Kich thuoc bo cai: $size byte"
+          if ($size -ge 80000000) { throw "Bo cai vuot qua 80 MB ($size byte)" }
+
+      - name: Test cài/gỡ trên bộ cài
+        run: |
+          python -m pytest -q -m frozen tests/packaging/test_installer.py
 
       - name: Đóng gói tài nguyên phát hành
         shell: pwsh

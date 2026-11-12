@@ -85,3 +85,34 @@ def test_app_on_firewall_checked_shows_and_hides_notice(qapp, monkeypatch):
     app_module.GuiApp._on_firewall_checked(app, FirewallIssue.NONE)
     assert app.transfers.view.hide_notice.called
     assert app._firewall_notice is None
+
+
+def test_check_firewall_background_thread_dispatches_to_main_thread(qapp, monkeypatch):
+    import time
+
+    from PySide6.QtCore import QCoreApplication, QObject
+
+    from teleport.app.firewall import FirewallIssue
+    from teleport.ui import app as app_module
+
+    class DummyApp(QObject):
+        def __init__(self):
+            super().__init__()
+            self._quitting = False
+            self.called_with = None
+
+        def _on_firewall_checked(self, issue):
+            self.called_with = issue
+
+    app = DummyApp()
+    monkeypatch.setattr(app_module, "check_firewall_status_fn", lambda: FirewallIssue.BLOCKED)
+
+    app_module.GuiApp._check_firewall(app)
+
+    # Đợi thread nền hoàn tất và QTimer.singleShot chuyển sự kiện về luồng chính
+    deadline = time.monotonic() + 2.0
+    while app.called_with is None and time.monotonic() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.01)
+
+    assert app.called_with is FirewallIssue.BLOCKED

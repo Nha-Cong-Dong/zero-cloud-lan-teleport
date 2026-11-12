@@ -102,3 +102,32 @@ def test_download_and_apply_update_installer(tmp_path: Path):
     assert launched_cmds[0][0] == str(installer_path)
     assert "/VERYSILENT" in launched_cmds[0]
     assert "/RESTARTAPPLICATIONS" in launched_cmds[0]
+
+
+def test_apply_update_installer_sha256_verification(tmp_path: Path):
+    import hashlib
+
+    dummy_installer = tmp_path / "setup.exe"
+    payload = b"valid-installer-data"
+    dummy_installer.write_bytes(payload)
+    correct_hash = hashlib.sha256(payload).hexdigest()
+
+    launched: list[list[str]] = []
+
+    # Khớp hash -> Cho phép khởi chạy
+    ok = updater.apply_update_installer(
+        dummy_installer,
+        expected_sha256=correct_hash,
+        launcher=lambda cmd: launched.append(cmd) or True,
+    )
+    assert ok is True
+    assert len(launched) == 1
+
+    # Sai hash -> Từ chối khởi chạy
+    rejected = updater.apply_update_installer(
+        dummy_installer,
+        expected_sha256="0" * 64,
+        launcher=lambda cmd: launched.append(cmd) or True,
+    )
+    assert rejected is False
+    assert len(launched) == 1

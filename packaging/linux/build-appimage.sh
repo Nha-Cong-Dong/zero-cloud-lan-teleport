@@ -35,11 +35,18 @@ pyinstaller --noconfirm --clean \
 # Liên kết file chạy vào usr/bin
 ln -sf "../lib/teleport-gui/teleport-gui" "${APP_DIR}/usr/bin/teleport-gui"
 
-# 2. Chép tài nguyên XDG
-echo "[*] Đang chép tệp desktop, metainfo và biểu tượng..."
+# 2. Chép tài nguyên XDG và tệp giấy phép
+echo "[*] Đang chép tệp desktop, metainfo, biểu tượng và giấy phép..."
 cp "${SCRIPT_DIR}/io.github.nhacongdong.teleport.desktop" "${APP_DIR}/usr/share/applications/"
 cp "${SCRIPT_DIR}/io.github.nhacongdong.teleport.metainfo.xml" "${APP_DIR}/usr/share/metainfo/"
 cp "${SCRIPT_DIR}/io.github.nhacongdong.teleport.desktop" "${APP_DIR}/"
+cp "${REPO_DIR}/LICENSE" "${APP_DIR}/"
+if [ -f "${APP_DIR}/usr/lib/teleport-gui/THIRD-PARTY-NOTICES.txt" ]; then
+    cp "${APP_DIR}/usr/lib/teleport-gui/THIRD-PARTY-NOTICES.txt" "${APP_DIR}/"
+fi
+if [ -f "${APP_DIR}/usr/lib/teleport-gui/SOURCE.txt" ]; then
+    cp "${APP_DIR}/usr/lib/teleport-gui/SOURCE.txt" "${APP_DIR}/"
+fi
 
 # Tạo icon SVG từ logo
 python -c '

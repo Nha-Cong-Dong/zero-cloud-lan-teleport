@@ -14,6 +14,7 @@ Cơ chế hoạt động:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -53,6 +54,23 @@ class UpdateInfo:
     asset_name: str
     asset_size: int
     release_notes: str = ""
+    expected_sha256: str | None = None
+
+
+def compute_file_sha256(file_path: Path) -> str:
+    """Tính mã băm SHA-256 của tệp trên đĩa."""
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(CHUNK_SIZE):
+            hasher.update(chunk)
+    return hasher.hexdigest().lower()
+
+
+def verify_file_sha256(file_path: Path, expected_sha256: str) -> bool:
+    """True nếu mã băm SHA-256 của tệp khớp với chuỗi mong đợi (không phân biệt hoa thường)."""
+    if not file_path.exists() or not expected_sha256:
+        return False
+    return compute_file_sha256(file_path) == expected_sha256.strip().lower()
 
 
 def parse_version_tuple(version_str: str) -> tuple[int, ...]:
@@ -206,6 +224,16 @@ def check_for_update(
             download_url = f"https://github.com/{repo}/releases/latest/download/{asset_name}"
             asset_size = 0
 
+        expected_sha256: str | None = None
+        if asset_name and notes:
+            pattern = (
+                rf"\b([a-fA-F0-9]{{64}})\b.*?\b{re.escape(asset_name)}\b"
+                rf"|\b{re.escape(asset_name)}\b.*?\b([a-fA-F0-9]{{64}})\b"
+            )
+            match = re.search(pattern, notes)
+            if match:
+                expected_sha256 = (match.group(1) or match.group(2)).lower()
+
         return UpdateInfo(
             version=tag_name,
             current_version=current_version,
@@ -215,6 +243,7 @@ def check_for_update(
             asset_name=asset_name,
             asset_size=asset_size,
             release_notes=notes,
+            expected_sha256=expected_sha256,
         )
     except Exception:
         log.debug("khong the kiem tra ban cap nhat tu github", exc_info=True)
@@ -238,11 +267,16 @@ def download_update_installer(
 
 def apply_update_installer(
     installer_path: Path,
+    expected_sha256: str | None = None,
     silent: bool = True,
     launcher: _ProcessLauncher | None = None,
 ) -> bool:
     """Khởi chạy bộ cài đặt mới để tự động nâng cấp phần mềm và mở lại ứng dụng."""
     if not installer_path.exists() or installer_path.stat().st_size == 0:
+        return False
+
+    if expected_sha256 is not None and not verify_file_sha256(installer_path, expected_sha256):
+        log.warning("ma bam sha256 cua bo cai khong khop, tu choi khoi chay: %s", installer_path)
         return False
 
     launch = launcher or _launcher

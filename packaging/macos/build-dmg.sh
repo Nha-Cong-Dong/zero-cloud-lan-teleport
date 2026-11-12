@@ -52,6 +52,12 @@ fi
 
 # Chép các file giấy phép bắt buộc
 cp "${REPO_DIR}/LICENSE" "${APP_BUNDLE}/Contents/Resources/"
+if [ -f "${BUILD_DIR}/pyi-dist/Teleport/THIRD-PARTY-NOTICES.txt" ]; then
+    cp "${BUILD_DIR}/pyi-dist/Teleport/THIRD-PARTY-NOTICES.txt" "${APP_BUNDLE}/Contents/Resources/"
+fi
+if [ -f "${BUILD_DIR}/pyi-dist/Teleport/SOURCE.txt" ]; then
+    cp "${BUILD_DIR}/pyi-dist/Teleport/SOURCE.txt" "${APP_BUNDLE}/Contents/Resources/"
+fi
 
 # 4. Đóng gói file .dmg bằng hdiutil
 DMG_NAME="Teleport-${APP_VERSION}-macOS.dmg"

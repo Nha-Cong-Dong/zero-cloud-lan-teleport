@@ -849,8 +849,18 @@ async def test_done_transfer_answers_verified_after_restart_and_record_is_cleane
 @pytest.mark.slow
 @leakcheck
 async def test_two_configs_sharing_receive_dir_do_not_touch_each_other(
-    T, transfer_nodes, restart, write_spy, cleanup_spy, resume_helpers, app_helpers, tmp_path, grace_real
+    T,
+    transfer_nodes,
+    restart,
+    write_spy,
+    cleanup_spy,
+    resume_helpers,
+    app_helpers,
+    tmp_path,
+    grace_real,
+    monkeypatch,
 ):
+    monkeypatch.setattr(T, "CLOSE_DISK_WAIT", 10.0)
     net = await transfer_nodes(sender_opts={"rate_limit": 8 * MiB})
     A, B = net.A, net.B
     src = make_file(net.src, "f.bin", 16 * MiB)

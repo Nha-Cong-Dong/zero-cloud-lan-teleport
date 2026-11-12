@@ -2,7 +2,7 @@
 
 > **Vai trò:** số đo thực tế của các yêu cầu phi chức năng và kết quả kiểm tiêu chí MVP hackathon.
 > **Nguồn duy nhất cho:** định nghĩa từng phép đo, môi trường, kết quả từng lần đo và kết luận so với ngưỡng.
-> **Không chứa:** ngưỡng yêu cầu → [mvp.md](mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](ke_hoach.md) mục 5.1.
+> **Không chứa:** ngưỡng yêu cầu → [mvp.md](../product/mvp.md) mục 9 (tham chiếu theo mã `mvp N1`…, không chép số). Thiết kế khám phá, TTL, chu kỳ kiểm còn sống và cận trên đã tính → [protocol.md](protocol.md) mục 8. Trạng thái giai đoạn → [ke_hoach.md](../product/ke_hoach.md) mục 5.1.
 > **Cập nhật:** 2026-11-05
 
 ## 1. Quy ước
@@ -128,7 +128,7 @@ Không có lần nào quá hạn hay lỗi đo (0 / 0 ở mọi ca). Ở bốn c
 
 - Thấy lại sau khi cắm lại mạng (`link_down_reappear`): trung vị 10,044 s, trong khoảng 7,683–12,442 s.
 - Thấy lại sau khi VM chạy tiếp (`pause_vm_reappear`): 9/10 lần nằm sát nhau trong 17,003–17,011 s (cận dưới 16,933–16,980 s); một lần (lần 5) chỉ 0,379 s. Giá trị gần như cố định này là quan sát cần tìm hiểu; lần đo này chưa có dữ liệu để biết nó đến từ đâu (node trên VM, zeroconf, hay đồng hồ VM sau khi chạy tiếp).
-- Host quảng bá cả `172.18.96.1` dù node lọc card ảo (protocol mục 2.1). Theo danh sách card trong `results.jsonl`, `172.18.96.1/20` nằm trên card “Hyper-V Virtual Ethernet Adapter”, tên Windows `vEthernet (WSL (Hyper-V firewall))`. Nguyên nhân và cách sửa ghi ở mục `### Fixed` của [CHANGELOG.md](CHANGELOG.md) (địa chỉ ưu tiên lấy theo tuyến multicast); lần đo này chạy trên mã trước khi sửa (commit `efa9d5b`), nên chưa có số đo với bản đã sửa. VM vẫn thấy host đúng hạn (`appear_host`), nhưng địa chỉ này đi vào danh sách địa chỉ máy kia sẽ thử kết nối.
+- Host quảng bá cả `172.18.96.1` dù node lọc card ảo (protocol mục 2.1). Theo danh sách card trong `results.jsonl`, `172.18.96.1/20` nằm trên card “Hyper-V Virtual Ethernet Adapter”, tên Windows `vEthernet (WSL (Hyper-V firewall))`. Nguyên nhân và cách sửa ghi ở mục `### Fixed` của [CHANGELOG.md](../community/CHANGELOG.md) (địa chỉ ưu tiên lấy theo tuyến multicast); lần đo này chạy trên mã trước khi sửa (commit `efa9d5b`), nên chưa có số đo với bản đã sửa. VM vẫn thấy host đúng hạn (`appear_host`), nhưng địa chỉ này đi vào danh sách địa chỉ máy kia sẽ thử kết nối.
 
 **Giới hạn của lần đo này**
 
@@ -143,10 +143,10 @@ Không có lần nào quá hạn hay lỗi đo (0 / 0 ở mọi ca). Ở bốn c
 
 ### 3.4. Việc còn lại
 
-- N1 trên hai máy thật trong cùng mạng Wi-Fi: đã đo, ĐẠT cho xuất hiện, thoát app và mất mạng đột ngột (mục 3.6). Còn lại thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D1): máy **ngủ** thật (ca `pause` với `--hv manual`, cho máy thứ hai ngủ rồi đánh thức) **chưa đo**; mạng dây **chưa đo**; Wi-Fi 5 GHz **chưa đo**.
+- N1 trên hai máy thật trong cùng mạng Wi-Fi: đã đo, ĐẠT cho xuất hiện, thoát app và mất mạng đột ngột (mục 3.6). Còn lại thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D1): máy **ngủ** thật (ca `pause` với `--hv manual`, cho máy thứ hai ngủ rồi đánh thức) **chưa đo**; mạng dây **chưa đo**; Wi-Fi 5 GHz **chưa đo**.
 - Một lần “thấy lại sau khi cắm lại mạng” quá hạn 300 s trên hai máy thật dù mạng của máy kia đã có lại (mục 3.6, Ghi nhận): **chưa tìm hiểu** nguyên nhân.
-- Kiểm kịch bản mất gói ở hai lần resolve đầu (protocol mục 8): **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D1).
-- Thêm cặp hệ điều hành khác (macOS, Windows ↔ Windows) theo mvp N10: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D7).
+- Kiểm kịch bản mất gói ở hai lần resolve đầu (protocol mục 8): **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D1).
+- Thêm cặp hệ điều hành khác (macOS, Windows ↔ Windows) theo mvp N10: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D7).
 - Tìm hiểu hai ghi nhận ở mục 3.3 (thấy lại ≈ 17 s sau khi VM chạy tiếp; địa chỉ card Hyper-V được quảng bá).
 
 ### 3.5. Cách đo lại
@@ -171,7 +171,7 @@ Lệnh trên host viết cho PowerShell (Python trên Windows không tự mở r
 
 ### 3.6. Lần đo 2026-11-05: hai máy Windows thật qua Wi-Fi
 
-Người dùng tự chạy theo hướng dẫn từng bước; đợt đo D1 ([ke_hoach.md](ke_hoach.md) mục 5.4), một phần. Định nghĩa các ca: mục 3.1; phương pháp như mục 3.2, khác ở chỗ “VM” là **máy thật thứ hai** (chạy `n1_vm_agent.py`) và ca `link_down` do người dùng tự tắt / bật Wi-Fi của máy đó (`--hv manual`, xem Cách chạy bên dưới). Trong bảng và trong `results.jsonl`, “host” là máy A, “VM” là máy B.
+Người dùng tự chạy theo hướng dẫn từng bước; đợt đo D1 ([ke_hoach.md](../product/ke_hoach.md) mục 5.4), một phần. Định nghĩa các ca: mục 3.1; phương pháp như mục 3.2, khác ở chỗ “VM” là **máy thật thứ hai** (chạy `n1_vm_agent.py`) và ca `link_down` do người dùng tự tắt / bật Wi-Fi của máy đó (`--hv manual`, xem Cách chạy bên dưới). Trong bảng và trong `results.jsonl`, “host” là máy A, “VM” là máy B.
 
 Mã đo: `main` tại commit `28ab2d2`, không sửa (`src_dirty: false` ở máy A). Máy B chạy mã nguồn tải từ GitHub đúng commit đó (không có git); hai máy cùng digest mã nguồn `54c2c04ac27f2e455b864af237862ea1b5b891e894d16b9bea7db4537c363ac9`. Kết quả áp dụng cho `main` tại `7824259` (ngày đo): từ `28ab2d2` tới đó không đổi `net/discovery.py`, `core/discovery.py` hay `app/node.py`. Script: `n1_host.py`, `n1_vm_agent.py`, `n1_common.py`, `n1_firewall.ps1` (mục 3.5).
 
@@ -384,10 +384,10 @@ Lần chậm nhất của 64 MiB (18,2 MB/s, 3,70 s) là lần đo đầu tiên 
 ### 4.4. Việc còn lại
 
 - File 1 GiB, 5 GiB và 10 GiB qua CLI thật trên loopback: đã đo, ĐẠT (mục 4.6).
-- Ổ đích chậm mà RAM không tăng: **chưa đo**; USB có sẵn không dùng được (FAT32, mục 4.8). Cần một USB định dạng NTFS hoặc exFAT, còn ≥ 8 GB trống (định dạng lại USB hiện có thì xóa dữ liệu trên đó: người dùng quyết), hoặc ổ ảo giới hạn tốc độ trong máy ảo. Script đã có `--recv-dir` (mục 4.5). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D4).
-- 10 GiB từ host sang máy thật thứ hai (Windows, Wi-Fi) qua card mạng, RAM hai phía ([ke_hoach.md](ke_hoach.md) mục 5.4, D3): đã đo **1 lần** qua Wi-Fi 2,4 GHz (mục 4.10), ĐẠT theo quyết định của người dùng (1 lần là đủ). Còn **chưa đo**: mạng dây, và phần so 10 GiB với 1 GiB của tiêu chí 2 (cần các lần 1 GiB qua cùng mạng, lượt mvp N2 mục 5.1).
+- Ổ đích chậm mà RAM không tăng: **chưa đo**; USB có sẵn không dùng được (FAT32, mục 4.8). Cần một USB định dạng NTFS hoặc exFAT, còn ≥ 8 GB trống (định dạng lại USB hiện có thì xóa dữ liệu trên đó: người dùng quyết), hoặc ổ ảo giới hạn tốc độ trong máy ảo. Script đã có `--recv-dir` (mục 4.5). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D4).
+- 10 GiB từ host sang máy thật thứ hai (Windows, Wi-Fi) qua card mạng, RAM hai phía ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D3): đã đo **1 lần** qua Wi-Fi 2,4 GHz (mục 4.10), ĐẠT theo quyết định của người dùng (1 lần là đủ). Còn **chưa đo**: mạng dây, và phần so 10 GiB với 1 GiB của tiêu chí 2 (cần các lần 1 GiB qua cùng mạng, lượt mvp N2 mục 5.1).
 - Phần lúc rảnh của mvp N3: lệnh CLI đã ghi nhận (mục 4.7); app có giao diện đã đo một lần khi máy bận (mục 4.11), **chưa có lần đo khi máy rảnh** để kết luận. Đo lại bằng cùng script (mục 4.11, “Cách đo lại”), khi không có bộ test hay agent nào khác chạy; bản build PyInstaller cũng cần đo. Đo CPU cần tránh bẫy lõi tiết kiệm điện của Windows (EcoQoS).
-- Hệ điều hành khác (Linux, macOS làm bên nhận và bên gửi), Python 3.12: **chưa đo**. Hệ điều hành khác thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D7); Python 3.12 đo được trên máy này, không thuộc đợt đo.
+- Hệ điều hành khác (Linux, macOS làm bên nhận và bên gửi), Python 3.12: **chưa đo**. Hệ điều hành khác thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D7); Python 3.12 đo được trên máy này, không thuộc đợt đo.
 
 ### 4.5. Cách đo lại
 
@@ -562,7 +562,7 @@ Vì hệ file là FAT32, lượt đo **không chạy**; không có file nào đ�
 | 2. Đường RAM phẳng | **chưa đo** |
 | 3. SHA-256 khớp, `.teleport` trống, mã thoát 0 / 0 | **chưa đo** |
 
-**Kết luận phần ổ đích chậm: CHƯA ĐỦ DỮ LIỆU** (chưa đo). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D4).
+**Kết luận phần ổ đích chậm: CHƯA ĐỦ DỮ LIỆU** (chưa đo). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D4).
 
 **Việc cần để đo:** một USB NTFS hoặc exFAT còn ≥ 8 GB trống. Định dạng lại ổ hiện có thành exFAT/NTFS sẽ xóa khoảng 26 GB dữ liệu đang có trên đó: người dùng quyết, người đo không làm. Ổ đang báo cần sửa lỗi, nên sửa lỗi (hoặc định dạng lại) trước. VID/PID `048D:1234` là mã chung, hay gặp ở USB không rõ hãng; nếu dùng lại ổ này, kiểm dung lượng thật trước, vì USB khai khống dung lượng làm hỏng dữ liệu ghi và khiến SHA-256 không khớp mà không do Teleport.
 
@@ -819,8 +819,8 @@ Script `n3_net_host.py` (host), `may2_nhan.py` và `may2_chuanbi.ps1` (máy th�
 
 ### 5.3. Việc còn lại
 
-- Lượt đầu (host Windows 11 → máy thứ hai Windows 10/11, **cả hai qua Wi-Fi**) theo phương pháp mục 5.1: **chưa đo**; đã có một lần đo tay chỉ để tham khảo (mục 5.4). Giới hạn đã biết trước: qua Wi-Fi, mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách, nên tỉ số đo được không cho biết Teleport có theo kịp SMB trên mạng dây gigabit (khi CPU và Python mới là giới hạn). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2, D3).
-- Mạng dây gigabit giữa hai máy thật: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D2).
+- Lượt đầu (host Windows 11 → máy thứ hai Windows 10/11, **cả hai qua Wi-Fi**) theo phương pháp mục 5.1: **chưa đo**; đã có một lần đo tay chỉ để tham khảo (mục 5.4). Giới hạn đã biết trước: qua Wi-Fi, mỗi byte đi qua sóng hai lần và Wi-Fi là nút cổ chai cho cả hai cách, nên tỉ số đo được không cho biết Teleport có theo kịp SMB trên mạng dây gigabit (khi CPU và Python mới là giới hạn). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D2, D3).
+- Mạng dây gigabit giữa hai máy thật: **chưa đo**. Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D2).
 
 ### 5.4. Lần đo 2026-10-29/30: đo tay qua giao diện, Wi-Fi 2,4 GHz (chỉ tham khảo)
 
@@ -863,7 +863,7 @@ Tỉ số trung vị SMB / Teleport = 372 / 387 ≈ 0,96; theo từng cặp vớ
 
 ## 6. MVP hackathon (mvp mục 4.1)
 
-Tiêu chí H1–H5, cách kiểm và điều kiện đạt (máy, mạng, bản chạy): [mvp.md](mvp.md) mục 4.1. Lịch kiểm: [ke_hoach.md](ke_hoach.md) mục 5.5. Mỗi lần kiểm là một mục con riêng theo quy ước mục 1: ngày, commit của bản zip, hai máy (hệ điều hành, card mạng), mạng Wi-Fi, kết quả từng bước và hash hai phía.
+Tiêu chí H1–H5, cách kiểm và điều kiện đạt (máy, mạng, bản chạy): [mvp.md](../product/mvp.md) mục 4.1. Lịch kiểm: [ke_hoach.md](../product/ke_hoach.md) mục 5.5. Mỗi lần kiểm là một mục con riêng theo quy ước mục 1: ngày, commit của bản zip, hai máy (hệ điều hành, card mạng), mạng Wi-Fi, kết quả từng bước và hash hai phía.
 
 | Mã | Lần kiểm gần nhất | Kết luận |
 |---|---|---|
@@ -877,7 +877,7 @@ Lần đo tay N2 ở mục 5.4 không tính cho H2: không so SHA-256 của file
 
 ### 6.1. Lần kiểm 2026-11-05: zip RC1 `7824259`, hai máy Windows thật qua Wi-Fi
 
-Kiểm trước lịch chính thức ngày 06/11 ở [ke_hoach.md](ke_hoach.md) mục 5.5 vì có máy mượn sớm hơn. Lần kiểm này đủ điều kiện của mvp mục 4.1: zip RC1, hai máy Windows thật, cùng một mạng Wi-Fi, chỉ gõ lệnh kiểm hash. Người dùng thao tác và bấm giờ; số liệu dưới đây là số người dùng báo lại.
+Kiểm trước lịch chính thức ngày 06/11 ở [ke_hoach.md](../product/ke_hoach.md) mục 5.5 vì có máy mượn sớm hơn. Lần kiểm này đủ điều kiện của mvp mục 4.1: zip RC1, hai máy Windows thật, cùng một mạng Wi-Fi, chỉ gõ lệnh kiểm hash. Người dùng thao tác và bấm giờ; số liệu dưới đây là số người dùng báo lại.
 
 **Bản chạy.** Cả hai máy chạy zip `teleport-gui-0.1.0a0-7824259-windows` (34 384 865 byte). Zip được build bằng workflow “Build GUI (thử)” (run 41953253539) trên `main` `7824259`; build và test frozen đều đạt. Zip `40da800` có `src/` giống hệt `7824259`, và `main` không đổi `src/` từ `7824259` tới `40da800`.
 
@@ -914,7 +914,7 @@ File thử là `demo-1GiB.bin` trên máy A: 1 073 741 824 byte ngẫu nhiên, S
 - Thời gian ở H1, H2 và độ dài lúc tắt Wi-Fi ở H3, H4 đều bấm tay hoặc do người dùng ước lượng.
 - Chỉ đo trên Wi-Fi 2,4 GHz; mỗi tiêu chí kiểm một lần, riêng H1 bấm giờ 3 lần.
 - Máy B chạy Windows 10 21H2, không phải phiên bản mvp N10 nêu.
-- Nếu zip chốt ngày 07/11 khác commit `7824259`, phải kiểm lại các H mà thay đổi có thể ảnh hưởng ([ke_hoach.md](ke_hoach.md) mục 5.5).
+- Nếu zip chốt ngày 07/11 khác commit `7824259`, phải kiểm lại các H mà thay đổi có thể ảnh hưởng ([ke_hoach.md](../product/ke_hoach.md) mục 5.5).
 
 ## 7. mvp N4: Nối lại
 
@@ -998,8 +998,8 @@ Lớn nhất qua mọi lần: **24,31 MiB** (25 493 504 byte, `killlive`, proxy 
 
 ### 7.4. Việc còn lại
 
-- **Linux: chưa đo.** Máy ảo `Teleport-N1` (mục 3.3) đang tắt; phiên đo không có kênh chạy lệnh trong máy ảo (agent của mục 3.5 chỉ có lệnh cho N1, không có `guestcontrol` hay SSH đã cấu hình), Teleport trong máy ảo còn ở commit `efa9d5b` và phải cập nhật lên commit cần đo (cần Internet trong máy ảo), và chiều máy ảo gửi → host nhận cần mở tường lửa của host bằng quyền Administrator. Cần người dùng chạy theo mục 7.5; dời vào đợt đo D5 ([ke_hoach.md](ke_hoach.md) mục 5.4).
-- Card mạng thật, Wi-Fi (tắt Wi-Fi giữa lượt rồi bật lại) và macOS: **chưa đo**, thuộc đợt đo trên thiết bị thật ([ke_hoach.md](ke_hoach.md) mục 5.4, D5).
+- **Linux: chưa đo.** Máy ảo `Teleport-N1` (mục 3.3) đang tắt; phiên đo không có kênh chạy lệnh trong máy ảo (agent của mục 3.5 chỉ có lệnh cho N1, không có `guestcontrol` hay SSH đã cấu hình), Teleport trong máy ảo còn ở commit `efa9d5b` và phải cập nhật lên commit cần đo (cần Internet trong máy ảo), và chiều máy ảo gửi → host nhận cần mở tường lửa của host bằng quyền Administrator. Cần người dùng chạy theo mục 7.5; dời vào đợt đo D5 ([ke_hoach.md](../product/ke_hoach.md) mục 5.4).
+- Card mạng thật, Wi-Fi (tắt Wi-Fi giữa lượt rồi bật lại) và macOS: **chưa đo**, thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D5).
 - Nhiều file trong một lượt, và nhiều lần gián đoạn trong một lượt: **chưa đo**.
 
 ### 7.5. Cách đo lại
@@ -1083,13 +1083,13 @@ Từ 2026-10-31 (mục 8.4, bộ cài thử của PR E2, chế độ `/CURRENTUS
 
 - Cỡ **sau khi cài** là 85 256 013 B = 81,31 MiB = 85,26 MB (10⁶), 151 file: **trên** con số 80 dù hiểu “MB” theo cách nào. mvp N11 chỉ đặt trần cho bộ cài, không cho cỡ sau khi cài; ghi lại để chủ của `mvp.md` quyết có cần trần cho cỡ này không. Riêng các file của app (không tính `unins000.*`) là 80 826 254 B = 77,08 MiB = 80,83 MB; trình gỡ của Inno thêm 4 429 759 B.
 - Cỡ zip ở mục 8.2 chỉ để so các bản build với nhau. Bộ cài (`lzma2/max`, nén khối) bằng 75 % zip “Sau A2” của mục 8.2 (26 078 484 / 34 601 261 B); hai bản build khác nhau (thư mục `dist` chênh 24 414 B) nên tỉ lệ này chỉ để tham khảo.
-- Còn **chưa đo**: (1) cài/gỡ ở chế độ quản trị (mặc định khi cài bằng tay, cần quyền quản trị): “không cần khởi động lại” và việc tạo/xóa hai rule tường lửa; (2) toàn bộ phép kiểm trên **máy ảo Windows sạch** như mvp N11 yêu cầu (máy dev đã có sẵn `%APPDATA%\Teleport`, Python, VC++ runtime…); (3) gỡ có giao diện với lựa chọn giữ/xóa cài đặt và thiết bị tin cậy. Thuộc Giai đoạn 6 ([ke_hoach.md](ke_hoach.md) mục 5.2).
+- Còn **chưa đo**: (1) cài/gỡ ở chế độ quản trị (mặc định khi cài bằng tay, cần quyền quản trị): “không cần khởi động lại” và việc tạo/xóa hai rule tường lửa; (2) toàn bộ phép kiểm trên **máy ảo Windows sạch** như mvp N11 yêu cầu (máy dev đã có sẵn `%APPDATA%\Teleport`, Python, VC++ runtime…); (3) gỡ có giao diện với lựa chọn giữ/xóa cài đặt và thiết bị tin cậy. Thuộc Giai đoạn 6 ([ke_hoach.md](../product/ke_hoach.md) mục 5.2).
 
 Trước 2026-10-31 (giữ nguyên):
 
 - Trần của mvp N11 áp cho **bộ cài** Windows; chưa có bộ cài nên mục này là **chưa đo**. Cỡ zip ở trên chỉ để tham khảo: bộ cài nén cùng các file này, nhưng cỡ còn tùy công cụ và mức nén.
 - Zip sau A2 dưới trần của mvp N11 với khoảng cách lớn. Thư mục đã giải nén (cái người dùng thấy sau khi cài) xấp xỉ trần: dưới trần nếu “MB” trong mvp N11 là MiB, **trên** trần nếu là 10⁶ byte. mvp N11 không nói rõ đơn vị và không đặt trần cho cỡ sau khi cài; ghi lại để chủ của `mvp.md` quyết.
-- Còn lại: cỡ bộ cài thật, “không cần khởi động lại” và gỡ cài đặt sạch, kiểm trên máy ảo sạch theo mvp N11 (Giai đoạn 6, [ke_hoach.md](ke_hoach.md) mục 5.2).
+- Còn lại: cỡ bộ cài thật, “không cần khởi động lại” và gỡ cài đặt sạch, kiểm trên máy ảo sạch theo mvp N11 (Giai đoạn 6, [ke_hoach.md](../product/ke_hoach.md) mục 5.2).
 
 **Cách đo lại:** build theo `CONTRIBUTING.md`, rồi chạy script tạo zip và in cỡ (đặt ngoài repo, nội dung đúng như dưới):
 
@@ -1339,7 +1339,7 @@ Working set đỉnh của cả tiến trình (gồm cả lúc script tạo ảnh
 
 ### 9.5. Việc còn lại
 
-- **Wi-Fi 5 giữa hai máy thật: chưa đo** (D6, [ke_hoach.md](ke_hoach.md) mục 5.4). Cần máy thật thứ hai và điểm phát Wi-Fi đúng loại mvp N6 nêu; mỗi đầu chỉ dùng đồng hồ của chính nó (ví dụ đo khứ hồi A → B → A trên đồng hồ A), không so đồng hồ hai máy.
+- **Wi-Fi 5 giữa hai máy thật: chưa đo** (D6, [ke_hoach.md](../product/ke_hoach.md) mục 5.4). Cần máy thật thứ hai và điểm phát Wi-Fi đúng loại mvp N6 nêu; mỗi đầu chỉ dùng đồng hồ của chính nó (ví dụ đo khứ hồi A → B → A trên đồng hồ A), không so đồng hồ hai máy.
 - **M4 trên clipboard thật của Windows** (nền `windows`: thời gian `clipboard.image()` chuyển DIB trên thread Qt, `setImage`, lệch Qt): **chưa đo**; cần một phiên máy thật mà người dùng chấp nhận clipboard bị ghi đè trong lúc đo (mục 9.4 chỉ đo offscreen).
 - M1–M4 trên Linux và macOS: chưa đo.
 
