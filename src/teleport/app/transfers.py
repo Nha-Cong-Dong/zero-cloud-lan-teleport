@@ -441,7 +441,7 @@ def _result_of(ended: TransferEnded, unpaired: bool) -> TransferResult:
 async def preview_sources(
     paths: Sequence[str | os.PathLike[str]],
     *,
-    allow_dirs: bool = True,
+    allow_dirs: bool = False,
 ) -> list[SourceFile]:
     """Kiểm các file sẽ gửi như `TransferManager.send` (`sources.prepare_sources`), không cần node.
 
@@ -452,7 +452,10 @@ async def preview_sources(
     """
     executor = DiskExecutor(1, name="teleport.preview")
     try:
-        job = executor.submit(sources.prepare_sources, paths, allow_dirs)
+        if allow_dirs:
+            job = executor.submit(sources.prepare_sources, paths, allow_dirs)
+        else:
+            job = executor.submit(sources.prepare_sources, paths)
         try:
             return await job.result(None)
         except asyncio.CancelledError:
@@ -961,7 +964,7 @@ class TransferManager:
         device_id: str,
         paths: Sequence[str | os.PathLike[str]],
         *,
-        allow_dirs: bool = True,
+        allow_dirs: bool = False,
     ) -> TransferKey:
         """Gửi các file (hoặc thư mục) `paths` tới thiết bị tin cậy `device_id`; trả khóa của lượt.
 
@@ -971,7 +974,10 @@ class TransferManager:
         `SourceError`. Sự kiện của lượt có thể tới trước khi hàm trả về.
         """
         self._check_send_target(device_id)
-        job = self._executor.submit(sources.prepare_sources, paths, allow_dirs)
+        if allow_dirs:
+            job = self._executor.submit(sources.prepare_sources, paths, allow_dirs)
+        else:
+            job = self._executor.submit(sources.prepare_sources, paths)
         try:
             files = await _job_result(job, None)
         except _JobDropped:
@@ -2053,12 +2059,19 @@ class TransferManager:
         source_entry = files[a.file_index].entry
         job = None
         try:
-            job = self._executor.submit(
-                sources.check_source,
-                files[a.file_index].path,
-                a.leaves,
-                source_entry.is_dir,
-            )
+            if source_entry.is_dir:
+                job = self._executor.submit(
+                    sources.check_source,
+                    files[a.file_index].path,
+                    a.leaves,
+                    True,
+                )
+            else:
+                job = self._executor.submit(
+                    sources.check_source,
+                    files[a.file_index].path,
+                    a.leaves,
+                )
             size, mtime, root = await _job_result(job, DISK_OP_TIMEOUT)
         except asyncio.CancelledError:
             if job is not None:

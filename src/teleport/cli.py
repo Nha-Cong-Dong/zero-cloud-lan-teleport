@@ -2081,64 +2081,129 @@ class _TransferPrinter:
 class _SendSession(_Session):
     """Trạng thái của `send`: ghi kết quả ngay trong callback, để Ctrl+C tới sau vẫn trả đúng mã."""
 
-    def __init__(self, output: _Output) -> None:
+    def __init__(self, output: _Output, *, prefix: bool = False) -> None:
         super().__init__()
         self.output = output
-        self.device_id = ""
-        self.peer_name: str | None = None  # tên trong trusted.json, chưa qua display_name
-        self.connected = False  # đã có DeviceConnected của máy nhận (có thể tới trước khi chờ)
-        self.failure: ConnectFailed | None = None  # ConnectFailed đầu tiên trước khi gửi
-        self.sending = False  # đã gọi transfers.send: ConnectFailed sau đó chỉ in (nối lại tới 24 h)
-        self.offered = False  # đã phát `offer` (JSON) cho lượt gửi
-        self.result: TransferFinished | None = None
-        self.wake = asyncio.Event()  # có sự kiện kết nối mới
-        self.done = asyncio.Event()  # có `result`
+        self.device_ids: set[str] = set()
+        self.peer_names: dict[str, str] = {}
+        self.connected_ids: set[str] = set()
+        self.failures: dict[str, ConnectFailed] = {}
+        self.sending_ids: set[str] = set()
+        self.offered_ids: set[str] = set()
+        self.results: dict[str, TransferFinished] = {}
+        self.wake_events: dict[str, asyncio.Event] = {}
+        self.done_events: dict[str, asyncio.Event] = {}
+        self.done = asyncio.Event()
         self.printer = _TransferPrinter(
-            output, name_of=lambda _: self.peer_name, receive_dir=lambda: None, prefix=False
+            output,
+            name_of=lambda dev_id: self.peer_names.get(dev_id),
+            receive_dir=lambda: None,
+            prefix=prefix,
         )
+
+    @property
+    def result(self) -> TransferFinished | None:
+        """Kết quả tổng thể: nếu có bất kỳ thất bại nào thì trả về nó; nếu đều DONE thì trả về 1 cái."""
+        if not self.results:
+            return None
+        for res in self.results.values():
+            if res.result is not TransferResult.DONE:
+                return res
+        return next(iter(self.results.values()))
+
+    @property
+    def device_id(self) -> str:
+        return next(iter(self.device_ids)) if self.device_ids else ""
+
+    @device_id.setter
+    def device_id(self, val: str) -> None:
+        if val:
+            self.device_ids.add(val)
+            self.wake_events.setdefault(val, asyncio.Event())
+            self.done_events.setdefault(val, asyncio.Event())
+
+    @property
+    def peer_name(self) -> str | None:
+        return self.peer_names.get(self.device_id)
+
+    @peer_name.setter
+    def peer_name(self, val: str | None) -> None:
+        if val and self.device_id:
+            self.peer_names[self.device_id] = val
+
+    @property
+    def connected(self) -> bool:
+        return self.device_id in self.connected_ids
+
+    @property
+    def failure(self) -> ConnectFailed | None:
+        return self.failures.get(self.device_id)
+
+    @property
+    def sending(self) -> bool:
+        return self.device_id in self.sending_ids
+
+    @property
+    def wake(self) -> asyncio.Event:
+        return self.wake_events.setdefault(self.device_id, asyncio.Event())
+
+    def register_device(self, device_id: str, name: str) -> None:
+        self.device_ids.add(device_id)
+        self.peer_names[device_id] = name
+        self.wake_events.setdefault(device_id, asyncio.Event())
+        self.done_events.setdefault(device_id, asyncio.Event())
 
     def on_event(self, event: NodeEvent) -> None:
         view = event.device
-        if view.device_id != self.device_id:
+        dev_id = view.device_id
+        if dev_id not in self.device_ids:
             return
+        wake = self.wake_events.get(dev_id)
         if isinstance(event, DeviceConnected):
-            self.connected = True
-            self.wake.set()
+            self.connected_ids.add(dev_id)
+            if wake:
+                wake.set()
         elif isinstance(event, ConnectFailed):
-            if self.sending and event.result is ConnectResult.UNREACHABLE:
-                # Đang chờ nối lại: không phải câu “mạng chặn” (mvp mục 8, “Mất mạng”). Mỗi đợt mất
-                # kết nối `core.links` chỉ báo một lần.
-                self.output.text(_reconnect_unreachable_message(_peer_label(self.peer_name, self.device_id)))
-            elif self.sending:
+            peer_name = self.peer_names.get(dev_id, dev_id[:8])
+            if dev_id in self.sending_ids and event.result is ConnectResult.UNREACHABLE:
+                self.output.text(_reconnect_unreachable_message(_peer_label(peer_name, dev_id)))
+            elif dev_id in self.sending_ids:
                 self.output.text(*connect_failed_message(view, event.result))
-            elif self.failure is None:
-                self.failure = event
-                self.wake.set()
+            elif dev_id not in self.failures:
+                self.failures[dev_id] = event
+                if wake:
+                    wake.set()
 
     def on_transfer_event(self, update: TransferUpdate) -> None:
         if isinstance(update, DataUnreachable):
-            if update.device_id == self.device_id:
+            if update.device_id in self.device_ids:
                 self.printer.handle(update)
             return
         key = _key_of(update)
-        if key is None or key.direction is not Direction.SEND or key.device_id != self.device_id:
+        if key is None or key.direction is not Direction.SEND or key.device_id not in self.device_ids:
             return
-        if not self.offered and isinstance(
+        dev_id = key.device_id
+        peer_name = self.peer_names.get(dev_id, dev_id[:8])
+        if dev_id not in self.offered_ids and isinstance(
             update, TransferStatusChanged | TransferProgress | TransferFinished
         ):
-            self.offered = True
+            self.offered_ids.add(dev_id)
             info = update.info
             self.output.event(
                 "offer",
                 **_transfer_fields(key),
-                device_name=self.peer_name,
+                device_name=peer_name,
                 files=[{"name": n, "size": e.size} for n, e in zip(info.names, info.files, strict=False)],
                 total_bytes=info.total_bytes,
             )
         self.printer.handle(update)
-        if isinstance(update, TransferFinished) and self.result is None:
-            self.result = update
-            self.done.set()
+        if isinstance(update, TransferFinished) and dev_id not in self.results:
+            self.results[dev_id] = update
+            done = self.done_events.get(dev_id)
+            if done:
+                done.set()
+            if len(self.results) >= len(self.device_ids):
+                self.done.set()
 
 
 def _expand_sources(paths: Sequence[str]) -> tuple[list[str], str | None]:
@@ -2248,35 +2313,64 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
     if len(paths) > MAX_OFFER_FILES:
         output.error("too_many_files", f"Mỗi lần gửi được tối đa {MAX_OFFER_FILES} file.")
         return 2
-    # Kiểm thiết bị và file trước khi lấy node.lock hay đụng mạng.
-    query = args.to
+    # Phân tích danh sách thiết bị nhận từ `--to`
+    queries: list[str] = []
+    for item in args.to:
+        for q in item.split(","):
+            q = q.strip()
+            if q:
+                queries.append(q)
+    if not queries:
+        output.error("missing_target", "Cần chỉ định ít nhất một thiết bị nhận qua `--to`.")
+        return 2
+    if endpoint is not None and len(queries) > 1:
+        output.error(
+            "invalid_address_multiple",
+            "Chỉ được dùng `--address` khi gửi tới duy nhất 1 thiết bị.",
+        )
+        return 2
+
+    # Kiểm tra các thiết bị trước khi lấy node.lock hay đụng mạng.
+    devices: list[TrustedDevice] = []
+    seen_ids: set[str] = set()
+    for q in queries:
+        try:
+            dev = find_trusted(_config(args), q)
+        except ConfigDirError as e:
+            _config_dir_error(output, e.path, e.error)
+            return 1
+        except TrustStoreError as e:
+            output.error("trust_store_error", str(e))
+            return 1
+        except (DeviceNotFound, AmbiguousDevice) as e:
+            _trusted_lookup_error(output, q, e)
+            return 1
+        if dev.device_id not in seen_ids:
+            devices.append(dev)
+            seen_ids.add(dev.device_id)
+
     try:
-        device = find_trusted(_config(args), query)
-    except ConfigDirError as e:
-        _config_dir_error(output, e.path, e.error)
-        return 1
-    except TrustStoreError as e:
-        output.error("trust_store_error", str(e))
-        return 1
-    except (DeviceNotFound, AmbiguousDevice) as e:
-        _trusted_lookup_error(output, query, e)
-        return 1
-    try:
-        files = await app_transfers.preview_sources(paths)
+        files = await app_transfers.preview_sources(paths, allow_dirs=True)
     except SourceError as e:
         return _source_error(output, e)
     except ValueError:
         return _duplicate_error(output)
     total = sum(f.entry.size for f in files)
-    name = _name_label(device.name)
+
+    for dev in devices:
+        session.register_device(dev.device_id, dev.name)
+    session.printer._prefix = len(devices) > 1
+
     mdns = _mdns_options(args, advertise=False)
     # Địa chỉ đã kết nối lần trước (`last_address`): node tự thử nó, kể cả khi không có mDNS.
-    if mdns is None and endpoint is None and not _has_saved_address(device):
-        output.error("discovery_error", _no_discovery_message(name, "đang tắt"))
-        return 1
-    session.device_id = device.device_id
-    session.peer_name = device.name
+    for dev in devices:
+        d_name = _name_label(dev.name)
+        if mdns is None and endpoint is None and not _has_saved_address(dev):
+            output.error("discovery_error", _no_discovery_message(d_name, "đang tắt"))
+            return 1
+
     port = getattr(args, "port", None)
+    stealth = True if getattr(args, "stealth", False) else None
     node = Node(
         _config(args),
         name=getattr(args, "name", None),
@@ -2285,7 +2379,8 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
         accept_pairing=False,
         mdns=mdns,
         auto_connect=True,
-        auto_connect_to=device.device_id,
+        auto_connect_to={dev.device_id for dev in devices},
+        stealth=stealth,
         on_event=session.on_event,
         rate_limit=rate,
         on_transfer_event=session.on_transfer_event,
@@ -2294,59 +2389,86 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
     code = await _start_transfer_node(node, output)
     if code is not None:
         return code
+
     # trusted.json có thể đã đổi giữa lúc tìm và lúc lấy khóa.
-    current = node.store.get(device.device_id)
-    if current is None:
-        _trusted_lookup_error(output, query, DeviceNotFound(query, node.store.devices()))
-        return 1
-    session.peer_name = current.name
-    name = _name_label(current.name)
+    for dev in devices:
+        curr = node.store.get(dev.device_id)
+        if curr is None:
+            _trusted_lookup_error(output, dev.device_id, DeviceNotFound(dev.device_id, node.store.devices()))
+            return 1
+        session.register_device(curr.device_id, curr.name)
+
     if not node.visible:
         output.text(_HIDDEN_WARNING)
-    if endpoint is not None:
-        node.connect_hint(current.device_id, [endpoint[0]], endpoint[1])
-        output.text(f"Đang kết nối tới “{name}” tại {endpoint[0]}:{endpoint[1]}…")
-    elif not node.discovery_active and _has_saved_address(current):
-        output.text(f"Đang kết nối tới “{name}” ở địa chỉ đã kết nối lần trước…")
-    elif not node.discovery_active:
-        reason = node.discovery_error
-        output.error(
-            "discovery_error", _no_discovery_message(name, "?" if reason is None else _error_text(reason))
-        )
-        return 1
-    else:
-        output.text(f"Đang tìm “{name}” trong mạng…")
+
+    for dev in devices:
+        curr = node.store.get(dev.device_id)
+        assert curr is not None
+        d_name = _name_label(curr.name)
+        if endpoint is not None:
+            node.connect_hint(curr.device_id, [endpoint[0]], endpoint[1])
+            output.text(f"Đang kết nối tới “{d_name}” tại {endpoint[0]}:{endpoint[1]}…")
+        elif not node.discovery_active and _has_saved_address(curr):
+            output.text(f"Đang kết nối tới “{d_name}” ở địa chỉ đã kết nối lần trước…")
+        elif not node.discovery_active:
+            reason = node.discovery_error
+            err_msg = _no_discovery_message(d_name, "?" if reason is None else _error_text(reason))
+            output.error("discovery_error", err_msg)
+            return 1
+        else:
+            output.text(f"Đang tìm “{d_name}” trong mạng…")
+
     rate = node.transfers.rate_limit  # không có `--limit-rate`: giới hạn đã lưu trong cài đặt
     if rate is not None:
         output.text(f"Giới hạn tốc độ gửi: {format_size(rate, trim=True)}/s.")
-    output.event(
-        "connecting",
-        device_id=current.device_id,
-        name=current.name,
-        address=None if endpoint is None else f"{endpoint[0]}:{endpoint[1]}",
-        file_count=len(files),
-        total_bytes=total,
-        rate_limit=rate,
-    )
-    code = await _wait_connected(node, output, session, name, endpoint)
-    if code is not None:
-        return code
-    output.text(f"Đã kết nối với “{name}”. Gửi {len(files)} file ({format_size(total)}).")
-    session.sending = True
-    try:
-        await node.transfers.send(current.device_id, [f.path for f in files])
-    except SourceError as e:
-        return _source_error(output, e)
-    except ValueError:
-        return _duplicate_error(output)
-    except (RuntimeError, KeyError):  # node đang đóng, hoặc máy nhận vừa thôi tin cậy
-        if session.result is None:
-            output.text(_CANCELLED)
-            output.event("error", error="cancelled", message=_CANCELLED)
-        return 1
-    await session.done.wait()
-    assert session.result is not None
-    return 0 if session.result.result is TransferResult.DONE else 1
+
+    for dev in devices:
+        curr = node.store.get(dev.device_id)
+        assert curr is not None
+        output.event(
+            "connecting",
+            device_id=curr.device_id,
+            name=curr.name,
+            address=None if endpoint is None else f"{endpoint[0]}:{endpoint[1]}",
+            file_count=len(files),
+            total_bytes=total,
+            rate_limit=rate,
+        )
+
+    # Chờ tất cả máy kết nối
+    wait_coros = [
+        _wait_connected(node, output, session, _name_label(d.name), d.device_id, endpoint)
+        for d in devices
+    ]
+    wait_results = await asyncio.gather(*wait_coros)
+    for res in wait_results:
+        if res is not None:
+            return res
+
+    async def _send_to(dev: TrustedDevice) -> int:
+        d_name = _name_label(dev.name)
+        output.text(f"Đã kết nối với “{d_name}”. Gửi {len(files)} file ({format_size(total)}).")
+        session.sending_ids.add(dev.device_id)
+        try:
+            await node.transfers.send(dev.device_id, paths, allow_dirs=True)
+        except SourceError as e:
+            return _source_error(output, e)
+        except ValueError:
+            return _duplicate_error(output)
+        except (RuntimeError, KeyError):
+            return 1
+        dev_done = session.done_events.get(dev.device_id)
+        if dev_done:
+            await dev_done.wait()
+        res = session.results.get(dev.device_id)
+        return 0 if (res and res.result is TransferResult.DONE) else 1
+
+    send_tasks = [_send_to(d) for d in devices]
+    send_codes = await asyncio.gather(*send_tasks)
+    for c in send_codes:
+        if c != 0:
+            return c
+    return 0
 
 
 def _no_discovery_message(name: str, reason: str) -> str:
@@ -2361,18 +2483,23 @@ def _has_saved_address(device: TrustedDevice) -> bool:
 
 
 async def _wait_connected(
-    node: Node, output: _Output, session: _SendSession, name: str, endpoint: tuple[str, int] | None
+    node: Node,
+    output: _Output,
+    session: _SendSession,
+    name: str,
+    device_id: str,
+    endpoint: tuple[str, int] | None,
 ) -> int | None:
     """Chờ kết nối điều khiển tới máy nhận. `ConnectFailed` đầu tiên → mã 1; qua mDNS: quá
     `_SEND_CONNECT_TIMEOUT` → mã 1. `--address` không có hạn: lần thử do `connect_hint` thất bại
     được `core.links` báo ngay. Kết nối được → None."""
     loop = asyncio.get_running_loop()
     deadline = None if endpoint is not None else loop.time() + _SEND_CONNECT_TIMEOUT
-    device_id = session.device_id
+    wake = session.wake_events.setdefault(device_id, asyncio.Event())
     while True:
-        if session.connected or device_id in node.connected_devices():
+        if device_id in session.connected_ids or device_id in node.connected_devices():
             return None
-        failure = session.failure
+        failure = session.failures.get(device_id)
         if failure is not None:
             if failure.result is ConnectResult.UNREACHABLE and endpoint is not None:
                 lines = [
@@ -2405,10 +2532,10 @@ async def _wait_connected(
                     device_id=device_id,
                 )
             return 1
-        session.wake.clear()
+        wake.clear()
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(timeout):
-                await session.wake.wait()
+                await wake.wait()
 
 
 # ---- receive ---------------------------------------------------------------------------------
@@ -2698,6 +2825,7 @@ async def _receive_main(
         Path(os.path.abspath(os.path.expanduser(raw_dir))) if raw_dir else ReceiveDirChoice.SAVED
     )
     mdns = _mdns_options(args, advertise=True)
+    stealth = True if getattr(args, "stealth", False) else None
     node = Node(
         _config(args),
         name=getattr(args, "name", None),
@@ -2706,6 +2834,7 @@ async def _receive_main(
         accept_pairing=False,
         mdns=mdns,
         auto_connect=True,
+        stealth=stealth,
         on_event=session.on_event,
         receive_dir=receive_dir,
         auto_accept=auto_accept,
@@ -2894,6 +3023,11 @@ def _add_node_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--name", help="tên thiết bị cho lần chạy này (mặc định: tên đã lưu, chưa có thì tên máy)"
     )
+    parser.add_argument(
+        "--stealth",
+        action="store_true",
+        help="chế độ ẩn danh: không phát tên thật máy tính ra toàn mạng WiFi",
+    )
     # Ẩn: chỉ để test bind 127.0.0.1 và cổng 0 (tránh hộp thoại tường lửa Windows).
     parser.add_argument("--host", default=_ANY_HOST, help=argparse.SUPPRESS)
     parser.add_argument("--port", type=_port_type, default=None, help=argparse.SUPPRESS)
@@ -2970,7 +3104,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"các file hoặc thư mục cần gửi (tối đa {MAX_OFFER_FILES})",
     )
     send.add_argument(
-        "--to", required=True, metavar="<thiết bị>", help="tên hoặc tiền tố mã thiết bị đã ghép đôi"
+        "--to",
+        action="append",
+        required=True,
+        metavar="<thiết bị>",
+        help="tên hoặc tiền tố mã thiết bị đã ghép đôi (có thể lặp lại hoặc cách nhau bằng dấu phẩy)",
     )
     send.add_argument(
         "--address", metavar="<ip[:cổng]>", help="địa chỉ của máy nhận, khi mạng chặn mDNS (vẫn cần --to)"

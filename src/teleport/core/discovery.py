@@ -230,12 +230,16 @@ def truncate_txt_name(name: str) -> str:
     return validate_device_name(result)
 
 
-def build_txt(device_id: str, name: str, os: str) -> dict[str, str]:
-    """Bản ghi TXT để quảng bá. Tham số sai → MessageError."""
+def build_txt(device_id: str, name: str, os: str, *, stealth: bool = False) -> dict[str, str]:
+    """Bản ghi TXT để quảng bá. Tham số sai → MessageError.
+
+    `stealth=True`: phát tên ẩn danh `Teleport-<device_id[:6]>` thay vì tên thực để bảo vệ riêng tư.
+    """
     validate_device_id(device_id)
+    public_name = f"Teleport-{device_id[:6]}" if stealth else name
     return {
         "id": device_id,
-        "name": truncate_txt_name(name),
+        "name": truncate_txt_name(public_name),
         "os": validate_os(os),
         "proto": str(PROTOCOL_VERSION),
     }
