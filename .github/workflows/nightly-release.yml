@@ -69,6 +69,8 @@ jobs:
           pyinstaller --noconfirm --clean --distpath dist --workpath build packaging/pyinstaller/teleport-gui.spec
 
       - name: Test khói trên exe (pytest -m frozen)
+        env:
+          TELEPORT_FROZEN_GUI_EXE: ${{ github.workspace }}\dist\teleport-gui\Teleport.exe
         run: |
           python -m pytest -q -m frozen tests/packaging/test_frozen_gui.py
 
@@ -106,9 +108,15 @@ jobs:
           $size = $setups[0].Length
           Write-Host "Kich thuoc bo cai: $size byte"
           if ($size -ge 80000000) { throw "Bo cai vuot qua 80 MB ($size byte)" }
+          "TELEPORT_INSTALLER_EXE=$($setups[0].FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Test cài/gỡ trên bộ cài
+        shell: pwsh
         run: |
+          if (-not $env:TELEPORT_INSTALLER_EXE) {
+            $setups = Get-ChildItem -Path "installer/*.exe"
+            $env:TELEPORT_INSTALLER_EXE = $setups[0].FullName
+          }
           python -m pytest -q -m frozen tests/packaging/test_installer.py
 
       - name: Đóng gói tài nguyên phát hành
@@ -162,6 +170,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             Write-Host "Release $tag da ton tai, dang ghi de tep moi..."
             gh release upload $tag $files --clobber
+            gh release edit $tag --notes "Bản tự động đóng gói mới nhất từ nhánh main. Cập nhật commit: ${{ steps.info.outputs.sha7 }}"
           } else {
             Write-Host "Tao moi ban phat hanh $tag..."
             gh release create $tag $files `
