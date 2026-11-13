@@ -538,11 +538,15 @@ def test_currentuser_silent_install_and_uninstall_leave_nothing(inst: Install, u
 
     # Bản đã cài chạy được (đủ _internal): --selftest không mở mạng, không ghi gì.
     cfg = inst.tmp / "cfg-selftest"
+    selftest_env = dict(os.environ)
+    for name in ("TELEPORT_HOME", "QT_QPA_PLATFORM", "QT_PLUGIN_PATH"):
+        selftest_env.pop(name, None)
     p = subprocess.run(
         [str(inst.exe), "--selftest", "--config-dir", str(cfg)],
         stdin=subprocess.DEVNULL,
         capture_output=True,
         timeout=60,
+        env=selftest_env,
         check=False,
     )
     assert p.returncode == 0
