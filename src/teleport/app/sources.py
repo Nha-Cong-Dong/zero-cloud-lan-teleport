@@ -99,7 +99,6 @@ class SourceFile:
 
 def prepare_sources(
     paths: Sequence[str | os.PathLike[str]],
-    *,
     allow_dirs: bool = False,
 ) -> list[SourceFile]:
     """Kiểm các file sẽ gửi theo thứ tự và dựng `SourceFile`; ném lỗi đầu tiên gặp.
@@ -221,7 +220,7 @@ def _entry_for(path: Path, st: os.stat_result) -> FileEntry:
     return _entry_for_rel(path, st, "", is_dir=False)
 
 
-def check_source(path: Path, leaves: bytearray, *, is_dir: bool = False) -> tuple[int, int, bytes]:
+def check_source(path: Path, leaves: bytearray, is_dir: bool = False) -> tuple[int, int, bytes]:
     """Kết quả cho `CheckSource`: `(size, mtime_ms, merkle_root(leaves))` của file nguồn.
 
     `stat` theo đường dẫn (theo symlink). Không còn là file thường (hoặc thư mục khi is_dir=True)

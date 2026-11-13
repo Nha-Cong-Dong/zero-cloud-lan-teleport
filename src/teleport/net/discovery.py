@@ -87,14 +87,14 @@ def _check_port(port: object) -> int:
 
 
 def build_service_info(
-    *, device_id: str, name: str, os: str, port: int, addresses: Sequence[str]
+    *, device_id: str, name: str, os: str, port: int, addresses: Sequence[str], stealth: bool = False
 ) -> AsyncServiceInfo:
     """`AsyncServiceInfo` để quảng bá máy này (SRV, TXT, A; mọi bản ghi TTL `RECORD_TTL`)."""
     return AsyncServiceInfo(
         SERVICE_TYPE,
         service_name(device_id),
         port=_check_port(port),
-        properties=build_txt(device_id, name, os),
+        properties=build_txt(device_id, name, os, stealth=stealth),
         server=f"teleport-{device_id}.local.",
         host_ttl=RECORD_TTL,
         other_ttl=RECORD_TTL,
@@ -330,7 +330,14 @@ class MdnsDiscovery:
     # ---- Quảng bá --------------------------------------------------------------------------
 
     async def advertise(
-        self, *, device_id: str, name: str, os: str, port: int, addresses: Sequence[str] | None = None
+        self,
+        *,
+        device_id: str,
+        name: str,
+        os: str,
+        port: int,
+        addresses: Sequence[str] | None = None,
+        stealth: bool = False,
     ) -> None:
         """Quảng bá (lần đầu) hoặc cập nhật tên/cổng/địa chỉ (các lần sau) của máy này.
 
@@ -339,6 +346,7 @@ class MdnsDiscovery:
         có truyền thì vẫn qua `filter_addresses`. Không còn địa chỉ nào, hoặc tên
         instance đã có máy khác dùng → DiscoveryError. Đổi `device_id` so với lần
         quảng bá đang chạy → ValueError.
+        `stealth=True`: phát tên ẩn danh `Teleport-<device_id[:6]>` trên TXT mDNS.
         """
         validate_device_id(device_id)
         validate_device_name(name)
@@ -354,7 +362,14 @@ class MdnsDiscovery:
                 selected = filter_addresses(addresses)
             if not selected:
                 raise DiscoveryError("không tìm thấy địa chỉ IPv4 nào để quảng bá trong mạng LAN")
-            info = build_service_info(device_id=device_id, name=name, os=os, port=port, addresses=selected)
+            info = build_service_info(
+                device_id=device_id,
+                name=name,
+                os=os,
+                port=port,
+                addresses=selected,
+                stealth=stealth,
+            )
             aiozc = self._running_zeroconf()  # có thể đã close trong lúc chờ
             if self._info is None:
                 if info.name in self._registered_names:

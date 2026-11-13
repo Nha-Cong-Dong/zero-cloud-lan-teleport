@@ -60,6 +60,7 @@ _FIELDS = (
     "name",
     "receive_dir",
     "visible",
+    "stealth",
     "rate_limit",
     "temp_retention_days",
     "language",
@@ -194,6 +195,7 @@ _CHECKS: dict[str, Any] = {
     "name": _check_name,
     "receive_dir": _check_receive_dir,
     "visible": lambda v: _check_bool("visible", v),
+    "stealth": lambda v: _check_bool("stealth", v),
     "rate_limit": _check_rate_limit,
     "temp_retention_days": _check_retention,
     "language": _check_language,
@@ -206,7 +208,7 @@ _CHECKS: dict[str, Any] = {
     "tray_hint_shown": lambda v: _check_bool("tray_hint_shown", v),
 }
 # Trường bool: `null` trong file không hợp lệ (khác các trường có thể là None).
-_BOOL_FIELDS = frozenset({"visible", "autostart", "first_run_done", "tray_hint_shown"})
+_BOOL_FIELDS = frozenset({"visible", "stealth", "autostart", "first_run_done", "tray_hint_shown"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +319,7 @@ class Settings:
     name: str | None = None  # None = hostname (`default_device_name`)
     receive_dir: str | None = None  # None = `paths.default_receive_dir()`
     visible: bool = True
+    stealth: bool = False
     rate_limit: int | None = None  # byte/giây; None = không giới hạn
     temp_retention_days: int | None = None  # None = `storage.TEMP_RETENTION` (đọc lúc dùng)
     language: str | None = None  # None = theo hệ điều hành
@@ -435,6 +438,8 @@ class Settings:
                 data[name] = value
         if not self.visible:
             data["visible"] = False
+        if self.stealth:
+            data["stealth"] = True
         if self.autostart:
             data["autostart"] = True
         if self.first_run_done:

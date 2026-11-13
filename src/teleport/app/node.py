@@ -77,7 +77,7 @@ import re
 import socket
 import ssl
 import time
-from collections.abc import Callable, Coroutine, Iterable, Sequence
+from collections.abc import Callable, Collection, Coroutine, Iterable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -546,7 +546,7 @@ class Node:
         on_pairing_finished: Callable[[PairingFinished], None] | None = None,
         mdns: MdnsOptions | None = None,
         auto_connect: bool = True,
-        auto_connect_to: str | None = None,
+        auto_connect_to: str | Collection[str] | None = None,
         on_event: Callable[[NodeEvent], None] | None = None,
         receive_dir: str | os.PathLike[str] | ReceiveDirChoice | None = None,
         auto_accept: bool = False,
@@ -555,6 +555,7 @@ class Node:
         save_args: bool = False,
         clipboard: ClipboardBackend | None = None,
         on_clipboard_event: Callable[[ClipboardEvent], None] | None = None,
+        stealth: bool | None = None,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
 
@@ -606,8 +607,22 @@ class Node:
             raise TypeError("mdns phải là None hoặc MdnsOptions")
         if type(auto_connect) is not bool:
             raise ValueError("auto_connect phải là bool")
+        auto_targets: set[str] | None = None
         if auto_connect_to is not None:
-            validate_device_id(auto_connect_to)
+            if isinstance(auto_connect_to, str):
+                validate_device_id(auto_connect_to)
+                auto_targets = {auto_connect_to}
+            elif (
+                isinstance(auto_connect_to, Collection)
+                and not isinstance(auto_connect_to, (bytes, bytearray))
+            ):
+                for dev in auto_connect_to:
+                    if not isinstance(dev, str):
+                        raise ValueError("mỗi device_id trong auto_connect_to phải là chuỗi")
+                    validate_device_id(dev)
+                auto_targets = set(auto_connect_to)
+            else:
+                raise ValueError("auto_connect_to phải là chuỗi hoặc tập hợp chuỗi device_id")
             if not auto_connect:
                 raise ValueError("auto_connect_to cần auto_connect=True")
         receive_path: Path | None = None
@@ -640,7 +655,7 @@ class Node:
         self._on_pairing_finished = on_pairing_finished or _ignore
         self._mdns_opts = mdns
         self._auto_connect = auto_connect
-        self._auto_connect_to = auto_connect_to  # None: mọi thiết bị tin cậy
+        self._auto_connect_to = auto_targets  # None: mọi thiết bị tin cậy
         self._on_event = on_event or _ignore
         self._receive_path = receive_path
         self._receive_saved = receive_saved  # `ReceiveDirChoice.SAVED`
@@ -654,6 +669,8 @@ class Node:
         self._receive_dir_error: ReceiveDirUnavailable | None = None  # thư mục `SAVED` không mở được
         self._receive_dir_lock = asyncio.Lock()  # `set_receive_dir` chạy lần lượt
         self._visible = True  # chế độ ẩn (F10): `settings.visible`, đọc lúc `start`, đổi bằng `set_visible`
+        self._stealth_arg = stealth
+        self._stealth = False  # đọc lúc `start`, đổi bằng `set_stealth`
 
         self._started = False  # start() đã được gọi (thành công hay không)
         self._running = False  # start() thành công, close() chưa xong
@@ -748,6 +765,7 @@ class Node:
             # Đọc cài đặt đúng một lần; từ đây `self._settings` đổi cùng lúc với file.
             self._settings = Settings.load(self._config_dir)
             self._visible = self._settings.visible
+            self._stealth = self._stealth_arg if self._stealth_arg is not None else self._settings.stealth
             if self._save_args and self._name_arg is not None and self._settings.name != self._name_arg:
                 # Lần chạy đầu: lưu tên người dùng chọn trước khi quảng bá nó.
                 self._save_settings(dataclasses.replace(self._settings, name=self._name_arg))
@@ -1221,6 +1239,12 @@ class Node:
         return self._visible
 
     @property
+    def stealth(self) -> bool:
+        """Có phát tên ẩn danh mDNS không (F10, `settings.stealth`). Chưa `start` → RuntimeError."""
+        self._need(self._settings)
+        return self._stealth
+
+    @property
     def receive_dir_error(self) -> ReceiveDirUnavailable | None:
         """Thư mục nhận đã lưu (`ReceiveDirChoice.SAVED`) không mở được lúc `start`: node chạy mà
         không nhận file. None khi không có lỗi, hay sau khi `set_receive_dir` thành công."""
@@ -1402,6 +1426,21 @@ class Node:
         log.info("máy này %s", "hiện với máy chưa ghép đôi" if visible else "đang ẩn")
         if self._mdns_opts is not None and self._mdns_opts.advertise:
             self._spawn(self._apply_visibility(), f"{_TASK_NAME}.visibility")
+
+    def set_stealth(self, stealth: bool) -> None:
+        """Bật/tắt chế độ ẩn danh mDNS và lưu; không phải bool → TypeError."""
+        self._check_running()
+        assert self._settings is not None
+        if type(stealth) is not bool:
+            raise TypeError("stealth phải là bool")
+        if self._settings.stealth != stealth:
+            self._save_settings(dataclasses.replace(self._settings, stealth=stealth))
+        if stealth == self._stealth:
+            return
+        self._stealth = stealth
+        log.info("máy này %s", "bật ẩn danh mDNS" if stealth else "tắt ẩn danh mDNS")
+        if self._mdns_opts is not None and self._mdns_opts.advertise and self._visible:
+            self._spawn(self._readvertise(), f"{_TASK_NAME}.stealth")
 
     def _allows_anonymous(self, ip: str) -> bool:
         """`Listener`: gửi `hello` cho kết nối ẩn danh từ `ip` không (đồng bộ, protocol mục 2.3).
@@ -2355,13 +2394,16 @@ class Node:
 
     def _advertise_args(self) -> dict[str, Any]:
         assert self._identity is not None and self._hello is not None and self._mdns_opts is not None
-        return {
+        kw: dict[str, Any] = {
             "device_id": self._identity.device_id,
             "name": self._hello.name,
             "os": self._hello.os,
             "port": self.port,
             "addresses": self._mdns_opts.advertise_addresses,
         }
+        if self._stealth:
+            kw["stealth"] = True
+        return kw
 
     async def _start_mdns(self) -> None:
         """Bật mDNS (best-effort): duyệt, rồi quảng bá nếu `advertise`. Lỗi → `discovery_error`."""
@@ -2436,7 +2478,7 @@ class Node:
     def _auto_target(self, device_id: str) -> bool:
         """Địa chỉ mDNS và địa chỉ đã lưu của thiết bị có được đưa vào tracker không (`auto_connect`,
         `auto_connect_to`). Địa chỉ đã lưu vẫn được học và ghi cho mọi thiết bị."""
-        return self._auto_connect and self._auto_connect_to in (None, device_id)
+        return self._auto_connect and (self._auto_connect_to is None or device_id in self._auto_connect_to)
 
     def _on_discovery_event(self, source: MdnsDiscovery, event: DeviceEvent) -> None:
         """Sự kiện của `MdnsDiscovery` (đồng bộ): registry, tracker, rồi `on_event`.
