@@ -153,7 +153,7 @@ from enum import Enum, StrEnum
 
 from teleport.core.bitfield import Bitfield
 from teleport.core.blocks import BLOCK_SIZE, DIGEST_SIZE, MAX_BLOCKS, MAX_FILE_SIZE, block_count
-from teleport.core.filenames import dedupe_offer_names
+from teleport.core.filenames import dedupe_offer_names, dedupe_offer_paths
 from teleport.core.messages import (
     MAX_OFFER_FILES,
     MAX_SAFE_INTEGER,
@@ -252,6 +252,12 @@ class TransferIdInUse(ValueError):
 
 TransferMessage = Offer | Accept | Reject | Resume | Complete | Verified | Cancel
 _TRANSFER_MESSAGE_TYPES = (Offer, Accept, Reject, Resume, Complete, Verified, Cancel)
+
+
+def _clean_offer_names(files: Sequence[FileEntry]) -> tuple[str, ...]:
+    if any(bool(e.rel_path) for e in files):
+        return tuple(dedupe_offer_paths([e.rel_path if e.rel_path else e.name for e in files]))
+    return tuple(dedupe_offer_names([e.name for e in files]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,6 +459,8 @@ class Finalize:
     file_index: int
     name: str
     mtime: int
+    rel_path: str = ""
+    is_dir: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1184,7 +1192,7 @@ class TransferEngine:
             t = _Recv(
                 key=TransferKey(r.device_id, Direction.RECEIVE, transfer_id),
                 offer=offer,
-                names=tuple(dedupe_offer_names([entry.name for entry in offer.files])),
+                names=_clean_offer_names(offer.files),
                 total_size=sum(entry.size for entry in offer.files),
                 phase=_Phase.RUNNING,
                 owns_temp=True,
@@ -1364,7 +1372,7 @@ class TransferEngine:
         t = _Send(
             key=TransferKey(device_id, Direction.SEND, transfer_id),
             offer=offer,
-            names=tuple(entry.name for entry in offer.files),
+            names=tuple(entry.rel_path if entry.rel_path else entry.name for entry in offer.files),
             total_size=sum(entry.size for entry in offer.files),
             verified=bytearray(len(offer.files)),
         )
@@ -1816,7 +1824,17 @@ class TransferEngine:
         else:
             t.finalizing = True
             entry = t.offer.files[file_index]
-            self._emit(Finalize(device_id, transfer_id, file_index, t.names[file_index], entry.mtime))
+            self._emit(
+                Finalize(
+                    device_id,
+                    transfer_id,
+                    file_index,
+                    t.names[file_index],
+                    entry.mtime,
+                    rel_path=entry.rel_path,
+                    is_dir=entry.is_dir,
+                )
+            )
             return self._finish()
         t.verify_failures += 1
         if t.verify_failures > MAX_VERIFY_FAILURES:
@@ -2624,7 +2642,7 @@ class TransferEngine:
         new = _Recv(
             key=TransferKey(peer.device_id, Direction.RECEIVE, transfer_id),
             offer=msg,
-            names=tuple(dedupe_offer_names([entry.name for entry in msg.files])),
+            names=_clean_offer_names(msg.files),
             total_size=sum(entry.size for entry in msg.files),
         )
         self._add_transfer(peer, new)

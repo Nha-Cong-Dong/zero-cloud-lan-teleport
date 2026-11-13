@@ -137,6 +137,7 @@ from teleport.core.filenames import (
     fallback_filename,
     fit_filename,
     numbered,
+    sanitize_rel_path,
 )
 from teleport.core.messages import MAX_OFFER_FILES, validate_device_id, validate_transfer_id
 from teleport.core.resume_state import (
@@ -1059,7 +1060,15 @@ class ReceiveDir:
         finally:
             self._release(transfer_id)
 
-    def finalize(self, part: PartFile, name: str, *, mtime_ms: int | None = None) -> Path:
+    def finalize(
+        self,
+        part: PartFile,
+        name: str,
+        *,
+        mtime_ms: int | None = None,
+        rel_path: str = "",
+        is_dir: bool = False,
+    ) -> Path:
         """Đổi `.part` đã kiểm xong sang tên thật trong thư mục nhận; trả đường dẫn file cuối.
 
         Theo architecture mục 4 “Kết thúc một file”, bước bắt đầu suy từ `part.mode`:
@@ -1098,6 +1107,27 @@ class ReceiveDir:
             raise TypeError("name phải là chuỗi")
         if part._temp._record.verified != part.file_index:
             raise ValueError("transfer.json chưa ghi đủ các file trước file này")
+        if is_dir:
+            clean_rel = sanitize_rel_path(rel_path) if rel_path else fit_filename(name)
+            dir_path = self._root / clean_rel
+            dir_path.mkdir(parents=True, exist_ok=True)
+            if mtime_ms is not None:
+                try:
+                    s = mtime_ms / 1000.0
+                    os.utime(dir_path, (s, s))
+                except OSError:
+                    pass
+            part._close_quietly()
+            part._finalized = True
+            try:
+                if part._path.exists():
+                    part._path.unlink()
+            except OSError:
+                pass
+            self._sync_root()
+            self._record_verified(part)
+            self._drop_state(part)
+            return dir_path
         if part.mode is ResumeMode.VERIFY_TARGET:
             candidate = part._target_name
             assert candidate is not None
@@ -1116,8 +1146,23 @@ class ReceiveDir:
             if part.mode is ResumeMode.REUSE_PLACEHOLDER:
                 reused = self._reuse_reserved(part)  # bước 5
             if reused is None:
-                taken = {dedupe_key(entry) for entry in self._list_root()}  # F2
-                reused = self._place(part, name, taken)  # bước 1–5
+                prefix = ""
+                target_name = name
+                if rel_path:
+                    clean_rel = sanitize_rel_path(rel_path)
+                    if "/" in clean_rel:
+                        dir_part, base = clean_rel.rsplit("/", 1)
+                        sub_dir = self._root / dir_part
+                        sub_dir.mkdir(parents=True, exist_ok=True)
+                        prefix = dir_part + "/"
+                        target_name = base
+                        taken = {dedupe_key(entry) for entry in os.listdir(sub_dir)}
+                    else:
+                        target_name = clean_rel
+                        taken = {dedupe_key(entry) for entry in self._list_root()}
+                else:
+                    taken = {dedupe_key(entry) for entry in self._list_root()}  # F2
+                reused = self._place(part, target_name, taken, prefix=prefix)  # bước 1–5
             candidate = reused
         path = self._root / candidate
         self._sync_root()  # bước 6
@@ -1125,6 +1170,7 @@ class ReceiveDir:
         self._record_verified(part)  # bước 7
         _after_record(path)
         self._drop_state(part)  # bước 8
+        return path
         return path
 
     def remove_temp(self, temp: TransferTemp, *, keep_record: bool = False) -> bool:
@@ -1776,7 +1822,7 @@ class ReceiveDir:
         finally:
             os.close(fd)
 
-    def _place(self, part: PartFile, name: str, taken: set[str]) -> str:
+    def _place(self, part: PartFile, name: str, taken: set[str], *, prefix: str = "") -> str:
         """Bước 1–5: chọn tên, `TARGET`, giữ chỗ, kiểm lại, `RESERVED`, đổi tên. Trả tên cuối."""
         fallback = False
         n = 0
@@ -1785,13 +1831,14 @@ class ReceiveDir:
             tried += 1
             if tried > MAX_NAME_CANDIDATES:
                 raise NameUnavailableError(f"{part._label()}: đã thử quá {MAX_NAME_CANDIDATES} tên")
-            candidate = self._candidate(name, n, fallback=fallback)
-            key = dedupe_key(candidate)
+            candidate = self._candidate(name, n, prefix=prefix, fallback=fallback)
+            cand_base = candidate.rsplit("/", 1)[-1]
+            key = dedupe_key(cand_base)
             if key in taken:
                 n += 1
                 continue
             try:
-                intent = encode_target(candidate)
+                intent = encode_target(cand_base)
             except StateError:
                 # Tên không qua được luật của `TARGET` (đổi đi khi làm sạch lại): bỏ ứng viên này.
                 taken.add(key)
@@ -1827,7 +1874,7 @@ class ReceiveDir:
             taken.add(key)  # F7: file giữ chỗ đã khác đi → để nguyên, chọn tên mới
             n += 1
 
-    def _candidate(self, name: str, n: int, *, fallback: bool) -> str:
+    def _candidate(self, name: str, n: int, *, prefix: str = "", fallback: bool) -> str:
         """Ứng viên thứ `n`, cắt cho vừa giới hạn đường dẫn (architecture mục 4 “Thư mục nhận”)."""
         budget = self._limits.max_name_bytes
         if fallback:
@@ -1836,11 +1883,12 @@ class ReceiveDir:
             try:
                 if fallback:
                     base = fallback_filename(name, budget)
-                    candidate = base if n == 0 else numbered(base, n, max_bytes=budget)
+                    cand_base = base if n == 0 else numbered(base, n, max_bytes=budget)
                 else:
-                    candidate = fit_filename(name, budget) if n == 0 else numbered(name, n, max_bytes=budget)
+                    cand_base = fit_filename(name, budget) if n == 0 else numbered(name, n, max_bytes=budget)
             except ValueError as e:
                 raise PathTooLongError("đường dẫn thư mục nhận quá dài: không còn chỗ cho tên file") from e
+            candidate = prefix + cand_base
             excess = _units(os.path.join(self._root_str, candidate)) - self._limits.max_path
             if excess <= 0:
                 return candidate
@@ -1870,7 +1918,8 @@ class ReceiveDir:
             _after_reserve(target)
             if not self._reserve_intact(candidate, identity):  # F7
                 return False
-            intent = encode_reserved(candidate)
+            cand_base = candidate.rsplit("/", 1)[-1]
+            intent = encode_reserved(cand_base)
             part.log._make_room(RECORD_RESERVED)  # gộp (nếu cần) trước: lỗi ở đây chưa ghi `RESERVED`
             reserved = True
             part.log.append(intent)  # bước 4
@@ -1917,7 +1966,8 @@ class ReceiveDir:
     @staticmethod
     def _forget_reserved(part: PartFile, candidate: str) -> None:
         """Nối lại `TARGET` cùng tên + `fsync`: đọc lại sẽ quên `RESERVED` trước đó."""
-        part.log.append(encode_target(candidate))
+        cand_base = candidate.rsplit("/", 1)[-1]
+        part.log.append(encode_target(cand_base))
         part.log.sync()
 
     def _reserve_intact(self, candidate: str, identity: tuple[int, int] | None) -> bool:
@@ -2052,8 +2102,12 @@ class ReceiveDir:
         _fsync_dir(self._root_fd_or_raise())
 
     def _open_in_root(self, entry: str, flags: int) -> int:
+        full = os.path.join(self._root_str, entry)
+        parent = os.path.dirname(full)
+        if parent and not os.path.exists(parent):
+            os.makedirs(parent, exist_ok=True)
         if sys.platform == "win32":
-            return os.open(os.path.join(self._root_str, entry), flags, _FILE_MODE)
+            return os.open(full, flags, _FILE_MODE)
         return os.open(entry, flags, _FILE_MODE, dir_fd=self._root_fd_or_raise())
 
     def _lstat_in_root(self, entry: str) -> os.stat_result:

@@ -438,7 +438,11 @@ def _result_of(ended: TransferEnded, unpaired: bool) -> TransferResult:
     return TransferResult.CANCELLED_OTHER
 
 
-async def preview_sources(paths: Sequence[str | os.PathLike[str]]) -> list[SourceFile]:
+async def preview_sources(
+    paths: Sequence[str | os.PathLike[str]],
+    *,
+    allow_dirs: bool = True,
+) -> list[SourceFile]:
     """Kiểm các file sẽ gửi như `TransferManager.send` (`sources.prepare_sources`), không cần node.
 
     Chạy trên một `DiskExecutor` một thread dùng một lần (thread daemon), không hạn (ổ mạng có
@@ -448,7 +452,7 @@ async def preview_sources(paths: Sequence[str | os.PathLike[str]]) -> list[Sourc
     """
     executor = DiskExecutor(1, name="teleport.preview")
     try:
-        job = executor.submit(sources.prepare_sources, paths)
+        job = executor.submit(sources.prepare_sources, paths, allow_dirs)
         try:
             return await job.result(None)
         except asyncio.CancelledError:
@@ -952,8 +956,14 @@ class TransferManager:
         self._rate_limit = value
         self._bucket = None if value is None else TokenBucket(value, ratelimit.CHUNK_SIZE)
 
-    async def send(self, device_id: str, paths: Sequence[str | os.PathLike[str]]) -> TransferKey:
-        """Gửi các file `paths` tới thiết bị tin cậy `device_id`; trả khóa của lượt.
+    async def send(
+        self,
+        device_id: str,
+        paths: Sequence[str | os.PathLike[str]],
+        *,
+        allow_dirs: bool = True,
+    ) -> TransferKey:
+        """Gửi các file (hoặc thư mục) `paths` tới thiết bị tin cậy `device_id`; trả khóa của lượt.
 
         Ném lỗi trước khi gửi gì: node chưa chạy hay đang đóng → RuntimeError; không tin cậy →
         KeyError; `device_id` sai hay là máy này, 0 hoặc quá `MAX_OFFER_FILES` file, một file chọn
@@ -961,7 +971,7 @@ class TransferManager:
         `SourceError`. Sự kiện của lượt có thể tới trước khi hàm trả về.
         """
         self._check_send_target(device_id)
-        job = self._executor.submit(sources.prepare_sources, paths)
+        job = self._executor.submit(sources.prepare_sources, paths, allow_dirs)
         try:
             files = await _job_result(job, None)
         except _JobDropped:
@@ -2040,9 +2050,15 @@ class TransferManager:
         if files is None or not 0 <= a.file_index < len(files) or self._closing:
             self._call(self._engine.source_failed, a.device_id, a.transfer_id, a.file_index, False)
             return
+        source_entry = files[a.file_index].entry
         job = None
         try:
-            job = self._executor.submit(sources.check_source, files[a.file_index].path, a.leaves)
+            job = self._executor.submit(
+                sources.check_source,
+                files[a.file_index].path,
+                a.leaves,
+                source_entry.is_dir,
+            )
             size, mtime, root = await _job_result(job, DISK_OP_TIMEOUT)
         except asyncio.CancelledError:
             if job is not None:
@@ -2265,7 +2281,14 @@ class TransferManager:
                     self._call(self._engine.reread_done, device_id, transfer_id, action.file_index, bad, root)
             else:
                 part = self._part(lane, action.file_index)
-                finalize = functools.partial(rd.finalize, part, action.name, mtime_ms=action.mtime)
+                finalize = functools.partial(
+                    rd.finalize,
+                    part,
+                    action.name,
+                    mtime_ms=action.mtime,
+                    rel_path=action.rel_path,
+                    is_dir=action.is_dir,
+                )
                 # Còn xếp hàng ở executor (thread chưa nhận) thì `SuspendTemp` còn bỏ được (`_close_lane`).
                 lane.finalize_job = submit(finalize)
                 try:

@@ -2962,9 +2962,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_node_options(pair)
     pair.set_defaults(handler=cmd_pair)
 
-    send = sub.add_parser("send", help="gửi file tới một thiết bị đã ghép đôi")
+    send = sub.add_parser("send", help="gửi file hoặc thư mục tới một thiết bị đã ghép đôi")
     send.add_argument(
-        "files", nargs="+", metavar="<file>", help=f"các file cần gửi (tối đa {MAX_OFFER_FILES})"
+        "files",
+        nargs="+",
+        metavar="<đường dẫn>",
+        help=f"các file hoặc thư mục cần gửi (tối đa {MAX_OFFER_FILES})",
     )
     send.add_argument(
         "--to", required=True, metavar="<thiết bị>", help="tên hoặc tiền tố mã thiết bị đã ghép đôi"

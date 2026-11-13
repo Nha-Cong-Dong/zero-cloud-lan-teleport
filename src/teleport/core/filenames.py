@@ -43,6 +43,7 @@ import unicodedata
 from collections.abc import Sequence
 
 MAX_NAME_BYTES = 255  # protocol mục 3.3: `name` ≤ 255 byte UTF-8
+MAX_PATH_DEPTH = 32  # v1.1.0: tối đa 32 cấp thư mục lồng nhau
 FALLBACK_NAME = "file"  # tên rỗng sau khi làm sạch
 TEMP_DIR_NAME = ".teleport"  # thư mục file tạm trong thư mục nhận (architecture mục 4)
 # Trần độ dài tên dự phòng, byte (architecture mục 4 “Thư mục nhận”).
@@ -321,3 +322,94 @@ def prepare_outgoing_name(name: str) -> str:
         if unicodedata.category(ch) in _OUTGOING_FORBIDDEN_CATEGORIES:
             raise OutgoingNameError(f"tên file chứa ký tự không được phép: U+{ord(ch):04X}")
     return _fit(name, MAX_NAME_BYTES)
+
+
+def sanitize_rel_path(path: str, *, max_depth: int = MAX_PATH_DEPTH) -> str:
+    """Làm sạch đường dẫn tương đối để đặt an toàn trong thư mục nhận.
+
+    Phân rã thành từng đoạn qua `/` và `\\`. Mỗi đoạn được làm sạch bằng `sanitize_filename`.
+    Bỏ qua các đoạn rỗng, `.` hoặc `..`. Giới hạn tối đa `max_depth` đoạn.
+    Trả về chuỗi chuẩn hóa phân tách bằng `/`.
+    Nếu rỗng sau khi làm sạch → FALLBACK_NAME.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path phải là chuỗi")
+    raw_segments = _SEPARATORS_RE.split(path)
+    clean_segments: list[str] = []
+    for s in raw_segments:
+        s = s.strip()
+        if not s or s == "." or s == "..":
+            continue
+        clean = sanitize_filename(s)
+        if clean:
+            clean_segments.append(clean)
+            if len(clean_segments) >= max_depth:
+                break
+    if not clean_segments:
+        return FALLBACK_NAME
+    return "/".join(clean_segments)
+
+
+def dedupe_offer_paths(paths: Sequence[str]) -> list[str]:
+    """Làm sạch từng đường dẫn của một `offer` rồi khử trùng, cùng thứ tự.
+
+    Nếu đường dẫn có thư mục cha (`dir/file.txt`), việc đánh số khi trùng được áp dụng
+    cho phần tên tệp cuối (`dir/file (1).txt`). Trả về danh sách các đường dẫn đã làm sạch
+    và khử trùng.
+    """
+    cleaned = [sanitize_rel_path(p) if ("/" in p or "\\" in p) else sanitize_filename(p) for p in paths]
+    keys = [dedupe_key(p) for p in cleaned]
+    taken = set(keys)
+    seen: set[str] = set()
+    result: list[str] = []
+    for path, key in zip(cleaned, keys, strict=True):
+        if key not in seen:
+            seen.add(key)
+            result.append(path)
+            continue
+        if "/" in path:
+            dir_part, base_name = path.rsplit("/", 1)
+            prefix = dir_part + "/"
+        else:
+            prefix = ""
+            base_name = path
+        n = 1
+        found: str | None = None
+        while found is None:
+            cand_base = numbered(base_name, n)
+            cand_path = prefix + cand_base
+            cand_key = dedupe_key(cand_path)
+            if cand_key not in taken:
+                found = cand_path
+                taken.add(cand_key)
+                break
+            n += 1
+        result.append(found)
+    return result
+
+
+def prepare_outgoing_rel_path(rel_path: str, *, max_depth: int = MAX_PATH_DEPTH) -> str:
+    """Đường dẫn tương đối để bên gửi đặt vào `FileEntry.rel_path`.
+
+    Mỗi thành phần được chuẩn bị bằng `prepare_outgoing_name`.
+    Chuỗi rỗng được giữ nguyên (tệp ở thư mục gốc).
+    Phân tách chuẩn bằng `/`.
+    """
+    if not isinstance(rel_path, str):
+        raise TypeError("rel_path phải là chuỗi")
+    if not rel_path:
+        return ""
+    segments = _SEPARATORS_RE.split(rel_path)
+    clean_segs: list[str] = []
+    for s in segments:
+        s = s.strip()
+        if not s or s == ".":
+            continue
+        if s == "..":
+            raise OutgoingNameError("rel_path không được chứa đoạn '..'")
+        clean_segs.append(prepare_outgoing_name(s))
+        if len(clean_segs) >= max_depth:
+            break
+    if not clean_segs:
+        return ""
+    return "/".join(clean_segs)
