@@ -12,14 +12,14 @@
 [![Giấy phép](https://img.shields.io/badge/gi%E1%BA%A5y%20ph%C3%A9p-GPL--3.0-blue)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 
-**[Trang giới thiệu](https://nha-cong-dong.github.io/teleport-site/)** · **[Tải bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
+**[Trang web chính thức (ZCL Hub)](https://luffyreals.github.io/zcl-hub/)** · **[Tải bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
 
 </div>
 
 > **Giới thiệu:** ZCL Teleport giúp bạn chuyển các file dung lượng rất lớn và đồng bộ nội dung sao chép giữa các máy tính trong cùng một mạng nội bộ nhanh chóng, bảo mật trực tiếp giữa hai máy mà không đi qua máy chủ bên ngoài hay thu thập thông tin người dùng. Khi đường truyền bị ngắt giữa chừng, ứng dụng tự động gửi tiếp phần còn lại ngay khi kết nối trở lại.
 
 > [!NOTE]
-> **Phiên bản chính thức `v1.0.0` đã sẵn sàng.** Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
+> **Phiên bản chính thức `v1.2.0` đã sẵn sàng.** Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
 
 ---
 
@@ -69,6 +69,8 @@ Tiêu chí chi tiết cho từng tính năng: [docs/product/mvp.md](docs/product
 | **Tự tìm máy trong mạng** | Mở ứng dụng là nhìn thấy ngay các máy khác đang mở Teleport gần bạn. Nếu mạng chặn tìm tự động, có thể nhập địa chỉ máy để kết nối. | Hoàn thành |
 | **Ghép đôi một lần duy nhất** | Lần đầu kết nối, hai máy hiển thị cùng một mã 6 chữ số để xác nhận. Sau đó hai máy sẽ tự nhận ra nhau. | Hoàn thành |
 | **Gửi file dung lượng cực lớn** | Kéo thả một hoặc nhiều file để gửi. Bên nhận luôn được hỏi ý kiến trước khi nhận; hiển thị rõ tốc độ và tiến độ truyền. | Hoàn thành |
+| **Gửi cả thư mục & nhiều máy** | Hỗ trợ gửi toàn bộ cây thư mục con giữ nguyên cấu trúc; gửi cùng lúc tới nhiều thiết bị trong mạng nội bộ. | Hoàn thành |
+| **Chế độ khách qua Web QR** | Quét mã QR bằng điện thoại để gửi nhận tệp tức thì qua trình duyệt mà không cần cài đặt thêm phần mềm. | Hoàn thành |
 | **Tự động nhận tiếp** | Đang gửi mà mất kết nối, khi kết nối lại ứng dụng sẽ gửi tiếp từ vị trí tạm dừng, không gửi lại từ đầu. | Hoàn thành |
 | **Kiểm tra tính nguyên vẹn** | Từng phần nhỏ và toàn bộ file đều được kiểm tra khớp hoàn toàn với bản gốc trước khi hoàn tất. | Hoàn thành |
 | **Đồng bộ nội dung sao chép** | Sao chép văn bản hoặc ảnh ở máy này có thể dán ngay trên máy kia nếu bạn bật cho phép. Mặc định tắt để đảm bảo riêng tư. | Hoàn thành |

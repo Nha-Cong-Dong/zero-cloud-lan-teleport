@@ -23,6 +23,7 @@
 | Thời hạn | Không có hạn cố định → kiểm soát bằng các bản phát hành (mục 5), mốc tham khảo ~15 tuần tới v1.0 |
 | Hackathon | Demo khoảng 08/11/2026, phạm vi [mvp.md](mvp.md) mục 4.1, lịch mục 5.5 |
 | Ngôn ngữ giao diện | Tiếng Việt và English |
+| Trang web chính | **ZCL Hub** (https://luffyreals.github.io/zcl-hub/): trang giới thiệu, trải nghiệm trực quan và cổng tải về bộ cài chính thức. |
 | Tên sản phẩm | **Zero-Cloud LAN Teleport** (dạng viết liền `zero-cloud-lan-teleport`, đã dùng cho repo và tên gói phân phối); tên ngắn hiển thị trong app và bộ cài là **ZCL Teleport** (`APP_NAME` ở `src/teleport/ui/texts.py`), còn định danh kỹ thuật (gói `teleport`, lệnh `teleport`, `Teleport.exe`, thư mục cấu hình và thư mục nhận) giữ “Teleport” để không mất dữ liệu cũ; biểu tượng là logo vẽ ở `src/teleport/ui/logo.py`. Chốt 01/11/2026 |
 
 ---
@@ -242,6 +243,8 @@ Nguyên tắc: **làm bằng dòng lệnh (CLI) trước, giao diện sau.** Ph�
 | 4 | Giao diện, khay hệ thống, đa ngôn ngữ | 2 tuần | 11 | `v0.3.0-beta` | F2–F5 (giao diện), F9, F10, F11 | Dùng hoàn toàn bằng giao diện: radar, kéo thả, ghép đôi | ✅ Đã xong |
 | 5 | Đồng bộ clipboard | 1 tuần | 12 | `v0.4.0-beta` | F8 | Đồng bộ clipboard | ✅ Đã xong |
 | 6 | Hoàn thiện, bộ cài, phát hành | 3 tuần | 15 | `v1.0.0` | F1, toàn bộ N1–N12 | Bộ cài 3 hệ điều hành, tài liệu người dùng, đã thử với người dùng thật | ✅ Đã xong (bộ cài Windows Inno Setup build tự động khi gắn tag `v1.0.0`, kịch bản đóng gói macOS DMG và Linux AppImage sẵn sàng) |
+| 7 | Gửi thư mục & nhiều máy, ẩn danh mDNS | 1 tuần | 16 | `v1.1.0` | F4 mở rộng, F10 | Gửi đồng thời nhiều máy, gửi cấu trúc thư mục con, tùy chọn stealth ẩn danh | ✅ Đã xong |
+| 8 | Chế độ khách qua Web QR (Web Guest) | 1 tuần | 17 | `v1.2.0` | Chế độ khách Web | Quét mã QR chuyển file tức thì với điện thoại qua trình duyệt web nội bộ | ✅ Đã xong |
 
 Ký hiệu trạng thái: [README.md](../README.md) mục 4. Giai đoạn ⏸ còn chờ gì: dòng “Xong khi” của nó ở mục 5.2.
 
@@ -325,14 +328,19 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - ✅ Đáp ứng LGPL-2.1 §6 cho zeroconf: mỗi GitHub Release đính kèm sdist zeroconf đúng bản ghim, `SOURCE.txt` của bản phát hành trỏ tới file đó (§6(d); cách làm: [CONTRIBUTING.md](../community/CONTRIBUTING.md) “Phát hành”).
 - **Xong khi:** đạt toàn bộ tiêu chí phát hành ở mvp mục 12, gồm D1–D8 của đợt đo (mục 5.4). → **`v1.0.0`**.
 
-### 5.3. Sau v1.0
-1. App Android (Java/Kotlin, dùng cùng giao thức): mDNS cần `MulticastLock`, clipboard qua share-sheet.
-2. Chế độ khách qua trình duyệt cho điện thoại không cài app (thứ tự với mục 1 chưa chốt, xem mục 9).
-3. Gửi tới nhiều thiết bị cùng lúc, gửi/đồng bộ thư mục.
-4. App iOS.
-5. Quảng bá mDNS ẩn danh: người nghe thụ động không còn đọc được `device_id` cố định (mục 3.7).
+### 5.3. Sau v1.0 & Lộ trình tiếp theo
 
-Ý tưởng mới trong lúc làm v1.0 ghi vào GitHub Issues với nhãn `after-1.0`.
+Các tính năng mở rộng đã hoàn thành:
+1. ✅ **Gửi tới nhiều thiết bị cùng lúc & gửi cấu trúc thư mục con** (Hoàn thành ở `v1.1.0`).
+2. ✅ **Quảng bá mDNS ẩn danh** (`--stealth`, không để lộ thông tin máy ra mạng công cộng, hoàn thành ở `v1.1.0`).
+3. ✅ **Chế độ khách qua Web QR** (Web Guest Mode: quét QR gửi nhận file trực tiếp với điện thoại di động qua trình duyệt web mà không cần cài app, hoàn thành ở `v1.2.0`).
+
+Các hạng mục kỹ thuật kế tiếp:
+1. **IPC CLI ↔ GUI Daemon:** Cho phép các lệnh dòng lệnh `teleport send` / `teleport list` giao tiếp trực tiếp với tiến trình giao diện đang chạy nền qua IPC (Named Pipe trên Windows / Domain Socket trên POSIX), loại bỏ hoàn toàn xung đột khóa độc quyền `node.lock`.
+2. **Đóng gói phát hành tự động đa nền tảng trên CI:** Tích hợp quy trình build AppImage (Linux) và DMG (macOS) vào workflow `release.yml` để tự động đính kèm lên GitHub Releases cùng với bộ cài Windows.
+3. **Nâng cấp Web Guest Mode (v1.3.0):** Hỗ trợ kéo thả gửi đồng thời nhiều tệp / thư mục từ điện thoại lên máy tính, và cơ chế đóng gói tải về theo luồng (zip stream) khi chia sẻ danh sách nhiều tệp.
+4. **Ứng dụng di động ZCL Teleport cho Android:** Viết ứng dụng Android (Java/Kotlin) dùng chung giao thức Teleport (`MulticastLock` cho mDNS, chia khối 1 MiB, TLS 1.3).
+5. **App iOS và CLA:** Cân nhắc ký thỏa thuận chuyển quyền (CLA) trước khi mở rộng lên App Store.
 
 ### 5.4. Đợt đo trên thiết bị thật
 
