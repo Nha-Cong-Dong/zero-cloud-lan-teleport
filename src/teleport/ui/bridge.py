@@ -137,6 +137,7 @@ class NodeOptions:
     name: str | None = None
     save_args: bool = False
     clipboard: ClipboardBackend | None = None
+    enable_ipc: bool = True
 
 
 def _clean(text: str) -> str:
@@ -517,6 +518,7 @@ class NodeHost(QObject):
                 save_args=opts.save_args,
                 clipboard=opts.clipboard,
                 on_clipboard_event=self._clipboard_callback,
+                enable_ipc=opts.enable_ipc,
             )
         except Exception as e:
             self._fail(e)

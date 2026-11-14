@@ -557,6 +557,7 @@ class Node:
         clipboard: ClipboardBackend | None = None,
         on_clipboard_event: Callable[[ClipboardEvent], None] | None = None,
         stealth: bool | None = None,
+        enable_ipc: bool = False,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
 
@@ -671,6 +672,8 @@ class Node:
         self._visible = True  # chế độ ẩn (F10): `settings.visible`, đọc lúc `start`, đổi bằng `set_visible`
         self._stealth_arg = stealth
         self._stealth = False  # đọc lúc `start`, đổi bằng `set_stealth`
+        self._enable_ipc = enable_ipc
+        self._ipc: Any = None
 
         self._started = False  # start() đã được gọi (thành công hay không)
         self._running = False  # start() thành công, close() chưa xong
@@ -850,6 +853,12 @@ class Node:
                 self._cleanup_task = asyncio.create_task(
                     self._cleanup_temps(transfers), name=f"{_TASK_NAME}.cleanup-temps"
                 )
+            if self._enable_ipc:
+                from teleport.app.ipc import IpcServer
+
+                self._ipc = IpcServer(self._config_dir, self)
+                with contextlib.suppress(Exception):
+                    await self._ipc.start()
         except BaseException:
             self._closing = True  # _apply không tạo task mới nữa
             self._cancel_rename_timers()
@@ -878,6 +887,10 @@ class Node:
         `close()`: đóng cổng ngay (đồng bộ), đóng mDNS chạy nền, rồi để lỗi bay ra — bên
         gọi chỉ nhả khóa sau khi cổng đã đóng.
         """
+        if self._ipc is not None:
+            with contextlib.suppress(Exception):
+                await self._ipc.close()
+            self._ipc = None
         tasks = [t for t in (self._timer_task, self._netwatch_task, self._cleanup_task) if t is not None]
         tasks += [*self._attempts.values(), *self._link_tasks]
         for task in tasks:
@@ -1032,6 +1045,10 @@ class Node:
         listener_closing = False
         transfers = self._transfers
         try:
+            if self._ipc is not None:
+                with contextlib.suppress(Exception):
+                    await self._ipc.close()
+                self._ipc = None
             if transfers is not None:
                 # Đồng bộ, trước await đầu tiên: tạm dừng lượt đang nhận, ngừng nhận offer, hủy lượt khác.
                 transfers.begin_close()
@@ -1068,6 +1085,9 @@ class Node:
                 # ≤ TOMBSTONE_FLUSH_TIMEOUT), thư mục nhận.
                 await transfers.close()
         except BaseException:
+            if self._ipc is not None:
+                self._spawn(self._ipc.close(), f"{_TASK_NAME}.close-ipc")
+                self._ipc = None
             self._pairing.abort_all()
             if transfers is not None:
                 transfers.abort_now()
