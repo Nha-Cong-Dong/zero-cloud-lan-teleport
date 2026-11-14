@@ -18,6 +18,7 @@ async def test_node_starts_and_stops_ipc_server(tmp_path: Path):
         port=0,
         accept_pairing=False,
         auto_connect=False,
+        enable_ipc=True,
     )
     await node.start()
     try:
@@ -36,3 +37,21 @@ async def test_node_starts_and_stops_ipc_server(tmp_path: Path):
         await node.close()
 
     assert not (tmp_path / IPC_INFO_FILE).exists()
+
+
+@pytest.mark.asyncio
+async def test_node_default_does_not_start_ipc(tmp_path: Path):
+    node = Node(
+        tmp_path,
+        name="NodeNoIpc",
+        port=0,
+        accept_pairing=False,
+        auto_connect=False,
+    )
+    await node.start()
+    try:
+        assert not (tmp_path / IPC_INFO_FILE).exists()
+        client = await try_connect_ipc(tmp_path)
+        assert client is None
+    finally:
+        await node.close()

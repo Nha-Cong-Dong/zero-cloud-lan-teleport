@@ -557,7 +557,7 @@ class Node:
         clipboard: ClipboardBackend | None = None,
         on_clipboard_event: Callable[[ClipboardEvent], None] | None = None,
         stealth: bool | None = None,
-        enable_ipc: bool = True,
+        enable_ipc: bool = False,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
 
@@ -853,6 +853,12 @@ class Node:
                 self._cleanup_task = asyncio.create_task(
                     self._cleanup_temps(transfers), name=f"{_TASK_NAME}.cleanup-temps"
                 )
+            if self._enable_ipc:
+                from teleport.app.ipc import IpcServer
+
+                self._ipc = IpcServer(self._config_dir, self)
+                with contextlib.suppress(Exception):
+                    await self._ipc.start()
         except BaseException:
             self._closing = True  # _apply không tạo task mới nữa
             self._cancel_rename_timers()
@@ -873,13 +879,6 @@ class Node:
         self._lock = lock
         self._running = True
         log.info("node chạy trên cổng %d, mã máy %s", listener.port, identity.device_id[:8])
-
-        if self._enable_ipc:
-            from teleport.app.ipc import IpcServer
-
-            self._ipc = IpcServer(self._config_dir, self)
-            with contextlib.suppress(Exception):
-                await self._ipc.start()
 
     async def _abort_start(self, listener: Listener | None) -> None:
         """Dọn khi `start` thất bại hoặc bị hủy: task nền, cổng, kết nối, mDNS.
