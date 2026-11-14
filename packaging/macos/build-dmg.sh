@@ -30,6 +30,8 @@ pyinstaller --noconfirm --clean \
     --name "Teleport" \
     --windowed \
     --onedir \
+    --collect-data "teleport" \
+    --collect-submodules "zeroconf" \
     --distpath "${BUILD_DIR}/pyi-dist" \
     --workpath "${BUILD_DIR}/pyi-work" \
     packaging/pyinstaller/launcher_gui.py

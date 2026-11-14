@@ -22,12 +22,16 @@ mkdir -p "${APP_DIR}/usr/share/metainfo"
 # 1. Cài đặt và build PyInstaller bản onedir nếu chưa có
 echo "[*] Đang chuẩn bị bản chạy từ PyInstaller..."
 cd "${REPO_DIR}"
+APP_VERSION="$(python -c 'import teleport; print(teleport.__version__)')"
+echo "[*] Phiên bản: ${APP_VERSION}"
 python -m pip install -e ".[gui]"
 
 # Tạo bản build tạm thời vào AppDir/usr/lib/teleport
 pyinstaller --noconfirm --clean \
     --name "teleport-gui" \
     --onedir \
+    --collect-data "teleport" \
+    --collect-submodules "zeroconf" \
     --distpath "${APP_DIR}/usr/lib" \
     --workpath "${BUILD_DIR}/pyi-work" \
     packaging/pyinstaller/launcher_gui.py
@@ -75,10 +79,12 @@ if [ ! -f "${APPIMAGETOOL}" ]; then
     chmod +x "${APPIMAGETOOL}"
 fi
 
-OUTPUT_NAME="${REPO_DIR}/dist/Teleport-x86_64.AppImage"
+OUTPUT_NAME="${REPO_DIR}/dist/Teleport-${APP_VERSION}-x86_64.AppImage"
 mkdir -p "${REPO_DIR}/dist"
 
 echo "[*] Đang đóng gói ${OUTPUT_NAME}..."
+export APPIMAGE_EXTRACT_AND_RUN=1
 ARCH=x86_64 "${APPIMAGETOOL}" "${APP_DIR}" "${OUTPUT_NAME}"
+cp "${OUTPUT_NAME}" "${REPO_DIR}/dist/Teleport-x86_64.AppImage"
 
 echo "[+] Hoàn tất! File AppImage đã được tạo tại: ${OUTPUT_NAME}"

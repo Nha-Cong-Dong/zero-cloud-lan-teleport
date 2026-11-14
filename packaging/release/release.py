@@ -50,13 +50,14 @@ FIXED_NOTES = "\n".join(
         "",
         "**Trước khi tải và chạy**",
         "",
-        "- {kind} Chỉ có bản Windows 10/11 64-bit: bộ cài `{setup}`, bản zip giao diện và bản zip dòng lệnh.",
-        "- Bản này **chưa ký mã**: Windows SmartScreen có thể hiện “Windows protected your PC”. Bấm"
+        "- {kind} Hỗ trợ đa nền tảng: Windows 10/11 64-bit (bộ cài `{setup}`, bản zip giao diện và CLI),"
+        " Linux x86_64 (AppImage chạy ngay), và macOS (tệp .dmg).",
+        "- Bản Windows **chưa ký mã**: Windows SmartScreen có thể hiện “Windows protected your PC”. Bấm"
         " “More info” → “Run anyway”.",
         "- Dùng bản zip giao diện (`teleport-gui-…`) thì đọc `DOC-TRUOC.txt` trong thư mục giải nén"
         " trước khi chạy (chỗ giải nén, tường lửa, hồ sơ mạng Private).",
-        "- Kiểm file tải về bằng `SHA256SUMS.txt`: trong PowerShell chạy"
-        " `Get-FileHash .\\<tên file> -Algorithm SHA256` rồi so với dòng cùng tên.",
+        "- Kiểm file tải về bằng `SHA256SUMS.txt`: dùng `Get-FileHash` (PowerShell) hoặc `sha256sum`"
+        " (Linux/macOS) rồi so với dòng cùng tên.",
         "- Giấy phép: Teleport theo GPL-3.0-or-later; giấy phép các thành phần đi kèm ở"
         " `THIRD-PARTY-NOTICES.txt`, nơi lấy mã nguồn ở `SOURCE.txt` (cả hai nằm cạnh file exe, trong"
         " bản zip lẫn thư mục cài). Mã nguồn thư viện LGPL đóng kèm: {sources}.",
