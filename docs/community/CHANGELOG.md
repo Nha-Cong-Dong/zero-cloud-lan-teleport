@@ -5,6 +5,22 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-14
+
+### Added
+- Chế độ khách qua Web QR (Web Guest Mode):
+  - Chuyển tệp tức thì với điện thoại di động trong cùng mạng nội bộ mà không cần cài đặt ứng dụng.
+  - Bộ mã hóa mã QR Model 2 thuần túy (sans-IO) theo chuẩn ISO/IEC 18004 không phụ thuộc thư viện ngoài (`teleport.core.qr`), hỗ trợ xuất ASCII console và SVG monochrome.
+  - Máy chủ HTTP/1.1 nội bộ siêu nhẹ (`teleport.net.web_guest`, `teleport.net.web_guest_assets`) streaming 64 KiB, xác thực bằng token một lần và chỉ phục vụ trong dải IP nội bộ / loopback.
+  - Giao diện web khách 1 tệp HTML (<50 KB) tự động nhận diện chế độ sáng/tối và hỗ trợ song ngữ (tiếng Việt / tiếng Anh).
+  - Lệnh dòng lệnh `teleport guest [files...]` hiển thị mã QR trực tiếp trên terminal.
+  - Hộp thoại PySide6/Qt `WebGuestDialog` hiển thị mã QR, liên kết URL, nút sao chép nhanh và thanh tiến độ nhận tệp thời gian thực từ điện thoại.
+  - Nút kích hoạt nhanh ("Chuyển tệp với điện thoại") trên thanh tiêu đề cửa sổ chính.
+- Gửi đồng thời nhiều máy và chế độ ẩn danh mDNS (v1.1.0):
+  - Lệnh `teleport send <files...> --to máy1,máy2` gửi tệp song song tới nhiều thiết bị.
+  - Hỗ trợ gửi trọn vẹn cấu trúc cây thư mục con và thư mục rỗng.
+  - Tùy chọn `--stealth` và chế độ ẩn danh mDNS không quảng bá dịch vụ ra mạng công cộng.
+
 ## [1.0.0] - 2026-11-10
 
 ### Added

@@ -44,6 +44,7 @@ MAX_CERT_PEM_LEN = 8192
 MAX_SAFE_INTEGER = 2**53 - 1
 MAX_OFFER_FILES = 1000
 MAX_FILE_NAME_BYTES = 255  # độ dài tên file trong `offer`, tính bằng byte UTF-8
+MAX_REL_PATH_BYTES = 4096  # độ dài đường dẫn tương đối trong `offer`, tính bằng byte UTF-8
 MAX_CLIP_KIND_LEN = 64
 
 CERT_PEM_HEADER = "-----BEGIN CERTIFICATE-----"
@@ -213,6 +214,33 @@ def validate_file_name(value: object) -> str:
     # Không còn surrogate lẻ nên encode không ném UnicodeEncodeError.
     if len(value.encode("utf-8")) > MAX_FILE_NAME_BYTES:
         raise MessageError(f"name dài quá {MAX_FILE_NAME_BYTES} byte UTF-8")
+    return value if type(value) is str else str.__str__(value)
+
+
+def validate_rel_path(value: object) -> str:
+    """Đường dẫn tương đối trong `offer`: ≤ 4096 byte UTF-8, không có ký tự loại Cc hay Cs.
+
+    Phân tách bằng dấu gạch chéo `/`. Không bắt đầu bằng `/` hoặc `\\`, không chứa ổ đĩa,
+    không chứa đoạn `..`. Chuỗi rỗng vẫn hợp lệ (mặc định cho tệp đơn lẻ).
+    """
+    if not isinstance(value, str):
+        raise MessageError("rel_path phải là chuỗi")
+    if not value:
+        return ""
+    if len(value) > MAX_REL_PATH_BYTES:
+        raise MessageError(f"rel_path dài quá {MAX_REL_PATH_BYTES} byte UTF-8")
+    bad = _FILE_NAME_FORBIDDEN_RE.search(value)
+    if bad is not None:
+        raise MessageError(f"rel_path chứa ký tự không được phép: U+{ord(bad.group()):04X}")
+    if len(value.encode("utf-8")) > MAX_REL_PATH_BYTES:
+        raise MessageError(f"rel_path dài quá {MAX_REL_PATH_BYTES} byte UTF-8")
+    if value.startswith(("/", "\\")):
+        raise MessageError("rel_path không được là đường dẫn tuyệt đối")
+    if re.match(r"^[A-Za-z]:", value):
+        raise MessageError("rel_path không được chứa ký tự ổ đĩa")
+    segments = re.split(r"[/\\]", value)
+    if any(s == ".." for s in segments):
+        raise MessageError("rel_path không được chứa đoạn '..'")
     return value if type(value) is str else str.__str__(value)
 
 
@@ -404,16 +432,23 @@ class FileEntry:
 
     `name` là tên máy kia gửi, **chưa** làm sạch (xem `validate_file_name`). `mtime`:
     mili giây Unix, số nguyên (bên gửi ép giá trị âm thành 0).
+    `rel_path`: đường dẫn tương đối (chuỗi rỗng nếu ở thư mục gốc).
+    `is_dir`: True nếu là thư mục rỗng.
     """
 
     name: str
     size: int
     mtime: int
+    rel_path: str = ""
+    is_dir: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", validate_file_name(self.name))
         _validate_int(self.size, "size", 0, MAX_FILE_SIZE)
         _validate_int(self.mtime, "mtime", 0, MAX_SAFE_INTEGER)
+        object.__setattr__(self, "rel_path", validate_rel_path(self.rel_path))
+        if type(self.is_dir) is not bool:
+            raise MessageError("is_dir phải là bool")
 
     @classmethod
     def from_dict(cls, obj: object) -> FileEntry:
@@ -423,10 +458,27 @@ class FileEntry:
         for name in ("name", "size", "mtime"):
             if name not in obj:
                 raise MessageError(f"phần tử của files thiếu trường {name}")
-        return cls(name=obj["name"], size=obj["size"], mtime=obj["mtime"])
+        rel_path = obj.get("rel_path", "")
+        if not isinstance(rel_path, str):
+            raise MessageError("rel_path phải là chuỗi")
+        is_dir = obj.get("is_dir", False)
+        if type(is_dir) is not bool:
+            raise MessageError("is_dir phải là bool")
+        return cls(
+            name=obj["name"],
+            size=obj["size"],
+            mtime=obj["mtime"],
+            rel_path=rel_path,
+            is_dir=is_dir,
+        )
 
     def to_dict(self) -> dict[str, object]:
-        return {"name": self.name, "size": self.size, "mtime": self.mtime}
+        res: dict[str, object] = {"name": self.name, "size": self.size, "mtime": self.mtime}
+        if self.rel_path:
+            res["rel_path"] = self.rel_path
+        if self.is_dir:
+            res["is_dir"] = self.is_dir
+        return res
 
 
 @dataclass(frozen=True, slots=True)

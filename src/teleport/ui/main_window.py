@@ -441,6 +441,7 @@ class MainWindow(QMainWindow):
     page_changed = Signal(str)  # giá trị `Page`; nối thẳng từ `PageStack.page_changed`
     open_receive_dir_requested = Signal(object)  # Path; nối thẳng từ `save_bar.open_requested`
     change_receive_dir_requested = Signal()  # nối thẳng từ `save_bar.change_requested`
+    web_guest_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -530,6 +531,13 @@ class MainWindow(QMainWindow):
         self.brand_label.setTextFormat(Qt.TextFormat.PlainText)
         self.brand_label.setFont(theme.font_for(theme.TextStyle.TITLE, self.brand_label.font()))
         self.brand_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.web_guest_button = IconButton(
+            "globe",
+            QCoreApplication.translate("MainWindow", "Chuyển tệp với điện thoại"),
+            self.sidebar_header,
+        )
+        self.web_guest_button.setObjectName("webGuestButton")
+        self.web_guest_button.clicked.connect(self.web_guest_requested)
         self.discover_button = IconButton(
             "search",
             QCoreApplication.translate("MainWindow", "Tìm máy mới"),
@@ -556,6 +564,7 @@ class MainWindow(QMainWindow):
         self.header_buttons = QHBoxLayout()
         self.header_buttons.setSpacing(theme.SPACING[0])
         self.header_buttons.addWidget(self.discover_button)
+        self.header_buttons.addWidget(self.web_guest_button)
         self.header_buttons.addWidget(self.settings_button)
         self.header_layout.addLayout(self.header_buttons)
 
@@ -646,6 +655,7 @@ class MainWindow(QMainWindow):
             self.start_button,
             self.discover_button,
             self.settings_button,
+            self.web_guest_button,
             self.conversations.first_focus_widget(),
         ]
         for first, second in pairwise(chain):
@@ -901,6 +911,7 @@ class MainWindow(QMainWindow):
     def _update_page_buttons(self) -> None:
         self.discover_button.setVisible(self.pages.has_page(Page.DISCOVER))
         self.settings_button.setVisible(self.pages.has_page(Page.SETTINGS))
+        self.web_guest_button.setVisible(self._state is ViewState.RUNNING)
 
     def set_addresses(self, addresses: Sequence[str], port: int | None) -> None:
         """Địa chỉ IPv4 của máy này và cổng đang lắng nghe (`Node.local_addresses`, `Node.port`).
@@ -971,8 +982,10 @@ class MainWindow(QMainWindow):
         self.start_button.setText(start)
         self.start_button.setAccessibleName(start)
         self.start_button.setAccessibleDescription(first_run.consent_text())
+        self.web_guest_button.set_label(QCoreApplication.translate("MainWindow", "Chuyển tệp với điện thoại"))
         self.discover_button.set_label(QCoreApplication.translate("MainWindow", "Tìm máy mới"))
         self.settings_button.set_label(QCoreApplication.translate("MainWindow", "Cài đặt"))
+        self._update_page_buttons()
         self.sidebar.setAccessibleName(QCoreApplication.translate("MainWindow", "Thiết bị"))
         transfers = QCoreApplication.translate("MainWindow", "Lượt truyền")
         self.stream_pane.setAccessibleName(transfers)
@@ -1153,7 +1166,7 @@ class MainWindow(QMainWindow):
         align = Qt.AlignmentFlag.AlignHCenter if compact else Qt.AlignmentFlag.AlignVCenter
         self.header_layout.setAlignment(self.brand_logo, align)
         self.header_layout.setAlignment(self.header_buttons, align)
-        for button in (self.discover_button, self.settings_button):
+        for button in (self.discover_button, self.web_guest_button, self.settings_button):
             self.header_buttons.setAlignment(button, align)
         self.header_layout.setContentsMargins(*(_HEADER_COMPACT_MARGINS if compact else _HEADER_MARGINS))
         self.brand_label.setVisible(not compact)

@@ -173,7 +173,9 @@ Mọi message đến từ máy khác đều không được tin: sai một trư�
   - **`transfer_id`**: đúng 32 ký tự hex thường. Bên gửi sinh bằng UUID4; bên nhận không kiểm các bit phiên bản của UUID. Một lượt truyền được nhận diện bằng `(device_id, chiều, transfer_id)` (mục 6.3): cùng `transfer_id` từ thiết bị khác là một lượt khác.
   - **`file_index`**: số nguyên JSON 0 … 999; so với `offer`: nhỏ hơn số file của `offer`.
   - **`block_size`**: đúng số nguyên 1 048 576; giá trị khác làm cả `offer` sai.
-  - **`files`**: mảng JSON 1 … 1000 phần tử, mỗi phần tử là object có đủ `name`, `size`, `mtime` (trường lạ bị bỏ qua).
+  - **`files`**: mảng JSON 1 … 1000 phần tử, mỗi phần tử là object có đủ `name`, `size`, `mtime` (trường lạ bị bỏ qua). Từ v1.1.0, hỗ trợ thêm hai trường tùy chọn để gửi trọn gói cấu trúc thư mục:
+    - **`rel_path`**: đường dẫn tương đối (dài ≤ 4096 byte UTF-8), phân tách bằng `/`, không chứa ký tự điều khiển (`Cc`, `Cs`), không chứa dấu thoát `..` hay đường dẫn tuyệt đối; bên nhận dùng để tái tạo cây thư mục con trong thư mục nhận. Nếu vắng mặt hoặc rỗng, file được lưu phẳng ở thư mục nhận.
+    - **`is_dir`**: boolean (`true`/`false`), đánh dấu entry là một thư mục (ví dụ thư mục rỗng, `size = 0`). Mặc định `false`. Client cũ không có hai trường này vẫn nhận diện và xử lý bình thường (tương thích ngược 100%).
   - **`size`**: số nguyên JSON 0 … 2⁴² (4 TiB). Bên gửi chặn file lớn hơn ngay lúc chọn; `resume` của file lớn nhất có bitfield 512 KiB, mã hóa base64 khoảng 683 KiB, nên vẫn vừa trần 1 MiB.
   - **`mtime`**: thời điểm sửa file, **mili giây** Unix, số nguyên JSON 0 … 2⁵³ − 1. Bên gửi đổi giá trị âm (file có ngày trước 1970) thành 0.
   - **`name`** (tên file trong `offer`): dài ≤ 255 byte UTF-8 và không chứa ký tự loại `Cc` (điều khiển) hay `Cs` (surrogate lẻ, không mã hóa được UTF-8). Đó là **mọi** luật làm `offer` bị từ chối vì tên: chuỗi rỗng, `..`, đường dẫn tuyệt đối, tên thiết bị Windows, ký tự hướng chữ… vẫn hợp lệ trên dây, vì bên nhận luôn đưa tên qua bộ làm sạch tên file trước khi dùng (mục 4.4), và bộ làm sạch **biến đổi** tên (bỏ hay thay ký tự, thêm hậu tố) chứ không bao giờ từ chối. Bên gửi tự cắt tên dài hơn (giữ đuôi file); tên có ký tự điều khiển thì bên gửi từ chối và báo lỗi trên máy mình, không gửi gì. Nhờ vậy `offer` 1000 file luôn vừa trần 1 MiB.
@@ -494,7 +496,7 @@ Message điều khiển có thể mất khi kết nối đứt hoặc bị thay 
 Cài đặt ở `teleport.core.discovery` (bản ghi, lọc, theo dõi thiết bị) và `teleport.net.discovery` (zeroconf). Dùng bởi `teleport.app.node` (`teleport listen`, `teleport receive`, `teleport send`) và `teleport list` / `teleport pair <tên>`.
 
 - Dịch vụ `_teleport._tcp.local.`; cổng thật nằm trong bản ghi SRV. **Tên instance là `device_id`** (`<device_id>._teleport._tcp.local.`, luôn khác nhau giữa các máy, nên zeroconf không phải tự đổi tên); tên hiển thị chỉ nằm trong TXT. Host trong SRV là `teleport-<device_id>.local.`. Chỉ quảng bá bản ghi A (IPv4, mục 2.1), tối đa **16 địa chỉ**.
-- Thuộc tính TXT: `id` (`device_id`), `name`, `os`, `proto` (phiên bản giao thức). Không quảng bá fingerprint: TLS và `trusted.json` đã đủ để nhận ra thiết bị tin cậy.
+- Thuộc tính TXT: `id` (`device_id`), `name`, `os`, `proto` (phiên bản giao thức). Không quảng bá fingerprint: TLS và `trusted.json` đã đủ để nhận ra thiết bị tin cậy. Từ v1.1.0, hỗ trợ **chế độ phát sóng ẩn danh mDNS** (stealth mode): khi bật (`stealth: true`), giá trị của thuộc tính `name` trong TXT được thay bằng tên chung `Teleport` thay vì tên thật của máy, tránh lộ danh tính trên mạng công cộng. Các thiết bị đã ghép đôi vẫn nhận diện được máy qua `device_id` và đối chiếu tên đã lưu trong `trusted.json`.
 - Mỗi chuỗi TXT tối đa 255 byte (RFC 6763 mục 6.1). Tên thiết bị hợp lệ có thể dài tới 256 byte UTF-8, nên `name` trong TXT được cắt theo code point cho vừa **≤ 200 byte**, rồi bỏ khoảng trắng và U+200D (ZWJ) ở cuối; tên đầy đủ lấy từ `hello` khi kết nối. Cắt theo code point, không theo grapheme, nên emoji ghép có thể bị cắt mất phần sau.
 - Mọi bản ghi nhận được là dữ liệu không tin cậy; một trường sai thì **bỏ qua cả bản ghi** đó (ghi log DEBUG, không báo người dùng):
   - Khóa TXT là chữ thường, so chính xác (`ID` không phải `id`). Khóa trùng thì lấy lần đầu; khóa lạ bị bỏ qua; khóa thiếu `=` (không có giá trị) là sai.
@@ -538,3 +540,46 @@ Phần này tả hành vi hiện có ✅, trừ chỗ đánh 📝.
 - Hai bên so `hello.protocol`: khác nhau thì đóng kết nối và báo cập nhật app (mvp mục 8).
 - Phiên bản 1 cố định từ commit đóng Giai đoạn 2 trên `main`, kể cả khi tag `v0.1.0-alpha` bị bỏ qua ([ke_hoach.md](../product/ke_hoach.md) mục 5.4), và cố định cả **các phần đánh 📝**: khi cài đặt sau này, chúng theo đúng đặc tả ở đây. Từ mốc đó, **mọi thay đổi không tương thích đều tăng số phiên bản** (lên 2), kể cả trước `v1.0.0`, để người dùng thử các bản alpha/beta khác nhau nhận được thông báo rõ ràng thay vì lỗi khó hiểu.
 - Thêm message hay trường tùy chọn mới mà bản cũ bỏ qua được (mục 3.1, 3.3) thì không phải tăng số.
+
+---
+
+## 10. Chế độ khách qua Web QR (v1.2.0)
+
+Chế độ khách cho phép chuyển tệp tức thì với điện thoại di động mà **không cần cài đặt thêm bất kỳ phần mềm nào trên điện thoại**.
+
+### 10.1. Kiểm soát kết nối và bảo mật
+
+- **Cổng ngẫu nhiên:** Khi người dùng mở tính năng (qua lệnh `teleport guest` hoặc hộp thoại giao diện), máy chủ HTTP/1.1 bất đồng bộ mở trên cổng ngẫu nhiên do hệ điều hành cấp phát (`port 0`), nghe trên mọi địa chỉ cục bộ (`0.0.0.0`).
+- **Giới hạn mạng nội bộ:** Kiểm tra địa chỉ IP bên gọi (`peername[0]`). Chỉ chấp nhận các dải địa chỉ riêng tư (Private IP: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, link-local `169.254.0.0/16`) hoặc loopback (`127.0.0.0/8`). Mọi yêu cầu từ địa chỉ Internet công cộng bị trả về `403 Forbidden` và ngắt kết nối ngay lập tức.
+- **Mã thông báo một lần (One-Time Token):** Khi mở phiên, máy tính sinh một mã thông báo bí mật 32 ký tự hex (`secrets.token_hex(16)`). Mọi yêu cầu HTTP phải chứa tham số truy vấn `?token=<token>` hoặc Cookie `teleport_token=<token>` do yêu cầu đầu tiên thiết lập. Thiếu hoặc sai token bị trả về `403 Forbidden`.
+- **Hết hạn do không hoạt động:** Phiên tự động đóng cổng và giải phóng tài nguyên sau 10 phút liên tục không nhận được yêu cầu nào.
+
+### 10.2. Mã QR và URL
+
+- URL kết nối có dạng: `http://<ip_noi_bo>:<port>/?token=<token>`.
+- Mã QR được tạo theo tiêu chuẩn **QR Code Model 2 (ISO/IEC 18004)** ở mức sửa lỗi L (7%) hoặc M (15%) bằng thuật toán thuần túy (`teleport.core.qr`), xuất ra dạng khối Unicode terminal cho CLI hoặc ảnh vector SVG / QPixmap cho giao diện đồ họa.
+
+### 10.3. Các tuyến đường HTTP (Endpoints)
+
+1. `GET /` hoặc `GET /index.html`:
+   - Trả về giao diện web khách đóng gói hoàn chỉnh trong 1 file HTML duy nhất (< 50 KB), nhúng sẵn CSS và JavaScript thuần, tự động nhận diện chế độ sáng/tối theo hệ điều hành điện thoại và hỗ trợ song ngữ (tiếng Việt / tiếng Anh).
+2. `GET /api/info`:
+   - Trả về dữ liệu JSON mô tả tên máy tính và danh sách các tệp máy tính đang chuẩn bị sẵn để chia sẻ cho điện thoại:
+     ```json
+     {
+       "device_name": "PC-Nha",
+       "files": [
+         {"id": "a1b2c3d4", "name": "bao_cao.pdf", "size": 1048576}
+       ]
+     }
+     ```
+3. `GET /api/download/<file_id>`:
+   - Tải tệp từ máy tính về điện thoại theo dòng byte trực tiếp (khối 64 KiB), gửi kèm `Content-Disposition: attachment; filename="..."`.
+   - Hỗ trợ tải ngắt quãng và tiếp tục qua tiêu đề `Range: bytes=start-end` (`HTTP/1.1 206 Partial Content`).
+4. `POST /api/upload`:
+   - Nhận tệp tải lên từ điện thoại theo luồng byte nhị phân trực tiếp (`Content-Type: application/octet-stream`).
+   - Tên tệp được truyền qua tham số `?name=...` hoặc tiêu đề `X-Filename` và được làm sạch an toàn bằng `sanitize_filename` (chống tuyệt đối tấn công thoát thư mục Path Traversal).
+   - Ghi vào tệp tạm `.part` trước khi đổi tên hoàn tất, tự động thêm số thứ tự ` (1)`, ` (2)` nếu trùng tên để không ghi đè dữ liệu có sẵn.
+5. `GET /api/events`:
+   - Kênh thông báo Server-Sent Events (`text/event-stream`) để cập nhật trạng thái kết nối và danh sách tệp theo thời gian thực tới trình duyệt điện thoại.
+

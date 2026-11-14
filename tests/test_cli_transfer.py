@@ -1337,18 +1337,25 @@ def test_too_many_files_exits_2(tmp_path, capsys, json_mode):
         assert text in captured.out + captured.err
 
 
+@with_marks(socket_test)
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
-def test_directory_exits_2(pair_dirs, capsys, json_mode):
-    folder = pair_dirs.tmp / "ảnh"
-    folder.mkdir()
-    assert run_main(send_argv(pair_dirs, [folder], json_mode=json_mode)) == 2
-    captured = capsys.readouterr()
-    if json_mode:
-        [ev] = json_lines(captured.out)
-        assert ev["error"] == "not_a_file" and ev["message"].endswith(B4_SUFFIX)
-    else:
-        assert B4_SUFFIX in captured.out + captured.err
-    assert lock_is_free(pair_dirs.S)
+async def test_directory_send_cli(pair_dirs, transfer_env, cli_runs, json_mode):
+    """v1.1.0: Thư mục được gửi thành công qua CLI `teleport send`."""
+    net = pair_dirs
+    recv = cli_runs("receive", receive_argv(net, json_mode=True))
+    ready = await recv.wait_event("receiving")
+    port = ready["port"]
+
+    folder = net.src / "anh"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "pic1.jpg").write_bytes(b"image data 1")
+    (folder / "pic2.jpg").write_bytes(b"image data 2")
+
+    send = cli_runs("send", send_argv(net, [folder], port, json_mode=json_mode))
+    assert await send.code(30) == 0, send.text()
+    assert (net.recv / "anh" / "pic1.jpg").read_bytes() == b"image data 1"
+    assert (net.recv / "anh" / "pic2.jpg").read_bytes() == b"image data 2"
+    assert (net.recv / "anh" / "pic2.jpg").read_bytes() == b"image data 2"
 
 
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])

@@ -46,7 +46,11 @@ from typing import Self
 
 from teleport.core import blocks
 from teleport.core.blocks import BLOCK_SIZE, block_count, block_length
-from teleport.core.filenames import OutgoingNameError, prepare_outgoing_name
+from teleport.core.filenames import (
+    OutgoingNameError,
+    prepare_outgoing_name,
+    prepare_outgoing_rel_path,
+)
 from teleport.core.merkle import merkle_root
 from teleport.core.messages import MAX_OFFER_FILES, FileEntry, MessageError
 from teleport.core.transfer import mtime_ms
@@ -93,16 +97,19 @@ class SourceFile:
     entry: FileEntry  # name = prepare_outgoing_name(path.name), size, mtime = mtime_ms(st_mtime_ns)
 
 
-def prepare_sources(paths: Sequence[str | os.PathLike[str]]) -> list[SourceFile]:
+def prepare_sources(
+    paths: Sequence[str | os.PathLike[str]],
+    allow_dirs: bool = False,
+) -> list[SourceFile]:
     """Kiểm các file sẽ gửi theo thứ tự và dựng `SourceFile`; ném lỗi đầu tiên gặp.
 
     `paths` là một chuỗi/bytes/`PathLike` đơn lẻ, không phải dãy, hay phần tử không phải
     `str`/`PathLike[str]` → TypeError. Số path ngoài 1…`MAX_OFFER_FILES`, hay hai path chỉ cùng
     một file (cùng `os.path.normcase(abspath)`, hoặc cùng `(st_dev, st_ino)` khi `st_ino` ≠ 0)
-    → ValueError. Từng file: không có → `NOT_FOUND`; không phải file thường → `NOT_A_FILE`;
-    lớn hơn `MAX_FILE_SIZE` → `TOO_LARGE` (kèm `size`); tên không gửi được → `BAD_NAME`; mở
-    đọc thử bị từ chối → `PERMISSION`; OSError khác → `OS_ERROR` (đều là `SourceError`).
-    Không giữ handle nào sau khi trả về.
+    → ValueError. Từng file: không có → `NOT_FOUND`; không phải file thường → `NOT_A_FILE`
+    (trừ khi `allow_dirs=True` và là thư mục); lớn hơn `MAX_FILE_SIZE` → `TOO_LARGE` (kèm `size`);
+    tên không gửi được → `BAD_NAME`; mở đọc thử bị từ chối → `PERMISSION`; OSError khác → `OS_ERROR`
+    (đều là `SourceError`). Không giữ handle nào sau khi trả về.
     """
     if isinstance(paths, str | bytes | os.PathLike) or not isinstance(paths, Sequence):
         raise TypeError("paths phải là một dãy đường dẫn, không phải một đường dẫn")
@@ -126,18 +133,47 @@ def prepare_sources(paths: Sequence[str | os.PathLike[str]]) -> list[SourceFile]
     identities: set[tuple[int, int]] = set()
     result: list[SourceFile] = []
     for path in absolute:
-        st = _stat_source(path)
-        if st.st_ino:
-            identity = (st.st_dev, st.st_ino)
-            if identity in identities:
-                raise ValueError("một file được chọn hai lần")
-            identities.add(identity)
-        result.append(SourceFile(path, _entry_for(path, st)))
+        st = _stat_source(path, allow_dirs=allow_dirs)
+        if stat.S_ISDIR(st.st_mode):
+            parent_dir = path.parent
+            for root, dirs, files in os.walk(path, followlinks=False):
+                dirs.sort()
+                files.sort()
+                if not dirs and not files:
+                    rel = os.path.relpath(root, parent_dir).replace("\\", "/")
+                    dir_st = os.stat(root)
+                    entry = _entry_for_rel(Path(root), dir_st, rel, is_dir=True)
+                    result.append(SourceFile(Path(root), entry))
+                    if len(result) > MAX_OFFER_FILES:
+                        raise ValueError(f"số file phải trong 1…{MAX_OFFER_FILES}")
+                    continue
+                for f in files:
+                    file_p = Path(os.path.join(root, f))
+                    rel = os.path.relpath(file_p, parent_dir).replace("\\", "/")
+                    file_st = _stat_source(file_p, allow_dirs=False)
+                    if file_st.st_ino:
+                        identity = (file_st.st_dev, file_st.st_ino)
+                        if identity in identities:
+                            raise ValueError("một file được chọn hai lần")
+                        identities.add(identity)
+                    entry = _entry_for_rel(file_p, file_st, rel, is_dir=False)
+                    result.append(SourceFile(file_p, entry))
+                    if len(result) > MAX_OFFER_FILES:
+                        raise ValueError(f"số file phải trong 1…{MAX_OFFER_FILES}")
+        else:
+            if st.st_ino:
+                identity = (st.st_dev, st.st_ino)
+                if identity in identities:
+                    raise ValueError("một file được chọn hai lần")
+                identities.add(identity)
+            result.append(SourceFile(path, _entry_for(path, st)))
+    if not result:
+        raise ValueError("danh sách file rỗng")
     return result
 
 
-def _stat_source(path: Path) -> os.stat_result:
-    """`stat` một file nguồn: phải là file thường, không quá `MAX_FILE_SIZE`."""
+def _stat_source(path: Path, allow_dirs: bool = False) -> os.stat_result:
+    """`stat` một file nguồn: phải là file thường (hoặc thư mục khi allow_dirs), không quá `MAX_FILE_SIZE`."""
     try:
         st = os.stat(path)
     except (FileNotFoundError, NotADirectoryError) as e:
@@ -146,6 +182,8 @@ def _stat_source(path: Path) -> os.stat_result:
         raise SourceError(path, SourceErrorKind.PERMISSION, errno=e.errno) from e
     except OSError as e:
         raise SourceError(path, SourceErrorKind.OS_ERROR, errno=e.errno) from e
+    if allow_dirs and stat.S_ISDIR(st.st_mode):
+        return st
     if not stat.S_ISREG(st.st_mode):
         raise SourceError(path, SourceErrorKind.NOT_A_FILE)
     if st.st_size > MAX_FILE_SIZE:
@@ -153,33 +191,46 @@ def _stat_source(path: Path) -> os.stat_result:
     return st
 
 
-def _entry_for(path: Path, st: os.stat_result) -> FileEntry:
-    """Tên gửi đi, rồi mở đọc thử (đóng ngay) để báo sớm file không đọc được."""
+def _entry_for_rel(path: Path, st: os.stat_result, rel: str, is_dir: bool = False) -> FileEntry:
+    """Tên gửi đi và đường dẫn tương đối, rồi mở đọc thử (đóng ngay) để báo sớm file không đọc được."""
     try:
-        entry = FileEntry(prepare_outgoing_name(path.name), st.st_size, mtime_ms(st.st_mtime_ns))
+        clean_name = prepare_outgoing_name(path.name)
+        clean_rel = prepare_outgoing_rel_path(rel)
+        size = 0 if is_dir else st.st_size
+        entry = FileEntry(clean_name, size, mtime_ms(st.st_mtime_ns), rel_path=clean_rel, is_dir=is_dir)
     except (OutgoingNameError, MessageError) as e:
         raise SourceError(path, SourceErrorKind.BAD_NAME) from e
-    try:
-        with _open_regular(path):
-            pass
-    except SourceChanged as e:  # đổi thành thứ khác file thường ngay sau `stat`
-        raise SourceError(path, SourceErrorKind.NOT_A_FILE) from e
-    except PermissionError as e:
-        raise SourceError(path, SourceErrorKind.PERMISSION, errno=e.errno) from e
-    except FileNotFoundError as e:
-        raise SourceError(path, SourceErrorKind.NOT_FOUND, errno=e.errno) from e
-    except OSError as e:
-        raise SourceError(path, SourceErrorKind.OS_ERROR, errno=e.errno) from e
+    if not is_dir:
+        try:
+            with _open_regular(path):
+                pass
+        except SourceChanged as e:
+            raise SourceError(path, SourceErrorKind.NOT_A_FILE) from e
+        except PermissionError as e:
+            raise SourceError(path, SourceErrorKind.PERMISSION, errno=e.errno) from e
+        except FileNotFoundError as e:
+            raise SourceError(path, SourceErrorKind.NOT_FOUND, errno=e.errno) from e
+        except OSError as e:
+            raise SourceError(path, SourceErrorKind.OS_ERROR, errno=e.errno) from e
     return entry
 
 
-def check_source(path: Path, leaves: bytearray) -> tuple[int, int, bytes]:
+def _entry_for(path: Path, st: os.stat_result) -> FileEntry:
+    """Tên gửi đi, rồi mở đọc thử (đóng ngay) để báo sớm file không đọc được."""
+    return _entry_for_rel(path, st, "", is_dir=False)
+
+
+def check_source(path: Path, leaves: bytearray, is_dir: bool = False) -> tuple[int, int, bytes]:
     """Kết quả cho `CheckSource`: `(size, mtime_ms, merkle_root(leaves))` của file nguồn.
 
-    `stat` theo đường dẫn (theo symlink). Không còn là file thường → `SourceChanged`; OSError
-    (kể cả không còn file) bay ra nguyên trạng. `leaves` là của engine: chỉ đọc.
+    `stat` theo đường dẫn (theo symlink). Không còn là file thường (hoặc thư mục khi is_dir=True)
+    → `SourceChanged`; OSError (kể cả không còn file) bay ra nguyên trạng. `leaves` là của engine: chỉ đọc.
     """
     st = os.stat(path)
+    if is_dir:
+        if not stat.S_ISDIR(st.st_mode):
+            raise SourceChanged("thư mục nguồn không còn là thư mục")
+        return 0, mtime_ms(st.st_mtime_ns), merkle_root(leaves)
     if not stat.S_ISREG(st.st_mode):
         raise SourceChanged("file nguồn không còn là file thường")
     return st.st_size, mtime_ms(st.st_mtime_ns), merkle_root(leaves)
@@ -231,11 +282,12 @@ class SourceReader:
     Không thread-safe (docstring module, mục Bẫy). Dùng được với `with`.
     """
 
-    def __init__(self, path: Path, entry: FileEntry, file: io.FileIO) -> None:
+    def __init__(self, path: Path, entry: FileEntry, file: io.FileIO | None) -> None:
         self._path = path
         self._entry = entry
         self._file: io.FileIO | None = file
         self._block_count = block_count(entry.size)
+        self._closed = False
 
     @classmethod
     def open(cls, path: Path, entry: FileEntry) -> SourceReader:
@@ -247,6 +299,14 @@ class SourceReader:
         """
         if not isinstance(entry, FileEntry):
             raise TypeError("entry phải là FileEntry")
+        if entry.is_dir:
+            try:
+                st = os.stat(path)
+                if not stat.S_ISDIR(st.st_mode):
+                    raise SourceChanged("thư mục nguồn không còn là thư mục")
+            except OSError as e:
+                raise SourceChanged("không thể truy cập thư mục nguồn") from e
+            return cls(path, entry, None)
         file = _open_regular(path)
         try:
             st = os.fstat(file.fileno())
@@ -267,7 +327,7 @@ class SourceReader:
 
     @property
     def closed(self) -> bool:
-        return self._file is None
+        return self._closed
 
     def read_block(self, index: int) -> tuple[bytearray, bytes]:
         """Đọc khối `index` (`block_length(size, index)` byte tại `index × BLOCK_SIZE`).
@@ -276,6 +336,10 @@ class SourceReader:
         `index` ngoài 0…`block_count` − 1 → ValueError. Đọc thiếu (file bị cắt) → `SourceChanged`.
         OSError bay ra nguyên trạng.
         """
+        if self._closed:
+            raise ValueError("SourceReader đã đóng")
+        if self._entry.is_dir:
+            raise ValueError("thư mục không có khối dữ liệu")
         file = self._file
         if file is None:
             raise ValueError("SourceReader đã đóng")
@@ -297,6 +361,7 @@ class SourceReader:
 
     def close(self) -> None:
         """Đóng handle. Gọi lại được."""
+        self._closed = True
         file, self._file = self._file, None
         if file is not None:
             file.close()

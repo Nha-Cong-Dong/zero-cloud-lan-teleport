@@ -359,6 +359,7 @@ from teleport.ui.settings import Section, SettingsController, SettingsPage, auto
 from teleport.ui.transfers import TransfersController
 from teleport.ui.tray import ClipNotice, ClipNoticeKind, SendTarget, Tray, TrayBadge, make_icon
 from teleport.ui.wait_pairing import WaitPairingController
+from teleport.ui.web_guest_dialog import WebGuestDialog
 from teleport.ui.widgets import InfoLevel
 
 EXIT_OK = 0
@@ -815,6 +816,7 @@ class GuiApp(QObject):
         self.window.open_receive_dir_requested.connect(self._on_open_receive_dir)
         self.window.change_receive_dir_requested.connect(self._choose_receive_dir)
         self.window.change_first_run_dir_requested.connect(self._choose_first_run_dir)
+        self.window.web_guest_requested.connect(self._open_web_guest)
         self.receive_dir_controller.state_changed.connect(self._on_receive_dir_state)
         self.receive_dir_controller.failed.connect(self._on_receive_dir_failed)
         self.receive_dir_controller.initial_selected.connect(self._on_first_run_dir_selected)
@@ -1352,6 +1354,13 @@ class GuiApp(QObject):
         """“Mở Cài đặt” của gợi ý khi dán không phải file: mục Thiết bị tin cậy, ô “Đồng bộ clipboard”."""
         if self.window.open_page(Page.SETTINGS):
             self.settings.page.show_section(Section.DEVICES, device_id, focus="clipboard")
+
+    def _open_web_guest(self) -> None:
+        """Mở hộp thoại Chế độ khách qua Web QR để chuyển tệp với điện thoại."""
+        if self._quitting or self.host is None or not self.host.running:
+            return
+        dialog = WebGuestDialog(host=self.host, parent=self.window)
+        dialog.open()
 
     def _on_first_run_marked(self, result: object) -> None:
         if self._quitting:
