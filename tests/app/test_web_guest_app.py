@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import httpx
 import pytest
 
 from teleport.app.web_guest import WebGuestManager
+from tests.test_http_client import SimpleHttpClient
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ async def test_web_guest_manager_lifecycle(temp_receive_dir: Path) -> None:
     assert info.qr_svg.startswith("<svg")
 
     # Kiểm tra kết nối HTTP qua URL đã sinh
-    async with httpx.AsyncClient() as client:
+    async with SimpleHttpClient() as client:
         resp = await client.get(info.url)
         assert resp.status_code == 200
         assert "ZCL Teleport" in resp.text
@@ -55,7 +55,7 @@ async def test_web_guest_manager_shared_files(temp_receive_dir: Path, tmp_path: 
     info = await manager.start_session(shared_files=[doc], preferred_ip="127.0.0.1")
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with SimpleHttpClient() as client:
             resp = await client.get(f"http://127.0.0.1:{info.port}/api/info?token={info.token}")
             assert resp.status_code == 200
             data = resp.json()

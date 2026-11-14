@@ -7,10 +7,10 @@ import io
 import json
 from pathlib import Path
 
-import httpx
 import pytest
 
 from teleport.cli import build_parser, run_guest
+from tests.test_http_client import SimpleHttpClient
 
 
 def test_cli_guest_help() -> None:
@@ -70,7 +70,7 @@ async def test_cli_guest_json_run_and_upload(tmp_path: Path) -> None:
     assert "127.0.0.1" in url
 
     # Giả lập điện thoại tải file lên máy tính
-    async with httpx.AsyncClient() as client:
+    async with SimpleHttpClient() as client:
         upload_resp = await client.post(
             f"http://127.0.0.1:{start_event['port']}/api/upload",
             params={"name": "phone_photo.png", "token": token},

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-import cv2
-import numpy as np
+try:
+    import cv2
+    import numpy as np
+except ImportError:
+    cv2 = None  # type: ignore[assignment]
+    np = None  # type: ignore[assignment]
 import pytest
 
 from teleport.core.qr import encode_qr, render_ascii, render_svg
@@ -11,6 +15,8 @@ from teleport.core.qr import encode_qr, render_ascii, render_svg
 
 def _decode_qr_matrix(matrix: list[list[bool]]) -> str:
     """Giải mã ma trận QR boolean bằng bộ giải mã OpenCV chuẩn."""
+    if cv2 is None or np is None:
+        pytest.skip("opencv-python hoặc numpy chưa được cài đặt")
     border = 4
     size = len(matrix)
     scale = 10

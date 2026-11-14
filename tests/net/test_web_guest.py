@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import httpx
 import pytest
 
 from teleport.net.web_guest import WebGuestHttpServer
+from tests.test_http_client import SimpleHttpClient
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ async def test_web_guest_token_validation(temp_dirs: tuple[Path, Path]) -> None:
     port = await server.start(host="127.0.0.1", port=0)
 
     try:
-        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port}") as client:
             # 1. Yêu cầu thiếu token phải bị từ chối 403
             resp = await client.get("/")
             assert resp.status_code == 403
@@ -62,7 +62,7 @@ async def test_web_guest_cookie_auth(temp_dirs: tuple[Path, Path]) -> None:
     port = await server.start(host="127.0.0.1", port=0)
 
     try:
-        async with httpx.AsyncClient(
+        async with SimpleHttpClient(
             base_url=f"http://127.0.0.1:{port}",
             cookies={"teleport_token": "secret123"},
         ) as client:
@@ -88,7 +88,7 @@ async def test_web_guest_download_and_range(temp_dirs: tuple[Path, Path]) -> Non
     port = await server.start(host="127.0.0.1", port=0)
 
     try:
-        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port}") as client:
             # Tải toàn bộ tệp
             resp = await client.get(f"/api/download/{file_id}", params={"token": "tok_abc"})
             assert resp.status_code == 200
@@ -137,7 +137,7 @@ async def test_web_guest_upload_and_collision(temp_dirs: tuple[Path, Path]) -> N
     port = await server.start(host="127.0.0.1", port=0)
 
     try:
-        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port}") as client:
             payload = b"DULIEU_ANH_CHUP_DIEN_THOAI_1234567890"
 
             # 1. Tải lên tệp đầu tiên
