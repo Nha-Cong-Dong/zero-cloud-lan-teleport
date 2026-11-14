@@ -654,8 +654,8 @@ class MainWindow(QMainWindow):
             self.retry_button,
             self.start_button,
             self.discover_button,
-            self.web_guest_button,
             self.settings_button,
+            self.web_guest_button,
             self.conversations.first_focus_widget(),
         ]
         for first, second in pairwise(chain):

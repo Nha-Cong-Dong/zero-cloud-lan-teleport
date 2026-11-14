@@ -1171,7 +1171,6 @@ class ReceiveDir:
         _after_record(path)
         self._drop_state(part)  # bước 8
         return path
-        return path
 
     def remove_temp(self, temp: TransferTemp, *, keep_record: bool = False) -> bool:
         """Xóa thư mục tạm của một lượt (architecture mục 4 “Dọn một lượt”).
@@ -2102,12 +2101,13 @@ class ReceiveDir:
         _fsync_dir(self._root_fd_or_raise())
 
     def _open_in_root(self, entry: str, flags: int) -> int:
-        full = os.path.join(self._root_str, entry)
-        parent = os.path.dirname(full)
-        if parent and not os.path.exists(parent):
-            os.makedirs(parent, exist_ok=True)
+        entry_dir = os.path.dirname(entry)
+        if entry_dir:
+            full_parent = os.path.join(self._root_str, entry_dir)
+            if not os.path.exists(full_parent):
+                os.makedirs(full_parent, exist_ok=True)
         if sys.platform == "win32":
-            return os.open(full, flags, _FILE_MODE)
+            return os.open(os.path.join(self._root_str, entry), flags, _FILE_MODE)
         return os.open(entry, flags, _FILE_MODE, dir_fd=self._root_fd_or_raise())
 
     def _lstat_in_root(self, entry: str) -> os.stat_result:

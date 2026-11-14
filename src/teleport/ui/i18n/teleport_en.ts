@@ -1014,6 +1014,11 @@
     </message>
     <message>
         <location filename="../main_window.py"/>
+        <source>Chuyển tệp với điện thoại</source>
+        <translation>Transfer files with phone</translation>
+    </message>
+    <message>
+        <location filename="../main_window.py"/>
         <source>Cài đặt</source>
         <translation>Settings</translation>
     </message>
@@ -2805,6 +2810,77 @@
         <location filename="../wait_pairing.py"/>
         <source>Địa chỉ</source>
         <translation>Address</translation>
+    </message>
+</context>
+<context>
+    <name>WebGuest</name>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>+ Thêm tệp chia sẻ...</source>
+        <translation>+ Add files to share...</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Chuyển tệp với điện thoại</source>
+        <translation>Transfer files with phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Chưa có tệp nào chia sẻ sẵn cho điện thoại.</source>
+        <translation>No files currently shared with phone.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Chọn tệp chia sẻ cho điện thoại</source>
+        <translation>Select files to share with phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Không thể khởi động phiên khách: </source>
+        <translation>Failed to start guest session: </translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Mở máy ảnh điện thoại quét mã bên dưới hoặc truy cập liên kết trong trình duyệt.</source>
+        <translation>Open phone camera to scan QR code below or visit the link in a browser.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Quét mã QR để chuyển tệp</source>
+        <translation>Scan QR code to transfer files</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Sao chép</source>
+        <translation>Copy</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../web_guest_dialog.py"/>
+        <source>Đang chia sẻ sẵn %n tệp cho điện thoại.</source>
+        <translation>
+            <numerusform>Sharing %n file with phone.</numerusform>
+            <numerusform>Sharing %n files with phone.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Đang nhận {filename}: {percent}% {size_info}</source>
+        <translation>Receiving {filename}: {percent}% {size_info}</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Đóng</source>
+        <translation>Close</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>✓ Đã chép</source>
+        <translation>✓ Copied</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>✓ Đã nhận thành công: {filename} ({size_str})</source>
+        <translation>✓ Received successfully: {filename} ({size_str})</translation>
     </message>
 </context>
 <context>

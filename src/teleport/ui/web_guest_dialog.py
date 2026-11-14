@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QCoreApplication, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QGuiApplication, QImage, QPainter, QPixmap
+from PySide6.QtGui import QBrush, QFont, QGuiApplication, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from teleport.app.web_guest import WebGuestManager
 from teleport.core.display import format_size
 from teleport.paths import default_receive_dir
+from teleport.ui.theme import tokens
 
 if TYPE_CHECKING:
     from teleport.app.node import Node
@@ -40,11 +41,12 @@ def qr_matrix_to_pixmap(matrix: list[list[bool]], module_size: int = 6, border: 
     size = len(matrix)
     full_size = (size + 2 * border) * module_size
     img = QImage(full_size, full_size, QImage.Format.Format_RGB32)
-    img.fill(QColor(255, 255, 255))
+    tok = tokens(dark=False)
+    img.fill(tok.surface_raised)
 
     painter = QPainter(img)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(QColor(0, 0, 0)))
+    painter.setBrush(QBrush(tok.text))
 
     for r in range(size):
         for c in range(size):
@@ -120,16 +122,15 @@ class WebGuestDialog(QDialog):
         )
         self.subtitle.setWordWrap(True)
         self.subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.subtitle.setStyleSheet("color: #64748b;")
+        self.subtitle.setProperty("tone", "muted")
         layout.addWidget(self.subtitle)
 
         # Khung chứa ảnh mã QR
         self.qr_card = QFrame(self)
         self.qr_card.setFrameShape(QFrame.Shape.StyledPanel)
-        self.qr_card.setStyleSheet(
-            "background-color: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px;"
-        )
+        self.qr_card.setProperty("surface", "card")
         qr_layout = QVBoxLayout(self.qr_card)
+        qr_layout.setContentsMargins(12, 12, 12, 12)
         qr_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.qr_label = QLabel(self.qr_card)
@@ -141,9 +142,10 @@ class WebGuestDialog(QDialog):
         url_layout = QHBoxLayout()
         self.url_label = QLabel(self)
         self.url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.url_label.setStyleSheet(
-            "background: rgba(0,0,0,0.05); padding: 8px 12px; border-radius: 8px; font-family: monospace;"
-        )
+        self.url_label.setProperty("surface", "sidebar")
+        url_font = self.url_label.font()
+        url_font.setFamilies(["monospace", "Consolas", "Courier New"])
+        self.url_label.setFont(url_font)
         url_layout.addWidget(self.url_label, 1)
 
         self.copy_btn = QPushButton(QCoreApplication.translate("WebGuest", "Sao chép"), self)
@@ -158,7 +160,7 @@ class WebGuestDialog(QDialog):
         prog_layout.setSpacing(4)
 
         self.progress_label = QLabel(self.progress_container)
-        self.progress_label.setStyleSheet("font-size: 12px; color: #64748b;")
+        self.progress_label.setProperty("tone", "muted")
         self.progress_bar = QProgressBar(self.progress_container)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -172,7 +174,7 @@ class WebGuestDialog(QDialog):
 
         # Danh sách tệp chia sẻ sẵn
         self.shared_info_label = QLabel(self)
-        self.shared_info_label.setStyleSheet("font-size: 12px; color: #475569;")
+        self.shared_info_label.setProperty("tone", "muted")
         layout.addWidget(self.shared_info_label)
 
         # Hàng nút thao tác ở dưới
@@ -237,7 +239,9 @@ class WebGuestDialog(QDialog):
         self.subtitle.setText(
             QCoreApplication.translate("WebGuest", "Không thể khởi động phiên khách: ") + err
         )
-        self.subtitle.setStyleSheet("color: #ef4444;")
+        self.subtitle.setProperty("tone", "danger")
+        self.subtitle.style().unpolish(self.subtitle)
+        self.subtitle.style().polish(self.subtitle)
 
     def _update_shared_count(self) -> None:
         count = len(self.initial_files)
@@ -247,7 +251,7 @@ class WebGuestDialog(QDialog):
             )
         else:
             self.shared_info_label.setText(
-                QCoreApplication.translate("WebGuest", f"Đang chia sẻ sẵn {count} tệp cho điện thoại.")
+                QCoreApplication.translate("WebGuest", "Đang chia sẻ sẵn %n tệp cho điện thoại.", None, count)
             )
 
     def _copy_url(self) -> None:
@@ -283,12 +287,18 @@ class WebGuestDialog(QDialog):
         percent = int((current / total) * 100) if total > 0 else 0
         self.progress_bar.setValue(percent)
         size_info = f"({format_size(current)}/{format_size(total)})"
-        self.progress_label.setText(f"Đang nhận {filename}: {percent}% {size_info}")
+        msg = QCoreApplication.translate("WebGuest", "Đang nhận {filename}: {percent}% {size_info}").format(
+            filename=filename, percent=percent, size_info=size_info
+        )
+        self.progress_label.setText(msg)
 
     def _on_upload_completed_ui(self, filename: str, size: int, _path: str) -> None:
         self.progress_container.setVisible(True)
         self.progress_bar.setValue(100)
-        self.progress_label.setText(f"✓ Đã nhận thành công: {filename} ({format_size(size)})")
+        msg = QCoreApplication.translate("WebGuest", "✓ Đã nhận thành công: {filename} ({size_str})").format(
+            filename=filename, size_str=format_size(size)
+        )
+        self.progress_label.setText(msg)
 
     def closeEvent(self, event: object) -> None:
         if self.host is not None:
