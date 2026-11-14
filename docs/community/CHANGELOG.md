@@ -5,6 +5,13 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+### Added
+- Giao tiếp liên tiến trình (IPC) giữa CLI và GUI Node Daemon (`teleport.app.ipc`):
+  - Kênh giao tiếp IPC cục bộ bảo mật qua loopback TCP `127.0.0.1`, xác thực bằng token ngẫu nhiên 32-byte (`ipc.json`).
+  - Lệnh CLI `teleport send`, `teleport list` và `teleport unpair` tự động phát hiện khi tiến trình giao diện hoặc daemon đang chạy, ủy quyền thực thi trực tiếp qua IPC mà không bị chặn bởi khóa độc quyền `node.lock`.
+  - Hỗ trợ truyền phát tiến độ tệp trực quan từ daemon về terminal theo thời gian thực.
+  - Tự động phát hiện và dọn dẹp các tệp `ipc.json` mồ côi nếu daemon gặp sự cố kết thúc đột ngột.
+
 ## [1.2.0] - 2026-11-14
 
 ### Added
