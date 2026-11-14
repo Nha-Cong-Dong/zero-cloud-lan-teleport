@@ -3005,6 +3005,106 @@ def cmd_unpair(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---- Chế độ khách (Web Guest) --------------------------------------------------------------
+
+
+async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: Any = sys.stderr) -> int:
+    from teleport.app.web_guest import WebGuestManager
+    from teleport.core.display import format_size
+    from teleport.paths import default_receive_dir
+
+    recv_dir = Path(args.receive_dir).expanduser().resolve() if args.receive_dir else default_receive_dir()
+
+    shared_paths: list[Path] = []
+    if args.files:
+        for f in args.files:
+            p = Path(f).expanduser().resolve()
+            if not p.is_file():
+                print(f"Lỗi: Không tìm thấy tệp hoặc không phải tệp thông thường: {f}", file=stderr)
+                return 2
+            shared_paths.append(p)
+
+    def on_upload_start(name: str, total: int) -> None:
+        if not args.json:
+            total_str = f" ({format_size(total)})" if total > 0 else ""
+            print(f"\n[Điện thoại tải lên] Bắt đầu nhận: {name}{total_str}...", file=stdout, flush=True)
+
+    def on_upload_complete(name: str, size: int, path: Path) -> None:
+        if args.json:
+            data = {"event": "uploaded", "filename": name, "size": size, "path": str(path)}
+            print(json.dumps(data, ensure_ascii=False), file=stdout, flush=True)
+        else:
+            print(
+                f"\n[Điện thoại tải lên] Hoàn tất nhận: {name} ({format_size(size)})\n-> Đã lưu tại: {path}",
+                file=stdout,
+                flush=True,
+            )
+
+    manager = WebGuestManager(
+        receive_dir=recv_dir,
+        inactivity_timeout=args.timeout,
+        on_upload_start=on_upload_start,
+        on_upload_complete=on_upload_complete,
+    )
+
+    try:
+        info = await manager.start_session(
+            shared_files=shared_paths,
+            preferred_ip=args.ip,
+            port=args.port,
+        )
+    except Exception as e:
+        print(f"Lỗi khởi động máy chủ Web khách: {e}", file=stderr)
+        return 1
+
+    if args.json:
+        data = {
+            "event": "guest_started",
+            "url": info.url,
+            "token": info.token,
+            "ip": info.local_ip,
+            "port": info.port,
+            "files": [p.name for p in shared_paths],
+            "receive_dir": str(recv_dir),
+        }
+        print(json.dumps(data, ensure_ascii=False), file=stdout, flush=True)
+    else:
+        print("=" * 64, file=stdout)
+        print("ZCL Teleport - Chế độ khách qua Web QR (v1.2.0)", file=stdout)
+        print("=" * 64, file=stdout)
+        print(info.qr_ascii, file=stdout)
+        print(f"\nLiên kết kết nối: {info.url}", file=stdout)
+        print(f"Thư mục lưu tệp nhận: {recv_dir}", file=stdout)
+        if shared_paths:
+            print(f"Các tệp chia sẻ sẵn ({len(shared_paths)}):", file=stdout)
+            for p in shared_paths:
+                print(f"  - {p.name} ({format_size(p.stat().st_size)})", file=stdout)
+        print("\nDùng camera điện thoại quét mã QR hoặc truy cập liên kết trên.", file=stdout)
+        print("Không cần cài đặt thêm phần mềm trên điện thoại.", file=stdout)
+        print("(Nhấn Ctrl+C để kết thúc phiên)", file=stdout)
+        print("=" * 64, file=stdout, flush=True)
+
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        pass
+    finally:
+        await manager.stop_session()
+        if not args.json:
+            print("\nĐã đóng phiên kết nối chế độ khách.", file=stdout, flush=True)
+
+    return 0
+
+
+def cmd_guest(args: argparse.Namespace) -> int:
+    with asyncio.Runner() as runner:
+        try:
+            return runner.run(run_guest(args))
+        except KeyboardInterrupt:
+            return 0
+
+
 # ---- Tham số -------------------------------------------------------------------------------
 
 
@@ -3144,6 +3244,31 @@ def build_parser() -> argparse.ArgumentParser:
     unpair.add_argument("device", metavar="<thiết bị>", help="tên hoặc tiền tố mã thiết bị (≥ 4 ký tự)")
     unpair.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
     unpair.set_defaults(handler=cmd_unpair)
+
+    guest = sub.add_parser("guest", help="mở chế độ khách chia sẻ tệp qua Web QR với điện thoại")
+    guest.add_argument(
+        "files",
+        nargs="*",
+        metavar="<file>",
+        help="các file trên máy tính muốn chia sẻ cho điện thoại",
+    )
+    guest.add_argument(
+        "--dir",
+        dest="receive_dir",
+        metavar="<thư mục>",
+        help="thư mục lưu tệp nhận từ điện thoại",
+    )
+    guest.add_argument("--ip", metavar="<ip>", help="chỉ định địa chỉ IP card mạng hiển thị trong mã QR")
+    guest.add_argument("--port", type=int, default=0, help="cổng TCP (mặc định ngẫu nhiên)")
+    guest.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="thời gian tự đóng khi không hoạt động (giây, mặc định 600)",
+    )
+    guest.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    guest.set_defaults(handler=cmd_guest)
+
     return parser
 
 

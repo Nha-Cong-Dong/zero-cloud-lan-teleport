@@ -540,3 +540,46 @@ Phần này tả hành vi hiện có ✅, trừ chỗ đánh 📝.
 - Hai bên so `hello.protocol`: khác nhau thì đóng kết nối và báo cập nhật app (mvp mục 8).
 - Phiên bản 1 cố định từ commit đóng Giai đoạn 2 trên `main`, kể cả khi tag `v0.1.0-alpha` bị bỏ qua ([ke_hoach.md](../product/ke_hoach.md) mục 5.4), và cố định cả **các phần đánh 📝**: khi cài đặt sau này, chúng theo đúng đặc tả ở đây. Từ mốc đó, **mọi thay đổi không tương thích đều tăng số phiên bản** (lên 2), kể cả trước `v1.0.0`, để người dùng thử các bản alpha/beta khác nhau nhận được thông báo rõ ràng thay vì lỗi khó hiểu.
 - Thêm message hay trường tùy chọn mới mà bản cũ bỏ qua được (mục 3.1, 3.3) thì không phải tăng số.
+
+---
+
+## 10. Chế độ khách qua Web QR (v1.2.0)
+
+Chế độ khách cho phép chuyển tệp tức thì với điện thoại di động mà **không cần cài đặt thêm bất kỳ phần mềm nào trên điện thoại**.
+
+### 10.1. Kiểm soát kết nối và bảo mật
+
+- **Cổng ngẫu nhiên:** Khi người dùng mở tính năng (qua lệnh `teleport guest` hoặc hộp thoại giao diện), máy chủ HTTP/1.1 bất đồng bộ mở trên cổng ngẫu nhiên do hệ điều hành cấp phát (`port 0`), nghe trên mọi địa chỉ cục bộ (`0.0.0.0`).
+- **Giới hạn mạng nội bộ:** Kiểm tra địa chỉ IP bên gọi (`peername[0]`). Chỉ chấp nhận các dải địa chỉ riêng tư (Private IP: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, link-local `169.254.0.0/16`) hoặc loopback (`127.0.0.0/8`). Mọi yêu cầu từ địa chỉ Internet công cộng bị trả về `403 Forbidden` và ngắt kết nối ngay lập tức.
+- **Mã thông báo một lần (One-Time Token):** Khi mở phiên, máy tính sinh một mã thông báo bí mật 32 ký tự hex (`secrets.token_hex(16)`). Mọi yêu cầu HTTP phải chứa tham số truy vấn `?token=<token>` hoặc Cookie `teleport_token=<token>` do yêu cầu đầu tiên thiết lập. Thiếu hoặc sai token bị trả về `403 Forbidden`.
+- **Hết hạn do không hoạt động:** Phiên tự động đóng cổng và giải phóng tài nguyên sau 10 phút liên tục không nhận được yêu cầu nào.
+
+### 10.2. Mã QR và URL
+
+- URL kết nối có dạng: `http://<ip_noi_bo>:<port>/?token=<token>`.
+- Mã QR được tạo theo tiêu chuẩn **QR Code Model 2 (ISO/IEC 18004)** ở mức sửa lỗi L (7%) hoặc M (15%) bằng thuật toán thuần túy (`teleport.core.qr`), xuất ra dạng khối Unicode terminal cho CLI hoặc ảnh vector SVG / QPixmap cho giao diện đồ họa.
+
+### 10.3. Các tuyến đường HTTP (Endpoints)
+
+1. `GET /` hoặc `GET /index.html`:
+   - Trả về giao diện web khách đóng gói hoàn chỉnh trong 1 file HTML duy nhất (< 50 KB), nhúng sẵn CSS và JavaScript thuần, tự động nhận diện chế độ sáng/tối theo hệ điều hành điện thoại và hỗ trợ song ngữ (tiếng Việt / tiếng Anh).
+2. `GET /api/info`:
+   - Trả về dữ liệu JSON mô tả tên máy tính và danh sách các tệp máy tính đang chuẩn bị sẵn để chia sẻ cho điện thoại:
+     ```json
+     {
+       "device_name": "PC-Nha",
+       "files": [
+         {"id": "a1b2c3d4", "name": "bao_cao.pdf", "size": 1048576}
+       ]
+     }
+     ```
+3. `GET /api/download/<file_id>`:
+   - Tải tệp từ máy tính về điện thoại theo dòng byte trực tiếp (khối 64 KiB), gửi kèm `Content-Disposition: attachment; filename="..."`.
+   - Hỗ trợ tải ngắt quãng và tiếp tục qua tiêu đề `Range: bytes=start-end` (`HTTP/1.1 206 Partial Content`).
+4. `POST /api/upload`:
+   - Nhận tệp tải lên từ điện thoại theo luồng byte nhị phân trực tiếp (`Content-Type: application/octet-stream`).
+   - Tên tệp được truyền qua tham số `?name=...` hoặc tiêu đề `X-Filename` và được làm sạch an toàn bằng `sanitize_filename` (chống tuyệt đối tấn công thoát thư mục Path Traversal).
+   - Ghi vào tệp tạm `.part` trước khi đổi tên hoàn tất, tự động thêm số thứ tự ` (1)`, ` (2)` nếu trùng tên để không ghi đè dữ liệu có sẵn.
+5. `GET /api/events`:
+   - Kênh thông báo Server-Sent Events (`text/event-stream`) để cập nhật trạng thái kết nối và danh sách tệp theo thời gian thực tới trình duyệt điện thoại.
+
