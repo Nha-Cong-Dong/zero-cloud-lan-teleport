@@ -2331,7 +2331,7 @@ async def _run_send_ipc(
     output: _Output,
     session: _SendSession,
     args: argparse.Namespace,
-    paths: list[Path],
+    paths: Sequence[str | Path],
     devices: list[TrustedDevice],
     files: list[Any],
     total: int,
@@ -2405,7 +2405,7 @@ async def _run_send_ipc(
                     )
                     session.results[dev_id] = TransferFinished(
                         info=None,  # type: ignore
-                        result=TransferResult.FAILED,
+                        result=TransferResult.PEER_ERROR,
                         by_peer=False,
                         reason=str(reason),
                         file_index=None,

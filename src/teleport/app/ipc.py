@@ -73,6 +73,10 @@ class IpcProtocolError(Exception):
     """Lỗi định dạng giao thức IPC hoặc thông điệp không hợp lệ."""
 
 
+class IpcClientError(Exception):
+    """Lỗi phía client IPC."""
+
+
 class IpcServer:
     """Máy chủ IPC chạy trên tiến trình giữ node.lock để nhận lệnh từ CLI."""
 
@@ -400,18 +404,20 @@ class IpcClient:
 
     async def connect(self) -> None:
         """Kết nối tới máy chủ IPC và thực hiện xác thực handshake."""
-        self._reader, self._writer = await asyncio.wait_for(
+        reader, writer = await asyncio.wait_for(
             asyncio.open_connection("127.0.0.1", self._info.port),
             timeout=IPC_HANDSHAKE_TIMEOUT,
         )
+        self._reader = reader
+        self._writer = writer
 
         # Gửi handshake
         auth_msg = json.dumps({"auth": self._info.token}).encode("utf-8") + b"\n"
-        self._writer.write(auth_msg)
-        await self._writer.drain()
+        writer.write(auth_msg)
+        await writer.drain()
 
         # Đọc xác nhận
-        resp_line = await asyncio.wait_for(self._reader.readline(), timeout=IPC_HANDSHAKE_TIMEOUT)
+        resp_line = await asyncio.wait_for(reader.readline(), timeout=IPC_HANDSHAKE_TIMEOUT)
         if not resp_line:
             raise IpcAuthError("Server ngat ket noi trong luc handshake")
 
@@ -448,7 +454,8 @@ class IpcClient:
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> bool:
         """Gửi yêu cầu truyền file qua daemon và stream sự kiện."""
-        assert self._reader is not None and self._writer is not None
+        if self._reader is None or self._writer is None:
+            raise IpcClientError("Client chua duoc ket noi")
 
         cmd = {
             "command": "send",
@@ -477,7 +484,8 @@ class IpcClient:
 
     async def _call(self, msg: dict[str, Any]) -> dict[str, Any]:
         """Gửi một lệnh request-response đơn giản."""
-        assert self._reader is not None and self._writer is not None
+        if self._reader is None or self._writer is None:
+            raise IpcClientError("Client chua duoc ket noi")
         self._writer.write(json.dumps(msg).encode("utf-8") + b"\n")
         await self._writer.drain()
 
