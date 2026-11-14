@@ -104,6 +104,7 @@ from teleport.app.devices import (
     parse_manual_address,
     resolve_device,
 )
+from teleport.app.ipc import try_connect_ipc
 from teleport.app.node import (
     MAX_SCAN_TIMEOUT,
     SCAN_TIMEOUT,
@@ -1050,9 +1051,41 @@ def _choose_device(output: _Output, query: str, views: tuple[DeviceView, ...]) -
 
 
 async def run_list(args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
-    """`teleport list`: duyệt mDNS vài giây rồi in các thiết bị; không giữ `node.lock`, không quảng bá."""
+    """`teleport list`: duyệt mDNS vài giây rồi in các thiết bị; không giữ `node.lock`, không quảng bá.
+
+    Nếu có tiến trình daemon đang chạy nền, lấy danh sách tức thời qua IPC mà không cần chờ quét.
+    """
     output = _Output(out, err, bool(getattr(args, "json", False)))
     directory = _config(args)
+
+    # Thử lấy danh sách tức thời qua IPC daemon nếu đang có tiến trình chạy nền
+    ipc_client = await try_connect_ipc(directory)
+    if ipc_client is not None:
+        try:
+            res = await ipc_client.list_devices()
+            devices = [
+                DeviceView(
+                    device_id=d["device_id"],
+                    name=d["name"],
+                    os=d.get("os"),
+                    paired=d.get("paired", False),
+                    online=d.get("online", False),
+                    connected=False,
+                    addresses=tuple(d.get("addresses", ())),
+                    port=d.get("port"),
+                )
+                for d in res.get("devices", [])
+            ]
+            self_info = res.get("self", {})
+            self_id = self_info.get("device_id", "")
+            self_name = self_info.get("name", "")
+            self_port = self_info.get("port", 0)
+
+            _render_list_output(output, out, self_id, self_name, self_port, devices)
+            return 0
+        finally:
+            await ipc_client.close()
+
     interfaces = getattr(args, "mdns_interface", None)
     mdns = MdnsOptions(advertise=False, interfaces=tuple(interfaces)) if interfaces else None
     timeout = getattr(args, "timeout", None) or SCAN_TIMEOUT
@@ -1071,17 +1104,31 @@ async def run_list(args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
         cause = e.__cause__ if e.__cause__ is not None else e
         output.error("discovery_error", f"Không bật được khám phá mDNS ({_error_text(cause)}).")
         return 1
+
+    _render_list_output(output, out, result.device_id, result.name, result.port, list(result.devices))
+    return 0
+
+
+def _render_list_output(
+    output: _Output,
+    out: TextIO,
+    self_id: str,
+    self_name: str,
+    self_port: int,
+    devices: list[DeviceView],
+) -> None:
     if output.json:
         obj = {
             "time": _utc_now(),
-            "self": {"device_id": result.device_id, "name": result.name, "port": result.port},
-            "devices": [_view_dict(v) for v in result.devices],
+            "self": {"device_id": self_id, "name": self_name, "port": self_port},
+            "devices": [_view_dict(v) for v in devices],
         }
         print(json.dumps(obj, ensure_ascii=False), file=out, flush=True)
-        return 0
-    online = [v for v in result.devices if v.online]
-    offline_paired = [v for v in result.devices if v.paired and not v.online]
-    text = [f"Máy này: {_name_label(result.name)} ({result.device_id[:8]}), cổng {result.port}"]
+        return
+
+    online = [v for v in devices if v.online]
+    offline_paired = [v for v in devices if v.paired and not v.online]
+    text = [f"Máy này: {_name_label(self_name)} ({self_id[:8]}), cổng {self_port}"]
     if online:
         text.append("Thiết bị trong mạng:")
         for v in online:
@@ -1106,7 +1153,6 @@ async def run_list(args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
                 "Nếu máy đó vừa cài lại Teleport, hãy ghép đôi lại."
             )
     output.text(*text)
-    return 0
 
 
 _NO_DEVICES = (
@@ -2280,6 +2326,106 @@ async def run_send(
     return code
 
 
+async def _run_send_ipc(
+    ipc_client: Any,
+    output: _Output,
+    session: _SendSession,
+    args: argparse.Namespace,
+    paths: list[Path],
+    devices: list[TrustedDevice],
+    files: list[Any],
+    total: int,
+    rate: int | None,
+) -> int:
+    """Truyền file thông qua daemon IPC đang chạy nền."""
+    try:
+        for dev in devices:
+            session.register_device(dev.device_id, dev.name)
+        session.printer._prefix = len(devices) > 1
+
+        if rate is not None:
+            output.text(f"Giới hạn tốc độ gửi: {format_size(rate, trim=True)}/s.")
+
+        for dev in devices:
+            d_name = _name_label(dev.name)
+            output.text(
+                f"Đang gửi {len(files)} file ({format_size(total)}) tới “{d_name}” qua tiến trình nền…"
+            )
+            output.event("connecting", device_id=dev.device_id, name=dev.name)
+
+        def on_ipc_event(ev: dict[str, Any]) -> None:
+            ev_name = ev.get("event")
+            dev_id = ev.get("device_id", "")
+            d_name = session.peer_names.get(dev_id, dev_id[:8])
+
+            if ev_name == "started":
+                output.event("started", device_id=dev_id)
+            elif ev_name == "progress":
+                bytes_sent = ev.get("bytes_sent", 0)
+                tot = ev.get("total_bytes", total)
+                spd = ev.get("speed", 0.0)
+                if output.json:
+                    output.event(
+                        "progress",
+                        device_id=dev_id,
+                        bytes_sent=bytes_sent,
+                        total_bytes=tot,
+                        speed=spd,
+                    )
+                else:
+                    pct = int(bytes_sent * 100 / tot) if tot > 0 else 0
+                    prefix = f"[{_name_label(d_name)}] " if len(devices) > 1 else ""
+                    msg = (
+                        f"\r{prefix}Đang gửi: {pct}% "
+                        f"({format_size(bytes_sent)} / {format_size(tot)}) - {format_size(int(spd))}/s"
+                    )
+                    print(msg, end="", flush=True)
+            elif ev_name == "finished":
+                is_done = ev.get("success", False)
+                if not output.json:
+                    print()  # Xuống dòng sau progress bar
+                if is_done:
+                    output.text(
+                        f"Đã gửi xong {len(files)} file ({format_size(total)}) tới “{_name_label(d_name)}”."
+                    )
+                    output.event("finished", device_id=dev_id, result="done", total_bytes=total)
+                    session.results[dev_id] = TransferFinished(
+                        info=None,  # type: ignore
+                        result=TransferResult.DONE,
+                        by_peer=False,
+                        reason=None,
+                        file_index=None,
+                        reject=None,
+                    )
+                else:
+                    reason = ev.get("reason", ev.get("result", "failed"))
+                    output.error(
+                        "transfer_failed",
+                        f"Lượt gửi tới “{_name_label(d_name)}” thất bại: {reason}",
+                    )
+                    session.results[dev_id] = TransferFinished(
+                        info=None,  # type: ignore
+                        result=TransferResult.FAILED,
+                        by_peer=False,
+                        reason=str(reason),
+                        file_index=None,
+                        reject=None,
+                    )
+            elif ev_name in ("failed_to_start", "error"):
+                err_text = ev.get("error", ev.get("message", "unknown_error"))
+                output.error("send_error", f"Lỗi gửi file qua tiến trình nền: {err_text}")
+
+        success = await ipc_client.send(
+            paths=paths,
+            targets=[dev.device_id for dev in devices],
+            rate_limit=rate,
+            on_event=on_ipc_event,
+        )
+        return 0 if success else 1
+    finally:
+        await ipc_client.close()
+
+
 async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSession) -> int:
     """Phần việc của `send` (task con, bị hủy khi Ctrl+C); node được `_supervise` đóng."""
     rate: int | None = None
@@ -2356,6 +2502,11 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
     except ValueError:
         return _duplicate_error(output)
     total = sum(f.entry.size for f in files)
+
+    # Thử kết nối IPC daemon nếu đang có tiến trình chạy nền
+    ipc_client = await try_connect_ipc(_config(args))
+    if ipc_client is not None:
+        return await _run_send_ipc(ipc_client, output, session, args, paths, devices, files, total, rate)
 
     for dev in devices:
         session.register_device(dev.device_id, dev.name)
