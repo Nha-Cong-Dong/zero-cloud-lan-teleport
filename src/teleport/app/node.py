@@ -95,6 +95,7 @@ from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt, PairingService
 from teleport.app.settings import DeviceSettings, Settings, SettingsSaveError, WindowGeometry
 from teleport.app.transfers import ReceiveDirBusy, TransferManager, TransferUpdate
+from teleport.app.web_guest import GuestSessionInfo, WebGuestManager
 from teleport.core.discovery import (
     PROBE_INTERVAL,
     RESOLVE_TIMEOUT,
@@ -697,6 +698,7 @@ class Node:
         self._timer_task: asyncio.Task | None = None
         self._netwatch_task: asyncio.Task | None = None
         self._cleanup_task: asyncio.Task | None = None  # hẹn giờ dọn tạm (chỉ khi có thư mục nhận)
+        self._guest_manager: WebGuestManager | None = None
         self._mdns: MdnsDiscovery | None = None
         self._mdns_closing: set[MdnsDiscovery] = set()  # instance cũ đang đóng (khởi động lại)
         self._mdns_lock = asyncio.Lock()
@@ -1059,6 +1061,9 @@ class Node:
             for task in list(self._link_tasks):
                 task.cancel()  # kết nối ra: ControlChannel đóng gọn
             await self._drain_background()
+            if self._guest_manager is not None:
+                with contextlib.suppress(Exception):
+                    await self._guest_manager.stop_session()
             if transfers is not None:
                 # Task dữ liệu, hàng đĩa (≤ CLOSE_DISK_WAIT), bia mộ và lịch sử (song song,
                 # ≤ TOMBSTONE_FLUSH_TIMEOUT), thư mục nhận.
@@ -1367,6 +1372,40 @@ class Node:
             self._restart_cleanup()
             log.info("đã đổi thư mục nhận")
             return rd.root
+
+    @property
+    def guest_session_info(self) -> GuestSessionInfo | None:
+        """Thông tin phiên chế độ khách đang hoạt động (nếu có)."""
+        return self._guest_manager.session_info if self._guest_manager else None
+
+    async def start_guest_session(
+        self,
+        shared_files: Sequence[Path] | None = None,
+        preferred_ip: str | None = None,
+        port: int = 0,
+        inactivity_timeout: float = 600.0,
+    ) -> GuestSessionInfo:
+        """Bắt đầu một phiên chia sẻ Web khách qua mã QR cho điện thoại."""
+        self._check_running()
+        if self._guest_manager is None:
+            recv_dir = self.transfers.receive_dir
+            if recv_dir is None:
+                recv_dir = paths.default_receive_dir()
+            self._guest_manager = WebGuestManager(
+                receive_dir=recv_dir,
+                device_name=self.name,
+                inactivity_timeout=inactivity_timeout,
+            )
+        return await self._guest_manager.start_session(
+            shared_files=shared_files,
+            preferred_ip=preferred_ip,
+            port=port,
+        )
+
+    async def stop_guest_session(self) -> None:
+        """Dừng phiên chia sẻ Web khách."""
+        if self._guest_manager:
+            await self._guest_manager.stop_session()
 
     def set_ask_before_receive(self, device_id: str, ask: bool) -> None:
         """Hỏi (True) hay tự nhận (False, "Luôn nhận") `offer` từ thiết bị tin cậy `device_id`; lưu.
