@@ -38,15 +38,17 @@ async def test_cli_guest_json_run_and_upload(tmp_path: Path) -> None:
     sample_file.write_bytes(b"HELLO_FROM_PC")
 
     parser = build_parser()
-    args = parser.parse_args([
-        "guest",
-        str(sample_file),
-        "--dir",
-        str(recv_dir),
-        "--ip",
-        "127.0.0.1",
-        "--json",
-    ])
+    args = parser.parse_args(
+        [
+            "guest",
+            str(sample_file),
+            "--dir",
+            str(recv_dir),
+            "--ip",
+            "127.0.0.1",
+            "--json",
+        ]
+    )
 
     stdout = io.StringIO()
     stderr = io.StringIO()

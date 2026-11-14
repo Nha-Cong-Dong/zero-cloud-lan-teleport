@@ -91,10 +91,7 @@ class WebGuestHttpServer:
             self._broadcast_event("files_updated", {"files": self._get_files_meta()})
 
     def _get_files_meta(self) -> list[dict[str, Any]]:
-        return [
-            {"id": fid, "name": name, "size": size}
-            for fid, (name, _, size) in self.shared_files.items()
-        ]
+        return [{"id": fid, "name": name, "size": size} for fid, (name, _, size) in self.shared_files.items()]
 
     async def start(self, host: str = "0.0.0.0", port: int = 0) -> int:
         """Khởi động máy chủ HTTP trên cổng ngẫu nhiên hoặc chỉ định."""
@@ -345,7 +342,7 @@ class WebGuestHttpServer:
         content_length = end - start + 1
         mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         ascii_filename = urllib.parse.quote(filename)
-        cd_val = f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{ascii_filename}'
+        cd_val = f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{ascii_filename}"
 
         status_line = "HTTP/1.1 206 Partial Content" if is_range else "HTTP/1.1 200 OK"
         resp_headers = [

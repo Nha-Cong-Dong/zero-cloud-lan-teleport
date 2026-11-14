@@ -2437,8 +2437,7 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
 
     # Chờ tất cả máy kết nối
     wait_coros = [
-        _wait_connected(node, output, session, _name_label(d.name), d.device_id, endpoint)
-        for d in devices
+        _wait_connected(node, output, session, _name_label(d.name), d.device_id, endpoint) for d in devices
     ]
     wait_results = await asyncio.gather(*wait_coros)
     for res in wait_results:

@@ -219,13 +219,7 @@ def encode_qr(text_or_bytes: str | bytes, level: str = "L") -> list[list[bool]]:
     def put_finder(top_r: int, top_c: int) -> None:
         for r in range(7):
             for c in range(7):
-                is_black = (
-                    r == 0
-                    or r == 6
-                    or c == 0
-                    or c == 6
-                    or (2 <= r <= 4 and 2 <= c <= 4)
-                )
+                is_black = r == 0 or r == 6 or c == 0 or c == 6 or (2 <= r <= 4 and 2 <= c <= 4)
                 matrix[top_r + r][top_c + c] = is_black
                 reserved[top_r + r][top_c + c] = True
 

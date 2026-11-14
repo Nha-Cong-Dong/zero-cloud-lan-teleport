@@ -267,9 +267,11 @@ class WebGuestDialog(QDialog):
             if p.is_file() and p not in self.initial_files:
                 self.initial_files.append(p)
                 if self.host is not None:
+
                     def _add(node: Node, file_path: Path = p) -> None:
                         if node._guest_manager:
                             node._guest_manager.add_file_to_share(file_path)
+
                     self.host.call(_add)
                 elif self.node is not None and self.node._guest_manager is not None:
                     self.node._guest_manager.add_file_to_share(p)
@@ -290,7 +292,9 @@ class WebGuestDialog(QDialog):
 
     def closeEvent(self, event: object) -> None:
         if self.host is not None:
+
             async def _async_stop(node: Node) -> None:
                 await node.stop_guest_session()
+
             self.host.submit(_async_stop)
         super().closeEvent(event)  # type: ignore[arg-type]

@@ -982,9 +982,7 @@ class MainWindow(QMainWindow):
         self.start_button.setText(start)
         self.start_button.setAccessibleName(start)
         self.start_button.setAccessibleDescription(first_run.consent_text())
-        self.web_guest_button.set_label(
-            QCoreApplication.translate("MainWindow", "Chuyển tệp với điện thoại")
-        )
+        self.web_guest_button.set_label(QCoreApplication.translate("MainWindow", "Chuyển tệp với điện thoại"))
         self.discover_button.set_label(QCoreApplication.translate("MainWindow", "Tìm máy mới"))
         self.settings_button.set_label(QCoreApplication.translate("MainWindow", "Cài đặt"))
         self._update_page_buttons()

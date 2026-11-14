@@ -112,9 +112,7 @@ def test_receive_dir_finalize_rel_path_deduplication(tmp_path: Path) -> None:
     existing_dir.mkdir(parents=True)
     (existing_dir / "notes.txt").write_text("old content", encoding="utf-8")
 
-    offer_files = (
-        FileEntry(name="notes.txt", size=4, mtime=2000, rel_path="docs/notes.txt"),
-    )
+    offer_files = (FileEntry(name="notes.txt", size=4, mtime=2000, rel_path="docs/notes.txt"),)
     t_id = "0" * 32
     offer = Offer(transfer_id=t_id, files=offer_files, block_size=BLOCK_SIZE)
     record = TransferRecord(receiver="a" * 32, sender="b" * 32, offer=offer, verified=0, done_at=None)

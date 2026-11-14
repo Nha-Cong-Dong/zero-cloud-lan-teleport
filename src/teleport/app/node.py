@@ -613,9 +613,8 @@ class Node:
             if isinstance(auto_connect_to, str):
                 validate_device_id(auto_connect_to)
                 auto_targets = {auto_connect_to}
-            elif (
-                isinstance(auto_connect_to, Collection)
-                and not isinstance(auto_connect_to, (bytes, bytearray))
+            elif isinstance(auto_connect_to, Collection) and not isinstance(
+                auto_connect_to, (bytes, bytearray)
             ):
                 for dev in auto_connect_to:
                     if not isinstance(dev, str):

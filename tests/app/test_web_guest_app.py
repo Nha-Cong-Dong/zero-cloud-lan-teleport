@@ -64,7 +64,9 @@ async def test_web_guest_manager_shared_files(temp_receive_dir: Path, tmp_path: 
 
             # Tải tệp xuống qua HTTP
             file_id = data["files"][0]["id"]
-            dl_resp = await client.get(f"http://127.0.0.1:{info.port}/api/download/{file_id}?token={info.token}")
+            dl_resp = await client.get(
+                f"http://127.0.0.1:{info.port}/api/download/{file_id}?token={info.token}"
+            )
             assert dl_resp.status_code == 200
             assert dl_resp.content == b"%PDF-1.4 dummy content"
     finally:
