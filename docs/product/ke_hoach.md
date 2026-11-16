@@ -337,7 +337,7 @@ Các tính năng mở rộng đã hoàn thành:
 
 Các hạng mục kỹ thuật kế tiếp:
 1. ✅ **IPC CLI ↔ GUI Daemon:** Cho phép các lệnh dòng lệnh `teleport send`, `teleport list`, `teleport unpair` giao tiếp trực tiếp với tiến trình giao diện đang chạy nền qua IPC loopback TCP, loại bỏ hoàn toàn xung đột khóa độc quyền `node.lock` (Hoàn thành ở PR #153).
-2. **Đóng gói phát hành tự động đa nền tảng trên CI:** Tích hợp quy trình build AppImage (Linux) và DMG (macOS) vào workflow `release.yml` để tự động đính kèm lên GitHub Releases cùng với bộ cài Windows.
+2. ✅ **Đóng gói phát hành tự động đa nền tảng trên CI:** Tích hợp quy trình build AppImage (Linux) và DMG (macOS) vào workflow `release.yml` để tự động đính kèm lên GitHub Releases cùng với bộ cài Windows.
 3. **Nâng cấp Web Guest Mode (v1.3.0):** Hỗ trợ kéo thả gửi đồng thời nhiều tệp / thư mục từ điện thoại lên máy tính, và cơ chế đóng gói tải về theo luồng (zip stream) khi chia sẻ danh sách nhiều tệp.
 4. **Ứng dụng di động ZCL Teleport cho Android:** Viết ứng dụng Android (Java/Kotlin) dùng chung giao thức Teleport (`MulticastLock` cho mDNS, chia khối 1 MiB, TLS 1.3).
 5. **App iOS và CLA:** Cân nhắc ký thỏa thuận chuyển quyền (CLA) trước khi mở rộng lên App Store.

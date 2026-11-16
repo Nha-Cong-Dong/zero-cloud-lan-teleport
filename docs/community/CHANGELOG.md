@@ -6,6 +6,10 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ## [Unreleased]
 
 ### Added
+- Đóng gói và phát hành tự động đa nền tảng trên CI (`.github/workflows/release.yml`):
+  - Tích hợp quy trình build Linux AppImage tự động (`.github/workflows/build-linux.yml`, `packaging/linux/build-appimage.sh`) sử dụng `appimagetool` với cờ `APPIMAGE_EXTRACT_AND_RUN=1`.
+  - Tích hợp quy trình build macOS DMG tự động (`.github/workflows/build-macos.yml`, `packaging/macos/build-dmg.sh`) đóng gói tệp cài đặt `.dmg` hoàn chỉnh bằng `hdiutil`.
+  - Mở rộng job `publish` trong `release.yml` tự động thu thập và xuất bản trọn vẹn bộ cài Windows (`.exe`, `.zip`), Linux (`.AppImage`) và macOS (`.dmg`) kèm mã băm SHA-256 chính thức trên GitHub Releases.
 - Giao tiếp liên tiến trình (IPC) giữa CLI và GUI Node Daemon (`teleport.app.ipc`):
   - Kênh giao tiếp IPC cục bộ bảo mật qua loopback TCP `127.0.0.1`, xác thực bằng token ngẫu nhiên 32-byte (`ipc.json`).
   - Lệnh CLI `teleport send`, `teleport list` và `teleport unpair` tự động phát hiện khi tiến trình giao diện hoặc daemon đang chạy, ủy quyền thực thi trực tiếp qua IPC mà không bị chặn bởi khóa độc quyền `node.lock`.

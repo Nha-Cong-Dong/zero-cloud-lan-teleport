@@ -111,9 +111,23 @@ jobs:
     with:
       release_tag: ${{ needs.prepare.outputs.tag }}
 
+  linux:
+    name: Build Linux AppImage
+    needs: prepare
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.tag }}
+
+  macos:
+    name: Build macOS DMG
+    needs: prepare
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.tag }}
+
   publish:
     name: Đóng file và tạo Release
-    needs: [prepare, cli, gui]
+    needs: [prepare, cli, gui, linux, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -138,6 +152,14 @@ jobs:
         with:
           name: ${{ needs.gui.outputs.setup-artifact }}
           path: in/setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.linux.outputs.artifact }}
+          path: in/linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.macos.outputs.artifact }}
+          path: in/macos
       - name: Đóng file phát hành và SHA256SUMS.txt
         run: |
           set -euo pipefail
@@ -151,6 +173,9 @@ jobs:
           setup="in/setup/teleport-setup-${VERSION}-x64.exe"
           test -f "$setup"
           cp "$setup" out/
+          # Đóng gói Linux AppImage và macOS DMG
+          cp in/linux/Teleport-*-x86_64.AppImage out/
+          cp in/macos/Teleport-*-macOS.dmg out/
           cp in/prepare/lgpl-sources/*.tar.gz out/
           (cd out && sha256sum -- * > SHA256SUMS.txt)
           {
