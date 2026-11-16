@@ -81,9 +81,7 @@ def test_finalize_into_subfolder(tmp_path: Path):
     subfolder = make_transfer_subfolder_name("Redmi Note 13", timestamp=dt)
     assert subfolder == "Redmi Note 13 (2026-11-16 10-52)"
 
-    offer_files = (
-        FileEntry(name="photo.jpg", size=10, mtime=1000),
-    )
+    offer_files = (FileEntry(name="photo.jpg", size=10, mtime=1000),)
     t_id = "1" * 32
     offer = Offer(transfer_id=t_id, files=offer_files, block_size=BLOCK_SIZE)
     record = TransferRecord(receiver="a" * 32, sender="b" * 32, offer=offer, verified=0, done_at=None)

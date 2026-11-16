@@ -240,6 +240,7 @@ def make_transfer_subfolder_name(
     safe_name = fit_filename(base_name, 40)
     return fit_filename(f"{safe_name} ({time_str})")
 
+
 # architecture §5 (bảng số của truyền file). Đọc lúc dùng: test vá bằng monkeypatch.
 # Hạn đĩa: danh sách đủ các thao tác ở bảng architecture §5.
 DISK_OP_TIMEOUT = 60.0  # một thao tác đĩa (tạo thư mục tạm, ghi/đọc khối, đọc/ghi `tombstones.json`…)
