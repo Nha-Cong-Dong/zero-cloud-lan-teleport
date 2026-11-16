@@ -59,6 +59,7 @@ _FIELDS = (
     "port",
     "name",
     "receive_dir",
+    "create_subfolder",
     "visible",
     "stealth",
     "rate_limit",
@@ -194,6 +195,7 @@ def _check_last_conversation(value: object) -> str | None:
 _CHECKS: dict[str, Any] = {
     "name": _check_name,
     "receive_dir": _check_receive_dir,
+    "create_subfolder": lambda v: _check_bool("create_subfolder", v),
     "visible": lambda v: _check_bool("visible", v),
     "stealth": lambda v: _check_bool("stealth", v),
     "rate_limit": _check_rate_limit,
@@ -208,7 +210,9 @@ _CHECKS: dict[str, Any] = {
     "tray_hint_shown": lambda v: _check_bool("tray_hint_shown", v),
 }
 # Trường bool: `null` trong file không hợp lệ (khác các trường có thể là None).
-_BOOL_FIELDS = frozenset({"visible", "stealth", "autostart", "first_run_done", "tray_hint_shown"})
+_BOOL_FIELDS = frozenset(
+    {"visible", "stealth", "autostart", "first_run_done", "tray_hint_shown", "create_subfolder"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,6 +322,7 @@ class Settings:
     extra: Mapping[str, Any] = field(default_factory=dict, compare=False, repr=False)
     name: str | None = None  # None = hostname (`default_device_name`)
     receive_dir: str | None = None  # None = `paths.default_receive_dir()`
+    create_subfolder: bool = True  # True = tự tạo thư mục con [tên máy] (ngày-tháng) cho mỗi lần nhận
     visible: bool = True
     stealth: bool = False
     rate_limit: int | None = None  # byte/giây; None = không giới hạn
@@ -438,6 +443,8 @@ class Settings:
                 data[name] = value
         if not self.visible:
             data["visible"] = False
+        if not self.create_subfolder:
+            data["create_subfolder"] = False
         if self.stealth:
             data["stealth"] = True
         if self.autostart:

@@ -208,6 +208,12 @@ class WebGuestDialog(QDialog):
             recv_dir = node.transfers.receive_dir
             if recv_dir is None:
                 recv_dir = default_receive_dir()
+            if getattr(node, "create_subfolder", True):
+                from teleport.app.transfers import make_transfer_subfolder_name
+
+                sub_name = make_transfer_subfolder_name("Điện thoại")
+                recv_dir = recv_dir / sub_name
+                recv_dir.mkdir(parents=True, exist_ok=True)
             node._guest_manager = WebGuestManager(
                 receive_dir=recv_dir,
                 device_name=node.name,
