@@ -217,8 +217,8 @@ Repo Git: GitHub `Nha-Cong-Dong/zero-cloud-lan-teleport` (public, GPL-3.0-or-lat
 ```
 teleport/                      # ← gốc repo
   README.md  LICENSE  pyproject.toml   # gốc repo chỉ có 3 file này (ngoài các file ẩn .gitignore, .gitattributes)
-  .claude/CLAUDE.md            # hướng dẫn cho Claude Code
-  .claude/agents/              # đội subagent (danh sách: .claude/CLAUDE.md)
+  gemini.md                    # hướng dẫn phát triển và quy chuẩn trợ lý AI
+  .agents/                     # đội subagent (danh sách: gemini.md)
   .github/workflows/           # ci.yml; build-cli.yml, build-gui.yml (build bản CLI, bản GUI và bộ cài Windows, chạy tay hoặc được `release.yml` gọi lại); release.yml (phát hành khi push tag, gọi lại hai workflow build)
   docs/                        # mọi tài liệu .md: README (mục lục, thuật ngữ), y_tuong, mvp, ke_hoach,
                                #   architecture, protocol, CONTRIBUTING, SECURITY, CHANGELOG,
@@ -227,10 +227,10 @@ teleport/                      # ← gốc repo
                                #   chụp bằng tests/ui/test_snapshots.py với nền Windows (cách chạy: docstring file đó)
   src/teleport/                # core/ trust/ net/ app/ ui/ + tiện ích dùng chung và cli.py
   tests/                       # core/, trust/, net/, app/, … theo tầng
-  packaging/pyinstaller/       # cấu hình build PyInstaller (cách build: docs/CONTRIBUTING.md)
-  packaging/inno/              # script bộ cài Inno Setup cho Windows, bản dịch, giấy phép Inno (cách build: docs/CONTRIBUTING.md)
-  packaging/release/           # các bước kiểm của workflow phát hành (docs/CONTRIBUTING.md, Phát hành)
-  packaging/i18n/              # update.py: cập nhật bản dịch .ts/.qm của giao diện (luật: docs/CONTRIBUTING.md, Bản dịch)
+  packaging/pyinstaller/       # cấu hình build PyInstaller (cách build: docs/community/CONTRIBUTING.md)
+  packaging/inno/              # script bộ cài Inno Setup cho Windows, bản dịch, giấy phép Inno (cách build: docs/community/CONTRIBUTING.md)
+  packaging/release/           # các bước kiểm của workflow phát hành (docs/community/CONTRIBUTING.md, Phát hành)
+  packaging/i18n/              # update.py: cập nhật bản dịch .ts/.qm của giao diện (luật: docs/community/CONTRIBUTING.md, Bản dịch)
   tools/                       # (tùy chọn) cpp-receiver/, java-client/
 ```
 Danh sách module và trạng thái từng module: [architecture.md](../technical/architecture.md) mục 3. Module chỉ được tạo khi có code thật.
@@ -410,8 +410,8 @@ Bản chính thức: [CONTRIBUTING.md](../community/CONTRIBUTING.md). Tóm tắt
 - **Nhánh:** `main` luôn chạy được và được bảo vệ (chỉ merge qua Pull Request khi CI xanh). Mỗi việc làm trên nhánh riêng `feat/...`, `fix/...`.
 - **Commit:** theo [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `test:`, `chore:`), giúp viết `CHANGELOG.md` dễ dàng.
 - **CI** (`.github/workflows/ci.yml`): các bước kiểm tra và ma trận hệ điều hành × Python ở [CONTRIBUTING.md](../community/CONTRIBUTING.md). `mypy` có từ đầu Giai đoạn 2 (cấu hình trong `pyproject.toml`).
-- **Đội subagent** trong `.claude/agents/`: vai trò và quy trình ở `.claude/CLAUDE.md`. Chỉ commit và push khi người dùng đồng ý.
-- **Phát hành:** các bước, cách đánh số, workflow phát hành và cách chạy khô ở [CONTRIBUTING.md](../community/CONTRIBUTING.md) (“Phát hành”). Push tag thì `release.yml` build bản CLI, bản GUI (zip) và bộ cài Windows (Inno Setup, chưa ký mã) bằng chính hai workflow build chạy tay, rồi tạo GitHub Release (bản alpha/beta là pre-release). Bộ cài macOS/Linux và ký mã vẫn là việc của Giai đoạn 6.
+- **Đội subagent** trong `.agents/`: vai trò và quy trình ở `gemini.md`. Chỉ commit và push khi người dùng đồng ý.
+- **Phát hành:** các bước, cách đánh số, workflow phát hành và cách chạy khô ở [CONTRIBUTING.md](../community/CONTRIBUTING.md) (“Phát hành”). Push tag thì `release.yml` gọi các workflow build đa nền tảng để build bản CLI, bản GUI (zip), bộ cài Windows (Inno Setup, kèm tích hợp ký mã SignPath trong `packaging/signing/`), AppImage cho Linux (`build-linux.yml`) và `.dmg` cho macOS (`build-macos.yml`), rồi tạo GitHub Release kèm `SHA256SUMS.txt` (bản alpha/beta là pre-release).
 - **Theo dõi công việc:** GitHub Issues + Milestones tương ứng từng bản phát hành ở mục 5.1.
 
 ---
