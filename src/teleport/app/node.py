@@ -1519,7 +1519,6 @@ class Node:
             return
         new_settings = dataclasses.replace(self._settings, create_subfolder=create)
         self._save_settings(new_settings)
-        self._settings = new_settings
         if self._transfers is not None:
             self._transfers.create_subfolder = create
 
@@ -1598,7 +1597,6 @@ class Node:
         if new == self._settings:  # so sánh bỏ qua `extra`, `load_failed`
             return False
         self._save_settings(new)
-        self._settings = new
         if create_subfolder is not _UNSET and self._transfers is not None:
             self._transfers.create_subfolder = bool(create_subfolder)
         return True

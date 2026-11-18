@@ -1710,7 +1710,7 @@ def test_new_constants_have_expected_values():
     assert app_clip.CLIP_CLOSE_WAIT == 1.0
 
 
-async def test_ram_budget_evicts_stalled_clips_of_other_devices_oldest_first(make, evict):
+async def test_ram_budget_evicts_stalled_clips_of_other_devices_oldest_first(make, evict, clock):
     """A3 (tan-cong): hai máy giữ mỗi máy một clip dở lớn không tiến triển; clip của máy thứ ba
     không còn bị bỏ mãi: clip dở đứng cũ nhất bị đẩy ra, vừa đủ chỗ."""
     evict(stall=0.1, hold=100)
@@ -1719,9 +1719,9 @@ async def test_ram_budget_evicts_stalled_clips_of_other_devices_oldest_first(mak
         h.connect(d, FakeConn(d[:2]), conn_id=i)
     hold1, hold2 = parts_text("a" * 400, 4), parts_text("b" * 400, 4)
     h.feed(D1, hold1[:2], 1)
-    await asyncio.sleep(0.02)
+    clock.t += 0.02
     h.feed(D2, hold2[:2], 2)
-    await asyncio.sleep(0.3)  # cả hai đứng > CLIP_STALL_EVICT
+    clock.t += 0.3  # cả hai đứng > CLIP_STALL_EVICT
     honest = parts_text("c" * 500, 2)  # 400 + 400 + 500 > 1000; bỏ D1 thì 900 ≤ 1000
     h.feed(D3, honest, 3)
     await wait_until(lambda: h.backend.texts() == ["c" * 500], 3, "clip của máy thật phải được nhận")
@@ -1733,7 +1733,7 @@ async def test_ram_budget_evicts_stalled_clips_of_other_devices_oldest_first(mak
     assert h.backend.texts() == ["c" * 500]
 
 
-async def test_ram_budget_does_not_evict_clips_that_progress(make, evict):
+async def test_ram_budget_does_not_evict_clips_that_progress(make, evict, clock):
     evict(stall=0.2, hold=100)
     h = make()
     for i, d in enumerate((D1, D2, D3), start=1):
@@ -1741,7 +1741,7 @@ async def test_ram_budget_does_not_evict_clips_that_progress(make, evict):
     hold1, hold2 = parts_text("a" * 400, 4), parts_text("b" * 400, 4)
     h.feed(D1, hold1[:1], 1)
     h.feed(D2, hold2[:1], 2)
-    await asyncio.sleep(0.3)
+    clock.t += 0.3
     h.feed(D1, hold1[1:2], 1)  # cả hai vừa có mảnh mới
     h.feed(D2, hold2[1:2], 2)
     h.feed(D3, parts_text("c" * 500, 2), 3)
@@ -1751,14 +1751,14 @@ async def test_ram_budget_does_not_evict_clips_that_progress(make, evict):
     assert h.backend.write_calls == 0, "không có clip dở nào đứng: clip mới bị bỏ như cũ"
 
 
-async def test_ram_budget_evicts_nothing_unless_that_makes_room(make, evict):
+async def test_ram_budget_evicts_nothing_unless_that_makes_room(make, evict, clock):
     evict(stall=0.1, hold=100)
     h = make()
     for i, d in enumerate((D1, D2, D3), start=1):
         h.connect(d, FakeConn(d[:2]), conn_id=i)
     stalled, fresh = parts_text("a" * 300, 3), parts_text("b" * 400, 4)
     h.feed(D1, stalled[:1], 1)
-    await asyncio.sleep(0.3)
+    clock.t += 0.3
     h.feed(D2, fresh[:1], 2)
     h.feed(D3, parts_text("c" * 700, 2), 3)  # bỏ D1 vẫn 400 + 700 > 1000
     await asyncio.sleep(SETTLE)
@@ -1768,7 +1768,7 @@ async def test_ram_budget_evicts_nothing_unless_that_makes_room(make, evict):
     assert h.backend.write_calls == 0
 
 
-async def test_ram_budget_evicts_clip_held_too_long_even_if_progressing(make, evict):
+async def test_ram_budget_evicts_clip_held_too_long_even_if_progressing(make, evict, clock):
     evict(stall=100, hold=0.2)
     h = make()
     h.connect(D1, FakeConn("a"), conn_id=1)
@@ -1776,7 +1776,7 @@ async def test_ram_budget_evicts_clip_held_too_long_even_if_progressing(make, ev
     slow = parts_text("a" * 900, 9)
     h.feed(D1, slow[:1], 1)
     for i in range(1, 4):
-        await asyncio.sleep(0.1)
+        clock.t += 0.1
         h.feed(D1, slow[i : i + 1], 1)  # vẫn tiến triển, nhưng đã giữ chỗ > CLIP_HOLD_EVICT
     h.feed(D2, parts_text("b" * 200, 2), 2)
     await wait_until(lambda: h.backend.texts() == ["b" * 200], 3, "clip mới phải được nhận")
@@ -2161,14 +2161,14 @@ async def test_a3_holders_and_hammers_do_not_starve_honest_device(make, clock):
     assert all(len(data) == 5 * MiB for _, data in h.backend.writes)
 
 
-async def test_abandoning_device_cannot_evict_other_devices(make, evict):
+async def test_abandoning_device_cannot_evict_other_devices(make, evict, clock):
     evict(stall=0.1, hold=100)
     h = make()
     for i, d in enumerate((D1, D2, D3), start=1):
         h.connect(d, FakeConn(d[:2]), conn_id=i)
     stalled = parts_text("a" * 600, 3)
     h.feed(D1, stalled[:1], 1)
-    await asyncio.sleep(0.3)  # D1 đứng
+    clock.t += 0.3  # D1 đứng
     h.feed(D2, parts_text("b" * 300, 3)[:1], 2)
     h.feed(D2, parts_text("c" * 500, 2), 2)  # thay clip dở của chính nó: đang bỏ dở, không được đẩy D1
     await asyncio.sleep(SETTLE)
@@ -2180,13 +2180,13 @@ async def test_abandoning_device_cannot_evict_other_devices(make, evict):
     assert asm.reserved_bytes(D1) == 0
 
 
-async def test_abandoning_device_is_evicted_before_stalled_one(make, evict):
+async def test_abandoning_device_is_evicted_before_stalled_one(make, evict, clock):
     evict(stall=0.1, hold=100)
     h = make()
     for i, d in enumerate((D1, D2, D3), start=1):
         h.connect(d, FakeConn(d[:2]), conn_id=i)
     h.feed(D1, parts_text("a" * 400, 4)[:1], 1)
-    await asyncio.sleep(0.3)  # D1 đứng
+    clock.t += 0.3  # D1 đứng
     h.feed(D2, parts_text("b" * 300, 3)[:1], 2)
     h.feed(D2, parts_text("c" * 400, 4)[:1], 2)  # D2 bỏ dở clip trước; clip mới vẫn vừa trần
     asm = assembler_of(h.sync)
@@ -2249,7 +2249,7 @@ async def test_write_that_lands_then_times_out_is_not_forwarded(make, monkeypatc
     assert c1.clips() == [] and c2.clips() == []
 
 
-async def test_device_evicted_for_budget_is_not_marked_abandoning(make, evict):
+async def test_device_evicted_for_budget_is_not_marked_abandoning(make, evict, clock):
     """Soát vòng 2: máy bị máy này đẩy clip ra vì trần, rồi mở clip mới, không bị coi là bỏ dở: clip mới
     của nó vẫn đẩy được clip đã đứng của máy khác."""
     evict(stall=0.1, hold=100, budget=1_500_000)
@@ -2258,10 +2258,10 @@ async def test_device_evicted_for_budget_is_not_marked_abandoning(make, evict):
     h.connect(D2, FakeConn("b"), conn_id=2)  # B
     asm = assembler_of(h.sync)
     h.feed(D2, [declared_png(total=1_000_000)], 2)
-    await asyncio.sleep(0.3)  # B đứng
+    clock.t += 0.3  # B đứng
     h.feed(D1, [declared_png(total=1_000_000)], 1)  # A đẩy B ra
     assert asm.reserved_bytes(D2) == 0 and asm.reserved_bytes(D1) == 1_000_000
-    await asyncio.sleep(0.3)  # A đứng
+    clock.t += 0.3  # A đứng
     h.feed(D2, [declared_png(total=1_000_000)], 2)  # B mở clip mới: không bỏ dở nên đẩy được A
     assert asm.reserved_bytes(D2) == 1_000_000, "B bị coi là bỏ dở"
     assert asm.reserved_bytes(D1) == 0

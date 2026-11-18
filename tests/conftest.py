@@ -319,6 +319,14 @@ def fake_registry(monkeypatch: pytest.MonkeyPatch):
     yield fake
 
 
+@pytest.fixture(autouse=True)
+def _default_flat_receive_in_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Các test truyền file hiện có kiểm đường dẫn phẳng `receive_dir / name`; chỉ bật tạo thư mục
+    con tự động trong `test_create_subfolder.py`."""
+    if "test_create_subfolder" not in request.node.nodeid:
+        monkeypatch.setenv("TELEPORT_DISABLE_SUBFOLDER", "1")
+
+
 # =================================================================================================
 # Hằng thời gian rút ngắn (đặc tả PR-3 mục 4.1, PR-4 mục 4.1, P2-6b việc 6b-T0)
 # =================================================================================================

@@ -211,7 +211,7 @@ class WebGuestDialog(QDialog):
             if getattr(node, "create_subfolder", True):
                 from teleport.app.transfers import make_transfer_subfolder_name
 
-                sub_name = make_transfer_subfolder_name("Điện thoại")
+                sub_name = make_transfer_subfolder_name(QCoreApplication.translate("WebGuest", "Điện thoại"))
                 recv_dir = recv_dir / sub_name
                 recv_dir.mkdir(parents=True, exist_ok=True)
             node._guest_manager = WebGuestManager(

@@ -2126,7 +2126,7 @@ class TransferManager:
             self._call(self._engine.storage_failed, a.device_id, a.transfer_id, DiskOp.CREATE_TEMP)
             return
         lane = _DiskLane(a.device_id, a.transfer_id, rd=self._receive_dir)
-        if self._create_subfolder:
+        if self._create_subfolder and os.environ.get("TELEPORT_DISABLE_SUBFOLDER") != "1":
             dev = self._store.get(a.device_id)
             dname = dev.name if dev and dev.name else None
             lane.subfolder = make_transfer_subfolder_name(dname)
@@ -2602,7 +2602,7 @@ class TransferManager:
             lane = _DiskLane(
                 sender, transfer_id, rd=rd, temp=handle.temp, parts={handle.file_index: handle.part}
             )
-            if self._create_subfolder:
+            if self._create_subfolder and os.environ.get("TELEPORT_DISABLE_SUBFOLDER") != "1":
                 dev = self._store.get(sender)
                 dname = dev.name if dev and dev.name else None
                 ts = datetime.datetime.fromtimestamp(handle.last_activity)
