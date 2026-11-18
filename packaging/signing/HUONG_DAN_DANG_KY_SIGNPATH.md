@@ -19,7 +19,7 @@ ZCL Teleport đã chuẩn bị sẵn đầy đủ chính sách bảo mật, cấ
 Truy cập <https://signpath.org/apply/> bằng tài khoản GitHub của chủ dự án (`@Luffyreals`) và điền các mục theo mẫu dưới đây:
 
 - **Project Name:** `ZCL Teleport`
-- **Website / Repository URL:** `https://github.com/Luffyreals/Zero-Cloud-LAN-Teleport` *(thay bằng đúng URL GitHub công khai của repo nếu đổi đường dẫn)*
+- **Website / Repository URL:** `https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport` *(thay bằng đúng URL GitHub công khai của repo nếu đổi đường dẫn)*
 - **License:** `GPL-3.0-or-later`
 - **Build System:** `GitHub Actions`
 - **Code Signing Policy URL:** Liên kết trực tiếp tới mục "Chính Sách Ký Mã (Code Signing Policy)" trong `docs/community/SECURITY.md`.
