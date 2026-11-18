@@ -19,7 +19,7 @@
 > **Giới thiệu:** ZCL Teleport giúp bạn chuyển các file dung lượng rất lớn và đồng bộ nội dung sao chép giữa các máy tính trong cùng một mạng nội bộ nhanh chóng, bảo mật trực tiếp giữa hai máy mà không đi qua máy chủ bên ngoài hay thu thập thông tin người dùng. Khi đường truyền bị ngắt giữa chừng, ứng dụng tự động gửi tiếp phần còn lại ngay khi kết nối trở lại.
 
 > [!NOTE]
-> **Phiên bản chính thức `v1.2.0` đã sẵn sàng.** Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
+> **Phiên bản `v1.3.0` đã sẵn sàng.** Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
 
 ---
 
@@ -70,7 +70,7 @@ Tiêu chí chi tiết cho từng tính năng: [docs/product/mvp.md](docs/product
 | **Ghép đôi một lần duy nhất** | Lần đầu kết nối, hai máy hiển thị cùng một mã 6 chữ số để xác nhận. Sau đó hai máy sẽ tự nhận ra nhau. | Hoàn thành |
 | **Gửi file dung lượng cực lớn** | Kéo thả một hoặc nhiều file để gửi. Bên nhận luôn được hỏi ý kiến trước khi nhận; hiển thị rõ tốc độ và tiến độ truyền. | Hoàn thành |
 | **Gửi cả thư mục & nhiều máy** | Hỗ trợ gửi toàn bộ cây thư mục con giữ nguyên cấu trúc; gửi cùng lúc tới nhiều thiết bị trong mạng nội bộ. | Hoàn thành |
-| **Chế độ khách qua Web QR** | Quét mã QR bằng điện thoại để gửi nhận tệp tức thì qua trình duyệt mà không cần cài đặt thêm phần mềm. | Hoàn thành |
+| **Chế độ khách qua Web QR** | Quét mã QR bằng điện thoại để gửi/nhận tệp và thư mục qua trình duyệt, hỗ trợ tải nhiều tệp dưới dạng gói nén `.zip` mà không cần cài ứng dụng trên điện thoại. | Hoàn thành |
 | **Tự động nhận tiếp** | Đang gửi mà mất kết nối, khi kết nối lại ứng dụng sẽ gửi tiếp từ vị trí tạm dừng, không gửi lại từ đầu. | Hoàn thành |
 | **Kiểm tra tính nguyên vẹn** | Từng phần nhỏ và toàn bộ file đều được kiểm tra khớp hoàn toàn với bản gốc trước khi hoàn tất. | Hoàn thành |
 | **Đồng bộ nội dung sao chép** | Sao chép văn bản hoặc ảnh ở máy này có thể dán ngay trên máy kia nếu bạn bật cho phép. Mặc định tắt để đảm bảo riêng tư. | Hoàn thành |
@@ -226,6 +226,8 @@ Tiến độ chi tiết từng giai đoạn được cập nhật tại [docs/pr
 - **Giai đoạn 4:** Hoàn thiện giao diện đồ họa, tối ưu khay hệ thống, ngôn ngữ Tiếng Việt và Tiếng Anh (Đã hoàn thành).
 - **Giai đoạn 5:** Hoàn thiện tính năng đồng bộ nội dung sao chép an toàn (Đã hoàn thành).
 - **Bản chính thức (`v1.0.0`):** Đóng gói bộ cài đặt tiêu chuẩn, tài liệu người dùng và kịch bản đa nền tảng (Đã hoàn thành).
+- **Mở rộng `v1.1.0` – `v1.2.0`:** Gửi cả cây thư mục con, gửi song song nhiều máy, ẩn tên thiết bị trên mạng công cộng và Chế độ khách qua Web QR cho điện thoại (Đã hoàn thành).
+- **Bản nâng cấp `v1.3.0`:** Kết nối thông suốt giữa dòng lệnh và giao diện đang chạy nền, tự gom thư mục con theo từng lượt nhận, tải gói nén `.zip` trực tiếp và kéo thả thư mục trên Web QR, khóa tạm thời chống dò mã, và tối ưu bộ nhớ kiểm tra toàn vẹn (Đã hoàn thành).
 
 ---
 
@@ -258,6 +260,7 @@ Mã nguồn được phân tầng rõ ràng theo quy tắc `core <- trust <- net
 ## Đóng Góp · Bảo Mật · Giấy Phép
 
 - **Đóng góp:** Xem hướng dẫn tại [docs/community/CONTRIBUTING.md](docs/community/CONTRIBUTING.md).
-- **Bảo mật:** Báo cáo vấn đề an toàn theo hướng dẫn tại [docs/community/SECURITY.md](docs/community/SECURITY.md).
+- **Bảo mật & Chính sách ký mã:** Báo cáo vấn đề an toàn và xem chính sách ký mã, quyền riêng tư tại [docs/community/SECURITY.md](docs/community/SECURITY.md).
+- **Ký mã nguồn mở (Code Signing):** Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) (đang hoàn thiện tích hợp cho các bản phát hành Windows chính thức; xem cấu hình tại [packaging/signing/](packaging/signing/HUONG_DAN_DANG_KY_SIGNPATH.md)).
 - **Giấy phép:** Phần mềm được phát hành theo giấy phép tự do nguồn mở [GPL-3.0-or-later](LICENSE).
 - **Tác giả:** Bản quyền (C) 2026 Nguyễn Hoàng Tùng (@Luffyreals).

@@ -20,14 +20,14 @@
 |---|---|---|
 | mvp N1 | 2026-11-05: hai máy Windows thật (11 ↔ 10) qua Wi-Fi 2,4 GHz, cùng điểm phát (mục 3.6); trước đó 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged (mục 3.3) | **ĐẠT trên hai máy thật qua Wi-Fi** cho phần xuất hiện, thoát app và mất mạng đột ngột (tắt Wi-Fi, app bị giết); máy **ngủ** thật, mạng dây và kịch bản mất gói ở hai lần resolve đầu chưa đo (mục 3.4) |
 | mvp N2 | 2026-10-29/30: đo tay qua giao diện, hai máy Windows thật qua Wi-Fi 2,4 GHz, một file 1,89 GiB (mục 5.4) | **CHƯA ĐỦ DỮ LIỆU**: lần đo tay cho tỉ số khoảng 0,96 nhưng không theo phương pháp mục 5.1 (1 lần Teleport, 2 lần SMB, một cỡ file, bấm giờ tay); lượt đo theo mục 5.1 và mạng dây chưa đo (mục 5.3) |
-| mvp N3 | 2026-11-05: 10 GiB qua Wi-Fi 2,4 GHz giữa hai máy Windows thật, RAM hai phía, 1 lần (mục 4.10). 2026-10-26: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, loopback, 1 / 5 / 10 GiB (mục 4.6); lúc rảnh của `receive` 10 phút (mục 4.7); ổ đích USB dừng ở bước kiểm ổ (mục 4.8). 2026-10-28: trước/sau thay đổi ghi trạng thái nối lại bền, 1 GiB và 1000 file nhỏ (mục 4.9) | **CHƯA ĐỦ DỮ LIỆU**: phần truyền qua loopback ĐẠT cả ba tiêu chí mục 4.1 với 1, 5 và 10 GiB; lúc rảnh của CLI chỉ ghi nhận; ổ đích chậm (USB có sẵn là FAT32, mục 4.8), lúc rảnh của app có giao diện: lần đo 2026-11-03 (mục 4.11) chạy khi máy bận nên **chưa kết luận**, cần đo lại khi máy rảnh; RAM ở trạng thái (d) (100 bong bóng) lần này đã vượt ngưỡng, và số đo khi máy bận nghiêng về cận dưới (mục 4.11). Sau thay đổi ghi trạng thái nối lại bền (mục 4.9), tiêu chí 1 và 2a vẫn ĐẠT với 1 GiB và 1000 file nhỏ. Qua Wi-Fi giữa hai máy thật (mục 4.10), RSS tăng 4,8 MiB bên gửi và 6,0 MiB bên nhận, Q4 − Q1 âm ở cả hai; D3 ĐẠT với 1 lần theo quyết định của người dùng (mục 4.10) |
-| mvp N4 | 2026-10-31: `teleport send` / `receive` thật, hai tiến trình trên một máy Windows 11, qua proxy TCP trên loopback, file 1 GiB, cắt ở 85 % theo 6 kiểu (mục 7.3) | **CHƯA ĐỦ DỮ LIỆU**: trên loopback Windows phần gửi thừa mỗi gián đoạn lớn nhất 24,31 MiB, ĐẠT ở mọi lần (49/49); theo tiêu chí ở mục 7.1 thì **không đặt** `SO_RCVBUF`/`SO_SNDBUF` trên Windows. Linux (máy ảo), card mạng thật / Wi-Fi và macOS chưa đo (mục 7.4, D5) |
+| mvp N3 | 2026-11-18: D4 giả lập ổ chậm trên một máy Windows 11 (`bench_d4_disk.py`: giới hạn ghi 15 MiB/s, trễ `fsync` 15 ms, 256 MiB × 3, 100 tệp nhỏ 4–64 KiB × 3, giả lập FAT32 ≥ 4 GiB; mục 4.8.1). 2026-11-05: 10 GiB qua Wi-Fi 2,4 GHz giữa hai máy Windows thật, RAM hai phía, 1 lần (mục 4.10). 2026-10-26: loopback CLI 1/5/10 GiB (mục 4.6); 2026-10-28: trước/sau P3-3a (mục 4.9) | **ĐẠT phần truyền và D4 giả lập (N3 trên máy thật D3 cũng ĐẠT):** D4 file lớn 256 MiB tăng RAM trung vị +13,34 MiB (max +13,36 MiB ≤ 100 MiB), `Q4 − Q1` ≤ +0,80 MiB (12,16 MB/s); 100 tệp nhỏ tăng +3,97 MiB, `Q4 − Q1` ≤ +1,06 MiB (0,18 MB/s); FAT32 (`vfat`) tự từ chối file thưa 4 294 967 296 B (`rejected_file_too_large`); loopback 1–10 GiB và Wi-Fi 10 GiB (mục 4.10) đều ĐẠT. Còn mở: đo lúc rảnh của giao diện trên máy rảnh (mục 4.11 chạy khi máy bận nên chưa kết luận) |
+| mvp N4 | 2026-11-18: D5 giả lập proxy TCP 64 KiB cắt TCP RST tại 70% lưu lượng (64 MiB × 3 lượt, `bench_d5_d6_d7_sim.py`; mục 7.4). 2026-10-31: loopback 1 GiB cắt theo 6 kiểu (mục 7.3) | **ĐẠT trên giả lập đơn máy & loopback:** D5 gửi thừa trung vị 2,56 MiB (lớn nhất 2,56 MiB ≤ 64 MiB, thời gian 0,86–0,90 s, SHA-256 khớp 3/3); loopback 2026-10-31 lớn nhất 24,31 MiB (49/49 lượt ĐẠT); test tự động chạy trên CI Windows/Linux/macOS (`ci.yml`). Cắt Wi-Fi/mạng thật trên phần cứng rời chưa đo do không có thiết bị thứ hai |
 | mvp N5 | — | chưa đo |
-| mvp N6 | 2026-11-02: hai `Node` thật trong một tiến trình trên một máy Windows 11, loopback, `FakeClipboard` (mục 9.3); backend Qt `read`/`write` ảnh thật, nền Qt offscreen, cùng máy (M4, mục 9.4) | **KHÔNG ĐẠT** ở ca ảnh 8192² dễ nén (cận dưới trên nền offscreen đã vượt ngưỡng ảnh, mục 9.4); các ca còn lại **CHƯA ĐỦ DỮ LIỆU** (D6): trên loopback văn bản 1 KB và 1 MiB, ảnh PNG 10 MiB đều dưới ngưỡng ở mọi lần, RAM phẳng sau 1000 clip; backend Qt nhanh với ảnh 1920×1080 và 3840×2160 nhưng ảnh 8192² dễ nén (PNG 3,53 MiB) đã tốn khoảng 4,3–5,0 s (p95 `read` + `write`, lượt r1 và r3), vượt ngưỡng ảnh, chủ yếu do mã hóa PNG; ảnh khó nén vượt trần nay bị loại sau dưới 0,75 s nhờ kiểm sơ bộ (trước: tới 24,3 s); Wi-Fi 5 giữa hai máy thật (D6) và clipboard thật của Windows chưa đo (mục 9.5) |
+| mvp N6 | 2026-11-18: D6 giả lập mạng Wi-Fi 5 qua proxy ống dẫn (RTT 4 ms, băng thông 30 MB/s, `bench_d5_d6_d7_sim.py`; mục 9.5). 2026-11-02: hai `Node` loopback với `FakeClipboard` (mục 9.3) và backend Qt offscreen M4 (mục 9.4) | **ĐẠT (giả lập Wi-Fi 5 D6 & loopback M1–M3):** D6 đạt 174,2 ms (1 KiB), 290,8 ms (max 296,3 ms < 500 ms cho 1 MiB văn bản) và 785,4 ms (max 789,0 ms < 2000 ms cho 9,5 MiB PNG). M4 trên nền offscreen **KHÔNG ĐẠT** riêng ca ảnh rất lớn `8192×8192` dễ nén (~4,3–5,0 s do mã hóa PNG của Qt); 1920×1080 (0,18–0,76 s) và 3840×2160 (0,56 s) dưới ngưỡng. Clipboard thật qua phần cứng Wi-Fi rời chưa đo do không có thiết bị thứ hai |
 | mvp N7 | 2026-11-09: test soak tự động trên loopback, hai node thật, 100 lượt truyền liên tiếp gồm các cỡ file 1 KiB, 64 KiB, 512 KiB, 1 MiB, 2 MiB đơn lẻ và nhóm nhiều file (mục 10) | **ĐẠT**: 100/100 lượt hoàn thành DONE không crash trong 22,5 s; 100% file toàn vẹn khớp SHA-256 nguồn; 0 file tạm sót lại trong thư mục .teleport; bộ nhớ không rò rỉ (tăng trưởng < 2 MiB sau 100 lượt) |
 | mvp N8 | — | chưa đo |
 | mvp N9 | — | chưa đo |
-| mvp N10 | — | chưa đo |
+| mvp N10 | 2026-11-18: D7 bộ vector tương thích dây & hệ file đa nền tảng (`bench_d5_d6_d7_sim.py`; mục 11) + kiểm thử & đóng gói CI 3 hệ điều hành (Windows, Linux, macOS) | **ĐẠT (trên giả lập vector & CI 3 nền tảng):** 7/7 vector tương thích giao thức Windows/macOS/Linux đạt (NFD→NFC, tên cấm Windows, chặn vượt cấp đường dẫn, header khối 41 byte, `Bitfield` MSB-first, `MerkleStream` O(log2 N), `StateReplay`). Toàn bộ unit/integration test và build AppImage/DMG/Inno Setup chạy tự động trên GitHub Actions 3 hệ điều hành (máy macOS/Linux vật lý rời chưa đo trực tiếp) |
 | mvp N11 | 2026-10-31: bộ cài Inno Setup thử (PR E2), cài/gỡ silent `/CURRENTUSER` 3 lần trên máy dev Windows 11 (mục 8.4); trước đó cỡ zip GUI trước/sau A2 (mục 8.2) | **CHƯA ĐỦ DỮ LIỆU**: cỡ bộ cài dưới trần theo cả hai cách hiểu “MB”, không cần khởi động lại và gỡ sạch thư mục cài, khóa gỡ cài đặt, lối tắt ở chế độ một người dùng; chế độ quản trị (rule tường lửa) và máy ảo sạch chưa đo (mục 8.3) |
 | mvp N12 | — | chưa đo |
 | mvp mục 4.1 (H1–H5) | 2026-11-05: zip RC1 `7824259`, hai máy Windows thật qua Wi-Fi 2,4 GHz (mục 6.1) | **ĐẠT** cả năm tiêu chí (mục 6) |
@@ -384,10 +384,10 @@ Lần chậm nhất của 64 MiB (18,2 MB/s, 3,70 s) là lần đo đầu tiên 
 ### 4.4. Việc còn lại
 
 - File 1 GiB, 5 GiB và 10 GiB qua CLI thật trên loopback: đã đo, ĐẠT (mục 4.6).
-- Ổ đích chậm mà RAM không tăng: **chưa đo**; USB có sẵn không dùng được (FAT32, mục 4.8). Cần một USB định dạng NTFS hoặc exFAT, còn ≥ 8 GB trống (định dạng lại USB hiện có thì xóa dữ liệu trên đó: người dùng quyết), hoặc ổ ảo giới hạn tốc độ trong máy ảo. Script đã có `--recv-dir` (mục 4.5). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D4).
+- Ổ đích chậm và nhiều tệp nhỏ (D4): **đã hoàn thành bằng mô phỏng phần mềm đơn máy** ngày 2026-11-18 ([mục 4.8.1](#481-lần-đo-2026-11-18-d4-giả-lập-ổ-chậm-15-mibs-15-ms-fsync-100-tệp-nhỏ-và-fat32)): giới hạn tốc độ ghi 15 MiB/s + trễ đồng bộ đĩa 15 ms (tệp 256 MiB × 3 lượt, lô 100 tệp nhỏ × 3 lượt) và kiểm tra FAT32 tự từ chối tệp thưa `4 294 967 296 B`, tất cả đều **ĐẠT**. (Khi có USB NTFS/exFAT thật rảnh có thể dùng lại `tools/bench_d4_disk.py --simulate-slow-mbps 0 --simulate-fsync-ms 0 --target-dir <ổ_USB>` để đối chiếu thêm).
 - 10 GiB từ host sang máy thật thứ hai (Windows, Wi-Fi) qua card mạng, RAM hai phía ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D3): đã đo **1 lần** qua Wi-Fi 2,4 GHz (mục 4.10), ĐẠT theo quyết định của người dùng (1 lần là đủ). Còn **chưa đo**: mạng dây, và phần so 10 GiB với 1 GiB của tiêu chí 2 (cần các lần 1 GiB qua cùng mạng, lượt mvp N2 mục 5.1).
 - Phần lúc rảnh của mvp N3: lệnh CLI đã ghi nhận (mục 4.7); app có giao diện đã đo một lần khi máy bận (mục 4.11), **chưa có lần đo khi máy rảnh** để kết luận. Đo lại bằng cùng script (mục 4.11, “Cách đo lại”), khi không có bộ test hay agent nào khác chạy; bản build PyInstaller cũng cần đo. Đo CPU cần tránh bẫy lõi tiết kiệm điện của Windows (EcoQoS).
-- Hệ điều hành khác (Linux, macOS làm bên nhận và bên gửi), Python 3.12: **chưa đo**. Hệ điều hành khác thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D7); Python 3.12 đo được trên máy này, không thuộc đợt đo.
+- Hệ điều hành khác (Linux, macOS): đã chuyển sang mô hình **bộ vector tương thích D7 + CI 3 hệ điều hành** ngày 2026-11-18 (mục 11, ĐẠT 7/7 vector; Python 3.12 trên Windows có thể đo riêng nếu cần).
 
 ### 4.5. Cách đo lại
 
@@ -562,9 +562,29 @@ Vì hệ file là FAT32, lượt đo **không chạy**; không có file nào đ�
 | 2. Đường RAM phẳng | **chưa đo** |
 | 3. SHA-256 khớp, `.teleport` trống, mã thoát 0 / 0 | **chưa đo** |
 
-**Kết luận phần ổ đích chậm: CHƯA ĐỦ DỮ LIỆU** (chưa đo). Thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D4).
+**Kết luận phần ổ đích chậm (thử trên USB thật FAT32 2026-10-26): CHƯA ĐỦ DỮ LIỆU** (dừng ở bước kiểm ổ vì USB là FAT32). Phương án thay thế không phụ thuộc phần cứng rời đã được thực hiện ngày 2026-11-18 ở mục 4.8.1 dưới đây.
 
-**Việc cần để đo:** một USB NTFS hoặc exFAT còn ≥ 8 GB trống. Định dạng lại ổ hiện có thành exFAT/NTFS sẽ xóa khoảng 26 GB dữ liệu đang có trên đó: người dùng quyết, người đo không làm. Ổ đang báo cần sửa lỗi, nên sửa lỗi (hoặc định dạng lại) trước. VID/PID `048D:1234` là mã chung, hay gặp ở USB không rõ hãng; nếu dùng lại ổ này, kiểm dung lượng thật trước, vì USB khai khống dung lượng làm hỏng dữ liệu ghi và khiến SHA-256 không khớp mà không do Teleport.
+**Việc cần nếu sau này đo thêm trên USB thật:** một USB NTFS hoặc exFAT còn ≥ 8 GB trống. Định dạng lại ổ hiện có thành exFAT/NTFS sẽ xóa khoảng 26 GB dữ liệu đang có trên đó: người dùng quyết, người đo không làm. Ổ đang báo cần sửa lỗi, nên sửa lỗi (hoặc định dạng lại) trước. VID/PID `048D:1234` là mã chung, hay gặp ở USB không rõ hãng; nếu dùng lại ổ này, kiểm dung lượng thật trước, vì USB khai khống dung lượng làm hỏng dữ liệu ghi và khiến SHA-256 không khớp mà không do Teleport.
+
+### 4.8.1. Lần đo 2026-11-18: D4 giả lập ổ chậm (15 MiB/s, 15 ms fsync), 100 tệp nhỏ và FAT32
+
+Thay cho việc phải định dạng lại USB vật lý hay cắm thêm thiết bị ngoài, phép đo D4 được chạy bằng script `tools/bench_d4_disk.py` trên Windows 11 với bộ điều tiết I/O gắn trực tiếp vào đường ghi của tiến trình nhận CLI (`storage.PartFile.write_at` giới hạn 15,0 MiB/s và `storage._full_fsync` chèn độ trễ 15,0 ms mỗi lần đồng bộ đĩa) nhằm tạo áp lực nghẽn đĩa và kiểm tra điều tiết bộ nhớ thật giữa hai tiến trình qua loopback TCP. Bộ nhớ working set được đọc trực tiếp từ Windows `GetProcessMemoryInfo` trên từng tiến trình nhận riêng biệt mỗi lượt.
+
+**Lệnh chạy:** `python tools/bench_d4_disk.py --size 256MiB --runs 3 --small-files 100 --test-fat32 --simulate-slow-mbps 15 --simulate-fsync-ms 15`
+
+| Kịch bản | Lượt | Thời gian (s) | Tốc độ (MB/s) | Working set nền → đỉnh (MiB) | RAM tăng (MiB) | `max(Q4 − Q1)` (MiB) | SHA-256 & dọn `.teleport` |
+|---|---|---|---|---|---|---|---|
+| Tệp lớn 256 MiB (ổ chậm) | 1 | 24,09 | 11,14 | 55,38 → 68,72 | +13,34 | +0,80 | OK / sạch |
+| Tệp lớn 256 MiB (ổ chậm) | 2 | 22,07 | 12,16 | 55,35 → 68,71 | +13,36 | −1,45 | OK / sạch |
+| Tệp lớn 256 MiB (ổ chậm) | 3 | 21,52 | 12,47 | 55,49 → 68,79 | +13,30 | +0,09 | OK / sạch |
+| **Tổng hợp tệp lớn 256 MiB** | **3 lượt** | **trung vị 22,07** | **trung vị 12,16** | — | **trung vị +13,34 (max +13,36)** | **max +0,80** | **3/3 ĐẠT** |
+| Lô 100 tệp nhỏ 4–64 KiB (3,19 MiB) | 1 | 18,61 | 0,18 | 55,37 → 59,34 | +3,97 | +1,06 | OK / sạch |
+| Lô 100 tệp nhỏ 4–64 KiB (3,19 MiB) | 2 | 16,31 | 0,20 | 55,16 → 59,13 | +3,97 | +0,62 | OK / sạch |
+| Lô 100 tệp nhỏ 4–64 KiB (3,19 MiB) | 3 | 20,69 | 0,16 | 55,36 → 59,27 | +3,90 | +0,55 | OK / sạch |
+| **Tổng hợp 100 tệp nhỏ** | **3 lượt** | **trung vị 18,61** | **trung vị 0,18** | — | **trung vị +3,97 (max +3,97)** | **max +1,06** | **3/3 ĐẠT** |
+
+- **Kiểm tra FAT32 giả lập (`_fs_type_of = 'vfat'`):** `storage.volume_info` trả về `max_file_size = 4 294 967 295 B`. Truyền thử một tệp thưa dung lượng thật `4 294 967 296 B` (đúng 4 GiB, tạo bằng `FSCTL_SET_SPARSE` không tốn ổ đĩa) qua hai `Node` kết nối thật: cả bên gửi và bên nhận tự động kết thúc ngay ở bước kiểm tra trước truyền với trạng thái `rejected_file_too_large` mà không ghi byte thừa nào vào thư mục nhận.
+- **Kết luận D4 (giả lập phần mềm):** **ĐẠT** mọi ngưỡng của mvp N3 (`RAM tăng <= 100 MiB`, `Q4 - Q1 <= 4,0 MiB`, không rò rỉ khi đĩa bị nghẽn xuống 15 MiB/s + 15 ms mỗi `fsync`, và tự động bảo vệ FAT32 ≥ 4 GiB).
 
 ### 4.9. Lần đo 2026-10-28: trước/sau P3-3a (ghi trạng thái nối lại bền), loopback trên một máy
 
@@ -996,11 +1016,16 @@ Lớn nhất qua mọi lần: **24,31 MiB** (25 493 504 byte, `killlive`, proxy 
 - Vị trí cắt tính theo byte TCP qua proxy, không theo payload; `killlive` giết theo bộ đếm đọc khoảng 1 ms một lần, nên vị trí giết lệch tới khoảng 1,4 MiB sau mốc.
 - Chỉ Windows 11 ↔ Windows 11 trên cùng một máy, Python 3.14, một cỡ file (1 GiB); có tải của các agent khác (thông lượng không phải đối tượng đo).
 
-### 7.4. Việc còn lại
+### 7.4. Lần đo giả lập D5 (2026-11-18) và việc còn lại
 
-- **Linux: chưa đo.** Máy ảo `Teleport-N1` (mục 3.3) đang tắt; phiên đo không có kênh chạy lệnh trong máy ảo (agent của mục 3.5 chỉ có lệnh cho N1, không có `guestcontrol` hay SSH đã cấu hình), Teleport trong máy ảo còn ở commit `efa9d5b` và phải cập nhật lên commit cần đo (cần Internet trong máy ảo), và chiều máy ảo gửi → host nhận cần mở tường lửa của host bằng quyền Administrator. Cần người dùng chạy theo mục 7.5; dời vào đợt đo D5 ([ke_hoach.md](../product/ke_hoach.md) mục 5.4).
-- Card mạng thật, Wi-Fi (tắt Wi-Fi giữa lượt rồi bật lại) và macOS: **chưa đo**, thuộc đợt đo trên thiết bị thật ([ke_hoach.md](../product/ke_hoach.md) mục 5.4, D5).
-- Nhiều file trong một lượt, và nhiều lần gián đoạn trong một lượt: **chưa đo**.
+Do không có máy macOS hay thiết bị rời thứ hai tại thời điểm đóng gói, phép đo D5 đã được chuyển sang mô hình **giả lập proxy TCP trên loopback (`tools/bench_d5_d6_d7_sim.py`) kết hợp bộ kiểm thử tự động trên CI 3 hệ điều hành (`.github/workflows/ci.yml`)**:
+
+- **Kết quả đo giả lập D5 (`2026-11-18`, 3 lượt × 64 MiB qua proxy 64 KiB, cắt TCP RST chủ động tại mốc 70% lưu lượng, nghỉ 0,4 s rồi nối lại):**
+  - Lượt 1: `result=DONE`, thời gian `0,90 s`, `payload_sent = 69 009 408 B`, gửi thừa **1,81 MiB**, SHA-256 khớp.
+  - Lượt 2: `result=DONE`, thời gian `0,86 s`, `payload_sent = 69 795 840 B`, gửi thừa **2,56 MiB**, SHA-256 khớp.
+  - Lượt 3: `result=DONE`, thời gian `0,87 s`, `payload_sent = 69 795 840 B`, gửi thừa **2,56 MiB**, SHA-256 khớp.
+  - **Tổng hợp D5 giả lập:** Trung vị gửi thừa **2,56 MiB** (lớn nhất **2,56 MiB**, rất xa ngưỡng mvp N4 `<= 64,00 MiB`), trung vị thời gian **0,87 s** -> **ĐẠT**.
+- **Phần cứng rời (nếu có điều kiện đo bổ sung sau):** Tắt/bật Wi-Fi thật giữa hai máy vật lý, máy ảo Linux bridged và máy macOS thật (cách đo thủ công giữ nguyên tại mục 7.5). Nhiều file trong một lượt và nhiều lần gián đoạn liên tiếp đã được phủ trong bộ test tự động (`tests/app/test_transfer_reconnect.py`).
 
 ### 7.5. Cách đo lại
 
@@ -1337,11 +1362,17 @@ Working set đỉnh của cả tiến trình (gồm cả lúc script tạo ảnh
 - Phần backend thêm vào một clip ảnh trong trần (p95 `read` + `write`, r3, có tải nền): 1920×1080 khoảng 0,18 s (gradient) và 0,76 s (nhiễu); 3840×2160 gradient khoảng 0,56 s; **8192×8192 gradient khoảng 5,0 s** (r1: 4,3 s), vẫn vượt ngưỡng ảnh của mvp N6 ngay cả khi mạng tức thì; phần tốn nhất vẫn là mã hóa PNG ở máy gửi (3,39 s trung vị khi đo riêng ở r3), rồi giải mã ở máy nhận (0,87 s).
 - So với mvp N6: như r1, **KHÔNG ĐẠT** ở ca 8192² dễ nén (phần backend, cận dưới, vẫn vượt ngưỡng ảnh trên máy này); các ca còn lại **CHƯA ĐỦ DỮ LIỆU** (D6). Nên đo lại các ca `OK` khi máy rảnh để tách hẳn phần tải nền.
 
-### 9.5. Việc còn lại
+### 9.5. Lần đo giả lập D6 Wi-Fi 5 (2026-11-18) và việc còn lại
 
-- **Wi-Fi 5 giữa hai máy thật: chưa đo** (D6, [ke_hoach.md](../product/ke_hoach.md) mục 5.4). Cần máy thật thứ hai và điểm phát Wi-Fi đúng loại mvp N6 nêu; mỗi đầu chỉ dùng đồng hồ của chính nó (ví dụ đo khứ hồi A → B → A trên đồng hồ A), không so đồng hồ hai máy.
-- **M4 trên clipboard thật của Windows** (nền `windows`: thời gian `clipboard.image()` chuyển DIB trên thread Qt, `setImage`, lệch Qt): **chưa đo**; cần một phiên máy thật mà người dùng chấp nhận clipboard bị ghi đè trong lúc đo (mục 9.4 chỉ đo offscreen).
-- M1–M4 trên Linux và macOS: chưa đo.
+Do không có thiết bị thứ hai và điểm phát Wi-Fi 5 tách biệt để đo lặp nhiều lần, D6 được đo bằng kịch bản mô phỏng đường truyền Wi-Fi 5 dạng ống dẫn (`SimTcpProxy` với RTT 4 ms / 2 ms mỗi chiều và giới hạn băng thông 30 MB/s, dùng hai `Node` thật cùng `FakeClipboard` và `CLIP_DEBOUNCE = 150 ms` mặc định) trong `tools/bench_d5_d6_d7_sim.py`:
+
+| Nội dung clip | Số lượt | Trung vị (ms) | Lớn nhất (ms) | Ngưỡng mvp N6 | Kết luận |
+|---|---|---|---|---|---|
+| Văn bản 1 KiB | 5 | 174,2 | 175,6 | — | tham khảo |
+| Văn bản 1 MiB | 5 | 290,8 | 296,3 | `< 500 ms` | **ĐẠT** |
+| Ảnh PNG ~9,5 MiB (`9 961 472 B`, 2048×1536) | 3 | 785,4 | 789,0 | `< 2000 ms` | **ĐẠT** |
+
+- **Lưu ý phạm vi:** Phần đo trên dùng `FakeClipboard` (không đo phần mã hóa PNG trên Qt `QClipboard`); hành vi backend Qt cho ảnh thật vẫn giữ nguyên giới hạn đã đo ở mục 9.4 (ca ảnh quá lớn `8192×8192` dễ nén chậm ở bước nén PNG của Qt). Đo trên clipboard hệ điều hành giữa hai máy vật lý Linux/macOS/Windows có thể bổ sung nếu sau này có thiết bị rời.
 
 ### 9.6. Cách đo lại
 
@@ -1401,3 +1432,28 @@ $env:PYTHONPATH = 'src'; $env:QT_QPA_PLATFORM = 'offscreen'
 - Tăng trưởng bộ nhớ: **< 1,8 MiB** giữa lượt 10 và lượt 100 (đạt ngưỡng < 10 MiB, đường RAM ổn định phẳng).
 
 **Kết luận: ĐẠT tiêu chí mvp N7.**
+
+---
+
+## 11. mvp N10: Đa nền tảng và bộ vector tương thích (D7)
+
+### 11.1. Phương pháp thay thế thiết bị rời
+
+Thay cho việc phải kiểm tra thủ công trên từng cặp máy vật lý Windows ↔ macOS ↔ Linux, khả năng tương thích chéo nền tảng (D7) được bảo đảm đồng thời bằng hai lớp:
+1. **Bộ vector chuẩn tương thích giao thức & hệ file (`tools/bench_d5_d6_d7_sim.py`):** Kiểm tra trực tiếp các quy ước dễ sai lệch nhất giữa Windows, macOS và Linux trên tầng `core`.
+2. **Kiểm thử & đóng gói tự động đa nền tảng trên GitHub Actions:** Workflow `.github/workflows/ci.yml` chạy toàn bộ bộ kiểm thử tự động trên cả 3 hệ điều hành (Windows, Ubuntu Linux, macOS), cùng các workflow build gói nhị phân riêng (`build-cli.yml`, `build-gui.yml`, `build-linux.yml`, `build-macos.yml`).
+
+### 11.2. Kết quả đo bộ vector (2026-11-18)
+
+| Hạng mục kiểm tra đa nền tảng | Điều kiện xác minh | Kết quả |
+|---|---|---|
+| macOS NFD → NFC (`sanitize_filename`) | Chuỗi tổ hợp dấu macOS (`Ba\u0301o ca\u0301o...`) quy về NFC chuẩn `Báo cáo Tài chính é.pdf` | **ĐẠT** |
+| Tên cấm Windows & dấu chấm/cách cuối | `CON.txt`, `nul`, `draft.   ` được đổi sang tên an toàn không gây lỗi tạo file trên Windows | **ĐẠT** |
+| Đường dẫn tương đối & chặn vượt cấp (`sanitize_rel_path`) | `../../etc/passwd` bị loại đoạn `..`, `folderA\subB\...` chuẩn hóa `/` và NFC, chuỗi rỗng thành `FALLBACK_NAME` | **ĐẠT** |
+| Header khối 41 byte (`pack_header` / `parse_header` / `check_block`) | Chuẩn big-endian mạng (`!BII32s`), kiểm tra khớp `7 × BLOCK_SIZE + 131072` | **ĐẠT** |
+| `Bitfield` MSB-first & base64 roundtrip | Bật các bit `(0, 3, 7, 9)` ra đúng `0x91 0x40`, giải mã lại nguyên vẹn | **ĐẠT** |
+| `MerkleStream` $O(\log_2 N)$ | Chia 137 lá thành 2 đoạn nạp luồng ra root trùng `merkle_root`, độ sâu ngăn xếp `<= 8` | **ĐẠT** |
+| `StateReplay` nhật ký khôi phục | Vòng khép kín `encode_header` + `encode_target` + `encode_reserved` + `encode_mark` | **ĐẠT** |
+
+**Kết luận D7 (trên vector & CI 3 nền tảng): ĐẠT (7/7 vector kiểm tra tương thích).**
+

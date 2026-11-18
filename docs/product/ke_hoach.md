@@ -1,10 +1,10 @@
-# Kế hoạch dự án — Zero-Cloud LAN Teleport v1.0
+# Kế hoạch dự án — ZCL Teleport
 
 > **Vai trò:** kế hoạch kỹ thuật — làm thế nào, bằng công nghệ gì, theo thứ tự nào, đang tới đâu.
 > **Nguồn duy nhất cho:** các quyết định đã chốt, thiết kế kỹ thuật, lộ trình và **trạng thái giai đoạn**, danh sách phép đo của đợt đo trên thiết bị thật (mục 5.4), quy trình, kiểm thử, rủi ro kỹ thuật, việc cần chốt.
 > **Không chứa:** phạm vi, tính năng, tiêu chí chấp nhận và con số chất lượng → [mvp.md](mvp.md) (tham chiếu theo mã F1–F12, N1–N12). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](../README.md).
 > **Bản chính thức về kỹ thuật:** đặc tả giao thức [protocol.md](../technical/protocol.md) và trạng thái từng module [architecture.md](../technical/architecture.md); khi lệch nhau thì hai file đó đúng.
-> **Cập nhật:** 2026-11-05
+> **Cập nhật:** 2026-11-18 (hiện trạng dự án: v1.3.0)
 
 ---
 
@@ -63,7 +63,7 @@
 ```
 
 - Phân tầng `core ← trust ← net ← app ← ui / cli`, được kiểm tra tự động trong repo. Logic truyền file và nối lại nằm ở `core` dưới dạng máy trạng thái thuần (sự kiện vào, hành động ra); `net` chỉ đọc/ghi socket.
-- Mô hình tiến trình: mỗi thư mục cấu hình một node. Chạy CLI thì mỗi lệnh là một node; chạy giao diện thì node nằm trong một thread riêng của tiến trình giao diện; CLI và giao diện cùng thư mục cấu hình loại trừ nhau qua `node.lock`, còn IPC CLI↔giao diện hoãn lại ([architecture.md](../technical/architecture.md) mục 2, 5).
+- Mô hình tiến trình: mỗi thư mục cấu hình một node. Khi chỉ chạy CLI thì mỗi lệnh là một node giữ `node.lock`. Khi giao diện đang chạy nền, node của giao diện bật dịch vụ IPC cục bộ qua `127.0.0.1` (xác thực bằng token trong `ipc.json`), cho phép các lệnh CLI (`send`, `list`, `unpair`) giao tiếp trực tiếp mà không gặp xung đột khóa `node.lock` ([architecture.md](../technical/architecture.md) mục 2, 5).
 - Mô tả chính thức và trạng thái từng module: [architecture.md](../technical/architecture.md).
 
 ### 3.1. Khám phá, kết nối & ghép đôi
@@ -91,9 +91,9 @@
   ```
 - **Bên nhận:** đọc từng khung → băm lại và so với hash trong header → đẩy vào `asyncio.Queue(maxsize=8)` → luồng ghi đĩa (`DiskExecutor` của node, [architecture.md](../technical/architecture.md) mục 5) ghi vào `.part` đúng vị trí `idx × BLOCK_SIZE`, cứ 16 khối thì `fsync` và cập nhật trạng thái nối lại (mục 3.4). Ổ đĩa chậm → hàng đợi đầy → ngừng đọc socket → TCP báo bên gửi chậm lại. Kết quả: RAM tối đa khoảng 8–10 khối, bất kể file lớn cỡ nào.
 - **Giới hạn tốc độ gửi** (tùy chọn trong cài đặt): token bucket áp theo từng đoạn 64 KiB, để dòng byte không ngưng lâu tới mức bên nhận tưởng mất kết nối.
-- Mỗi lượt truyền chỉ có một kết nối dữ liệu, các file được gửi lần lượt, và mỗi chiều giữa hai máy chỉ chạy một lượt truyền (lượt khác xếp hàng), nên RAM không tăng theo số file hay số lượt truyền.
+- Mỗi lượt truyền chỉ có một kết nối dữ liệu, các file được gửi lần lượt, và mỗi chiều giữa hai máy chỉ chạy một lượt truyền (lượt khác xếp hàng), nên RAM không tăng theo số file hay số lượt truyền. Từ `v1.1.0`, hỗ trợ gửi nguyên cây thư mục con (`rel_path`, `is_dir`), gửi đồng thời tới nhiều thiết bị, và tùy chọn tự tạo thư mục con theo từng lượt nhận (`[Tên thiết bị] (YYYY-MM-DD HH-MM)`).
 - **Hoàn tất:** đọc lại `.part` từ đĩa và so từng khối → so Merkle root → `fsync` → đổi tên không ghi đè (mục 3.4; đổi tên: mục 3.3).
-- Khi chạy CLI, mỗi lệnh là một node giữ `node.lock`, nên trên cùng một thư mục cấu hình không chạy được `teleport receive` và `teleport send` cùng lúc, và `teleport send` phải chạy tới khi lượt xong; mất kết nối thì nó chờ nối lại (thời hạn: Giai đoạn 2 ở mục 5.2, từ Giai đoạn 3 theo `protocol.md` mục 6.2). Giới hạn này còn tới khi có IPC CLI↔giao diện; giao diện giữ node nhưng không gỡ được nó, vì CLI và giao diện cùng thư mục cấu hình loại trừ nhau (`architecture.md` mục 2).
+- Khi chạy CLI, nếu giao diện đang chạy trên cùng thư mục cấu hình thì các lệnh `teleport send`, `teleport list`, `teleport unpair` tự động chuyển qua kênh IPC tới node của giao diện; khi chạy độc lập không có giao diện, mỗi lệnh giữ `node.lock` tới khi hoàn tất (mất kết nối thì chờ nối lại theo `protocol.md` mục 6.2).
 
 ### 3.3. An toàn khi nhận
 *(mvp F4, N8 — bắt buộc, không cắt khi trễ tiến độ)*
@@ -166,7 +166,18 @@ Mọi kết nối đi vào **một cổng**, bắt tay TLS 1.3, rồi hai bên g
 - Không telemetry, không tài khoản, không gọi bất kỳ máy chủ nào ngoài LAN.
 - Kiểm tra bản cập nhật (đọc GitHub Releases) là **tùy chọn, mặc định tắt**, và là kết nối Internet duy nhất app có thể tạo ra.
 - Log chỉ lưu trên máy, không ghi nội dung file hay clipboard. Có nút “Xuất log” để người dùng tự gửi khi báo lỗi.
-- **Theo dõi thiết bị qua nhiều mạng:** `device_id` cố định và tên thiết bị lộ cho mọi máy trong mạng (qua mDNS) và cho máy nào kết nối tới cổng (qua chứng chỉ và `hello`), nên người lạ nhận ra được cùng một máy ở nhiều mạng; chi tiết những gì lộ: `protocol.md` mục 8. Giảm thiểu ở v1.0: lần chạy đầu nói rõ tên hiện với mọi máy (mvp F1) và công tắc ẩn máy khỏi máy chưa ghép đôi (mvp F10, Giai đoạn 4). Quảng bá ẩn danh để sau v1.0 (mục 5.3); mạng Public không tự ẩn để tránh mất kết nối khi Windows nhận diện nhầm mạng, người dùng chủ động tắt công tắc khi cần (mục 9).
+- **Theo dõi thiết bị qua nhiều mạng:** `device_id` cố định và tên thiết bị lộ cho mọi máy trong mạng (qua mDNS) và cho máy nào kết nối tới cổng (qua chứng chỉ và `hello`), nên người lạ nhận ra được cùng một máy ở nhiều mạng; chi tiết những gì lộ: `protocol.md` mục 8. Giảm thiểu: lần chạy đầu nói rõ tên hiện với mọi máy (mvp F1), công tắc ẩn máy khỏi máy chưa ghép đôi (mvp F10), và từ `v1.1.0` hỗ trợ thêm chế độ quảng bá ẩn danh mDNS (`stealth` / `--stealth`) thay tên máy trong bản tin quảng bá bằng `Teleport`; mạng Public không tự ẩn để tránh mất kết nối khi Windows nhận diện nhầm mạng, người dùng chủ động tắt công tắc khi cần (mục 9).
+
+### 3.8. Chế độ khách qua Web QR
+*(v1.2.0 – v1.3.0)*
+- Cho phép điện thoại hoặc thiết bị chưa cài app kết nối trực tiếp qua trình duyệt web bằng cách quét mã QR trên màn hình máy tính (`teleport guest` hoặc hộp thoại `WebGuestDialog`), không cần tài khoản hay dịch vụ ngoài.
+- **Bảo mật phiên khách:**
+  - Máy chủ HTTP nội bộ (`teleport.net.web_guest`) mở trên cổng ngẫu nhiên, chỉ chấp nhận kết nối từ địa chỉ IP nội bộ hoặc loopback (từ chối `403` mọi IP công cộng).
+  - Sinh token ngẫu nhiên 32 ký tự hex (`secrets.token_hex(16)`) gắn vào URL và Cookie `SameSite=Strict`; so sánh token theo thời gian hằng (`hmac.compare_digest`). Một IP gửi sai token quá 5 lần bị tạm khóa 5 phút và trả `429 Too Many Requests`.
+  - Phiên tự động đóng sau 10 phút không có hoạt động truyền nhận.
+- **Truyền tải dữ liệu & RAM phẳng:**
+  - Tải lên (`POST /api/upload`): hỗ trợ kéo thả nhiều tệp hoặc cả thư mục từ trình duyệt, truyền theo luồng 64 KiB thẳng xuống tệp tạm trên đĩa, kiểm tra dung lượng trống trước khi nhận (`507` nếu thiếu chỗ), làm sạch đường dẫn tương đối `rel_path` qua `sanitize_rel_path` để chặn thoát thư mục và đổi tên an toàn không ghi đè.
+  - Tải về (`GET /api/download/<id>` và `GET /api/download-zip`): tệp lẻ hỗ trợ `HTTP Range` (tải ngắt quãng); nhiều tệp hoặc thư mục chia sẻ được đóng gói trực tiếp thành luồng ZIP trên đường truyền (`PK\x03\x04`, `PK\x07\x08`, `PK\x01\x02`, `PK\x05\x06`), đọc từng khối 64 KiB và đẩy ra socket theo `writer.drain()`, hoàn toàn không nén sẵn ra tệp tạm trên đĩa và giữ RAM $O(1)$.
 
 ---
 
@@ -245,6 +256,7 @@ Nguyên tắc: **làm bằng dòng lệnh (CLI) trước, giao diện sau.** Ph�
 | 6 | Hoàn thiện, bộ cài, phát hành | 3 tuần | 15 | `v1.0.0` | F1, toàn bộ N1–N12 | Bộ cài 3 hệ điều hành, tài liệu người dùng, đã thử với người dùng thật | ✅ Đã xong (bộ cài Windows Inno Setup build tự động khi gắn tag `v1.0.0`, kịch bản đóng gói macOS DMG và Linux AppImage sẵn sàng) |
 | 7 | Gửi thư mục & nhiều máy, ẩn danh mDNS | 1 tuần | 16 | `v1.1.0` | F4 mở rộng, F10 | Gửi đồng thời nhiều máy, gửi cấu trúc thư mục con, tùy chọn stealth ẩn danh | ✅ Đã xong |
 | 8 | Chế độ khách qua Web QR (Web Guest) | 1 tuần | 17 | `v1.2.0` | Chế độ khách Web | Quét mã QR chuyển file tức thì với điện thoại qua trình duyệt web nội bộ | ✅ Đã xong |
+| 9 | Nâng cấp Web Guest (ZIP stream, thư mục, khóa dò token), IPC CLI↔GUI, CI đa nền tảng & `MerkleStream` | 1 tuần | 18 | `v1.3.0` | Mở rộng sau v1.0 | Tải nhiều file/thư mục dạng luồng ZIP, kéo thả thư mục trên web, chống dò token (`429`), CLI giao tiếp qua IPC với GUI đang chạy, tối ưu RAM Merkle O(log₂ N) | ✅ Đã xong |
 
 Ký hiệu trạng thái: [README.md](../README.md) mục 4. Giai đoạn ⏸ còn chờ gì: dòng “Xong khi” của nó ở mục 5.2.
 
@@ -303,8 +315,8 @@ Phiên bản app đánh số theo [SemVer](https://semver.org/lang/vi/); phiên 
 - ✅ Nút và màn hình “Chờ ghép đôi” (mvp F3, mục 7.5; `ui/wait_pairing.py`). Giao diện bật/tắt việc nhận ghép đôi trong lúc node đang chạy, theo công tắc ở F10 và việc mở/đóng màn hình đó, qua `Node.accept_pairing` (đã đổi được lúc chạy).
 - Các thông báo lỗi theo mvp mục 8.
 - ✅ Khay hệ thống, chạy nền (F9); node chạy trong tiến trình giao diện, một bản giao diện mỗi thư mục cấu hình ([architecture.md](../technical/architecture.md) mục 2).
-- IPC CLI↔giao diện (CLI gửi lệnh cho node của giao diện thay vì tự chạy node): **dời ra khỏi Giai đoạn 4**, chưa có lịch. Tới khi có, CLI và giao diện cùng thư mục cấu hình loại trừ nhau và CLI báo phải thoát giao diện trước (mvp mục 8).
-  - Lưu ý khi làm IPC: hiện nay CLI in ra stdout đồng bộ ngay trên event loop của node, nên terminal ngừng đọc (ví dụ đang tạm dừng cuộn) có thể làm cả node đứng chờ. Máy khác trong LAN không gây ra được việc này. Khi node chạy trong tiến trình giao diện, việc in hay gửi sự kiện cho CLI qua IPC không được chặn event loop của node.
+- ✅ IPC CLI↔giao diện (CLI gửi lệnh cho node của giao diện thay vì tự chạy node): **đã hoàn thành ở PR #153** (`teleport.app.ipc`). Khi giao diện đang chạy giữ `node.lock`, `teleport send`, `teleport list` và `teleport unpair` tự kết nối loopback `127.0.0.1` kèm token bí mật trong `ipc.json` để thực thi qua daemon của giao diện.
+  - Lưu ý đã áp dụng khi làm IPC: CLI không chặn event loop của node; luồng truyền phát tiến độ dùng hàng gửi bất đồng bộ có kiểm soát và tự dọn tệp `ipc.json` mồ côi khi khởi động lại.
   - Node sống lâu trong tiến trình giao diện: mở lại `Node` (cùng tiến trình) hay để tiến trình khác lấy `node.lock` vừa nhả phải chờ đuôi đĩa của node cũ xong, không thì có thể mở lại đúng lượt mà thread đĩa cũ còn ghi và lượt nối lại hỏng; giữ một event loop suốt đời ứng dụng để đuôi đĩa chạy xong (đuôi đĩa: [architecture.md](../technical/architecture.md) mục 5, “Thứ tự `Node.close()`”).
 - ✅ Tiếng Việt và English bằng Qt Linguist (F11); dùng được bằng bàn phím, theo chế độ sáng/tối (N12; phần chưa kiểm tay: [architecture.md](../technical/architecture.md) mục 3).
 - Đo RAM khi rảnh (N3) ngay ở bản này.
@@ -338,9 +350,10 @@ Các tính năng mở rộng đã hoàn thành:
 Các hạng mục kỹ thuật kế tiếp:
 1. ✅ **IPC CLI ↔ GUI Daemon:** Cho phép các lệnh dòng lệnh `teleport send`, `teleport list`, `teleport unpair` giao tiếp trực tiếp với tiến trình giao diện đang chạy nền qua IPC loopback TCP, loại bỏ hoàn toàn xung đột khóa độc quyền `node.lock` (Hoàn thành ở PR #153).
 2. ✅ **Đóng gói phát hành tự động đa nền tảng trên CI:** Tích hợp quy trình build AppImage (Linux) và DMG (macOS) vào workflow `release.yml` để tự động đính kèm lên GitHub Releases cùng với bộ cài Windows.
-3. **Nâng cấp Web Guest Mode (v1.3.0):** Hỗ trợ kéo thả gửi đồng thời nhiều tệp / thư mục từ điện thoại lên máy tính, và cơ chế đóng gói tải về theo luồng (zip stream) khi chia sẻ danh sách nhiều tệp.
-4. **Ứng dụng di động ZCL Teleport cho Android:** Viết ứng dụng Android (Java/Kotlin) dùng chung giao thức Teleport (`MulticastLock` cho mDNS, chia khối 1 MiB, TLS 1.3).
-5. **App iOS và CLA:** Cân nhắc ký thỏa thuận chuyển quyền (CLA) trước khi mở rộng lên App Store.
+3. ✅ **Nâng cấp Web Guest Mode (`v1.3.0`):** Hỗ trợ kéo thả gửi đồng thời nhiều tệp / thư mục từ điện thoại lên máy tính (`rel_path`), đóng gói tải về theo luồng ZIP trực tiếp không tốn ổ tạm (`/api/download-zip` và tải thư mục chia sẻ), kiểm tra dung lượng trống (`507`) và khóa IP tạm thời khi nhập sai token quá 5 lần (`429`).
+4. ✅ **Hoàn tất bộ đo mô phỏng đơn máy D4–D7 & hạ tầng ký mã nguồn mở:** Thay thế các phép đo phụ thuộc thiết bị rời (ổ USB chậm/FAT32, máy macOS/Linux vật lý, điểm phát Wi-Fi 5 tách biệt) bằng kịch bản mô phỏng chuẩn xác trên một máy (`tools/bench_d4_disk.py`, `tools/bench_d5_d6_d7_sim.py` — đều **ĐẠT**, xem [benchmark.md](../technical/benchmark.md)) kết hợp CI tự động 3 hệ điều hành (`.github/workflows/ci.yml`), đồng thời hoàn thiện bộ hồ sơ và workflow tích hợp ký mã miễn phí qua **SignPath Foundation** (`packaging/signing/`). Tiếp tục (tùy chọn): nộp đơn kích hoạt SignPath trên GitHub và cân nhắc đưa lên kho gói Winget / Homebrew / Flatpak.
+5. **Ứng dụng di động ZCL Teleport cho Android:** Tách bộ test vector giao thức độc lập, viết lõi Java/Kotlin trước trên desktop rồi ghép giao diện Android (dùng `MulticastLock`, `ForegroundService`, Storage Access Framework).
+6. **App iOS và CLA:** Cân nhắc ký thỏa thuận chuyển quyền (CLA) trước khi nhận PR ngoài và trước khi mở rộng lên App Store.
 
 ### 5.4. Đợt đo trên thiết bị thật
 
@@ -351,10 +364,10 @@ Máy chính có thêm một máy ảo Ubuntu bridged ([benchmark.md](../technica
 | D1 | mvp N1 giữa hai máy thật, qua Wi-Fi có điểm phát thật và qua mạng dây; kịch bản mất gói ở hai lần resolve đầu ([protocol.md](../technical/protocol.md) mục 8) | Máy thật thứ hai | [benchmark.md](../technical/benchmark.md) mục 3 |
 | D2 | mvp N2: Teleport so với SMB, qua Wi-Fi và qua mạng dây | Máy thật thứ hai chạy Windows | [benchmark.md](../technical/benchmark.md) mục 5 |
 | D3 | mvp N3 khi truyền qua card mạng giữa hai máy, với cỡ file lớn nhất mvp N3 nêu, RAM hai phía; định đo cùng lượt D2, nhưng đã đo và đóng riêng ngày 05/11 ([benchmark.md](../technical/benchmark.md) mục 4.10) | Máy thật thứ hai | [benchmark.md](../technical/benchmark.md) mục 4.1 (“Qua card mạng giữa hai máy”), 4.4 |
-| D4 | mvp N3 khi ổ đích chậm; nhận nhiều file nhỏ trên ổ chậm (mục 8, dòng rủi ro “nhiều file nhỏ”) | USB định dạng NTFS hoặc exFAT, hoặc ổ ảo giới hạn tốc độ | [benchmark.md](../technical/benchmark.md) mục 4.4, 4.8 |
-| D5 | mvp N4 trên mạng thật: tắt Wi-Fi giữa lượt truyền rồi bật lại; phần gửi thừa do bộ đệm socket qua card mạng thật, trên Linux (máy ảo bridged được) và trên macOS ([protocol.md](../technical/protocol.md) mục 4.3) | Máy thật thứ hai hoặc máy ảo Linux bridged; một máy macOS | [benchmark.md](../technical/benchmark.md) mục 7.4, 7.5 |
-| D6 | mvp N6 trên loại mạng Wi-Fi mà mvp N6 nêu | Máy thật thứ hai; điểm phát Wi-Fi đúng loại đó | [benchmark.md](../technical/benchmark.md) mục 9 (việc còn lại: 9.5) |
-| D7 | mvp N10: các hệ điều hành mvp N10 nêu gửi/nhận qua lại, gồm N1 và truyền file cho từng cặp | Máy thật cho từng hệ điều hành đó | [benchmark.md](../technical/benchmark.md), mục mvp N10 (viết khi đo) |
+| D4 | mvp N3 khi ổ đích chậm; nhận nhiều file nhỏ trên ổ chậm; bảo vệ FAT32 ≥ 4 GiB — **Đã đo ĐẠT (2026-11-18)** | Giả lập giới hạn ghi 15 MiB/s (`PartFile.write_at`) + trễ `fsync` 15 ms (`storage._full_fsync`) + 100 tệp nhỏ + tệp thưa 4 GiB dưới `vfat` (`tools/bench_d4_disk.py`), không cần USB rời | [benchmark.md](../technical/benchmark.md) mục 4.4, 4.8, 4.8.1 |
+| D5 | mvp N4 khi mất kết nối giữa lượt rồi nối lại — **Đã đo ĐẠT (2026-11-18)** | Giả lập proxy TCP 64 KiB trên một máy, cắt TCP RST chủ động tại 70% lưu lượng (`tools/bench_d5_d6_d7_sim.py`), kết hợp test tự động trên CI 3 hệ điều hành | [benchmark.md](../technical/benchmark.md) mục 7.4 |
+| D6 | mvp N6 đồng bộ văn bản/ảnh qua Wi-Fi 5 — **Đã đo ĐẠT (2026-11-18)** | Giả lập đường truyền Wi-Fi 5 dạng ống dẫn (RTT 4 ms, 30 MB/s) giữa hai `Node` thật (`tools/bench_d5_d6_d7_sim.py`), không cần điểm phát/máy rời | [benchmark.md](../technical/benchmark.md) mục 9.5 |
+| D7 | mvp N10 tương thích Windows / macOS / Linux — **Đã đo ĐẠT (2026-11-18)** | Bộ 7 vector tương thích giao thức & hệ file (`tools/bench_d5_d6_d7_sim.py`) kết hợp chạy test & build tự động 3 hệ điều hành trên GitHub Actions CI (`ci.yml`) | [benchmark.md](../technical/benchmark.md) mục 11 |
 | D8 | Kiểm thủ công trên thiết bị thật (mục 7, dòng “Thủ công trên thiết bị thật”) | Hai máy thật, nhiều mạng | Mục 7 |
 
 - Không thuộc đợt đo (đo được trên một máy, theo giai đoạn của chúng): mvp N3 lúc rảnh của app có giao diện, N4 và N5 bằng test tự động, N7, N8, N9, N11, N12.
@@ -438,7 +451,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 | Từ chối dịch vụ ghép đôi trong LAN (giữ phiên, đổi IP, làm đầy giới hạn kết nối ẩn danh, bắt tay TLS với chuỗi chứng chỉ client lớn) | Chờ tăng dần theo IP, giới hạn số mã hiện ra, hạn chờ `pair_nonce` ngắn (`protocol.md` mục 2.3); phần còn lại chấp nhận theo `protocol.md` mục 5.3. Giới hạn kết nối đang mở đầu một mình không đủ giữ event loop nhanh khi máy lạ gửi chuỗi chứng chỉ client lớn (đã đo, `protocol.md` mục 2.3), nên đã thêm ✅ giới hạn tốc độ bắt tay mới theo IP và ngân sách chung, áp trước `start_tls`, cùng pool ưu tiên cho IP đã xác thực mTLS để thiết bị đã ghép đôi vẫn nối lại được (`teleport.core.admission`, `protocol.md` mục 2.3; giới hạn còn lại ở đó) |
 | Kẻ lạ trong LAN có nhiều IP, đầu độc mDNS và xoay vòng relay tới thiết bị tin cậy thật chặn được pool ưu tiên (ngân sách lỗi tính theo IP; giới hạn M3, `protocol.md` mục 2.3) | Chấp nhận cho v1.0 (cần nhiều IP và kẻ tấn công trong LAN; kết nối đang sống không bị ảnh hưởng). Việc sau: ngân sách lỗi theo thiết bị (fingerprint) đã cấp ưu tiên, trừ ngay lúc nhận vé ưu tiên |
 | Lũ TCP trần: client reset giữa SYN và `accept`, asyncio in một dòng traceback “Accept failed on a socket” (WinError 64 trên Windows) mỗi lần chạy lũ; server vẫn chạy tiếp, kết nối đó không vào `AdmissionGate` nên không tính vào `refusals` (lần đo T2, `protocol.md` mục 2.3) | Đã làm ✅: hạ mức log riêng lỗi này ở loop asyncio xuống mức DEBUG (`teleport.ui.errorlog.loop_exception_handler`), không in traceback gây nhiễu log |
-| **Cả hai bên** giữ hash mọi khối của file đang truyền trong RAM (bên gửi để tính Merkle root, `protocol.md` mục 4.2; bên nhận để đọc lại và tính Merkle root): 32 byte mỗi khối, tới 128 MiB cho file 4 TiB (trần `size`, `protocol.md` mục 3.3). Gộp `.state` của file 4 TiB mà dựng cả bản gọn trong RAM thì thêm khoảng 144 MiB | Lưu hash dồn trong một `bytearray` 32·N byte, không dùng `list[bytes]` (khoảng 80 byte mỗi khối); gộp và đọc lại `.state` theo từng đoạn ([architecture.md](../technical/architecture.md) mục 4). Vẫn trong ngưỡng mvp N3 ở các cỡ file N3 đo, nhưng RAM tăng theo kích thước file (trái mục 2, dòng RAM). Gộp `.state` trong lúc nhận đọc lại chính `.state` nên dùng thêm RAM tạm 32 byte mỗi khối, chỉ trong lúc gộp (hiếm). Nếu đo thấy vượt mvp N3, phương án là đọc hash từ `.state` theo từng đoạn thay vì giữ cả danh sách trong RAM |
+| **Cả hai bên** giữ hash mọi khối của file đang truyền trong RAM (bên gửi để tính Merkle root, `protocol.md` mục 4.2; bên nhận để đọc lại và tính Merkle root): 32 byte mỗi khối, tới 128 MiB cho file 4 TiB (trần `size`, `protocol.md` mục 3.3). Gộp `.state` của file 4 TiB mà dựng cả bản gọn trong RAM thì thêm khoảng 144 MiB | Đã cải tiến ở `v1.3.0`: bổ sung `MerkleStream` trong `teleport.core.merkle` tính Merkle root dạng luồng bằng ngăn xếp đỉnh trung gian chỉ tốn $O(\log_2 N)$ bộ nhớ (< 1 KiB RAM cho mọi cỡ file tới 4 TiB); `merkle_root(leaves)` cũng tính qua `MerkleStream` mà không cấp phát lại mảng tầng trung gian. Phần đọc/ghi `.state` vẫn giữ `bytearray` 32·N byte và gộp theo từng đoạn ([architecture.md](../technical/architecture.md) mục 4), vẫn trong ngưỡng mvp N3 |
 | Bộ đệm socket do hệ điều hành tự điều chỉnh có thể lớn, làm tăng phần gửi thừa ở mvp N4 (`protocol.md` mục 4.3) | Đo ở Giai đoạn 3; vượt ngưỡng thì đặt bộ đệm theo từng hệ điều hành, đặt trước `connect` ở phía client |
 | Nhận nhiều file nhỏ chậm hơn rõ vì mỗi file có thêm vài lần `fsync` để bền sau khi sập (mvp F6, F7); số đo trên loopback: [benchmark.md](../technical/benchmark.md) mục 4.9, ổ chậm chưa đo | Đo trên ổ chậm cùng D4 (mục 5.4); nhiều lượt liên tiếp trong một tiến trình đo ở Giai đoạn 3 trên loopback. Làm mvp N2 (D2) hay N7 không đạt thì bớt `fsync` mà vẫn giữ thứ tự bền ([architecture.md](../technical/architecture.md) mục 4) |
 | Lượt nhận dở (đang chờ nối lại, kể cả lượt được khôi phục sau khi app nhận khởi động lại) vẫn giữ chỗ trống cho phần còn thiếu (`promised_bytes` của `teleport.core.transfer`) suốt thời hạn nối lại (`protocol.md` mục 6.2), nên `offer` mới trong lúc đó có thể bị tự từ chối vì thiếu chỗ dù đĩa đang trống | Chấp nhận cho v1.0: giữ chỗ là để lượt dở chắc chắn nhận xong được. Người dùng hủy lượt dở (giao diện, Giai đoạn 4; CLI chưa có lệnh hủy lượt nhận dở, chỉ chờ hết hạn nối lại) thì chỗ được trả ngay; lượt quá hạn nối lại thì hết hạn và file tạm bị xóa (`protocol.md` mục 6.2) |
@@ -455,7 +468,7 @@ Rủi ro về sản phẩm và thị trường (cô lập Wi-Fi, SmartScreen, c�
 
 Đây là danh sách câu hỏi mở duy nhất của dự án.
 
-1. **Ngân sách ký mã cho Windows/macOS:** Đã chốt (10/11/2026). Chưa mua chứng chỉ thương mại cho bản v1.0.0 do chi phí cao ($200–$500+/năm). Bản phát hành cung cấp tệp mã băm `SHA256SUMS.txt` để đối chiếu tính toàn vẹn và tài liệu `huong_dan_su_dung.md` đã có hướng dẫn rõ thao tác mở qua cảnh báo SmartScreen ("More info" → "Run anyway") và Gatekeeper. Xem xét đăng ký chương trình ký mã hỗ trợ nguồn mở hoặc gây quỹ cộng đồng sau v1.0.
-2. **Chế độ khách cho điện thoại** (qua trình duyệt) có làm ngay sau v1.0, trước app Android, hay không.
+1. **Ngân sách ký mã cho Windows/macOS:** Đã chốt định hướng miễn phí cho nguồn mở (18/11/2026). Không mua chứng chỉ thương mại ($200–$500+/năm); dự án đã hoàn thiện chính sách ký mã & tuyên bố quyền riêng tư trong [SECURITY.md](../community/SECURITY.md), cấu hình nộp artifact (`packaging/signing/artifact-configuration.xml`), công cụ ký tự động (`packaging/signing/sign_windows.py`), hướng dẫn nộp đơn (`packaging/signing/HUONG_DAN_DANG_KY_SIGNPATH.md`) và hỗ trợ cờ `--signed` / `TELEPORT_SIGNED` trong `release.py` để kích hoạt chương trình ký mã miễn phí qua **SignPath Foundation** ngay sau khi duyệt hồ sơ trên GitHub. Trong lúc chờ duyệt hoặc ở các bản build thử, người dùng đối chiếu mã băm `SHA256SUMS.txt` và mở qua cảnh báo SmartScreen / Gatekeeper theo [huong_dan_su_dung.md](huong_dan_su_dung.md).
+2. **Chế độ khách cho điện thoại** (qua trình duyệt): **Đã chốt và hoàn thành** ở `v1.2.0` (Web QR cơ bản) và nâng cấp toàn diện ở `v1.3.0` (tải luồng ZIP, kéo thả thư mục, khóa dò token), triển khai trước app Android.
 3. **App iOS và CLA** (sau v1.0): điều khoản App Store xung đột với GPL. Muốn đưa app lên App Store thì chủ bản quyền phải cấp thêm giấy phép riêng, nên cần người đóng góp ký thỏa thuận chuyển quyền (CLA) **trước khi** nhận code của họ. Chưa có người đóng góp ngoài nên chưa cần; cần quyết trước khi nhận Pull Request đầu tiên từ bên ngoài.
 4. **Tự ẩn khi Windows ở mạng Public:** Đã chốt (10/11/2026). **Không tự động ẩn.** Thiết bị vẫn hiển thị bình thường trên mạng nội bộ vì đã được bảo vệ đa lớp an toàn (bắt buộc ghép đôi bằng mã 6 số ngẫu nhiên mới truyền nhận được, máy lạ không thể kết nối dữ liệu hay gửi file rác). Quyết định này tránh lỗi Windows nhận nhầm mạng nhà/văn phòng là Public làm máy biến mất khỏi danh sách tìm kiếm. Khi cần ẩn chủ động ở quán cà phê hay nơi công cộng, người dùng tự gạt tắt công tắc "Cho máy chưa ghép đôi thấy máy này" trong Cài đặt (mvp F10).

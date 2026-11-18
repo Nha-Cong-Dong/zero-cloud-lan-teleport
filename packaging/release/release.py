@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import os
 import re
 import sys
 import urllib.request
@@ -54,6 +55,27 @@ FIXED_NOTES = "\n".join(
         " Linux x86_64 (AppImage chạy ngay), và macOS (tệp .dmg).",
         "- Bản Windows **chưa ký mã**: Windows SmartScreen có thể hiện “Windows protected your PC”. Bấm"
         " “More info” → “Run anyway”.",
+        "- Dùng bản zip giao diện (`teleport-gui-…`) thì đọc `DOC-TRUOC.txt` trong thư mục giải nén"
+        " trước khi chạy (chỗ giải nén, tường lửa, hồ sơ mạng Private).",
+        "- Kiểm file tải về bằng `SHA256SUMS.txt`: dùng `Get-FileHash` (PowerShell) hoặc `sha256sum`"
+        " (Linux/macOS) rồi so với dòng cùng tên.",
+        "- Giấy phép: Teleport theo GPL-3.0-or-later; giấy phép các thành phần đi kèm ở"
+        " `THIRD-PARTY-NOTICES.txt`, nơi lấy mã nguồn ở `SOURCE.txt` (cả hai nằm cạnh file exe, trong"
+        " bản zip lẫn thư mục cài). Mã nguồn thư viện LGPL đóng kèm: {sources}.",
+        "",
+    )
+)
+
+SIGNED_FIXED_NOTES = "\n".join(
+    (
+        "---",
+        "",
+        "**Trước khi tải và chạy**",
+        "",
+        "- {kind} Hỗ trợ đa nền tảng: Windows 10/11 64-bit (bộ cài `{setup}`, bản zip giao diện và CLI),"
+        " Linux x86_64 (AppImage chạy ngay), và macOS (tệp .dmg).",
+        "- Bản Windows **đã ký mã số** qua chương trình ký mã miễn phí cho phần mềm nguồn mở"
+        " (SignPath.io / SignPath Foundation), kèm kiểm tra toàn vẹn qua `SHA256SUMS.txt`.",
         "- Dùng bản zip giao diện (`teleport-gui-…`) thì đọc `DOC-TRUOC.txt` trong thư mục giải nén"
         " trước khi chạy (chỗ giải nén, tường lửa, hồ sơ mạng Private).",
         "- Kiểm file tải về bằng `SHA256SUMS.txt`: dùng `Get-FileHash` (PowerShell) hoặc `sha256sum`"
@@ -127,7 +149,17 @@ def changelog_section(tag: str, text: str) -> str | None:
     return None
 
 
-def release_notes(tag: str, version: str, *, allow_missing: bool = False) -> str:
+def _env_is_signed() -> bool:
+    return os.environ.get("TELEPORT_SIGNED", "").strip().lower() in ("1", "true", "yes")
+
+
+def release_notes(
+    tag: str,
+    version: str,
+    *,
+    allow_missing: bool = False,
+    signed: bool | None = None,
+) -> str:
     section = changelog_section(tag, CHANGELOG.read_text(encoding="utf-8"))
     if section is None:
         if not allow_missing:
@@ -138,7 +170,9 @@ def release_notes(tag: str, version: str, *, allow_missing: bool = False) -> str
         f"`{third_party.sdist_filename(name, ver)}`"
         for name, (ver, _sha) in sorted(third_party.LGPL_SDISTS.items())
     )
-    body = f"{section}\n\n" + FIXED_NOTES.format(
+    use_signed = _env_is_signed() if signed is None else signed
+    template = SIGNED_FIXED_NOTES if use_signed else FIXED_NOTES
+    body = f"{section}\n\n" + template.format(
         kind=kind, setup=f"teleport-setup-{version}-x64.exe", sources=sources
     )
     if len(body) > _BODY_LIMIT:
@@ -191,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     p_notes.add_argument("tag")
     p_notes.add_argument("--out", type=Path, required=True)
     p_notes.add_argument("--allow-missing", action="store_true", help="chỉ cho chạy khô")
+    p_notes.add_argument("--signed", action="store_true", help="ghi chú bản phát hành đã ký mã số")
     p_fetch = sub.add_parser("fetch-sources", help="tải sdist của thư viện LGPL và kiểm hash")
     p_fetch.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -205,7 +240,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"tag {args.tag} khớp __version__ {version}")
         elif args.cmd == "notes":
             check_tag(args.tag, version)
-            notes = release_notes(args.tag, version, allow_missing=args.allow_missing)
+            notes = release_notes(
+                args.tag,
+                version,
+                allow_missing=args.allow_missing,
+                signed=True if args.signed else None,
+            )
             args.out.write_text(notes, encoding="utf-8")
             print(f"{args.out}: {len(notes)} ký tự")
         elif args.cmd == "fetch-sources":

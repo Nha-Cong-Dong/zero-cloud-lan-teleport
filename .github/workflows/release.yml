@@ -79,6 +79,7 @@ jobs:
         env:
           TAG: ${{ steps.info.outputs.tag }}
           PUBLISH: ${{ steps.mode.outputs.publish }}
+          TELEPORT_SIGNED: ${{ vars.TELEPORT_SIGNED || '' }}
         run: |
           if [ "$PUBLISH" = "true" ]; then
             python packaging/release/release.py notes "$TAG" --out release-notes.md
@@ -101,6 +102,7 @@ jobs:
     name: Build CLI
     needs: prepare
     uses: ./.github/workflows/build-cli.yml
+    secrets: inherit
     with:
       release_tag: ${{ needs.prepare.outputs.tag }}
 
@@ -108,6 +110,7 @@ jobs:
     name: Build GUI và bộ cài
     needs: prepare
     uses: ./.github/workflows/build-gui.yml
+    secrets: inherit
     with:
       release_tag: ${{ needs.prepare.outputs.tag }}
 
