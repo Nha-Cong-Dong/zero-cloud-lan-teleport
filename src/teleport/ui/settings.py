@@ -812,6 +812,7 @@ class SettingsSnapshot:
     language: str | None
     autostart: bool
     devices: Mapping[str, DeviceSettings]
+    create_subfolder: bool = True
     theme: str | None = None  # trường `theme` của settings.json (None = theo hệ điều hành)
     accent: str | None = None  # trường `accent` (None = mặc định; mã lạ giữ nguyên)
 
@@ -831,6 +832,7 @@ def read_snapshot(node: Node) -> SettingsSnapshot:
         language=settings.language,
         autostart=settings.autostart,
         devices=_read_device_settings(node),
+        create_subfolder=settings.create_subfolder,
         theme=settings.theme,
         accent=settings.accent,
     )
@@ -1022,6 +1024,7 @@ class SettingsPage(QWidget):
     theme_selected = Signal(object)  # None (theo hệ điều hành) | "light" | "dark"
     accent_selected = Signal(object)  # None (mặc định) | mã màu nhấn
     autostart_toggled = Signal(bool)
+    create_subfolder_toggled = Signal(bool)
     rate_limit_changed = Signal(object)  # byte/giây hay None
     retention_changed = Signal(object)  # ngày hay None (= mặc định)
     ask_toggled = Signal(str, bool)
@@ -1191,6 +1194,15 @@ class SettingsPage(QWidget):
         self.open_dir_button.clicked.connect(self._on_open_dir)
         self.change_dir_button.clicked.connect(self.change_receive_dir_requested)
 
+        self.create_subfolder_row = self._row(Section.GENERAL, "createSubfolderRow")
+        self.create_subfolder_switch = ToggleSwitch(self.create_subfolder_row)
+        self.create_subfolder_switch.setObjectName("createSubfolderSwitch")
+        self.create_subfolder_switch.setChecked(True)
+        self.create_subfolder_switch.clicked.connect(
+            lambda checked: self.create_subfolder_toggled.emit(bool(checked))
+        )
+        self.create_subfolder_row.set_control(self.create_subfolder_switch)
+
         self.autostart_row = self._row(Section.GENERAL, "autostartRow")
         self.autostart_switch = ToggleSwitch(self.autostart_row)
         self.autostart_switch.setObjectName("autostartSwitch")
@@ -1349,7 +1361,7 @@ class SettingsPage(QWidget):
             content = self._section_widgets[section].widget()
             if content is not None:
                 content.setEnabled(self._loaded)
-        for row in (self.name_row, self.autostart_row):
+        for row in (self.name_row, self.create_subfolder_row, self.autostart_row):
             row.setEnabled(self._loaded)
         self.appearance.set_loaded(self._loaded)
 
@@ -1362,6 +1374,8 @@ class SettingsPage(QWidget):
         self.set_language(s.language, i18n.available_languages())
         self.appearance.set_theme(s.theme)
         self.appearance.set_accent(s.accent)
+        with _blocked(self.create_subfolder_switch):
+            self.create_subfolder_switch.setChecked(bool(s.create_subfolder))
         with _blocked(self.autostart_switch):
             self.autostart_switch.setChecked(bool(s.autostart))
         self.set_device_settings(s.devices)
@@ -1505,6 +1519,10 @@ class SettingsPage(QWidget):
         self.open_dir_button.setAccessibleName(t("Settings", "Mở thư mục nhận"))
         self.change_dir_button.setText(t("Settings", "Đổi…"))
         self.change_dir_button.setAccessibleName(t("Settings", "Đổi thư mục nhận"))
+        self.create_subfolder_row.set_text(
+            t("Settings", "Tạo thư mục con cho mỗi lần nhận"),
+            t("Settings", "Tự động gom tệp vào thư mục riêng theo tên máy gửi và thời gian nhận."),
+        )
         self.autostart_row.set_text(
             t("Settings", "Khởi động cùng Windows"),
             t("Settings", "Teleport chạy ở khay hệ thống khi bạn đăng nhập Windows, sẵn sàng nhận file."),
@@ -1945,6 +1963,7 @@ class SettingsController(QObject):
         page.theme_selected.connect(self._on_theme)
         page.accent_selected.connect(self._on_accent)
         page.autostart_toggled.connect(self._on_autostart)
+        page.create_subfolder_toggled.connect(self._on_create_subfolder)
         page.rate_limit_changed.connect(self._on_rate)
         page.retention_changed.connect(self._on_retention)
         page.ask_toggled.connect(self._on_ask)
@@ -2329,6 +2348,11 @@ class SettingsController(QObject):
         if host is not None:
             host.call(lambda node: node.set_ui_preferences(autostart=enabled), _warn("lưu cài đặt khởi động"))
         self.page.set_autostart(self._read_autostart())
+
+    def _on_create_subfolder(self, enabled: bool) -> None:
+        host = self._host
+        if host is not None:
+            host.call(lambda node: node.set_create_subfolder(enabled), _warn("lưu cài đặt tạo thư mục con"))
 
     # ---- Xóa toàn bộ lịch sử -------------------------------------------------------------------
 

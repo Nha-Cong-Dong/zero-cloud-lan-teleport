@@ -3169,8 +3169,8 @@ async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: 
     if args.files:
         for f in args.files:
             p = Path(f).expanduser().resolve()
-            if not p.is_file():
-                print(f"Lỗi: Không tìm thấy tệp hoặc không phải tệp thông thường: {f}", file=stderr)
+            if not (p.is_file() or p.is_dir()):
+                print(f"Lỗi: Không tìm thấy tệp hoặc không phải tệp/thư mục hợp lệ: {f}", file=stderr)
                 return 2
             shared_paths.append(p)
 
@@ -3220,7 +3220,7 @@ async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: 
         print(json.dumps(data, ensure_ascii=False), file=stdout, flush=True)
     else:
         print("=" * 64, file=stdout)
-        print("ZCL Teleport - Chế độ khách qua Web QR (v1.2.0)", file=stdout)
+        print(f"ZCL Teleport - Chế độ khách qua Web QR (v{__version__})", file=stdout)
         print("=" * 64, file=stdout)
         print(info.qr_ascii, file=stdout)
         print(f"\nLiên kết kết nối: {info.url}", file=stdout)

@@ -1917,8 +1917,18 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Tạo thư mục con cho mỗi lần nhận</source>
+        <translation>Create subfolder for each transfer</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Tốc độ gửi tối đa (MB/s)</source>
         <translation>Maximum send speed (MB/s)</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Tự động gom tệp vào thư mục riêng theo tên máy gửi và thời gian nhận.</source>
+        <translation>Automatically group files into a separate folder named after the sender and time.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2866,6 +2876,11 @@
         <location filename="../web_guest_dialog.py"/>
         <source>Đang nhận {filename}: {percent}% {size_info}</source>
         <translation>Receiving {filename}: {percent}% {size_info}</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Điện thoại</source>
+        <translation>Phone</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>

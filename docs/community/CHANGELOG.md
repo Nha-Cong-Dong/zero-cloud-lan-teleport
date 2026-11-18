@@ -5,7 +5,16 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-18
+
 ### Added
+- Nâng cấp toàn diện Chế độ khách qua Web QR (`teleport.net.web_guest`, `teleport.net.web_guest_assets`, `teleport.app.web_guest`, `teleport.cli`):
+  - Hỗ trợ đóng gói và truyền phát luồng ZIP trực tiếp (`GET /api/download-zip` và tải thư mục chia sẻ qua `GET /api/download/<id>`) với bộ nhớ $O(1)$ không tạo tệp tạm trên đĩa.
+  - Hỗ trợ chọn hoặc kéo thả nhiều tệp và cả thư mục từ trình duyệt điện thoại lên máy tính, giữ nguyên cấu trúc thư mục con (`rel_path`) qua `sanitize_rel_path` và chặn thoát thư mục.
+  - Tự động kiểm tra dung lượng trống trước khi ghi đĩa (`507 Insufficient Storage`).
+  - Nâng cấp bảo mật xác thực: so sánh token hằng thời gian (`hmac.compare_digest`), tạm khóa IP 5 phút (`429 Too Many Requests`) khi nhập sai token quá 5 lần liên tiếp, và tự cập nhật danh sách chia sẻ qua Server-Sent Events (`/api/events`).
+  - Lệnh `teleport guest` hỗ trợ truyền cả tệp lẻ lẫn thư mục vào danh sách chia sẻ.
+- Tự động tạo thư mục con cho từng lượt nhận theo định dạng `[Tên thiết bị] (YYYY-MM-DD HH-MM)` kèm công tắc bật/tắt trong Cài đặt (`teleport.app.transfers`, `teleport.app.settings`, `teleport.ui.settings`, `teleport.ui.web_guest_dialog`).
 - Đóng gói và phát hành tự động đa nền tảng trên CI (`.github/workflows/release.yml`):
   - Tích hợp quy trình build Linux AppImage tự động (`.github/workflows/build-linux.yml`, `packaging/linux/build-appimage.sh`) sử dụng `appimagetool` với cờ `APPIMAGE_EXTRACT_AND_RUN=1`.
   - Tích hợp quy trình build macOS DMG tự động (`.github/workflows/build-macos.yml`, `packaging/macos/build-dmg.sh`) đóng gói tệp cài đặt `.dmg` hoàn chỉnh bằng `hdiutil`.
@@ -15,6 +24,10 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
   - Lệnh CLI `teleport send`, `teleport list` và `teleport unpair` tự động phát hiện khi tiến trình giao diện hoặc daemon đang chạy, ủy quyền thực thi trực tiếp qua IPC mà không bị chặn bởi khóa độc quyền `node.lock`.
   - Hỗ trợ truyền phát tiến độ tệp trực quan từ daemon về terminal theo thời gian thực.
   - Tự động phát hiện và dọn dẹp các tệp `ipc.json` mồ côi nếu daemon gặp sự cố kết thúc đột ngột.
+
+### Changed
+- Tối ưu bộ nhớ kiểm tra toàn vẹn Merkle (`teleport.core.merkle`): bổ sung lớp `MerkleStream` tính Merkle root dạng luồng chỉ giữ ngăn xếp $O(\log_2 N)$ đỉnh trung gian (< 1 KiB RAM cho mọi cỡ tệp tới 4 TiB) và chuyển `merkle_root()` sang tính trực tiếp trên `MerkleStream`.
+- Đồng bộ hệ thống tài liệu dự án (`docs/product/ke_hoach.md`, `docs/product/mvp.md`, `docs/product/huong_dan_su_dung.md`, `docs/technical/protocol.md`, `docs/technical/architecture.md`, `README.md`) khớp với hiện trạng v1.3.0.
 
 ## [1.2.0] - 2026-11-14
 

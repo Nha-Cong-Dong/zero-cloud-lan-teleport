@@ -96,6 +96,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import functools
 import hashlib
 import logging
@@ -132,6 +133,7 @@ from teleport.app.storage import (
 from teleport.core import ratelimit
 from teleport.core import transfer as core_transfer
 from teleport.core.blocks import DIGEST_SIZE, BlockError
+from teleport.core.filenames import fit_filename
 from teleport.core.history import HistoryEntry, HistoryError, entry_from_info
 from teleport.core.merkle import merkle_root
 from teleport.core.messages import (
@@ -222,8 +224,22 @@ __all__ = [
     "TransferStatus",
     "TransferStatusChanged",
     "TransferUpdate",
+    "make_transfer_subfolder_name",
     "preview_sources",
 ]
+
+
+def make_transfer_subfolder_name(
+    device_name: str | None,
+    timestamp: datetime.datetime | None = None,
+) -> str:
+    """Tạo tên thư mục con theo định dạng: `Tên thiết bị (YYYY-MM-DD HH-MM)`."""
+    ts = timestamp or datetime.datetime.now()
+    time_str = ts.strftime("%Y-%m-%d %H-%M")
+    base_name = device_name.strip() if device_name and device_name.strip() else "Thiết bị"
+    safe_name = fit_filename(base_name, 40)
+    return fit_filename(f"{safe_name} ({time_str})")
+
 
 # architecture §5 (bảng số của truyền file). Đọc lúc dùng: test vá bằng monkeypatch.
 # Hạn đĩa: danh sách đủ các thao tác ở bảng architecture §5.
@@ -606,6 +622,7 @@ class _DiskLane:
     create_job: DiskJob[TransferTemp] | None = None
     finalize_job: DiskJob[Path] | None = None  # `Finalize` đã giao cho executor, chưa xong
     waiters: set[asyncio.Event] = field(default_factory=set)  # bên đọc khung chờ chỗ trong hàng ghi
+    subfolder: str = ""
 
 
 @dataclass(eq=False)
@@ -757,6 +774,7 @@ class TransferManager:
         new_id: Callable[[], int],
         set_hold: Callable[[str, bool], None],
         ask_before_receive: Callable[[str], bool] | None = None,
+        create_subfolder: bool = True,
     ) -> None:
         """Gọi trong event loop. `new_id` cấp `data_id`; `set_hold(device_id, held)` → `LinkTracker.hold`.
 
@@ -774,6 +792,7 @@ class TransferManager:
         self._new_id = new_id
         self._set_hold = set_hold
         self._ask_before_receive = ask_before_receive
+        self._create_subfolder = bool(create_subfolder)
         self._loop = asyncio.get_running_loop()
         self._engine = TransferEngine(identity.device_id, receiving=receive_dir is not None)
         self._paused = False  # `pause_receiving`: chỉ trong phiên, không lưu
@@ -946,6 +965,17 @@ class TransferManager:
         if type(value) is not bool:
             raise ValueError("auto_accept phải là bool")
         self._auto_accept = value
+
+    @property
+    def create_subfolder(self) -> bool:
+        """Tự động tạo thư mục con [tên máy] (ngày-tháng) cho mỗi lần nhận file."""
+        return self._create_subfolder
+
+    @create_subfolder.setter
+    def create_subfolder(self, value: bool) -> None:
+        if type(value) is not bool:
+            raise ValueError("create_subfolder phải là bool")
+        self._create_subfolder = value
 
     @property
     def rate_limit(self) -> int | None:
@@ -2096,6 +2126,10 @@ class TransferManager:
             self._call(self._engine.storage_failed, a.device_id, a.transfer_id, DiskOp.CREATE_TEMP)
             return
         lane = _DiskLane(a.device_id, a.transfer_id, rd=self._receive_dir)
+        if self._create_subfolder and os.environ.get("TELEPORT_DISABLE_SUBFOLDER") != "1":
+            dev = self._store.get(a.device_id)
+            dname = dev.name if dev and dev.name else None
+            lane.subfolder = make_transfer_subfolder_name(dname)
         self._lanes[pair] = lane
         self._live_lanes.add(lane)
         if lane.rd is None or self._closing:
@@ -2294,12 +2328,16 @@ class TransferManager:
                     self._call(self._engine.reread_done, device_id, transfer_id, action.file_index, bad, root)
             else:
                 part = self._part(lane, action.file_index)
+                rel_path = action.rel_path
+                if lane.subfolder:
+                    prefix = f"{lane.subfolder}/"
+                    rel_path = f"{prefix}{rel_path}" if rel_path else f"{prefix}{action.name}"
                 finalize = functools.partial(
                     rd.finalize,
                     part,
                     action.name,
                     mtime_ms=action.mtime,
-                    rel_path=action.rel_path,
+                    rel_path=rel_path,
                     is_dir=action.is_dir,
                 )
                 # Còn xếp hàng ở executor (thread chưa nhận) thì `SuspendTemp` còn bỏ được (`_close_lane`).
@@ -2564,6 +2602,11 @@ class TransferManager:
             lane = _DiskLane(
                 sender, transfer_id, rd=rd, temp=handle.temp, parts={handle.file_index: handle.part}
             )
+            if self._create_subfolder and os.environ.get("TELEPORT_DISABLE_SUBFOLDER") != "1":
+                dev = self._store.get(sender)
+                dname = dev.name if dev and dev.name else None
+                ts = datetime.datetime.fromtimestamp(handle.last_activity)
+                lane.subfolder = make_transfer_subfolder_name(dname, timestamp=ts)
             self._lanes[pair] = lane
             self._live_lanes.add(lane)
             lanes.append(lane)

@@ -298,6 +298,8 @@ Test vector Merkle: lá thứ `i` (đếm từ 0) là SHA-256 của khối dài 
 
 Với 5 lá L0 … L4: tầng 1 là SHA-256(L0 ‖ L1), SHA-256(L2 ‖ L3), L4 (đẩy thẳng lên); tầng 2 là SHA-256 của hai nút đầu, rồi L4; root = SHA-256(tầng 2 nút đầu ‖ L4).
 
+Từ `v1.3.0`, `teleport.core.merkle.MerkleStream` tính đúng giá trị Merkle root này bằng một ngăn xếp đỉnh trung gian kích thước $O(\log_2 N)$ (tối đa $\lfloor \log_2 N \rfloor + 1$ phần tử, dưới 1 KiB cho mọi kích thước file tới 4 TiB) thay vì cấp phát lại toàn bộ mảng tầng trung gian trong RAM.
+
 **Tên file nhận được** được làm sạch trước khi dùng (chi tiết: [ke_hoach.md](../product/ke_hoach.md) mục 3.3); bộ làm sạch chỉ biến đổi tên, không bao giờ từ chối (mục 3.3). Hai file trùng tên trong cùng `offer`, hoặc trùng với file đã có (không phân biệt hoa thường), đều được đặt tên ` (1)`, ` (2)`… Tên còn được cắt cho vừa giới hạn độ dài đường dẫn của máy nhận, và hệ file từ chối tên thì bên nhận dùng tên dự phòng ([architecture.md](architecture.md) mục 4 “Thư mục nhận”).
 
 ## 5. Ghép đôi
@@ -543,7 +545,7 @@ Phần này tả hành vi hiện có ✅, trừ chỗ đánh 📝.
 
 ---
 
-## 10. Chế độ khách qua Web QR (v1.2.0)
+## 10. Chế độ khách qua Web QR (v1.2.0 – v1.3.0)
 
 Chế độ khách cho phép chuyển tệp tức thì với điện thoại di động mà **không cần cài đặt thêm bất kỳ phần mềm nào trên điện thoại**.
 
@@ -551,8 +553,8 @@ Chế độ khách cho phép chuyển tệp tức thì với điện thoại di 
 
 - **Cổng ngẫu nhiên:** Khi người dùng mở tính năng (qua lệnh `teleport guest` hoặc hộp thoại giao diện), máy chủ HTTP/1.1 bất đồng bộ mở trên cổng ngẫu nhiên do hệ điều hành cấp phát (`port 0`), nghe trên mọi địa chỉ cục bộ (`0.0.0.0`).
 - **Giới hạn mạng nội bộ:** Kiểm tra địa chỉ IP bên gọi (`peername[0]`). Chỉ chấp nhận các dải địa chỉ riêng tư (Private IP: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, link-local `169.254.0.0/16`) hoặc loopback (`127.0.0.0/8`). Mọi yêu cầu từ địa chỉ Internet công cộng bị trả về `403 Forbidden` và ngắt kết nối ngay lập tức.
-- **Mã thông báo một lần (One-Time Token):** Khi mở phiên, máy tính sinh một mã thông báo bí mật 32 ký tự hex (`secrets.token_hex(16)`). Mọi yêu cầu HTTP phải chứa tham số truy vấn `?token=<token>` hoặc Cookie `teleport_token=<token>` do yêu cầu đầu tiên thiết lập. Thiếu hoặc sai token bị trả về `403 Forbidden`.
-- **Hết hạn do không hoạt động:** Phiên tự động đóng cổng và giải phóng tài nguyên sau 10 phút liên tục không nhận được yêu cầu nào.
+- **Mã thông báo một lần (One-Time Token) & chống dò mã (v1.3.0):** Khi mở phiên, máy tính sinh một mã thông báo bí mật 32 ký tự hex (`secrets.token_hex(16)`). Mọi yêu cầu HTTP phải chứa tham số truy vấn `?token=<token>` hoặc Cookie `teleport_token=<token>` do yêu cầu đầu tiên thiết lập, được kiểm tra bằng so sánh hằng thời gian (`hmac.compare_digest`). Thiếu hoặc sai token bị trả về `403 Forbidden`; nếu một IP nhập sai quá 5 lần liên tiếp (`MAX_FAILED_AUTH_ATTEMPTS`), IP đó bị tạm khóa trong 5 phút và mọi yêu cầu kế tiếp từ IP đó nhận `429 Too Many Requests`.
+- **Hết hạn do không hoạt động:** Phiên tự động đóng cổng và giải phóng tài nguyên sau 10 phút liên tục không nhận được yêu cầu nào (đồng hồ hoạt động được làm mới trong suốt quá trình truyền tải).
 
 ### 10.2. Mã QR và URL
 
@@ -562,24 +564,26 @@ Chế độ khách cho phép chuyển tệp tức thì với điện thoại di 
 ### 10.3. Các tuyến đường HTTP (Endpoints)
 
 1. `GET /` hoặc `GET /index.html`:
-   - Trả về giao diện web khách đóng gói hoàn chỉnh trong 1 file HTML duy nhất (< 50 KB), nhúng sẵn CSS và JavaScript thuần, tự động nhận diện chế độ sáng/tối theo hệ điều hành điện thoại và hỗ trợ song ngữ (tiếng Việt / tiếng Anh).
+   - Trả về giao diện web khách đóng gói hoàn chỉnh trong 1 file HTML duy nhất (< 50 KB), nhúng sẵn CSS và JavaScript thuần, tự động nhận diện chế độ sáng/tối theo hệ điều hành điện thoại và hỗ trợ song ngữ (tiếng Việt / tiếng Anh). Từ `v1.3.0`, giao diện hỗ trợ chọn/kéo thả cả thư mục và nút tải tất cả dạng gói nén `.zip`.
 2. `GET /api/info`:
-   - Trả về dữ liệu JSON mô tả tên máy tính và danh sách các tệp máy tính đang chuẩn bị sẵn để chia sẻ cho điện thoại:
+   - Trả về dữ liệu JSON mô tả tên máy tính và danh sách các tệp hoặc thư mục máy tính đang chuẩn bị sẵn để chia sẻ cho điện thoại (`is_dir` cho biết mục đó là thư mục):
      ```json
      {
        "device_name": "PC-Nha",
        "files": [
-         {"id": "a1b2c3d4", "name": "bao_cao.pdf", "size": 1048576}
+         {"id": "a1b2c3d4", "name": "bao_cao.pdf", "size": 1048576, "is_dir": false}
        ]
      }
      ```
 3. `GET /api/download/<file_id>`:
-   - Tải tệp từ máy tính về điện thoại theo dòng byte trực tiếp (khối 64 KiB), gửi kèm `Content-Disposition: attachment; filename="..."`.
-   - Hỗ trợ tải ngắt quãng và tiếp tục qua tiêu đề `Range: bytes=start-end` (`HTTP/1.1 206 Partial Content`).
-4. `POST /api/upload`:
-   - Nhận tệp tải lên từ điện thoại theo luồng byte nhị phân trực tiếp (`Content-Type: application/octet-stream`).
-   - Tên tệp được truyền qua tham số `?name=...` hoặc tiêu đề `X-Filename` và được làm sạch an toàn bằng `sanitize_filename` (chống tuyệt đối tấn công thoát thư mục Path Traversal).
+   - Với tệp lẻ: tải tệp từ máy tính về điện thoại theo dòng byte trực tiếp (khối 64 KiB), gửi kèm `Content-Disposition: attachment; filename="..."`; hỗ trợ tải ngắt quãng qua tiêu đề `Range: bytes=start-end` (`HTTP/1.1 206 Partial Content`).
+   - Với thư mục chia sẻ (`is_dir = true`, từ `v1.3.0`): đóng gói trực tiếp các tệp bên trong thành luồng ZIP chuẩn (`PK\x03\x04`, `PK\x07\x08`, `PK\x01\x02`, `PK\x05\x06`) và truyền phát ngay ra socket với bộ nhớ $O(1)$, không tạo tệp tạm trên đĩa.
+4. `GET /api/download-zip` (v1.3.0):
+   - Đóng gói và truyền phát toàn bộ danh sách tệp/thư mục đang chia sẻ thành một tệp `teleport-files.zip` duy nhất theo luồng trực tiếp với bộ nhớ $O(1)$.
+5. `POST /api/upload`:
+   - Nhận tệp tải lên từ điện thoại theo luồng byte nhị phân trực tiếp (`Content-Type: application/octet-stream`). Kiểm tra dung lượng trống trên ổ đĩa trước khi ghi (trả về `507 Insufficient Storage` nếu thiếu chỗ).
+   - Tên tệp được truyền qua `?name=...` hoặc `X-Filename`; từ `v1.3.0` hỗ trợ thêm đường dẫn tương đối `?rel_path=...` hoặc `X-Rel-Path` để giữ nguyên cấu trúc thư mục con khi kéo thả/chọn thư mục từ trình duyệt. Mọi tên và đường dẫn đều được làm sạch bằng `sanitize_filename` / `sanitize_rel_path` và kiểm tra `is_relative_to(upload_dir)` để chặn tuyệt đối tấn công thoát thư mục.
    - Ghi vào tệp tạm `.part` trước khi đổi tên hoàn tất, tự động thêm số thứ tự ` (1)`, ` (2)` nếu trùng tên để không ghi đè dữ liệu có sẵn.
-5. `GET /api/events`:
+6. `GET /api/events`:
    - Kênh thông báo Server-Sent Events (`text/event-stream`) để cập nhật trạng thái kết nối và danh sách tệp theo thời gian thực tới trình duyệt điện thoại.
 

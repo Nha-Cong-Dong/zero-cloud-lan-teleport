@@ -16,7 +16,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from teleport.core.merkle import merkle_root
+from teleport.core.merkle import MerkleStream, merkle_root
 
 _PROTO = Path(__file__).resolve().parents[2] / "docs" / "technical" / "protocol.md"
 PROTOCOL_MD = _PROTO if _PROTO.exists() else (Path(__file__).resolve().parents[2] / "docs" / "protocol.md")
@@ -221,3 +221,43 @@ def test_protocol_md_merkle_vectors_match_independent_computation():
         if n in by_hand:
             assert by_hand[n].hex() == root_hex, f"vector {n} lá lệch công thức viết tay"
         assert merkle_root(data).hex() == root_hex, f"code lệch vector {n} lá"
+
+
+def test_merkle_stream_incremental_feed_matches_merkle_root():
+    stream = MerkleStream()
+    assert stream.count == 0
+    assert stream.stack_depth == 0
+    assert stream.root() == hashlib.sha256(b"").digest()
+
+    for k in range(1, 66):
+        stream.feed(leaf(k - 1))
+        assert stream.count == k
+        assert stream.stack_depth <= k.bit_length()
+        expected = ref_root_iterative(leaves(k))
+        assert stream.root() == expected
+        assert merkle_root(leaves(k)) == expected
+
+
+def test_merkle_stream_chunked_update_matches():
+    stream = MerkleStream()
+    all_leaves = leaves(100)
+    stream.update(b"")
+    stream.update(all_leaves[:32])
+    stream.update(bytearray(all_leaves[32 : 4 * 32]))
+    stream.update(memoryview(all_leaves)[4 * 32 : 20 * 32])
+    stream.update(all_leaves[20 * 32 :])
+    assert stream.count == 100
+    assert stream.stack_depth <= (100).bit_length()
+    assert stream.root() == ref_root_iterative(all_leaves)
+
+
+def test_merkle_stream_validation():
+    stream = MerkleStream()
+    with pytest.raises(TypeError):
+        stream.feed("not-bytes")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        stream.feed(b"short")
+    with pytest.raises(TypeError):
+        stream.update(123)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        stream.update(b"x" * 33)

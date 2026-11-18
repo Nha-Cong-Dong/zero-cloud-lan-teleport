@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from teleport.net.web_guest import WebGuestHttpServer
+from teleport.net.web_guest_assets import WEB_GUEST_HTML
 from tests.test_http_client import SimpleHttpClient
 
 
@@ -184,5 +187,113 @@ async def test_web_guest_upload_and_collision(temp_dirs: tuple[Path, Path]) -> N
             # Phải nằm an toàn trong upload_dir với tên evil.txt
             assert (upload_dir / "evil.txt").is_file()
             assert not (upload_dir.parent / "evil.txt").exists()
+    finally:
+        await server.stop()
+
+
+def test_web_guest_html_size_under_50kb() -> None:
+    assert len(WEB_GUEST_HTML.encode("utf-8")) < 50 * 1024
+
+
+@pytest.mark.asyncio
+async def test_web_guest_download_zip_stream(temp_dirs: tuple[Path, Path]) -> None:
+    upload_dir, shared_dir = temp_dirs
+    file_a = shared_dir / "bao_cao.txt"
+    file_a.write_bytes(b"NOI_DUNG_BAO_CAO")
+
+    folder = shared_dir / "anh_du_lich"
+    sub = folder / "ngay1"
+    sub.mkdir(parents=True)
+    (folder / "cover.jpg").write_bytes(b"COVER_BYTES")
+    (sub / "pic1.jpg").write_bytes(b"PIC1_BYTES")
+
+    server = WebGuestHttpServer(token="zip_tok", upload_dir=upload_dir)
+    server.add_shared_file(file_a)
+    dir_id = server.add_shared_file(folder)
+    port = await server.start(host="127.0.0.1", port=0)
+
+    try:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port}") as client:
+            # 1. Tải toàn bộ danh sách dạng luồng ZIP
+            resp = await client.get("/api/download-zip", params={"token": "zip_tok"})
+            assert resp.status_code == 200
+            assert "application/zip" in resp.headers.get("Content-Type", "")
+            with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                names = set(zf.namelist())
+                assert names == {
+                    "bao_cao.txt",
+                    "anh_du_lich/cover.jpg",
+                    "anh_du_lich/ngay1/pic1.jpg",
+                }
+                assert zf.read("bao_cao.txt") == b"NOI_DUNG_BAO_CAO"
+                assert zf.read("anh_du_lich/cover.jpg") == b"COVER_BYTES"
+                assert zf.read("anh_du_lich/ngay1/pic1.jpg") == b"PIC1_BYTES"
+
+            # 2. Tải riêng thư mục qua /api/download/<dir_id> cũng trả ZIP
+            resp_dir = await client.get(f"/api/download/{dir_id}", params={"token": "zip_tok"})
+            assert resp_dir.status_code == 200
+            assert "application/zip" in resp_dir.headers.get("Content-Type", "")
+            with zipfile.ZipFile(io.BytesIO(resp_dir.content)) as zf_dir:
+                assert set(zf_dir.namelist()) == {
+                    "anh_du_lich/cover.jpg",
+                    "anh_du_lich/ngay1/pic1.jpg",
+                }
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_web_guest_upload_with_rel_path_and_traversal_guard(temp_dirs: tuple[Path, Path]) -> None:
+    upload_dir, _ = temp_dirs
+    server = WebGuestHttpServer(token="rel_tok", upload_dir=upload_dir)
+    port = await server.start(host="127.0.0.1", port=0)
+
+    try:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port}") as client:
+            resp = await client.post(
+                "/api/upload",
+                params={"name": "img.jpg", "rel_path": "album/2026/img.jpg", "token": "rel_tok"},
+                content=b"ALBUM_IMG",
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            assert resp.status_code == 200
+            saved = upload_dir / "album" / "2026" / "img.jpg"
+            assert saved.is_file()
+            assert saved.read_bytes() == b"ALBUM_IMG"
+
+            # Thử path traversal trong rel_path -> đoạn '..' phải bị loại, lưu an toàn trong upload_dir
+            resp_evil = await client.post(
+                "/api/upload",
+                params={"name": "passwd", "rel_path": "../../../etc/passwd", "token": "rel_tok"},
+                content=b"SAFE",
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            assert resp_evil.status_code == 200
+            assert (upload_dir / "etc" / "passwd").is_file()
+            assert not (upload_dir.parent / "etc" / "passwd").exists()
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_web_guest_token_brute_force_rate_limit(temp_dirs: tuple[Path, Path]) -> None:
+    upload_dir, _ = temp_dirs
+    server = WebGuestHttpServer(
+        token="real_secret",
+        upload_dir=upload_dir,
+        max_failed_attempts=5,
+        auth_lockout_seconds=60.0,
+    )
+    port = await server.start(host="127.0.0.1", port=0)
+
+    try:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port}") as client:
+            for _ in range(5):
+                resp = await client.get("/api/info", params={"token": "bad"})
+                assert resp.status_code == 403
+
+            # Lần thứ 6 bị khóa 429 kể cả khi thử gửi đúng token
+            locked_resp = await client.get("/api/info", params={"token": "real_secret"})
+            assert locked_resp.status_code == 429
     finally:
         await server.stop()

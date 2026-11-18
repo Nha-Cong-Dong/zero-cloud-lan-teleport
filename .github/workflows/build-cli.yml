@@ -58,6 +58,12 @@ jobs:
           version="$(python -c 'import teleport; print(teleport.__version__)')"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "sha7=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Ký số tệp thực thi CLI (nếu đã cấu hình chứng chỉ)
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+        run: python packaging/signing/sign_windows.py sign --if-configured --description "ZCL Teleport CLI" dist/teleport/teleport.exe
       - name: Test khói trên exe (pytest -m frozen)
         env:
           TELEPORT_FROZEN_EXE: ${{ github.workspace }}\dist\teleport\teleport.exe

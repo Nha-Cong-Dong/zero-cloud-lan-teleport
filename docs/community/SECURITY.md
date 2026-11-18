@@ -25,3 +25,27 @@ Bạn sẽ nhận được phản hồi trong vòng 7 ngày.
 - Bất kỳ kết nối nào ra Internet mà người dùng không bật.
 
 Mô hình mối đe dọa và biện pháp: [mvp.md](../product/mvp.md) mục 11. Thiết kế bảo mật trên dây: [protocol.md](../technical/protocol.md).
+
+---
+
+## Chính Sách Ký Mã (Code Signing Policy)
+
+*This section establishes the open-source Code Signing Policy and Privacy Statement for ZCL Teleport.*
+
+### Quy trình đóng gói và ký số (Build & Signing Process)
+
+- Chương trình ký mã miễn phí cho phần mềm nguồn mở được cung cấp bởi **SignPath.io**, với chứng chỉ từ **SignPath Foundation**.
+- Toàn bộ tệp thực thi phát hành chính thức (`teleport.exe`, `Teleport.exe`, bộ cài `teleport-setup-*-x64.exe` và các gói nén phát hành) được biên dịch hoàn toàn tự động từ mã nguồn công khai trên GitHub Actions (`.github/workflows/build-cli.yml`, `.github/workflows/build-gui.yml`, `.github/workflows/release.yml`), không bao giờ ký thủ công từ máy cá nhân.
+- Chỉ các mã nguồn trên nhánh chính (`main`) đã qua kiểm tra tự động hoặc thẻ phiên bản (`v*`) mới đủ điều kiện đưa vào quy trình ký phát hành.
+
+### Vai trò chịu trách nhiệm (Team Roles)
+
+- **Tác giả mã nguồn & Người rà soát (Authors & Reviewers):** **Nguyễn Hoàng Tùng** (`@Luffyreals`) và các cộng tác viên được chấp nhận qua Pull Request công khai.
+- **Người phê duyệt ký số (Approvers):** **Nguyễn Hoàng Tùng** (`@Luffyreals`), chủ sở hữu kho mã nguồn.
+
+### Tuyên Bố Quyền Riêng Tư (Privacy Statement)
+
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+
+Cụ thể trong **ZCL Teleport**: mọi thao tác truyền tệp và đồng bộ văn bản chỉ diễn ra trực tiếp giữa các thiết bị do chính người dùng ghép đôi trong cùng mạng nội bộ, sử dụng kết nối mã hóa an toàn giữa hai máy. Ứng dụng không kết nối máy chủ đám mây, không thu thập dữ liệu đo lường hay báo cáo sử dụng ngầm.
+

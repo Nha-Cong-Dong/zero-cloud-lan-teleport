@@ -3,7 +3,7 @@
 > **Vai trò:** đặc tả sản phẩm — giải quyết vấn đề gì, cho ai, gồm những gì, trông ra sao, đạt chuẩn nào thì được phát hành.
 > **Nguồn duy nhất cho:** phạm vi MVP, tính năng và tiêu chí chấp nhận (F1–F12), yêu cầu phi chức năng (N1–N12), thông báo lỗi, tiêu chí phát hành.
 > **Không chứa:** thiết kế kỹ thuật, lộ trình và tiến độ → [ke_hoach.md](ke_hoach.md). Ý tưởng, nguyên tắc và tầm nhìn → [y_tuong.md](y_tuong.md). Thuật ngữ, quy ước và bản đồ tài liệu → [README.md](../README.md).
-> **Cập nhật:** 2026-11-03
+> **Cập nhật:** 2026-11-18 (mở rộng tới v1.3.0 tại mục 4.2; đặc tả v1.0 giữ nguyên chuẩn đối chiếu)
 
 ---
 
@@ -98,6 +98,15 @@ Bản tối thiểu để demo ở buổi demo hackathon, nhỏ hơn MVP v1.0 �
 Từ 03/11 tới hết buổi demo, `main` đóng băng tính năng: chỉ nhận bản sửa lỗi, luật ở [ke_hoach.md](ke_hoach.md) mục 5.5. Bản zip đã kiểm H1–H5 được chốt theo commit. Không đạt kịp thì demo bằng CLI cho phần giao diện còn thiếu; H2–H5 vẫn phải đạt bằng CLI.
 
 Kịch bản demo hackathon (5 phút): các dòng 0:00–3:00 của mục 13, thêm H4 (đóng app nhận rồi mở lại) và dòng 4:00 (tắt Internet của router). Bỏ clipboard và so sánh với lưu trữ đám mây.
+
+### 4.2. Các tính năng mở rộng sau v1.0 (v1.1.0 – v1.3.0)
+
+Bảng phạm vi ở mục 4 là mốc chuẩn của bản `v1.0.0`. Từ sau `v1.0.0`, các mục từng nằm ở cột “Không có trong MVP” dưới đây đã được hoàn thành và phát hành:
+
+- **v1.1.0 — Gửi thư mục, gửi đồng thời nhiều máy & ẩn danh mạng nội bộ:** hỗ trợ gửi trọn vẹn cây thư mục con (kể cả thư mục rỗng), gửi song song tới nhiều thiết bị tin cậy (`--to may1,may2`), và tùy chọn ẩn tên thật trong bản tin tìm kiếm mạng công cộng (`--stealth`).
+- **v1.2.0 — Chế độ khách qua Web QR:** quét mã QR trên màn hình máy tính (`teleport guest` hoặc nút trong giao diện) để gửi/nhận tệp trực tiếp với trình duyệt điện thoại trong cùng mạng nội bộ mà không cần cài ứng dụng trên điện thoại.
+- **IPC dòng lệnh ↔ giao diện & đóng gói đa nền tảng:** lệnh CLI tự động giao tiếp trực tiếp với tiến trình giao diện đang chạy nền (không bị khóa `node.lock`), kèm tùy chọn tự gom tệp nhận vào thư mục con theo từng lượt chuyển (`[Tên thiết bị] (YYYY-MM-DD HH-MM)`).
+- **v1.3.0 — Nâng cấp Chế độ khách & tối ưu bộ nhớ:** cho phép kéo thả nhiều tệp hoặc cả thư mục từ trình duyệt điện thoại, tải nhiều tệp hoặc thư mục chia sẻ dưới dạng gói `.zip` truyền thẳng không tạo tệp tạm trên đĩa, khóa tạm thời nếu nhập sai mã kết nối nhiều lần, và tối ưu thuật toán kiểm tra toàn vẹn dùng bộ nhớ $O(\log_2 N)$.
 
 ---
 

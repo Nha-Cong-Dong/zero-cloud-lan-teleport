@@ -457,6 +457,29 @@ def test_main_notes_rejects_tag_not_matching_version(
     assert not out.exists()
 
 
+def test_release_notes_signed_mode_omits_unsigned_warning(
+    fake_version, fake_changelog, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_version("0.1.0a0")
+    fake_changelog(_CHANGELOG)
+    body = rel.release_notes("v0.1.0-alpha", "0.1.0a0", signed=True)
+    assert "chưa ký mã" not in body
+    assert "đã ký mã số" in body
+    assert "SignPath" in body
+
+    monkeypatch.setenv("TELEPORT_SIGNED", "true")
+    out = tmp_path / "signed_notes.md"
+    assert rel.main(["notes", "v0.1.0-alpha", "--out", str(out)]) == 0
+    written = out.read_text(encoding="utf-8")
+    assert "đã ký mã số" in written
+    assert "chưa ký mã" not in written
+
+    monkeypatch.delenv("TELEPORT_SIGNED", raising=False)
+    out_cli = tmp_path / "signed_flag_notes.md"
+    assert rel.main(["notes", "v0.1.0-alpha", "--out", str(out_cli), "--signed"]) == 0
+    assert "đã ký mã số" in out_cli.read_text(encoding="utf-8")
+
+
 def test_real_changelog_has_section_for_real_version_tag() -> None:
     """Tài liệu không lệch: khi __version__ là dạng phát hành được, CHANGELOG thật phải có mục của tag."""
     version = rel.app_version()

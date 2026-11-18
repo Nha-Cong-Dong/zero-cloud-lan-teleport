@@ -818,6 +818,7 @@ class Node:
                 new_id=self._new_conn_id,
                 set_hold=self._transfer_hold,
                 ask_before_receive=self._asks_before_receive,
+                create_subfolder=settings.create_subfolder,
             )
             if settings.temp_retention_days is not None:
                 transfers.set_temp_retention(settings.temp_retention_days * 86400.0)
@@ -1500,6 +1501,27 @@ class Node:
         if self._mdns_opts is not None and self._mdns_opts.advertise and self._visible:
             self._spawn(self._readvertise(), f"{_TASK_NAME}.stealth")
 
+    @property
+    def create_subfolder(self) -> bool:
+        """Có tự động tạo thư mục con [tên máy] (ngày-tháng) cho mỗi lần nhận file không."""
+        if self._transfers is not None:
+            return self._transfers.create_subfolder
+        assert self._settings is not None
+        return self._settings.create_subfolder
+
+    def set_create_subfolder(self, create: bool) -> None:
+        """Bật/tắt tự động tạo thư mục con khi nhận file và lưu."""
+        self._check_running()
+        if type(create) is not bool:
+            raise TypeError("create_subfolder phải là bool")
+        assert self._settings is not None
+        if self._settings.create_subfolder == create:
+            return
+        new_settings = dataclasses.replace(self._settings, create_subfolder=create)
+        self._save_settings(new_settings)
+        if self._transfers is not None:
+            self._transfers.create_subfolder = create
+
     def _allows_anonymous(self, ip: str) -> bool:
         """`Listener`: gửi `hello` cho kết nối ẩn danh từ `ip` không (đồng bộ, protocol mục 2.3).
 
@@ -1544,6 +1566,7 @@ class Node:
         window: WindowGeometry | _Unset | None = _UNSET,
         last_conversation: str | _Unset | None = _UNSET,
         tray_hint_shown: bool | _Unset = _UNSET,
+        create_subfolder: bool | _Unset = _UNSET,
     ) -> bool:
         """Lưu cài đặt của giao diện (chỉ lưu; app không làm gì thêm). Trường không truyền giữ nguyên.
 
@@ -1566,6 +1589,7 @@ class Node:
                 ("window", window),
                 ("last_conversation", last_conversation),
                 ("tray_hint_shown", tray_hint_shown),
+                ("create_subfolder", create_subfolder),
             )
             if value is not _UNSET
         }
@@ -1573,6 +1597,8 @@ class Node:
         if new == self._settings:  # so sánh bỏ qua `extra`, `load_failed`
             return False
         self._save_settings(new)
+        if create_subfolder is not _UNSET and self._transfers is not None:
+            self._transfers.create_subfolder = bool(create_subfolder)
         return True
 
     def _asks_before_receive(self, device_id: str) -> bool:

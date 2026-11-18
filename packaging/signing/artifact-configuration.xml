@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <!-- Bộ cài Windows Inno Setup -->
+  <pe-file name="teleport-setup-*-x64.exe" />
+
+  <!-- Gói zip bản giao diện đồ họa: ký tệp chạy chính và toàn bộ thư viện đi kèm bên trong -->
+  <zip-file name="teleport-gui-*-windows-x64.zip">
+    <pe-file name="teleport-gui/Teleport.exe" />
+    <pe-file name="teleport-gui/*.dll" />
+    <pe-file name="teleport-gui/*.pyd" />
+  </zip-file>
+
+  <!-- Gói zip bản dòng lệnh: ký tệp chạy chính và tệp nhị phân bên trong -->
+  <zip-file name="teleport-cli-*-windows-x64.zip">
+    <pe-file name="teleport/teleport.exe" />
+    <pe-file name="teleport/*.dll" />
+    <pe-file name="teleport/*.pyd" />
+  </zip-file>
+</artifact-configuration>
