@@ -1,13 +1,15 @@
-"""Máy chủ HTTP nội bộ siêu nhẹ phục vụ Chế độ khách qua trình duyệt Web (v1.2.0).
+"""Máy chủ HTTP nội bộ siêu nhẹ phục vụ Chế độ khách qua trình duyệt Web (v1.3.0).
 
 Không sử dụng bất kỳ framework web nặng nề nào bên ngoài (chỉ dùng `asyncio.start_server`),
 giữ ứng dụng gọn nhẹ, bảo toàn tính tương thích bản quyền GPLv3.
 
 Bảo mật nhiều lớp:
 1. Chỉ phục vụ trong mạng nội bộ (kiểm tra `ipaddress.is_private` hoặc loopback).
-2. Yêu cầu mã thông báo bảo mật 1 lần (`token`) trên mọi yêu cầu.
+2. Yêu cầu mã thông báo bảo mật 1 lần (`token`) so sánh hằng thời gian trên mọi yêu cầu,
+   tự động khóa IP tạm thời nếu nhập sai quá nhiều lần.
 3. Chống ghi đè và tấn công đường dẫn (Path Traversal) qua `teleport.core.filenames`.
-4. Truyền và nhận dữ liệu dạng luồng byte (streaming 64 KiB), bộ nhớ RAM không tăng theo kích thước tệp.
+4. Truyền và nhận dữ liệu dạng luồng byte (streaming 64 KiB, hỗ trợ nén ZIP trực tiếp trên
+   luồng tải về), bộ nhớ RAM không tăng theo kích thước tệp.
 5. Tự động đóng phiên sau thời gian không hoạt động (mặc định 10 phút).
 """
 
@@ -15,17 +17,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import hashlib
+import hmac
 import ipaddress
 import json
 import logging
 import mimetypes
+import os
+import shutil
+import struct
 import time
 import urllib.parse
+import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from teleport.core.filenames import sanitize_filename
+from teleport.core.filenames import sanitize_filename, sanitize_rel_path
 from teleport.net.web_guest_assets import WEB_GUEST_HTML
 
 if TYPE_CHECKING:
@@ -35,6 +43,65 @@ log = logging.getLogger("teleport.net.web_guest")
 
 DEFAULT_INACTIVITY_TIMEOUT = 600.0  # 10 phút
 CHUNK_SIZE = 64 * 1024  # 64 KiB
+MAX_FAILED_AUTH_ATTEMPTS = 5
+AUTH_LOCKOUT_SECONDS = 300.0
+_MAX_TRACKED_AUTH_IPS = 1024
+_ZIP_MAX_UINT32 = 0xFFFFFFFF
+
+
+def _dos_timestamp(mtime: float) -> tuple[int, int]:
+    """Chuyển epoch timestamp sang cặp (dos_time, dos_date) cho định dạng ZIP."""
+    dt = datetime.datetime.fromtimestamp(mtime)
+    year = max(1980, dt.year) - 1980
+    dos_time = (dt.hour << 11) | (dt.minute << 5) | (dt.second // 2)
+    dos_date = (year << 9) | (dt.month << 5) | dt.day
+    return dos_time, dos_date
+
+
+def _collect_zip_files(items: list[tuple[str, Path, bool]]) -> list[tuple[str, Path]]:
+    """Thu thập danh sách cặp `(arcname, file_path)` không trùng lặp từ tệp và thư mục chia sẻ."""
+    entries: list[tuple[str, Path]] = []
+    used_arcnames: set[str] = set()
+
+    def _unique_arcname(candidate: str) -> str:
+        norm = candidate.replace("\\", "/").strip("/")
+        if norm not in used_arcnames:
+            used_arcnames.add(norm)
+            return norm
+        if "/" in norm:
+            parent, leaf = norm.rsplit("/", 1)
+            prefix = f"{parent}/"
+        else:
+            prefix = ""
+            leaf = norm
+        stem, suffix = os.path.splitext(leaf)
+        counter = 1
+        while True:
+            alt = f"{prefix}{stem} ({counter}){suffix}"
+            if alt not in used_arcnames:
+                used_arcnames.add(alt)
+                return alt
+            counter += 1
+
+    for name, path, is_dir in items:
+        clean_root = sanitize_filename(name)
+        if not is_dir:
+            if path.is_file():
+                entries.append((_unique_arcname(clean_root), path))
+            continue
+        if not path.is_dir():
+            continue
+        for root, dirs, files in os.walk(path, followlinks=False):
+            dirs.sort()
+            files.sort()
+            for fname in files:
+                fpath = Path(root) / fname
+                if not fpath.is_file():
+                    continue
+                rel = os.path.relpath(fpath, path).replace("\\", "/")
+                clean_rel = sanitize_rel_path(f"{clean_root}/{rel}")
+                entries.append((_unique_arcname(clean_rel), fpath))
+    return entries
 
 
 class WebGuestHttpServer:
@@ -50,11 +117,15 @@ class WebGuestHttpServer:
         on_upload_progress: Callable[[str, int, int], None] | None = None,
         on_upload_complete: Callable[[str, int, Path], None] | None = None,
         on_session_timeout: Callable[[], None] | None = None,
+        max_failed_attempts: int = MAX_FAILED_AUTH_ATTEMPTS,
+        auth_lockout_seconds: float = AUTH_LOCKOUT_SECONDS,
     ) -> None:
         self.token = token
         self.upload_dir = upload_dir
         self.device_name = device_name
         self.inactivity_timeout = inactivity_timeout
+        self.max_failed_attempts = max(1, max_failed_attempts)
+        self.auth_lockout_seconds = max(0.0, auth_lockout_seconds)
 
         self.on_upload_start = on_upload_start
         self.on_upload_progress = on_upload_progress
@@ -62,6 +133,8 @@ class WebGuestHttpServer:
         self.on_session_timeout = on_session_timeout
 
         self.shared_files: dict[str, tuple[str, Path, int]] = {}
+        self._shared_dirs: set[str] = set()
+        self._failed_auth: dict[str, tuple[int, float]] = {}
         self._server: asyncio.Server | None = None
         self._port: int = 0
         self._last_activity = time.monotonic()
@@ -75,23 +148,39 @@ class WebGuestHttpServer:
         return self._port
 
     def add_shared_file(self, path: Path) -> str:
-        """Đưa một tệp trên máy tính vào danh sách chia sẻ để điện thoại tải về."""
-        if not path.is_file():
-            raise FileNotFoundError(f"Tệp không tồn tại: {path}")
-        file_id = hashlib.sha256(f"{path.name}:{path.stat().st_size}:{time.time()}".encode()).hexdigest()[:12]
-        size = path.stat().st_size
+        """Đưa một tệp hoặc thư mục trên máy tính vào danh sách chia sẻ để điện thoại tải về."""
+        if path.is_file():
+            is_dir = False
+            size = path.stat().st_size
+        elif path.is_dir():
+            is_dir = True
+            size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+        else:
+            raise FileNotFoundError(f"Tệp hoặc thư mục không tồn tại: {path}")
+
+        file_id = hashlib.sha256(f"{path.name}:{size}:{time.time()}".encode()).hexdigest()[:12]
         self.shared_files[file_id] = (path.name, path, size)
+        if is_dir:
+            self._shared_dirs.add(file_id)
+        else:
+            self._shared_dirs.discard(file_id)
         self._broadcast_event("files_updated", {"files": self._get_files_meta()})
         return file_id
 
+    add_shared_path = add_shared_file
+
     def remove_shared_file(self, file_id: str) -> None:
-        """Bỏ một tệp khỏi danh sách chia sẻ."""
+        """Bỏ một tệp hoặc thư mục khỏi danh sách chia sẻ."""
         if file_id in self.shared_files:
             del self.shared_files[file_id]
+            self._shared_dirs.discard(file_id)
             self._broadcast_event("files_updated", {"files": self._get_files_meta()})
 
     def _get_files_meta(self) -> list[dict[str, Any]]:
-        return [{"id": fid, "name": name, "size": size} for fid, (name, _, size) in self.shared_files.items()]
+        return [
+            {"id": fid, "name": name, "size": size, "is_dir": fid in self._shared_dirs}
+            for fid, (name, _, size) in self.shared_files.items()
+        ]
 
     async def start(self, host: str = "0.0.0.0", port: int = 0) -> int:
         """Khởi động máy chủ HTTP trên cổng ngẫu nhiên hoặc chỉ định."""
@@ -207,19 +296,28 @@ class WebGuestHttpServer:
                     k, v = line.split(":", 1)
                     headers[k.strip().lower()] = v.strip()
 
-            # Xác thực mã thông báo 1 lần (token)
+            # Kiểm tra giới hạn sai token & xác thực mã thông báo 1 lần (token)
             req_token = query.get("token", [""])[0]
             if not req_token and "cookie" in headers:
-                # Tìm trong Cookie
                 for cookie in headers["cookie"].split(";"):
                     if "teleport_token=" in cookie:
                         req_token = cookie.split("teleport_token=", 1)[1].strip()
 
-            if req_token != self.token:
-                log.warning("Yêu cầu từ %s có mã token không hợp lệ hoặc bị thiếu", client_ip)
-                await self._send_response(
-                    writer, 403, "text/plain; charset=utf-8", b"Tu choi: Ma token khong chinh xac\n"
-                )
+            auth_error = self._verify_client_auth(client_ip, req_token)
+            if auth_error is not None:
+                if auth_error == 429:
+                    log.warning("IP %s bị tạm khóa do nhập sai mã kết nối nhiều lần", client_ip)
+                    await self._send_response(
+                        writer,
+                        429,
+                        "text/plain; charset=utf-8",
+                        b"Tu choi: Nhap sai ma ket noi qua nhieu lan. Vui long thu lai sau.\n",
+                    )
+                else:
+                    log.warning("Yêu cầu từ %s có mã token không hợp lệ hoặc bị thiếu", client_ip)
+                    await self._send_response(
+                        writer, 403, "text/plain; charset=utf-8", b"Tu choi: Ma token khong chinh xac\n"
+                    )
                 return
 
             # Xử lý các tuyến đường
@@ -249,6 +347,40 @@ class WebGuestHttpServer:
                     pass
                 self._active_connections.discard(writer)
 
+    def _verify_client_auth(self, client_ip: str, req_token: str) -> int | None:
+        """Kiểm tra khóa IP và so sánh token theo thời gian hằng. Trả mã lỗi HTTP hoặc None nếu đạt."""
+        now = time.monotonic()
+        entry = self._failed_auth.get(client_ip)
+        if entry is not None:
+            fails, unlock_at = entry
+            if fails >= self.max_failed_attempts:
+                if now < unlock_at:
+                    return 429
+                del self._failed_auth[client_ip]
+
+        token_ok = bool(req_token) and hmac.compare_digest(
+            req_token.encode("utf-8", errors="replace"),
+            self.token.encode("utf-8"),
+        )
+        if token_ok:
+            self._failed_auth.pop(client_ip, None)
+            return None
+
+        prev_fails = self._failed_auth.get(client_ip, (0, 0.0))[0]
+        fails = prev_fails + 1
+        unlock_at = now + self.auth_lockout_seconds if fails >= self.max_failed_attempts else 0.0
+        if len(self._failed_auth) >= _MAX_TRACKED_AUTH_IPS and client_ip not in self._failed_auth:
+            expired = [
+                ip for ip, (f, u) in self._failed_auth.items() if f >= self.max_failed_attempts and now >= u
+            ]
+            for ip in expired:
+                del self._failed_auth[ip]
+            if len(self._failed_auth) >= _MAX_TRACKED_AUTH_IPS:
+                oldest = next(iter(self._failed_auth))
+                del self._failed_auth[oldest]
+        self._failed_auth[client_ip] = (fails, unlock_at)
+        return 429 if fails > self.max_failed_attempts else 403
+
     async def _handle_get(
         self,
         path: str,
@@ -277,14 +409,37 @@ class WebGuestHttpServer:
             body = json.dumps(data, ensure_ascii=False).encode("utf-8")
             await self._send_response(writer, 200, "application/json; charset=utf-8", body)
 
+        elif path == "/api/download-zip":
+            if not self.shared_files:
+                await self._send_response(writer, 404, "text/plain", b"No Files Shared\n")
+                return
+            items = [(name, p, fid in self._shared_dirs) for fid, (name, p, _) in self.shared_files.items()]
+            entries = _collect_zip_files(items)
+            if not entries:
+                await self._send_response(writer, 404, "text/plain", b"No Files Available\n")
+                return
+            await self._serve_zip_stream("teleport-files.zip", entries, writer)
+
         elif path.startswith("/api/download/"):
-            # Tải tệp xuống điện thoại
+            # Tải tệp hoặc thư mục xuống điện thoại
             file_id = path.split("/api/download/", 1)[1].strip("/")
             if file_id not in self.shared_files:
                 await self._send_response(writer, 404, "text/plain", b"Not Found\n")
                 return
 
             filename, file_path, file_size = self.shared_files[file_id]
+            if file_id in self._shared_dirs:
+                if not file_path.is_dir():
+                    await self._send_response(writer, 404, "text/plain", b"Directory Missing\n")
+                    return
+                entries = _collect_zip_files([(filename, file_path, True)])
+                if not entries:
+                    await self._send_response(writer, 404, "text/plain", b"Empty Directory\n")
+                    return
+                zip_name = f"{sanitize_filename(filename)}.zip"
+                await self._serve_zip_stream(zip_name, entries, writer)
+                return
+
             if not file_path.is_file():
                 await self._send_response(writer, 404, "text/plain", b"File Missing\n")
                 return
@@ -371,7 +526,153 @@ class WebGuestHttpServer:
                     break
                 writer.write(chunk)
                 await writer.drain()
+                self._last_activity = time.monotonic()
                 remaining -= len(chunk)
+
+    async def _serve_zip_stream(
+        self,
+        zip_filename: str,
+        entries: list[tuple[str, Path]],
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Đóng gói và truyền phát nhiều tệp dưới dạng luồng ZIP trực tiếp với RAM O(1)."""
+        ascii_filename = urllib.parse.quote(zip_filename)
+        cd_val = f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{ascii_filename}"
+        resp_headers = [
+            "HTTP/1.1 200 OK",
+            "Content-Type: application/zip",
+            f"Content-Disposition: {cd_val}",
+            "Cache-Control: no-store",
+            "Connection: close",
+            "\r\n",
+        ]
+        writer.write("\r\n".join(resp_headers).encode("latin1"))
+        await writer.drain()
+
+        offset = 0
+        central_dir_records: list[bytes] = []
+
+        for arcname, file_path in entries:
+            if self._closed or not file_path.is_file():
+                continue
+            stat_res = file_path.stat()
+            if stat_res.st_size > _ZIP_MAX_UINT32 or offset > _ZIP_MAX_UINT32:
+                log.warning("Bỏ qua tệp vượt ngưỡng ZIP 32-bit trong luồng tải ZIP: %s", arcname)
+                continue
+
+            name_bytes = arcname.replace("\\", "/").encode("utf-8")
+            dos_time, dos_date = _dos_timestamp(stat_res.st_mtime)
+            header_offset = offset
+
+            local_hdr = (
+                struct.pack(
+                    "<4sHHHHHIIIHH",
+                    b"PK\x03\x04",
+                    20,
+                    0x0808,
+                    0,
+                    dos_time,
+                    dos_date,
+                    0,
+                    0,
+                    0,
+                    len(name_bytes),
+                    0,
+                )
+                + name_bytes
+            )
+            writer.write(local_hdr)
+            await writer.drain()
+            offset += len(local_hdr)
+
+            crc = 0
+            file_size = 0
+            with open(file_path, "rb") as f:
+                while not self._closed:
+                    chunk = f.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    crc = zlib.crc32(chunk, crc)
+                    file_size += len(chunk)
+                    offset += len(chunk)
+                    writer.write(chunk)
+                    await writer.drain()
+                    self._last_activity = time.monotonic()
+
+            crc &= _ZIP_MAX_UINT32
+            data_desc = struct.pack("<4sIII", b"PK\x07\x08", crc, file_size, file_size)
+            writer.write(data_desc)
+            await writer.drain()
+            offset += len(data_desc)
+
+            cd_record = (
+                struct.pack(
+                    "<4sHHHHHHIIIHHHHHII",
+                    b"PK\x01\x02",
+                    20,
+                    20,
+                    0x0808,
+                    0,
+                    dos_time,
+                    dos_date,
+                    crc,
+                    file_size,
+                    file_size,
+                    len(name_bytes),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    header_offset,
+                )
+                + name_bytes
+            )
+            central_dir_records.append(cd_record)
+
+        cd_offset = offset
+        cd_size = 0
+        for rec in central_dir_records:
+            writer.write(rec)
+            cd_size += len(rec)
+        await writer.drain()
+
+        entry_count = len(central_dir_records)
+        eocd = struct.pack(
+            "<4sHHHHIIH",
+            b"PK\x05\x06",
+            0,
+            0,
+            entry_count,
+            entry_count,
+            cd_size,
+            cd_offset,
+            0,
+        )
+        writer.write(eocd)
+        await writer.drain()
+
+    def _resolve_upload_target(self, raw_filename: str, raw_rel_path: str) -> tuple[str, Path]:
+        """Làm sạch tên tệp / đường dẫn tương đối và chọn đường dẫn đích an toàn không ghi đè."""
+        upload_root = self.upload_dir.resolve()
+        if raw_rel_path.strip():
+            unquoted = urllib.parse.unquote(raw_rel_path).replace("\\", "/")
+            clean_rel = sanitize_rel_path(unquoted)
+            parts = clean_rel.split("/")
+            if len(parts) >= 2:
+                target_parent = self.upload_dir.joinpath(*parts[:-1])
+                target_parent.mkdir(parents=True, exist_ok=True)
+                if not target_parent.resolve().is_relative_to(upload_root):
+                    raise ValueError("Đường dẫn lưu trữ vượt ngoài thư mục nhận")
+                final_path = self._resolve_unique_path(target_parent / parts[-1])
+                display_name = f"{'/'.join(parts[:-1])}/{final_path.name}"
+                return display_name, final_path
+            filename = parts[0]
+        else:
+            filename = sanitize_filename(urllib.parse.unquote(raw_filename))
+
+        final_path = self._resolve_unique_path(self.upload_dir / filename)
+        return final_path.name, final_path
 
     async def _handle_post(
         self,
@@ -388,19 +689,50 @@ class WebGuestHttpServer:
         raw_filename = query.get("name", [""])[0] or headers.get("x-filename", "")
         if not raw_filename:
             raw_filename = f"guest_upload_{int(time.time())}.bin"
+        raw_rel_path = query.get("rel_path", [""])[0] or headers.get("x-rel-path", "")
 
-        # Lọc sạch tên file chống tấn công Path Traversal
-        filename = sanitize_filename(urllib.parse.unquote(raw_filename))
-        content_length = int(headers.get("content-length", "0"))
+        try:
+            content_length = int(headers.get("content-length", "0"))
+        except ValueError:
+            await self._send_response(writer, 400, "text/plain", b"Invalid Content-Length\n")
+            return
+        if content_length < 0:
+            await self._send_response(writer, 400, "text/plain", b"Invalid Content-Length\n")
+            return
+
+        if content_length > 0:
+            try:
+                free_bytes = shutil.disk_usage(self.upload_dir).free
+            except OSError:
+                free_bytes = content_length
+            if free_bytes < content_length:
+                await self._send_response(
+                    writer,
+                    507,
+                    "application/json; charset=utf-8",
+                    json.dumps({"ok": False, "error": "Không đủ chỗ trống trên ổ đĩa"}).encode("utf-8"),
+                )
+                return
+
+        try:
+            display_name, final_path = self._resolve_upload_target(raw_filename, raw_rel_path)
+        except ValueError as e:
+            await self._send_response(
+                writer,
+                400,
+                "application/json; charset=utf-8",
+                json.dumps({"ok": False, "error": str(e)}).encode("utf-8"),
+            )
+            return
 
         if self.on_upload_start:
             try:
-                self.on_upload_start(filename, content_length)
+                self.on_upload_start(display_name, content_length)
             except Exception as e:
                 log.error("Lỗi callback bắt đầu tải lên: %s", e)
 
-        # Ghi trực tiếp ra tệp tạm trên đĩa
-        temp_path = self.upload_dir / f".part_{filename}_{int(time.time())}"
+        # Ghi trực tiếp ra tệp tạm trong cùng thư mục đích
+        temp_path = final_path.parent / f".part_{final_path.name}_{int(time.time() * 1000)}"
         hasher = hashlib.sha256()
         received = 0
 
@@ -415,29 +747,35 @@ class WebGuestHttpServer:
                     f.write(chunk)
                     hasher.update(chunk)
                     received += len(chunk)
+                    self._last_activity = time.monotonic()
                     if remaining != float("inf"):
                         remaining -= len(chunk)
 
                     if self.on_upload_progress and content_length > 0:
                         with contextlib.suppress(Exception):
-                            self.on_upload_progress(filename, received, content_length)
+                            self.on_upload_progress(display_name, received, content_length)
 
-            # Đổi tên tệp hoàn tất, tự động thêm số thứ tự nếu trùng tên
-            final_path = self._resolve_unique_path(self.upload_dir / filename)
+            final_path = self._resolve_unique_path(final_path)
             temp_path.replace(final_path)
 
-            log.info("Nhận thành công tệp %s (%d bytes, sha256=%s)", filename, received, hasher.hexdigest())
+            log.info(
+                "Nhận thành công tệp %s (%d bytes, sha256=%s)",
+                display_name,
+                received,
+                hasher.hexdigest(),
+            )
 
             if self.on_upload_complete:
                 try:
-                    self.on_upload_complete(filename, received, final_path)
+                    self.on_upload_complete(display_name, received, final_path)
                 except Exception as e:
                     log.error("Lỗi callback hoàn tất tải lên: %s", e)
 
             # Phản hồi JSON 200
             res = {
                 "ok": True,
-                "filename": filename,
+                "filename": final_path.name,
+                "rel_path": display_name,
                 "size": received,
                 "sha256": hasher.hexdigest(),
             }
@@ -448,7 +786,7 @@ class WebGuestHttpServer:
             if temp_path.exists():
                 with contextlib.suppress(Exception):
                     temp_path.unlink()
-            log.error("Lỗi nhận tệp %s: %s", filename, e)
+            log.error("Lỗi nhận tệp %s: %s", display_name, e)
             await self._send_response(
                 writer,
                 500,
@@ -485,7 +823,9 @@ class WebGuestHttpServer:
             403: "Forbidden",
             404: "Not Found",
             405: "Method Not Allowed",
+            429: "Too Many Requests",
             500: "Internal Server Error",
+            507: "Insufficient Storage",
         }
         reason = reasons.get(status_code, "Unknown")
         lines = [

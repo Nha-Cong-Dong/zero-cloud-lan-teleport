@@ -3169,8 +3169,8 @@ async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: 
     if args.files:
         for f in args.files:
             p = Path(f).expanduser().resolve()
-            if not p.is_file():
-                print(f"Lỗi: Không tìm thấy tệp hoặc không phải tệp thông thường: {f}", file=stderr)
+            if not (p.is_file() or p.is_dir()):
+                print(f"Lỗi: Không tìm thấy tệp hoặc không phải tệp/thư mục hợp lệ: {f}", file=stderr)
                 return 2
             shared_paths.append(p)
 

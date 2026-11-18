@@ -71,3 +71,36 @@ async def test_web_guest_manager_shared_files(temp_receive_dir: Path, tmp_path: 
             assert dl_resp.content == b"%PDF-1.4 dummy content"
     finally:
         await manager.stop_session()
+
+
+@pytest.mark.asyncio
+async def test_web_guest_manager_shared_directory(temp_receive_dir: Path, tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    folder = tmp_path / "thumuc_chiase"
+    folder.mkdir()
+    (folder / "ghi_chu.txt").write_bytes(b"THU_MUC_CHIA_SE")
+
+    manager = WebGuestManager(receive_dir=temp_receive_dir)
+    info = await manager.start_session(shared_files=[folder], preferred_ip="127.0.0.1")
+
+    try:
+        async with SimpleHttpClient() as client:
+            resp = await client.get(f"http://127.0.0.1:{info.port}/api/info?token={info.token}")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data["files"]) == 1
+            assert data["files"][0]["name"] == "thumuc_chiase"
+            assert data["files"][0]["is_dir"] is True
+
+            dir_id = data["files"][0]["id"]
+            dl_resp = await client.get(
+                f"http://127.0.0.1:{info.port}/api/download/{dir_id}?token={info.token}"
+            )
+            assert dl_resp.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(dl_resp.content)) as zf:
+                assert zf.namelist() == ["thumuc_chiase/ghi_chu.txt"]
+                assert zf.read("thumuc_chiase/ghi_chu.txt") == b"THU_MUC_CHIA_SE"
+    finally:
+        await manager.stop_session()

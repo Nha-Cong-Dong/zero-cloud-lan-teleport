@@ -70,7 +70,7 @@ Có 3 cách đơn giản để gửi:
 
 - Khi có người gửi dữ liệu tới, một hộp thoại thông báo sẽ xuất hiện trên màn hình máy nhận kèm tên người gửi, tên các tệp tin và dung lượng tệp.
 - Bấm **Nhận** để đồng ý tải về, hoặc bấm **Từ chối** nếu không muốn nhận.
-- Mặc định, tệp tin nhận về sẽ được lưu an toàn trong thư mục `Teleport` tại mục `Tải về (Downloads)` của máy tính. Bạn có thể đổi thư mục lưu này trong phần Cài đặt.
+- Mặc định, tệp tin nhận về sẽ được lưu an toàn trong thư mục `Teleport` tại mục `Tải về (Downloads)` của máy tính. Bạn có thể bật tùy chọn **Tạo thư mục con cho từng lượt nhận** trong Cài đặt để mỗi lần nhận được gom gọn vào một thư mục riêng theo tên máy gửi và thời gian nhận (ví dụ `[Laptop-Minh] (2026-11-18 07-00)`), giúp thư mục Tải về luôn ngăn nắp.
 
 ### 4.3. Theo dõi tiến trình truyền
 
@@ -90,9 +90,21 @@ ZCL Teleport hỗ trợ tính năng chia sẻ nội dung sao chép giữa các m
 
 ---
 
-## 6. Xử Lý Các Sự Cố Thường Gặp
+## 6. Chuyển Tệp Nhanh Với Điện Thoại Qua Mã QR
 
-### 6.1. Hai máy cùng mạng nhưng không tìm thấy nhau
+Khi muốn gửi ảnh, video hoặc tài liệu giữa máy tính và điện thoại mà không cần cài thêm phần mềm lên điện thoại:
+
+1. Trên giao diện máy tính, bấm nút **Chuyển tệp với điện thoại** (hoặc chạy lệnh `teleport guest` trên cửa sổ dòng lệnh).
+2. Màn hình máy tính sẽ hiện một mã QR. Hãy mở máy ảnh trên điện thoại (đang dùng chung mạng Wi-Fi với máy tính) để quét mã đó và mở đường dẫn trên trình duyệt web.
+3. **Gửi từ điện thoại sang máy tính:** Tại mục **Gửi sang máy tính**, chọn một hoặc nhiều tệp, chọn cả thư mục, hoặc kéo thả trực tiếp vào khung trên trình duyệt để chuyển thẳng vào thư mục nhận của máy tính.
+4. **Tải từ máy tính về điện thoại:** Trên máy tính bấm **+ Thêm tệp chia sẻ...** để chọn tệp hoặc thư mục muốn gửi. Trên điện thoại chuyển sang mục **Nhận về điện thoại** để tải từng tệp hoặc bấm **Tải tất cả (.zip)** để gộp tất cả thành một tệp nén tải về ngay lập tức mà không tốn dung lượng tạm trên ổ đĩa máy tính.
+5. Khi xong việc, bấm **Đóng** hộp thoại trên máy tính để ngắt phiên kết nối. Đường dẫn chỉ có tác dụng trong mạng nội bộ và tự động tắt sau 10 phút nếu không có thao tác nào.
+
+---
+
+## 7. Xử Lý Các Sự Cố Thường Gặp
+
+### 7.1. Hai máy cùng mạng nhưng không tìm thấy nhau
 
 1. **Kiểm tra trạng thái mở ứng dụng:** Đảm bảo cả hai máy đều đang bật ZCL Teleport.
 2. **Kiểm tra loại mạng của Windows (Mạng riêng tư vs Mạng công cộng):**
@@ -101,17 +113,17 @@ ZCL Teleport hỗ trợ tính năng chia sẻ nội dung sao chép giữa các m
    - Bấm vào nút **Mở hướng dẫn**, sau đó bấm **Mở cài đặt mạng** để chuyển mạng đang dùng sang chế độ **Mạng riêng tư (Private)**.
 3. **Nhập địa chỉ trực tiếp:** Nếu điểm phát sóng (như ở quán cà phê, khách sạn) cố tình cô lập các máy tính, hãy bấm **Nhập địa chỉ thủ công** để kết nối thẳng tới địa chỉ của máy cần gửi.
 
-### 6.2. Ứng dụng báo không đủ chỗ trống trên ổ đĩa
+### 7.2. Ứng dụng báo không đủ chỗ trống trên ổ đĩa
 
 - Trước khi bắt đầu nhận tệp, ZCL Teleport luôn kiểm tra dung lượng còn trống trên ổ đĩa lưu của máy nhận.
 - Nếu ổ đĩa của bạn còn trống ít hơn dung lượng tệp gửi tới, ứng dụng sẽ tự động từ chối và thông báo rõ ràng để tránh làm đầy ổ cứng của bạn.
 - Bạn chỉ cần dọn dẹp ổ đĩa hoặc vào Cài đặt chọn một thư mục lưu khác có nhiều dung lượng trống hơn.
 
-### 6.3. Muốn tắt hẳn ứng dụng
+### 7.3. Muốn tắt hẳn ứng dụng
 
 - Khi bạn bấm nút đóng cửa sổ (dấu X), ứng dụng sẽ tự động thu nhỏ xuống thanh tác vụ ở góc dưới màn hình để luôn sẵn sàng nhận tệp khi có người gửi tới.
 - Để tắt hoàn toàn ứng dụng, hãy bấm chuột phải vào biểu tượng ứng dụng ở khay hệ thống (cạnh đồng hồ) và chọn **Thoát**.
 
 ---
 
-*Tài liệu được cập nhật ngày: 2026-11-09 · Tác giả: Nguyễn Hoàng Tùng (@Luffyreals)*
+*Tài liệu được cập nhật ngày: 2026-11-18 · Tác giả: Nguyễn Hoàng Tùng (@Luffyreals)*

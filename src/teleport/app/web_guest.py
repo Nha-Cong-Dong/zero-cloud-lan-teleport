@@ -95,7 +95,7 @@ class WebGuestManager:
 
         if shared_files:
             for p in shared_files:
-                if p.is_file():
+                if p.is_file() or p.is_dir():
                     self._server.add_shared_file(p)
 
         bound_port = await self._server.start(host="0.0.0.0", port=port)

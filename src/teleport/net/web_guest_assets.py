@@ -1,5 +1,5 @@
-# ruff: noqa: E501, W293
-"""Tài nguyên giao diện Web chế độ khách (Web Guest Mode) cho ZCL Teleport (v1.2.0).
+# ruff: noqa: E501
+"""Tài nguyên giao diện Web chế độ khách (Web Guest Mode) cho ZCL Teleport (v1.3.0).
 
 Toàn bộ trang web được đóng gói trong một file HTML duy nhất (< 50 KB),
 nhúng sẵn CSS và JavaScript thuần, hỗ trợ chế độ sáng/tối tự động và đa ngôn ngữ (VI/EN).
@@ -56,7 +56,7 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     }
     .container {
       width: 100%;
-      max-width: 520px;
+      max-width: 540px;
       display: flex;
       flex-direction: column;
       gap: 16px;
@@ -143,39 +143,63 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     .dropzone {
       border: 2px dashed var(--border);
       border-radius: var(--radius);
-      padding: 32px 20px;
+      padding: 28px 20px;
       text-align: center;
       cursor: pointer;
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 12px;
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, background-color 0.2s;
     }
     .dropzone:active, .dropzone.dragover {
       border-color: var(--primary);
-      background: rgba(2, 132, 199, 0.05);
+      background: rgba(2, 132, 199, 0.06);
     }
     .dropzone svg {
       width: 44px;
       height: 44px;
       stroke: var(--primary);
     }
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
     .btn-select {
       background: var(--primary);
       color: #ffffff;
       border: none;
-      padding: 10px 20px;
+      padding: 10px 18px;
       border-radius: 8px;
       font-weight: 600;
-      font-size: 0.95rem;
+      font-size: 0.9rem;
       cursor: pointer;
+    }
+    .btn-select-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    .download-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 12px;
     }
     .file-list {
       margin-top: 16px;
       display: flex;
       flex-direction: column;
       gap: 10px;
+    }
+    #downloadSection .file-list {
+      margin-top: 0;
     }
     .file-item {
       display: flex;
@@ -302,6 +326,7 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     <!-- Tab Gửi sang máy tính -->
     <div class="card" id="uploadSection">
       <input type="file" id="filePicker" multiple style="display:none;" onchange="handleFilesSelected(this.files)">
+      <input type="file" id="folderPicker" webkitdirectory directory multiple style="display:none;" onchange="handleFilesSelected(this.files)">
       <div class="dropzone" id="dropZone" onclick="document.getElementById('filePicker').click()">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
@@ -309,10 +334,13 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           <path d="m16 16-4-4-4 4"></path>
         </svg>
         <div>
-          <strong id="dropzoneTitle">Chọn tệp hoặc ảnh từ điện thoại</strong>
-          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;" id="dropzoneSub">Bấm vào đây để chọn nhiều tệp cùng lúc</div>
+          <strong id="dropzoneTitle">Chọn hoặc kéo thả tệp, thư mục</strong>
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;" id="dropzoneSub">Hỗ trợ chọn nhiều tệp hoặc cả thư mục cùng lúc</div>
         </div>
-        <button class="btn-select" id="btnSelectText">Chọn tệp</button>
+        <div class="btn-row">
+          <button type="button" class="btn-select" id="btnSelectText" onclick="event.stopPropagation(); document.getElementById('filePicker').click()">Chọn tệp</button>
+          <button type="button" class="btn-select-secondary" id="btnSelectFolderText" onclick="event.stopPropagation(); document.getElementById('folderPicker').click()">Chọn thư mục</button>
+        </div>
       </div>
 
       <div class="file-list" id="uploadList"></div>
@@ -320,6 +348,16 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
 
     <!-- Tab Nhận về điện thoại -->
     <div class="card hidden" id="downloadSection">
+      <div class="download-toolbar hidden" id="downloadToolbar">
+        <a class="btn-action" id="downloadAllBtn" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span id="downloadAllText">Tải tất cả (.zip)</span>
+        </a>
+      </div>
       <div class="file-list" id="downloadList">
         <div class="empty-state" id="downloadEmpty">Không có tệp nào đang chờ nhận từ máy tính.</div>
       </div>
@@ -335,17 +373,21 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token') || '';
     let currentLang = 'vi';
+    let lastFiles = [];
 
     const I18N = {
       vi: {
         peer: 'Kết nối máy tính: {name}',
         tabUpload: 'Gửi sang máy tính',
         tabDownload: 'Nhận về điện thoại',
-        dropTitle: 'Chọn tệp hoặc ảnh từ điện thoại',
-        dropSub: 'Bấm vào đây để chọn nhiều tệp cùng lúc',
+        dropTitle: 'Chọn hoặc kéo thả tệp, thư mục',
+        dropSub: 'Hỗ trợ chọn nhiều tệp hoặc cả thư mục cùng lúc',
         btnSelect: 'Chọn tệp',
+        btnSelectFolder: 'Chọn thư mục',
+        downloadAll: 'Tải tất cả (.zip)',
         emptyDownload: 'Không có tệp nào đang chờ nhận từ máy tính.',
         downloadBtn: 'Tải về',
+        folderTag: 'Thư mục',
         uploading: 'Đang gửi... {percent}% ({speed})',
         completed: 'Hoàn tất',
         failed: 'Thất bại: {err}',
@@ -355,11 +397,14 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         peer: 'Connected PC: {name}',
         tabUpload: 'Send to Computer',
         tabDownload: 'Receive on Phone',
-        dropTitle: 'Select files or photos',
-        dropSub: 'Tap here to choose files to send',
+        dropTitle: 'Select or drop files & folders',
+        dropSub: 'Supports multiple files or whole folders at once',
         btnSelect: 'Choose Files',
+        btnSelectFolder: 'Choose Folder',
+        downloadAll: 'Download All (.zip)',
         emptyDownload: 'No files waiting to download from computer.',
         downloadBtn: 'Download',
+        folderTag: 'Folder',
         uploading: 'Sending... {percent}% ({speed})',
         completed: 'Finished',
         failed: 'Failed: {err}',
@@ -380,9 +425,9 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       document.getElementById('dropzoneTitle').innerText = t.dropTitle;
       document.getElementById('dropzoneSub').innerText = t.dropSub;
       document.getElementById('btnSelectText').innerText = t.btnSelect;
-      if (document.getElementById('downloadEmpty')) {
-        document.getElementById('downloadEmpty').innerText = t.emptyDownload;
-      }
+      document.getElementById('btnSelectFolderText').innerText = t.btnSelectFolder;
+      document.getElementById('downloadAllText').innerText = t.downloadAll;
+      renderDownloadList(lastFiles);
     }
 
     function switchTab(tab) {
@@ -417,36 +462,67 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           const t = I18N[currentLang];
           document.getElementById('peerInfo').innerText = t.peer.replace('{name}', data.device_name);
         }
-        renderDownloadList(data.files || []);
+        lastFiles = data.files || [];
+        renderDownloadList(lastFiles);
       } catch (e) {
         console.error('Lỗi lấy thông tin phiên:', e);
       }
     }
 
     function renderDownloadList(files) {
+      lastFiles = files || [];
+      const t = I18N[currentLang];
+      const toolbar = document.getElementById('downloadToolbar');
+      const dlAll = document.getElementById('downloadAllBtn');
+      if (lastFiles.length >= 2) {
+        toolbar.classList.remove('hidden');
+        dlAll.href = '/api/download-zip?token=' + encodeURIComponent(token);
+        dlAll.setAttribute('download', 'teleport-files.zip');
+      } else {
+        toolbar.classList.add('hidden');
+      }
+
       const container = document.getElementById('downloadList');
-      if (!files || files.length === 0) {
-        container.innerHTML = '<div class="empty-state" id="downloadEmpty">' + I18N[currentLang].emptyDownload + '</div>';
+      container.innerHTML = '';
+      if (lastFiles.length === 0) {
+        const emptyEl = document.createElement('div');
+        emptyEl.className = 'empty-state';
+        emptyEl.id = 'downloadEmpty';
+        emptyEl.innerText = t.emptyDownload;
+        container.appendChild(emptyEl);
         return;
       }
-      container.innerHTML = '';
-      files.forEach(f => {
+
+      lastFiles.forEach(f => {
         const item = document.createElement('div');
         item.className = 'file-item';
-        item.innerHTML = `
-          <div class="file-details">
-            <div class="file-name" title="${f.name}">${f.name}</div>
-            <div class="file-meta">${formatBytes(f.size)}</div>
-          </div>
-          <a class="btn-action" href="/api/download/${f.id}?token=${encodeURIComponent(token)}" download="${f.name}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            ${I18N[currentLang].downloadBtn}
-          </a>
-        `;
+
+        const details = document.createElement('div');
+        details.className = 'file-details';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'file-name';
+        nameEl.title = f.name;
+        nameEl.innerText = f.name;
+
+        const metaEl = document.createElement('div');
+        metaEl.className = 'file-meta';
+        metaEl.innerText = f.is_dir ? (t.folderTag + ' · ' + formatBytes(f.size)) : formatBytes(f.size);
+
+        details.appendChild(nameEl);
+        details.appendChild(metaEl);
+
+        const link = document.createElement('a');
+        link.className = 'btn-action';
+        link.href = '/api/download/' + encodeURIComponent(f.id) + '?token=' + encodeURIComponent(token);
+        link.setAttribute('download', f.is_dir ? (f.name + '.zip') : f.name);
+        link.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+        const btnText = document.createElement('span');
+        btnText.innerText = f.is_dir ? (t.downloadBtn + ' (.zip)') : t.downloadBtn;
+        link.appendChild(btnText);
+
+        item.appendChild(details);
+        item.appendChild(link);
         container.appendChild(item);
       });
     }
@@ -461,6 +537,65 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       processUploadQueue();
     }
 
+    async function readEntryFiles(entry, prefix) {
+      if (entry.isFile) {
+        return new Promise((resolve) => {
+          entry.file((file) => {
+            file._relPath = prefix ? (prefix + '/' + file.name) : file.name;
+            resolve([file]);
+          }, () => resolve([]));
+        });
+      }
+      if (entry.isDirectory) {
+        const reader = entry.createReader();
+        const nextPrefix = prefix ? (prefix + '/' + entry.name) : entry.name;
+        const collected = [];
+        while (true) {
+          const batch = await new Promise((resolve) => reader.readEntries(resolve, () => resolve([])));
+          if (!batch || batch.length === 0) break;
+          for (const child of batch) {
+            const sub = await readEntryFiles(child, nextPrefix);
+            collected.push(...sub);
+          }
+        }
+        return collected;
+      }
+      return [];
+    }
+
+    const dropZone = document.getElementById('dropZone');
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
+    dropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      const items = e.dataTransfer && e.dataTransfer.items;
+      if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+        const droppedFiles = [];
+        const entries = [];
+        for (let i = 0; i < items.length; i++) {
+          const entry = items[i].webkitGetAsEntry();
+          if (entry) entries.push(entry);
+        }
+        for (const entry of entries) {
+          const files = await readEntryFiles(entry, '');
+          droppedFiles.push(...files);
+        }
+        if (droppedFiles.length > 0) {
+          handleFilesSelected(droppedFiles);
+          return;
+        }
+      }
+      if (e.dataTransfer && e.dataTransfer.files) {
+        handleFilesSelected(e.dataTransfer.files);
+      }
+    });
+
     async function processUploadQueue() {
       if (isUploading || uploadQueue.length === 0) return;
       isUploading = true;
@@ -472,17 +607,19 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
 
     function uploadFile(file) {
       return new Promise((resolve) => {
+        const relPath = file._relPath || file.webkitRelativePath || '';
+        const displayName = relPath || file.name;
         const list = document.getElementById('uploadList');
         const item = document.createElement('div');
         item.className = 'file-item';
-        
+
         const details = document.createElement('div');
         details.className = 'file-details';
-        
+
         const nameEl = document.createElement('div');
         nameEl.className = 'file-name';
-        nameEl.innerText = file.name;
-        
+        nameEl.innerText = displayName;
+
         const metaEl = document.createElement('div');
         metaEl.className = 'file-meta';
         metaEl.innerText = formatBytes(file.size) + ' · ' + I18N[currentLang].waiting;
@@ -504,7 +641,6 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
 
         const xhr = new XMLHttpRequest();
         let startTime = Date.now();
-        let lastLoaded = 0;
 
         xhr.upload.onprogress = function(e) {
           if (e.lengthComputable) {
@@ -539,14 +675,31 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           resolve();
         };
 
-        const targetUrl = '/api/upload?name=' + encodeURIComponent(file.name) + '&token=' + encodeURIComponent(token);
+        let targetUrl = '/api/upload?name=' + encodeURIComponent(file.name) + '&token=' + encodeURIComponent(token);
+        if (relPath && relPath.includes('/')) {
+          targetUrl += '&rel_path=' + encodeURIComponent(relPath);
+        }
         xhr.open('POST', targetUrl, true);
         xhr.setRequestHeader('Content-Type', 'application/octet-stream');
         xhr.send(file);
       });
     }
 
+    function connectEvents() {
+      if (!window.EventSource) return;
+      const es = new EventSource('/api/events?token=' + encodeURIComponent(token));
+      const onFiles = (ev) => {
+        try {
+          const payload = JSON.parse(ev.data);
+          if (payload.files) renderDownloadList(payload.files);
+        } catch (_) {}
+      };
+      es.addEventListener('init', onFiles);
+      es.addEventListener('files_updated', onFiles);
+    }
+
     fetchInfo();
+    connectEvents();
   </script>
 </body>
 </html>
