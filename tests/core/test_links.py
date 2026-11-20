@@ -1712,7 +1712,7 @@ def test_l1_first_connection_and_untrusted_incoming_never_emit_link_switched():
 
 def test_l2_hint_for_trusted_device_connects_now_with_hint_address():
     t = tracker(PEER)
-    assert t.hint(PEER, ADDR2, PORT2, 0.0) == [Connect(PEER, 1, ADDR2, PORT2)]
+    assert t.hint(PEER, ADDR2, PORT2, 0.0) == [Connect(PEER, 1, ADDR2, PORT2, from_hint=True)]
     assert t.attempting() == {PEER: 1}
 
 
@@ -3905,3 +3905,32 @@ def test_l20_remember_global_does_not_replace_local_saved_address():
     assert t.remember(PEER, "8.8.8.8", SPORT, 1.0) == []
     c = the_connect(t.tick(0.1 + links.SAVED_RETRY_BASE))
     assert is_saved(c), "địa chỉ global bị từ chối, không thay địa chỉ đã lưu"
+
+
+# --- PR 2.1: Connect.from_hint ------------------------------------------------------------------------------
+
+
+def test_connect_from_hint_flag():
+    assert Connect(PEER, 1, ADDR, PORT).from_hint is False
+
+    t_hint = tracker(PEER)
+    c_hint = the_connect(t_hint.hint(PEER, HINT_ADDR, HPORT, 0.0))
+    assert c_hint.from_hint is True
+
+    t_auto = tracker(PEER)
+    c_seen = the_connect(t_auto.device_seen(PEER, ADDR, PORT, 0.0))
+    assert c_seen.from_hint is False
+    t_auto.connect_finished(PEER, c_seen.attempt_id, UNREACHABLE, None, 0.1)
+
+    acts, _ = tick_to_wakeup(t_auto)
+    c_reconnect = the_connect(acts)
+    assert c_reconnect.from_hint is False
+
+
+def test_connect_from_hint_is_false_for_remembered_and_retry_now():
+    t = tracker(PEER)
+    c_mem = remembered(t, 0.0)
+    assert c_mem.from_hint is False
+    t.connect_finished(PEER, c_mem.attempt_id, UNREACHABLE, None, 0.1)
+    c_retry = the_connect(t.retry_now(PEER, 1.0))
+    assert c_retry.from_hint is False

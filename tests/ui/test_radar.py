@@ -850,3 +850,29 @@ def test_no_log_file_written_before_single_instance_acquired(gui, config_dir, tm
     assert handlers == [], "gắn handler log file trước khi có SingleInstance"
     log_file = a / "logs" / "teleport.log"
     assert not log_file.exists() or log_file.stat().st_size == 0, log_file.read_text(errors="replace")
+
+
+# --- PR 2.1: Nhận diện đúng thiết bị tin cậy khi nhập nhầm IP -----------------------------------------------
+
+
+def test_pr21_connect_failed_with_actual_device_shows_wrong_ip_peer_in_radar(radar):
+    from teleport.core.links import ConnectResult
+
+    p = view("PC-Nha", paired=True)
+    load(radar, [p])
+    feed(
+        radar,
+        _ev(
+            "ConnectFailed",
+            p,
+            result=ConnectResult.IDENTITY_MISMATCH,
+            from_hint=True,
+            address="192.168.1.50",
+            port=47474,
+            actual_device_id="c" * 32,
+            actual_name="PC-Khac",
+        ),
+    )
+    text = radar_text(radar)
+    assert "pc-khac" in text.lower()
+    assert "giả mạo" not in text.lower()

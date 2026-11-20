@@ -47,6 +47,7 @@ from teleport.app.node import (
     NodeEvent,
 )
 from teleport.core.links import ConnectResult
+from teleport.net.connection import DEFAULT_PORT
 from teleport.ui import texts
 
 DEVICE_ROLE = Qt.ItemDataRole.UserRole + 1  # DeviceView của hàng
@@ -93,6 +94,32 @@ def connect_failed_text(view: DeviceView, result: ConnectResult) -> str:
             "chuyện với nhau (hay gặp ở quán cà phê, khách sạn). Hãy thử dùng điểm phát Wi-Fi từ điện thoại.",
         )
     return texts.fill(template, name=texts.peer_label(view.name, view.device_id))
+
+
+def wrong_address_text(
+    view: DeviceView,
+    actual_device_id: str,
+    actual_name: str,
+    address: str | None = None,
+    port: int | None = None,
+) -> str:
+    """Câu khi nhập nhầm IP sang một máy đã ghép đôi khác (`from_hint`, `IDENTITY_MISMATCH`)."""
+    t = QCoreApplication.translate
+    name = texts.peer_label(view.name, view.device_id)
+    other = f"{texts.peer_label(actual_name, actual_device_id)} ({actual_device_id[:8]})"
+    if address:
+        shown = address if (port is None or port == DEFAULT_PORT) else f"{address}:{port}"
+        return texts.fill(
+            t("Radar", "Địa chỉ {address} đang là của {other}, không phải {name}. Hãy kiểm tra lại địa chỉ."),
+            address=shown,
+            other=other,
+            name=name,
+        )
+    return texts.fill(
+        t("Radar", "Địa chỉ IP vừa nhập đang là của {other}, không phải {name}. Hãy kiểm tra lại địa chỉ."),
+        other=other,
+        name=name,
+    )
 
 
 def invalid_address_text(entered: str) -> str:
@@ -152,6 +179,7 @@ class DeviceListModel(QAbstractListModel):
         super().__init__(parent)
         self._rows: list[DeviceView] = []
         self._failures: dict[str, ConnectResult] = {}
+        self._wrong_addresses: dict[str, tuple[str, str, str | None, int | None]] = {}
 
     # -- API ------------------------------------------------------------------------------------
 
@@ -198,6 +226,7 @@ class DeviceListModel(QAbstractListModel):
         self.beginResetModel()
         self._rows = []
         self._failures.clear()
+        self._wrong_addresses.clear()
         self.endResetModel()
 
     def apply(self, event: NodeEvent) -> None:
@@ -210,8 +239,28 @@ class DeviceListModel(QAbstractListModel):
         if isinstance(event, ConnectFailed):
             if event.result is not ConnectResult.OK:
                 self._failures[view.device_id] = event.result
+                actual_device_id: object = getattr(event, "actual_device_id", None)
+                actual_name: object = getattr(event, "actual_name", None)
+                if (
+                    event.from_hint
+                    and event.result is ConnectResult.IDENTITY_MISMATCH
+                    and isinstance(actual_device_id, str)
+                    and actual_device_id
+                    and isinstance(actual_name, str)
+                ):
+                    address: object = getattr(event, "address", None)
+                    port: object = getattr(event, "port", None)
+                    self._wrong_addresses[view.device_id] = (
+                        actual_device_id,
+                        actual_name,
+                        address if isinstance(address, str) else None,
+                        port if isinstance(port, int) and not isinstance(port, bool) else None,
+                    )
+                else:
+                    self._wrong_addresses.pop(view.device_id, None)
         elif isinstance(event, DeviceConnected):
             self._failures.pop(view.device_id, None)
+            self._wrong_addresses.pop(view.device_id, None)
         if isinstance(event, DeviceOffline) and not view.paired:
             self._remove(view.device_id)
             return
@@ -275,7 +324,15 @@ class DeviceListModel(QAbstractListModel):
         lines.append(" · ".join(parts))
         failure = self.shown_failure(view)
         if failure is not None:
-            lines.append(connect_failed_text(view, failure))
+            wrong = (
+                self._wrong_addresses.get(view.device_id)
+                if failure is ConnectResult.IDENTITY_MISMATCH
+                else None
+            )
+            if wrong is not None:
+                lines.append(wrong_address_text(view, *wrong))
+            else:
+                lines.append(connect_failed_text(view, failure))
         return lines
 
     def _remove(self, device_id: str) -> None:

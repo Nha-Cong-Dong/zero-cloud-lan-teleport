@@ -1837,3 +1837,58 @@ def test_transfers_controller_wires_diagnose(qtbot, monkeypatch):
         ctl.close_all()
     finally:
         tray.dispose()
+
+
+# --- PR 2.1: Nhận diện đúng thiết bị tin cậy khi nhập nhầm IP -----------------------------------------------
+
+
+def test_pr21_hint_identity_mismatch_with_actual_device_shows_actual_peer_on_bar(env):
+    from teleport.app.node import ConnectFailed
+    from teleport.core.links import ConnectResult
+    from teleport.ui.widgets import InfoLevel
+
+    view = dview(last=LAST)
+    start(env, view)
+    emit(
+        env,
+        ConnectFailed(
+            device=view,
+            result=ConnectResult.IDENTITY_MISMATCH,
+            from_hint=True,
+            address="192.0.2.50",
+            port=5000,
+            actual_device_id=OTHER_ID,
+            actual_name=OTHER,
+        ),
+    )
+    assert shown(env)
+    assert env.bar.level is InfoLevel.WARNING
+    text = title(env) + "\n" + body(env)
+    assert OTHER in text
+    assert "giả mạo" not in text.lower()
+    assert not retry_visible(env)
+    assert ip_visible(env)
+
+
+def test_pr21_dialog_identity_mismatch_with_actual_device_shows_actual_peer(env):
+    from teleport.app.node import ConnectFailed
+    from teleport.core.links import ConnectResult
+
+    _, parts = _dialog_waiting(env)
+    emit(
+        env,
+        ConnectFailed(
+            device=dview(last=LAST),
+            result=ConnectResult.IDENTITY_MISMATCH,
+            from_hint=True,
+            address="192.0.2.50",
+            port=5000,
+            actual_device_id=OTHER_ID,
+            actual_name=OTHER,
+        ),
+    )
+    env.host.finish(ConnectResult.IDENTITY_MISMATCH)
+    err = parts.error.text()
+    assert OTHER in err
+    assert "giả mạo" not in err.lower()
+    assert parts.edit.isEnabled()

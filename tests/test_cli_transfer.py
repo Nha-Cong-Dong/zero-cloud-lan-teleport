@@ -4072,3 +4072,71 @@ def test_f3a_hidden_warning_sentence_matches_mvp():
     assert F3A_HIDDEN_TAIL in mvp
     assert F3A_HIDDEN_OLD not in mvp
     assert "hai máy tin cậy cùng ẩn sẽ không tự kết nối được" not in mvp
+
+
+# --- PR 2.1: Nhận diện đúng thiết bị tin cậy khi nhập nhầm IP -----------------------------------------------
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_pr21_send_wrong_trusted_ip_reports_actual_device(
+    pair_dirs, transfer_env, cli_runs, tmp_path, json_mode
+):
+    net = pair_dirs
+    c_dir = tmp_path / "C"
+    ic = load_or_create_identity(c_dir)
+    TrustStore.load(net.S).add(peer_cert_from_pem(ic.cert_pem()), "May-C")
+
+    c_run = cli_runs(
+        "listen", ["--config-dir", str(c_dir), "listen", "--host", LOCAL, "--port", "0", "--json"]
+    )
+    c_port = (await c_run.wait_event("listening"))["port"]
+
+    f = make_file(net.src, "a.bin", 1000)
+    send = cli_runs("send", send_argv(net, [f], c_port, json_mode=json_mode))
+    assert await send.code(15) == 1
+
+    if json_mode:
+        [ev] = send.events_of("error")
+        assert ev["error"] == "connect_failed"
+        assert ev["result"] == "identity_mismatch"
+        assert ev["actual_device_id"] == ic.device_id
+        assert ev["actual_name"] == "May-C"
+        assert ev["address"] == LOCAL
+        assert "May-C" in ev["message"] and ic.device_id[:8] in ev["message"]
+        assert "giả mạo" not in ev["message"].lower()
+    else:
+        text = send.text()
+        assert "May-C" in text and ic.device_id[:8] in text
+        assert "giả mạo" not in text.lower()
+    assert lock_is_free(net.S)
+
+
+@with_marks(socket_test)
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+async def test_pr21_send_stranger_ip_still_reports_identity_mismatch_without_actual_device(
+    pair_dirs, transfer_env, cli_runs, tmp_path, json_mode
+):
+    net = pair_dirs
+    d_dir = tmp_path / "D"
+    load_or_create_identity(d_dir)
+
+    d_run = cli_runs(
+        "listen", ["--config-dir", str(d_dir), "listen", "--host", LOCAL, "--port", "0", "--json"]
+    )
+    d_port = (await d_run.wait_event("listening"))["port"]
+
+    f = make_file(net.src, "a.bin", 1000)
+    send = cli_runs("send", send_argv(net, [f], d_port, json_mode=json_mode))
+    assert await send.code(15) == 1
+
+    if json_mode:
+        [ev] = send.events_of("error")
+        assert ev["error"] == "connect_failed"
+        assert ev["result"] == "identity_mismatch"
+        assert ev.get("actual_device_id") is None
+        assert ev.get("actual_name") is None
+        assert "giả mạo" in ev["message"].lower()
+    else:
+        assert "giả mạo" in send.text().lower()
+    assert lock_is_free(net.S)

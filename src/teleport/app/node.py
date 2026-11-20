@@ -149,6 +149,7 @@ from teleport.net.connection import (
     Unreachable,
     VersionMismatch,
     open_control,
+    probe_server_cert,
 )
 from teleport.net.discovery import PROBE_TICK, DiscoveryError, MdnsDiscovery
 from teleport.trust.identity import Identity, load_or_create_identity
@@ -353,6 +354,10 @@ class ConnectFailed:
     # Lỗi của lần thử tới địa chỉ người dùng vừa đưa (`connect_hint` / `connect_address`). Có thể tới
     # sau khi `connect_address` đã trả UNREACHABLE vì hết giờ: bên gọi bỏ qua nếu không còn chờ.
     from_hint: bool = False
+    address: str | None = None
+    port: int | None = None
+    actual_device_id: str | None = None
+    actual_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -721,6 +726,9 @@ class Node:
         self._address_waiters: dict[str, list[tuple[str, int, asyncio.Future[ConnectResult]]]] = {}
         # `retry_connect` đang chờ: device_id → [(attempt_id, future)], mỗi lời gọi một future.
         self._retry_waiters: dict[str, list[tuple[int, asyncio.Future[ConnectResult]]]] = {}
+        # Thông tin probe khi IdentityMismatch (attempt_id → (address, port, actual_fingerprint)).
+        self._mismatch_probes: dict[int, tuple[str, int, str | None]] = {}
+        self._finishing_attempt_id: int | None = None
 
     # ---- Vòng đời --------------------------------------------------------------------------
 
@@ -1107,6 +1115,8 @@ class Node:
             raise
         finally:
             self._running = False
+            self._mismatch_probes.clear()
+            self._finishing_attempt_id = None
             if self._lock is not None:
                 self._lock.release()
             self._close_done.set()
@@ -2045,6 +2055,7 @@ class Node:
         device_id, attempt_id = action.device_id, action.attempt_id
         conn: Connection | None = None
         result = ConnectResult.UNREACHABLE
+        probe_info: tuple[str, int, str | None] | None = None
         device = self._store.get(device_id)
         if device is None:
             log.error("thử kết nối tới %s nhưng thiết bị không có trong kho tin cậy", device_id[:8])
@@ -2060,12 +2071,28 @@ class Node:
                         result = value
                         break
                 log.debug("kết nối điều khiển tới %s thất bại: %s", device_id[:8], result.value)
+                if isinstance(e, IdentityMismatch) and e.address is not None:
+                    actual_fp = e.actual_fingerprint
+                    if action.from_hint and actual_fp is None:
+                        probed = await probe_server_cert(e.address, action.port)
+                        if probed is not None:
+                            actual_fp = probed.fingerprint
+                    probe_info = (e.address, action.port, actual_fp)
             except Exception:
                 log.exception("lỗi khi mở kết nối điều khiển tới %s", device_id[:8])
         if conn is None:
             self._attempts.pop(attempt_id, None)
             if not self._closing and self._links is not None:
-                self._apply(self._links.connect_finished(device_id, attempt_id, result, None, self._now()))
+                if probe_info is not None:
+                    self._mismatch_probes[attempt_id] = probe_info
+                self._finishing_attempt_id = attempt_id
+                try:
+                    self._apply(
+                        self._links.connect_finished(device_id, attempt_id, result, None, self._now())
+                    )
+                finally:
+                    self._finishing_attempt_id = None
+                    self._mismatch_probes.pop(attempt_id, None)
                 self._settle_retry_attempt(device_id, attempt_id, result)
             return
         # Thành công: không await cho tới khi đăng ký xong. Chứng chỉ server đã được kiểm
@@ -2187,9 +2214,39 @@ class Node:
         else:
             # INFO: giao diện / CLI báo người dùng qua ConnectFailed, không lặp lại trên stderr.
             log.info("không kết nối được tới %s: %s", event.device_id[:8], event.result.value)
+            probe = (
+                self._mismatch_probes.pop(self._finishing_attempt_id, None)
+                if self._finishing_attempt_id is not None
+                else None
+            )
+            address: str | None = None
+            port: int | None = event.port
+            actual_device_id: str | None = None
+            actual_name: str | None = None
+            if probe is not None:
+                probe_addr, probe_port, actual_fp = probe
+                address = probe_addr
+                port = probe_port
+                if actual_fp is not None and self._store is not None:
+                    actual = self._store.by_fingerprint(actual_fp)
+                    if actual is not None and actual.device_id != event.device_id:
+                        actual_device_id = actual.device_id
+                        actual_name = actual.name
+            elif event.addresses:
+                address = event.addresses[0]
             view = registry.get(event.device_id)
             if view is not None:
-                self._emit(ConnectFailed(view, event.result, event.from_hint))
+                self._emit(
+                    ConnectFailed(
+                        view,
+                        event.result,
+                        event.from_hint,
+                        address=address,
+                        port=port,
+                        actual_device_id=actual_device_id,
+                        actual_name=actual_name,
+                    )
+                )
 
     def _refresh_peer(self, device_id: str, conn: Connection | None) -> None:
         """Kết nối điều khiển hiện tại của máy đã ghép đôi vừa có hay vừa đổi (đồng bộ): nhớ

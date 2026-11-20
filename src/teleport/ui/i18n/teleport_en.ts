@@ -577,8 +577,23 @@
     </message>
     <message>
         <location filename="../diagnose.py"/>
+        <source>Địa chỉ IP vừa nhập là của {other}, không phải {name}</source>
+        <translation>The entered IP address belongs to {other}, not {name}</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
         <source>Địa chỉ lần trước ({address}) giờ là của một máy khác. Hãy kết nối bằng địa chỉ IP mới của {name}.</source>
         <translation>The last known address ({address}) now belongs to another device. Connect using the new IP address of {name}.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Địa chỉ {address} đang là của {other} (một máy đã ghép đôi khác), không phải {name}. Hãy kiểm tra lại địa chỉ.</source>
+        <translation>{address} belongs to {other} (another paired device), not {name}. Check the address and try again.</translation>
+    </message>
+    <message>
+        <location filename="../diagnose.py"/>
+        <source>Địa chỉ {address} đang là của {other}, không phải {name}</source>
+        <translation>{address} belongs to {other}, not {name}</translation>
     </message>
 </context>
 <context>
@@ -1437,6 +1452,16 @@
         <location filename="../radar.py"/>
         <source>{name} đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản.</source>
         <translation>{name} is using a different version of Teleport. Update both devices to the same version.</translation>
+    </message>
+    <message>
+        <location filename="../radar.py"/>
+        <source>Địa chỉ IP vừa nhập đang là của {other}, không phải {name}. Hãy kiểm tra lại địa chỉ.</source>
+        <translation>The entered IP address belongs to {other}, not {name}. Check the address and try again.</translation>
+    </message>
+    <message>
+        <location filename="../radar.py"/>
+        <source>Địa chỉ {address} đang là của {other}, không phải {name}. Hãy kiểm tra lại địa chỉ.</source>
+        <translation>{address} belongs to {other}, not {name}. Check the address and try again.</translation>
     </message>
     <message>
         <location filename="../radar.py"/>
