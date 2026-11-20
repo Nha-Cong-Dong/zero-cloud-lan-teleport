@@ -1,6 +1,6 @@
 cask "zcl-teleport" do
   version "1.3.0"
-  sha256 "REPLACE_WITH_SHA256_FROM_SHA256SUMS"
+  sha256 "18c5b5d4b306dec733ab794f36cc557d92c7edb019c820638c7228f9c14348a8"
 
   url "https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/download/v#{version}/Teleport-#{version}-macOS.dmg",
       verified: "github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/"
