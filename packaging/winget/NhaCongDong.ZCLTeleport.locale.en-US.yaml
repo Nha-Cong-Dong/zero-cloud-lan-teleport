@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+
+PackageIdentifier: NhaCongDong.ZCLTeleport
+PackageVersion: 1.3.0
+PackageLocale: en-US
+Publisher: Nha-Cong-Dong
+PublisherUrl: https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport
+PublisherSupportUrl: https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/issues
+Author: Nguyễn Hoàng Tùng
+PackageName: ZCL Teleport
+PackageUrl: https://luffyreals.github.io/zcl-hub/
+License: GPL-3.0-or-later
+LicenseUrl: https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/blob/main/LICENSE
+Copyright: Copyright (C) 2026 Nguyễn Hoàng Tùng
+ShortDescription: Direct high-speed LAN file transfer and clipboard sync with zero cloud dependency.
+Description: >-
+  ZCL Teleport transfers large files, folder trees, and clipboard content directly
+  between devices on the same local area network over TLS 1.3 mTLS, with automatic
+  chunk-level resume, SHA-256 Merkle verification, and Web QR Guest mode for mobile browsers.
+Moniker: teleport
+Tags:
+  - file-transfer
+  - lan
+  - p2p
+  - clipboard-sync
+  - local-network
+  - open-source
+ReleaseNotesUrl: https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/tag/v1.3.0
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0

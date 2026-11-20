@@ -29,6 +29,11 @@
   </provides>
 
   <releases>
+    <release version="1.3.0" date="2026-11-18">
+      <description>
+        <p>Nâng cấp Chế độ khách Web QR (tải luồng ZIP, kéo thả thư mục, khóa IP khi sai token), giao tiếp IPC CLI-GUI và tối ưu kiểm tra toàn vẹn MerkleStream.</p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-11-10">
       <description>
         <p>Bản phát hành chính thức 1.0.0 với đầy đủ tính năng truyền file dung lượng lớn, tự nối lại khi đứt mạng, đồng bộ clipboard an toàn và phát hiện tường lửa mạng nội bộ.</p>
