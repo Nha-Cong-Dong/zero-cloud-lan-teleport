@@ -19,6 +19,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import secrets
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
@@ -37,7 +38,9 @@ IPC_INFO_FILE = "ipc.json"
 IPC_VERSION = 1
 IPC_HANDSHAKE_TIMEOUT = 5.0
 IPC_COMMAND_TIMEOUT = 10.0
+IPC_TRANSFER_CANCEL_TIMEOUT = 65.0
 IPC_MAX_LINE_BYTES = 131_072  # 128 KiB trần cho một thông điệp JSON
+_TRANSFER_QUERY_RE = re.compile(r"^[0-9a-f]{4,32}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +269,124 @@ class IpcServer:
             # Thực hiện gửi file qua Node và stream sự kiện về client
             await self._handle_send_request(paths, target_ids, rate_limit, writer)
 
+        elif cmd == "list_transfers":
+            from teleport.app.transfers import Direction
+
+            rd = self._node.transfers.receive_dir
+            devices_by_id = {d.device_id: d.name for d in self._node.devices()}
+            items = []
+            for info in self._node.transfers.transfers():
+                key = info.key
+                item_promised = (
+                    max(0, info.total_bytes - info.done_bytes - info.unsynced_bytes)
+                    if key.direction is Direction.RECEIVE
+                    else 0
+                )
+                items.append(
+                    {
+                        "direction": key.direction.value,
+                        "device_id": key.device_id,
+                        "device_name": devices_by_id.get(key.device_id, key.device_id[:8]),
+                        "transfer_id": key.transfer_id,
+                        "state": info.status.value,
+                        "files_total": len(info.files),
+                        "files_done": info.file_index,
+                        "bytes_done": info.done_bytes,
+                        "total_bytes": info.total_bytes,
+                        "promised_bytes": item_promised,
+                    }
+                )
+            resp = {
+                "status": "ok",
+                "promised_bytes": self._node.transfers.promised_bytes(),
+                "receive_dir": str(rd) if rd is not None else "",
+                "transfers": items,
+            }
+            writer.write(json.dumps(resp, ensure_ascii=False).encode("utf-8") + b"\n")
+            await writer.drain()
+
+        elif cmd == "cancel_transfer":
+            raw_cancel_all = cmd_obj.get("cancel_all", False)
+            if type(raw_cancel_all) is not bool:
+                writer.write(
+                    json.dumps(
+                        {"error": "invalid_target", "message": "cancel_all phải là kiểu bool."},
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                    + b"\n"
+                )
+                await writer.drain()
+                return
+            cancel_all = raw_cancel_all
+            target = cmd_obj.get("target")
+            if cancel_all and target is not None:
+                writer.write(
+                    json.dumps(
+                        {
+                            "error": "invalid_target",
+                            "message": "Không được truyền đồng thời cancel_all và target.",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                    + b"\n"
+                )
+                await writer.drain()
+                return
+            all_transfers = list(self._node.transfers.transfers())
+            if cancel_all:
+                targets = all_transfers
+            else:
+                if not isinstance(target, str):
+                    writer.write(json.dumps({"error": "invalid_target"}).encode("utf-8") + b"\n")
+                    await writer.drain()
+                    return
+                query = target.strip().lower()
+                if not _TRANSFER_QUERY_RE.fullmatch(query):
+                    writer.write(json.dumps({"error": "invalid_target"}).encode("utf-8") + b"\n")
+                    await writer.drain()
+                    return
+                matches = [t for t in all_transfers if t.key.transfer_id.lower().startswith(query)]
+                if not matches:
+                    writer.write(
+                        json.dumps({"error": "transfer_not_found", "target": target}).encode("utf-8") + b"\n"
+                    )
+                    await writer.drain()
+                    return
+                if len(matches) > 1:
+                    writer.write(
+                        json.dumps(
+                            {
+                                "error": "ambiguous_transfer",
+                                "target": target,
+                                "matches": [m.key.transfer_id for m in matches],
+                            }
+                        ).encode("utf-8")
+                        + b"\n"
+                    )
+                    await writer.drain()
+                    return
+                targets = matches
+
+            devices_by_id = {d.device_id: d.name for d in self._node.devices()}
+            results = await asyncio.gather(
+                *(self._node.transfers.cancel_transfer(info.key, wait_disk=True) for info in targets)
+            )
+            cancelled = [
+                {
+                    "direction": info.key.direction.value,
+                    "device_id": info.key.device_id,
+                    "device_name": devices_by_id.get(info.key.device_id, info.key.device_id[:8]),
+                    "transfer_id": info.key.transfer_id,
+                }
+                for info, ok in zip(targets, results, strict=True)
+                if ok
+            ]
+            writer.write(
+                json.dumps({"status": "ok", "cancelled": cancelled}, ensure_ascii=False).encode("utf-8")
+                + b"\n"
+            )
+            await writer.drain()
+
         else:
             writer.write(json.dumps({"error": "unknown_command", "command": cmd}).encode("utf-8") + b"\n")
             await writer.drain()
@@ -446,6 +567,17 @@ class IpcClient:
         """Yêu cầu daemon hủy ghép đôi thiết bị."""
         return await self._call({"command": "unpair", "target": target})
 
+    async def list_transfers(self) -> dict[str, Any]:
+        """Lấy danh sách lượt truyền đang mở và tổng dung lượng đã hứa nhận từ daemon."""
+        return await self._call({"command": "list_transfers"})
+
+    async def cancel_transfer(self, target: str | None = None, *, cancel_all: bool = False) -> dict[str, Any]:
+        """Yêu cầu daemon hủy một hoặc toàn bộ lượt truyền đang mở."""
+        return await self._call(
+            {"command": "cancel_transfer", "target": target, "cancel_all": cancel_all},
+            timeout=IPC_TRANSFER_CANCEL_TIMEOUT,
+        )
+
     async def send(
         self,
         paths: Sequence[Path | str],
@@ -482,14 +614,14 @@ class IpcClient:
 
         return success
 
-    async def _call(self, msg: dict[str, Any]) -> dict[str, Any]:
+    async def _call(self, msg: dict[str, Any], *, timeout: float = IPC_COMMAND_TIMEOUT) -> dict[str, Any]:
         """Gửi một lệnh request-response đơn giản."""
         if self._reader is None or self._writer is None:
             raise IpcClientError("Client chua duoc ket noi")
         self._writer.write(json.dumps(msg).encode("utf-8") + b"\n")
         await self._writer.drain()
 
-        line = await asyncio.wait_for(self._reader.readline(), timeout=IPC_COMMAND_TIMEOUT)
+        line = await asyncio.wait_for(self._reader.readline(), timeout=timeout)
         if not line:
             raise IpcProtocolError("Server dong ket noi bat ngo")
         return json.loads(line.decode("utf-8").strip())
