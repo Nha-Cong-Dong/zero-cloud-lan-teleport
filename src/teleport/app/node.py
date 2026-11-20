@@ -66,6 +66,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import datetime
 import errno
 import functools
 import ipaddress
@@ -87,13 +88,14 @@ import teleport
 from teleport import paths
 from teleport.app import clipboard as app_clipboard
 from teleport.app import pairing as app_pairing
-from teleport.app import storage
+from teleport.app import storage, tombstones
 from teleport.app import transfers as app_transfers
 from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipboardSync
 from teleport.app.devices import DeviceNotFound, DeviceRegistry, DeviceView, resolve_trusted
 from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt, PairingService
 from teleport.app.settings import DeviceSettings, Settings, SettingsSaveError, WindowGeometry
+from teleport.app.storage import ReceiveDir, TempKind
 from teleport.app.transfers import ReceiveDirBusy, TransferManager, TransferUpdate
 from teleport.app.web_guest import GuestSessionInfo, WebGuestManager
 from teleport.core.discovery import (
@@ -135,6 +137,7 @@ from teleport.core.messages import (
     validate_device_name,
     validate_os,
 )
+from teleport.core.resume_state import TombstoneRecord
 from teleport.lock import NodeLock
 from teleport.net import connection as net_connection
 from teleport.net import discovery as net_discovery
@@ -152,7 +155,7 @@ from teleport.net.connection import (
     probe_server_cert,
 )
 from teleport.net.discovery import PROBE_TICK, DiscoveryError, MdnsDiscovery
-from teleport.trust.identity import Identity, load_or_create_identity
+from teleport.trust.identity import CERT_FILE, KEY_FILE, Identity, load_or_create_identity
 from teleport.trust.store import TrustedDevice, TrustStore, TrustStoreError
 
 LOCK_TIMEOUT = 2.0  # chờ node.lock (khóa của tiến trình vừa chết có thể chưa được nhả, nhất là Windows)
@@ -464,6 +467,221 @@ def unpair_offline(config_dir: Path, query: str, *, lock_timeout: float | None =
             except (OSError, ValueError, TypeError, RecursionError) as e:
                 log.warning("không xóa được cài đặt theo thiết bị trong settings.json (%s)", type(e).__name__)
         return removed
+    finally:
+        lock.release()
+
+
+_TRANSFER_QUERY_RE = re.compile(r"^[0-9a-f]{4,32}$")
+
+
+@dataclass(frozen=True, slots=True)
+class PendingTransfer:
+    """Một lượt nhận dở đang nằm trên đĩa (đọc offline từ `.teleport`)."""
+
+    transfer_id: str
+    device_id: str
+    device_name: str
+    files_total: int
+    files_done: int
+    bytes_done: int
+    total_bytes: int
+    last_activity: float | None = None
+
+
+class TransferNotFound(Exception):
+    """Không tìm thấy lượt truyền nào khớp với mã lượt."""
+
+    def __init__(self, query: str) -> None:
+        self.query = query
+        super().__init__(f"không tìm thấy lượt truyền khớp {query!r}")
+
+
+class AmbiguousTransfer(Exception):
+    """Có nhiều hơn một lượt truyền khớp với tiền tố mã lượt."""
+
+    def __init__(self, query: str, matches: Sequence[str] = ()) -> None:
+        self.query = query
+        self.matches = tuple(matches)
+        super().__init__(f"nhiều lượt truyền khớp {query!r}")
+
+
+def _normalize_transfer_query(query: str) -> str:
+    if not isinstance(query, str):
+        raise ValueError("mã lượt phải là chuỗi")
+    normalized = query.strip().lower()
+    if not _TRANSFER_QUERY_RE.fullmatch(normalized):
+        raise ValueError("mã lượt phải gồm ít nhất 4 ký tự hex (0-9, a-f)")
+    return normalized
+
+
+def _resolve_offline_receive_dir(settings: Settings, receive_dir: Path | None) -> Path:
+    if receive_dir is not None:
+        return Path(receive_dir)
+    if settings.receive_dir is not None:
+        return Path(settings.receive_dir)
+    return paths.default_receive_dir()
+
+
+def _scan_pending_in_dir(
+    rd: ReceiveDir, own_device_id: str, trusted_devices: Sequence[TrustedDevice]
+) -> list[PendingTransfer]:
+    trusted_by_id = {d.device_id: d for d in trusted_devices}
+    scans = rd.scan_temps(own_device_id, trusted_by_id.keys())
+    items: list[PendingTransfer] = []
+    for scan in scans:
+        if scan.kind is not TempKind.RUNNING or scan.record is None:
+            continue
+        record = scan.record
+        files = record.offer.files
+        files_total = len(files)
+        files_done = record.verified
+        bytes_done = sum(f.size for f in files[:files_done])
+        total_bytes = sum(f.size for f in files)
+        trusted = trusted_by_id.get(record.sender)
+        device_name = trusted.name if trusted is not None else record.sender[:8]
+        items.append(
+            PendingTransfer(
+                transfer_id=scan.transfer_id,
+                device_id=record.sender,
+                device_name=device_name,
+                files_total=files_total,
+                files_done=files_done,
+                bytes_done=bytes_done,
+                total_bytes=total_bytes,
+                last_activity=scan.last_activity,
+            )
+        )
+    return items
+
+
+def _check_existing_config_dir(config_dir: Path) -> bool:
+    """Trả False nếu `config_dir` chưa tồn tại; ném `ConfigDirError` nếu tồn tại mà không phải thư mục."""
+    try:
+        if not config_dir.exists():
+            return False
+        if not config_dir.is_dir():
+            code = errno.ENOTDIR
+            raise ConfigDirError(config_dir, NotADirectoryError(code, os.strerror(code), str(config_dir)))
+    except OSError as e:
+        raise ConfigDirError(config_dir, e) from e
+    return True
+
+
+def list_pending_offline(config_dir: Path, *, receive_dir: Path | None = None) -> list[PendingTransfer]:
+    """Liệt kê các lượt nhận dở trên đĩa khi không có node nào đang chạy.
+
+    Kiểm tra `config_dir` trước khi lấy `node.lock`; không tạo danh tính mới nếu chưa có.
+    """
+    config_dir = Path(config_dir)
+    if not _check_existing_config_dir(config_dir):
+        return []
+    lock = NodeLock(config_dir)
+    lock.acquire(timeout=LOCK_TIMEOUT)
+    try:
+        cert_path = config_dir / CERT_FILE
+        key_path = config_dir / KEY_FILE
+        if not (cert_path.is_file() and key_path.is_file()):
+            return []
+        identity = load_or_create_identity(config_dir)
+        store = TrustStore.load(config_dir)
+        settings = Settings.load(config_dir)
+        target_dir = _resolve_offline_receive_dir(settings, receive_dir)
+        if not (target_dir.is_dir() and (target_dir / ".teleport").is_dir()):
+            return []
+        rd = ReceiveDir.open(target_dir)
+        try:
+            return _scan_pending_in_dir(rd, identity.device_id, store.devices())
+        finally:
+            rd.close()
+    finally:
+        lock.release()
+
+
+def cancel_pending_offline(
+    config_dir: Path,
+    query: str | None = None,
+    *,
+    cancel_all: bool = False,
+    receive_dir: Path | None = None,
+) -> list[PendingTransfer]:
+    """Hủy một hoặc toàn bộ lượt nhận dở trên đĩa khi không có node nào đang chạy.
+
+    Xóa thư mục tạm của từng lượt khớp và luôn ghi bia mộ `reason="user", unsent=True`
+    vào `tombstones.json` để lần kết nối sau báo hủy cho máy gửi.
+    """
+    if cancel_all and query is not None:
+        raise ValueError("không truyền đồng thời query và cancel_all=True")
+    normalized_query: str | None = None
+    if not cancel_all:
+        if query is None:
+            raise ValueError("cần truyền mã lượt hoặc cancel_all=True")
+        normalized_query = _normalize_transfer_query(query)
+
+    config_dir = Path(config_dir)
+    if not _check_existing_config_dir(config_dir):
+        if cancel_all:
+            return []
+        assert query is not None
+        raise TransferNotFound(query)
+
+    lock = NodeLock(config_dir)
+    lock.acquire(timeout=LOCK_TIMEOUT)
+    try:
+        cert_path = config_dir / CERT_FILE
+        key_path = config_dir / KEY_FILE
+        if not (cert_path.is_file() and key_path.is_file()):
+            if cancel_all:
+                return []
+            assert query is not None
+            raise TransferNotFound(query)
+        identity = load_or_create_identity(config_dir)
+        store = TrustStore.load(config_dir)
+        settings = Settings.load(config_dir)
+        target_dir = _resolve_offline_receive_dir(settings, receive_dir)
+        if not (target_dir.is_dir() and (target_dir / ".teleport").is_dir()):
+            if cancel_all:
+                return []
+            assert query is not None
+            raise TransferNotFound(query)
+
+        rd = ReceiveDir.open(target_dir)
+        try:
+            pending = _scan_pending_in_dir(rd, identity.device_id, store.devices())
+            if cancel_all:
+                targets = pending
+                if not targets:
+                    return []
+            else:
+                assert normalized_query is not None and query is not None
+                matches = [p for p in pending if p.transfer_id.lower().startswith(normalized_query)]
+                if not matches:
+                    raise TransferNotFound(query)
+                if len(matches) > 1:
+                    raise AmbiguousTransfer(query, [m.transfer_id for m in matches])
+                targets = matches
+
+            for item in targets:
+                rd.discard_temp(item.transfer_id, own_device_id=identity.device_id)
+        finally:
+            rd.close()
+
+        records = tombstones.load(config_dir)
+        now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        cancelled_keys = {(item.device_id, "receive", item.transfer_id) for item in targets}
+        kept = [r for r in records if (r.device_id, r.direction, r.transfer_id) not in cancelled_keys]
+        for item in targets:
+            kept.append(
+                TombstoneRecord(
+                    device_id=item.device_id,
+                    direction="receive",
+                    transfer_id=item.transfer_id,
+                    reason="user",
+                    unsent=True,
+                    at=now,
+                )
+            )
+        tombstones.save(config_dir, kept)
+        return targets
     finally:
         lock.release()
 

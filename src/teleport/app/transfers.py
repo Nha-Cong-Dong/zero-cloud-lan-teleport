@@ -622,6 +622,7 @@ class _DiskLane:
     create_job: DiskJob[TransferTemp] | None = None
     finalize_job: DiskJob[Path] | None = None  # `Finalize` đã giao cho executor, chưa xong
     waiters: set[asyncio.Event] = field(default_factory=set)  # bên đọc khung chờ chỗ trong hàng ghi
+    done: asyncio.Event = field(default_factory=asyncio.Event)  # đặt khi `_run_lane` kết thúc
     subfolder: str = ""
 
 
@@ -1057,6 +1058,40 @@ class TransferManager:
         if not self._closing:
             self._cancel_every()
 
+    async def cancel_transfer(
+        self, key: TransferKey, *, wait_disk: bool = True, timeout: float = DISK_OP_TIMEOUT
+    ) -> bool:
+        """Hủy lượt `key` và tùy chọn chờ hàng đĩa của lượt nhận kết thúc.
+
+        Trả `False` nếu không thấy lượt (hoặc đang đóng), `True` nếu đã phát lệnh hủy.
+        Nếu chờ đĩa quá `timeout`, ghi log WARNING và vẫn trả `True` vì lượt đã hủy trong engine.
+        """
+        if not isinstance(key, TransferKey):
+            raise TypeError("key phải là TransferKey")
+        if self._closing or self._engine.info(key) is None:
+            return False
+        lane: _DiskLane | None = None
+        if key.direction is Direction.RECEIVE:
+            pair = (key.device_id, key.transfer_id)
+            lane = self._lanes.get(pair)
+            if lane is None:
+                lane = next(
+                    (item for item in self._live_lanes if (item.device_id, item.transfer_id) == pair),
+                    None,
+                )
+        self.cancel(key)
+        if wait_disk and lane is not None:
+            try:
+                await asyncio.wait_for(lane.done.wait(), timeout=timeout)
+            except TimeoutError:
+                log.warning(
+                    "hủy lượt %s (%s) chờ dọn đĩa quá %g s",
+                    key.transfer_id[:8],
+                    key.device_id[:8],
+                    timeout,
+                )
+        return True
+
     def get(self, key: TransferKey) -> TransferInfo | None:
         """Bản chụp lượt `key`; None nếu không biết hoặc đã kết thúc."""
         return self._engine.info(key)
@@ -1064,6 +1099,10 @@ class TransferManager:
     def transfers(self) -> tuple[TransferInfo, ...]:
         """Mọi lượt chưa kết thúc, theo thứ tự tạo."""
         return self._engine.transfers()
+
+    def promised_bytes(self) -> int:
+        """Tổng số byte đã hứa nhận của các lượt nhận đang chờ hoặc đang chạy."""
+        return self._engine.promised_bytes()
 
     def history(self, device_id: str | None = None) -> tuple[HistoryEntry, ...]:
         """Lịch sử các lượt đã kết thúc (mvp F5), mới nhất trước; gọi được ở mọi lúc.
@@ -2260,6 +2299,7 @@ class TransferManager:
             await self._cleanup_lane(lane)
         finally:
             self._live_lanes.discard(lane)
+            lane.done.set()
 
     async def _lane_job[R](self, lane: _DiskLane, job: DiskJob[R], timeout: float) -> R:
         """Chờ một việc của hàng; việc chưa xong (quá hạn) ở lại `lane.jobs` để dọn chờ nó."""

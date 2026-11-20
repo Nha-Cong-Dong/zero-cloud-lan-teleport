@@ -104,10 +104,11 @@ from teleport.app.devices import (
     parse_manual_address,
     resolve_device,
 )
-from teleport.app.ipc import try_connect_ipc
+from teleport.app.ipc import IpcClientError, IpcProtocolError, try_connect_ipc
 from teleport.app.node import (
     MAX_SCAN_TIMEOUT,
     SCAN_TIMEOUT,
+    AmbiguousTransfer,
     ConfigDirError,
     ConnectFailed,
     DeviceConnected,
@@ -118,9 +119,13 @@ from teleport.app.node import (
     MdnsOptions,
     Node,
     NodeEvent,
+    PendingTransfer,
     ReceiveDirChoice,
     ReceiveDirUnavailable,
+    TransferNotFound,
+    cancel_pending_offline,
     find_trusted,
+    list_pending_offline,
     scan_devices,
     unpair_offline,
 )
@@ -3211,6 +3216,257 @@ def cmd_unpair(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---- Liệt kê & hủy lượt truyền dở ----------------------------------------------------------
+
+_TRANSFER_QUERY_RE = re.compile(r"^[0-9a-fA-F]{4,32}$")
+_TRANSFER_STATE_LABELS = {
+    "queued": "đang chờ",
+    "waiting": "chờ xác nhận",
+    "transferring": "đang truyền",
+    "verifying": "đang kiểm tra",
+    "reconnecting": "đang nối lại",
+    "pending": "đang tạm dừng",
+}
+
+
+def _cli_syntax_error(args: argparse.Namespace, message: str) -> int:
+    parser = getattr(args, "_parser", None)
+    if parser is not None:
+        parser.error(message)
+    print(f"Lỗi: {message}", file=sys.stderr, flush=True)
+    return 2
+
+
+def _dirs_match(first: Path, second: str) -> bool:
+    if not second:
+        return False
+    return os.path.normcase(os.path.abspath(first)) == os.path.normcase(os.path.abspath(second))
+
+
+def _pending_to_dict(item: PendingTransfer) -> dict[str, Any]:
+    return {
+        "direction": "receive",
+        "device_id": item.device_id,
+        "device_name": item.device_name,
+        "transfer_id": item.transfer_id,
+        "state": "pending",
+        "files_total": item.files_total,
+        "files_done": item.files_done,
+        "bytes_done": item.bytes_done,
+        "total_bytes": item.total_bytes,
+    }
+
+
+def _render_transfers_list(output: _Output, items: list[dict[str, Any]]) -> None:
+    if output.json:
+        print(json.dumps({"time": _utc_now(), "transfers": items}, ensure_ascii=False), flush=True)
+        return
+    if not items:
+        print("Không có lượt truyền nào đang dở.", flush=True)
+        return
+    for item in items:
+        direction = "Nhận từ" if item.get("direction") == "receive" else "Gửi tới"
+        name = _name_label(str(item.get("device_name") or item.get("device_id", "")[:8]))
+        tid = str(item.get("transfer_id", ""))[:8]
+        files_done = int(item.get("files_done", 0))
+        files_total = int(item.get("files_total", 0))
+        bytes_done = format_size(int(item.get("bytes_done", 0)))
+        total_bytes = format_size(int(item.get("total_bytes", 0)))
+        state = _TRANSFER_STATE_LABELS.get(str(item.get("state", "")), str(item.get("state", "")))
+        print(
+            f"- {tid} | {direction} {name} | {files_done}/{files_total} tệp "
+            f"({bytes_done} / {total_bytes}) | {state}",
+            flush=True,
+        )
+
+
+def _render_transfers_cancelled(output: _Output, cancelled: list[dict[str, Any]]) -> None:
+    if output.json:
+        print(json.dumps({"time": _utc_now(), "cancelled": cancelled}, ensure_ascii=False), flush=True)
+        return
+    if not cancelled:
+        print("Không có lượt truyền nào đang dở.", flush=True)
+        return
+    for item in cancelled:
+        direction = "nhận từ" if item.get("direction") == "receive" else "gửi tới"
+        name = _name_label(str(item.get("device_name") or item.get("device_id", "")[:8]))
+        tid = str(item.get("transfer_id", ""))[:8]
+        print(f"Đã hủy lượt {tid} ({direction} {name}).", flush=True)
+
+
+async def _transfers_list_ipc(
+    directory: Path, recv_dir: Path | None
+) -> tuple[bool, list[dict[str, Any]] | None, str]:
+    ipc_client = await try_connect_ipc(directory)
+    if ipc_client is None:
+        return False, None, ""
+    try:
+        res = await ipc_client.list_transfers()
+        if recv_dir is not None and not _dirs_match(recv_dir, str(res.get("receive_dir", ""))):
+            return True, None, "không thể dùng --dir khác với thư mục nhận của Teleport đang chạy"
+        return True, list(res.get("transfers", [])), ""
+    finally:
+        await ipc_client.close()
+
+
+async def _transfers_cancel_ipc(
+    directory: Path,
+    recv_dir: Path | None,
+    query: str | None,
+    cancel_all: bool,
+) -> tuple[bool, dict[str, Any] | None, str]:
+    ipc_client = await try_connect_ipc(directory)
+    if ipc_client is None:
+        return False, None, ""
+    try:
+        if recv_dir is not None:
+            info_res = await ipc_client.list_transfers()
+            if not _dirs_match(recv_dir, str(info_res.get("receive_dir", ""))):
+                return True, None, "không thể dùng --dir khác với thư mục nhận của Teleport đang chạy"
+        res = await ipc_client.cancel_transfer(query, cancel_all=cancel_all)
+        return True, res, ""
+    finally:
+        await ipc_client.close()
+
+
+def cmd_transfers_list(args: argparse.Namespace) -> int:
+    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
+    directory = _config(args)
+    raw_dir = getattr(args, "dir", None)
+    if raw_dir is not None and not raw_dir.strip():
+        return _cli_syntax_error(args, "--dir không được rỗng")
+    recv_dir = Path(raw_dir).expanduser() if raw_dir is not None else None
+
+    try:
+        with asyncio.Runner() as runner:
+            connected, ipc_items, syntax_err = runner.run(_transfers_list_ipc(directory, recv_dir))
+    except (TimeoutError, IpcProtocolError, IpcClientError, OSError, json.JSONDecodeError) as e:
+        output.error("ipc_error", f"Không thể giao tiếp với Teleport đang chạy: {e}")
+        return 1
+    if connected:
+        if syntax_err:
+            return _cli_syntax_error(args, syntax_err)
+        _render_transfers_list(output, ipc_items or [])
+        return 0
+
+    try:
+        pending = list_pending_offline(directory, receive_dir=recv_dir)
+    except ConfigDirError as e:
+        _config_dir_error(output, e.path, e.error)
+        return 1
+    except OSError as e:
+        _config_dir_error(output, directory, e)
+        return 1
+    except NodeLockedError:
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
+        return 1
+    except IdentityError as e:
+        output.error("identity_error", str(e))
+        return 1
+    except TrustStoreError as e:
+        output.error("trust_store_error", str(e))
+        return 1
+    except (UnsafeReceiveDirError, PathTooLongError) as e:
+        output.error("receive_dir_error", str(e))
+        return 1
+
+    _render_transfers_list(output, [_pending_to_dict(item) for item in pending])
+    return 0
+
+
+def cmd_transfers_cancel(args: argparse.Namespace) -> int:
+    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
+    raw_query = getattr(args, "transfer", None)
+    cancel_all = bool(getattr(args, "cancel_all", False))
+    if (raw_query is None and not cancel_all) or (raw_query is not None and cancel_all):
+        return _cli_syntax_error(args, "cần chỉ định <mã lượt> hoặc --all (không dùng cả hai)")
+    query: str | None = None
+    if raw_query is not None:
+        query = raw_query.strip()
+        if not _TRANSFER_QUERY_RE.fullmatch(query):
+            return _cli_syntax_error(args, "mã lượt phải gồm ít nhất 4 ký tự hex (0-9, a-f)")
+
+    directory = _config(args)
+    raw_dir = getattr(args, "dir", None)
+    if raw_dir is not None and not raw_dir.strip():
+        return _cli_syntax_error(args, "--dir không được rỗng")
+    recv_dir = Path(raw_dir).expanduser() if raw_dir is not None else None
+
+    try:
+        with asyncio.Runner() as runner:
+            connected, res, syntax_err = runner.run(
+                _transfers_cancel_ipc(directory, recv_dir, query, cancel_all)
+            )
+    except (TimeoutError, IpcProtocolError, IpcClientError, OSError, json.JSONDecodeError) as e:
+        output.error("ipc_error", f"Không thể giao tiếp với Teleport đang chạy: {e}")
+        return 1
+    if connected:
+        if syntax_err:
+            return _cli_syntax_error(args, syntax_err)
+        assert res is not None
+        if "error" in res:
+            err = str(res["error"])
+            if err == "transfer_not_found":
+                output.error("transfer_not_found", f"Không tìm thấy lượt truyền nào khớp {query!r}.")
+                return 1
+            if err == "ambiguous_transfer":
+                output.error(
+                    "ambiguous_transfer",
+                    f"Có nhiều lượt truyền khớp {query!r}; hãy nhập thêm ký tự.",
+                )
+                return 1
+            if err == "invalid_target":
+                return _cli_syntax_error(args, "mã lượt phải gồm ít nhất 4 ký tự hex (0-9, a-f)")
+            output.error(err, str(res.get("detail") or err))
+            return 1
+        _render_transfers_cancelled(output, list(res.get("cancelled", [])))
+        return 0
+
+    try:
+        cancelled_items = cancel_pending_offline(
+            directory, query, cancel_all=cancel_all, receive_dir=recv_dir
+        )
+    except ConfigDirError as e:
+        _config_dir_error(output, e.path, e.error)
+        return 1
+    except OSError as e:
+        _config_dir_error(output, directory, e)
+        return 1
+    except NodeLockedError:
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
+        return 1
+    except IdentityError as e:
+        output.error("identity_error", str(e))
+        return 1
+    except TrustStoreError as e:
+        output.error("trust_store_error", str(e))
+        return 1
+    except (UnsafeReceiveDirError, PathTooLongError) as e:
+        output.error("receive_dir_error", str(e))
+        return 1
+    except TransferNotFound:
+        output.error("transfer_not_found", f"Không tìm thấy lượt truyền nào khớp {query!r}.")
+        return 1
+    except AmbiguousTransfer:
+        output.error(
+            "ambiguous_transfer",
+            f"Có nhiều lượt truyền khớp {query!r}; hãy nhập thêm ký tự.",
+        )
+        return 1
+
+    cancelled = [
+        {
+            "direction": "receive",
+            "device_id": item.device_id,
+            "device_name": item.device_name,
+            "transfer_id": item.transfer_id,
+        }
+        for item in cancelled_items
+    ]
+    _render_transfers_cancelled(output, cancelled)
+    return 0
+
+
 # ---- Chế độ khách (Web Guest) --------------------------------------------------------------
 
 
@@ -3450,6 +3706,39 @@ def build_parser() -> argparse.ArgumentParser:
     unpair.add_argument("device", metavar="<thiết bị>", help="tên hoặc tiền tố mã thiết bị (≥ 4 ký tự)")
     unpair.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
     unpair.set_defaults(handler=cmd_unpair)
+
+    transfers = sub.add_parser("transfers", help="xem và hủy các lượt truyền file đang dở")
+    transfers_sub = transfers.add_subparsers(dest="transfers_command", required=True, metavar="<thao tác>")
+
+    transfers_list = transfers_sub.add_parser("list", help="liệt kê các lượt truyền đang dở")
+    transfers_list.add_argument(
+        "--dir",
+        metavar="<thư mục>",
+        help="thư mục nhận cần kiểm tra (khi Teleport không chạy)",
+    )
+    transfers_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    transfers_list.set_defaults(handler=cmd_transfers_list, _parser=transfers_list)
+
+    transfers_cancel = transfers_sub.add_parser("cancel", help="hủy một hoặc toàn bộ lượt truyền đang dở")
+    transfers_cancel.add_argument(
+        "transfer",
+        nargs="?",
+        metavar="<mã lượt>",
+        help="tiền tố mã lượt truyền (tối thiểu 4 ký tự hex)",
+    )
+    transfers_cancel.add_argument(
+        "--all",
+        action="store_true",
+        dest="cancel_all",
+        help="hủy toàn bộ lượt truyền đang dở",
+    )
+    transfers_cancel.add_argument(
+        "--dir",
+        metavar="<thư mục>",
+        help="thư mục nhận cần xử lý (khi Teleport không chạy)",
+    )
+    transfers_cancel.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    transfers_cancel.set_defaults(handler=cmd_transfers_cancel, _parser=transfers_cancel)
 
     guest = sub.add_parser("guest", help="mở chế độ khách chia sẻ tệp qua Web QR với điện thoại")
     guest.add_argument(

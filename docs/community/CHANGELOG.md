@@ -5,6 +5,12 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+### Added
+- **Lệnh CLI/IPC liệt kê và hủy lượt truyền dở (`teleport transfers list`, `teleport transfers cancel`):**
+  - Hỗ trợ liệt kê và hủy theo tiền tố mã lượt (tối thiểu 4 ký tự hex) hoặc `--all` (kèm `--json`), giải phóng ngay dung lượng giữ chỗ `promised_bytes` và xóa thư mục tạm `.teleport/<transfer_id>` mà không phải chờ hết hạn nối lại (`protocol.md` mục 6.2).
+  - Hoạt động cả ở **chế độ ngoại tuyến** khi node không chạy (`list_pending_offline`, `cancel_pending_offline` giữ `node.lock`, không tạo mới danh tính/thư mục `.teleport`, ghi nhận hủy `cancel{user}` vào `tombstones.json`) lẫn **chế độ trực tuyến qua IPC** khi GUI/daemon đang chạy nền (`list_transfers`, `cancel_transfer` hỗ trợ hủy cả lượt gửi và nhận, có `IPC_TRANSFER_CANCEL_TIMEOUT = 65.0`).
+  - Nội bộ: thêm `_DiskLane.done`, `TransferManager.promised_bytes()` và `TransferManager.cancel_transfer(..., wait_disk=True)` (`teleport.app.transfers`).
+
 ### Changed
 - **Nhận diện đúng thiết bị tin cậy khi nhập nhầm IP:** Khi kết nối theo địa chỉ IP nhập tay (`teleport send --address`, hộp thoại *"Kết nối bằng IP…"* hoặc `Node.connect_address`) trỏ nhầm tới một thiết bị tin cậy khác không phải máy đang chọn, ZCL Teleport dò chứng chỉ máy đích một lần không gửi chứng chỉ máy mình và không gửi dữ liệu ứng dụng (`probe_server_cert`) để báo rõ tên và 8 ký tự đầu mã thiết bị (`<tên> (<device_id[:8]>)`) thay vì cảnh báo nhầm có dấu hiệu giả mạo:
   - Đồng bộ thông báo ở cả CLI (kể cả `--json` với `address`, `actual_device_id`, `actual_name`) lẫn giao diện (`ConnectAddressDialog`, `DiagnoseBar`, `DeviceListModel`), kèm bản dịch tiếng Anh (`teleport_en.ts`/`.qm`).
