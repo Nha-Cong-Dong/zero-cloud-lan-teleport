@@ -170,6 +170,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
     args = build_parser().parse_args(argv)
     if args.command == "sign":
         return cmd_sign(args.targets, if_configured=args.if_configured, description=args.description)
