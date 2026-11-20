@@ -20,16 +20,16 @@
 |---|---|---|
 | mvp N1 | 2026-11-05: hai máy Windows thật (11 ↔ 10) qua Wi-Fi 2,4 GHz, cùng điểm phát (mục 3.6); trước đó 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged (mục 3.3) | **ĐẠT trên hai máy thật qua Wi-Fi** cho phần xuất hiện, thoát app và mất mạng đột ngột (tắt Wi-Fi, app bị giết); máy **ngủ** thật, mạng dây và kịch bản mất gói ở hai lần resolve đầu chưa đo (mục 3.4) |
 | mvp N2 | 2026-10-29/30: đo tay qua giao diện, hai máy Windows thật qua Wi-Fi 2,4 GHz, một file 1,89 GiB (mục 5.4) | **CHƯA ĐỦ DỮ LIỆU**: lần đo tay cho tỉ số khoảng 0,96 nhưng không theo phương pháp mục 5.1 (1 lần Teleport, 2 lần SMB, một cỡ file, bấm giờ tay); lượt đo theo mục 5.1 và mạng dây chưa đo (mục 5.3) |
-| mvp N3 | 2026-11-18: D4 giả lập ổ chậm trên một máy Windows 11 (`bench_d4_disk.py`: giới hạn ghi 15 MiB/s, trễ `fsync` 15 ms, 256 MiB × 3, 100 tệp nhỏ 4–64 KiB × 3, giả lập FAT32 ≥ 4 GiB; mục 4.8.1). 2026-11-05: 10 GiB qua Wi-Fi 2,4 GHz giữa hai máy Windows thật, RAM hai phía, 1 lần (mục 4.10). 2026-10-26: loopback CLI 1/5/10 GiB (mục 4.6); 2026-10-28: trước/sau P3-3a (mục 4.9) | **ĐẠT phần truyền và D4 giả lập (N3 trên máy thật D3 cũng ĐẠT):** D4 file lớn 256 MiB tăng RAM trung vị +13,34 MiB (max +13,36 MiB ≤ 100 MiB), `Q4 − Q1` ≤ +0,80 MiB (12,16 MB/s); 100 tệp nhỏ tăng +3,97 MiB, `Q4 − Q1` ≤ +1,06 MiB (0,18 MB/s); FAT32 (`vfat`) tự từ chối file thưa 4 294 967 296 B (`rejected_file_too_large`); loopback 1–10 GiB và Wi-Fi 10 GiB (mục 4.10) đều ĐẠT. Còn mở: đo lúc rảnh của giao diện trên máy rảnh (mục 4.11 chạy khi máy bận nên chưa kết luận) |
+| mvp N3 | 2026-11-20: đo lúc rảnh `teleport-gui` trên máy Windows 11 rảnh (`bench_local_mvp.py`, lấy mẫu 10 s sau 5 s ổn định: RSS trung vị 133,77 MiB, max 133,77 MiB, CPU trung vị 0,0%; mục 16). 2026-11-18: D4 giả lập ổ chậm (`bench_d4_disk.py`). 2026-11-05: 10 GiB Wi-Fi 2,4 GHz. 2026-10-26: loopback CLI 1/5/10 GiB | **ĐẠT:** D4 giả lập và truyền 1–10 GiB đều ĐẠT; phần rảnh giao diện đạt **133,77 MiB** (< 150 MB) và CPU trung vị **0,0%** |
 | mvp N4 | 2026-11-18: D5 giả lập proxy TCP 64 KiB cắt TCP RST tại 70% lưu lượng (64 MiB × 3 lượt, `bench_d5_d6_d7_sim.py`; mục 7.4). 2026-10-31: loopback 1 GiB cắt theo 6 kiểu (mục 7.3) | **ĐẠT trên giả lập đơn máy & loopback:** D5 gửi thừa trung vị 2,56 MiB (lớn nhất 2,56 MiB ≤ 64 MiB, thời gian 0,86–0,90 s, SHA-256 khớp 3/3); loopback 2026-10-31 lớn nhất 24,31 MiB (49/49 lượt ĐẠT); test tự động chạy trên CI Windows/Linux/macOS (`ci.yml`). Cắt Wi-Fi/mạng thật trên phần cứng rời chưa đo do không có thiết bị thứ hai |
-| mvp N5 | — | chưa đo |
+| mvp N5 | 2026-11-20: đo tự động `bench_local_mvp.py` trên loopback (`Node` ↔ `Node` 4 cỡ tệp 1 KiB–10 MiB + thử lật 1 byte đầu/giữa/cuối tệp 3 MiB + 777 B; mục 12) | **ĐẠT:** 4/4 lượt truyền khớp SHA-256 nguồn 100%; 3/3 điểm lật 1 byte bị phát hiện ở cả kiểm tra khối lẫn `MerkleStream` |
 | mvp N6 | 2026-11-18: D6 giả lập mạng Wi-Fi 5 qua proxy ống dẫn (RTT 4 ms, băng thông 30 MB/s, `bench_d5_d6_d7_sim.py`; mục 9.5). 2026-11-02: hai `Node` loopback với `FakeClipboard` (mục 9.3) và backend Qt offscreen M4 (mục 9.4) | **ĐẠT (giả lập Wi-Fi 5 D6 & loopback M1–M3):** D6 đạt 174,2 ms (1 KiB), 290,8 ms (max 296,3 ms < 500 ms cho 1 MiB văn bản) và 785,4 ms (max 789,0 ms < 2000 ms cho 9,5 MiB PNG). M4 trên nền offscreen **KHÔNG ĐẠT** riêng ca ảnh rất lớn `8192×8192` dễ nén (~4,3–5,0 s do mã hóa PNG của Qt); 1920×1080 (0,18–0,76 s) và 3840×2160 (0,56 s) dưới ngưỡng. Clipboard thật qua phần cứng Wi-Fi rời chưa đo do không có thiết bị thứ hai |
 | mvp N7 | 2026-11-09: test soak tự động trên loopback, hai node thật, 100 lượt truyền liên tiếp gồm các cỡ file 1 KiB, 64 KiB, 512 KiB, 1 MiB, 2 MiB đơn lẻ và nhóm nhiều file (mục 10) | **ĐẠT**: 100/100 lượt hoàn thành DONE không crash trong 22,5 s; 100% file toàn vẹn khớp SHA-256 nguồn; 0 file tạm sót lại trong thư mục .teleport; bộ nhớ không rò rỉ (tăng trưởng < 2 MiB sau 100 lượt) |
-| mvp N8 | — | chưa đo |
-| mvp N9 | — | chưa đo |
+| mvp N8 | 2026-11-20: đo tự động `bench_local_mvp.py` trên `127.0.0.1` (hạ cấp TLS 1.2, chứng chỉ lạ, fuzzing cổng `Node`, Web Guest HTTP brute-force `429`, IPC token sai; mục 13) | **ĐẠT:** Toàn bộ 6/6 kịch bản kiểm tra bảo mật và từ chối đầu vào sai đều đạt, `Node` giữ ổn định sau fuzzing |
+| mvp N9 | 2026-11-20: đo tự động `bench_local_mvp.py` (`Node` ↔ `Node` truyền file + clipboard chứa chuỗi đánh dấu, giám sát `Get-NetTCPConnection` và quét 15 tệp log/cấu hình; mục 14) | **ĐẠT:** 0 kết nối mạng ra ngoài loopback; 0 rò rỉ nội dung file hoặc clipboard trong toàn bộ tệp log và cấu hình |
 | mvp N10 | 2026-11-18: D7 bộ vector tương thích dây & hệ file đa nền tảng (`bench_d5_d6_d7_sim.py`; mục 11) + kiểm thử & đóng gói CI 3 hệ điều hành (Windows, Linux, macOS) | **ĐẠT (trên giả lập vector & CI 3 nền tảng):** 7/7 vector tương thích giao thức Windows/macOS/Linux đạt (NFD→NFC, tên cấm Windows, chặn vượt cấp đường dẫn, header khối 41 byte, `Bitfield` MSB-first, `MerkleStream` O(log2 N), `StateReplay`). Toàn bộ unit/integration test và build AppImage/DMG/Inno Setup chạy tự động trên GitHub Actions 3 hệ điều hành (máy macOS/Linux vật lý rời chưa đo trực tiếp) |
 | mvp N11 | 2026-10-31: bộ cài Inno Setup thử (PR E2), cài/gỡ silent `/CURRENTUSER` 3 lần trên máy dev Windows 11 (mục 8.4); trước đó cỡ zip GUI trước/sau A2 (mục 8.2) | **CHƯA ĐỦ DỮ LIỆU**: cỡ bộ cài dưới trần theo cả hai cách hiểu “MB”, không cần khởi động lại và gỡ sạch thư mục cài, khóa gỡ cài đặt, lối tắt ở chế độ một người dùng; chế độ quản trị (rule tường lửa) và máy ảo sạch chưa đo (mục 8.3) |
-| mvp N12 | — | chưa đo |
+| mvp N12 | 2026-11-20: `bench_local_mvp.py` (336 cặp màu trên 6 bộ nhấn × Sáng/Tối) + `pytest tests/ui/test_tokens.py test_a11y.py test_shortcuts.py test_appearance.py` (mục 15) | **ĐẠT:** Tương phản chữ nhỏ nhất **5,05:1** ($\ge 4{,}5:1$), thành phần UI nhỏ nhất **3,93:1** ($\ge 3{,}0:1$); 479 test tự động UI/a11y/phím tắt đạt (86 skip theo nền tảng) |
 | mvp mục 4.1 (H1–H5) | 2026-11-05: zip RC1 `7824259`, hai máy Windows thật qua Wi-Fi 2,4 GHz (mục 6.1) | **ĐẠT** cả năm tiêu chí (mục 6) |
 
 ## 3. mvp N1: Khám phá
@@ -1456,4 +1456,61 @@ Thay cho việc phải kiểm tra thủ công trên từng cặp máy vật lý 
 | `StateReplay` nhật ký khôi phục | Vòng khép kín `encode_header` + `encode_target` + `encode_reserved` + `encode_mark` | **ĐẠT** |
 
 **Kết luận D7 (trên vector & CI 3 nền tảng): ĐẠT (7/7 vector kiểm tra tương thích).**
+
+---
+
+## 12. mvp N5: Toàn vẹn dữ liệu (2026-11-20)
+
+- **Script:** `tools/bench_local_mvp.py` (commit `9652ca8`, Windows 11).
+- **Truyền qua `Node` ↔ `Node` trên loopback:** 4 cỡ tệp (`1 KiB`, `1 MiB`, `5 MiB + 123 B`, `10 MiB`) → **4 / 4 lượt** khớp 100% mã băm SHA-256 nguồn.
+- **Phát hiện sai lệch 1 byte:** Lật 1 bit tại byte đầu (`0`), byte giữa và byte cuối của tệp `3 MiB + 777 B` → **3 / 3 vị trí** bị phát hiện ở cả kiểm tra SHA-256 khối lẫn `MerkleStream.root()`.
+- **Kết luận: ĐẠT tiêu chí mvp N5.**
+
+---
+
+## 13. mvp N8: Bảo mật (2026-11-20)
+
+- **Script:** `tools/bench_local_mvp.py` trên `127.0.0.1` (commit `9652ca8`).
+
+| Kịch bản kiểm tra | Kết quả |
+|---|---|
+| Hạ cấp TLS 1.2 vào cổng `Node` | **Bị từ chối** (`tls12_rejected: True`) |
+| Kết nối TLS 1.3 từ thiết bị chưa ghép đôi (`accept_pairing=False`) | **Bị từ chối** (`untrusted_rejected: True`) |
+| Fuzzing frame rác / độ dài cực lớn trực tiếp vào cổng `Node` | **Node giữ ổn định**, không sập (`fuzz_node_alive: True`) |
+| Web Guest HTTP token hợp lệ | **200 OK** (`web_guest_auth_ok: True`) |
+| Web Guest HTTP thử sai token 6 lần liên tiếp | **401/403** rồi khóa IP **`429 Too Many Requests`** (`web_guest_bruteforce_429: True`) |
+| IPC Server nhận token sai | **Bị từ chối** (`ipc_auth_rejected: True`) |
+
+- **Kết luận: ĐẠT tiêu chí mvp N8.**
+
+---
+
+## 14. mvp N9: Quyền riêng tư (2026-11-20)
+
+- **Script:** `tools/bench_local_mvp.py` (commit `9652ca8`): chạy hai `Node` thật thực hiện truyền file và đồng bộ clipboard qua `FakeClipboard` với chuỗi đánh dấu nhạy cảm, bật mức log `DEBUG`.
+- **Giám sát kết nối mạng (`Get-NetTCPConnection`):** **0** kết nối TCP ra ngoài dải loopback (`127.0.0.1` / `::1`).
+- **Quét tệp log và cấu hình/metadata:** Quét **15** tệp sinh ra trong phiên chạy (ngoại trừ thư mục đích `recv/`) → **0** lần xuất hiện chuỗi nội dung file hoặc clipboard.
+- **Kết luận: ĐẠT tiêu chí mvp N9.**
+
+---
+
+## 15. mvp N12: Trợ năng (2026-11-20)
+
+- **Kiểm tra tương phản màu (`bench_local_mvp.py`):** Quét **336 cặp màu** trên toàn bộ **6 bộ màu nhấn** × **2 chế độ Sáng/Tối** từ `teleport.ui.theme.tokens()`:
+  - Tương phản chữ trên nền nhỏ nhất: **5,05:1** (đạt chuẩn WCAG AA $\ge 4{,}5:1$).
+  - Tương phản viền/biểu tượng/trạng thái nhỏ nhất: **3,93:1** (đạt chuẩn WCAG AA $\ge 3{,}0:1$).
+- **Kiểm thử tự động giao diện (`pytest`):**
+  - `tests/ui/test_tokens.py`: **77 passed**.
+  - `tests/ui/test_a11y.py`, `tests/ui/test_shortcuts.py`, `tests/ui/test_appearance.py`: **402 passed, 86 skipped** (các ca skip theo nền tảng).
+- **Kết luận: ĐẠT tiêu chí mvp N12.**
+
+---
+
+## 16. mvp N3 (bổ sung): RAM & CPU giao diện lúc rảnh (2026-11-20)
+
+- **Script:** `tools/bench_local_mvp.py` khởi chạy `teleport.ui.app:main` với thư mục cấu hình tạm, chờ 5 giây ổn định rồi lấy mẫu Working Set và thời gian CPU mỗi giây trong 10 giây qua Win32 API (`GetProcessMemoryInfo`, `GetProcessTimes`, PID `14836`).
+- **Kết quả:**
+  - RAM (Working Set): trung vị **133,77 MiB**, lớn nhất **133,77 MiB** (đạt ngưỡng `< 150 MB`).
+  - CPU: trung vị **0,0%**, đỉnh tức thời 1 mẫu **3,12%** (đạt ngưỡng `~0%`).
+- **Kết luận: ĐẠT phần rảnh của tiêu chí mvp N3.**
 
