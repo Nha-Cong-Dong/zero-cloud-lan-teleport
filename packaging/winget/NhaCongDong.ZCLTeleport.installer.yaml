@@ -18,6 +18,6 @@ ReleaseDate: 2026-11-20
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/download/v1.3.0/teleport-setup-1.3.0-x64.exe
-    InstallerSha256: REPLACE_WITH_SHA256_FROM_SHA256SUMS
+    InstallerSha256: B702B5857D10013AF7F133327BF6E1E69C79A53036970E98C6E16F1B754A6F19
 ManifestType: installer
 ManifestVersion: 1.9.0
