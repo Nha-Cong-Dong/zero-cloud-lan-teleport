@@ -709,3 +709,61 @@ async def test_n15_connect_address_while_connected_does_not_replace_saved_target
     await connected(A, B, timeout=6)  # hint không bị đổi thành cổng sai: nối lại tới địa chỉ đã lưu
     assert all(c.port != bad_port for c in counter.of(caller=A)), [c.port for c in counter.of(caller=A)]
     assert A.rec.events_of(ConnectFailed) == []
+
+
+# --- PR 2.1: Nhận diện đúng thiết bị tin cậy khi nhập nhầm IP -----------------------------------------------
+
+
+@integration
+async def test_pr21_connect_address_wrong_trusted_peer_reports_actual_device(node_factory, trust_each_other):
+    trust_each_other("A", "B", "A", "B")
+    trust_each_other("A", "C", "A", "C")
+    A = await node_factory("A", auto_connect=False)
+    B = await node_factory("B", auto_connect=False)
+    C = await node_factory("C", auto_connect=False)
+
+    result = await asyncio.wait_for(A.connect_address(B.id, LOCAL, C.port), 10)
+    assert result == IDENTITY
+
+    ev = await A.rec.wait_event(ConnectFailed, B.id, timeout=5)
+    assert ev.result == IDENTITY
+    assert ev.from_hint is True
+    assert ev.actual_device_id == C.id
+    assert ev.actual_name == C.name
+    assert ev.address == LOCAL
+    assert ev.port == C.port
+
+
+@integration
+async def test_pr21_connect_hint_wrong_trusted_peer_reports_actual_device(node_factory, trust_each_other):
+    trust_each_other("A", "B", "A", "B")
+    trust_each_other("A", "C", "A", "C")
+    A = await node_factory("A", auto_connect=False)
+    B = await node_factory("B", auto_connect=False)
+    C = await node_factory("C", auto_connect=False)
+
+    A.connect_hint(B.id, [LOCAL], C.port)
+    ev = await A.rec.wait_event(ConnectFailed, B.id, timeout=5)
+    assert ev.result == IDENTITY
+    assert ev.from_hint is True
+    assert ev.actual_device_id == C.id
+    assert ev.actual_name == C.name
+    assert ev.address == LOCAL
+    assert ev.port == C.port
+
+
+@integration
+async def test_pr21_connect_address_stranger_reports_none_actual_device(node_factory, trust_each_other):
+    A, B = await two_nodes(node_factory, trust_each_other)
+    D = await node_factory("D", auto_connect=False)
+
+    result = await asyncio.wait_for(A.connect_address(B.id, LOCAL, D.port), 10)
+    assert result == IDENTITY
+
+    ev = await A.rec.wait_event(ConnectFailed, B.id, timeout=5)
+    assert ev.result == IDENTITY
+    assert ev.from_hint is True
+    assert ev.actual_device_id is None
+    assert ev.actual_name is None
+    assert ev.address == LOCAL
+    assert ev.port == D.port

@@ -139,6 +139,7 @@ class Connect:
     attempt_id: int  # tracker cấp, tăng dần từ 1
     addresses: tuple[str, ...]
     port: int
+    from_hint: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -726,7 +727,7 @@ class LinkTracker:
         dev.next_at = None
         dev.dirty = False
         addresses, port = target
-        return Connect(device_id, attempt_id, addresses, port)
+        return Connect(device_id, attempt_id, addresses, port, from_hint=from_hint)
 
     @staticmethod
     def _reset_failures(dev: _Device) -> None:

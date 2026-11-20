@@ -5,6 +5,11 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+### Changed
+- **Nhận diện đúng thiết bị tin cậy khi nhập nhầm IP:** Khi kết nối theo địa chỉ IP nhập tay (`teleport send --address`, hộp thoại *"Kết nối bằng IP…"* hoặc `Node.connect_address`) trỏ nhầm tới một thiết bị tin cậy khác không phải máy đang chọn, ZCL Teleport dò chứng chỉ máy đích một lần không gửi chứng chỉ máy mình và không gửi dữ liệu ứng dụng (`probe_server_cert`) để báo rõ tên và 8 ký tự đầu mã thiết bị (`<tên> (<device_id[:8]>)`) thay vì cảnh báo nhầm có dấu hiệu giả mạo:
+  - Đồng bộ thông báo ở cả CLI (kể cả `--json` với `address`, `actual_device_id`, `actual_name`) lẫn giao diện (`ConnectAddressDialog`, `DiagnoseBar`, `DeviceListModel`), kèm bản dịch tiếng Anh (`teleport_en.ts`/`.qm`).
+  - Nội bộ: thêm `Connect.from_hint` (`teleport.core.links`), `probe_server_cert` (`teleport.net.connection`) và mở rộng `ConnectFailed` (`address`, `port`, `actual_device_id`, `actual_name`) trong `teleport.app.node`.
+
 ## [1.3.0] - 2026-11-18
 
 ### Added

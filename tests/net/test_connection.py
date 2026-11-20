@@ -4561,3 +4561,93 @@ def test_discard_limits_by_kind():
     assert connection._DISCARD_LIMIT_PAIRING == 64 * 1024
     limit = connection._DISCARD_LIMIT_CONTROL
     assert limit == 2 * (connection.MAX_MESSAGE_SIZE + HEADER.size)
+
+
+# --- PR 2.1: probe_server_cert ------------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("allow_anonymous", [None, lambda _ip: False], ids=["visible", "hidden"])
+async def test_probe_server_cert_returns_peer_cert_from_listener(listener_factory, ids, allow_anonymous):
+    h = await listener_factory(ids.server, allow_anonymous=allow_anonymous)
+    cert = await connection.probe_server_cert(LOCAL, h.port)
+    assert cert is not None
+    assert cert.device_id == ids.server.device_id
+    assert cert.fingerprint == ids.server.fingerprint
+    assert cert.pem == ids.server.cert_pem()
+    await asyncio.sleep(0.05)
+    assert h.calls == 0 and h.accepted.empty()
+
+
+@pytest.mark.integration
+async def test_probe_server_cert_sends_no_client_cert_and_no_app_bytes(ids):
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(str(ids.server.cert_path), str(ids.server.key_path))
+    ctx.verify_mode = ssl.CERT_OPTIONAL
+    ctx.load_verify_locations(cadata=ids.b.cert_pem())
+
+    observed: dict[str, object] = {}
+    done = asyncio.Event()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            ssl_obj = writer.get_extra_info("ssl_object")
+            observed["client_cert"] = ssl_obj.getpeercert(binary_form=True) if ssl_obj else "missing"
+            try:
+                observed["app_bytes"] = await asyncio.wait_for(reader.read(64), timeout=0.5)
+            except CLOSED:
+                observed["app_bytes"] = b""
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+            done.set()
+
+    server = await asyncio.start_server(handle, LOCAL, 0, ssl=ctx)
+    try:
+        port = server.sockets[0].getsockname()[1]
+        cert = await connection.probe_server_cert(LOCAL, port)
+        await asyncio.wait_for(done.wait(), timeout=2.0)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert cert is not None
+    assert cert.device_id == ids.server.device_id
+    assert observed["client_cert"] is None, "probe_server_cert không được gửi chứng chỉ client"
+    assert observed["app_bytes"] == b"", "probe_server_cert không được gửi byte ứng dụng"
+
+
+@pytest.mark.integration
+async def test_probe_server_cert_returns_none_on_closed_port_or_invalid_target():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((LOCAL, 0))
+        closed_port = s.getsockname()[1]
+
+    assert await connection.probe_server_cert(LOCAL, closed_port) is None
+    for bad_addr, bad_port in [
+        ("0.0.0.0", 47474),
+        ("", 47474),
+        (LOCAL, 0),
+        (LOCAL, -1),
+        (LOCAL, 70000),
+    ]:
+        assert await connection.probe_server_cert(bad_addr, bad_port) is None
+
+
+@pytest.mark.integration
+async def test_probe_server_cert_returns_none_on_non_tls_server():
+    async def handle(_reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writer.write(b"NOT_TLS\r\n")
+        await writer.drain()
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(handle, LOCAL, 0)
+    try:
+        port = server.sockets[0].getsockname()[1]
+        assert await connection.probe_server_cert(LOCAL, port) is None
+    finally:
+        server.close()
+        await server.wait_closed()

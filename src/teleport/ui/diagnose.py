@@ -171,6 +171,23 @@ def wrong_address_title(name: str) -> str:
     )
 
 
+def wrong_address_known_title(address: str, other: str, name: str) -> str:
+    return texts.fill(
+        QCoreApplication.translate("Diagnose", "Địa chỉ {address} đang là của {other}, không phải {name}"),
+        address=address,
+        other=other,
+        name=name,
+    )
+
+
+def wrong_address_known_no_addr_title(other: str, name: str) -> str:
+    return texts.fill(
+        QCoreApplication.translate("Diagnose", "Địa chỉ IP vừa nhập là của {other}, không phải {name}"),
+        other=other,
+        name=name,
+    )
+
+
 def wrong_address_body(name: str) -> str:
     return texts.fill(
         QCoreApplication.translate(
@@ -250,6 +267,20 @@ def not_this_device_text(address: str, name: str) -> str:
     )
 
 
+def not_this_device_known_text(address: str, other: str, name: str) -> str:
+    """Hộp: máy ở `address` là một thiết bị tin cậy khác (`other`), không phải `name`."""
+    return texts.fill(
+        QCoreApplication.translate(
+            "Diagnose",
+            "Địa chỉ {address} đang là của {other} (một máy đã ghép đôi khác), không phải {name}. "
+            "Hãy kiểm tra lại địa chỉ.",
+        ),
+        address=address,
+        other=other,
+        name=name,
+    )
+
+
 def connect_error_text() -> str:
     """Hộp: lỗi không mong đợi (node đang đóng, lỗi lạ)."""
     return QCoreApplication.translate(
@@ -325,13 +356,62 @@ def diagnose(
     return Diagnosis(Cause.NOT_SEEN, None, InfoLevel.INFO, False, False, True)
 
 
-def _cause_texts(diagnosis: Diagnosis, view: DeviceView) -> tuple[texts.Text, texts.Text]:
+@dataclass(frozen=True, slots=True)
+class _WrongAddressInfo:
+    """Thông tin máy tin cậy thực tế ở địa chỉ vừa nhập sai (`from_hint`, `IDENTITY_MISMATCH`)."""
+
+    actual_device_id: str
+    actual_name: str
+    address: str | None = None
+    port: int | None = None
+
+
+def _other_label(info: _WrongAddressInfo) -> str:
+    return f"{texts.peer_label(info.actual_name, info.actual_device_id)} ({info.actual_device_id[:8]})"
+
+
+def _wrong_address_from_event(event: ConnectFailed) -> _WrongAddressInfo | None:
+    actual_device_id: object = getattr(event, "actual_device_id", None)
+    actual_name: object = getattr(event, "actual_name", None)
+    if not isinstance(actual_device_id, str) or not actual_device_id or not isinstance(actual_name, str):
+        return None
+    address: object = getattr(event, "address", None)
+    port: object = getattr(event, "port", None)
+    return _WrongAddressInfo(
+        actual_device_id=actual_device_id,
+        actual_name=actual_name,
+        address=address if isinstance(address, str) else None,
+        port=port if isinstance(port, int) and not isinstance(port, bool) else None,
+    )
+
+
+def _cause_texts(
+    diagnosis: Diagnosis,
+    view: DeviceView,
+    wrong_address: _WrongAddressInfo | None = None,
+) -> tuple[texts.Text, texts.Text]:
     """(tiêu đề, thân) của nguyên nhân, dạng hàm; thân "" khi nguyên nhân chỉ có tiêu đề."""
     name = _peer(view)
     cause = diagnosis.cause
     if cause is Cause.BLOCKED and diagnosis.result is not None:
         return functools.partial(radar.connect_failed_text, view, diagnosis.result), ""
     if cause is Cause.WRONG_ADDRESS:
+        if wrong_address is not None:
+            other = _other_label(wrong_address)
+            if wrong_address.address:
+                shown = (
+                    format_address(wrong_address.address, wrong_address.port)
+                    if wrong_address.port is not None
+                    else wrong_address.address
+                )
+                return (
+                    functools.partial(wrong_address_known_title, shown, other, name),
+                    functools.partial(wrong_address_body, name),
+                )
+            return (
+                functools.partial(wrong_address_known_no_addr_title, other, name),
+                functools.partial(wrong_address_body, name),
+            )
         return functools.partial(wrong_address_title, name), functools.partial(wrong_address_body, name)
     if cause is Cause.ISOLATED:
         return functools.partial(radar.connect_failed_text, view, ConnectResult.UNREACHABLE), ""
@@ -612,7 +692,15 @@ class _Tried:
     result: ConnectResult | None
 
 
-_Key = tuple[str, Cause, ConnectResult | None, Overlay, str, tuple[str, int] | None]
+_Key = tuple[
+    str,
+    Cause,
+    ConnectResult | None,
+    Overlay,
+    str,
+    tuple[str, int] | None,
+    _WrongAddressInfo | None,
+]
 
 
 class DiagnoseController(QObject):
@@ -634,6 +722,8 @@ class DiagnoseController(QObject):
         self._closing = False
         self._device_id: str | None = None
         self._failures: dict[str, tuple[ConnectResult, bool]] = {}
+        self._wrong_addresses: dict[str, _WrongAddressInfo] = {}
+        self._dialog_wrong_addresses: dict[str, _WrongAddressInfo] = {}
         self._offline_since: dict[str, float] = {}
         self._busy: dict[str, SubmitJob] = {}
         self._tried: dict[str, _Tried] = {}
@@ -706,6 +796,17 @@ class DiagnoseController(QObject):
             if event.from_hint and event.result is ConnectResult.UNREACHABLE:
                 return  # chỉ nói về địa chỉ vừa nhập; hộp đã báo (spec 2.3)
             self._failures[device_id] = (event.result, event.from_hint)
+            if event.from_hint and event.result is ConnectResult.IDENTITY_MISMATCH:
+                info = _wrong_address_from_event(event)
+                if info is not None:
+                    self._wrong_addresses[device_id] = info
+                    self._dialog_wrong_addresses[device_id] = info
+                else:
+                    self._wrong_addresses.pop(device_id, None)
+                    self._dialog_wrong_addresses.pop(device_id, None)
+            else:
+                self._wrong_addresses.pop(device_id, None)
+                self._dialog_wrong_addresses.pop(device_id, None)
         elif isinstance(event, DeviceConnected):
             self._forget_errors(device_id)
         self._render()
@@ -732,6 +833,8 @@ class DiagnoseController(QObject):
         self._busy.clear()
         self._close_dialog()
         self._failures.clear()
+        self._wrong_addresses.clear()
+        self._dialog_wrong_addresses.clear()
         self._offline_since.clear()
         self._tried.clear()
         self._before_retry.clear()
@@ -744,6 +847,8 @@ class DiagnoseController(QObject):
 
     def _forget_errors(self, device_id: str) -> None:
         self._failures.pop(device_id, None)
+        self._wrong_addresses.pop(device_id, None)
+        self._dialog_wrong_addresses.pop(device_id, None)
         self._tried.pop(device_id, None)
         self._before_retry.pop(device_id, None)
         self._dismissed.pop(device_id, None)
@@ -766,6 +871,8 @@ class DiagnoseController(QObject):
                 self._offline_since.pop(view.device_id, None)
         known = (
             set(self._failures)
+            | set(self._wrong_addresses)
+            | set(self._dialog_wrong_addresses)
             | set(self._tried)
             | set(self._before_retry)
             | set(self._dismissed)
@@ -921,6 +1028,7 @@ class DiagnoseController(QObject):
             dialog.show_error(functools.partial(radar.invalid_address_text, text))
             return
         address = f"{ip}:{port}"
+        self._dialog_wrong_addresses.pop(dialog.device_id, None)
         cell: list[SubmitJob] = []
         job = host.submit(
             functools.partial(_connect_address, device_id=dialog.device_id, ip=ip, port=port),
@@ -952,7 +1060,17 @@ class DiagnoseController(QObject):
         elif result is ConnectResult.UNREACHABLE:
             dialog.show_error(functools.partial(pairing.unreachable_text, address))
         elif result is ConnectResult.IDENTITY_MISMATCH:
-            dialog.show_error(functools.partial(not_this_device_text, address, name))
+            info = self._dialog_wrong_addresses.get(dialog.device_id)
+            if info is not None:
+                shown = (
+                    (format_address(info.address, info.port) if info.port is not None else info.address)
+                    if info.address
+                    else address
+                )
+                other = _other_label(info)
+                dialog.show_error(functools.partial(not_this_device_known_text, shown, other, name))
+            else:
+                dialog.show_error(functools.partial(not_this_device_text, address, name))
         elif result in (ConnectResult.REJECTED, ConnectResult.VERSION_MISMATCH):
             assert isinstance(result, ConnectResult)
             dialog.show_error(functools.partial(radar.connect_failed_text, dialog.view, result))
@@ -1017,7 +1135,16 @@ class DiagnoseController(QObject):
             self._before_retry.pop(device_id, None)
             return None
         overlay = self._overlay(device_id, diagnosis)
-        key: _Key = (device_id, diagnosis.cause, diagnosis.result, overlay, view.name, view.last_address)
+        wrong = self._wrong_addresses.get(device_id) if diagnosis.cause is Cause.WRONG_ADDRESS else None
+        key: _Key = (
+            device_id,
+            diagnosis.cause,
+            diagnosis.result,
+            overlay,
+            view.name,
+            view.last_address,
+            wrong,
+        )
         return view, diagnosis, overlay, key
 
     def _hide(self) -> None:
@@ -1060,7 +1187,8 @@ class DiagnoseController(QObject):
 
     def _show(self, view: DeviceView, diagnosis: Diagnosis, overlay: Overlay) -> None:
         name = _peer(view)
-        title, body = _cause_texts(diagnosis, view)
+        wrong = self._wrong_addresses.get(view.device_id) if diagnosis.cause is Cause.WRONG_ADDRESS else None
+        title, body = _cause_texts(diagnosis, view, wrong)
         level = diagnosis.level
         if overlay is Overlay.BUSY:
             title, body, level = functools.partial(connecting_title, name), "", InfoLevel.INFO

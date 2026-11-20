@@ -431,7 +431,15 @@ def _view_dict(view: DeviceView) -> dict[str, Any]:
     }
 
 
-def connect_failed_message(view: DeviceView, result: ConnectResult) -> list[str]:
+def connect_failed_message(
+    view: DeviceView,
+    result: ConnectResult,
+    *,
+    address: str | None = None,
+    port: int | None = None,
+    actual_device_id: str | None = None,
+    actual_name: str | None = None,
+) -> list[str]:
     """Câu báo không kết nối được tới thiết bị đã ghép đôi (docs/mvp.md mục 8)."""
     x = _name_label(view.name)
     short_id = view.device_id[:8]
@@ -441,6 +449,17 @@ def connect_failed_message(view: DeviceView, result: ConnectResult) -> list[str]
             f"Để ghép đôi lại: `teleport pair {short_id}`",
         ]
     if result is ConnectResult.IDENTITY_MISMATCH:
+        if actual_device_id is not None and actual_name is not None:
+            where = (
+                f"{address}:{port}"
+                if address is not None and port is not None
+                else (address or "địa chỉ này")
+            )
+            actual_label = f"{_name_label(actual_name)} ({actual_device_id[:8]})"
+            return [
+                f"Địa chỉ {where} đang thuộc về thiết bị tin cậy {actual_label}, không phải {x}.",
+                f"Hãy kiểm tra lại địa chỉ IP của {x} hoặc chọn gửi tới {actual_label}.",
+            ]
         return [
             f"{x} đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. "
             "Kết nối đã bị chặn.",
@@ -478,15 +497,28 @@ def _print_event(output: _Output, event: NodeEvent) -> None:
         output.text(f"Mất kết nối với {who})." + (" Đang nối lại…" if view.online else ""))
         output.event("device_disconnected", device_id=view.device_id, name=view.name)
     elif isinstance(event, ConnectFailed):
-        lines = connect_failed_message(view, event.result)
-        output.text(*lines)
-        output.event(
-            "connect_failed",
-            device_id=view.device_id,
-            name=view.name,
-            result=event.result.value,
-            message=" ".join(lines),
+        lines = connect_failed_message(
+            view,
+            event.result,
+            address=event.address,
+            port=event.port,
+            actual_device_id=event.actual_device_id,
+            actual_name=event.actual_name,
         )
+        output.text(*lines)
+        fields: dict[str, Any] = {
+            "device_id": view.device_id,
+            "name": view.name,
+            "result": event.result.value,
+            "message": " ".join(lines),
+        }
+        if event.address is not None:
+            fields["address"] = event.address
+        if event.actual_device_id is not None:
+            fields["actual_device_id"] = event.actual_device_id
+        if event.actual_name is not None:
+            fields["actual_name"] = event.actual_name
+        output.event("connect_failed", **fields)
 
 
 def _emit_result(output: _Output, result: PairingFinished, *, seen_name: str | None = None) -> None:
@@ -2214,7 +2246,16 @@ class _SendSession(_Session):
             if dev_id in self.sending_ids and event.result is ConnectResult.UNREACHABLE:
                 self.output.text(_reconnect_unreachable_message(_peer_label(peer_name, dev_id)))
             elif dev_id in self.sending_ids:
-                self.output.text(*connect_failed_message(view, event.result))
+                self.output.text(
+                    *connect_failed_message(
+                        view,
+                        event.result,
+                        address=event.address,
+                        port=event.port,
+                        actual_device_id=event.actual_device_id,
+                        actual_name=event.actual_name,
+                    )
+                )
             elif dev_id not in self.failures:
                 self.failures[dev_id] = event
                 if wake:
@@ -2657,10 +2698,25 @@ async def _wait_connected(
                     "trên máy đó, hai máy dùng chung một mạng, và tường lửa cho phép Teleport."
                 ]
             else:
-                lines = connect_failed_message(failure.device, failure.result)
-            output.error(
-                "connect_failed", lines[0], extra=lines[1:], result=failure.result.value, device_id=device_id
-            )
+                lines = connect_failed_message(
+                    failure.device,
+                    failure.result,
+                    address=failure.address,
+                    port=failure.port,
+                    actual_device_id=failure.actual_device_id,
+                    actual_name=failure.actual_name,
+                )
+            fields: dict[str, Any] = {
+                "result": failure.result.value,
+                "device_id": device_id,
+            }
+            if failure.address is not None:
+                fields["address"] = failure.address
+            if failure.actual_device_id is not None:
+                fields["actual_device_id"] = failure.actual_device_id
+            if failure.actual_name is not None:
+                fields["actual_name"] = failure.actual_name
+            output.error("connect_failed", lines[0], extra=lines[1:], **fields)
             return 1
         timeout = None if deadline is None else deadline - loop.time()
         if timeout is not None and timeout <= 0:

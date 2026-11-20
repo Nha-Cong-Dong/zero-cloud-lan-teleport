@@ -1758,6 +1758,41 @@ async def open_pairing(addresses: Sequence[str], port: int, hello: Hello) -> Con
     return await _open_any(addrs, port, tls.client_context(), hello, ConnectionKind.PAIRING, None)
 
 
+async def probe_server_cert(address: str, port: int) -> PeerCert | None:
+    """Mở kết nối TLS ẩn danh tới `address:port` để đọc chứng chỉ server, rồi cắt ngay.
+
+    Không gửi bất kỳ byte ứng dụng nào. Địa chỉ hoặc cổng không hợp lệ, hết giờ, lỗi
+    kết nối hay chứng chỉ không hợp lệ đều trả `None`.
+    """
+    try:
+        ip = _check_ipv4(address, "địa chỉ")
+        _check_port(port, 1)
+    except ValueError:
+        return None
+    if ip.is_unspecified or ip.is_multicast or ip == _BROADCAST:
+        return None
+
+    writer: asyncio.StreamWriter | None = None
+    try:
+        async with asyncio.timeout(OPENING_TIMEOUT):
+            _, writer = await asyncio.open_connection(
+                address,
+                port,
+                ssl=tls.client_context(),
+                ssl_shutdown_timeout=_ssl_shutdown_timeout(ConnectionKind.PAIRING),
+            )
+        ssl_object = writer.get_extra_info("ssl_object")
+        der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
+        if der is None:
+            return None
+        return peer_cert_from_der(der)
+    except Exception:
+        return None
+    finally:
+        if writer is not None:
+            _abort(writer)
+
+
 async def open_control(
     addresses: Sequence[str], port: int, identity: Identity, hello: Hello, expected_cert_pem: str
 ) -> Connection:
