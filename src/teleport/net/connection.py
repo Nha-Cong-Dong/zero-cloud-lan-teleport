@@ -1436,7 +1436,9 @@ class Listener:
         """
         handle = self._gate.control_opened(ip, fingerprint, _now())
         if handle == 0:
-            log.debug("%s: không cấp ưu tiên (IP bị hạ ưu tiên hoặc bảng đầy)", ip)
+            log.debug(
+                "%s: không cấp ưu tiên (bị hạ ưu tiên, hết ngân sách/trần IP thiết bị hoặc bảng đầy)", ip
+            )
         return handle
 
     def release_outgoing_control(self, handle: int) -> None:
@@ -1611,7 +1613,10 @@ class Listener:
                 # Cùng khối đồng bộ với lần kiểm is_trusted: IP vừa chứng minh bằng mTLS.
                 handle = self._gate.control_opened(ip, cert.fingerprint, loop.time())
                 if handle == 0:
-                    log.debug("%s: không cấp ưu tiên (IP bị hạ ưu tiên hoặc bảng đầy)", ip)
+                    log.debug(
+                        "%s: không cấp ưu tiên (bị hạ ưu tiên, hết ngân sách/trần IP thiết bị hoặc bảng đầy)",
+                        ip,
+                    )
             try:
                 await self._on_connection(conn)
             except Exception:

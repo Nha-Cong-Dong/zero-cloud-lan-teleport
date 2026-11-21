@@ -31,13 +31,16 @@ Ngân sách lỗi và hạ ưu tiên: mTLS chứng minh *thiết bị*, không c
 relay nguyên byte tới một máy tin cậy là có ưu tiên cho IP của mình. Vì vậy mỗi IP ưu
 tiên có một ngân sách lỗi (`PRIORITY_STRIKES` lần, hồi 1 lần mỗi `STRIKE_REFILL` giây;
 một kết nối điều khiển của IP đó đóng sau khi đã sống ít nhất `STRIKE_CREDIT_AFTER` giây
-thì cộng lại 1). Không cộng theo từng lần bắt tay tin cậy: kẻ relay cắt kết nối là máy
-tin cậy nối lại qua nó sau 1 s, nên kẻ đó sẽ tự nạp lại được. Vé pool ưu tiên kết thúc
-mà chưa `trusted` (TCP trần, bắt tay hỏng, hết giờ, ẩn danh, lần thử thua bị client
-hủy) trừ 1; hết ngân sách
-thì IP đó bị hạ tới `now + PRIORITY_TTL`: mất luôn handle sống và mốc đóng của nó,
+thì cộng lại 1). Ngoài ra mỗi thiết bị (theo `fingerprint`) cũng có ngân sách lỗi riêng
+(`DEVICE_PRIORITY_STRIKES`, kẹp không âm) và trần số IP ưu tiên đồng thời
+(`MAX_PRIORITY_IPS_PER_DEVICE`) để kẻ có nhiều IP xoay vòng relay qua cùng thiết bị không
+chiếm được nhiều IP ưu tiên liên tiếp. Không cộng theo từng lần bắt tay tin cậy: kẻ relay
+cắt kết nối là máy tin cậy nối lại qua nó sau 1 s, nên kẻ đó sẽ tự nạp lại được. Vé pool
+ưu tiên kết thúc mà chưa `trusted` (TCP trần, bắt tay hỏng, hết giờ, ẩn danh, lần thử thua
+bị client hủy) trừ 1 cho IP và mọi `fingerprint` còn hiệu lực gắn với IP đó; hết ngân
+sách IP thì IP đó bị hạ tới `now + PRIORITY_TTL`: mất luôn handle sống và mốc đóng của nó,
 `control_opened` trong thời gian này không cấp gì (trả 0), kết nối mới vào pool chung.
-Hết hạn thì chỉ một `control_opened` mới mới cấp lại ưu tiên (ngân sách lại đầy).
+Hết hạn thì chỉ một `control_opened` mới mới cấp lại ưu tiên (ngân sách IP lại đầy).
 
 Bộ nhớ có trần: bảng bucket của pool chung chỉ thêm mục khi nhận, bỏ mục đã đầy lại mà
 không có vé sống, tối đa `MAX_TRACKED_IPS` mục; bảng ưu tiên tối đa `MAX_PRIORITY_IPS`
@@ -45,7 +48,8 @@ không có vé sống, tối đa `MAX_TRACKED_IPS` mục; bảng ưu tiên tối
 chỗ khi bảng đầy không bao giờ bỏ mục đang có vé sống hoặc kết nối điều khiển sống; bảng
 ưu tiên đầy mà mục nào cũng còn như vậy thì IP mới không được ưu tiên (`control_opened`
 trả 0). Hủy ghép đôi và hạ ưu tiên thì vẫn bỏ ưu tiên dù kết nối còn sống. Bảng IP bị hạ tối đa
-`MAX_DEMOTED_IPS` (đầy thì bỏ mục hết hạn sớm nhất).
+`MAX_DEMOTED_IPS` (đầy thì bỏ mục hết hạn sớm nhất). Bảng ngân sách theo thiết bị tối đa
+`MAX_TRACKED_DEVICES` (đầy thì bỏ mục không còn IP ưu tiên hiệu lực, ưu tiên mục đã hồi đầy).
 """
 
 from __future__ import annotations
@@ -82,6 +86,9 @@ MAX_TRACKED_IPS = 4096  # số IP tối đa trong bảng bucket của pool chung
 MAX_PRIORITY_IPS = 256  # số IP ưu tiên tối đa
 MAX_DEMOTED_IPS = 1024  # số IP bị hạ ưu tiên tối đa
 PRIORITY_STRIKES = 4  # số lần lỗi được tha cho mỗi IP ưu tiên trước khi hạ
+DEVICE_PRIORITY_STRIKES = 4  # số lần lỗi được tha cho mỗi thiết bị (fingerprint) cho IP mới
+MAX_PRIORITY_IPS_PER_DEVICE = 2  # số IP ưu tiên còn hiệu lực tối đa của mỗi thiết bị
+MAX_TRACKED_DEVICES = 1024  # số thiết bị tối đa trong bảng ngân sách theo fingerprint
 STRIKE_REFILL = 600.0  # số giây để hồi 1 lần lỗi (> 0)
 STRIKE_CREDIT_AFTER = 60.0  # kết nối điều khiển sống ≥ chừng này giây: lúc đóng cộng lại 1
 
@@ -164,6 +171,19 @@ class _Priority:
     def last_closed(self) -> float:
         return next(reversed(self.closed.values())) if self.closed else -math.inf
 
+    def has_active_fingerprint(self, fingerprint: str, now: float) -> bool:
+        if fingerprint in self.handles.values():
+            return True
+        closed_at = self.closed.get(fingerprint)
+        return closed_at is not None and now - closed_at < PRIORITY_TTL
+
+    def active_fingerprints(self, now: float) -> set[str]:
+        fps = set(self.handles.values())
+        for fp, closed_at in self.closed.items():
+            if now - closed_at < PRIORITY_TTL:
+                fps.add(fp)
+        return fps
+
 
 def _strike_rate() -> float:
     """Tốc độ hồi ngân sách lỗi (lần mỗi giây); `STRIKE_REFILL` ≤ 0 nghĩa là hồi ngay."""
@@ -218,6 +238,9 @@ class AdmissionGate:
         self._live: dict[int, _Live] = {}
         self._entries: OrderedDict[str, _Entry] = OrderedDict()  # pool chung, dùng lâu nhất đứng đầu
         self._priority: dict[str, _Priority] = {}
+        self._device_strikes: OrderedDict[str, _Bucket] = (
+            OrderedDict()
+        )  # fingerprint → ngân sách thiết bị (LRU)
         self._handles: dict[int, tuple[str, float]] = {}  # handle sống → (IP, lúc mở)
         self._demoted: dict[str, float] = {}  # IP bị hạ ưu tiên → hết hạn lúc (`now`)
         self._opening = {Pool.GENERAL: 0, Pool.PRIORITY: 0}
@@ -406,16 +429,36 @@ class AdmissionGate:
 
         Gọi cho kết nối vào đã qua kiểm `is_trusted`, và cho kết nối ra đã kiểm chứng chỉ
         server trong bắt tay. Trả handle (≥ 1) để báo `control_closed`. Trả 0 và không cấp
-        ưu tiên (`control_closed(0)` không làm gì) khi `ip` đang bị hạ ưu tiên, hoặc khi
-        bảng ưu tiên đầy (`MAX_PRIORITY_IPS`) mà mục nào cũng còn kết nối sống hoặc vé
-        sống. `fingerprint` không phải 64 ký tự hex thường → ValueError.
+        ưu tiên (`control_closed(0)` không làm gì) khi `ip` đang bị hạ ưu tiên, thiết bị
+        đã cạn ngân sách lỗi (`DEVICE_PRIORITY_STRIKES`) hoặc đã đủ trần IP ưu tiên
+        (`MAX_PRIORITY_IPS_PER_DEVICE`) khi mở trên IP mới, hoặc khi bảng ưu tiên/thiết bị
+        đầy mà không dọn được chỗ. `fingerprint` không phải 64 ký tự hex thường → ValueError.
         """
         ip = _normalize_ip(ip)
-        _check_fingerprint(fingerprint)
+        fingerprint = _check_fingerprint(fingerprint)
         now = self._advance(now)
         if self._is_demoted(ip, now):
             return 0
         record = self._priority.get(ip)
+        already_attached = record is not None and record.has_active_fingerprint(fingerprint, now)
+        if not already_attached:
+            dev_bucket = self._device_strikes.get(fingerprint)
+            if (
+                dev_bucket is not None
+                and dev_bucket.available(now, _strike_rate(), DEVICE_PRIORITY_STRIKES) < 1.0
+            ):
+                return 0
+            active_ips = sum(
+                1
+                for other_ip, rec in self._priority.items()
+                if other_ip != ip
+                and not self._is_demoted(other_ip, now)
+                and rec.has_active_fingerprint(fingerprint, now)
+            )
+            if active_ips >= MAX_PRIORITY_IPS_PER_DEVICE:
+                return 0
+            if dev_bucket is None and not self._make_device_room(now):
+                return 0
         if record is None:
             if not self._make_priority_room(now):
                 return 0
@@ -423,6 +466,10 @@ class AdmissionGate:
                 _Bucket(float(PRIORITY_BURST_PER_IP), now), _Bucket(float(PRIORITY_STRIKES), now)
             )
             self._priority[ip] = record
+        if fingerprint in self._device_strikes:
+            self._device_strikes.move_to_end(fingerprint)
+        elif not already_attached:
+            self._device_strikes[fingerprint] = _Bucket(float(DEVICE_PRIORITY_STRIKES), now)
         handle = self._next_handle
         self._next_handle += 1
         record.handles[handle] = fingerprint
@@ -433,8 +480,9 @@ class AdmissionGate:
         """Kết nối của `handle` đã đóng: IP còn ưu tiên thêm `PRIORITY_TTL` từ `now`.
 
         Kết nối đã sống ít nhất `STRIKE_CREDIT_AFTER` giây → cộng lại 1 vào ngân sách lỗi
-        của IP (không vượt `PRIORITY_STRIKES`). Handle 0, handle lạ, đã đóng hoặc đã bị
-        xóa (`retain_trusted`, hạ ưu tiên): không làm gì. `handle` không phải int → TypeError.
+        của IP (không vượt `PRIORITY_STRIKES`) và của thiết bị (không vượt `DEVICE_PRIORITY_STRIKES`).
+        Handle 0, handle lạ, đã đóng hoặc đã bị xóa (`retain_trusted`, hạ ưu tiên): không làm gì.
+        `handle` không phải int → TypeError.
         """
         if isinstance(handle, bool) or not isinstance(handle, int):
             raise TypeError("handle phải là số nguyên")
@@ -444,9 +492,13 @@ class AdmissionGate:
             return
         ip, opened_at = item
         record = self._priority[ip]
+        fingerprint = record.handles.pop(handle)
         if now - opened_at >= STRIKE_CREDIT_AFTER and not self._is_demoted(ip, now):
             record.strikes.give_back(now, _strike_rate(), PRIORITY_STRIKES)
-        fingerprint = record.handles.pop(handle)
+            dev_bucket = self._device_strikes.get(fingerprint)
+            if dev_bucket is not None:
+                dev_bucket.give_back(now, _strike_rate(), DEVICE_PRIORITY_STRIKES)
+                self._device_strikes.move_to_end(fingerprint)
         record.closed.pop(fingerprint, None)
         record.closed[fingerprint] = now  # giữ thứ tự tăng dần theo lúc đóng
         while len(record.closed) > _MAX_FINGERPRINTS_PER_IP:
@@ -456,9 +508,9 @@ class AdmissionGate:
         """Chỉ giữ ưu tiên do các thiết bị trong `fingerprints` (danh sách tin cậy hiện tại) mang lại.
 
         Fingerprint không còn trong danh sách: handle sống của nó bị xóa (hủy ghép đôi
-        thắng kết nối đang sống) và mốc đóng của nó bị bỏ; IP không còn gì giữ thì về
-        pool chung ngay. Vé đang sống không bị ảnh hưởng. `fingerprints` là một chuỗi,
-        hoặc có phần tử không phải 64 ký tự hex thường → ValueError, trạng thái không đổi.
+        thắng kết nối đang sống), mốc đóng và ngân sách thiết bị của nó bị bỏ; IP không còn
+        gì giữ thì về pool chung ngay. Vé đang sống không bị ảnh hưởng. `fingerprints` là một
+        chuỗi, hoặc có phần tử không phải 64 ký tự hex thường → ValueError, trạng thái không đổi.
         """
         if isinstance(fingerprints, str | bytes):
             raise ValueError("fingerprints phải là một dãy fingerprint, không phải một chuỗi")
@@ -472,6 +524,8 @@ class AdmissionGate:
                 del record.closed[fp]
             if record.opening == 0 and not record.handles and not record.closed:
                 del self._priority[ip]
+        for fp in [fp for fp in self._device_strikes if fp not in keep]:
+            del self._device_strikes[fp]
 
     def is_priority(self, ip: str, now: float) -> bool:
         """`ip` có đang được ưu tiên không (kết nối mới từ đó vào pool ưu tiên); bị hạ → False."""
@@ -491,6 +545,18 @@ class AdmissionGate:
         if record is None:
             return None
         return record.strikes.available(now, _strike_rate(), PRIORITY_STRIKES)
+
+    def device_priority_strikes(self, fingerprint: str, now: float) -> float | None:
+        """Ngân sách lỗi còn lại của thiết bị `fingerprint` (đã tính phần hồi tới `now`); chẩn đoán, test, đo.
+
+        None: `fingerprint` chưa có trong bảng thiết bị hoặc đã bị xóa. `fingerprint` sai → ValueError.
+        """
+        fingerprint = _check_fingerprint(fingerprint)
+        now = self._advance(now)
+        bucket = self._device_strikes.get(fingerprint)
+        if bucket is None:
+            return None
+        return bucket.available(now, _strike_rate(), DEVICE_PRIORITY_STRIKES)
 
     # ---- Nội bộ ----------------------------------------------------------------------------
 
@@ -535,7 +601,15 @@ class AdmissionGate:
         record = self._active_priority(ip, now)
         if record is None:
             return  # đã ở pool chung: không còn ưu tiên để hạ
-        rate, cap = _strike_rate(), PRIORITY_STRIKES
+        rate = _strike_rate()
+        for fp in record.active_fingerprints(now):
+            dev_bucket = self._device_strikes.get(fp)
+            if dev_bucket is not None:
+                dev_bucket.take(now, rate, DEVICE_PRIORITY_STRIKES)
+                if dev_bucket.tokens < 0.0:
+                    dev_bucket.tokens = 0.0
+                self._device_strikes.move_to_end(fp)
+        cap = PRIORITY_STRIKES
         if record.strikes.available(now, rate, cap) >= 1:
             record.strikes.take(now, rate, cap)
         else:
@@ -608,3 +682,28 @@ class AdmissionGate:
         while idle and len(self._priority) >= MAX_PRIORITY_IPS:
             del self._priority[idle.pop(0)[1]]
         return len(self._priority) < MAX_PRIORITY_IPS
+
+    def _make_device_room(self, now: float) -> bool:
+        """Chỗ cho một thiết bị mới trong bảng ngân sách thiết bị; đầy thì bỏ mục không active lâu nhất."""
+        if MAX_TRACKED_DEVICES <= 0:
+            return False
+        if len(self._device_strikes) < MAX_TRACKED_DEVICES:
+            return True
+        active_fps: set[str] = set()
+        for other_ip, rec in self._priority.items():
+            if not self._is_demoted(other_ip, now):
+                active_fps.update(rec.active_fingerprints(now))
+        rate, cap = _strike_rate(), DEVICE_PRIORITY_STRIKES
+        for fp, bucket in list(self._device_strikes.items()):
+            if len(self._device_strikes) < MAX_TRACKED_DEVICES:
+                return True
+            if fp not in active_fps and bucket.available(now, rate, cap) >= cap:
+                del self._device_strikes[fp]
+        if len(self._device_strikes) < MAX_TRACKED_DEVICES:
+            return True
+        for fp in list(self._device_strikes):
+            if len(self._device_strikes) < MAX_TRACKED_DEVICES:
+                return True
+            if fp not in active_fps:
+                del self._device_strikes[fp]
+        return len(self._device_strikes) < MAX_TRACKED_DEVICES

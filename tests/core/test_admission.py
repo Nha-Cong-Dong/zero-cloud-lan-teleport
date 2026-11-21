@@ -788,6 +788,8 @@ H_LIMITS = {
     "MAX_ANONYMOUS_TOTAL": 2,
     "PRIORITY_TTL": H_TTL,
     "PRIORITY_STRIKES": 10**9,  # coi như vô hạn: test này không kiểm hạ ưu tiên
+    "DEVICE_PRIORITY_STRIKES": 10**9,
+    "MAX_PRIORITY_IPS_PER_DEVICE": 10**9,
 }
 
 op_strategy = st.one_of(
