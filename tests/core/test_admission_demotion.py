@@ -43,6 +43,7 @@ pytestmark = pytest.mark.real_admission_limits
 A, B, C, D, E, F = (f"192.168.1.{i}" for i in range(10, 16))
 STRANGERS = [f"10.1.{i // 250}.{i % 250 + 1}" for i in range(64)]
 FP = {ip: f"{i:02x}" * 32 for i, ip in enumerate((A, B, C, D, E, F))}
+STRANGER_FP = {ip: f"ee{i:062x}" for i, ip in enumerate(STRANGERS)}
 OTHER_FP = "ee" * 32
 
 RELAXED_RATES = {
@@ -62,8 +63,12 @@ RELAXED_RATES = {
 
 @pytest.fixture
 def no_strike_budget(monkeypatch):
-    """`PRIORITY_STRIKES = 0`: lần kết thúc không tin cậy đầu tiên hạ ngay."""
+    """`PRIORITY_STRIKES = 0`: lần kết thúc không tin cậy đầu tiên hạ ngay.
+
+    Nới ngân sách theo thiết bị và trần IP/thiết bị để các test luật hạ IP cơ bản không bị chặn."""
     monkeypatch.setattr(admission, "PRIORITY_STRIKES", 0)
+    monkeypatch.setattr(admission, "DEVICE_PRIORITY_STRIKES", 10**9)
+    monkeypatch.setattr(admission, "MAX_PRIORITY_IPS_PER_DEVICE", 10**9)
 
 
 zero_strikes = pytest.mark.usefixtures("no_strike_budget")
@@ -96,7 +101,8 @@ def demoted_count(gate: AdmissionGate) -> int:
 
 def opened(gate: AdmissionGate, ip: str, now: float, fp: str | None = None) -> int:
     """Kết nối điều khiển đã xác thực mTLS tới/từ `ip`."""
-    return gate.control_opened(ip, FP.get(ip, OTHER_FP) if fp is None else fp, now)
+    resolved_fp = FP.get(ip) or STRANGER_FP.get(ip, OTHER_FP) if fp is None else fp
+    return gate.control_opened(ip, resolved_fp, now)
 
 
 def ticket(result) -> Ticket:
@@ -882,6 +888,8 @@ H_LIMITS = {
     "MAX_ANONYMOUS_TOTAL": 2,
     "PRIORITY_TTL": H_TTL,
     "PRIORITY_STRIKES": H_STRIKES,
+    "DEVICE_PRIORITY_STRIKES": 10**9,
+    "MAX_PRIORITY_IPS_PER_DEVICE": 10**9,
     "STRIKE_REFILL": H_REFILL,
     "STRIKE_CREDIT_AFTER": H_CREDIT_AFTER,
 }
@@ -1295,3 +1303,208 @@ def test_demoted_table_cap_drops_entry_expiring_first(cap, ops):
                 opened(gate, ip, now)
                 expected = ip not in entries
                 assert gate.is_priority(ip, now) is expected, f"{ip} lúc {now}: ưu tiên phải là {expected}"
+
+
+# --- Ngân sách lỗi theo fingerprint thiết bị (PR 2.3 / chống M3) ----------------------------------
+
+
+def _relax_rates(monkeypatch) -> None:
+    for name, value in RELAXED_RATES.items():
+        monkeypatch.setattr(admission, name, value)
+
+
+def test_device_strike_exhaustion_blocks_new_ip_but_keeps_clean_ip(monkeypatch):
+    """Tấn công xoay vòng tuần tự: `Y1` đốt hết ngân sách của `fp` bị hạ, `Y2` mở mới với cùng `fp`
+    bị từ chối (`0`), trong khi IP sạch `X` đã gắn `fp` từ trước vẫn giữ `Pool.PRIORITY` và mở
+    thêm handle trên `X` vẫn thành công."""
+    _relax_rates(monkeypatch)
+    gate = AdmissionGate()
+    fp = FP[A]
+    x_ip, y1_ip, y2_ip = A, B, C
+
+    assert opened(gate, x_ip, 0.0, fp=fp) >= 1
+    assert opened(gate, y1_ip, 0.0, fp=fp) >= 1
+    assert gate.device_priority_strikes(fp, 0.0) == pytest.approx(float(admission.DEVICE_PRIORITY_STRIKES))
+
+    for _ in range(admission.DEVICE_PRIORITY_STRIKES):
+        fail_once(gate, y1_ip, 0.25)
+    fail_once(gate, y1_ip, 0.25)  # lần vượt ngân sách: hạ Y1
+    assert gate.is_priority(y1_ip, 0.25) is False
+    assert gate.device_priority_strikes(fp, 0.25) < 1.0
+
+    assert opened(gate, y2_ip, 0.25, fp=fp) == 0
+    assert gate.is_priority(y2_ip, 0.25) is False
+
+    assert gate.is_priority(x_ip, 0.25) is True
+    t_x = ticket(gate.admit(x_ip, 0.25))
+    assert t_x.pool is Pool.PRIORITY
+    gate.trusted(t_x, 0.25)
+    gate.finish(t_x, 0.25)
+    assert opened(gate, x_ip, 0.25, fp=fp) >= 1
+
+
+def test_prewarming_blocked_by_max_priority_ips_per_device():
+    """Pre-warming nhiều IP cho cùng `fp` bị chặn bởi `MAX_PRIORITY_IPS_PER_DEVICE` (= 2): IP thứ 3
+    trả `0`, hai IP đầu vẫn sạch và chỉ mở thêm được IP mới khi một trong hai IP cũ hết TTL."""
+    gate = AdmissionGate()
+    fp = FP[A]
+
+    h_a = opened(gate, A, 0.0, fp=fp)
+    h_b = opened(gate, B, 0.0, fp=fp)
+    assert h_a >= 1 and h_b >= 1
+    assert opened(gate, C, 0.0, fp=fp) == 0
+    assert gate.is_priority(C, 0.0) is False
+    assert gate.is_priority(A, 0.0) is True
+    assert gate.is_priority(B, 0.0) is True
+
+    # Mở thêm handle trên IP đang active vẫn thành công, không tính thành IP thứ 3.
+    h_a2 = opened(gate, A, 0.5, fp=fp)
+    assert h_a2 >= 1
+
+    # Đóng tất cả handle trên A tại t = 1.0; giữ B sống suốt thời gian chờ TTL của A.
+    gate.control_closed(h_a, 1.0)
+    gate.control_closed(h_a2, 1.0)
+    later = 1.0 + ttl() + 1.0
+    assert gate.is_priority(A, later) is False
+    assert gate.is_priority(B, later) is True
+
+    # Khi A đã hết TTL, C mở mới được, và D sau đó tiếp tục bị chặn.
+    assert opened(gate, C, later, fp=fp) >= 1
+    assert gate.is_priority(C, later) is True
+    assert opened(gate, D, later, fp=fp) == 0
+    assert gate.is_priority(D, later) is False
+
+
+def test_trusted_does_not_refill_device_strikes_and_floor_is_zero(monkeypatch):
+    """Không tự bơm ngân sách qua `admit` + `trusted`; 100 lần `finish` lỗi kẹp ở `0.0` (không âm
+    sâu), nên sau đúng `STRIKE_REFILL` hồi lại `1.0` và mở được IP mới."""
+    _relax_rates(monkeypatch)
+    monkeypatch.setattr(admission, "PRIORITY_STRIKES", 10**9)
+    gate = AdmissionGate()
+    fp = FP[A]
+    y1_ip, y2_ip = B, C
+
+    assert opened(gate, y1_ip, 0.0, fp=fp) >= 1
+
+    for _ in range(admission.DEVICE_PRIORITY_STRIKES):
+        fail_once(gate, y1_ip, 0.25)
+    assert gate.device_priority_strikes(fp, 0.25) == pytest.approx(0.0)
+
+    for _ in range(5):
+        trusted_once(gate, y1_ip, 0.25)
+    assert gate.device_priority_strikes(fp, 0.25) == pytest.approx(0.0)
+
+    for _ in range(100):
+        fail_once(gate, y1_ip, 0.25)
+    assert gate.device_priority_strikes(fp, 0.25) == pytest.approx(0.0)
+
+    after_refill = 0.25 + admission.STRIKE_REFILL
+    assert gate.device_priority_strikes(fp, after_refill) == pytest.approx(1.0)
+    assert opened(gate, y2_ip, after_refill, fp=fp) >= 1
+
+
+def test_device_strikes_refill_over_time_and_credit_on_long_lived_control_close(monkeypatch):
+    """Ngân sách theo `fp` hồi tuyến tính theo `STRIKE_REFILL`, cộng `+1` khi kết nối điều khiển
+    sống ≥ `STRIKE_CREDIT_AFTER` đóng (không cộng khi sống ngắn), và không vượt trần."""
+    _relax_rates(monkeypatch)
+    gate = AdmissionGate()
+    fp = FP[A]
+
+    h_long = opened(gate, A, 0.0, fp=fp)
+    fail_once(gate, A, 0.25)
+    fail_once(gate, A, 0.25)
+    assert gate.device_priority_strikes(fp, 0.25) == pytest.approx(2.0)
+
+    half_refill = 0.25 + admission.STRIKE_REFILL / 2.0
+    assert gate.device_priority_strikes(fp, half_refill) == pytest.approx(2.5)
+
+    h_short = opened(gate, A, half_refill, fp=fp)
+    t_after_short = half_refill + 1.0
+    gate.control_closed(h_short, t_after_short)  # sống 1 s < STRIKE_CREDIT_AFTER
+    expected_after_short = 2.5 + 1.0 / admission.STRIKE_REFILL
+    assert gate.device_priority_strikes(fp, t_after_short) == pytest.approx(expected_after_short)
+
+    gate.control_closed(h_long, t_after_short)  # sống ≥ STRIKE_CREDIT_AFTER
+    assert gate.device_priority_strikes(fp, t_after_short) == pytest.approx(expected_after_short + 1.0)
+
+    later = t_after_short + admission.STRIKE_REFILL * 2.0
+    assert gate.device_priority_strikes(fp, later) == pytest.approx(float(admission.DEVICE_PRIORITY_STRIKES))
+
+
+def test_retain_trusted_cleans_device_strikes_including_inflight_ticket():
+    """`retain_trusted` xóa `fp` không còn tin cậy khỏi `_device_strikes`; vé in-flight bị hủy
+    sau đó không làm hồi sinh `fp` đã bị xóa."""
+    gate = AdmissionGate()
+    opened(gate, A, 0.0, fp=FP[A])
+    opened(gate, B, 0.0, fp=FP[B])
+    t_a = priority_ticket(gate, A, 0.25)
+
+    gate.retain_trusted({FP[B]})
+    assert gate.device_priority_strikes(FP[A], 0.5) is None
+    assert gate.device_priority_strikes(FP[B], 0.5) == pytest.approx(float(admission.DEVICE_PRIORITY_STRIKES))
+
+    gate.finish(t_a, 0.5)
+    assert gate.device_priority_strikes(FP[A], 0.5) is None
+
+
+def test_max_tracked_devices_caps_device_strikes_table(monkeypatch):
+    """`_device_strikes` không vượt quá `MAX_TRACKED_DEVICES`: khi đầy thiết bị active thì từ chối
+    thiết bị mới (`0`), còn khi thiết bị cũ không còn active và hết TTL thì dọn chỗ cho thiết bị mới."""
+    monkeypatch.setattr(admission, "MAX_TRACKED_DEVICES", 3)
+    gate = AdmissionGate()
+    fps = [STRANGER_FP[ip] for ip in STRANGERS[:6]]
+
+    handles = []
+    for i, ip in enumerate(STRANGERS[:3]):
+        h = opened(gate, ip, 0.0, fp=fps[i])
+        assert h >= 1
+        handles.append(h)
+    assert opened(gate, STRANGERS[3], 0.25, fp=fps[3]) == 0
+    assert sum(1 for fp in fps if gate.device_priority_strikes(fp, 0.25) is not None) <= 3
+
+    for h in handles:
+        gate.control_closed(h, 0.5)
+    later = 0.5 + ttl() + 1.0
+    for i, ip in enumerate(STRANGERS[3:6], start=3):
+        now = later + (i - 3) * 0.25
+        assert opened(gate, ip, now, fp=fps[i]) >= 1
+        assert sum(1 for fp in fps if gate.device_priority_strikes(fp, now) is not None) <= 3
+
+
+def test_nat_shared_ip_deducts_all_active_fps_and_blocks_exhausted_fp(monkeypatch):
+    """NAT: nhiều `fp` cùng trên `ip1` → lỗi trên `ip1` trừ tất cả `fp` active; nhưng nếu `fp_b`
+    đã cạn ngân sách ở `ip2`, `control_opened(ip1, fp_b)` vẫn trả `0` (không bám ké `ip1` của `fp_a`)."""
+    _relax_rates(monkeypatch)
+    gate1 = AdmissionGate()
+    assert opened(gate1, A, 0.0, fp=FP[A]) >= 1
+    assert opened(gate1, A, 0.0, fp=FP[B]) >= 1
+    fail_once(gate1, A, 0.25)
+    expected = float(admission.DEVICE_PRIORITY_STRIKES - 1)
+    assert gate1.device_priority_strikes(FP[A], 0.25) == pytest.approx(expected)
+    assert gate1.device_priority_strikes(FP[B], 0.25) == pytest.approx(expected)
+
+    gate2 = AdmissionGate()
+    assert opened(gate2, A, 0.0, fp=FP[A]) >= 1
+    assert opened(gate2, B, 0.0, fp=FP[B]) >= 1
+    for _ in range(admission.DEVICE_PRIORITY_STRIKES):
+        fail_once(gate2, B, 0.25)
+    assert gate2.device_priority_strikes(FP[B], 0.25) < 1.0
+
+    assert opened(gate2, A, 0.25, fp=FP[B]) == 0
+    assert opened(gate2, A, 0.25, fp=FP[A]) >= 1
+
+
+@pytest.mark.parametrize("bad_now", BAD_NOW, ids=BAD_NOW_IDS)
+def test_device_priority_strikes_rejects_bad_now(bad_now):
+    gate = AdmissionGate()
+    opened(gate, A, 10.0, fp=FP[A])
+    with pytest.raises(ValueError):
+        gate.device_priority_strikes(FP[A], bad_now)
+
+
+@pytest.mark.parametrize("bad_now", [None, "10", True, b"10", [10.0]], ids=repr)
+def test_device_priority_strikes_rejects_non_number_now(bad_now):
+    gate = AdmissionGate()
+    opened(gate, A, 10.0, fp=FP[A])
+    with pytest.raises(TypeError):
+        gate.device_priority_strikes(FP[A], bad_now)

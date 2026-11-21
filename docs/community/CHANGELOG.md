@@ -5,6 +5,12 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+### Security
+- **Ngân sách lỗi và trần IP theo thiết bị cho pool ưu tiên (`AdmissionGate`, chống M3):**
+  - Mỗi mã thiết bị (`fingerprint`) có ngân sách lỗi riêng (`DEVICE_PRIORITY_STRIKES = 4`, hồi theo `STRIKE_REFILL`, cộng `+1` khi kết nối điều khiển sống đủ `STRIKE_CREDIT_AFTER`) và chỉ được giữ tối đa `MAX_PRIORITY_IPS_PER_DEVICE = 2` địa chỉ IP ưu tiên hoạt động đồng thời (cùng trần bảng `MAX_TRACKED_DEVICES = 1024`), chặn kẻ tấn công trong mạng dùng nhiều IP giả mạo mDNS hoặc chuyển tiếp gói tin để làm cạn pool ưu tiên.
+  - Địa chỉ IP sạch đã giữ ưu tiên từ trước của thiết bị tin cậy không bị hạ cấp theo lỗi ở IP khác; chỉ các IP mới của thiết bị đã cạn ngân sách hoặc vượt trần mới bị giữ ở pool chung (`Pool.GENERAL`).
+  - Nội bộ: bổ sung `device_priority_strikes(fingerprint, now)` trong `teleport.core.admission`, đồng bộ dọn dẹp tại `retain_trusted`, và cập nhật đặc tả tại `docs/technical/protocol.md` mục 2.3.
+
 ### Added
 - **Lệnh CLI/IPC liệt kê và hủy lượt truyền dở (`teleport transfers list`, `teleport transfers cancel`):**
   - Hỗ trợ liệt kê và hủy theo tiền tố mã lượt (tối thiểu 4 ký tự hex) hoặc `--all` (kèm `--json`), giải phóng ngay dung lượng giữ chỗ `promised_bytes` và xóa thư mục tạm `.teleport/<transfer_id>` mà không phải chờ hết hạn nối lại (`protocol.md` mục 6.2).
