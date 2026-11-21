@@ -87,12 +87,13 @@ jobs:
           enable-cache: true
           cache-dependency-glob: pyproject.toml
           cache-suffix: lint-3.12
-      - run: uv pip install --system -e ".[dev]"
+      # Cần PySide6 để mypy kiểm tầng ui, nhưng không cài pytest-qt (nạp libEGL.so.1 lúc khởi động pytest).
+      - run: uv pip install --system -e ".[dev-core,gui]"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy src
       - run: python packaging/i18n/update.py --check
-      - run: pytest -q tests/test_architecture.py
+      - run: pytest -q -p no:qt tests/test_architecture.py
 
   test:
     name: ${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }}
