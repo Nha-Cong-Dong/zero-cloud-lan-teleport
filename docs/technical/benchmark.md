@@ -20,7 +20,7 @@
 |---|---|---|
 | mvp N1 | 2026-11-05: hai máy Windows thật (11 ↔ 10) qua Wi-Fi 2,4 GHz, cùng điểm phát (mục 3.6); trước đó 2026-10-23: host Windows 11 + máy ảo Ubuntu bridged (mục 3.3) | **ĐẠT trên hai máy thật qua Wi-Fi** cho phần xuất hiện, thoát app và mất mạng đột ngột (tắt Wi-Fi, app bị giết); máy **ngủ** thật, mạng dây và kịch bản mất gói ở hai lần resolve đầu chưa đo (mục 3.4) |
 | mvp N2 | 2026-10-29/30: đo tay qua giao diện, hai máy Windows thật qua Wi-Fi 2,4 GHz, một file 1,89 GiB (mục 5.4) | **CHƯA ĐỦ DỮ LIỆU**: lần đo tay cho tỉ số khoảng 0,96 nhưng không theo phương pháp mục 5.1 (1 lần Teleport, 2 lần SMB, một cỡ file, bấm giờ tay); lượt đo theo mục 5.1 và mạng dây chưa đo (mục 5.3) |
-| mvp N3 | 2026-11-20: đo lúc rảnh `teleport-gui` trên máy Windows 11 rảnh (`bench_local_mvp.py`, lấy mẫu 10 s sau 5 s ổn định: RSS trung vị 133,77 MiB, max 133,77 MiB, CPU trung vị 0,0%; mục 16). 2026-11-18: D4 giả lập ổ chậm (`bench_d4_disk.py`). 2026-11-05: 10 GiB Wi-Fi 2,4 GHz. 2026-10-26: loopback CLI 1/5/10 GiB | **ĐẠT:** D4 giả lập và truyền 1–10 GiB đều ĐẠT; phần rảnh giao diện đạt **133,77 MiB** (< 150 MB) và CPU trung vị **0,0%** |
+| mvp N3 | 2026-11-21: đo gộp `.state` dạng streaming PR 2.4 trên dữ liệu 4 TiB và 513 GiB (`bench_pr24_state_compact.py`: RSS delta max 20,46 MiB, `tracemalloc` peak max 19,41 MiB; mục 17). 2026-11-20: đo lúc rảnh `teleport-gui` trên máy Windows 11 rảnh (`bench_local_mvp.py`, lấy mẫu 10 s sau 5 s ổn định: RSS trung vị 133,77 MiB, max 133,77 MiB, CPU trung vị 0,0%; mục 16). 2026-11-18: D4 giả lập ổ chậm (`bench_d4_disk.py`). 2026-11-05: 10 GiB Wi-Fi 2,4 GHz. 2026-10-26: loopback CLI 1/5/10 GiB | **ĐẠT:** D4 giả lập, truyền 1–10 GiB và gộp `.state` 4 TiB sau PR 2.4 đều ĐẠT; phần rảnh giao diện đạt **133,77 MiB** và CPU trung vị **0,0%** |
 | mvp N4 | 2026-11-18: D5 giả lập proxy TCP 64 KiB cắt TCP RST tại 70% lưu lượng (64 MiB × 3 lượt, `bench_d5_d6_d7_sim.py`; mục 7.4). 2026-10-31: loopback 1 GiB cắt theo 6 kiểu (mục 7.3) | **ĐẠT trên giả lập đơn máy & loopback:** D5 gửi thừa trung vị 2,56 MiB (lớn nhất 2,56 MiB ≤ 64 MiB, thời gian 0,86–0,90 s, SHA-256 khớp 3/3); loopback 2026-10-31 lớn nhất 24,31 MiB (49/49 lượt ĐẠT); test tự động chạy trên CI Windows/Linux/macOS (`ci.yml`). Cắt Wi-Fi/mạng thật trên phần cứng rời chưa đo do không có thiết bị thứ hai |
 | mvp N5 | 2026-11-20: đo tự động `bench_local_mvp.py` trên loopback (`Node` ↔ `Node` 4 cỡ tệp 1 KiB–10 MiB + thử lật 1 byte đầu/giữa/cuối tệp 3 MiB + 777 B; mục 12) | **ĐẠT:** 4/4 lượt truyền khớp SHA-256 nguồn 100%; 3/3 điểm lật 1 byte bị phát hiện ở cả kiểm tra khối lẫn `MerkleStream` |
 | mvp N6 | 2026-11-18: D6 giả lập mạng Wi-Fi 5 qua proxy ống dẫn (RTT 4 ms, băng thông 30 MB/s, `bench_d5_d6_d7_sim.py`; mục 9.5). 2026-11-02: hai `Node` loopback với `FakeClipboard` (mục 9.3) và backend Qt offscreen M4 (mục 9.4) | **ĐẠT (giả lập Wi-Fi 5 D6 & loopback M1–M3):** D6 đạt 174,2 ms (1 KiB), 290,8 ms (max 296,3 ms < 500 ms cho 1 MiB văn bản) và 785,4 ms (max 789,0 ms < 2000 ms cho 9,5 MiB PNG). M4 trên nền offscreen **KHÔNG ĐẠT** riêng ca ảnh rất lớn `8192×8192` dễ nén (~4,3–5,0 s do mã hóa PNG của Qt); 1920×1080 (0,18–0,76 s) và 3840×2160 (0,56 s) dưới ngưỡng. Clipboard thật qua phần cứng Wi-Fi rời chưa đo do không có thiết bị thứ hai |
@@ -1513,4 +1513,34 @@ Thay cho việc phải kiểm tra thủ công trên từng cặp máy vật lý 
   - RAM (Working Set): trung vị **133,77 MiB**, lớn nhất **133,77 MiB** (đạt ngưỡng `< 150 MB`).
   - CPU: trung vị **0,0%**, đỉnh tức thời 1 mẫu **3,12%** (đạt ngưỡng `~0%`).
 - **Kết luận: ĐẠT phần rảnh của tiêu chí mvp N3.**
+
+---
+
+## 17. mvp N3 (bổ sung): Gộp `.state` dạng streaming — PR 2.4 (2026-11-21)
+
+### 17.1. Định nghĩa phép đo & môi trường
+
+- **Mục tiêu:** So sánh trực tiếp chi phí RAM và thời gian gộp nhật ký `.state` trước PR 2.4 (`StateReplay` + `compact_records`) và sau PR 2.4 (`StateScan` + `StateWindowCollector` + `iter_window_marks` ở tầng `core`, và `ResumeLog.compact()` nguyên tử trên đĩa thật qua `ReceiveDir` / `TransferTemp` ở tầng `app`), đối chiếu với `mvp N3`.
+- **Định nghĩa:** Mỗi mẫu chạy trong một tiến trình Python con độc lập để `PeakWorkingSetSize` (qua Win32 `GetProcessMemoryInfo`) và `tracemalloc.get_traced_memory()[1]` không bị nhiễu bởi bộ cấp phát của các lần trước; `gc.collect()` trước khi bắt đầu đồng hồ `time.perf_counter()` bao quanh đúng thao tác gộp.
+- **Môi trường:** Windows 11 (`10.0.26300-SP0`), Python `3.14.5` (64-bit), Teleport `1.3.0` (commit `2942113`), CPU Intel Core i7-12800H (20 luồng), RAM 15,7 GiB, `COMPACT_WINDOW_BLOCKS = 262 144`.
+- **Số lần:** 10 lần hợp lệ cho mỗi cặp (kịch bản × phương pháp), 0 lỗi đo. Kiểm tra thêm bất biến đầu ra khớp từng byte giữa ba phương pháp.
+
+### 17.2. Kịch bản & kết quả
+
+| Kịch bản (cỡ giả lập) | Phương pháp | Thời gian trung vị / p95 / min / max (s) | `tracemalloc` peak trung vị / max (MiB) | RSS delta trung vị / max (MiB) | So với `mvp N3` |
+|---|---|---|---|---|---|
+| `sparse_4tib` (`n_blocks = 4 194 304`, 48 khối đầu/giữa/cuối, `.state` 3,6 KiB) | Trước PR 2.4 (`StateReplay` + `compact_records`) | 0,114 / 0,119 / 0,113 / 0,119 | 131,51 / 131,51 | 131,69 / 131,71 | **KHÔNG ĐẠT** |
+| `sparse_4tib` | Sau PR 2.4 (`streaming_core`) | 0,127 / 0,132 / 0,123 / 0,132 | 17,39 / 17,52 | 17,52 / 17,60 | **ĐẠT** |
+| `sparse_4tib` | Sau PR 2.4 (`ResumeLog.compact()` đĩa thật) | 0,153 / 0,206 / 0,151 / 0,206 | 17,27 / 17,27 | 17,31 / 17,35 | **ĐẠT** |
+| `dense_4tib_16windows` (`n_blocks = 4 194 304`, 16 384 khối rải 16 cửa sổ, 964 `CLEAR`, `.state` 1170,0 KiB — ca xấu) | Trước PR 2.4 (`StateReplay` + `compact_records`) | 0,329 / 0,512 / 0,311 / 0,512 | 131,58 / 131,58 | 131,72 / 131,80 | **KHÔNG ĐẠT** |
+| `dense_4tib_16windows` | Sau PR 2.4 (`streaming_core`) | 1,158 / 1,229 / 1,147 / 1,229 | 19,53 / 19,66 | 20,27 / 20,53 | **ĐẠT** |
+| `dense_4tib_16windows` | Sau PR 2.4 (`ResumeLog.compact()` đĩa thật) | 1,293 / 1,383 / 1,248 / 1,383 | 19,41 / 19,41 | 20,15 / 20,46 | **ĐẠT** |
+| `multi_window_513gib` (`n_blocks = 525 312 > COMPACT_WINDOW_BLOCKS`, 8 208 khối rải 3 cửa sổ, `.state` 587,3 KiB — ca xấu) | Trước PR 2.4 (`StateReplay` + `compact_records`) | 0,118 / 0,194 / 0,117 / 0,194 | 17,84 / 17,84 | 17,84 / 18,38 | **ĐẠT** |
+| `multi_window_513gib` | Sau PR 2.4 (`streaming_core`) | 0,211 / 0,218 / 0,208 / 0,218 | 17,67 / 17,79 | 18,52 / 18,66 | **ĐẠT** |
+| `multi_window_513gib` | Sau PR 2.4 (`ResumeLog.compact()` đĩa thật) | 0,257 / 0,385 / 0,237 / 0,385 | 17,55 / 17,55 | 17,95 / 18,34 | **ĐẠT** |
+
+- **Kiểm tra khớp byte:** Cả 3 kịch bản cho đầu ra `.state` sau gộp khớp từng byte giữa `baseline`, `streaming_core` và `resumelog_disk` (`1 834 B`, `589 951 B`, `295 608 B`).
+- **Nhận xét kỹ thuật:** Với file 4 TiB, cơ chế cũ cấp phát toàn bộ bảng `leaves` (128 MiB) nên đỉnh RSS tăng ~131,7 MiB (vượt trần `mvp N3`). Cơ chế streaming sau PR 2.4 giữ đỉnh RSS tăng trong khoảng **17,3–20,5 MiB** (giảm ~84–87%, đường RAM phẳng từ 513 GiB tới 4 TiB) nhờ giới hạn bộ đệm cửa sổ ở `COMPACT_WINDOW_BLOCKS` (~8 MiB hash). Đổi lại ở ca xấu 16 cửa sổ dày đặc, thời gian gộp tăng từ 0,329 s lên 1,293 s do phải quét lại `.state` theo từng cửa sổ.
+- **Kết luận: ĐẠT tiêu chí mvp N3** cho cả ca thưa lẫn ca xấu nhiều cửa sổ trên file 4 TiB.
+
 

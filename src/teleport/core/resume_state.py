@@ -8,9 +8,10 @@ cắt file và đổi giờ tường ra tuổi là việc của `app`.
 - `.state`: `encode_header` / `check_header`; một hàm cho mỗi loại bản ghi (`encode_mark`,
   `encode_clear`, `encode_clear_all`, `encode_target`, `encode_reserved`); `StateReplay` đọc
   lại cả file theo từng đoạn (header rồi các bản ghi), dừng sạch ở bản ghi hỏng đầu tiên và
-  báo chỗ cắt (`ReplayResult.good_end`); trần độ dài `max_state_length`; gộp
-  (`needs_compaction`, `compact_records`, độ dài bản gọn `compact_length_for`); bảng “Phục hồi
-  tên đích” (`recover_target`).
+  báo chỗ cắt (`ReplayResult.good_end`); `StateScan`, `StateWindowCollector`, `iter_window_marks`
+  hỗ trợ gộp `.state` dạng streaming theo cửa sổ `COMPACT_WINDOW_BLOCKS`; trần độ dài
+  `max_state_length`; gộp (`needs_compaction`, `compact_records`, độ dài bản gọn
+  `compact_length_for`); bảng “Phục hồi tên đích” (`recover_target`).
 - `transfer.json`: `TransferRecord`, `encode_transfer_record`, `decode_transfer_record`.
 - `tombstones.json`: `TombstoneRecord`, `encode_tombstones`, `decode_tombstones`.
 
@@ -84,6 +85,7 @@ MAX_RECORD_BLOCKS = 0xFFFF  # `n` của `MARK` / `CLEAR` là u16
 MAX_RECORD_LENGTH = _RECORD_OVERHEAD + MAX_RECORD_BLOCKS * _MARK_ENTRY.size  # `MARK` lớn nhất
 MAX_TARGET_NAME_BYTES = MAX_NAME_BYTES  # `len` của `TARGET` / `RESERVED`: protocol mục 3.3
 COMPACT_MARK_BLOCKS = 4096  # số khối tối đa mỗi `MARK` của bản gọn
+COMPACT_WINDOW_BLOCKS = 64 * COMPACT_MARK_BLOCKS  # 262 144 khối ≈ 8 MiB hash mỗi cửa sổ gộp
 COMPACT_SLACK = 64 * 1024  # gộp khi `.state` dài hơn 2 × kích thước gọn + 64 KiB
 # Số bản ghi `TARGET` + `RESERVED` tối đa mỗi `.state`; bản thứ `MAX_NAME_RECORDS + 1` là bản ghi
 # hỏng. Nhật ký hợp lệ chỉ có vài bản (mỗi lần đổi tên thêm 2, bản gọn có tối đa 2); trần chặn
@@ -389,6 +391,76 @@ def _iter_compact(
         yield _record(RECORD_MARK, count, body)
 
 
+def iter_window_marks(
+    window_bits: Bitfield,
+    window_leaves: bytes | bytearray,
+    lo: int,
+    *,
+    carry: bytearray | None = None,
+    max_mark: int = COMPACT_MARK_BLOCKS,
+    flush: bool = False,
+) -> Iterator[bytes]:
+    """Sinh các bản ghi `MARK` của bản gọn từ cửa sổ `[lo, lo + len(window_bits))`.
+
+    `carry` lưu chuỗi entry `(4B u32 global_index + 32B digest)` (36 byte/entry), gom từ cửa sổ
+    hiện tại nối vào `carry`; mỗi khi đủ `max_mark` entry thì yield một bản ghi `MARK` đúng định
+    dạng `compact_records`; khi `flush=True` thì xả nốt phần dư trong `carry`. Dùng chung một
+    `carry` xuyên suốt các cửa sổ liên tiếp sẽ cho đầu ra khớp từng byte với `compact_records()`.
+    """
+    if not isinstance(window_bits, Bitfield):
+        raise StateError("window_bits phải là Bitfield")
+    if not isinstance(window_leaves, bytes | bytearray) or len(window_leaves) != DIGEST_SIZE * len(
+        window_bits
+    ):
+        raise StateError(f"window_leaves phải là {DIGEST_SIZE} × số khối byte")
+    lo_val = _check_int(lo, "lo", 0, MAX_BLOCKS - len(window_bits))
+    limit = _check_int(max_mark, "max_mark", 1, MAX_RECORD_BLOCKS)
+    if type(flush) is not bool:
+        raise StateError("flush phải là bool")
+    if carry is not None:
+        if not isinstance(carry, bytearray):
+            raise StateError("carry phải là bytearray")
+        if len(carry) % _MARK_ENTRY.size != 0:
+            raise StateError("carry có độ dài không hợp lệ")
+    return _iter_window_marks(window_bits, window_leaves, lo_val, carry, limit, flush)
+
+
+def _iter_window_marks(
+    window_bits: Bitfield,
+    window_leaves: bytes | bytearray,
+    lo: int,
+    carry: bytearray | None,
+    max_mark: int,
+    flush: bool,
+) -> Iterator[bytes]:
+    buf = bytearray() if carry is None else carry
+    entry_size = _MARK_ENTRY.size
+    limit_bytes = max_mark * entry_size
+    pack_index = _U32.pack
+    with memoryview(window_leaves) as view:
+        for byte_index, byte in enumerate(window_bits.to_bytes()):
+            if not byte:
+                continue
+            base = byte_index * 8
+            for bit in range(8):
+                if not byte & (0x80 >> bit):
+                    continue
+                i = base + bit
+                buf += pack_index(lo + i)
+                buf += view[i * DIGEST_SIZE : (i + 1) * DIGEST_SIZE]
+                while len(buf) >= limit_bytes:
+                    yield _record(RECORD_MARK, max_mark, buf[:limit_bytes])
+                    del buf[:limit_bytes]
+    if flush:
+        while len(buf) >= limit_bytes:
+            yield _record(RECORD_MARK, max_mark, buf[:limit_bytes])
+            del buf[:limit_bytes]
+        if buf:
+            count = len(buf) // entry_size
+            yield _record(RECORD_MARK, count, buf)
+            buf.clear()
+
+
 # ---- Đọc lại -------------------------------------------------------------------------------
 
 
@@ -422,74 +494,37 @@ class ReplayResult:
     name_records: int
 
 
-class StateReplay:
-    """Đọc lại một `.state` từ byte đầu (cả header) theo từng đoạn, không nạp cả file vào RAM.
-
-    Gọi `feed` với các đoạn liên tiếp của file, rồi `finish`. RAM ngoài bitfield và hash chỉ là
-    một bản ghi dở (≤ `MAX_RECORD_LENGTH`) cộng một đoạn.
-
-    - Header: chỉ kiểm cấu trúc (`magic`, `version`, `crc32`, số khối theo `size` và
-      `block_size` bằng `n_blocks`); sai → StateError, `app` coi như chưa có trạng thái. Đối
-      chiếu với `transfer.json` là `check_header`.
-    - Bản ghi: phát lần lượt theo luật ở architecture mục 4. Bản ghi đầu tiên bị cụt, sai
-      `crc32`, có loại lạ, `n` = 0, index ≥ `n_blocks`, `len` ngoài 1…255, tên không phải UTF-8
-      hay đổi đi khi qua bộ làm sạch → dừng sạch ở đó, không ném: phần còn lại bị bỏ.
-    - Byte thứ `max_length` trở đi là rác (thường `max_state_length(n_blocks)`): dừng như gặp
-      bản ghi hỏng.
-
-    - Bản ghi `TARGET`/`RESERVED` thứ `MAX_NAME_RECORDS` + 1 là bản ghi hỏng.
-
-    Chi phí CPU tuyến tính theo số byte đã đọc (≤ `max_length`), kể cả với `.state` do chương
-    trình khác dựng: `CLEAR_ALL` chỉ tắt các khối đã bật từ lần `CLEAR_ALL` trước, tên đã kiểm
-    được nhớ lại. Bản ghi tí hon đắt nhất mỗi byte. Đo trên máy phát triển (Windows, 2026-10,
-    máy đang tải): nhật ký hợp lệ (`MARK` 16 khối) khoảng 45 MiB/s; xấu nhất (`CLEAR` 1 khối,
-    hay `MARK` 1 khối xen `CLEAR_ALL`) khoảng 5–8 MiB/s tùy tải, tức đọc trọn `max_state_length`
-    của file 4 TiB (≈ 290 MiB) mất cỡ 35–60 s, của file 100 GiB (≈ 9 MiB) vài giây. Hạn của mỗi
-    lượt khôi phục ở `app` phải tính theo `max_state_length(n_blocks)` và chừa biên rộng hơn các
-    số này (máy chậm hơn), và việc đọc chạy trên thread đĩa,
-    không trên event loop. Đưa vào `feed` các đoạn lớn (cỡ 1 MiB): mỗi lời gọi có chi phí cố định.
-
-    `n_blocks` ngoài 0…`MAX_BLOCKS` hay `max_length` < `HEADER_SIZE` → StateError; `feed` sau
-    `finish` → RuntimeError.
-    """
+class _StateParser:
+    """Bộ phân tích khung `.state` dùng chung cho `StateReplay`, `StateScan`, `StateWindowCollector`."""
 
     __slots__ = (
-        "_bits",
         "_buf",
         "_buf_start",
         "_dirty",
         "_dirty_limit",
         "_error",
         "_fed",
+        "_finished",
         "_good_end",
         "_header_ok",
-        "_leaves",
         "_max_length",
         "_n",
         "_name_records",
         "_names",
-        "_reserved",
-        "_result",
         "_stopped",
-        "_target",
-        "_target_raw",
     )
 
-    def __init__(self, n_blocks: int, *, max_length: int) -> None:
+    def __init__(self, n_blocks: int, *, max_length: int, dirty_blocks: int | None = None) -> None:
         self._n = _check_n_blocks(n_blocks)
         self._max_length = _check_int(max_length, "max_length", HEADER_SIZE, 1 << 62)
-        self._bits = bytearray(_byte_len(self._n))
-        self._leaves = bytearray(DIGEST_SIZE * self._n)
-        self._target: str | None = None
-        self._target_raw: bytes | None = None
-        self._reserved = False
+        limit = self._n if dirty_blocks is None else dirty_blocks
         # Các index đã chuyển bit 0 → 1 từ lần `CLEAR_ALL` trước (mỗi index đã được trả bằng ≥ 36
         # byte `MARK`), để `CLEAR_ALL` chỉ tắt đúng các khối đó thay vì xóa cả mảng mỗi lần: nhật
         # ký toàn `CLEAR_ALL` 5 byte không được tốn O(n) mỗi bản ghi. Vượt `_dirty_limit` (n / 8,
         # chặn RAM ở ≤ n / 2 byte) thì thành None: lần `CLEAR_ALL` sau xóa cả mảng, mà chi phí đó
         # đã được trả bằng hơn n / 8 × 36 byte `MARK` trước nó.
         self._dirty: array[int] | None = array("I")
-        self._dirty_limit = self._n // 8
+        self._dirty_limit = limit // 8
         self._name_records = 0
         self._names: dict[bytes, str] = {}  # tên đã kiểm, ≤ `MAX_NAME_RECORDS` mục
         self._buf = bytearray()  # byte chưa xử lý, bắt đầu ở vị trí `_buf_start` của file
@@ -499,7 +534,7 @@ class StateReplay:
         self._header_ok = False
         self._stopped = False
         self._error: str | None = None
-        self._result: ReplayResult | None = None
+        self._finished = False
 
     def feed(self, chunk: bytes | bytearray | memoryview) -> bool:
         """Đưa đoạn kế tiếp của file vào. True: còn đọc tiếp; False: đã dừng, khỏi đọc phần còn lại.
@@ -507,7 +542,7 @@ class StateReplay:
         Đoạn đưa vào sau khi đã dừng chỉ được đếm vào `log_length`. Header hỏng → StateError (và
         mọi lời gọi sau cũng thế); `chunk` không phải bytes → StateError.
         """
-        if self._result is not None:
+        if self._finished:
             raise RuntimeError("đã gọi finish")
         if self._error is not None:
             raise StateError(self._error)
@@ -529,30 +564,12 @@ class StateReplay:
             self._stop()
         return not self._stopped
 
-    def finish(self) -> ReplayResult:
-        """Kết quả đọc lại; gọi lại trả đúng kết quả đó. Chưa đủ 41 byte header → StateError."""
-        if self._result is not None:
-            return self._result
+    def _ensure_ready(self) -> None:
         if self._error is not None:
             raise StateError(self._error)
         if not self._header_ok:
             self._error = "thiếu byte header"
             raise StateError(self._error)
-        bits = Bitfield.from_base64(base64.b64encode(self._bits).decode("ascii"), self._n)
-        count = sum(b.bit_count() for b in self._bits)
-        self._result = ReplayResult(
-            bits=bits,
-            leaves=self._leaves,
-            target=self._target,
-            reserved=self._reserved,
-            good_end=self._good_end,
-            truncated=self._fed > self._good_end,
-            log_length=self._fed,
-            compact_length=_compact_length(count, self._target_raw, self._reserved),
-            name_records=self._name_records,
-        )
-        self._buf = bytearray()
-        return self._result
 
     def _stop(self) -> None:
         self._stopped = True
@@ -638,6 +655,100 @@ class StateReplay:
         del buf[:pos]  # một lần mỗi `feed`, không xóa đầu bộ đệm sau từng bản ghi
         self._buf_start += pos
 
+    def _validate_name(self, view: memoryview, start: int, stop: int) -> tuple[bytes, str] | None:
+        if self._name_records >= MAX_NAME_RECORDS:
+            return None
+        raw = bytes(view[start:stop])
+        name = self._names.get(raw)
+        if name is None:
+            try:
+                name = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+            if sanitize_filename(name) != name:
+                return None
+            self._names[raw] = name
+        self._name_records += 1
+        return raw, name
+
+    def _apply(self, kind: int, buf: bytearray, view: memoryview, start: int, stop: int) -> bool:
+        raise NotImplementedError
+
+    def _clear_all(self) -> None:
+        raise NotImplementedError
+
+
+class StateReplay(_StateParser):
+    """Đọc lại một `.state` từ byte đầu (cả header) theo từng đoạn, không nạp cả file vào RAM.
+
+    Gọi `feed` với các đoạn liên tiếp của file, rồi `finish`. RAM ngoài bitfield và hash chỉ là
+    một bản ghi dở (≤ `MAX_RECORD_LENGTH`) cộng một đoạn.
+
+    - Header: chỉ kiểm cấu trúc (`magic`, `version`, `crc32`, số khối theo `size` và
+      `block_size` bằng `n_blocks`); sai → StateError, `app` coi như chưa có trạng thái. Đối
+      chiếu với `transfer.json` là `check_header`.
+    - Bản ghi: phát lần lượt theo luật ở architecture mục 4. Bản ghi đầu tiên bị cụt, sai
+      `crc32`, có loại lạ, `n` = 0, index ≥ `n_blocks`, `len` ngoài 1…255, tên không phải UTF-8
+      hay đổi đi khi qua bộ làm sạch → dừng sạch ở đó, không ném: phần còn lại bị bỏ.
+    - Byte thứ `max_length` trở đi là rác (thường `max_state_length(n_blocks)`): dừng như gặp
+      bản ghi hỏng.
+
+    - Bản ghi `TARGET`/`RESERVED` thứ `MAX_NAME_RECORDS` + 1 là bản ghi hỏng.
+
+    Chi phí CPU tuyến tính theo số byte đã đọc (≤ `max_length`), kể cả với `.state` do chương
+    trình khác dựng: `CLEAR_ALL` chỉ tắt các khối đã bật từ lần `CLEAR_ALL` trước, tên đã kiểm
+    được nhớ lại. Bản ghi tí hon đắt nhất mỗi byte. Đo trên máy phát triển (Windows, 2026-10,
+    máy đang tải): nhật ký hợp lệ (`MARK` 16 khối) khoảng 45 MiB/s; xấu nhất (`CLEAR` 1 khối,
+    hay `MARK` 1 khối xen `CLEAR_ALL`) khoảng 5–8 MiB/s tùy tải, tức đọc trọn `max_state_length`
+    của file 4 TiB (≈ 290 MiB) mất cỡ 35–60 s, của file 100 GiB (≈ 9 MiB) vài giây. Hạn của mỗi
+    lượt khôi phục ở `app` phải tính theo `max_state_length(n_blocks)` và chừa biên rộng hơn các
+    số này (máy chậm hơn), và việc đọc chạy trên thread đĩa,
+    không trên event loop. Đưa vào `feed` các đoạn lớn (cỡ 1 MiB): mỗi lời gọi có chi phí cố định.
+
+    `n_blocks` ngoài 0…`MAX_BLOCKS` hay `max_length` < `HEADER_SIZE` → StateError; `feed` sau
+    `finish` → RuntimeError.
+    """
+
+    __slots__ = (
+        "_bits",
+        "_leaves",
+        "_reserved",
+        "_result",
+        "_target",
+        "_target_raw",
+    )
+
+    def __init__(self, n_blocks: int, *, max_length: int) -> None:
+        super().__init__(n_blocks, max_length=max_length)
+        self._bits = bytearray(_byte_len(self._n))
+        self._leaves = bytearray(DIGEST_SIZE * self._n)
+        self._target: str | None = None
+        self._target_raw: bytes | None = None
+        self._reserved = False
+        self._result: ReplayResult | None = None
+
+    def finish(self) -> ReplayResult:
+        """Kết quả đọc lại; gọi lại trả đúng kết quả đó. Chưa đủ 41 byte header → StateError."""
+        if self._result is not None:
+            return self._result
+        self._ensure_ready()
+        bits = Bitfield.from_base64(base64.b64encode(self._bits).decode("ascii"), self._n)
+        count = sum(b.bit_count() for b in self._bits)
+        self._result = ReplayResult(
+            bits=bits,
+            leaves=self._leaves,
+            target=self._target,
+            reserved=self._reserved,
+            good_end=self._good_end,
+            truncated=self._fed > self._good_end,
+            log_length=self._fed,
+            compact_length=_compact_length(count, self._target_raw, self._reserved),
+            name_records=self._name_records,
+        )
+        self._finished = True
+        self._buf = bytearray()
+        return self._result
+
     def _apply(self, kind: int, buf: bytearray, view: memoryview, start: int, stop: int) -> bool:
         """Phát bản ghi `kind` có thân `buf[start:stop]`, CRC đã đúng. False: hỏng, trạng thái không đổi."""
         n = self._n
@@ -674,19 +785,10 @@ class StateReplay:
                     bits[i >> 3] &= ~mask & 0xFF
                     leaves[i * DIGEST_SIZE : (i + 1) * DIGEST_SIZE] = _ZERO_LEAF
         else:  # TARGET, RESERVED (`CLEAR_ALL` xử lý ngay trong `_parse`)
-            if self._name_records >= MAX_NAME_RECORDS:
+            res = self._validate_name(view, start, stop)
+            if res is None:
                 return False
-            raw = bytes(view[start:stop])
-            name = self._names.get(raw)
-            if name is None:
-                try:
-                    name = raw.decode("utf-8")
-                except UnicodeDecodeError:
-                    return False
-                if sanitize_filename(name) != name:
-                    return False
-                self._names[raw] = name
-            self._name_records += 1
+            raw, name = res
             if kind == RECORD_TARGET:
                 self._target, self._target_raw, self._reserved = name, raw, False
             elif name == self._target:
@@ -706,6 +808,226 @@ class StateReplay:
             for i in dirty:
                 bits[i >> 3] &= ~(0x80 >> (i & 7)) & 0xFF
                 leaves[i * DIGEST_SIZE : (i + 1) * DIGEST_SIZE] = _ZERO_LEAF
+        self._dirty = array("I")
+
+
+@dataclass(frozen=True, slots=True)
+class ScanResult:
+    """Kết quả quét lượt 1 `.state` (`StateScan.finish`), không cấp phát bảng hash."""
+
+    bits: Bitfield
+    target: str | None
+    reserved: bool
+    good_end: int
+    truncated: bool
+    log_length: int
+    compact_length: int
+    name_records: int
+    min_marked: int | None
+    max_marked: int | None
+
+
+class StateScan(_StateParser):
+    """Quét `.state` lấy bitfield, tên đích, vị trí cắt và dải khối đang bật; không cấp phát `_leaves`."""
+
+    __slots__ = (
+        "_bits",
+        "_reserved",
+        "_result",
+        "_target",
+        "_target_raw",
+    )
+
+    def __init__(self, n_blocks: int, *, max_length: int) -> None:
+        super().__init__(n_blocks, max_length=max_length)
+        self._bits = bytearray(_byte_len(self._n))
+        self._target: str | None = None
+        self._target_raw: bytes | None = None
+        self._reserved = False
+        self._result: ScanResult | None = None
+
+    def finish(self) -> ScanResult:
+        """Kết quả quét; gọi lại trả đúng kết quả đó. Chưa đủ 41 byte header → StateError."""
+        if self._result is not None:
+            return self._result
+        self._ensure_ready()
+        bits = Bitfield.from_base64(base64.b64encode(self._bits).decode("ascii"), self._n)
+        count = sum(b.bit_count() for b in self._bits)
+        min_marked: int | None = None
+        max_marked: int | None = None
+        if count > 0:
+            raw_bits = self._bits
+            for b_idx, byte in enumerate(raw_bits):
+                if byte:
+                    min_marked = b_idx * 8 + (8 - byte.bit_length())
+                    break
+            for e_idx in range(len(raw_bits) - 1, -1, -1):
+                byte = raw_bits[e_idx]
+                if byte:
+                    lsb = byte & -byte
+                    max_marked = e_idx * 8 + (8 - lsb.bit_length())
+                    break
+        self._result = ScanResult(
+            bits=bits,
+            target=self._target,
+            reserved=self._reserved,
+            good_end=self._good_end,
+            truncated=self._fed > self._good_end,
+            log_length=self._fed,
+            compact_length=_compact_length(count, self._target_raw, self._reserved),
+            name_records=self._name_records,
+            min_marked=min_marked,
+            max_marked=max_marked,
+        )
+        self._finished = True
+        self._buf = bytearray()
+        return self._result
+
+    def _apply(self, kind: int, buf: bytearray, view: memoryview, start: int, stop: int) -> bool:
+        n = self._n
+        bits = self._bits
+        if kind == RECORD_MARK:
+            if stop - start == _MARK_ENTRY.size:
+                indices = [_MARK_ENTRY.unpack_from(buf, start)[0]]
+            else:
+                indices = [i for i, _digest in _MARK_ENTRY.iter_unpack(view[start:stop])]
+            if max(indices) >= n:
+                return False
+            dirty = self._dirty
+            for i in indices:
+                mask = 0x80 >> (i & 7)
+                if not bits[i >> 3] & mask:
+                    bits[i >> 3] |= mask
+                    if dirty is not None:
+                        dirty.append(i)
+                        if len(dirty) > self._dirty_limit:
+                            self._dirty = dirty = None
+        elif kind == RECORD_CLEAR:
+            if stop - start == _U32.size:
+                indices = [_U32.unpack_from(buf, start)[0]]
+            else:
+                indices = [i for (i,) in _U32.iter_unpack(view[start:stop])]
+            if max(indices) >= n:
+                return False
+            for i in indices:
+                bits[i >> 3] &= ~(0x80 >> (i & 7)) & 0xFF
+        else:
+            res = self._validate_name(view, start, stop)
+            if res is None:
+                return False
+            raw, name = res
+            if kind == RECORD_TARGET:
+                self._target, self._target_raw, self._reserved = name, raw, False
+            elif name == self._target:
+                self._reserved = True
+        return True
+
+    def _clear_all(self) -> None:
+        bits, dirty = self._bits, self._dirty
+        if dirty is None:
+            bits[:] = bytes(len(bits))
+        else:
+            for i in dirty:
+                bits[i >> 3] &= ~(0x80 >> (i & 7)) & 0xFF
+        self._dirty = array("I")
+
+
+@dataclass(frozen=True, slots=True)
+class WindowResult:
+    """Kết quả thu thập hash cho một cửa sổ `[lo, hi)` (`StateWindowCollector.finish`)."""
+
+    bits: Bitfield
+    leaves: bytearray
+    good_end: int
+
+
+class StateWindowCollector(_StateParser):
+    """Đọc lại `.state` nhưng chỉ cấp phát `Bitfield(hi - lo)` và hash cho cửa sổ `[lo, hi)`."""
+
+    __slots__ = (
+        "_bits",
+        "_hi",
+        "_leaves",
+        "_lo",
+        "_result",
+    )
+
+    def __init__(self, n_blocks: int, lo: int, hi: int, *, max_length: int) -> None:
+        n = _check_n_blocks(n_blocks)
+        lo_val = _check_int(lo, "lo", 0, n)
+        hi_val = _check_int(hi, "hi", lo_val, n)
+        w_len = hi_val - lo_val
+        super().__init__(n, max_length=max_length, dirty_blocks=w_len)
+        self._lo = lo_val
+        self._hi = hi_val
+        self._bits = bytearray(_byte_len(w_len))
+        self._leaves = bytearray(DIGEST_SIZE * w_len)
+        self._result: WindowResult | None = None
+
+    def finish(self) -> WindowResult:
+        """Kết quả cửa sổ; gọi lại trả đúng kết quả đó. Chưa đủ 41 byte header → StateError."""
+        if self._result is not None:
+            return self._result
+        self._ensure_ready()
+        bits = Bitfield.from_base64(base64.b64encode(self._bits).decode("ascii"), self._hi - self._lo)
+        self._result = WindowResult(bits=bits, leaves=self._leaves, good_end=self._good_end)
+        self._finished = True
+        self._buf = bytearray()
+        return self._result
+
+    def _apply(self, kind: int, buf: bytearray, view: memoryview, start: int, stop: int) -> bool:
+        n, lo, hi = self._n, self._lo, self._hi
+        bits, leaves = self._bits, self._leaves
+        if kind == RECORD_MARK:
+            entries: list[tuple[int, bytes]]
+            if stop - start == _MARK_ENTRY.size:
+                entries = [_MARK_ENTRY.unpack_from(buf, start)]
+            else:
+                entries = list(_MARK_ENTRY.iter_unpack(view[start:stop]))
+            if max(entries)[0] >= n:
+                return False
+            dirty = self._dirty
+            for i, digest in entries:
+                if lo <= i < hi:
+                    li = i - lo
+                    mask = 0x80 >> (li & 7)
+                    if not bits[li >> 3] & mask:
+                        bits[li >> 3] |= mask
+                        if dirty is not None:
+                            dirty.append(li)
+                            if len(dirty) > self._dirty_limit:
+                                self._dirty = dirty = None
+                    leaves[li * DIGEST_SIZE : (li + 1) * DIGEST_SIZE] = digest
+        elif kind == RECORD_CLEAR:
+            indices: list[int]
+            if stop - start == _U32.size:
+                indices = [_U32.unpack_from(buf, start)[0]]
+            else:
+                indices = [i for (i,) in _U32.iter_unpack(view[start:stop])]
+            if max(indices) >= n:
+                return False
+            for i in indices:
+                if lo <= i < hi:
+                    li = i - lo
+                    mask = 0x80 >> (li & 7)
+                    if bits[li >> 3] & mask:
+                        bits[li >> 3] &= ~mask & 0xFF
+                        leaves[li * DIGEST_SIZE : (li + 1) * DIGEST_SIZE] = _ZERO_LEAF
+        else:
+            return self._validate_name(view, start, stop) is not None
+        return True
+
+    def _clear_all(self) -> None:
+        bits, leaves, dirty = self._bits, self._leaves, self._dirty
+        if dirty is None:
+            bits[:] = bytes(len(bits))
+            for start in range(0, len(leaves), len(_ZERO_CHUNK)):
+                end = min(start + len(_ZERO_CHUNK), len(leaves))
+                leaves[start:end] = _ZERO_CHUNK[: end - start]
+        else:
+            for li in dirty:
+                bits[li >> 3] &= ~(0x80 >> (li & 7)) & 0xFF
+                leaves[li * DIGEST_SIZE : (li + 1) * DIGEST_SIZE] = _ZERO_LEAF
         self._dirty = array("I")
 
 
