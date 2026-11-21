@@ -141,6 +141,7 @@ from teleport.core.filenames import (
 )
 from teleport.core.messages import MAX_OFFER_FILES, validate_device_id, validate_transfer_id
 from teleport.core.resume_state import (
+    COMPACT_WINDOW_BLOCKS,
     HEADER_SIZE,
     MAX_NAME_RECORDS,
     MAX_RECORD_BLOCKS,
@@ -151,6 +152,8 @@ from teleport.core.resume_state import (
     ReplayResult,
     StateError,
     StateReplay,
+    StateScan,
+    StateWindowCollector,
     TargetRecovery,
     TransferRecord,
     check_header,
@@ -164,6 +167,7 @@ from teleport.core.resume_state import (
     encode_reserved,
     encode_target,
     encode_transfer_record,
+    iter_window_marks,
     max_state_length,
     needs_compaction,
     recover_target,
@@ -2903,8 +2907,9 @@ class ResumeLog:
     - `sync()`: `fsync` `.state`.
     - `rewrite_header(target=None)`: thay cả file bằng header (kèm `TARGET` + `RESERVED` của
       `target` nếu có) trong một lần ghi nguyên tử.
-    - `compact()`: đọc lại chính `.state` theo đoạn `STATE_READ_CHUNK` trong trần rồi ghi bản gọn
-      nguyên tử (`_write_atomic_in`, theo đoạn); RAM tạm 32 byte mỗi khối chỉ trong lúc gộp.
+    - `compact()`: gộp `.state` dạng streaming theo từng cửa sổ `COMPACT_WINDOW_BLOCKS` (lượt 1
+      quét `StateScan`, lượt 2 gom hash từng cửa sổ qua `StateWindowCollector`) rồi ghi bản gọn
+      nguyên tử (`_write_atomic_in`, theo đoạn), không nạp bảng hash toàn file vào RAM.
 
     Ghi thiếu thì ghi tiếp tới đủ; `OSError` khi ghi hay `fsync` làm nhật ký hỏng: mọi `append`,
     `sync`, `compact` sau → `StorageError`, không bao giờ nối sau một bản ghi có thể đã cụt (lần
@@ -3110,17 +3115,117 @@ class ResumeLog:
         )
 
     def compact(self) -> None:
-        """Ghi lại bản gọn của chính `.state` (đọc lại theo đoạn), nguyên tử. Lỗi → nhật ký hỏng."""
+        """Ghi lại bản gọn của chính `.state` dạng streaming theo cửa sổ, nguyên tử. Lỗi → nhật ký hỏng."""
         self._writable()
         self._close_fd()
+        read_fd: int | None = None
         try:
-            result = self._read_back()
+            read_fd = self._temp._ref().open(self._name, _READ_FLAGS)
+            st = os.fstat(read_fd)
+            if not stat.S_ISREG(st.st_mode) or not _same_identity(self._identity, st):
+                raise StorageError(f"lượt {self._temp.transfer_id}: .state đã bị thay")
+            chunk_size = max(1, STATE_READ_CHUNK)
+            scanner = StateScan(self._count, max_length=max_state_length(self._count))
+            head = bytearray()
+            try:
+                while True:
+                    chunk = os.read(read_fd, chunk_size)
+                    if not chunk:
+                        break
+                    if len(head) < HEADER_SIZE:
+                        head += chunk[: HEADER_SIZE - len(head)]
+                    if not scanner.feed(chunk):
+                        break
+                scan = scanner.finish()
+            except StateError as e:
+                raise StorageError(f"lượt {self._temp.transfer_id}: .state hỏng") from e
+            if not check_header(
+                head,
+                transfer_id=self._temp.transfer_id,
+                file_index=self._file_index,
+                size=self._size,
+                block_size=BLOCK_SIZE,
+            ):
+                raise StorageError(f"lượt {self._temp.transfer_id}: header .state không khớp")
+
+            marked = scan.bits.count()
+            reserved_name = scan.target if scan.reserved else None
+            name_records = (scan.target is not None) + (reserved_name is not None)
+
+            if marked == 0:
+                _close_quietly(read_fd)
+                read_fd = None
+                chunks: list[bytes] = [encode_header(self._temp.transfer_id, self._file_index, self._size)]
+                if scan.target is not None:
+                    chunks.append(encode_target(scan.target))
+                    if scan.reserved:
+                        chunks.append(encode_reserved(scan.target))
+                self._replace(
+                    chunks,
+                    marked=0,
+                    target=scan.target,
+                    reserved=reserved_name,
+                    name_records=name_records,
+                )
+                return
+
+            assert scan.min_marked is not None and scan.max_marked is not None
+            start = scan.min_marked
+            stop = scan.max_marked + 1
+            fd = read_fd
+
+            def stream_compact() -> Iterator[bytes]:
+                nonlocal read_fd
+                try:
+                    yield encode_header(self._temp.transfer_id, self._file_index, self._size)
+                    if scan.target is not None:
+                        yield encode_target(scan.target)
+                        if scan.reserved:
+                            yield encode_reserved(scan.target)
+                    carry = bytearray()
+                    for lo in range(start, stop, COMPACT_WINDOW_BLOCKS):
+                        hi = min(lo + COMPACT_WINDOW_BLOCKS, stop)
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        collector = StateWindowCollector(self._count, lo, hi, max_length=scan.good_end)
+                        remaining = scan.good_end
+                        try:
+                            while remaining > 0:
+                                chunk = os.read(fd, min(chunk_size, remaining))
+                                if not chunk:
+                                    break
+                                remaining -= len(chunk)
+                                if not collector.feed(chunk):
+                                    break
+                            window = collector.finish()
+                        except StateError as e:
+                            raise StorageError(f"lượt {self._temp.transfer_id}: .state hỏng") from e
+                        if window.good_end != scan.good_end:
+                            raise StorageError(f"lượt {self._temp.transfer_id}: .state đã bị thay")
+                        yield from iter_window_marks(
+                            window.bits,
+                            window.leaves,
+                            lo,
+                            carry=carry,
+                            flush=(hi == stop),
+                        )
+                finally:
+                    if read_fd is not None:
+                        _close_quietly(read_fd)
+                        read_fd = None
+
+            self._replace(
+                stream_compact(),
+                marked=marked,
+                target=scan.target,
+                reserved=reserved_name,
+                name_records=name_records,
+            )
         except BaseException:
             self._broken = True
             raise
-        self._write_compact(
-            result.bits, result.leaves, result.target, result.target if result.reserved else None
-        )
+        finally:
+            if read_fd is not None:
+                _close_quietly(read_fd)
 
     def close(self) -> None:
         """Đóng fd. Gọi lại được; không xóa gì."""
@@ -3146,39 +3251,6 @@ class ResumeLog:
 
     def _close_quietly(self) -> None:
         self.close()
-
-    def _read_back(self) -> ReplayResult:
-        """Đọc lại chính `.state` (cả header) bằng `StateReplay` trong trần; header sai → `StorageError`."""
-        fd = self._temp._ref().open(self._name, _READ_FLAGS)
-        try:
-            st = os.fstat(fd)
-            if not stat.S_ISREG(st.st_mode) or not _same_identity(self._identity, st):
-                raise StorageError(f"lượt {self._temp.transfer_id}: .state đã bị thay")
-            replay = StateReplay(self._count, max_length=max_state_length(self._count))
-            head = bytearray()
-            try:
-                while True:
-                    chunk = os.read(fd, max(1, STATE_READ_CHUNK))
-                    if not chunk:
-                        break
-                    if len(head) < HEADER_SIZE:
-                        head += chunk[: HEADER_SIZE - len(head)]
-                    if not replay.feed(chunk):
-                        break
-                result = replay.finish()
-            except StateError as e:
-                raise StorageError(f"lượt {self._temp.transfer_id}: .state hỏng") from e
-        finally:
-            _close_quietly(fd)
-        if not check_header(
-            head,
-            transfer_id=self._temp.transfer_id,
-            file_index=self._file_index,
-            size=self._size,
-            block_size=BLOCK_SIZE,
-        ):
-            raise StorageError(f"lượt {self._temp.transfer_id}: header .state không khớp")
-        return result
 
     def _write_compact(
         self, bits: Bitfield, leaves: bytearray, target: str | None, reserved: str | None

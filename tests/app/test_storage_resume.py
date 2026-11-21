@@ -1238,3 +1238,160 @@ def test_close_temp_closes_handles_without_deleting(storage, rd, record_for, res
     with pytest.raises(ValueError):
         temp.create_part(1, 1)
     os.rmdir(temp.path)
+
+
+# ---------------------------------------------------------------------------------------------
+# Gộp `.state` dạng streaming (PR 2.4)
+# ---------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reserved", [False, True])
+def test_compact_streaming_zero_marked_blocks_preserves_target_and_reserved_without_inventing_reserved(
+    rd, record_for, resume_helpers, reserved: bool
+):
+    from teleport.core.bitfield import Bitfield
+
+    n = 10
+    temp = rd.create_temp(ID, record_for(ID, [n * BS]))
+    part = temp.create_part(0, n * BS)
+    part.commit(fake_hashes([0, 1]))
+    part.log.append(rs.encode_clear_all())
+    part.log.append(rs.encode_target("empty-bits.bin"))
+    if reserved:
+        (rd.root / "empty-bits.bin").write_bytes(b"")
+        part.log.append(rs.encode_reserved("empty-bits.bin"))
+    part.log.compact()
+
+    expected = rs.encode_header(ID, 0, n * BS) + b"".join(
+        rs.compact_records(Bitfield(n), bytes(32 * n), "empty-bits.bin", reserved)
+    )
+    assert state_path(part).read_bytes() == expected
+    assert part.log.name_records == (2 if reserved else 1)
+
+    rd.close_temp(temp)
+    [scan] = [
+        s for s in rd.scan_temps(resume_helpers.RECEIVER, {resume_helpers.SENDER}) if s.transfer_id == ID
+    ]
+    handle = rd.open_for_resume(scan)
+    try:
+        assert handle.bits.count() == 0
+        assert handle.part.log.name_records == (2 if reserved else 1)
+        resumed = replay(state_path(handle.part), n)
+        assert resumed.target == "empty-bits.bin"
+        assert bool(resumed.reserved) is reserved
+    finally:
+        rd.close_temp(handle.temp)
+
+
+@pytest.mark.parametrize("window_blocks", [5, 64])
+def test_compact_streaming_multiple_windows_matches_exact_compact_and_resumes(
+    storage, rd, record_for, resume_helpers, monkeypatch, window_blocks: int
+):
+    monkeypatch.setattr(rs, "COMPACT_WINDOW_BLOCKS", window_blocks)
+    if hasattr(storage, "COMPACT_WINDOW_BLOCKS"):
+        monkeypatch.setattr(storage, "COMPACT_WINDOW_BLOCKS", window_blocks)
+
+    n = 140
+    temp = rd.create_temp(ID, record_for(ID, [n * BS]))
+    part = temp.create_part(0, n * BS)
+    zero_block = b"\x00" * BS
+    for idx in range(n):
+        part.write_at(idx, zero_block)
+    part.commit(fake_hashes(range(0, n, 3)))
+    part.clear(list(range(0, n, 6)))
+    part.commit(fake_hashes(range(1, n, 5)))
+    part.log.append(rs.encode_target("multi.bin"))
+    (rd.root / "multi.bin").write_bytes(b"")
+    part.log.append(rs.encode_reserved("multi.bin"))
+
+    before = replay(state_path(part), n)
+    part.log.compact()
+
+    expected = rs.encode_header(ID, 0, n * BS) + b"".join(
+        rs.compact_records(before.bits, before.leaves, before.target, before.reserved)
+    )
+    assert state_path(part).read_bytes() == expected
+
+    rd.close_temp(temp)
+    [scan] = [
+        s for s in rd.scan_temps(resume_helpers.RECEIVER, {resume_helpers.SENDER}) if s.transfer_id == ID
+    ]
+    handle = rd.open_for_resume(scan)
+    try:
+        assert handle.bits.to_bytes() == before.bits.to_bytes()
+        assert handle.leaves == before.leaves
+        resumed = replay(state_path(handle.part), n)
+        assert resumed.target == "multi.bin"
+        assert resumed.reserved is True
+    finally:
+        rd.close_temp(handle.temp)
+
+
+def test_compact_streaming_large_sparse_file_peak_ram_under_24mib(rd, record_for):
+    import tracemalloc
+
+    from teleport.core.blocks import MAX_BLOCKS
+
+    n = MAX_BLOCKS
+    temp = rd.create_temp(ID, record_for(ID, [n * BS]))
+    part = temp.create_part(0, n * BS)
+    sparse_indices = [0, 1, 100_000, 2_000_000, n - 1]
+    part.commit(fake_hashes(sparse_indices))
+    part.log.append(rs.encode_target("huge.bin"))
+
+    tracemalloc.start()
+    try:
+        part.log.compact()
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 24 * 1024 * 1024  # rất nhỏ so với 32 * MAX_BLOCKS = 128 MiB
+
+    data = state_path(part).read_bytes()
+    scanner = rs.StateScan(n, max_length=rs.max_state_length(n))
+    scanner.feed(data)
+    res = scanner.finish()
+    assert {i for i in sparse_indices if i in res.bits} == set(sparse_indices)
+    assert res.bits.count() == len(sparse_indices)
+    assert res.target == "huge.bin"
+    assert res.reserved is False
+
+
+def test_compact_streaming_truncated_between_pass1_and_pass2_raises_storage_error(
+    storage, rd, record_for, monkeypatch
+):
+    n = 40
+    temp = rd.create_temp(ID, record_for(ID, [n * BS]))
+    part = temp.create_part(0, n * BS)
+    part.commit(fake_hashes([0, 5, 10, 20, 35]))
+    part.log.append(rs.encode_target("safe.bin"))
+    old = state_path(part).read_bytes()
+
+    monkeypatch.setattr(storage, "STATE_READ_CHUNK", 64)
+    real_read = os.read
+    read_calls = 0
+    pass1_bytes = 0
+    in_pass2 = False
+
+    def flaky_read(fd: int, length: int) -> bytes:
+        nonlocal read_calls, pass1_bytes, in_pass2
+        data = real_read(fd, length)
+        read_calls += 1
+        if not in_pass2:
+            pass1_bytes += len(data)
+            if not data and pass1_bytes >= len(old):
+                in_pass2 = True
+            return data
+        # Pass 2: cắt ngắn dữ liệu giữa chừng
+        return data[:10] if len(data) > 10 else b""
+
+    monkeypatch.setattr(os, "read", flaky_read)
+    with pytest.raises(storage.StorageError):
+        part.log.compact()
+    monkeypatch.undo()
+
+    assert state_path(part).read_bytes() == old
+    assert [p for p in state_path(part).parent.iterdir() if ".tmp" in p.name] == []
+    with pytest.raises(storage.StorageError):
+        part.log.append(rs.encode_target("after-broken.bin"))
