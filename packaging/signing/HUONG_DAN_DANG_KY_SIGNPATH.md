@@ -1,12 +1,12 @@
 # Hướng Dẫn Đăng Ký Ký Mã Miễn Phí Cho Nguồn Mở (SignPath Foundation)
 
-ZCL Teleport đã chuẩn bị sẵn đầy đủ chính sách bảo mật, cấu hình đóng gói và bước tích hợp CI/CD để tác giả (`@Luffyreals`) nộp hồ sơ nhận chứng chỉ ký mã Windows miễn phí từ **SignPath Foundation** (<https://signpath.org/>).
+ZCL Teleport đã chuẩn bị sẵn đầy đủ chính sách bảo mật, cấu hình đóng gói và bước tích hợp CI/CD để tác giả (`@tungkernel`) nộp hồ sơ nhận chứng chỉ ký mã Windows miễn phí từ **SignPath Foundation** (<https://signpath.org/>).
 
 ---
 
 ## 1. Những gì đã có sẵn trong mã nguồn
 
-- `docs/community/SECURITY.md`: Chính sách ký mã (Code Signing Policy) công khai danh sách tác giả/người duyệt (`Nguyễn Hoàng Tùng (@Luffyreals)`), tuyên bố không thu thập dữ liệu (Privacy Statement) và quy trình build tự động từ GitHub CI.
+- `docs/community/SECURITY.md`: Chính sách ký mã (Code Signing Policy) công khai danh sách tác giả/người duyệt (`Nguyễn Hoàng Tùng (@tungkernel)`), tuyên bố không thu thập dữ liệu (Privacy Statement) và quy trình build tự động từ GitHub CI.
 - `README.md`: Mục ghi nhận nguồn tài trợ ký mã miễn phí từ SignPath Foundation.
 - `packaging/signing/artifact-configuration.xml`: Quy tắc chỉ định chính xác tệp `.exe`, `.dll`, `.pyd` cần ký bên trong bộ cài `teleport-setup-*-x64.exe`, bản zip GUI và bản zip CLI.
 - `packaging/signing/sign_windows.py`: Script hỗ trợ ký bằng `signtool.exe` (tự động bỏ qua an toàn khi chạy build thử hoặc khi chưa nạp chứng chỉ PFX).
@@ -16,7 +16,7 @@ ZCL Teleport đã chuẩn bị sẵn đầy đủ chính sách bảo mật, cấ
 
 ## 2. Mẫu điền đơn đăng ký gửi SignPath Foundation
 
-Truy cập <https://signpath.org/apply/> bằng tài khoản GitHub của chủ dự án (`@Luffyreals`) và điền các mục theo mẫu dưới đây:
+Truy cập <https://signpath.org/apply/> bằng tài khoản GitHub của chủ dự án (`@tungkernel`) và điền các mục theo mẫu dưới đây:
 
 - **Project Name:** `ZCL Teleport`
 - **Website / Repository URL:** `https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport` *(thay bằng đúng URL GitHub công khai của repo nếu đổi đường dẫn)*
@@ -26,7 +26,7 @@ Truy cập <https://signpath.org/apply/> bằng tài khoản GitHub của chủ 
 - **Short Project Description:**
   > ZCL Teleport is a free, open-source (GPL-3.0-or-later) local network file transfer and text synchronization utility built in Python and PySide6. All transfers occur directly between paired devices on the local network with encrypted connections and zero cloud servers, telemetry, or analytics.
 - **Role / Organization Details:**
-  - Single maintainer / approver: Nguyễn Hoàng Tùng (`@Luffyreals`)
+  - Single maintainer / approver: Nguyễn Hoàng Tùng (`@tungkernel`)
   - CI runs purely from `main` branch and protected version tags (`v*`) via `.github/workflows/build-cli.yml`, `.github/workflows/build-gui.yml`, and `.github/workflows/release.yml`.
 
 ---

@@ -6,7 +6,7 @@ cask "zcl-teleport" do
       verified: "github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/"
   name "ZCL Teleport"
   desc "Direct LAN file transfer and clipboard sync without cloud servers"
-  homepage "https://luffyreals.github.io/zcl-hub/"
+  homepage "https://tungkernel.github.io/zcl-hub/"
 
   livecheck do
     url :url

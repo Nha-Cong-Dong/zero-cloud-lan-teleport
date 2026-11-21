@@ -40,8 +40,8 @@ Mô hình mối đe dọa và biện pháp: [mvp.md](../product/mvp.md) mục 11
 
 ### Vai trò chịu trách nhiệm (Team Roles)
 
-- **Tác giả mã nguồn & Người rà soát (Authors & Reviewers):** **Nguyễn Hoàng Tùng** (`@Luffyreals`) và các cộng tác viên được chấp nhận qua Pull Request công khai.
-- **Người phê duyệt ký số (Approvers):** **Nguyễn Hoàng Tùng** (`@Luffyreals`), chủ sở hữu kho mã nguồn.
+- **Tác giả mã nguồn & Người rà soát (Authors & Reviewers):** **Nguyễn Hoàng Tùng** (`@tungkernel`) và các cộng tác viên được chấp nhận qua Pull Request công khai.
+- **Người phê duyệt ký số (Approvers):** **Nguyễn Hoàng Tùng** (`@tungkernel`), chủ sở hữu kho mã nguồn.
 
 ### Tuyên Bố Quyền Riêng Tư (Privacy Statement)
 

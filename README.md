@@ -12,7 +12,7 @@
 [![Giấy phép](https://img.shields.io/badge/gi%E1%BA%A5y%20ph%C3%A9p-GPL--3.0-blue)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 
-**[Trang web chính thức (ZCL Hub)](https://luffyreals.github.io/zcl-hub/)** · **[Tải bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
+**[Trang web chính thức (ZCL Hub)](https://tungkernel.github.io/zcl-hub/)** · **[Tải bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
 
 </div>
 
@@ -263,4 +263,4 @@ Mã nguồn được phân tầng rõ ràng theo quy tắc `core <- trust <- net
 - **Bảo mật & Chính sách ký mã:** Báo cáo vấn đề an toàn và xem chính sách ký mã, quyền riêng tư tại [docs/community/SECURITY.md](docs/community/SECURITY.md).
 - **Ký mã nguồn mở (Code Signing):** Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) (đang hoàn thiện tích hợp cho các bản phát hành Windows chính thức; xem cấu hình tại [packaging/signing/](packaging/signing/HUONG_DAN_DANG_KY_SIGNPATH.md)).
 - **Giấy phép:** Phần mềm được phát hành theo giấy phép tự do nguồn mở [GPL-3.0-or-later](LICENSE).
-- **Tác giả:** Bản quyền (C) 2026 Nguyễn Hoàng Tùng (@Luffyreals).
+- **Tác giả:** Bản quyền (C) 2026 Nguyễn Hoàng Tùng (@tungkernel).
