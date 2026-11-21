@@ -426,16 +426,21 @@ def test_w2_send_done_for_unknown_key_remembers_nothing(env):
     assert not resend_shown(env, k)
 
 
-def test_w2_sources_capped_at_256_entries(env):
+def test_w2_sources_capped_at_256_entries(env, monkeypatch):
+    from teleport.ui import transfers
+
+    assert transfers.SOURCES_MAX_TRANSFERS == 256
+    cap = 16
+    monkeypatch.setattr(transfers, "SOURCES_MAX_TRANSFERS", cap)
     env.model.reset([dview()])
-    for i in range(257):
+    for i in range(cap + 1):
         env.ctl.request_send(PEER_ID, [env.tmp / "nguon" / f"f{i}.bin"])
         k = tkey("send", 10_000 + i)
         env.ctl.on_transfer(changed(k, "transferring"))
         env.host.finish_submit(i, k)
-    assert len(env.ctl._sources) <= 256
+    assert len(env.ctl._sources) <= cap
     assert tkey("send", 10_000) not in env.ctl._sources, "bỏ mục cũ nhất"
-    assert tkey("send", 10_256) in env.ctl._sources
+    assert tkey("send", 10_000 + cap) in env.ctl._sources
 
 
 def test_w2_sources_capped_at_4096_paths(env):

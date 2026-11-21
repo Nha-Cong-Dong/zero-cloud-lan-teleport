@@ -66,8 +66,8 @@ pytestmark = [
 
 MiB = 1024 * 1024
 D1, D2, D3, D4 = "a1" * 16, "b2" * 16, "c3" * 16, "d4" * 16
-DEBOUNCE = 0.02  # CLIP_DEBOUNCE trong test (thật: 0,15 s)
-SETTLE = 0.25  # chờ “không có gì xảy ra thêm” (> 10 lần DEBOUNCE)
+DEBOUNCE = 0.005  # CLIP_DEBOUNCE trong test (thật: 0,15 s)
+SETTLE = 0.08  # chờ “không có gì xảy ra thêm” (> 10 lần DEBOUNCE)
 
 
 def new_id() -> str:

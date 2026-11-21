@@ -24,16 +24,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
+# Công cụ kiểm thử & kiểm tra mã cho mọi tầng trừ giao diện (không kéo PySide6/pytest-qt).
+dev-core = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "hypothesis>=6.100",
     "ruff>=0.6",
     "mypy>=2.4",  # MIT
-    "pytest-qt>=4.4",  # MIT
     "pytest-xdist>=3.6",  # MIT; CI chạy pytest song song (-n auto --dist loadgroup)
+]
+dev = [
+    "zero-cloud-lan-teleport[dev-core,gui]",
     # pytest-qt cần một binding Qt lúc cấu hình, nên dev kéo luôn extra gui.
-    "zero-cloud-lan-teleport[gui]",
+    "pytest-qt>=4.4",  # MIT
 ]
 # Giao diện đồ họa (`teleport-gui`, tầng `ui`). Chỉ `ui` import PySide6.
 gui = [

@@ -23,7 +23,7 @@ python -m venv .venv; .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev,gui]"
 ```
 
-Extra `gui` cài PySide6 cho giao diện (`teleport-gui`) và test `tests/ui/`; `dev` cũng tự kéo nó theo vì `pytest-qt` cần. Trên Linux, Qt còn cần vài thư viện hệ thống, kể cả khi test chạy không màn hình (`QT_QPA_PLATFORM=offscreen`, [architecture.md](../technical/architecture.md) mục 6); danh sách gói là bước Linux trong [.github/workflows/ci.yml](../../.github/workflows/ci.yml) (Ubuntu: `sudo apt-get install` các gói đó).
+Extra `gui` cài PySide6 cho giao diện (`teleport-gui`) và test `tests/ui/`; `dev` tự kéo cả `dev-core` lẫn `gui` vì `pytest-qt` cần Qt (nếu chỉ chạy kiểm thử không có giao diện, có thể cài `pip install -e ".[dev-core]"`). Trên Linux, Qt còn cần vài thư viện hệ thống, kể cả khi test chạy không màn hình (`QT_QPA_PLATFORM=offscreen`, [architecture.md](../technical/architecture.md) mục 6); danh sách gói là bước Linux trong [.github/workflows/ci.yml](../../.github/workflows/ci.yml) (Ubuntu: `sudo apt-get install` các gói đó).
 
 ## Trước khi mở Pull Request
 
@@ -34,9 +34,9 @@ mypy src
 pytest
 ```
 
-Muốn nhanh hơn thì chạy `pytest -n 4 --dist loadgroup -m "not gui"` và `pytest -n 4 --dist loadgroup -m gui` (song song, test giao diện là một lần chạy riêng; hai lệnh chạy cùng lúc ở hai terminal được; vì sao không dùng `-n auto` trên máy nhiều lõi: [architecture.md](../technical/architecture.md) mục 6).
+Muốn nhanh hơn thì chạy `pytest -n 4 --dist loadgroup --ignore=tests/ui` và `pytest -n 4 --dist loadgroup tests/ui` (song song, tránh thu thập thừa tệp của bộ kia; hai lệnh chạy cùng lúc ở hai terminal được; vì sao không dùng `-n auto` trên máy nhiều lõi: [architecture.md](../technical/architecture.md) mục 6).
 
-CI ([.github/workflows/ci.yml](../../.github/workflows/ci.yml)) chạy `ruff check .`, `ruff format --check .`, `mypy src`, `pytest -n auto --dist loadgroup -m "not gui"` trên Windows, macOS, Linux × Python 3.12 và 3.14; test giao diện chạy ở job riêng song song với job đó (`pytest -n auto --dist loadgroup -m gui`; riêng Windows chạy tuần tự `pytest -m gui`, chia ba job theo `TELEPORT_SHARD`). Push commit mới vào một PR thì lần chạy CI cũ của PR đó bị hủy. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
+CI ([.github/workflows/ci.yml](../../.github/workflows/ci.yml)) dùng `uv` kèm bộ đệm phụ thuộc và gom kết quả qua job cổng `CI Gate`: job `Detect Changes` kiểm tra tệp thay đổi (PR chỉ sửa tài liệu không nằm trong kiểm thử bỏ qua ma trận test; sửa mã, cấu hình hoặc các tệp đặc tả mà test đọc trực tiếp vẫn chạy đầy đủ); job `Lint & Typecheck` chạy một lần trên Ubuntu (`ruff check .`, `ruff format --check .`, `mypy src`, `packaging/i18n/update.py --check`, `tests/test_architecture.py`); ma trận `test` chạy trên Windows, macOS, Linux × Python 3.12 và 3.14 với hai bộ song song — `core` cài `.[dev-core]` chạy `--ignore=tests/ui --ignore=tests/packaging`, còn `gui` cài `.[dev]` chạy `tests/ui tests/packaging` (`-n auto --dist loadgroup` trên Linux/macOS; trên Windows chạy tuần tự chia ba job theo `TELEPORT_SHARD`). Push commit mới vào một PR thì lần chạy CI cũ của PR đó bị hủy. Vì vậy hãy chạy `ruff format .` trước khi push, để bước kiểm tra định dạng không báo lỗi.
 
 PR đổi giao diện: đính kèm ảnh sáng/tối do `tests/ui/test_snapshots.py` sinh (lệnh: [architecture.md](../technical/architecture.md) mục 6), không commit ảnh vào repo.
 

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import re
 from pathlib import Path
 
@@ -493,6 +494,7 @@ _OFFSCREEN_SKIP = (
     "offscreen không có cửa sổ active nên không vẽ khung tiêu điểm; bằng chứng là lần chạy với "
     "QT_QPA_PLATFORM=windows (spec E1 mục 5)"
 )
+_SKIP_OFFSCREEN = pytest.mark.skipif(os.environ.get("QT_QPA_PLATFORM") == "offscreen", reason=_OFFSCREEN_SKIP)
 
 
 def show_active(qtbot, root: QWidget) -> None:
@@ -586,6 +588,7 @@ def focus_visibility_gaps(root: QWidget, stops: list[QWidget]) -> list[str]:
 
 
 @pytest.mark.slow
+@_SKIP_OFFSCREEN
 @pytest.mark.parametrize("dark", [False, True], ids=["light", "dark"])
 @pytest.mark.parametrize(("kind", "name"), TARGETS, ids=TARGET_IDS)
 def test_a5_focus_is_visible_on_every_tab_stop(qtbot, ui_theme, kind, name, dark):
@@ -614,6 +617,7 @@ class _NoFocusMark(QWidget):
 
 
 @pytest.mark.slow
+@_SKIP_OFFSCREEN
 def test_a5_check_catches_widget_without_focus_mark(qtbot, ui_theme):
     """Đối chứng của A5: (1) ảnh nút khi `keyboard_focus` giống hệt ảnh khi tới nút bằng phím Tab thật, và
     khác ảnh không tiêu điểm; (2) cùng cách đo, widget không có dấu tiêu điểm → báo, nút chuẩn → không."""
@@ -655,6 +659,7 @@ def test_a5_check_catches_widget_without_focus_mark(qtbot, ui_theme):
 
 
 @pytest.mark.slow
+@_SKIP_OFFSCREEN
 def test_a5_default_button_exemption_is_narrow(qtbot, ui_theme):
     """Miễn E1f chỉ cho nút mặc định của hộp thoại: nút còn lại của cùng hộp vẫn được đo (và có dấu tiêu
     điểm), widget không dấu tiêu điểm trong hộp vẫn bị bắt; nút mặc định ngoài `QDialog` không được miễn."""
