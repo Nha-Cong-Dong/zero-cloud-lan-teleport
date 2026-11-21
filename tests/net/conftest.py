@@ -496,18 +496,46 @@ def net_helpers():
     )
 
 
-async def find_leaks(before: set[asyncio.Task]) -> list[str]:
+async def find_leaks(before: set[asyncio.Task], *, full_gc: bool = True) -> list[str]:
     """Task và socket còn sót sau một test integration (đặc tả mục 4.1, "Kiểm rò rỉ")."""
     problems: list[str] = []
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0)
     current = asyncio.current_task()
-    leftover = [t for t in asyncio.all_tasks() if t is not current and t not in before and not t.done()]
+    deadline = time.monotonic() + 0.05
+    while True:
+        leftover = [t for t in asyncio.all_tasks() if t is not current and t not in before and not t.done()]
+        if not leftover or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.005)
     problems += [f"task còn chạy: {t.get_name()} {t.get_coro()!r}" for t in leftover]
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ResourceWarning)
-        gc.collect()
+        if full_gc:
+            gc.collect()
+        else:
+            gc.collect(1)
     problems += [f"ResourceWarning: {w.message}" for w in caught if issubclass(w.category, ResourceWarning)]
     return problems
+
+
+_net_gc_clean = False
+_net_module_used_no_leaks = False
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _net_no_leaks_module_gc():
+    """Chạy một lần `gc.collect()` thế hệ 2 cuối mỗi tệp có dùng `no_leaks` để bắt mọi rò rỉ sống lâu."""
+    global _net_module_used_no_leaks, _net_gc_clean
+    _net_module_used_no_leaks = False
+    yield
+    if _net_module_used_no_leaks:
+        _net_module_used_no_leaks = False
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            gc.collect()
+        _net_gc_clean = True
+        leaks = [f"ResourceWarning: {w.message}" for w in caught if issubclass(w.category, ResourceWarning)]
+        assert not leaks, "rò rỉ tài nguyên (gen-2) cuối module:\n" + "\n".join(leaks)
 
 
 @pytest.fixture
@@ -516,13 +544,19 @@ async def no_leaks(request):
 
     Test đồng bộ (unit, hoặc tự chạy `asyncio.run` như fuzz R15) thì bỏ qua: chúng tự kiểm.
     """
+    global _net_gc_clean, _net_module_used_no_leaks
     if not inspect.iscoroutinefunction(request.function):
+        _net_gc_clean = False
         yield
         return
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", ResourceWarning)
-        gc.collect()  # dọn rác của các test trước, để không đổ lỗi nhầm cho test này
+    if not _net_gc_clean:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            gc.collect(1)  # dọn rác của các test trước, để không đổ lỗi nhầm cho test này
+    _net_gc_clean = False
+    _net_module_used_no_leaks = True
     before = asyncio.all_tasks()
     yield
-    problems = await find_leaks(before)
+    problems = await find_leaks(before, full_gc=False)
+    _net_gc_clean = True
     assert not problems, "rò rỉ sau test:\n" + "\n".join(problems)

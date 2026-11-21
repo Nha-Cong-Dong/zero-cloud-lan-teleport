@@ -25,7 +25,9 @@ echo "[*] Phiên bản: ${APP_VERSION}"
 
 # 2. Build bằng PyInstaller
 echo "[*] Đang đóng gói ứng dụng với PyInstaller..."
-python -m pip install -e ".[gui]"
+if [ "${SKIP_PIP_INSTALL:-0}" != "1" ]; then
+    python -m pip install -e ".[gui]"
+fi
 pyinstaller --noconfirm --clean \
     --name "Teleport" \
     --windowed \

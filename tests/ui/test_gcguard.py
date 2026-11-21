@@ -18,6 +18,14 @@ import pytest
 pytest.importorskip("PySide6")
 
 
+@pytest.fixture(autouse=True)
+def _restore_session_gc_guard(qt_thread_gc):
+    """Các test ở tệp này tắt `qt_thread_gc` (phạm vi session) để thử guard riêng; luôn bật lại sau test."""
+    yield
+    if not qt_thread_gc.active:
+        qt_thread_gc.start()
+
+
 class _Cycle:
     """Đối tượng tự trỏ vào mình: chỉ GC vòng tham chiếu thu gom được."""
 
@@ -134,6 +142,25 @@ def test_stop_collects_once_on_calling_thread(qt_thread_gc):
     assert seen == []
     guard.stop()
     assert seen == [threading.current_thread().name]
+
+
+def test_collect_if_due_only_collects_when_threshold_exceeded(qt_thread_gc):
+    from teleport.ui.gcguard import GcGuard
+
+    qt_thread_gc.stop()
+    guard = GcGuard()
+    guard.start()
+    held: list = []
+    try:
+        gc.collect()
+        assert guard.collect_if_due() == 0
+        assert guard.collections == 0
+        held.append([[] for _ in range(_young_threshold() * 3)])
+        assert guard.collect_if_due() >= 1
+        assert guard.collections >= 1
+    finally:
+        held.clear()
+        guard.stop()
 
 
 # ---- Hẹn giờ thu gom trên thread Qt ------------------------------------------------------------
