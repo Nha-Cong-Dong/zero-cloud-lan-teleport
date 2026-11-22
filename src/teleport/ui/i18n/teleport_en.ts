@@ -123,6 +123,16 @@
         <translation>Resend</translation>
     </message>
     <message>
+        <location filename="../chat.py"/>
+        <source>Gửi thư mục</source>
+        <translation>Send folder</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Gửi tới nhiều máy</source>
+        <translation>Send to multiple devices</translation>
+    </message>
+    <message>
         <location filename="../chat_bubbles.py"/>
         <source>Gửi tới {name}</source>
         <translation>To {name}</translation>
@@ -325,6 +335,16 @@
         <location filename="../conversations.py"/>
         <source>Gửi file…</source>
         <translation>Send files…</translation>
+    </message>
+    <message>
+        <location filename="../conversations.py"/>
+        <source>Gửi thư mục…</source>
+        <translation>Send folder…</translation>
+    </message>
+    <message>
+        <location filename="../conversations.py"/>
+        <source>Gửi tới nhiều máy…</source>
+        <translation>Send to multiple devices…</translation>
     </message>
     <message>
         <location filename="../conversations.py"/>
@@ -877,6 +897,31 @@
         <location filename="../app.py"/>
         <source>Bạn chọn quá nhiều file một lần. Hãy chọn ít file hơn rồi gửi lại.</source>
         <translation>You selected too many files at once. Select fewer files and send again.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Chọn file gửi tới nhiều máy</source>
+        <translation>Choose files to send to multiple devices</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Chọn file…</source>
+        <translation>Choose files…</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Chọn thư mục gửi tới nhiều máy</source>
+        <translation>Choose folder to send to multiple devices</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Chọn thư mục…</source>
+        <translation>Choose folder…</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Gửi tới nhiều máy</source>
+        <translation>Send to multiple devices</translation>
     </message>
     <message>
         <location filename="../app.py"/>
@@ -1579,8 +1624,8 @@
     </message>
     <message>
         <location filename="../send.py"/>
-        <source>{name} không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file.</source>
-        <translation>{name} isn't a file. Teleport can't send whole folders yet; choose the files one by one.</translation>
+        <source>{name} không phải là file hay thư mục hợp lệ để gửi.</source>
+        <translation>{name} is not a valid file or folder to send.</translation>
     </message>
     <message>
         <location filename="../send.py"/>
@@ -1602,8 +1647,23 @@
     <name>SendPicker</name>
     <message>
         <location filename="../send_picker.py"/>
+        <source>Bỏ chọn</source>
+        <translation>Clear selection</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
         <source>Chưa ghép đôi với máy nào. Hãy ghép đôi một máy rồi gửi lại từ File Explorer.</source>
         <translation>No paired devices yet. Pair a device, then send again from File Explorer.</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Chọn một hoặc nhiều máy nhận (có thể bấm để bật/tắt từng máy).</source>
+        <translation>Choose one or more devices (click to toggle each device).</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
+        <source>Chọn tất cả</source>
+        <translation>Select all</translation>
     </message>
     <message>
         <location filename="../send_picker.py"/>
@@ -1621,6 +1681,14 @@
         <translation>
             <numerusform>Send %n file to…</numerusform>
             <numerusform>Send %n files to…</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../send_picker.py"/>
+        <source>Gửi (%n máy)</source>
+        <translation>
+            <numerusform>Send (%n device)</numerusform>
+            <numerusform>Send (%n devices)</numerusform>
         </translation>
     </message>
     <message>
@@ -1663,12 +1731,33 @@
     </message>
     <message numerus="yes">
         <location filename="../settings.py"/>
+        <source>%n file</source>
+        <translation>
+            <numerusform>%n file</numerusform>
+            <numerusform>%n files</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../settings.py"/>
+        <source>%n lượt nhận đang chờ hoặc dở dang</source>
+        <translation>
+            <numerusform>%n pending or incomplete receive</numerusform>
+            <numerusform>%n pending or incomplete receives</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../settings.py"/>
         <source>%n ngày</source>
         <comment>đơn vị của ô số ngày</comment>
         <translation>
             <numerusform>%n day</numerusform>
             <numerusform>%n days</numerusform>
         </translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Bạn đang dùng phiên bản mới nhất.</source>
+        <translation>You are using the latest version.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1684,6 +1773,11 @@
         <location filename="../settings.py"/>
         <source>Chưa ghép đôi với máy nào</source>
         <translation>Not paired with any device yet</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chưa hủy được lượt nhận. Hãy thử lại.</source>
+        <translation>Could not cancel the receive. Please try again.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1707,8 +1801,28 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Chế độ ẩn hoàn toàn trong mạng</source>
+        <translation>Completely hidden on the network</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chỉ kiểm tra khi bạn bấm nút. Ứng dụng không tự kết nối mạng.</source>
+        <translation>Checks only when you click. The app never connects automatically.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Cài đặt</source>
         <translation>Settings</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Cài đặt bản cập nhật</source>
+        <translation>Install update</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Cài đặt ngay</source>
+        <translation>Install now</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1719,6 +1833,11 @@
         <location filename="../settings.py"/>
         <source>Các mục cài đặt</source>
         <translation>Settings sections</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Cập nhật</source>
+        <translation>Updates</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1772,13 +1891,58 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Hủy</source>
+        <translation>Cancel</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Hủy ghép đôi…</source>
         <translation>Unpair…</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Hủy lượt nhận</source>
+        <translation>Cancel receive</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Hủy lượt nhận này và xóa phần đã tải dở khỏi máy?</source>
+        <translation>Cancel this receive and delete partial files from this device?</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Hủy lượt nhận từ {name}</source>
+        <translation>Cancel receive from {name}</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Hủy lượt nhận đang chờ</source>
+        <translation>Cancel pending receive</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Hủy toàn bộ lượt nhận đang chờ hoặc dở dang và xóa các phần đã tải dở khỏi máy?</source>
+        <translation>Cancel all pending or incomplete receives and delete partial files from this device?</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Hủy tất cả</source>
+        <translation>Cancel all</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Hủy tất cả lượt nhận dở</source>
+        <translation>Cancel all incomplete receives</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Không</source>
         <translation>No</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Không có lượt nhận đang chờ hoặc dở dang.</source>
+        <translation>No pending or incomplete receives.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1789,6 +1953,16 @@
         <location filename="../settings.py"/>
         <source>Không nhận file: không mở được {path}</source>
         <translation>Not receiving files: can't open {path}</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Không thể kiểm tra hoặc tải bản cập nhật. Hãy thử lại sau.</source>
+        <translation>Could not check for or download updates. Please try again later.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Không thể mở bộ cài cập nhật. Hãy thử tải lại từ trang phát hành.</source>
+        <translation>Could not start the update installer. Please download it from the releases page.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1812,8 +1986,28 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Kiểm tra</source>
+        <translation>Check</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Kiểm tra cập nhật</source>
+        <translation>Check for updates</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Kiểm tra lại</source>
+        <translation>Check again</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Lưu file log</source>
         <translation>Save log file</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Lượt nhận đang chờ</source>
+        <translation>Pending receives</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1922,6 +2116,11 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Thử lại</source>
+        <translation>Try again</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Truyền file</source>
         <translation>File transfer</translation>
     </message>
@@ -1944,6 +2143,21 @@
         <location filename="../settings.py"/>
         <source>Tạo thư mục con cho mỗi lần nhận</source>
         <translation>Create subfolder for each transfer</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Tải bản cập nhật</source>
+        <translation>Download update</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Tải về</source>
+        <translation>Download</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Tắt phát tín hiệu tự tìm máy trong mạng nội bộ. Máy đã ghép đôi vẫn kết nối được khi biết địa chỉ.</source>
+        <translation>Stop broadcasting on the local network. Paired devices can still connect using a known address.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2007,6 +2221,31 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Đang giữ chỗ {size}.</source>
+        <translation>Reserving {size}.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đang kiểm tra…</source>
+        <translation>Checking…</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đang tải bản cập nhật ({done} / {total})…</source>
+        <translation>Downloading update ({done} / {total})…</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đang tải bản cập nhật…</source>
+        <translation>Downloading update…</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đang tải…</source>
+        <translation>Downloading…</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Đang xuất…</source>
         <translation>Exporting…</translation>
     </message>
@@ -2022,13 +2261,48 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Đã có bản cập nhật mới.</source>
+        <translation>A new update is available.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đã có bản {version}.</source>
+        <translation>Version {version} is available.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đã hủy lượt nhận và dọn phần tải dở.</source>
+        <translation>Receive cancelled and partial files removed.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đã hủy toàn bộ lượt nhận đang chờ.</source>
+        <translation>All pending receives cancelled.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Đã lưu log vào {path}.</source>
         <translation>Saved logs to {path}.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Đã tải xong bản {version}. Đóng Teleport và chạy trình cài đặt ngay bây giờ?</source>
+        <translation>Version {version} downloaded. Close Teleport and run the installer now?</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đã tải xong bộ cài cập nhật.</source>
+        <translation>Update installer downloaded.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Đã xóa toàn bộ lịch sử truyền file.</source>
         <translation>Cleared all transfer history.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Để sau</source>
+        <translation>Later</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2047,8 +2321,38 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>đang chờ</source>
+        <translation>waiting</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>đang chờ xác nhận</source>
+        <translation>waiting for confirmation</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>đang kiểm tra</source>
+        <translation>verifying</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>đang nhận</source>
+        <translation>receiving</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>đang nối lại</source>
+        <translation>reconnecting</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>đang trong mạng</source>
         <translation>on the network</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>đang xếp hàng</source>
+        <translation>queued</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2367,6 +2671,11 @@
         <location filename="../transfers.py"/>
         <source>Chọn file gửi tới {name}</source>
         <translation>Choose files to send to {name}</translation>
+    </message>
+    <message>
+        <location filename="../transfers.py"/>
+        <source>Chọn thư mục gửi tới {peer}</source>
+        <translation>Choose folder to send to {peer}</translation>
     </message>
     <message>
         <location filename="../transfers_view.py"/>

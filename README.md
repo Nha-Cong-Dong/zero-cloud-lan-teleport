@@ -228,6 +228,8 @@ Tiến độ chi tiết từng giai đoạn được cập nhật tại [docs/pr
 - **Bản chính thức (`v1.0.0`):** Đóng gói bộ cài đặt tiêu chuẩn, tài liệu người dùng và kịch bản đa nền tảng (Đã hoàn thành).
 - **Mở rộng `v1.1.0` – `v1.2.0`:** Gửi cả cây thư mục con, gửi song song nhiều máy, ẩn tên thiết bị trên mạng công cộng và Chế độ khách qua Web QR cho điện thoại (Đã hoàn thành).
 - **Bản nâng cấp `v1.3.0`:** Kết nối thông suốt giữa dòng lệnh và giao diện đang chạy nền, tự gom thư mục con theo từng lượt nhận, tải gói nén `.zip` trực tiếp và kéo thả thư mục trên Web QR, khóa tạm thời chống dò mã, và tối ưu bộ nhớ kiểm tra toàn vẹn (Đã hoàn thành).
+- **Bản nâng cấp `v1.4.0`:** Chọn gửi cả thư mục và gửi đồng thời nhiều máy trực tiếp trên giao diện, chế độ ẩn danh hoàn toàn, quản lý/hủy lượt nhận dở và kiểm tra cập nhật thủ công từ Cài đặt (Đã hoàn thành).
+- **Lộ trình kế tiếp (`v1.5.0` – `v2.0.0`):** Nối lại bền qua mất điện hai chiều, Web QR 2.0 (bảng ghi chú/liên kết hai chiều và gửi ảnh từ camera), biên lai truyền nhận ký số hai bên, truyền thông minh phần thay đổi theo thư mục/khối và ứng dụng Android.
 
 ---
 
@@ -260,7 +262,7 @@ Mã nguồn được phân tầng rõ ràng theo quy tắc `core <- trust <- net
 ## Đóng Góp · Bảo Mật · Giấy Phép
 
 - **Đóng góp:** Xem hướng dẫn tại [docs/community/CONTRIBUTING.md](docs/community/CONTRIBUTING.md).
-- **Bảo mật & Chính sách ký mã:** Báo cáo vấn đề an toàn và xem chính sách ký mã, quyền riêng tư tại [docs/community/SECURITY.md](docs/community/SECURITY.md).
-- **Ký mã nguồn mở (Code Signing):** Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) (đang hoàn thiện tích hợp cho các bản phát hành Windows chính thức; xem cấu hình tại [packaging/signing/](packaging/signing/HUONG_DAN_DANG_KY_SIGNPATH.md)).
+- **Bảo mật & Toàn vẹn phát hành:** Báo cáo vấn đề an toàn, quy trình build công khai và quyền riêng tư tại [docs/community/SECURITY.md](docs/community/SECURITY.md).
+- **Xác minh bản tải về:** Việc ký mã Windows được tạm hoãn; mọi bản phát hành đều đính kèm `SHA256SUMS.txt` sinh từ GitHub Actions để kiểm tra toàn vẹn.
 - **Giấy phép:** Phần mềm được phát hành theo giấy phép tự do nguồn mở [GPL-3.0-or-later](LICENSE).
-- **Tác giả:** Bản quyền (C) 2026 Nguyễn Hoàng Tùng (@Luffyreals).
+- **Tác giả:** Bản quyền (C) 2026 Nguyễn Hoàng Tùng (@tungkernel).

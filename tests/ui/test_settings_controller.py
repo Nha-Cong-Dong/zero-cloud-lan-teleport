@@ -99,9 +99,27 @@ def view(name: str, *, paired: bool = True, online: bool = True):
 class FakeTransfers:
     def __init__(self, node: FakeNode) -> None:
         self.node = node
+        self.pending_infos: list = []
+        self.promised = 0
+        self.cancelled: list = []
 
     def clear_history(self, device_id=None) -> None:
         self.node._enter("clear_history", device_id)
+
+    def transfers(self):
+        return tuple(self.pending_infos)
+
+    def promised_bytes(self) -> int:
+        return self.promised
+
+    async def cancel_transfer(self, key, *, wait_disk: bool = True) -> bool:
+        self.node._enter("cancel_transfer", key, wait_disk)
+        before = len(self.pending_infos)
+        self.pending_infos = [info for info in self.pending_infos if info.key != key]
+        if len(self.pending_infos) == before:
+            return False
+        self.cancelled.append(key)
+        return True
 
 
 class FakeNode:
@@ -113,6 +131,7 @@ class FakeNode:
         self._fail: dict[str, list] = {}
         self.name = "May-A"
         self.visible = True
+        self.stealth = False
         self._accept_pairing = True
         self.rate_limit: int | None = None
         self.retention: int | None = None
@@ -144,9 +163,23 @@ class FakeNode:
         self._accept_pairing = value
 
     def snapshot(self):
-        from teleport.ui.settings import SettingsSnapshot
+        from teleport.core.transfer import Direction
+        from teleport.ui.settings import PendingReceiveItem, SettingsSnapshot
 
         self._enter("read_snapshot")
+        pending = tuple(
+            PendingReceiveItem(
+                transfer_id=info.key.transfer_id,
+                device_id=info.key.device_id,
+                device_name="May-B",
+                files_total=len(info.files),
+                done_bytes=info.done_bytes,
+                total_bytes=info.total_bytes,
+                status=str(info.status),
+            )
+            for info in self.transfers.transfers()
+            if info.key.direction is Direction.RECEIVE
+        )
         return SettingsSnapshot(
             name=self.name,
             visible=self.visible,
@@ -155,6 +188,9 @@ class FakeNode:
             language=self.language,
             autostart=self.autostart,
             devices=dict(self.devices_settings),
+            stealth=self.stealth,
+            pending_receives=pending,
+            promised_bytes=self.transfers.promised_bytes(),
         )
 
     def set_name(self, name: str) -> str:
@@ -165,6 +201,10 @@ class FakeNode:
     def set_visible(self, visible: bool) -> None:
         self._enter("set_visible", visible)
         self.visible = visible
+
+    def set_stealth(self, stealth: bool) -> None:
+        self._enter("set_stealth", stealth)
+        self.stealth = stealth
 
     def set_ui_preferences(self, **kw) -> None:
         self._enter("set_ui_preferences", kw)
@@ -258,6 +298,24 @@ class FakeHost(QObject):
                 return out
             for p in pending:
                 out.append(self.run_one(p))
+
+    def run_submits(self) -> list:
+        import inspect
+
+        out = []
+        pending = [p for p in self.submits if not p.ran]
+        for p in pending:
+            p.ran = True
+            try:
+                res = p.fn(self.node)
+                if inspect.isawaitable(res):
+                    res = asyncio.run(res)
+            except Exception as e:
+                res = e
+            if p.on_done is not None:
+                p.on_done(res)
+            out.append(res)
+        return out
 
 
 # =================================================================================================
@@ -1127,3 +1185,233 @@ def test_default_export_dir_falls_back_to_home_when_documents_missing(monkeypatc
     assert settings_mod.default_export_dir() == str(Path.home())
     missing.mkdir()
     assert settings_mod.default_export_dir() == str(missing)
+
+
+# =================================================================================================
+# Stealth, lượt nhận đang chờ & kiểm tra cập nhật thủ công (v1.4.0)
+# =================================================================================================
+
+
+def test_stealth_toggle_persists_and_reverts_on_save_error(env):
+    from teleport.app.settings import SettingsSaveError
+    from teleport.ui.widgets import InfoLevel
+
+    env.start()
+    env.page.stealth_switch.click()
+    env.host.run_calls()
+    assert env.node.stealth is True
+    assert env.page.stealth_switch.isChecked()
+
+    env.node.fail("set_stealth", SettingsSaveError("disk full"))
+    env.page.stealth_switch.click()
+    assert not env.page.stealth_switch.isChecked()
+    env.host.run_calls()
+    assert env.page.stealth_switch.isChecked(), "lỗi lưu phải trả lại trạng thái stealth đã xác nhận"
+    assert notice(env.page)[0] is InfoLevel.ERROR
+
+
+def test_read_snapshot_reads_stealth_and_pending_receives():
+    from teleport.app.settings import Settings
+    from teleport.core.messages import FileEntry
+    from teleport.core.transfer import Direction, TransferInfo, TransferKey, TransferStatus
+    from teleport.ui.settings import read_snapshot
+
+    peer = view("May-B")
+    key = TransferKey(peer.device_id, Direction.RECEIVE, "1" * 32)
+    info = TransferInfo(
+        key=key,
+        status=TransferStatus.RECONNECTING,
+        files=(FileEntry(name="doc.pdf", size=2048, mtime=0),),
+        names=("doc.pdf",),
+        file_index=0,
+        done_bytes=512,
+        total_bytes=2048,
+    )
+    node = SimpleNamespace(
+        name="May-A",
+        visible=True,
+        stealth=True,
+        settings=Settings(),
+        devices=lambda: [peer],
+        device_settings=lambda _did: SimpleNamespace(ask_before_receive=True, clipboard=False),
+        transfers=SimpleNamespace(transfers=lambda: (info,), promised_bytes=lambda: 1536),
+    )
+    snap = read_snapshot(node)
+    assert snap.stealth is True
+    assert snap.promised_bytes == 1536
+    assert len(snap.pending_receives) == 1
+    assert snap.pending_receives[0].device_name == "May-B"
+    assert snap.pending_receives[0].device_id == peer.device_id
+    assert snap.pending_receives[0].transfer_id == "1" * 32
+
+
+def test_cancel_pending_receive_single_and_all_via_confirm_box(env):
+    from teleport.core.messages import FileEntry
+    from teleport.core.transfer import Direction, TransferInfo, TransferKey, TransferStatus
+    from teleport.ui.widgets import InfoLevel
+
+    k1 = TransferKey("b" * 32, Direction.RECEIVE, "1" * 32)
+    k2 = TransferKey("c" * 32, Direction.RECEIVE, "2" * 32)
+    info1 = TransferInfo(
+        k1, TransferStatus.RECONNECTING, (FileEntry("a.bin", 1000, 0),), ("a.bin",), 0, 200, 1000
+    )
+    info2 = TransferInfo(k2, TransferStatus.WAITING, (FileEntry("b.bin", 2000, 0),), ("b.bin",), 0, 0, 2000)
+    env.node.transfers.pending_infos = [info1, info2]
+    env.node.transfers.promised = 2800
+    env.start()
+
+    assert len(env.page._pending_cancel_buttons) == 2
+    env.page._pending_cancel_buttons[0].click()
+    settle(env.qtbot)
+    box = env.c.cancel_pending_box
+    assert box is not None
+    assert box.buttonRole(box.defaultButton()) == QMessageBox.ButtonRole.RejectRole
+    button(box, "Hủy lượt nhận").click()
+    settle(env.qtbot)
+    env.host.run_submits()
+    env.host.run_calls()
+    settle(env.qtbot)
+    assert env.node.transfers.cancelled == [k1]
+    assert notice(env.page)[0] is InfoLevel.SUCCESS
+    assert len(env.page._pending_cancel_buttons) == 1
+
+    env.page.cancel_all_pending_button.click()
+    settle(env.qtbot)
+    box2 = env.c.cancel_pending_box
+    assert box2 is not None
+    button(box2, "Hủy tất cả").click()
+    settle(env.qtbot)
+    env.host.run_submits()
+    env.host.run_calls()
+    settle(env.qtbot)
+    assert env.node.transfers.cancelled == [k1, k2]
+    assert len(env.page._pending_cancel_buttons) == 0
+
+
+def test_manual_update_never_checks_automatically_and_handles_all_states(env, monkeypatch, tmp_path):
+    import hashlib
+
+    from teleport.app.updater import UpdateInfo
+    from teleport.ui import settings as ui_settings
+    from teleport.ui.settings import UpdateUiState
+
+    calls: list[str] = []
+    outcome: dict[str, object] = {"result": None, "error": None}
+
+    def fake_check():
+        calls.append(threading.current_thread().name)
+        if outcome["error"] is not None:
+            raise outcome["error"]  # type: ignore[misc]
+        return outcome["result"]
+
+    monkeypatch.setattr(ui_settings, "check_update_fn", fake_check)
+    env.start()
+    env.c.refresh()
+    settle(env.qtbot, 50)
+    assert calls == [], "mvp N9: tuyệt đối không tự kiểm tra cập nhật"
+
+    # 1) check returns None -> ERROR
+    env.page.check_update_button.click()
+    env.qtbot.waitUntil(lambda: len(calls) == 1, timeout=3000)
+    assert calls[0].startswith("teleport-update")
+    env.qtbot.waitUntil(lambda: env.page._update_state is UpdateUiState.ERROR, timeout=3000)
+
+    # 2) check raises -> ERROR
+    outcome["error"] = RuntimeError("offline")
+    env.page.check_update_button.click()
+    env.qtbot.waitUntil(lambda: len(calls) == 2, timeout=3000)
+    env.qtbot.waitUntil(lambda: env.page._update_state is UpdateUiState.ERROR, timeout=3000)
+
+    # 3) up to date -> UP_TO_DATE
+    outcome["error"] = None
+    outcome["result"] = UpdateInfo(
+        version="v1.4.0",
+        current_version="1.4.0",
+        is_newer=False,
+        release_url="https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/tag/v1.4.0",
+        download_url="",
+        asset_name="",
+        asset_size=0,
+    )
+    env.page.check_update_button.click()
+    env.qtbot.waitUntil(lambda: env.page._update_state is UpdateUiState.UP_TO_DATE, timeout=3000)
+
+    # 4) newer available -> non-frozen opens release_url
+    payload = b"installer-bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    newer = UpdateInfo(
+        version="v2.0.0",
+        current_version="1.4.0",
+        is_newer=True,
+        release_url="https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/tag/v2.0.0",
+        download_url="https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/download/v2.0.0/setup.exe",
+        asset_name="setup.exe",
+        asset_size=len(payload),
+        expected_sha256=digest,
+    )
+    outcome["result"] = newer
+    env.page.check_update_button.click()
+    env.qtbot.waitUntil(lambda: env.page._update_state is UpdateUiState.AVAILABLE, timeout=3000)
+
+    monkeypatch.setattr(ui_settings, "auto_install_supported", lambda: False)
+    env.page.download_update_button.click()
+    assert [str(u.toString()) for u in env.urls] == [newer.release_url]
+
+    # 5) frozen win32 -> download + sha256 verify + non-blocking install prompt
+    monkeypatch.setattr(ui_settings, "auto_install_supported", lambda: True)
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(payload)
+    applied: list[tuple[Path, str | None]] = []
+
+    def fake_dl(info, progress_cb=None):
+        if progress_cb is not None:
+            progress_cb(len(payload), len(payload))
+        return installer
+
+    def fake_apply(path, expected_sha256=None):
+        applied.append((path, expected_sha256))
+        return True
+
+    monkeypatch.setattr(ui_settings, "download_update_fn", fake_dl)
+    monkeypatch.setattr(ui_settings, "apply_update_fn", fake_apply)
+    env.page.download_update_button.click()
+    env.qtbot.waitUntil(lambda: env.c.install_update_box is not None, timeout=3000)
+    box = env.c.install_update_box
+    assert box.buttonRole(box.defaultButton()) == QMessageBox.ButtonRole.RejectRole
+    button(box, "Cài đặt ngay").click()
+    settle(env.qtbot)
+    assert applied == [(installer, digest)]
+
+
+def test_manual_update_checksum_mismatch_rejects_and_unlinks(env, monkeypatch, tmp_path):
+    from teleport.app.updater import UpdateInfo
+    from teleport.ui import settings as ui_settings
+    from teleport.ui.settings import UpdateUiState
+    from teleport.ui.widgets import InfoLevel
+
+    bad = UpdateInfo(
+        version="v2.0.1",
+        current_version="1.4.0",
+        is_newer=True,
+        release_url="https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/tag/v2.0.1",
+        download_url="https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/download/v2.0.1/setup.exe",
+        asset_name="setup.exe",
+        asset_size=10,
+        expected_sha256="a" * 64,
+    )
+    monkeypatch.setattr(ui_settings, "check_update_fn", lambda: bad)
+    monkeypatch.setattr(ui_settings, "auto_install_supported", lambda: True)
+    installer = tmp_path / "bad-setup.exe"
+    installer.write_bytes(b"corrupted!")
+    monkeypatch.setattr(ui_settings, "download_update_fn", lambda _info, progress_cb=None: installer)
+    applied: list = []
+    monkeypatch.setattr(ui_settings, "apply_update_fn", lambda *a, **k: applied.append(1) or True)
+
+    env.start()
+    env.page.check_update_button.click()
+    env.qtbot.waitUntil(lambda: env.page._update_state is UpdateUiState.AVAILABLE, timeout=3000)
+    env.page.download_update_button.click()
+    env.qtbot.waitUntil(lambda: env.page._update_state is UpdateUiState.ERROR, timeout=3000)
+    assert applied == []
+    assert not installer.exists()
+    assert notice(env.page)[0] is InfoLevel.ERROR

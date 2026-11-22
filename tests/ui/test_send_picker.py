@@ -769,7 +769,7 @@ def test_initial_focus_is_device_list(env):
 
 def test_tab_order_files_devices_cancel_send(env):
     dlg = armed_with(env)
-    order = [files_view(dlg), devices_view(dlg), cancel_button(dlg), send_button(dlg)]
+    order = [files_view(dlg), dlg.select_all_button, devices_view(dlg), cancel_button(dlg), send_button(dlg)]
     order[0].setFocus(Qt.FocusReason.TabFocusReason)
     env.qtbot.waitUntil(lambda: QApplication.focusWidget() is order[0], timeout=2_000)
     for nxt in order[1:]:
@@ -972,6 +972,73 @@ def test_quit_closes_picker_and_ignores_later_requests(gapp, qtbot):
     assert gapp.send_picker.dialog is None and gapp.send_picker.pending is None
     gapp.send_picker.send_confirmed.emit(PEER_ID, (B,))
     assert gapp.test_sends == []
+
+
+def test_picker_multi_mode_select_all_and_emits_confirmed_many(env):
+    many: list[tuple[tuple[str, ...], tuple[Path, ...]]] = []
+    env.ctl.send_many_confirmed.connect(lambda ids, paths: many.append((tuple(ids), tuple(paths))))
+    env.window.devices.reset([dview(PEER_ID, "PC-Nha"), dview(OTHER_ID, "Laptop")])
+    env.ctl.set_ready(True)
+    assert env.ctl.request([A, B], multi=True) is True
+    dlg = env.ctl.dialog
+    assert dlg is not None
+    activate(env.qtbot, dlg)
+
+    view = devices_view(dlg)
+    assert view.selectionMode() == QAbstractItemView.SelectionMode.MultiSelection
+    assert dlg.select_all_button.isVisibleTo(dlg)
+    assert dlg.multi_hint_label.isVisibleTo(dlg)
+    assert plain(dlg.select_all_button.text()) == mod().select_all_text()
+
+    dlg.select_all_button.click()
+    env.qtbot.waitUntil(lambda: send_button(dlg).isEnabled(), timeout=2_000)
+    assert set(dlg.selected_devices()) == {PEER_ID, OTHER_ID}
+    assert plain(send_button(dlg).text()) == mod().send_many_text(2)
+    assert plain(dlg.select_all_button.text()) == mod().clear_selection_text()
+
+    dlg.select_all_button.click()
+    assert dlg.selected_devices() == ()
+    assert not send_button(dlg).isEnabled()
+
+    dlg.select_all_button.click()
+    env.qtbot.waitUntil(lambda: send_button(dlg).isEnabled(), timeout=2_000)
+    QTest.mouseClick(send_button(dlg), Qt.MouseButton.LeftButton)
+    env.qtbot.waitUntil(lambda: bool(many), timeout=2_000)
+    assert len(many) == 1
+    assert set(many[0][0]) == {PEER_ID, OTHER_ID}
+    assert many[0][1] == (A, B)
+    assert env.confirmed == []
+
+
+def test_picker_multi_mode_with_single_selection_emits_confirmed(env):
+    many: list = []
+    env.ctl.send_many_confirmed.connect(lambda ids, paths: many.append((ids, paths)))
+    env.window.devices.reset([dview(PEER_ID, "PC-Nha"), dview(OTHER_ID, "Laptop")])
+    env.ctl.set_ready(True)
+    assert env.ctl.request([A], multi=True) is True
+    dlg = env.ctl.dialog
+    assert dlg is not None
+    activate(env.qtbot, dlg)
+    view = devices_view(dlg)
+    rect = view.visualRect(view.model().index(row_of(view, "PC-Nha"), 0))
+    QTest.mouseClick(
+        view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, rect.center()
+    )
+    env.qtbot.waitUntil(lambda: send_button(dlg).isEnabled(), timeout=2_000)
+    assert plain(send_button(dlg).text()) == mod().send_text()
+    QTest.mouseClick(send_button(dlg), Qt.MouseButton.LeftButton)
+    env.qtbot.waitUntil(lambda: bool(env.confirmed), timeout=2_000)
+    assert env.confirmed == [(PEER_ID, (A,))]
+    assert many == []
+
+
+def test_gapp_picker_send_many_sends_only_to_paired_devices(gapp, qtbot, tmp_path):
+    gapp.window.show_running("May-A", tmp_path / "nhan", None)
+    gapp.window.devices.reset([dview(PEER_ID, "PC-Nha"), dview(OTHER_ID, "Laptop")])
+    gapp.send_picker.send_many_confirmed.emit((PEER_ID, STRANGER_ID, OTHER_ID), (A, B))
+    qtbot.waitUntil(lambda: len(gapp.test_sends) == 2, timeout=2_000)
+    assert gapp.test_sends == [(PEER_ID, (A, B)), (OTHER_ID, (A, B))]
+    assert gapp.window.conversations.model.devices()[0].device_id in (PEER_ID, OTHER_ID)
 
 
 # =================================================================================================

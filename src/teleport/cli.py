@@ -1777,7 +1777,7 @@ def source_error_message(error: SourceError) -> tuple[int, str, list[str]]:
         return (
             2,
             "not_a_file",
-            [f"{name} không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file."],
+            [f"{name} không phải là file hay thư mục hợp lệ để gửi."],
         )
     if kind is SourceErrorKind.NOT_FOUND:
         return 1, "source_not_found", [f"Không tìm thấy file {_printable(str(path))}."]

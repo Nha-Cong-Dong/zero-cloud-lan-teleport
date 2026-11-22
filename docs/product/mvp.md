@@ -99,7 +99,7 @@ Từ 03/11 tới hết buổi demo, `main` đóng băng tính năng: chỉ nhậ
 
 Kịch bản demo hackathon (5 phút): các dòng 0:00–3:00 của mục 13, thêm H4 (đóng app nhận rồi mở lại) và dòng 4:00 (tắt Internet của router). Bỏ clipboard và so sánh với lưu trữ đám mây.
 
-### 4.2. Các tính năng mở rộng sau v1.0 (v1.1.0 – v1.3.0)
+### 4.2. Các tính năng mở rộng sau v1.0 (v1.1.0 – v1.4.0)
 
 Bảng phạm vi ở mục 4 là mốc chuẩn của bản `v1.0.0`. Từ sau `v1.0.0`, các mục từng nằm ở cột “Không có trong MVP” dưới đây đã được hoàn thành và phát hành:
 
@@ -107,6 +107,7 @@ Bảng phạm vi ở mục 4 là mốc chuẩn của bản `v1.0.0`. Từ sau `v
 - **v1.2.0 — Chế độ khách qua Web QR:** quét mã QR trên màn hình máy tính (`teleport guest` hoặc nút trong giao diện) để gửi/nhận tệp trực tiếp với trình duyệt điện thoại trong cùng mạng nội bộ mà không cần cài ứng dụng trên điện thoại.
 - **IPC dòng lệnh ↔ giao diện & đóng gói đa nền tảng:** lệnh CLI tự động giao tiếp trực tiếp với tiến trình giao diện đang chạy nền (không bị khóa `node.lock`), kèm tùy chọn tự gom tệp nhận vào thư mục con theo từng lượt chuyển (`[Tên thiết bị] (YYYY-MM-DD HH-MM)`).
 - **v1.3.0 — Nâng cấp Chế độ khách & tối ưu bộ nhớ:** cho phép kéo thả nhiều tệp hoặc cả thư mục từ trình duyệt điện thoại, tải nhiều tệp hoặc thư mục chia sẻ dưới dạng gói `.zip` truyền thẳng không tạo tệp tạm trên đĩa, khóa tạm thời nếu nhập sai mã kết nối nhiều lần, và tối ưu thuật toán kiểm tra toàn vẹn dùng bộ nhớ $O(\log_2 N)$.
+- **v1.4.0 — Hoàn thiện giao diện ngang hàng dòng lệnh & Cài đặt đầy đủ:** hỗ trợ chọn gửi thư mục (`allow_dirs=True`) và gửi đồng thời nhiều máy ngay trên giao diện đồ họa; bổ sung công tắc chế độ ẩn danh hoàn toàn (`stealth`), mục quản lý/hủy lượt nhận đang chờ kèm dung lượng giữ chỗ, và nút kiểm tra/tải bản cập nhật thủ công trong Cài đặt.
 
 ---
 
@@ -619,7 +620,7 @@ Dung lượng hiển thị cho người dùng tính theo hệ nhị phân, như 
 | Giao diện, máy gửi: đang truyền mà từ 5 giây trở lên không gửi thêm được dữ liệu (kể cả lúc máy nhận đang kiểm tra file lớn) | Dòng phụ: “*45,0*% · Đang chờ *PC-Nha* phản hồi…” (không hiện tốc độ và thời gian còn lại) | Tự xử lý |
 | Mất kết nối quá lâu (quá hạn nối lại; kể cả lượt nhận dở khi app nhận mở lại sau hạn nối lại) | Máy gửi: “Mất kết nối với *PC-Nha* quá lâu nên lượt gửi đã dừng. Hãy gửi lại.” Máy nhận: “Mất kết nối với *Laptop-Minh* quá lâu nên đã dừng nhận. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.” | Nút “Gửi lại” |
 | Chọn gửi file không có quyền đọc | “Không mở được *video.mp4*: máy này không có quyền đọc file đó.” | Lượt gửi không bắt đầu |
-| Chọn gửi một thư mục | “*ảnh* không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file.” | Lượt gửi không bắt đầu |
+| Chọn gửi mục không phải file hay thư mục | “*ảnh* không phải là file hay thư mục hợp lệ để gửi.” | Lượt gửi không bắt đầu |
 | Chọn một file hai lần | “Có file được chọn hai lần. Hãy chọn mỗi file một lần.” | Lượt gửi không bắt đầu |
 | Chọn gửi file không tồn tại | “Không tìm thấy file *D:\x\video.mp4*.” | Lượt gửi không bắt đầu |
 | Ổ đĩa báo lỗi khi kiểm file chọn gửi | “Không đọc được *video.mp4*: ổ đĩa báo lỗi.” | Lượt gửi không bắt đầu |

@@ -25,7 +25,7 @@ PEER = "PC-Nha"
 TOO_MANY = "Mỗi lần gửi được tối đa {n} file."
 DUPLICATE = "Có file được chọn hai lần. Hãy chọn mỗi file một lần."
 NOT_FOUND = "Không tìm thấy file {path}."
-NOT_A_FILE = "{name} không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file."
+NOT_A_FILE = "{name} không phải là file hay thư mục hợp lệ để gửi."
 PERMISSION = "Không mở được {name}: máy này không có quyền đọc file đó."
 TOO_LARGE = (
     "Không gửi được {name} ({size}): Teleport chỉ gửi được file tối đa 4 TB. "
