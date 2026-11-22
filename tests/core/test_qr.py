@@ -10,7 +10,7 @@ except ImportError:
     np = None  # type: ignore[assignment]
 import pytest
 
-from teleport.core.qr import encode_qr, render_ascii, render_svg
+from teleport.core.qr import encode_qr, encode_wifi_qr, format_wifi_qr, render_ascii, render_svg
 
 
 def _decode_qr_matrix(matrix: list[list[bool]]) -> str:
@@ -102,3 +102,27 @@ class TestQRCore:
         matrix = encode_qr(payload, level="M")
         decoded = _decode_qr_matrix(matrix)
         assert decoded == payload
+
+    def test_format_wifi_qr_escaping_and_variants(self) -> None:
+        """Kiểm tra chuẩn WIFI QR và escape ký tự đặc biệt \\ ; , : \"."""
+        assert (
+            format_wifi_qr(r'Cafe;Wi\Fi,"Net":1', r"pass\;123", security="WPA", hidden=True)
+            == r"WIFI:T:WPA;S:Cafe\;Wi\\Fi\,\"Net\"\:1;P:pass\\\;123;H:true;;"
+        )
+        assert format_wifi_qr("GuestNet", security="nopass") == "WIFI:T:nopass;S:GuestNet;;"
+        assert format_wifi_qr("LegacyNet", "12345", security="WEP") == "WIFI:T:WEP;S:LegacyNet;P:12345;;"
+
+    def test_format_wifi_qr_validation(self) -> None:
+        """SSID rỗng, security lạ hoặc WPA thiếu mật khẩu phải báo ValueError."""
+        with pytest.raises(ValueError, match="ssid"):
+            format_wifi_qr("")
+        with pytest.raises(ValueError, match="security"):
+            format_wifi_qr("Home", "1234", security="WPA3")
+        with pytest.raises(ValueError, match="mật khẩu"):
+            format_wifi_qr("Home", "", security="WPA")
+
+    def test_encode_wifi_qr_roundtrip(self) -> None:
+        """Giải mã ma trận QR Wi-Fi ra đúng chuỗi WIFI:..."""
+        payload = format_wifi_qr("ZCL-LAN", "MatKhau@2026")
+        matrix = encode_wifi_qr("ZCL-LAN", "MatKhau@2026")
+        assert _decode_qr_matrix(matrix) == payload

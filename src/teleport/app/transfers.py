@@ -112,7 +112,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from teleport.app import diskio, sources, storage, tombstones
+from teleport.app import diskio, outbox, receipts, sources, storage, tombstones
 from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.history import HistoryStore
 from teleport.app.sources import SourceChanged, SourceError, SourceErrorKind, SourceFile, SourceReader
@@ -132,8 +132,8 @@ from teleport.app.storage import (
 )
 from teleport.core import ratelimit
 from teleport.core import transfer as core_transfer
-from teleport.core.blocks import DIGEST_SIZE, BlockError
-from teleport.core.filenames import fit_filename
+from teleport.core.blocks import BLOCK_SIZE, DIGEST_SIZE, BlockError
+from teleport.core.filenames import fit_filename, sanitize_filename, sanitize_rel_path
 from teleport.core.history import HistoryEntry, HistoryError, entry_from_info
 from teleport.core.merkle import merkle_root
 from teleport.core.messages import (
@@ -151,7 +151,9 @@ from teleport.core.messages import (
     Verified,
     validate_device_id,
 )
+from teleport.core.outbox import OutboxRecord
 from teleport.core.ratelimit import TokenBucket
+from teleport.core.receipts import ReceiptFile
 from teleport.core.resume_state import TombstoneRecord, TransferRecord
 from teleport.core.transfer import (
     AskUser,
@@ -175,6 +177,7 @@ from teleport.core.transfer import (
     Reread,
     RestoredDone,
     RestoredReceive,
+    RestoredSend,
     RestoredTombstone,
     SendBlocks,
     SendMessage,
@@ -558,6 +561,39 @@ def _encode_and_save(config_dir: Path, items: tuple[RestoredTombstone, ...], wal
     tombstones.save(config_dir, tombstones.to_records(items, wall_now))
 
 
+def _save_outbox_records(config_dir: Path, items: tuple[OutboxRecord, ...]) -> None:
+    """(thread) Mã hóa và ghi `outbox.json` (qua thuộc tính module)."""
+    outbox.save(config_dir, items)
+
+
+def _verify_outbox_entry(record: OutboxRecord) -> list[SourceFile] | None:
+    """(thread) Kiểm lại file nguồn của một `OutboxRecord` trên đĩa."""
+    return outbox.verify_record_sources(record)
+
+
+def _create_and_save_receipt(
+    identity: Identity,
+    path: Path,
+    transfer_id: str,
+    direction: Direction,
+    completed_at: datetime.datetime,
+    peer_device_id: str,
+    peer_name: str,
+    files: tuple[ReceiptFile, ...],
+) -> Path:
+    """(thread) Ký và ghi nguyên tử biên lai truyền tệp."""
+    receipt = receipts.create_receipt(
+        identity,
+        transfer_id=transfer_id,
+        direction=direction,
+        completed_at=completed_at,
+        peer_device_id=peer_device_id,
+        peer_name=peer_name,
+        files=files,
+    )
+    return receipts.save_receipt(path, receipt)
+
+
 def _recency(scan: TempScan) -> tuple[bool, float, str]:
     """Khóa so “gần nhất” giữa các lượt RUNNING cùng máy gửi.
 
@@ -776,13 +812,16 @@ class TransferManager:
         set_hold: Callable[[str, bool], None],
         ask_before_receive: Callable[[str], bool] | None = None,
         create_subfolder: bool = True,
+        suspend_sends: bool = False,
     ) -> None:
         """Gọi trong event loop. `new_id` cấp `data_id`; `set_hold(device_id, held)` → `LinkTracker.hold`.
 
-        `config_dir`: thư mục cấu hình của node, nơi đọc/ghi `tombstones.json`.
+        `config_dir`: thư mục cấu hình của node, nơi đọc/ghi `tombstones.json`, `outbox.json`.
         `ask_before_receive(device_id)`: chính sách hỏi theo thiết bị, đọc đúng lúc có `offer` cần
         hỏi; chỉ khi trả đúng `False` thì tự nhận (raise → vẫn hỏi). None: luôn hỏi (trừ `auto_accept`).
         """
+        if type(suspend_sends) is not bool:
+            raise TypeError("suspend_sends phải là bool")
         self._identity = identity
         self._hello = hello
         self._store = store
@@ -794,6 +833,7 @@ class TransferManager:
         self._set_hold = set_hold
         self._ask_before_receive = ask_before_receive
         self._create_subfolder = bool(create_subfolder)
+        self._suspend_sends = suspend_sends
         self._loop = asyncio.get_running_loop()
         self._engine = TransferEngine(identity.device_id, receiving=receive_dir is not None)
         self._paused = False  # `pause_receiving`: chỉ trong phiên, không lưu
@@ -841,6 +881,17 @@ class TransferManager:
         self._tomb_job: DiskJob[None] | None = None  # việc đĩa của lần ghi gần nhất
         self._tomb_last_write: float | None = None  # `loop.time()` lúc lần ghi trước xong
         self._tomb_stopped = False  # đang xả lúc đóng hay đã hủy: không hẹn ghi nữa
+        # Ghi `outbox.json` (mục hàng đợi gửi bền).
+        self._outbox_records: dict[tuple[str, str], OutboxRecord] = {}
+        self._outbox_dirty = False
+        self._outbox_scheduled = False
+        self._outbox_handle: asyncio.Handle | None = None
+        self._outbox_task: asyncio.Task[None] | None = None
+        self._outbox_job: DiskJob[None] | None = None
+        self._outbox_stopped = False
+        self._file_roots: dict[tuple[Direction, str, str, int], str] = {}
+        self._receipt_tasks: set[asyncio.Task[None]] = set()
+        self._receipt_jobs: set[DiskJob[Path]] = set()
         self._cleanup_job: DiskJob[int] | None = None  # lần dọn tạm gần nhất
         self._discarding: set[str] = set()  # `transfer_id` có `_discard_temp` chưa xong
         self._history = HistoryStore(executor=executor, config_dir=self._config_dir)
@@ -1031,6 +1082,15 @@ class TransferManager:
             break
         key = TransferKey(device_id, Direction.SEND, transfer_id)
         self._sources[(device_id, transfer_id)] = files
+        record = OutboxRecord(
+            device_id=device_id,
+            offer=Offer(transfer_id, BLOCK_SIZE, tuple(entries)),
+            paths=tuple(str(f.path) for f in files),
+            created_at=datetime.datetime.fromtimestamp(math.floor(_wall_time()), datetime.UTC),
+        )
+        self._outbox_records[(device_id, transfer_id)] = record
+        self._outbox_dirty = True
+        self._schedule_outbox_save()
         self._dispatch_now(actions)
         self._drain_deferred()
         return key
@@ -1145,8 +1205,10 @@ class TransferManager:
         own = self._identity.device_id
         # Lịch sử nạp song song với bia mộ (cả hai chỉ ném CancelledError), xong trước
         # `_restore_apply` vì `engine.restore` có thể sinh `TransferEnded`.
-        records, _ = await asyncio.gather(
-            self._restore_load_tombstones(), self._history.load(DISK_OP_TIMEOUT)
+        records, outbox_records, _ = await asyncio.gather(
+            self._restore_load_tombstones(),
+            self._restore_load_outbox(),
+            self._history.load(DISK_OP_TIMEOUT),
         )
         rd = self._receive_dir
         scans: list[TempScan] = []
@@ -1183,7 +1245,19 @@ class TransferManager:
         handles: list[ResumeHandle] = []
         if rd is not None and running and not self._closing:
             handles = await self._restore_open(rd, list(running.values()))
-        restored = self._restore_apply(rd, own, records, handles, stones, done)
+        valid_outbox: list[tuple[OutboxRecord, list[SourceFile]]] = []
+        outbox_dropped = False
+        if outbox_records and not self._closing:
+            eligible = [r for r in outbox_records if r.device_id != own and r.device_id in trusted]
+            if len(eligible) != len(outbox_records):
+                outbox_dropped = True
+            verified_outbox = await self._restore_verify_outbox(eligible)
+            for rec, src_files in verified_outbox:
+                if src_files is None:
+                    outbox_dropped = True
+                else:
+                    valid_outbox.append((rec, src_files))
+        restored = self._restore_apply(rd, own, records, handles, stones, done, valid_outbox, outbox_dropped)
         # Sau các lần mở lại (không làm chậm khởi động): xóa lượt thừa, chạy nền; chỉ khi engine đã
         # nhớ bia mộ `expired` của chúng (không thì máy gửi không bao giờ biết lý do).
         if rd is not None and restored and not self._closing:
@@ -1305,6 +1379,8 @@ class TransferManager:
             return
         self._closing = True
         self._call(self._engine.suspend_receiving)
+        if self._suspend_sends:
+            self._call(self._engine.suspend_sends)
         self._apply_receiving()  # `_closing`: không nhận nữa
         self._cancel_every()
 
@@ -1367,7 +1443,12 @@ class TransferManager:
             if pending:
                 log.warning("còn %d việc dọn đĩa chưa xong khi đóng", len(pending))
                 self._abandon_lanes()  # trước khi xả bia mộ và lịch sử: không việc mới nào chiếm thread
-        await asyncio.gather(self._flush_tombstones(), self._history.flush(TOMBSTONE_FLUSH_TIMEOUT))
+        await asyncio.gather(
+            self._flush_tombstones(),
+            self._flush_outbox(),
+            self._flush_receipts(),
+            self._history.flush(TOMBSTONE_FLUSH_TIMEOUT),
+        )
         self._shutdown_disk()
         self._closed = True
 
@@ -1384,12 +1465,22 @@ class TransferManager:
         self._closing = True
         self._closed = True
         self._stop_tombstones()
+        self._stop_outbox()
         self._history.stop()
+        for job in list(self._receipt_jobs):
+            job.cancel()
         for stop in self._restore_stops:
             stop.set()
         for ctl in self._controls.values():
             ctl.outbox.close()
-        tasks = (self._timer_task, self._progress_task, self._tomb_task, *self._tasks)
+        tasks = (
+            self._timer_task,
+            self._progress_task,
+            self._tomb_task,
+            self._outbox_task,
+            *self._receipt_tasks,
+            *self._tasks,
+        )
         for task in tasks:
             if task is not None:
                 task.cancel()
@@ -1504,6 +1595,18 @@ class TransferManager:
             ctl = self._controls.get(action.device_id)
             if ctl is not None and ctl.control_id == action.control_id:
                 ctl.outbox.put(action.message)
+            if isinstance(action.message, Complete):
+                pair = (action.device_id, action.message.transfer_id)
+                self._file_roots[(Direction.SEND, *pair, action.message.file_index)] = (
+                    action.message.merkle_root
+                )
+                rec = self._outbox_records.get(pair)
+                if rec is not None:
+                    updated = rec.with_root(action.message.file_index, action.message.merkle_root)
+                    if updated != rec:
+                        self._outbox_records[pair] = updated
+                        self._outbox_dirty = True
+                        self._schedule_outbox_save()
         elif isinstance(action, WriteBlock):
             self._enqueue_write(action)
         elif isinstance(action, SyncPart | ClearBlocks | OpenPart | Reread | Finalize):
@@ -1697,8 +1800,15 @@ class TransferManager:
             result = _result_of(event, event.key in self._unpaired)
             sent = 0
             if event.key.direction is Direction.SEND:
-                sent = self._payload_sent.pop((event.key.device_id, event.key.transfer_id), 0)
+                pair = (event.key.device_id, event.key.transfer_id)
+                sent = self._payload_sent.pop(pair, 0)
+                if result is not TransferResult.SUSPENDED and pair in self._outbox_records:
+                    del self._outbox_records[pair]
+                    self._outbox_dirty = True
+                    self._schedule_outbox_save()
             if result is not TransferResult.SUSPENDED:
+                if result is TransferResult.DONE:
+                    self._record_receipt(event.info)
                 # Trước `_forget_transfer` (xóa `_final_paths`) và trước `_emit`.
                 self._record_history(event.info, result)
             self._forget_transfer(event.key)
@@ -1753,6 +1863,8 @@ class TransferManager:
         self._unpaired.discard(key)
         self._samples.pop(key, None)
         self._progress_states.pop(key, None)
+        for root_key in [k for k in self._file_roots if k[:3] == (key.direction, *pair)]:
+            del self._file_roots[root_key]
         if key.direction is Direction.SEND:
             self._sources.pop(pair, None)
             return
@@ -2135,6 +2247,15 @@ class TransferManager:
                     a.leaves,
                     True,
                 )
+            elif a.unhashed is not None:
+                job = self._executor.submit(
+                    functools.partial(
+                        sources.check_source,
+                        files[a.file_index].path,
+                        a.leaves,
+                        unhashed=a.unhashed,
+                    )
+                )
             else:
                 job = self._executor.submit(
                     sources.check_source,
@@ -2365,6 +2486,10 @@ class TransferManager:
                 check = submit(_reread_compare, part, action.leaves, lane.stop)
                 bad, root = await self._lane_job(lane, check, DISK_SYNC_TIMEOUT + n * REREAD_BLOCK_TIMEOUT)
                 if not lane.closing:
+                    if not bad and root is not None:
+                        self._file_roots[(Direction.RECEIVE, device_id, transfer_id, action.file_index)] = (
+                            root.hex()
+                        )
                     self._call(self._engine.reread_done, device_id, transfer_id, action.file_index, bad, root)
             else:
                 part = self._part(lane, action.file_index)
@@ -2485,11 +2610,11 @@ class TransferManager:
     def _trusted_ids(self) -> set[str]:
         return {device.device_id for device in self._store.devices()}
 
-    async def _restore_load_tombstones(self) -> list[TombstoneRecord]:
-        """Bước 1 của `restore`: `tombstones.load` qua executor; hạn `DISK_OP_TIMEOUT` bao cả lúc
-        chờ bắt đầu. Quá hạn hay lỗi → rỗng, WARNING."""
+    async def _load_config_store[T](
+        self, loader: Callable[[Path], list[T]], filename: str, empty_reason: str
+    ) -> list[T]:
         try:
-            job = self._executor.submit(tombstones.load, self._config_dir)
+            job = self._executor.submit(loader, self._config_dir)
         except RuntimeError:  # executor đã shutdown
             return []
         try:
@@ -2500,10 +2625,44 @@ class TransferManager:
             raise
         except Exception as e:  # gồm TimeoutError của `asyncio.timeout`, `_JobDropped`
             job.cancel()
-            log.warning(
-                "không đọc được %s (%s), coi như không có bia mộ", tombstones.TOMBSTONES_NAME, _error_label(e)
-            )
+            log.warning("không đọc được %s (%s), %s", filename, _error_label(e), empty_reason)
             return []
+
+    async def _restore_load_tombstones(self) -> list[TombstoneRecord]:
+        """Bước 1 của `restore`: `tombstones.load` qua executor; hạn `DISK_OP_TIMEOUT`."""
+        return await self._load_config_store(
+            lambda p: tombstones.load(p), tombstones.TOMBSTONES_NAME, "coi như không có bia mộ"
+        )
+
+    async def _restore_load_outbox(self) -> list[OutboxRecord]:
+        """Đọc `outbox.json` qua executor; hạn `DISK_OP_TIMEOUT`."""
+        return await self._load_config_store(
+            lambda p: outbox.load(p), outbox.OUTBOX_NAME, "bỏ qua hàng đợi gửi"
+        )
+
+    async def _restore_verify_outbox(
+        self, records: list[OutboxRecord]
+    ) -> list[tuple[OutboxRecord, list[SourceFile] | None]]:
+        """Kiểm lại nguồn trên đĩa song song cho từng mục trong `records`; lỗi/hết hạn → None."""
+
+        async def verify_one(rec: OutboxRecord) -> tuple[OutboxRecord, list[SourceFile] | None]:
+            try:
+                job = self._executor.submit(_verify_outbox_entry, rec)
+            except RuntimeError:
+                return rec, None
+            try:
+                async with asyncio.timeout(DISK_OP_TIMEOUT):
+                    files = await _job_result(job, None)
+            except asyncio.CancelledError:
+                job.cancel()
+                raise
+            except Exception as e:
+                job.cancel()
+                log.info("bỏ qua lượt gửi khôi phục %s: %s", rec.offer.transfer_id[:8], _error_label(e))
+                return rec, None
+            return rec, files
+
+        return list(await asyncio.gather(*(verify_one(rec) for rec in records)))
 
     async def _restore_scan(self, rd: ReceiveDir) -> list[TempScan]:
         """Bước 2 của `restore`: `scan_temps` qua executor (`trusted_ids` chụp ngay trước khi giao
@@ -2600,6 +2759,8 @@ class TransferManager:
         handles: list[ResumeHandle],
         extra: list[RestoredTombstone],
         done: list[RestoredDone],
+        valid_outbox: list[tuple[OutboxRecord, list[SourceFile]]],
+        outbox_dropped: bool,
     ) -> bool:
         """Bước 5 của `restore`: một khối đồng bộ, không `await` (mục “Khôi phục” ở docstring module).
 
@@ -2659,7 +2820,25 @@ class TransferManager:
         kept_extra = [s for s in extra if s.device_id != own and s.device_id in trusted]
         stones.extend(kept_extra)
         dones = [d for d in done if d.device_id != own and d.device_id in trusted]
-        actions, restored = self._restore_engine(receives, stones, dones, lanes)
+        deduped_sends: dict[tuple[str, str], tuple[OutboxRecord, list[SourceFile]]] = {}
+        for rec, src_files in valid_outbox:
+            pair = (rec.device_id, rec.offer.transfer_id)
+            if pair in deduped_sends:
+                outbox_dropped = True
+            deduped_sends[pair] = (rec, src_files)
+        send_entries: list[tuple[RestoredSend, OutboxRecord]] = []
+        restored_sends: list[RestoredSend] = []
+        for pair, (rec, src_files) in deduped_sends.items():
+            item = outbox.to_restored_send(rec, wall)
+            send_entries.append((item, rec))
+            restored_sends.append(item)
+            self._sources[pair] = src_files
+            self._outbox_records[pair] = rec
+        actions, restored, sends_ok = self._restore_engine(receives, stones, dones, lanes, restored_sends)
+        if not sends_ok:
+            for pair in deduped_sends:
+                self._sources.pop(pair, None)
+                self._outbox_records.pop(pair, None)
         grace = core_transfer.RECONNECT_GRACE
         self._dispatching = True  # callback gọi engine lúc này → hoãn
         try:
@@ -2668,6 +2847,22 @@ class TransferManager:
                 info = self._engine.info(key)
                 if info is not None and r.age < grace:
                     self._emit(TransferResumed(info))
+            if sends_ok:
+                for item, rec in send_entries:
+                    pair = (rec.device_id, rec.offer.transfer_id)
+                    key = TransferKey(rec.device_id, Direction.SEND, rec.offer.transfer_id)
+                    info = self._engine.info(key)
+                    if info is None:
+                        self._sources.pop(pair, None)
+                        self._outbox_records.pop(pair, None)
+                        outbox_dropped = True
+                    elif item.age < grace:
+                        self._emit(TransferResumed(info))
+                    if info is not None:
+                        for fidx, root_hex in rec.roots:
+                            self._file_roots[(Direction.SEND, rec.device_id, rec.offer.transfer_id, fidx)] = (
+                                root_hex
+                            )
         finally:
             self._dispatching = False
         self._dispatch_now(actions)
@@ -2675,6 +2870,9 @@ class TransferManager:
         if restored and kept_extra:
             self._tomb_dirty = True
             self._schedule_tombstone_snapshot()
+        if restored and sends_ok and outbox_dropped:
+            self._outbox_dirty = True
+            self._schedule_outbox_save()
         return restored
 
     def _restore_engine(
@@ -2683,27 +2881,36 @@ class TransferManager:
         stones: list[RestoredTombstone],
         dones: list[RestoredDone],
         lanes: list[_DiskLane],
-    ) -> tuple[list[TransferAction], bool]:
-        """`engine.restore` trực tiếp (không qua `_run`) → (hành động, engine đã nạp bia mộ chưa).
+        sends: list[RestoredSend],
+    ) -> tuple[list[TransferAction], bool, bool]:
+        """`engine.restore` trực tiếp → (hành động, engine đã nạp bia mộ chưa, khôi phục gửi ok).
 
-        Ném lỗi → gọi lại đúng một lần không kèm lượt nhận dở, rồi đóng các hàng vừa dựng kiểu tạm
-        dừng (`close_temp`, không xóa gì). Cả hai lần đều lỗi → `([], False)`: bên gọi không xóa
-        lượt thừa và không ghi `tombstones.json` (không đè file bằng bảng rỗng).
+        Ném lỗi → gọi lại đúng một lần không kèm lượt dở, rồi đóng các hàng vừa dựng kiểu tạm
+        dừng (`close_temp`, không xóa gì). Cả hai lần đều lỗi → `([], False, False)`: bên gọi không
+        xóa lượt thừa và không ghi `tombstones.json` / `outbox.json`.
         """
         try:
             actions = self._engine.restore(
-                receives=receives, tombstones=stones, done=dones, now=self._loop.time()
+                receives=receives,
+                tombstones=stones,
+                done=dones,
+                now=self._loop.time(),
+                sends=sends,
             )
-            return actions, True
+            return actions, True, True
         except RuntimeError:
             # Engine đã có lời gọi khác trước `restore` (không được xảy ra: `restore` chạy trước khi mở cổng).
             log.error("TransferEngine đã chạy trước restore(): không khôi phục được gì")
             actions, ok = [], False
         except Exception:
-            log.exception("TransferEngine.restore ném lỗi; khôi phục lại không kèm lượt nhận dở")
+            log.exception("TransferEngine.restore ném lỗi; khôi phục lại không kèm lượt dở")
             try:
                 actions = self._engine.restore(
-                    receives=(), tombstones=stones, done=dones, now=self._loop.time()
+                    receives=(),
+                    tombstones=stones,
+                    done=dones,
+                    now=self._loop.time(),
+                    sends=(),
                 )
                 ok = True
             except Exception:
@@ -2712,7 +2919,7 @@ class TransferManager:
         for lane in lanes:
             lane.suspended = True
             self._close_lane(lane)
-        return actions, ok
+        return actions, ok, False
 
     async def _discard_temp(self, rd: ReceiveDir, transfer_id: str) -> None:
         """Lượt nhận dở thừa của một máy gửi (`restore`): `discard_temp`, chờ `settled()`; lỗi → INFO."""
@@ -2839,3 +3046,176 @@ class TransferManager:
             log.warning(
                 "ghi %s chưa xong sau %g s khi đóng", tombstones.TOMBSTONES_NAME, TOMBSTONE_FLUSH_TIMEOUT
             )
+
+    # ---- Hàng đợi gửi (`outbox.json`) --------------------------------------------------------
+
+    def _schedule_outbox_save(self) -> None:
+        if self._outbox_scheduled or self._outbox_task is not None or self._outbox_stopped:
+            return
+        self._outbox_scheduled = True
+        self._outbox_handle = self._loop.call_soon(self._snapshot_outbox)
+
+    def _snapshot_outbox(self, *, flush: bool = False) -> None:
+        self._outbox_scheduled = False
+        self._outbox_handle = None
+        if self._outbox_task is not None or self._closed or (self._outbox_stopped and not flush):
+            return
+        self._outbox_dirty = False
+        items = tuple(self._outbox_records.values())
+        self._outbox_task = asyncio.create_task(
+            self._write_outbox(items), name=f"{_TASK_NAME}.transfer-outbox-save"
+        )
+
+    async def _write_outbox(self, items: tuple[OutboxRecord, ...]) -> None:
+        failed = False
+        try:
+            try:
+                job = self._executor.submit(_save_outbox_records, self._config_dir, items)
+            except RuntimeError:
+                log.warning("không ghi được %s: node đã đóng", outbox.OUTBOX_NAME)
+                return
+            self._outbox_job = job
+            try:
+                await _job_result(job, DISK_OP_TIMEOUT)
+            except DiskTimeout:
+                log.warning("ghi %s quá %g s", outbox.OUTBOX_NAME, DISK_OP_TIMEOUT)
+            except _JobDropped:
+                return
+            except Exception as e:
+                log.warning("không ghi được %s: %s", outbox.OUTBOX_NAME, _error_label(e))
+                failed = True
+            await job.settled()
+        finally:
+            if self._outbox_task is asyncio.current_task():
+                self._outbox_task = None
+        if failed and not self._outbox_dirty:
+            self._outbox_dirty = True
+            return
+        if self._outbox_dirty and not self._outbox_stopped:
+            self._schedule_outbox_save()
+
+    def _stop_outbox(self) -> None:
+        self._outbox_stopped = True
+        self._outbox_scheduled = False
+        handle, self._outbox_handle = self._outbox_handle, None
+        if handle is not None:
+            handle.cancel()
+
+    async def _flush_outbox(self) -> None:
+        self._stop_outbox()
+        try:
+            async with asyncio.timeout(TOMBSTONE_FLUSH_TIMEOUT):
+                task = self._outbox_task
+                if task is not None:
+                    await asyncio.wait({task})
+                if self._outbox_task is None and self._outbox_dirty:
+                    self._snapshot_outbox(flush=True)
+                    task = self._outbox_task
+                    if task is not None:
+                        await asyncio.wait({task})
+        except TimeoutError:
+            job = self._outbox_job
+            if job is not None:
+                job.cancel()
+            task = self._outbox_task
+            if task is not None:
+                task.cancel()
+            log.warning("ghi %s chưa xong sau %g s khi đóng", outbox.OUTBOX_NAME, TOMBSTONE_FLUSH_TIMEOUT)
+
+    # ---- Biên lai truyền tệp (teleport-receipt-v1) ------------------------------------------
+
+    def _record_receipt(self, info: TransferInfo) -> None:
+        """Tạo và lưu biên lai có chữ ký cho lượt vừa `DONE` (best-effort, không chặn lượt)."""
+        if self._closing:
+            return
+        key = info.key
+        pair = (key.device_id, key.transfer_id)
+        empty_root = merkle_root(b"").hex()
+        files: list[ReceiptFile] = []
+        for idx, entry in enumerate(info.files):
+            if entry.is_dir:
+                continue
+            root_hex = self._file_roots.get((key.direction, *pair, idx))
+            if root_hex is None:
+                if entry.size == 0:
+                    root_hex = empty_root
+                else:
+                    log.debug(
+                        "bỏ qua tạo biên lai lượt %s: thiếu root của file %d",
+                        key.transfer_id[:8],
+                        idx,
+                    )
+                    return
+            name = sanitize_rel_path(entry.rel_path) if entry.rel_path else sanitize_filename(entry.name)
+            files.append(ReceiptFile(name=name, size=entry.size, merkle_root=root_hex))
+        device = self._store.get(key.device_id)
+        peer_name = device.name if device is not None else key.device_id
+        completed_at = datetime.datetime.fromtimestamp(math.floor(_wall_time()), datetime.UTC)
+        path = receipts.receipt_path_for(self._config_dir, key.transfer_id, key.direction)
+        task = asyncio.create_task(
+            self._write_receipt(
+                path=path,
+                transfer_id=key.transfer_id,
+                direction=key.direction,
+                completed_at=completed_at,
+                peer_device_id=key.device_id,
+                peer_name=peer_name,
+                files=tuple(files),
+            ),
+            name=f"{_TASK_NAME}.transfer-receipt",
+        )
+        self._receipt_tasks.add(task)
+        task.add_done_callback(self._receipt_tasks.discard)
+
+    async def _write_receipt(
+        self,
+        *,
+        path: Path,
+        transfer_id: str,
+        direction: Direction,
+        completed_at: datetime.datetime,
+        peer_device_id: str,
+        peer_name: str,
+        files: tuple[ReceiptFile, ...],
+    ) -> None:
+        try:
+            job = self._executor.submit(
+                _create_and_save_receipt,
+                self._identity,
+                path,
+                transfer_id,
+                direction,
+                completed_at,
+                peer_device_id,
+                peer_name,
+                files,
+            )
+        except RuntimeError:
+            log.warning("không ghi được biên lai lượt %s: node đã đóng", transfer_id[:8])
+            return
+        self._receipt_jobs.add(job)
+        try:
+            await _job_result(job, DISK_OP_TIMEOUT)
+        except DiskTimeout:
+            log.warning("ghi biên lai lượt %s quá %g s", transfer_id[:8], DISK_OP_TIMEOUT)
+        except _JobDropped:
+            return
+        except Exception as e:
+            log.warning("không ghi được biên lai lượt %s: %s", transfer_id[:8], _error_label(e))
+        finally:
+            self._receipt_jobs.discard(job)
+            await job.settled()
+
+    async def _flush_receipts(self) -> None:
+        tasks = set(self._receipt_tasks)
+        if not tasks:
+            return
+        try:
+            async with asyncio.timeout(TOMBSTONE_FLUSH_TIMEOUT):
+                await asyncio.wait(tasks)
+        except TimeoutError:
+            for job in list(self._receipt_jobs):
+                job.cancel()
+            for task in list(self._receipt_tasks):
+                task.cancel()
+            log.warning("ghi biên lai chưa xong sau %g s khi đóng", TOMBSTONE_FLUSH_TIMEOUT)

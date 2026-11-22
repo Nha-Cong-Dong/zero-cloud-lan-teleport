@@ -1187,6 +1187,81 @@ def test_default_export_dir_falls_back_to_home_when_documents_missing(monkeypatc
     assert settings_mod.default_export_dir() == str(missing)
 
 
+def test_verify_receipt_dialog_outcomes(env, tmp_path):
+    """Nút “Kiểm tra biên lai…” mở hộp không chặn và báo đúng trạng thái trên InfoBar."""
+    import datetime
+    import hashlib
+
+    from teleport.app import receipts as app_receipts
+    from teleport.core.merkle import merkle_root
+    from teleport.core.receipts import ReceiptFile
+    from teleport.core.transfer import Direction
+    from teleport.trust.identity import load_or_create_identity
+    from teleport.ui.widgets import InfoLevel
+
+    env.start()
+    own_id = load_or_create_identity(env.c._config_dir)
+    other_cfg = tmp_path / "other_cfg"
+    other_cfg.mkdir()
+    other_id = load_or_create_identity(other_cfg)
+
+    root = merkle_root(hashlib.sha256(b"ui-receipt").digest()).hex()
+    rec_own = app_receipts.create_receipt(
+        own_id,
+        transfer_id="aa" * 16,
+        direction=Direction.SEND,
+        completed_at=datetime.datetime(2026, 11, 22, 8, 0, 0, tzinfo=datetime.UTC),
+        peer_device_id=other_id.device_id,
+        peer_name="Peer-OK",
+        files=(ReceiptFile(name="ok.txt", size=10, merkle_root=root),),
+    )
+    path_own = app_receipts.save_receipt(
+        app_receipts.receipt_path_for(env.c._config_dir, "aa" * 16, Direction.SEND),
+        rec_own,
+    )
+
+    rec_other = app_receipts.create_receipt(
+        other_id,
+        transfer_id="bb" * 16,
+        direction=Direction.RECEIVE,
+        completed_at=datetime.datetime(2026, 11, 22, 8, 5, 0, tzinfo=datetime.UTC),
+        peer_device_id=own_id.device_id,
+        peer_name="May-La",
+        files=(ReceiptFile(name="la.txt", size=10, merkle_root=root),),
+    )
+    path_other = app_receipts.save_receipt(tmp_path / "other.teleport-receipt.json", rec_other)
+
+    bad_path = tmp_path / "broken.teleport-receipt.json"
+    bad_path.write_text("{not valid}", encoding="utf-8")
+
+    # 1. Hợp lệ & nằm trong danh sách tin cậy (chính máy này) -> InfoLevel.SUCCESS
+    env.page.verify_receipt_button.click()
+    settle(env.qtbot)
+    assert SaveDialog.made[-1].acceptMode() == QFileDialog.AcceptMode.AcceptOpen
+    SaveDialog.made[-1].choose(path_own)
+    settle(env.qtbot)
+    lvl1, txt1 = notice(env.page)
+    assert lvl1 is InfoLevel.SUCCESS
+    assert "Peer-OK" in txt1
+
+    # 2. Chữ ký hợp lệ nhưng máy ký chưa ghép đôi -> InfoLevel.WARNING
+    env.page.verify_receipt_button.click()
+    settle(env.qtbot)
+    SaveDialog.made[-1].choose(path_other)
+    settle(env.qtbot)
+    lvl2, txt2 = notice(env.page)
+    assert lvl2 is InfoLevel.WARNING
+    assert "May-La" in txt2
+
+    # 3. File biên lai hỏng -> InfoLevel.ERROR
+    env.page.verify_receipt_button.click()
+    settle(env.qtbot)
+    SaveDialog.made[-1].choose(bad_path)
+    settle(env.qtbot)
+    lvl3, _ = notice(env.page)
+    assert lvl3 is InfoLevel.ERROR
+
+
 # =================================================================================================
 # Stealth, lượt nhận đang chờ & kiểm tra cập nhật thủ công (v1.4.0)
 # =================================================================================================

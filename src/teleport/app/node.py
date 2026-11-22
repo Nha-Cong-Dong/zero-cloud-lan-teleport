@@ -88,6 +88,7 @@ import teleport
 from teleport import paths
 from teleport.app import clipboard as app_clipboard
 from teleport.app import pairing as app_pairing
+from teleport.app import receipts as app_receipts
 from teleport.app import storage, tombstones
 from teleport.app import transfers as app_transfers
 from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipboardSync
@@ -138,6 +139,7 @@ from teleport.core.messages import (
     validate_os,
 )
 from teleport.core.resume_state import TombstoneRecord
+from teleport.core.transfer import Direction
 from teleport.lock import NodeLock
 from teleport.net import connection as net_connection
 from teleport.net import discovery as net_discovery
@@ -781,6 +783,7 @@ class Node:
         on_clipboard_event: Callable[[ClipboardEvent], None] | None = None,
         stealth: bool | None = None,
         enable_ipc: bool = False,
+        suspend_sends: bool = False,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
 
@@ -868,6 +871,8 @@ class Node:
             raise ValueError("receive_dir cần auto_accept=True hoặc on_transfer_event để hỏi người dùng")
         if type(save_args) is not bool:
             raise ValueError("save_args phải là bool")
+        if type(suspend_sends) is not bool:
+            raise ValueError("suspend_sends phải là bool")
         if on_clipboard_event is not None and not callable(on_clipboard_event):
             raise TypeError("on_clipboard_event phải là hàm")
         self._config_dir = Path(config_dir)
@@ -896,6 +901,7 @@ class Node:
         self._stealth_arg = stealth
         self._stealth = False  # đọc lúc `start`, đổi bằng `set_stealth`
         self._enable_ipc = enable_ipc
+        self._suspend_sends = suspend_sends
         self._ipc: Any = None
 
         self._started = False  # start() đã được gọi (thành công hay không)
@@ -1045,6 +1051,7 @@ class Node:
                 set_hold=self._transfer_hold,
                 ask_before_receive=self._asks_before_receive,
                 create_subfolder=settings.create_subfolder,
+                suspend_sends=self._suspend_sends,
             )
             if settings.temp_retention_days is not None:
                 transfers.set_temp_retention(settings.temp_retention_days * 86400.0)
@@ -1435,6 +1442,19 @@ class Node:
         Sau `close()` vẫn trả về đối tượng cũ: mọi lời gọi không làm gì, `send` → RuntimeError.
         """
         return self._need(self._transfers)
+
+    def receipt_path(self, transfer_id: str, direction: Direction | str) -> Path | None:
+        """Đường dẫn tệp biên lai đã lưu cho một lượt truyền hoàn tất; None nếu chưa có."""
+        candidate = app_receipts.receipt_path_for(self._config_dir, transfer_id, Direction(direction))
+        return candidate if candidate.is_file() else None
+
+    def export_receipt(self, transfer_id: str, direction: Direction | str, dest: Path) -> Path:
+        """Xuất bản sao biên lai của một lượt truyền hoàn tất sang `dest`."""
+        src = self.receipt_path(transfer_id, direction)
+        if src is None:
+            raise FileNotFoundError(f"Không tìm thấy biên lai cho lượt {transfer_id}")
+        receipt = app_receipts.load_receipt(src)
+        return app_receipts.save_receipt(dest, receipt)
 
     @property
     def clipboard(self) -> ClipboardSync | None:

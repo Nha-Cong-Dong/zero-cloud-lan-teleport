@@ -3471,8 +3471,9 @@ def cmd_transfers_cancel(args: argparse.Namespace) -> int:
 
 
 async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: Any = sys.stderr) -> int:
-    from teleport.app.web_guest import WebGuestManager
+    from teleport.app.web_guest import WebGuestManager, make_wifi_qr
     from teleport.core.display import format_size
+    from teleport.net.web_guest import GuestScope
     from teleport.paths import default_receive_dir
 
     recv_dir = Path(args.receive_dir).expanduser().resolve() if args.receive_dir else default_receive_dir()
@@ -3485,6 +3486,25 @@ async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: 
                 print(f"Lỗi: Không tìm thấy tệp hoặc không phải tệp/thư mục hợp lệ: {f}", file=stderr)
                 return 2
             shared_paths.append(p)
+
+    wifi_payload: str | None = None
+    wifi_ascii: str | None = None
+    wifi_ssid = getattr(args, "wifi_ssid", None)
+    if wifi_ssid:
+        try:
+            wifi_payload, _, wifi_ascii, _ = make_wifi_qr(
+                wifi_ssid,
+                getattr(args, "wifi_password", "") or "",
+                security=getattr(args, "wifi_security", "WPA"),
+            )
+        except ValueError as e:
+            print(f"Lỗi cấu hình Wi-Fi: {e}", file=stderr)
+            return 2
+
+    scope = GuestScope(getattr(args, "scope", "both"))
+    one_shot = bool(getattr(args, "one_shot", False))
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
     def on_upload_start(name: str, total: int) -> None:
         if not args.json:
@@ -3502,11 +3522,26 @@ async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: 
                 flush=True,
             )
 
+    def on_text_received(text: str) -> None:
+        if args.json:
+            data = {"event": "guest_text", "text": text}
+            print(json.dumps(data, ensure_ascii=False), file=stdout, flush=True)
+        else:
+            print(f"\n[Điện thoại gửi chữ] {text}", file=stdout, flush=True)
+
+    def on_session_timeout() -> None:
+        if one_shot:
+            loop.call_later(0.25, stop_event.set)
+        else:
+            stop_event.set()
+
     manager = WebGuestManager(
         receive_dir=recv_dir,
         inactivity_timeout=args.timeout,
         on_upload_start=on_upload_start,
         on_upload_complete=on_upload_complete,
+        on_session_timeout=on_session_timeout,
+        on_text_received=on_text_received,
     )
 
     try:
@@ -3514,13 +3549,15 @@ async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: 
             shared_files=shared_paths,
             preferred_ip=args.ip,
             port=args.port,
+            scope=scope,
+            one_shot=one_shot,
         )
     except Exception as e:
         print(f"Lỗi khởi động máy chủ Web khách: {e}", file=stderr)
         return 1
 
     if args.json:
-        data = {
+        data: dict[str, Any] = {
             "event": "guest_started",
             "url": info.url,
             "token": info.token,
@@ -3528,25 +3565,41 @@ async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: 
             "port": info.port,
             "files": [p.name for p in shared_paths],
             "receive_dir": str(recv_dir),
+            "scope": info.scope.value,
+            "one_shot": info.one_shot,
         }
+        if wifi_payload is not None:
+            data["wifi_qr"] = wifi_payload
         print(json.dumps(data, ensure_ascii=False), file=stdout, flush=True)
     else:
         print("=" * 64, file=stdout)
         print(f"ZCL Teleport - Chế độ khách qua Web QR (v{__version__})", file=stdout)
         print("=" * 64, file=stdout)
+        if wifi_ascii is not None and wifi_ssid:
+            print(f"\n1. Quét mã QR sau để nối Wi-Fi ({wifi_ssid}):", file=stdout)
+            print(wifi_ascii, file=stdout)
+            print("2. Sau đó quét mã QR dưới để mở trang truyền tệp:", file=stdout)
         print(info.qr_ascii, file=stdout)
         print(f"\nLiên kết kết nối: {info.url}", file=stdout)
         print(f"Thư mục lưu tệp nhận: {recv_dir}", file=stdout)
+        scope_text = {
+            GuestScope.BOTH: "Gửi và nhận hai chiều",
+            GuestScope.RECEIVE_ONLY: "Chỉ nhận tệp từ điện thoại",
+            GuestScope.SEND_ONLY: "Chỉ gửi tệp sang điện thoại",
+        }[info.scope]
+        mode_suffix = " · Chỉ dùng 1 lượt" if info.one_shot else ""
+        print(f"Quyền phiên: {scope_text}{mode_suffix}", file=stdout)
         if shared_paths:
             print(f"Các tệp chia sẻ sẵn ({len(shared_paths)}):", file=stdout)
             for p in shared_paths:
-                print(f"  - {p.name} ({format_size(p.stat().st_size)})", file=stdout)
+                size_val = p.stat().st_size if p.is_file() else 0
+                label = f"{p.name}/" if p.is_dir() else f"{p.name} ({format_size(size_val)})"
+                print(f"  - {label}", file=stdout)
         print("\nDùng camera điện thoại quét mã QR hoặc truy cập liên kết trên.", file=stdout)
         print("Không cần cài đặt thêm phần mềm trên điện thoại.", file=stdout)
         print("(Nhấn Ctrl+C để kết thúc phiên)", file=stdout)
         print("=" * 64, file=stdout, flush=True)
 
-    stop_event = asyncio.Event()
     try:
         await stop_event.wait()
     except (asyncio.CancelledError, KeyboardInterrupt):
@@ -3565,6 +3618,126 @@ def cmd_guest(args: argparse.Namespace) -> int:
             return runner.run(run_guest(args))
         except KeyboardInterrupt:
             return 0
+
+
+# ---- Biên lai truyền tệp (teleport receipt) ------------------------------------------------
+
+
+def cmd_receipt_verify(args: argparse.Namespace) -> int:
+    from teleport.app.receipts import known_trusted_fingerprints, verify_receipt
+    from teleport.core.display import format_size
+    from teleport.core.resume_state import format_time
+
+    receipt_path = Path(args.path).expanduser()
+    raw_dir = getattr(args, "dir", None)
+    if raw_dir is not None and not str(raw_dir).strip():
+        return _cli_syntax_error(args, "--dir không được rỗng")
+    files_dir = Path(raw_dir).expanduser() if raw_dir is not None else None
+    trusted_fps = known_trusted_fingerprints(_config(args))
+
+    result = verify_receipt(
+        receipt_path,
+        files_dir=files_dir,
+        trusted_fingerprints=trusted_fps,
+    )
+    receipt = result.receipt
+
+    if getattr(args, "json", False):
+        data: dict[str, Any] = {
+            "event": "receipt_verified",
+            "valid": result.valid,
+            "signature_ok": result.signature_ok,
+            "trusted_signer": result.trusted_signer,
+            "files_checked": result.files_checked,
+            "files_ok": result.files_ok,
+            "errors": list(result.errors),
+        }
+        if receipt is not None:
+            payload = receipt.payload
+            data.update(
+                {
+                    "schema": payload.schema,
+                    "transfer_id": payload.transfer_id,
+                    "direction": payload.direction.value,
+                    "completed_at": format_time(payload.completed_at),
+                    "signer_device_id": payload.signer_device_id,
+                    "signer_fingerprint": payload.signer_fingerprint,
+                    "peer_device_id": payload.peer_device_id,
+                    "peer_name": payload.peer_name,
+                    "total_bytes": payload.total_bytes,
+                    "file_count": len(payload.files),
+                }
+            )
+        print(json.dumps(data, ensure_ascii=False))
+        return 0 if result.valid else 1
+
+    status_tag = "HỢP LỆ" if result.valid else "KHÔNG HỢP LỆ"
+    print(f"[{status_tag}] {receipt_path}")
+    if receipt is not None:
+        p = receipt.payload
+        print(f"  Lượt truyền : {p.transfer_id} ({p.direction.value})")
+        print(f"  Hoàn tất lúc: {format_time(p.completed_at)}")
+        print(f"  Máy ký      : {p.signer_device_id[:8]} ({p.signer_fingerprint[:16]})")
+        print(f"  Máy đối tác : {p.peer_name} ({p.peer_device_id[:8]})")
+        print(f"  Dung lượng  : {format_size(p.total_bytes)} ({len(p.files)} tệp)")
+        if result.trusted_signer is True:
+            print("  Tin cậy     : máy ký thuộc danh sách tin cậy")
+        elif result.trusted_signer is False:
+            print("  Tin cậy     : máy ký chưa ghép đôi với máy này")
+        if files_dir is not None:
+            print(f"  Kiểm tra tệp: {result.files_ok}/{result.files_checked} tệp khớp")
+    for err in result.errors:
+        print(f"  Lỗi: {err}", file=sys.stderr)
+    return 0 if result.valid else 1
+
+
+def cmd_receipt_list(args: argparse.Namespace) -> int:
+    from teleport.app.receipts import list_receipts, load_receipt
+    from teleport.core.display import format_size
+    from teleport.core.receipts import ReceiptError
+    from teleport.core.resume_state import format_time
+
+    directory = _config(args)
+    paths = list_receipts(directory)
+    items: list[dict[str, Any]] = []
+    for p in paths:
+        item: dict[str, Any] = {"path": str(p), "filename": p.name}
+        try:
+            rec = load_receipt(p)
+        except (OSError, ReceiptError) as e:
+            item["error"] = type(e).__name__
+        else:
+            pl = rec.payload
+            item.update(
+                {
+                    "transfer_id": pl.transfer_id,
+                    "direction": pl.direction.value,
+                    "completed_at": format_time(pl.completed_at),
+                    "peer_device_id": pl.peer_device_id,
+                    "peer_name": pl.peer_name,
+                    "total_bytes": pl.total_bytes,
+                    "file_count": len(pl.files),
+                }
+            )
+        items.append(item)
+
+    if getattr(args, "json", False):
+        print(json.dumps({"receipts": items}, ensure_ascii=False))
+        return 0
+
+    if not items:
+        print("Chưa có biên lai truyền tệp nào được lưu.")
+        return 0
+    for item in items:
+        if "error" in item:
+            print(f"{item['filename']}  [lỗi đọc: {item['error']}]")
+        else:
+            print(
+                f"{item['transfer_id'][:8]}  {item['direction']:7s}  {item['completed_at']}  "
+                f"{item['peer_name']}  {format_size(item['total_bytes'])}  ({item['file_count']} tệp)  "
+                f"-> {item['path']}"
+            )
+    return 0
 
 
 # ---- Tham số -------------------------------------------------------------------------------
@@ -3761,8 +3934,42 @@ def build_parser() -> argparse.ArgumentParser:
         default=600.0,
         help="thời gian tự đóng khi không hoạt động (giây, mặc định 600)",
     )
+    guest.add_argument(
+        "--scope",
+        choices=("both", "receive_only", "send_only"),
+        default="both",
+        help="phạm vi quyền của phiên khách (both, receive_only, send_only)",
+    )
+    guest.add_argument(
+        "--one-shot",
+        action="store_true",
+        help="tự đóng phiên sau đúng một lượt tải lên hoặc tải về",
+    )
+    guest.add_argument("--wifi-ssid", metavar="<ssid>", help="tạo thêm mã QR Wi-Fi trước mã QR kết nối")
+    guest.add_argument(
+        "--wifi-password", default="", metavar="<mật khẩu>", help="mật khẩu Wi-Fi cho mã QR Wi-Fi"
+    )
+    guest.add_argument(
+        "--wifi-security",
+        choices=("WPA", "WEP", "nopass"),
+        default="WPA",
+        help="kiểu bảo mật Wi-Fi (WPA, WEP, nopass; mặc định WPA)",
+    )
     guest.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
     guest.set_defaults(handler=cmd_guest)
+
+    receipt = sub.add_parser("receipt", help="liệt kê và xác minh biên lai truyền tệp có chữ ký")
+    receipt_sub = receipt.add_subparsers(dest="receipt_command", required=True, metavar="<thao tác>")
+
+    receipt_verify = receipt_sub.add_parser("verify", help="xác minh chữ ký và tệp của một biên lai")
+    receipt_verify.add_argument("path", metavar="<file>", help="đường dẫn tới tệp .teleport-receipt.json")
+    receipt_verify.add_argument("--dir", metavar="<thư mục>", help="thư mục chứa tệp để đối chiếu nội dung")
+    receipt_verify.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    receipt_verify.set_defaults(handler=cmd_receipt_verify, _parser=receipt_verify)
+
+    receipt_list = receipt_sub.add_parser("list", help="liệt kê các biên lai đã lưu")
+    receipt_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    receipt_list.set_defaults(handler=cmd_receipt_list, _parser=receipt_list)
 
     return parser
 

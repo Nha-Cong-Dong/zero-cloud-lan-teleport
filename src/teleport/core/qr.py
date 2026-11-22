@@ -412,3 +412,50 @@ def render_svg(matrix: list[list[bool]], border: int = 4, scale: int = 8) -> str
         f"  {content}\n"
         f"</svg>"
     )
+
+
+_WIFI_SECURITIES = frozenset({"WPA", "WEP", "nopass"})
+_WIFI_ESCAPE_CHARS = frozenset({"\\", ";", ",", ":", '"'})
+
+
+def _escape_wifi_field(value: str) -> str:
+    return "".join(f"\\{ch}" if ch in _WIFI_ESCAPE_CHARS else ch for ch in value)
+
+
+def format_wifi_qr(
+    ssid: str,
+    password: str = "",
+    *,
+    security: str = "WPA",
+    hidden: bool = False,
+) -> str:
+    """Dựng chuỗi cấu hình Wi-Fi theo chuẩn mã QR (`WIFI:T:...;S:...;P:...;;`)."""
+    if not isinstance(ssid, str) or not ssid:
+        raise ValueError("ssid không được rỗng")
+    if not isinstance(password, str):
+        raise ValueError("password phải là chuỗi")
+    if not isinstance(security, str) or security not in _WIFI_SECURITIES:
+        raise ValueError("security phải là 'WPA', 'WEP' hoặc 'nopass'")
+    if type(hidden) is not bool:
+        raise ValueError("hidden phải là bool")
+    if security != "nopass" and not password:
+        raise ValueError("mật khẩu không được rỗng với mạng có bảo mật")
+    parts = [f"T:{security}", f"S:{_escape_wifi_field(ssid)}"]
+    if security != "nopass":
+        parts.append(f"P:{_escape_wifi_field(password)}")
+    if hidden:
+        parts.append("H:true")
+    return "WIFI:" + ";".join(parts) + ";;"
+
+
+def encode_wifi_qr(
+    ssid: str,
+    password: str = "",
+    *,
+    security: str = "WPA",
+    hidden: bool = False,
+    level: str = "L",
+) -> list[list[bool]]:
+    """Tạo ma trận mã QR cho thông tin kết nối Wi-Fi (`format_wifi_qr`)."""
+    payload = format_wifi_qr(ssid, password, security=security, hidden=hidden)
+    return encode_qr(payload, level=level)

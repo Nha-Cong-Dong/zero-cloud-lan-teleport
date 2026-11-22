@@ -459,7 +459,7 @@ Cài đặt ở `teleport.core.links` (máy trạng thái) và `teleport.app.nod
 - ✅ Kết nối điều khiển có lại → hai bên đồng bộ lại (mục 6.3); bên gửi chỉ gửi các khối có bit = 0, trên kết nối dữ liệu mới (mục 4.1).
 - ✅ Bên gửi kiểm `size` và `mtime` của file nguồn trước khi gửi tiếp; khác manifest → `cancel{source_changed}` (`teleport.app.sources`, mỗi lần mở file nguồn cho một kết nối dữ liệu).
 - ✅ **Tắt app nhận** (hoặc khởi động lại máy): trạng thái nối lại nằm trên đĩa, nên bên nhận gửi `resume` khi mở lại app. Lượng gửi lại vẫn theo mục 4.3. Đóng app nhận không gửi `cancel` cho lượt đang nhận; máy gửi thấy mất kết nối và nối lại. `offer` đang chờ hỏi hay đang xếp hàng bị từ chối bằng `reject{user}` (`teleport.app.transfers`: tạm dừng khi đóng, khôi phục khi khởi động).
-- ✅ **Tắt app gửi:** v1.0 không lưu lượt truyền của bên gửi xuống đĩa. Bên gửi nhận `resume` cho `transfer_id` không biết → trả `cancel{unknown_transfer}`; bên nhận xóa file tạm và báo người dùng gửi lại.
+- ✅ **Tắt app gửi (hoặc sập nguồn khi đang gửi):** trước v1.5.0 không lưu lượt truyền của bên gửi xuống đĩa (bên gửi nhận `resume` cho `transfer_id` không biết → trả `cancel{unknown_transfer}`; bên nhận xóa file tạm và báo người dùng gửi lại). Từ v1.5.0, vẫn giữ nguyên `protocol = 1`, bên gửi lưu hàng đợi `outbox.json` ([architecture.md](architecture.md) mục 4) trong `teleport.app.outbox` / `teleport.app.transfers`. Khi mở lại (hay sau sập nguồn với `suspend_sends=True` trên GUI), bên gửi kiểm lại file nguồn còn nguyên kích thước và `mtime`, khôi phục trạng thái gửi (`RestoredSend`) và gửi lại `offer` (kèm `complete` từ `roots` nếu có) khi nối lại kết nối điều khiển; bên nhận gửi `resume` mang bitfield các khối đã bền ở phía nhận và bên gửi chỉ truyền các khối còn thiếu rồi băm bù khối đã bỏ qua để đối chiếu Merkle root (`CheckSource.unhashed`). Lệnh CLI đơn lẻ (`teleport send`, `suspend_sends=False`) vẫn hủy lượt gửi và dọn `outbox.json` khi thoát có trật tự (nếu sập đột ngột giữa chừng thì vẫn khôi phục được ở lần chạy sau).
 - ✅ File dở dang không còn được nối lại quá hạn (mvp F6) thì bị dọn. Lượt nhận dở mà hoạt động cuối đã cách quá thời hạn nối lại ở gạch đầu (tính cả thời gian app nhận tắt) thì hết hạn ngay khi app nhận mở lại (lần kiểm hạn đầu tiên ngay sau khi mở lại, hay khi kết nối điều khiển với máy gửi có lại, cái nào tới trước): lý do `expired`, file tạm bị xóa ngay. Ngưỡng số ngày của mvp F6 chỉ áp cho file tạm không thuộc lượt nào còn sống (của node khác dùng chung thư mục nhận, mồ côi hay hỏng) ([architecture.md](architecture.md) mục 4, “Dọn tạm”).
 
 ### 6.3. Đồng bộ lại sau mỗi kết nối điều khiển mới ✅ (`teleport.core.transfer`, nối vào mạng ở `teleport.app.transfers`)
@@ -555,35 +555,44 @@ Chế độ khách cho phép chuyển tệp tức thì với điện thoại di 
 - **Giới hạn mạng nội bộ:** Kiểm tra địa chỉ IP bên gọi (`peername[0]`). Chỉ chấp nhận các dải địa chỉ riêng tư (Private IP: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, link-local `169.254.0.0/16`) hoặc loopback (`127.0.0.0/8`). Mọi yêu cầu từ địa chỉ Internet công cộng bị trả về `403 Forbidden` và ngắt kết nối ngay lập tức.
 - **Mã thông báo một lần (One-Time Token) & chống dò mã (v1.3.0):** Khi mở phiên, máy tính sinh một mã thông báo bí mật 32 ký tự hex (`secrets.token_hex(16)`). Mọi yêu cầu HTTP phải chứa tham số truy vấn `?token=<token>` hoặc Cookie `teleport_token=<token>` do yêu cầu đầu tiên thiết lập, được kiểm tra bằng so sánh hằng thời gian (`hmac.compare_digest`). Thiếu hoặc sai token bị trả về `403 Forbidden`; nếu một IP nhập sai quá 5 lần liên tiếp (`MAX_FAILED_AUTH_ATTEMPTS`), IP đó bị tạm khóa trong 5 phút và mọi yêu cầu kế tiếp từ IP đó nhận `429 Too Many Requests`.
 - **Hết hạn do không hoạt động:** Phiên tự động đóng cổng và giải phóng tài nguyên sau 10 phút liên tục không nhận được yêu cầu nào (đồng hồ hoạt động được làm mới trong suốt quá trình truyền tải).
+- **Quyền phiên (`scope`) và chế độ 1 lượt (`one_shot`, v1.5.0):**
+  - `scope`: `"both"` (mặc định, gửi và nhận hai chiều), `"receive_only"` (chỉ cho điện thoại tải tệp/văn bản lên; các đường dẫn tải về `/api/download/*` và `/api/download-zip` trả `403`, `/api/info` trả danh sách `files` rỗng), hoặc `"send_only"` (chỉ cho điện thoại tải về; `/api/upload` và `POST /api/text` trả `403`).
+  - `one_shot`: khi bật (`true`), ngay sau khi 1 lượt tải lên hoặc 1 lượt tải về hoàn tất thành công, máy chủ đánh dấu phiên đã dùng (`410 Gone` cho các yêu cầu truyền/gửi tiếp theo), phát sự kiện SSE `session_expired` (`{"reason": "one_shot"}`), thông báo `on_session_timeout` và tự tắt sau một khoảng trễ ngắn để phản hồi kịp tới khách.
 
 ### 10.2. Mã QR và URL
 
 - URL kết nối có dạng: `http://<ip_noi_bo>:<port>/?token=<token>`.
 - Mã QR được tạo theo tiêu chuẩn **QR Code Model 2 (ISO/IEC 18004)** ở mức sửa lỗi L (7%) hoặc M (15%) bằng thuật toán thuần túy (`teleport.core.qr`), xuất ra dạng khối Unicode terminal cho CLI hoặc ảnh vector SVG / QPixmap cho giao diện đồ họa.
+- **Mã QR Wi-Fi (v1.5.0):** `format_wifi_qr` tạo chuỗi chuẩn `WIFI:T:<security>;S:<ssid>;[P:<password>;][H:true;];;` với ký tự đặc biệt `\`, `;`, `,`, `:`, `"` được escape theo quy tắc Wi-Fi QR (`\x`).
 
 ### 10.3. Các tuyến đường HTTP (Endpoints)
 
 1. `GET /` hoặc `GET /index.html`:
-   - Trả về giao diện web khách đóng gói hoàn chỉnh trong 1 file HTML duy nhất (< 50 KB), nhúng sẵn CSS và JavaScript thuần, tự động nhận diện chế độ sáng/tối theo hệ điều hành điện thoại và hỗ trợ song ngữ (tiếng Việt / tiếng Anh). Từ `v1.3.0`, giao diện hỗ trợ chọn/kéo thả cả thư mục và nút tải tất cả dạng gói nén `.zip`.
+   - Trả về giao diện web khách đóng gói hoàn chỉnh trong 1 file HTML duy nhất (< 50 KB), nhúng sẵn CSS và JavaScript thuần, tự động nhận diện chế độ sáng/tối theo hệ điều hành điện thoại và hỗ trợ song ngữ (tiếng Việt / tiếng Anh). Từ `v1.3.0`, giao diện hỗ trợ chọn/kéo thả cả thư mục và nút tải tất cả dạng gói nén `.zip`. Từ `v1.5.0`, trang gồm 3 thẻ (Nhận / Gửi / Văn bản), nút chụp ảnh trực tiếp (`<input type="file" accept="image/*" capture="environment">`), khung trao đổi văn bản thời gian thực và huy hiệu trạng thái `scope`/`one_shot`.
 2. `GET /api/info`:
-   - Trả về dữ liệu JSON mô tả tên máy tính và danh sách các tệp hoặc thư mục máy tính đang chuẩn bị sẵn để chia sẻ cho điện thoại (`is_dir` cho biết mục đó là thư mục):
+   - Trả về dữ liệu JSON mô tả tên máy tính, phạm vi quyền (`scope`, `one_shot`) và danh sách các tệp hoặc thư mục máy tính đang chuẩn bị sẵn để chia sẻ cho điện thoại (`is_dir` cho biết mục đó là thư mục; rỗng nếu `scope == "receive_only"`):
      ```json
      {
        "device_name": "PC-Nha",
+       "scope": "both",
+       "one_shot": false,
        "files": [
          {"id": "a1b2c3d4", "name": "bao_cao.pdf", "size": 1048576, "is_dir": false}
        ]
      }
      ```
 3. `GET /api/download/<file_id>`:
-   - Với tệp lẻ: tải tệp từ máy tính về điện thoại theo dòng byte trực tiếp (khối 64 KiB), gửi kèm `Content-Disposition: attachment; filename="..."`; hỗ trợ tải ngắt quãng qua tiêu đề `Range: bytes=start-end` (`HTTP/1.1 206 Partial Content`).
+   - Với tệp lẻ: tải tệp từ máy tính về điện thoại theo dòng byte trực tiếp (khối 64 KiB), gửi kèm `Content-Disposition: attachment; filename="..."`; hỗ trợ tải ngắt quãng qua tiêu đề `Range: bytes=start-end` (`HTTP/1.1 206 Partial Content`). Trả `403` khi `scope == "receive_only"` hoặc `410 Gone` khi phiên `one_shot` đã dùng xong.
    - Với thư mục chia sẻ (`is_dir = true`, từ `v1.3.0`): đóng gói trực tiếp các tệp bên trong thành luồng ZIP chuẩn (`PK\x03\x04`, `PK\x07\x08`, `PK\x01\x02`, `PK\x05\x06`) và truyền phát ngay ra socket với bộ nhớ $O(1)$, không tạo tệp tạm trên đĩa.
 4. `GET /api/download-zip` (v1.3.0):
-   - Đóng gói và truyền phát toàn bộ danh sách tệp/thư mục đang chia sẻ thành một tệp `teleport-files.zip` duy nhất theo luồng trực tiếp với bộ nhớ $O(1)$.
+   - Đóng gói và truyền phát toàn bộ danh sách tệp/thư mục đang chia sẻ thành một tệp `teleport-files.zip` duy nhất theo luồng trực tiếp với bộ nhớ $O(1)$. Trả `403` khi `scope == "receive_only"` hoặc `410` nếu `one_shot` đã hết lượt.
 5. `POST /api/upload`:
-   - Nhận tệp tải lên từ điện thoại theo luồng byte nhị phân trực tiếp (`Content-Type: application/octet-stream`). Kiểm tra dung lượng trống trên ổ đĩa trước khi ghi (trả về `507 Insufficient Storage` nếu thiếu chỗ).
+   - Nhận tệp tải lên từ điện thoại theo luồng byte nhị phân trực tiếp (`Content-Type: application/octet-stream`). Trả `403` khi `scope == "send_only"`, `410` khi phiên `one_shot` đã hết lượt, và kiểm tra dung lượng trống trên ổ đĩa trước khi ghi (`507 Insufficient Storage`).
    - Tên tệp được truyền qua `?name=...` hoặc `X-Filename`; từ `v1.3.0` hỗ trợ thêm đường dẫn tương đối `?rel_path=...` hoặc `X-Rel-Path` để giữ nguyên cấu trúc thư mục con khi kéo thả/chọn thư mục từ trình duyệt. Mọi tên và đường dẫn đều được làm sạch bằng `sanitize_filename` / `sanitize_rel_path` và kiểm tra `is_relative_to(upload_dir)` để chặn tuyệt đối tấn công thoát thư mục.
    - Ghi vào tệp tạm `.part` trước khi đổi tên hoàn tất, tự động thêm số thứ tự ` (1)`, ` (2)` nếu trùng tên để không ghi đè dữ liệu có sẵn.
-6. `GET /api/events`:
-   - Kênh thông báo Server-Sent Events (`text/event-stream`) để cập nhật trạng thái kết nối và danh sách tệp theo thời gian thực tới trình duyệt điện thoại.
+6. `GET /api/texts` và `POST /api/text` (v1.5.0):
+   - `GET /api/texts`: trả lịch sử văn bản gần nhất (`MAX_TEXT_HISTORY = 50`).
+   - `POST /api/text`: nhận văn bản hoặc liên kết từ điện thoại (`application/json` `{"text": "..."}` hoặc `text/plain`), tối đa `MAX_TEXT_BYTES = 64 KiB` (vượt trần trả `413 Payload Too Large`), giới hạn tần suất `TEXT_RATE_LIMIT_MAX = 20` tin mỗi IP trong cửa sổ `10` giây (vượt trần trả `429 Too Many Requests`), chặn `403` khi `scope == "send_only"` và `410` khi `one_shot` đã dùng.
+7. `GET /api/events`:
+   - Kênh thông báo Server-Sent Events (`text/event-stream`) gửi trạng thái ban đầu (`init`), cập nhật tệp chia sẻ, tin nhắn văn bản hai chiều (`text_message`) và thông báo hết lượt (`session_expired`) tới trình duyệt điện thoại theo thời gian thực.
 

@@ -5,6 +5,19 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+### Added
+- **Cột mốc 2 (`v1.5.0`) — Phục hồi gửi hai đầu, Web QR 2.0 & Biên lai truyền tệp có chữ ký số (`protocol = 1`):**
+  - **Phục hồi gửi hai đầu khi tắt/sập app & hàng đợi gửi ngoại tuyến (`core/outbox.py`, `app/outbox.py`, `core/transfer.py`, `app/sources.py`, `app/transfers.py`, `app/node.py`, `ui/bridge.py`):**
+    - Lưu bền danh sách lượt gửi chưa kết thúc vào `<config_dir>/outbox.json` (tối đa `64` mục / `4 MiB`), bao gồm cặp `(file_index, merkle_root)` của những tệp đã từng gửi `complete`.
+    - Khi thoát giao diện (`NodeOptions.suspend_sends = True`) hoặc khi tiến trình tắt đột ngột, bên gửi không gửi `cancel{user}` lên dây mà khôi phục trạng thái gửi lúc khởi động (`TransferEngine.restore(..., sends=...)`, `RestoredSend`). Khi nối lại, bên nhận báo vị trí đã lưu và bên gửi chỉ băm bù phần khối chưa băm trên đĩa (`CheckSource.unhashed`) rồi truyền tiếp phần còn thiếu (cùng khả năng xếp hàng gửi khi máy nhận đang ngoại tuyến rồi tự nối lại).
+  - **Web QR 2.0 (`core/qr.py`, `net/web_guest.py`, `net/web_guest_assets.py`, `app/web_guest.py`, `cli.py`, `ui/web_guest_dialog.py`):**
+    - Hỗ trợ phân quyền phiên (`GuestScope`: `both`, `receive_only`, `send_only` kèm `--scope`) và chế độ dùng 1 lượt (`one_shot` kèm `--one-shot`, trả `410 Gone` sau 1 lượt tải lên/tải về rồi phát SSE `session_expired` và tự tắt).
+    - Bổ sung kênh trao đổi văn bản / liên kết 2 chiều theo thời gian thực qua `GET /api/texts`, `POST /api/text`, `WebGuestManager.send_text`, SSE `text_message` (trần `64 KiB`, giới hạn `20` tin / `10` giây mỗi IP) và thẻ **Văn bản** kèm nút chụp ảnh trực tiếp trên camera (`capture="environment"`) trong web tĩnh `< 50 KB`.
+    - Sinh mã QR kết nối Wi-Fi chuẩn `WIFI:T:...;S:...;P:...;;` (`format_wifi_qr`, `encode_wifi_qr`, `make_wifi_qr`, cờ `--wifi-ssid`/`--wifi-password`/`--wifi-security`, khung **QR Wi-Fi…** nội tuyến trên `WebGuestDialog`).
+  - **Biên lai truyền tệp có chữ ký số (`core/receipts.py`, `trust/identity.py`, `app/receipts.py`, `app/transfers.py`, `app/node.py`, `cli.py`, `ui/settings.py`):**
+    - Định dạng biên lai chuẩn hóa `teleport-receipt-v1` (sans-IO) lưu dưới `<config_dir>/receipts/<transfer_id>_<direction>.teleport-receipt.json` cho mọi lượt truyền hoàn tất (`TransferResult.DONE`), ký bằng khóa ECDSA P-256 sẵn có của thiết bị kèm Merkle root từng tệp.
+    - Thêm `Node.receipt_path`, `Node.export_receipt`, nhóm lệnh `teleport receipt verify <file> [--dir <thư mục>] [--json]` / `teleport receipt list [--json]` (xác minh ngoại tuyến chứng chỉ, chữ ký số và đối chiếu `MerkleStream` tệp thật có chặn thoát thư mục/symlink) và nút **"Kiểm tra biên lai…"** trong Cài đặt.
+
 ### Security
 - **Ngân sách lỗi và trần IP theo thiết bị cho pool ưu tiên (`AdmissionGate`, chống M3):**
   - Mỗi mã thiết bị (`fingerprint`) có ngân sách lỗi riêng (`DEVICE_PRIORITY_STRIKES = 4`, hồi theo `STRIKE_REFILL`, cộng `+1` khi kết nối điều khiển sống đủ `STRIKE_CREDIT_AFTER`) và chỉ được giữ tối đa `MAX_PRIORITY_IPS_PER_DEVICE = 2` địa chỉ IP ưu tiên hoạt động đồng thời (cùng trần bảng `MAX_TRACKED_DEVICES = 1024`), chặn kẻ tấn công trong mạng dùng nhiều IP giả mạo mDNS hoặc chuyển tiếp gói tin để làm cạn pool ưu tiên.

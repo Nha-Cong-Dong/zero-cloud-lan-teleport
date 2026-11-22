@@ -16,7 +16,7 @@ import random
 import pytest
 
 from teleport.core.blocks import BLOCK_SIZE, DIGEST_SIZE, block_count
-from teleport.core.messages import Cancel, DataOpen, Offer, Resume
+from teleport.core.messages import Accept, Cancel, Complete, DataOpen, Offer, Reject, Resume, Verified
 
 # ---- Phụ trợ ----------------------------------------------------------------------------------
 
@@ -1235,3 +1235,163 @@ def test_control_up_before_grace_still_resyncs_restored_receive(tx):
     acts = r.up(now=now + 0.5)
     assert _types(tx.sent(acts)) == ["Accept", "Resume"]
     assert tx.ended(acts) == []
+
+
+# ---- RestoredSend & suspend_sends (v1.5.0 Khối 2A) --------------------------------------------
+
+
+def _restored_send(
+    tx,
+    files,
+    *,
+    T: str | None = None,
+    peer: str | None = None,
+    age: float = 5.0,
+    now: float = 1000.0,
+    roots=(),
+    tombstones=(),
+):
+    tr = tx.tr
+    e = tr.TransferEngine(tx.ME, receiving=False)
+    s = tx.Send(files, engine=e, T=T or tx.T1, peer=peer or tx.PEER, clock=tx.Clock(now))
+    item = tr.RestoredSend(device_id=s.peer, offer=s.offer, age=age, roots=tuple(roots))
+    acts = e.restore(receives=(), tombstones=tuple(tombstones), done=(), sends=(item,), now=now)
+    tx.check_order(acts)
+    return s, acts
+
+
+def test_restored_send_partial_resume_skips_blocks_and_seeds_unhashed(tx):
+    """Lượt gửi khôi phục chấp nhận `have` của lần `resume` đầu tiên, chỉ gửi khối thiếu,
+    phát `CheckSource(unhashed=have)` và hoàn tất; lần `resume` sau vẫn chặn bit chưa gửi."""
+    tr = tx.tr
+    s, acts = _restored_send(tx, tx.entries(4))
+    assert tx.statuses(acts, s.key) == [tr.TransferStatus.RECONNECTING]
+
+    up = s.up()
+    assert tx.sent(up) == [s.offer]
+
+    res = s.resume(0, tx.bits(4, (0, 1)), seq=1)
+    assert tx.sent(res, Cancel) == []
+    assert s.e.info(s.key).done_bytes == 2 * BLOCK_SIZE
+
+    did, open_acts = s.open(0, 1)
+    sb = tx.one(open_acts, tr.SendBlocks)
+    assert list(sb.have.missing()) == [2, 3]
+
+    read_acts = s.read(did, 0, [2, 3])
+    cs = tx.one(read_acts, tr.CheckSource)
+    assert cs.unhashed == tx.bits(4, (0, 1))
+
+    # Lần resume thứ hai tự nhận thêm khối 3 (chưa gửi bằng server check) -> chặn PROTOCOL nếu chưa gửi.
+    # Trường hợp này khối 2, 3 vừa đọc xong nên `sent` đã bật 2, 3; kiểm chứng trên file mới hoặc kiểm tra
+    # hoàn tất bằng source_checked:
+    done_acts = s.call("source_checked", s.peer, s.T, 0, s.files[0].size, s.files[0].mtime, s.root(0))
+    assert tx.sent(done_acts) == [Complete(s.T, 0, s.root(0).hex())]
+
+    ver_acts = s.msg(Verified(s.T, 0))
+    (end,) = tx.ended(ver_acts)
+    assert (end.key, end.outcome) == (s.key, tr.Outcome.DONE)
+
+
+def test_restored_send_rejects_unannounced_bits_on_second_resume(tx):
+    tr = tx.tr
+    s, _ = _restored_send(tx, tx.entries(4))
+    s.up()
+    s.resume(0, tx.bits(4, (0,)), seq=1)
+    # Khối 1 chưa từng được gửi hoặc có trong `resume` đầu tiên -> lần `resume` thứ hai phải hủy.
+    bad_acts = s.resume(0, tx.bits(4, (0, 1)), seq=2)
+    assert tx.sent(bad_acts, Cancel) == [Cancel(s.T, "error")]
+    (end,) = tx.ended(bad_acts)
+    assert (end.outcome, end.detail) == (tr.Outcome.CANCELLED, tr.FailureDetail.PROTOCOL)
+
+
+def test_restored_send_full_resume_and_reread_unhashed_retry(tx):
+    tr = tx.tr
+    # (a) full=True không có root sẵn -> phát CheckSource(unhashed=all) ngay không mở kết nối dữ liệu
+    s, _ = _restored_send(tx, tx.entries(3))
+    s.up()
+    acts = s.resume(0, tx.bits(3, (0, 1, 2)), seq=1)
+    assert tx.of(acts, tr.OpenData) == []
+    cs = tx.one(acts, tr.CheckSource)
+    assert cs.unhashed == tx.bits(3, (0, 1, 2))
+    assert tx.sent(
+        s.call("source_checked", s.peer, s.T, 0, s.files[0].size, s.files[0].mtime, s.root(0))
+    ) == [Complete(s.T, 0, s.root(0).hex())]
+    # Bên nhận đọc lại thấy khối 1 lỗi -> xin gửi lại khối 1: `block_read` không báo SOURCE_CHANGED
+    s.resume(0, tx.bits(3, (0, 2)), seq=2)
+    did, open_acts = s.open(0, 2)
+    assert list(tx.one(open_acts, tr.SendBlocks).have.missing()) == [1]
+    assert tx.sent(s.read(did, 0, [1]), Cancel) == []
+    assert [e.outcome for e in tx.ended(s.msg(Verified(s.T, 0)))] == [tr.Outcome.DONE]
+
+
+def test_restored_send_with_roots_and_multifile_resume(tx):
+    tr = tx.tr
+    # (a) Đã có root từ `outbox.json` -> `control_up` gửi lại `offer` và `complete`; nhận `Verified` là DONE
+    files = tx.entries(2)
+    e = tr.TransferEngine(tx.ME, receiving=False)
+    s = tx.Send(files, engine=e, T=tx.T1, peer=tx.PEER)
+    r0 = s.root(0)
+    e.restore(
+        receives=(),
+        tombstones=(),
+        done=(),
+        sends=(tr.RestoredSend(s.peer, s.offer, 3.0, roots=((0, r0),)),),
+        now=100.0,
+    )
+    up = s.up(now=101.0)
+    assert tx.sent(up) == [s.offer, Complete(s.T, 0, r0.hex())]
+    assert [e_end.outcome for e_end in tx.ended(s.msg(Verified(s.T, 0)))] == [tr.Outcome.DONE]
+
+    # (b) Nhiều file: bên nhận xin resume từ file 1 -> tự đánh dấu file 0 đã FileVerified
+    files2 = tx.entries(2, 2)
+    s2, _ = _restored_send(tx, files2)
+    s2.up()
+    res = s2.resume(1, tx.bits(2, (0,)), seq=1)
+    verified_evs = tx.events(res, tr.FileVerified)
+    assert [(ev.file_index, ev.name) for ev in verified_evs] == [(0, files2[0].name)]
+    assert s2.e.info(s2.key).file_index == 1
+
+
+def test_restored_send_skipped_on_tombstone_and_expires_on_grace(tx):
+    tr = tx.tr
+    stone = tomb(tx, direction=tr.Direction.SEND, T=tx.T1, reason="user", unsent=True, age=20.0)
+    s, _ = _restored_send(tx, tx.entries(2), tombstones=(stone,))
+    assert s.e.info(s.key) is None
+    assert tx.sent(s.up()) == [Cancel(s.T, "user")]
+
+    s2, _ = _restored_send(tx, tx.entries(2), age=tr.RECONNECT_GRACE, now=10_000.0)
+    up2 = s2.up(now=10_000.5)
+    assert tx.sent(up2) == [Cancel(s2.T, "expired")]
+    assert [e.outcome for e in tx.ended(up2)] == [tr.Outcome.CANCELLED]
+
+
+def test_suspend_sends_stops_quietly_and_ignores_late_messages(tx):
+    tr = tx.tr
+    s = tx.Send(tx.entries(3))
+    s.start()
+    s.resume(0, tx.bits(3, ()), seq=1)
+    did, _ = s.open(0, 1)
+
+    acts = s.call("suspend_sends")
+    assert tx.sent(acts) == []
+    assert tx.one(acts, tr.CloseData).data_id == did
+    (end,) = tx.ended(acts)
+    assert (end.key, end.outcome) == (s.key, tr.Outcome.SUSPENDED)
+    assert s.e.export_tombstones(s.now) == ()
+    assert s.e.transfers() == ()
+
+    for msg in (
+        Accept(s.T),
+        Reject(s.T, "user"),
+        Resume(s.T, 0, 2, tx.bits(3, ()).to_base64()),
+        Verified(s.T, 0),
+        Cancel(s.T, "user"),
+    ):
+        assert s.msg(msg) == []
+    _, late_open = s.open(0, 1, did=s.new_did())
+    assert len(tx.of(late_open, tr.CloseData)) == 1
+    assert tx.sent(late_open) == []
+
+    with pytest.raises(tr.TransferIdInUse):
+        s.call("send", s.peer, s.T, list(s.files))

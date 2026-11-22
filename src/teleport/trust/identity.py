@@ -419,6 +419,16 @@ def verify_pairing_proof(peer: PeerCert, payload: bytes, signature: bytes) -> bo
     return True
 
 
+def sign_payload(identity: Identity, payload: bytes) -> bytes:
+    """Ký `payload` (64 byte r ‖ s, ECDSA P-256 + SHA-256) bằng khóa danh tính của máy này."""
+    return load_pairing_signer(identity).sign(payload)
+
+
+def verify_signature(peer: PeerCert, payload: bytes, signature: bytes) -> bool:
+    """Kiểm chữ ký `signature` trên `payload` bằng khóa công khai trong chứng chỉ `peer`."""
+    return verify_pairing_proof(peer, payload, signature)
+
+
 def _create_identity(cert_path: Path, key_path: Path) -> None:
     """Ghi cả hai file ra `.tmp`, rồi đổi tên khóa trước, chứng chỉ sau. Gọi khi giữ `identity.lock`.
 
