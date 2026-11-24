@@ -24,7 +24,9 @@ echo "[*] Đang chuẩn bị bản chạy từ PyInstaller..."
 cd "${REPO_DIR}"
 APP_VERSION="$(python -c 'import teleport; print(teleport.__version__)')"
 echo "[*] Phiên bản: ${APP_VERSION}"
-python -m pip install -e ".[gui]"
+if [ "${SKIP_PIP_INSTALL:-0}" != "1" ]; then
+    python -m pip install -e ".[gui]"
+fi
 
 # Tạo bản build tạm thời vào AppDir/usr/lib/teleport
 pyinstaller --noconfirm --clean \
@@ -72,12 +74,13 @@ EOF
 chmod +x "${APP_DIR}/AppRun"
 
 # 4. Tải appimagetool nếu chưa có và đóng gói
-APPIMAGETOOL="${BUILD_DIR}/appimagetool"
+APPIMAGETOOL="${APPIMAGETOOL:-${BUILD_DIR}/appimagetool}"
 if [ ! -f "${APPIMAGETOOL}" ]; then
     echo "[*] Đang tải appimagetool..."
+    mkdir -p "$(dirname "${APPIMAGETOOL}")"
     curl -fsSL -o "${APPIMAGETOOL}" "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
-    chmod +x "${APPIMAGETOOL}"
 fi
+chmod +x "${APPIMAGETOOL}"
 
 OUTPUT_NAME="${REPO_DIR}/dist/Teleport-${APP_VERSION}-x86_64.AppImage"
 mkdir -p "${REPO_DIR}/dist"

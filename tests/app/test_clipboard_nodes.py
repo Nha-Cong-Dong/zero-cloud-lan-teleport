@@ -559,9 +559,19 @@ async def test_memory_is_flat_after_1000_clips(clip_net, monkeypatch):
         monkeypatch.setattr(core_clip, name, value)
         if hasattr(app_clip, name):
             monkeypatch.setattr(app_clip, name, value)
-    monkeypatch.setattr(app_clip, "CLIP_DEBOUNCE", 0.001)
+    monkeypatch.setattr(app_clip, "CLIP_DEBOUNCE", 0.0)
     net = await clip_net()
     A, B = net.A, net.B
+
+    received = asyncio.Event()
+    real_write = B.cb.write
+
+    async def notify_write(kind, data):
+        result = await real_write(kind, data)
+        received.set()
+        return result
+
+    monkeypatch.setattr(B.cb, "write", notify_write)
 
     total = 0
 
@@ -570,10 +580,10 @@ async def test_memory_is_flat_after_1000_clips(clip_net, monkeypatch):
         for _ in range(n):
             text = f"{total:06d}" + "x" * 100_000
             total += 1
+            received.clear()
             A.cb.set_text(text)
-            await wait_until(
-                lambda text=text: B.cb.writes and B.cb.writes[-1][1].data == text, 10, "B chưa nhận"
-            )
+            await asyncio.wait_for(received.wait(), 10)
+            assert B.cb.writes and B.cb.writes[-1][1].data == text, "B chưa nhận đúng clip"
             B.cb.writes.clear()
 
     await run(100)  # khởi động

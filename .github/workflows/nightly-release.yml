@@ -4,6 +4,20 @@ name: Build Teleport & Nightly Release
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "GEMINI.md"
+      - "gemini.md"
+      - "docs/**"
+      - ".agents/**"
+      - "tools/**"
+      - ".gitignore"
+      - ".gitattributes"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/build-cli.yml"
+      - ".github/workflows/build-linux.yml"
+      - ".github/workflows/build-macos.yml"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 permissions:
@@ -29,16 +43,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12.10"
-          cache: pip
-          cache-dependency-path: |
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
             pyproject.toml
             packaging/pyinstaller/requirements.txt
             packaging/pyinstaller/constraints.txt
+          cache-suffix: build-gui
 
       - name: Cài đặt dependencies và công cụ build
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]" -r packaging/pyinstaller/requirements.txt -c packaging/pyinstaller/constraints.txt
+        run: uv pip install --system -e ".[dev]" -r packaging/pyinstaller/requirements.txt -c packaging/pyinstaller/constraints.txt
 
       - name: Lấy thông tin phiên bản
         id: info
@@ -73,12 +89,20 @@ jobs:
         run: |
           python -m pytest -q -m frozen tests/packaging/test_frozen_gui.py
 
+      - name: Khôi phục bộ cài Inno Setup từ cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/innosetup-${{ env.INNO_VERSION }}.exe
+          key: inno-setup-${{ env.INNO_VERSION }}-${{ env.INNO_SHA256 }}
+
       - name: Cài đặt Inno Setup chính thức
         shell: pwsh
         run: |
           $setup = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_VERSION.exe"
           $dir = Join-Path $env:RUNNER_TEMP "inno-$env:INNO_VERSION"
-          Invoke-WebRequest -Uri $env:INNO_URL -OutFile $setup
+          if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
+            Invoke-WebRequest -Uri $env:INNO_URL -OutFile $setup
+          }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
           if ($hash -ne $env:INNO_SHA256) { throw "SHA-256 cua Inno Setup khong khop: $hash" }
           $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(

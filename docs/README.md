@@ -61,4 +61,4 @@ Chứa hình ảnh giao diện thực tế, biểu đồ quy trình và biểu t
 
 ---
 
-*Tác giả dự án: Nguyễn Hoàng Tùng (@Luffyreals)*
+*Tác giả dự án: Nguyễn Hoàng Tùng (@tungkernel)*

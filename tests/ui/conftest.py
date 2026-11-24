@@ -100,6 +100,31 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         item.add_marker("gui")
 
 
+def _flush_deferred_deletes(app) -> None:
+    """Xả ngay các đối tượng Qt đã gọi `deleteLater()`.
+
+    `QApplication.processEvents()` ngoài vòng `exec()` không xử lý `QEvent.Type.DeferredDelete`,
+    nên widget mà `pytest-qt` đóng ở teardown từng tích tụ tới cuối tiến trình và khiến
+    `setStyle` / `setStyleSheet` / `LanguageChange` chậm dần theo O(N²).
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item: pytest.Item):
+    try:
+        return (yield)
+    finally:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            _flush_deferred_deletes(app)
+
+
 # =================================================================================================
 # Hàm phụ trợ
 # =================================================================================================
@@ -308,14 +333,14 @@ def notify_immediate(request, monkeypatch) -> None:
     monkeypatch.setattr(notify, "NOTIFY_MAX_WAIT", 0)
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 def qt_thread_gc(qapp):
-    """Mọi test ui: GC vòng tham chiếu chỉ chạy trên thread Qt (`teleport.ui.gcguard`), như `main`.
+    """Toàn phiên test ui: GC vòng tham chiếu chỉ chạy trên thread Qt (`teleport.ui.gcguard`), như `main`.
 
     Nhiều test tự dựng `NodeHost`, peer, proxy… không qua `main`; không có guard thì GC ở các thread
-    đó có thể hủy widget/QTimer ngoài thread Qt (segfault trên CI macOS). Teardown: `stop()` thu gom
-    một lần trên thread chính rồi khôi phục trạng thái GC. Fixture autouse dựng trước fixture thường
-    của test nên được dọn sau cùng (sau khi host, peer đã dừng).
+    đó có thể hủy widget/QTimer ngoài thread Qt (segfault trên CI macOS). Giữ guard ở phạm vi session
+    để không phải gọi `gc.collect()` thế hệ 2 hơn 5.000 lần sau từng test; teardown ở cuối phiên thu
+    gom một lần trên thread chính rồi khôi phục trạng thái GC.
     """
     from teleport.ui.gcguard import GcGuard
 
@@ -323,6 +348,15 @@ def qt_thread_gc(qapp):
     guard.start()
     yield guard
     guard.stop()
+
+
+@pytest.fixture(autouse=True)
+def _qt_thread_gc_per_test(qapp, qt_thread_gc):
+    """Sau mỗi test ui: xả `DeferredDelete` rồi chỉ thu gom trên thread Qt khi vượt ngưỡng CPython."""
+    yield
+    _flush_deferred_deletes(qapp)
+    if qt_thread_gc.active:
+        qt_thread_gc.collect_if_due()
 
 
 @pytest.fixture(autouse=True)
@@ -342,6 +376,7 @@ def ui_language_reset(qapp, monkeypatch):
     monkeypatch.setattr(i18n, "system_language", lambda: i18n.SOURCE_LANGUAGE)
     yield
     if i18n.current_language() != i18n.SOURCE_LANGUAGE:
+        _flush_deferred_deletes(qapp)
         i18n.set_language(i18n.SOURCE_LANGUAGE)
         qapp.processEvents()
 
@@ -810,7 +845,7 @@ def gui(qapp, monkeypatch, tmp_path):
     for w in visible_message_boxes():
         with contextlib.suppress(Exception):
             w.close()
-    QApplication.processEvents()
+    _flush_deferred_deletes(qapp)
     qapp.setQuitOnLastWindowClosed(old_quit_on_close)
     signal.signal(signal.SIGINT, old_sigint)
 
@@ -950,8 +985,9 @@ def ui_theme(qapp):
     """`ui_theme(dark) -> Tokens`: `theme.apply(qapp, Dark/Light)`, trả token của chế độ đó.
 
     Gọi được nhiều lần trong một test. Teardown khôi phục `qapp.palette()`, `qapp.styleSheet()` và tên
-    style lưu lúc dựng fixture. Khi đang có stylesheet, `qapp.style()` là proxy QStyleSheetStyle (tên
-    rỗng), nên tên style thật đọc sau khi tạm gỡ stylesheet.
+    style lưu lúc dựng fixture (chỉ khi `run` thật sự đã được gọi). Khi đang có stylesheet,
+    `qapp.style()` là proxy QStyleSheetStyle (tên rỗng), nên tên style thật đọc sau khi tạm gỡ
+    stylesheet.
     """
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QPalette
@@ -960,18 +996,26 @@ def ui_theme(qapp):
 
     old_palette = QPalette(qapp.palette())
     old_css = qapp.styleSheet()
-    if old_css:
-        qapp.setStyleSheet("")
-    old_style = qapp.style().name()
-    if old_css:
-        qapp.setStyleSheet(old_css)
+    old_style = ""
+    applied = False
 
     def run(dark: bool):
+        nonlocal old_style, applied
+        if not applied:
+            if old_css:
+                qapp.setStyleSheet("")
+            old_style = qapp.style().name()
+            if old_css:
+                qapp.setStyleSheet(old_css)
+            applied = True
         theme.apply(qapp, Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
         return theme.tokens(dark)
 
     yield run
 
+    if not applied:
+        return
+    _flush_deferred_deletes(qapp)
     qapp.setStyleSheet("")
     if old_style:
         qapp.setStyle(old_style)
