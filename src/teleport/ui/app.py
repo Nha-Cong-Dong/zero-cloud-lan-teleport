@@ -308,9 +308,9 @@ from types import FrameType
 from typing import Any, cast
 
 from PySide6.QtCore import QBuffer, QCoreApplication, QEventLoop, QIODevice, QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QFontInfo
+from PySide6.QtGui import QAction, QCursor, QDesktopServices, QFontInfo
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMenu, QMessageBox, QWidget
 
 from teleport import paths
 from teleport.app import autostart
@@ -777,6 +777,8 @@ class GuiApp(QObject):
         self._first_run: FirstRunChoice | None = None
         self._session_ending = False  # hệ điều hành đang tắt máy / đăng xuất (`commitDataRequest`)
         self._quit_box: QMessageBox | None = None
+        self._multi_menu: QMenu | None = None
+        self._multi_dialog: QFileDialog | None = None
         self._address_job: SubmitJob | None = None
         self._receive_dir_notice: texts.Text | None = None  # câu cuối app hiện ở dải về thư mục nhận
         self._firewall_notice: texts.Text | None = None
@@ -870,7 +872,10 @@ class GuiApp(QObject):
         self._wire_wait_pairing()
         self.send_picker = SendPickerController(self.window, self)
         self.send_picker.send_confirmed.connect(self._on_picker_send)
+        self.send_picker.send_many_confirmed.connect(self._on_picker_send_many)
         self.send_picker.discover_requested.connect(self._on_tray_discover)
+        self.transfers.view.send_multi_requested.connect(self._open_multi_send_menu)
+        self.window.conversations.send_multi_requested.connect(self._open_multi_send_menu)
         if instance is not None:
             instance.show_requested.connect(self._on_show_requested)
             instance.send_requested.connect(self._on_send_requested)
@@ -994,6 +999,7 @@ class GuiApp(QObject):
         self.pairing.close_all()
         self.settings.close_all()
         self.send_picker.close_all()
+        self._close_multi_send()
         self.window.hide()
         self.tray.hide()
         self._quit_timer.start(int((app_node.close_time_limit() + QUIT_GRACE) * 1000))
@@ -1019,6 +1025,7 @@ class GuiApp(QObject):
         self.pairing.close_all()
         self.settings.shutdown()
         self.send_picker.close_all()
+        self._close_multi_send()
         if self._instance is not None:
             self._instance.stop_listening()
         deadline = time.monotonic() + JOIN_TIMEOUT
@@ -1587,6 +1594,103 @@ class GuiApp(QObject):
             self.transfers.view.show_notice(send.not_paired_message(self._peer_label(device_id)))
             return
         self.transfers.request_send(device_id, list(paths))
+
+    def _on_picker_send_many(self, device_ids: object, paths: object) -> None:
+        """Bấm Gửi tới nhiều máy: gửi lần lượt qua `request_send` cho các máy còn ghép đôi."""
+        if (
+            self._quitting
+            or not isinstance(device_ids, tuple)
+            or not isinstance(paths, tuple)
+            or not device_ids
+        ):
+            return
+        self.window.bring_to_front()
+        valid_ids = [
+            d
+            for d in device_ids
+            if isinstance(d, str) and (view := self.window.devices.device(d)) is not None and view.paired
+        ]
+        if not valid_ids:
+            first = device_ids[0] if isinstance(device_ids[0], str) else ""
+            self.transfers.view.show_notice(send.not_paired_message(self._peer_label(first)))
+            return
+        self.window.open_conversation(valid_ids[0])
+        path_list = list(paths)
+        for device_id in valid_ids:
+            self.transfers.request_send(device_id, path_list)
+
+    def _open_multi_send_menu(self) -> None:
+        """Mở menu chọn file hoặc thư mục để gửi đồng thời nhiều máy (không chặn)."""
+        if self._quitting:
+            return
+        old, self._multi_menu = self._multi_menu, None
+        if old is not None:
+            with contextlib.suppress(RuntimeError):
+                old.close()
+                old.deleteLater()
+        t = QCoreApplication.translate
+        menu = QMenu(self.window)
+        menu.setObjectName("multiSendMenu")
+        menu.setAccessibleName(t("GuiApp", "Gửi tới nhiều máy"))
+        files_action = QAction(t("GuiApp", "Chọn file…"), menu)
+        files_action.triggered.connect(lambda _=False: self._pick_multi_send(folders=False))
+        folder_action = QAction(t("GuiApp", "Chọn thư mục…"), menu)
+        folder_action.triggered.connect(lambda _=False: self._pick_multi_send(folders=True))
+        menu.addAction(files_action)
+        menu.addAction(folder_action)
+        self._multi_menu = menu
+        btn = self.transfers.view.composer.send_multi_button
+        pos = (
+            btn.mapToGlobal(btn.rect().topLeft())
+            if btn.isVisibleTo(self.window) and not self.window.conversations.list_view.hasFocus()
+            else QCursor.pos()
+        )
+        menu.popup(pos)
+
+    def _pick_multi_send(self, *, folders: bool) -> None:
+        """Mở hộp chọn file/thư mục không chặn rồi chuyển vào hộp chọn nhiều máy."""
+        if self._quitting:
+            return
+        old, self._multi_dialog = self._multi_dialog, None
+        if old is not None:
+            with contextlib.suppress(RuntimeError):
+                old.close()
+                old.deleteLater()
+        t = QCoreApplication.translate
+        dialog = ui_transfers.file_dialog_factory(self.window)
+        if folders:
+            dialog.setFileMode(QFileDialog.FileMode.Directory)
+            dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+            dialog.setWindowTitle(t("GuiApp", "Chọn thư mục gửi tới nhiều máy"))
+            dialog.fileSelected.connect(
+                lambda folder: self.send_picker.request([Path(folder)], multi=True) if folder else None
+            )
+        else:
+            dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+            dialog.setWindowTitle(t("GuiApp", "Chọn file gửi tới nhiều máy"))
+            dialog.filesSelected.connect(
+                lambda files: self.send_picker.request([Path(f) for f in files if f], multi=True)
+            )
+        dialog.finished.connect(functools.partial(self._on_multi_dialog_finished, dialog))
+        self._multi_dialog = dialog
+        dialog.open()
+
+    def _on_multi_dialog_finished(self, dialog: QFileDialog, _result: int) -> None:
+        if self._multi_dialog is dialog:
+            self._multi_dialog = None
+        dialog.deleteLater()
+
+    def _close_multi_send(self) -> None:
+        menu, self._multi_menu = self._multi_menu, None
+        if menu is not None:
+            with contextlib.suppress(RuntimeError):
+                menu.close()
+                menu.deleteLater()
+        dialog, self._multi_dialog = self._multi_dialog, None
+        if dialog is not None:
+            with contextlib.suppress(RuntimeError):
+                dialog.close()
+                dialog.deleteLater()
 
     def _on_hidden_to_tray(self) -> None:
         """Thu cửa sổ xuống khay: chưa từng báo thì bóng thoại “vẫn chạy ở khay” (đang tạm dừng nhận thì

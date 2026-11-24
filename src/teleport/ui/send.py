@@ -105,7 +105,7 @@ def source_error_message(error: SourceError) -> str:
     kind = error.kind
     if kind is SourceErrorKind.NOT_A_FILE:
         return _fill(
-            t("Send", "{name} không phải là file. Teleport chưa gửi được cả thư mục; hãy chọn từng file."),
+            t("Send", "{name} không phải là file hay thư mục hợp lệ để gửi."),
             name=name,
         )
     if kind is SourceErrorKind.NOT_FOUND:

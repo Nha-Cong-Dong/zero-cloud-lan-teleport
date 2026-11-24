@@ -292,6 +292,11 @@ def pick_title(peer: str) -> str:
     return texts.fill(QCoreApplication.translate("Transfers", "Chọn file gửi tới {name}"), name=peer)
 
 
+def pick_folder_title(peer: str) -> str:
+    """Tiêu đề hộp chọn thư mục của “Gửi thư mục…”. `peer` đã qua `peer_label`."""
+    return texts.fill(QCoreApplication.translate("Transfers", "Chọn thư mục gửi tới {peer}"), peer=peer)
+
+
 class TransfersController(QObject):
     """Gửi/nhận file trên thread Qt: cột trái → node, sự kiện lượt → luồng chat, hoạt động theo
     máy, hộp hỏi, khay."""
@@ -363,6 +368,7 @@ class TransfersController(QObject):
         conversations = window.conversations
         conversations.send_files_requested.connect(self.request_send)
         conversations.pick_files_requested.connect(self.pick_and_send)
+        conversations.pick_folder_requested.connect(self.pick_folder_and_send)
         conversations.drop_hint_requested.connect(self.view.show_notice)
         conversations.current_changed.connect(self.view.set_device)
         conversations.current_changed.connect(self.diagnose.set_device)
@@ -370,6 +376,7 @@ class TransfersController(QObject):
         self.view.cancel_requested.connect(self.cancel)
         self.view.resend_requested.connect(self.resend)
         self.view.pick_files_requested.connect(self.pick_and_send)
+        self.view.pick_folder_requested.connect(self.pick_folder_and_send)
         self.view.send_files_requested.connect(self.request_send)
         self.view.drop_hint_requested.connect(self.view.show_notice)
         self.view.history_needed.connect(self._on_history_needed)
@@ -635,17 +642,33 @@ class TransfersController(QObject):
 
     def pick_and_send(self, device_id: str) -> None:
         """“Gửi file…”: mở hộp chọn nhiều file (không chặn), chọn xong thì `request_send`."""
+        self._open_pick_dialog(device_id, folders=False)
+
+    def pick_folder_and_send(self, device_id: str) -> None:
+        """“Gửi thư mục…”: mở hộp chọn thư mục (không chặn), chọn xong thì `request_send`."""
+        self._open_pick_dialog(device_id, folders=True)
+
+    def _open_pick_dialog(self, device_id: str, *, folders: bool) -> None:
         old, self._dialog = self._dialog, None
         if old is not None:
             old.close()
             old.deleteLater()
         view = self._window.devices.device(device_id)
+        peer = self._peer(device_id, view)
         dialog = file_dialog_factory(self._window)
-        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
-        dialog.setWindowTitle(pick_title(self._peer(device_id, view)))
-        dialog.filesSelected.connect(
-            lambda files, i=device_id: self.request_send(i, [Path(f) for f in files if f])
-        )
+        if folders:
+            dialog.setFileMode(QFileDialog.FileMode.Directory)
+            dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+            dialog.setWindowTitle(pick_folder_title(peer))
+            dialog.fileSelected.connect(
+                lambda folder, i=device_id: self.request_send(i, [Path(folder)]) if folder else None
+            )
+        else:
+            dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+            dialog.setWindowTitle(pick_title(peer))
+            dialog.filesSelected.connect(
+                lambda files, i=device_id: self.request_send(i, [Path(f) for f in files if f])
+            )
         dialog.finished.connect(lambda _result, d=dialog: self._dialog_finished(d))
         self._dialog = dialog
         dialog.open()
@@ -884,7 +907,7 @@ class TransfersController(QObject):
             return
         token = self.view.add_pending(device_id, paths)  # “Đang chuẩn bị…” tới khi `send` trả về
         host.submit(
-            lambda node: node.transfers.send(device_id, paths),
+            lambda node: node.transfers.send(device_id, paths, allow_dirs=True),
             functools.partial(self._on_send_done, host, peer, tuple(paths), token),
         )
 

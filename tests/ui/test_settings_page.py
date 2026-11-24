@@ -266,14 +266,19 @@ class Spy:
     NAMES = (
         "name_submitted",
         "visible_toggled",
+        "stealth_toggled",
         "language_selected",
         "autostart_toggled",
         "rate_limit_changed",
         "retention_changed",
+        "cancel_pending_requested",
+        "cancel_all_pending_requested",
         "ask_toggled",
         "unpair_requested",
         "clear_history_requested",
         "export_logs_requested",
+        "check_update_requested",
+        "download_update_requested",
         "open_receive_dir_requested",
         "change_receive_dir_requested",
         "discover_requested",
@@ -1082,16 +1087,102 @@ def test_devices_empty_state_shows_not_paired_illustration(ui):
     assert not empty.icon_badge.isVisibleTo(devices)
 
 
-def test_no_check_updates_control(ui):
-    """Ô “Đồng bộ clipboard” đã có từ D5 (test ở `test_clipboard_ui.py`); “Kiểm tra cập nhật” vẫn chưa."""
+def test_manual_check_updates_control_only_in_advanced(ui):
     page = ui.page
     ui.devices([view("May-B")])
-    for name in ("GENERAL", "PRIVACY", "DEVICES", "TRANSFER", "ADVANCED"):
+    for name in ("GENERAL", "PRIVACY", "DEVICES", "TRANSFER"):
         section = open_section(page, name)
         text = " | ".join(
             plain(b.text()) for b in section.findChildren(QAbstractButton) if b.isVisibleTo(section)
         ).casefold()
-        assert "kiểm tra cập nhật" not in text, f"{name}: “Kiểm tra cập nhật” thuộc GĐ6"
+        assert "kiểm tra" not in text
+    adv = open_section(page, "ADVANCED")
+    assert page.check_update_button.isVisibleTo(adv)
+    assert page.check_update_button.isEnabled()
+    assert not page.download_update_button.isVisibleTo(adv)
+    assert not page.update_status_label.isVisibleTo(adv)
+
+
+def test_stealth_switch_setter_is_silent_and_click_emits(ui):
+    page = ui.page
+    open_section(page, "PRIVACY")
+    assert not page.stealth_switch.isChecked()
+    page.set_stealth(True)
+    assert page.stealth_switch.isChecked()
+    assert ui.spy.of("stealth_toggled") == []
+    page.stealth_switch.click()
+    assert not page.stealth_switch.isChecked()
+    assert ui.spy.of("stealth_toggled") == [(False,)]
+
+
+def test_pending_receives_section_renders_empty_populated_and_emits_signals(ui):
+    from teleport.ui.settings import PendingReceiveItem
+
+    page = ui.page
+    open_section(page, "TRANSFER")
+    assert not page.cancel_all_pending_button.isVisibleTo(page)
+    assert not page.pending_list.isVisibleTo(page)
+    assert "Không có lượt nhận" in page.pending_row.hint_label.text()
+
+    items = (PendingReceiveItem("aaaa1111" * 4, "dddd2222" * 4, "May-B", 2, 1024, 4096, "reconnecting"),)
+    page.set_pending_receives(items, 3072)
+    assert page.cancel_all_pending_button.isVisibleTo(page)
+    assert page.pending_list.isVisibleTo(page)
+    assert "1 lượt nhận" in page.pending_row.hint_label.text()
+    assert len(page._pending_cancel_buttons) == 1
+
+    page._pending_cancel_buttons[0].click()
+    assert ui.spy.of("cancel_pending_requested") == [("dddd2222" * 4, "aaaa1111" * 4)]
+    page.cancel_all_pending_button.click()
+    assert ui.spy.of("cancel_all_pending_requested") == [()]
+
+
+def test_update_state_ui_transitions_and_signals(ui):
+    from teleport.app.updater import UpdateInfo
+    from teleport.ui import theme
+    from teleport.ui.settings import UpdateUiState
+
+    page = ui.page
+    open_section(page, "ADVANCED")
+    info = UpdateInfo(
+        version="v9.9.9",
+        current_version="1.4.0",
+        is_newer=True,
+        release_url="https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases/tag/v9.9.9",
+        download_url="https://example.invalid/setup.exe",
+        asset_name="setup.exe",
+        asset_size=1024,
+    )
+    page.check_update_button.click()
+    assert ui.spy.of("check_update_requested") == [()]
+
+    page.set_update_state(UpdateUiState.CHECKING)
+    assert not page.check_update_button.isEnabled()
+
+    page.set_update_state(UpdateUiState.UP_TO_DATE)
+    assert page.check_update_button.isEnabled()
+    assert not page.download_update_button.isVisibleTo(page)
+    assert "mới nhất" in page.update_status_label.text()
+
+    page.set_update_state(UpdateUiState.AVAILABLE, info=info)
+    assert page.download_update_button.isVisibleTo(page)
+    assert page.download_update_button.isEnabled()
+    assert "v9.9.9" in page.update_status_label.text()
+    page.download_update_button.click()
+    assert ui.spy.of("download_update_requested") == [()]
+
+    page.set_update_state(UpdateUiState.DOWNLOADING, info=info, progress=(512, 1024))
+    assert not page.check_update_button.isEnabled()
+    assert page.download_update_button.isVisibleTo(page)
+    assert not page.download_update_button.isEnabled()
+    assert "Đang tải" in page.update_status_label.text()
+
+    page.set_update_state(UpdateUiState.READY, info=info)
+    assert page.check_update_button.isEnabled()
+    assert not page.download_update_button.isVisibleTo(page)
+
+    page.set_update_state(UpdateUiState.ERROR)
+    assert page.update_status_label.property(theme.TONE_PROPERTY) == "warning"
 
 
 # =================================================================================================

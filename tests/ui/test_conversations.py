@@ -43,6 +43,8 @@ LIST_DESCRIPTION = (
 )
 ADD_DEVICE = "Ghép đôi máy mới"
 SEND_FILES = "Gửi file…"
+SEND_FOLDER = "Gửi thư mục…"
+SEND_MULTI = "Gửi tới nhiều máy…"
 UNPAIR = "Hủy ghép đôi…"
 MENU_NAME = "Thao tác với {name}"
 ONLINE = "Trực tuyến"
@@ -909,12 +911,22 @@ def test_enter_auto_repeat_does_not_emit_again(conv, qtbot):
 def test_context_menu_items_and_accessible_name(conv):
     a = dview("PC-Nha")
     conv.devices.reset([a])
+    folders: list[str] = []
+    multis: list[int] = []
+    conv.widget.pick_folder_requested.connect(folders.append)
+    conv.widget.send_multi_requested.connect(lambda: multis.append(1))
     menu = conv.widget.context_menu_for(a.device_id)
     assert menu is not None
-    assert menu_items(menu) == [SEND_FILES, UNPAIR]
+    assert menu_items(menu) == [SEND_FILES, SEND_FOLDER, SEND_MULTI, UNPAIR]
     assert menu.accessibleName() == MENU_NAME.replace("{name}", peer("PC-Nha", a.device_id))
     menu_action(menu, SEND_FILES).trigger()
     assert conv.picks == [a.device_id] and conv.unpairs == []
+    menu = conv.widget.context_menu_for(a.device_id)
+    menu_action(menu, SEND_FOLDER).trigger()
+    assert folders == [a.device_id]
+    menu = conv.widget.context_menu_for(a.device_id)
+    menu_action(menu, SEND_MULTI).trigger()
+    assert multis == [1]
     menu = conv.widget.context_menu_for(a.device_id)
     menu_action(menu, UNPAIR).trigger()
     assert conv.unpairs == [a.device_id] and conv.picks == [a.device_id]
@@ -952,7 +964,7 @@ def test_menu_opens_by_mouse_menu_key_and_shift_f10(conv, qtbot, menus, how):
     assert menus, f"{how}: không mở menu"
     menu = conv.widget.last_menu
     assert menu is not None
-    assert menu_items(menu) == [SEND_FILES, UNPAIR]
+    assert menu_items(menu) == [SEND_FILES, SEND_FOLDER, SEND_MULTI, UNPAIR]
     assert menu.accessibleName() == MENU_NAME.replace("{name}", "May-B")
     assert conv.picks == [] and conv.unpairs == [], "chỉ mở menu thì không phát gì"
 

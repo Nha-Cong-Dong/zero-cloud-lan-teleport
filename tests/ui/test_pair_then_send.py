@@ -175,7 +175,7 @@ class _FakeTransfers:
         """Spec B2 12.22: `TransfersController.on_started` đọc thêm lịch sử."""
         return ()
 
-    def send(self, device_id, paths):
+    def send(self, device_id, paths, allow_dirs=False):
         self.sent.append((device_id, list(paths)))
         return None
 

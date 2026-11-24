@@ -1059,6 +1059,36 @@ def test_f1_send_button_requests_pick(h):
     assert h.picks == [PEER_ID]
 
 
+def test_composer_folder_and_multi_buttons_emit_signals_and_follow_device(h):
+    v = h.view
+    folders: list[str] = []
+    multis: list[int] = []
+    v.pick_folder_requested.connect(folders.append)
+    v.send_multi_requested.connect(lambda: multis.append(1))
+
+    v.set_device(None)
+    assert not v.composer.send_folder_button.isEnabled()
+    assert not v.composer.send_multi_button.isEnabled()
+
+    v.set_device(PEER_ID)
+    assert v.composer.send_folder_button.isEnabled()
+    assert v.composer.send_multi_button.isEnabled()
+    v.composer.send_folder_button.click()
+    v.composer.send_multi_button.click()
+    assert folders == [PEER_ID]
+    assert multis == [1]
+
+
+def test_composer_tab_order_goes_send_folder_then_multi(tabbed):
+    v = tabbed.view
+    v.composer.send_button.setFocus(Qt.FocusReason.TabFocusReason)
+    assert QApplication.focusWidget() is v.composer.send_button
+    _tab()
+    assert QApplication.focusWidget() is v.composer.send_folder_button
+    _tab()
+    assert QApplication.focusWidget() is v.composer.send_multi_button
+
+
 def test_f1_ctrl_o_does_nothing_when_view_hidden(qtbot, clock):
     harness = Harness(qtbot)
     harness.show(qtbot, active=True)

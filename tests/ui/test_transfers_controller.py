@@ -153,12 +153,14 @@ def finished(key, result: str = "done", *, names=("video.mp4",)):
 class FakeTransfers:
     def __init__(self, infos=()) -> None:
         self.sent: list[tuple[str, list[Path]]] = []
+        self.sent_allow_dirs: list[bool] = []
         self.cancelled: list = []
         self.decided: list = []
         self.infos = tuple(infos)
 
-    def send(self, device_id, paths):
+    def send(self, device_id, paths, allow_dirs=False):
         self.sent.append((device_id, [Path(p) for p in paths]))
+        self.sent_allow_dirs.append(bool(allow_dirs))
         return SimpleNamespace(kind="coroutine giả")
 
     def cancel(self, key):
@@ -229,6 +231,12 @@ class FakeHost:
         for fn, _ in self.submits:
             fn(node)
         return node.transfers.sent
+
+    def sent_allow_dirs(self) -> list[bool]:
+        node = FakeNode()
+        for fn, _ in self.submits:
+            fn(node)
+        return node.transfers.sent_allow_dirs
 
 
 # =================================================================================================
@@ -1443,3 +1451,47 @@ def test_v2_notice_alone_shows_transfers_area(env):
     assert env.window.badge.text == READY
     env.ctl.view.hide_notice()
     assert env.window.stream_pane.currentWidget() is env.window.empty_state
+
+
+# =================================================================================================
+# Gửi thư mục trên GUI (v1.4.0)
+# =================================================================================================
+
+
+def test_request_send_submits_with_allow_dirs_true(env):
+    env.model.reset([dview()])
+    folder = env.tmp / "ThuMucGui"
+    env.ctl.request_send(PEER_ID, [folder])
+    assert env.host.sent() == [(PEER_ID, [folder])]
+    assert env.host.sent_allow_dirs() == [True]
+
+
+def test_pick_folder_and_send_uses_directory_mode_and_submits(env, dialogs):
+    from PySide6.QtWidgets import QFileDialog
+
+    env.model.reset([dview()])
+    env.ctl.pick_folder_and_send(PEER_ID)
+    [dlg] = dialogs.made
+    assert dlg.fileMode() == QFileDialog.FileMode.Directory
+    assert dlg.testOption(QFileDialog.Option.ShowDirsOnly)
+    folder = env.tmp / "ThuMucChon"
+    dlg.fileSelected.emit(str(folder))
+    assert env.host.sent() == [(PEER_ID, [folder])]
+    assert env.host.sent_allow_dirs() == [True]
+
+
+def test_conversations_and_view_pick_folder_signals_open_folder_dialog(env, dialogs):
+    from PySide6.QtWidgets import QFileDialog
+
+    env.model.reset([dview()])
+    env.conversations.pick_folder_requested.emit(PEER_ID)
+    assert len(dialogs.made) == 1
+    assert dialogs.made[0].fileMode() == QFileDialog.FileMode.Directory
+    folder = env.tmp / "ThuMucA"
+    dialogs.made[0].fileSelected.emit(str(folder))
+    assert env.host.sent() == [(PEER_ID, [folder])]
+
+    dialogs.made[0].finished.emit(0)
+    env.ctl.view.pick_folder_requested.emit(PEER_ID)
+    assert len(dialogs.made) == 2
+    assert dialogs.made[1].fileMode() == QFileDialog.FileMode.Directory

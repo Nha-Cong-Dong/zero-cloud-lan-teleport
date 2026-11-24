@@ -12,6 +12,9 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
   - Nội bộ: bổ sung `device_priority_strikes(fingerprint, now)` trong `teleport.core.admission`, đồng bộ dọn dẹp tại `retain_trusted`, và cập nhật đặc tả tại `docs/technical/protocol.md` mục 2.3.
 
 ### Added
+- **Hoàn thiện giao diện đồ họa ngang hàng CLI & Cài đặt đầy đủ (`v1.4.0`):**
+  - **Gửi thư mục & Gửi nhiều máy ngay trên giao diện (`ui/transfers.py`, `ui/chat.py`, `ui/conversations.py`, `ui/send_picker.py`, `ui/app.py`):** mọi lượt gửi trên GUI bật `allow_dirs=True`; bổ sung nút **"Gửi thư mục"** / **"Gửi tới nhiều máy"** trong thanh soạn luồng chat và menu chuột phải của danh sách cuộc trò chuyện; mở rộng `SendPickerDialog(..., multi=True)` với chế độ `MultiSelection`, nút **"Chọn tất cả"** / **"Bỏ chọn"**, nhãn **"Gửi (%n máy)"** (`confirmed_many` / `send_many_confirmed`) và menu chọn gửi file hoặc thư mục tới nhiều máy trong `GuiApp`.
+  - **Mục Cài đặt đầy đủ (`ui/settings.py`, `teleport_en.ts`/`.qm`):** thêm công tắc **"Chế độ ẩn hoàn toàn trong mạng"** (`stealth` — `Node.set_stealth`), danh sách **"Lượt nhận đang chờ"** kèm tổng dung lượng giữ chỗ (`promised_bytes`) và nút **"Hủy"** / **"Hủy tất cả"** (hộp xác nhận không chặn gọi `TransferManager.cancel_transfer(..., wait_disk=True)`), và mục **"Cập nhật"** thủ công chỉ chạy nền khi người dùng bấm nút (`mvp N9` — nối với `app/updater.py`, kiểm tra SHA-256 trước khi chạy bộ cài hoặc mở trang phát hành HTTPS).
 - **Lệnh CLI/IPC liệt kê và hủy lượt truyền dở (`teleport transfers list`, `teleport transfers cancel`):**
   - Hỗ trợ liệt kê và hủy theo tiền tố mã lượt (tối thiểu 4 ký tự hex) hoặc `--all` (kèm `--json`), giải phóng ngay dung lượng giữ chỗ `promised_bytes` và xóa thư mục tạm `.teleport/<transfer_id>` mà không phải chờ hết hạn nối lại (`protocol.md` mục 6.2).
   - Hoạt động cả ở **chế độ ngoại tuyến** khi node không chạy (`list_pending_offline`, `cancel_pending_offline` giữ `node.lock`, không tạo mới danh tính/thư mục `.teleport`, ghi nhận hủy `cancel{user}` vào `tombstones.json`) lẫn **chế độ trực tuyến qua IPC** khi GUI/daemon đang chạy nền (`list_transfers`, `cancel_transfer` hỗ trợ hủy cả lượt gửi và nhận, có `IPC_TRANSFER_CANCEL_TIMEOUT = 65.0`).
@@ -24,6 +27,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - **Nhận diện đúng thiết bị tin cậy khi nhập nhầm IP:** Khi kết nối theo địa chỉ IP nhập tay (`teleport send --address`, hộp thoại *"Kết nối bằng IP…"* hoặc `Node.connect_address`) trỏ nhầm tới một thiết bị tin cậy khác không phải máy đang chọn, ZCL Teleport dò chứng chỉ máy đích một lần không gửi chứng chỉ máy mình và không gửi dữ liệu ứng dụng (`probe_server_cert`) để báo rõ tên và 8 ký tự đầu mã thiết bị (`<tên> (<device_id[:8]>)`) thay vì cảnh báo nhầm có dấu hiệu giả mạo:
   - Đồng bộ thông báo ở cả CLI (kể cả `--json` với `address`, `actual_device_id`, `actual_name`) lẫn giao diện (`ConnectAddressDialog`, `DiagnoseBar`, `DeviceListModel`), kèm bản dịch tiếng Anh (`teleport_en.ts`/`.qm`).
   - Nội bộ: thêm `Connect.from_hint` (`teleport.core.links`), `probe_server_cert` (`teleport.net.connection`) và mở rộng `ConnectFailed` (`address`, `port`, `actual_device_id`, `actual_name`) trong `teleport.app.node`.
+- **Chính sách ký mã & phát hành:** tạm hoãn tích hợp ký mã tự động cho Windows do đơn đăng ký **SignPath Foundation** bị từ chối; cập nhật `docs/community/SECURITY.md`, `README.md` và `docs/product/ke_hoach.md` để hướng dẫn xác minh toàn vẹn qua `SHA256SUMS.txt`.
 
 ## [1.3.0] - 2026-11-18
 

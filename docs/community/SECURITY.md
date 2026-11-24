@@ -28,20 +28,20 @@ Mô hình mối đe dọa và biện pháp: [mvp.md](../product/mvp.md) mục 11
 
 ---
 
-## Chính Sách Ký Mã (Code Signing Policy)
+## Chính Sách Ký Mã & Toàn Vẹn Phát Hành
 
-*This section establishes the open-source Code Signing Policy and Privacy Statement for ZCL Teleport.*
+*This section establishes the Build Integrity Policy and Privacy Statement for ZCL Teleport.*
 
-### Quy trình đóng gói và ký số (Build & Signing Process)
+### Quy trình đóng gói và xác minh toàn vẹn (Build & Integrity Process)
 
-- Chương trình ký mã miễn phí cho phần mềm nguồn mở được cung cấp bởi **SignPath.io**, với chứng chỉ từ **SignPath Foundation**.
-- Toàn bộ tệp thực thi phát hành chính thức (`teleport.exe`, `Teleport.exe`, bộ cài `teleport-setup-*-x64.exe` và các gói nén phát hành) được biên dịch hoàn toàn tự động từ mã nguồn công khai trên GitHub Actions (`.github/workflows/build-cli.yml`, `.github/workflows/build-gui.yml`, `.github/workflows/release.yml`), không bao giờ ký thủ công từ máy cá nhân.
-- Chỉ các mã nguồn trên nhánh chính (`main`) đã qua kiểm tra tự động hoặc thẻ phiên bản (`v*`) mới đủ điều kiện đưa vào quy trình ký phát hành.
+- Toàn bộ tệp thực thi phát hành chính thức (`teleport.exe`, `Teleport.exe`, bộ cài `teleport-setup-*-x64.exe`, `.AppImage`, `.dmg` và các gói nén phát hành) được biên dịch hoàn toàn tự động từ mã nguồn công khai trên GitHub Actions (`.github/workflows/build-cli.yml`, `.github/workflows/build-gui.yml`, `.github/workflows/build-linux.yml`, `.github/workflows/build-macos.yml`, `.github/workflows/release.yml`).
+- Việc ký mã cho bộ cài Windows hiện **được tạm hoãn** (đơn đăng ký chương trình ký mã nguồn mở miễn phí SignPath Foundation đã bị từ chối). Mọi bản phát hành đều đính kèm tệp `SHA256SUMS.txt` sinh tự động trên CI để người dùng kiểm tra tính nguyên vẹn trước khi chạy.
+- Chỉ các mã nguồn trên nhánh chính (`main`) đã qua kiểm tra tự động hoặc thẻ phiên bản (`v*`) mới được xuất bản thành bản phát hành chính thức.
 
 ### Vai trò chịu trách nhiệm (Team Roles)
 
 - **Tác giả mã nguồn & Người rà soát (Authors & Reviewers):** **Nguyễn Hoàng Tùng** (`@tungkernel`) và các cộng tác viên được chấp nhận qua Pull Request công khai.
-- **Người phê duyệt ký số (Approvers):** **Nguyễn Hoàng Tùng** (`@tungkernel`), chủ sở hữu kho mã nguồn.
+- **Người quản lý phát hành (Release Maintainer):** **Nguyễn Hoàng Tùng** (`@tungkernel`), chủ sở hữu kho mã nguồn.
 
 ### Tuyên Bố Quyền Riêng Tư (Privacy Statement)
 

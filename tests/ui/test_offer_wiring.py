@@ -133,7 +133,7 @@ class FakeTransfers:
     def cancel(self, key):
         self.log.append(("cancel", key))
 
-    def send(self, device_id, paths):
+    def send(self, device_id, paths, allow_dirs=False):
         self.log.append(("send", device_id))
 
     def transfers(self):

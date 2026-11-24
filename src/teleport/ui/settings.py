@@ -12,17 +12,18 @@ Hai phần, theo mẫu `ui.discover`:
   (thread node), registry tự khởi động (`app.autostart`, thread Qt), hộp xác nhận và hộp lưu file
   (mở bằng `open()`, không `exec()`), việc xuất log (thread riêng).
 
-**Các mục** (`Section`, thứ tự cố định): Chung (tên thiết bị, thư mục nhận, khởi động cùng Windows) ·
-Giao diện (`ui.appearance.AppearanceSection`, spec D6: chế độ màu, màu nhấn, ngôn ngữ) · Quyền
-riêng tư (cho máy chưa ghép đôi thấy máy này, xóa toàn bộ lịch sử) · Thiết bị tin cậy (mỗi máy đã
-ghép đôi một `TrustedDeviceRow`: “Hỏi trước khi nhận”, “Đồng bộ clipboard” (objectName
-`syncClipboard`, mặc định tắt; clip chỉ đi khi cả hai máy cùng bật, mvp F8), “Hủy ghép
-đôi…”; không máy nào thì `EmptyState` + “Tìm máy mới”) · Truyền file (giới hạn tốc độ gửi, ngưỡng
-dọn phần nhận dở) · Nâng cao (xuất log, bảng “Phím tắt” chỉ để xem, phiên bản, giấy phép, “Thông báo
-bên thứ ba” khi có file `THIRD-PARTY-NOTICES.txt` cạnh `sys.executable`). Chưa có “Kiểm tra cập
-nhật” (GĐ6). Hàng thư mục nhận: chữ theo ba trạng thái của `ui.receive_dir` (đang đổi sang / thư mục
-nhận / thư mục đã lưu hỏng), “Mở” (chỉ khi có thư mục nhận) và “Đổi…” (ẩn tới
-`set_change_available(True)`; `ui.app` bật và nối vào `ReceiveDirController.choose`).
+**Các mục** (`Section`, thứ tự cố định): Chung (tên thiết bị, thư mục nhận, tự tạo thư mục con, khởi động
+cùng Windows) · Giao diện (`ui.appearance.AppearanceSection`, spec D6: chế độ màu, màu nhấn, ngôn
+ngữ) · Quyền riêng tư (cho máy chưa ghép đôi thấy máy này, chế độ ẩn hoàn toàn `stealth`, xóa toàn
+bộ lịch sử) · Thiết bị tin cậy (mỗi máy đã ghép đôi một `TrustedDeviceRow`: “Hỏi trước khi nhận”,
+“Đồng bộ clipboard” (objectName `syncClipboard`, mặc định tắt; clip chỉ đi khi cả hai máy cùng bật,
+mvp F8), “Hủy ghép đôi…”; không máy nào thì `EmptyState` + “Tìm máy mới”) · Truyền file (giới hạn tốc
+độ gửi, ngưỡng dọn phần nhận dở, quản lý các lượt nhận đang chờ hoặc dở dang) · Nâng cao (xuất log,
+bảng “Phím tắt” chỉ để xem, phiên bản, kiểm tra cập nhật thủ công chỉ khi bấm nút theo mvp N9, giấy
+phép, “Thông báo bên thứ ba” khi có file `THIRD-PARTY-NOTICES.txt` cạnh `sys.executable`). Hàng thư mục
+nhận: chữ theo ba trạng thái của `ui.receive_dir` (đang đổi sang / thư mục nhận / thư mục đã lưu hỏng),
+“Mở” (chỉ khi có thư mục nhận) và “Đổi…” (ẩn tới `set_change_available(True)`; `ui.app` bật và nối vào
+`ReceiveDirController.choose`).
 
 **Hàng** (`widgets.SettingsRow`, `QFrame[surface="raised"]`, bo `RADIUS_CARD`): nhãn đậm vừa, gợi ý
 màu dịu xuống dòng, control bên phải; hàng hẹp tới mức cột chữ còn dưới `widgets.LABEL_MIN_WIDTH` thì control
@@ -177,13 +178,15 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 import teleport
-from teleport.app import autostart, logexport, storage
+from teleport.app import autostart, logexport, storage, updater
 from teleport.app import settings as app_settings
 from teleport.app import transfers as app_transfers
 from teleport.app.devices import DeviceView
 from teleport.app.node import Node
 from teleport.app.settings import DeviceSettings, SettingsSaveError
+from teleport.app.updater import UpdateInfo
 from teleport.core.messages import PROTOCOL_VERSION, MessageError, validate_device_name
+from teleport.core.transfer import Direction, TransferKey, TransferStatus
 from teleport.ui import i18n, icons, motion, shortcuts, texts, theme
 from teleport.ui.appearance import AppearanceSection
 from teleport.ui.appearance import section_title as appearance_title
@@ -215,6 +218,7 @@ RATE_DEFAULT_MB = 10.0  # số hiện sẵn khi chưa giới hạn
 NAME_MAX_INPUT = 256  # ký tự tối đa gõ được vào ô tên (luật thật: `validate_device_name`)
 NOTICES_FILE = "THIRD-PARTY-NOTICES.txt"
 EXPORT_THREAD = "teleport-logexport"
+UPDATE_THREAD = "teleport-update"
 _NAV_ICON = 20  # px (`shield_checkmark` có cỡ 20)
 _NAV_ROW_HEIGHT = 36  # px
 _NAV_PILL_WIDTH = 3  # px, vạch nhấn của mục được chọn
@@ -228,9 +232,18 @@ _FIT_PASSES = 4  # số lượt tối đa tính lại chiều cao bảng Phím t
 _TABLE_ROW_PADDING = 6  # px, trên và dưới chữ mỗi hàng của bảng Phím tắt
 _TABLE_CELL_PADDING = 8  # px, hai bên chữ mỗi ô của bảng Phím tắt
 
-# Seam (đọc lúc gọi): hộp chọn file lưu log và hàm xuất log.
+
+def _default_auto_install_supported() -> bool:
+    return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
+
+
+# Seam (đọc lúc gọi): hộp chọn file lưu log, hàm xuất log và cập nhật thủ công.
 dialog_factory: Callable[[QWidget | None], QFileDialog] = QFileDialog
 export_fn: Callable[[Sequence[Path], Path], Path] = logexport.export_logs
+check_update_fn: Callable[..., UpdateInfo | None] = updater.check_for_update
+download_update_fn: Callable[..., Path] = updater.download_update_installer
+apply_update_fn: Callable[..., bool] = updater.apply_update_installer
+auto_install_supported: Callable[[], bool] = _default_auto_install_supported
 
 
 class Section(StrEnum):
@@ -392,6 +405,75 @@ def device_status_text(view: DeviceView) -> str:
     if view.online:
         return t("Settings", "đang trong mạng")
     return t("Settings", "không thấy trong mạng")
+
+
+def pending_status_text(status: str) -> str:
+    t = QCoreApplication.translate
+    if status == TransferStatus.QUEUED:
+        return t("Settings", "đang xếp hàng")
+    if status == TransferStatus.WAITING:
+        return t("Settings", "đang chờ xác nhận")
+    if status == TransferStatus.TRANSFERRING:
+        return t("Settings", "đang nhận")
+    if status == TransferStatus.VERIFYING:
+        return t("Settings", "đang kiểm tra")
+    if status == TransferStatus.RECONNECTING:
+        return t("Settings", "đang nối lại")
+    return t("Settings", "đang chờ")
+
+
+def cancel_pending_title() -> str:
+    return QCoreApplication.translate("Settings", "Hủy lượt nhận đang chờ")
+
+
+def cancel_pending_question() -> str:
+    return QCoreApplication.translate(
+        "Settings",
+        "Hủy lượt nhận này và xóa phần đã tải dở khỏi máy?",
+    )
+
+
+def cancel_all_pending_title() -> str:
+    return QCoreApplication.translate("Settings", "Hủy tất cả lượt nhận dở")
+
+
+def cancel_all_pending_question() -> str:
+    return QCoreApplication.translate(
+        "Settings",
+        "Hủy toàn bộ lượt nhận đang chờ hoặc dở dang và xóa các phần đã tải dở khỏi máy?",
+    )
+
+
+def pending_cancelled_text() -> str:
+    return QCoreApplication.translate("Settings", "Đã hủy lượt nhận và dọn phần tải dở.")
+
+
+def pending_all_cancelled_text() -> str:
+    return QCoreApplication.translate("Settings", "Đã hủy toàn bộ lượt nhận đang chờ.")
+
+
+def pending_cancel_failed_text() -> str:
+    return QCoreApplication.translate("Settings", "Chưa hủy được lượt nhận. Hãy thử lại.")
+
+
+def install_update_title() -> str:
+    return QCoreApplication.translate("Settings", "Cài đặt bản cập nhật")
+
+
+def install_update_question(version: str) -> str:
+    return texts.fill(
+        QCoreApplication.translate(
+            "Settings",
+            "Đã tải xong bản {version}. Đóng Teleport và chạy trình cài đặt ngay bây giờ?",
+        ),
+        version=version,
+    )
+
+
+def update_launch_failed_text() -> str:
+    return QCoreApplication.translate(
+        "Settings", "Không thể mở bộ cài cập nhật. Hãy thử tải lại từ trang phát hành."
+    )
 
 
 def default_export_dir() -> str:
@@ -802,6 +884,31 @@ class TrustedDeviceRow(QFrame):
 
 
 @dataclass(frozen=True)
+class PendingReceiveItem:
+    """Một lượt nhận đang chờ hoặc dở dang để hiện ở mục Truyền file."""
+
+    transfer_id: str
+    device_id: str
+    device_name: str
+    files_total: int
+    done_bytes: int
+    total_bytes: int
+    status: str
+
+
+class UpdateUiState(StrEnum):
+    """Trạng thái giao diện kiểm tra và tải bản cập nhật thủ công."""
+
+    IDLE = "idle"
+    CHECKING = "checking"
+    UP_TO_DATE = "up_to_date"
+    AVAILABLE = "available"
+    DOWNLOADING = "downloading"
+    READY = "ready"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
 class SettingsSnapshot:
     """Cài đặt hiện tại đọc trên thread node (`read_snapshot`)."""
 
@@ -815,15 +922,46 @@ class SettingsSnapshot:
     create_subfolder: bool = True
     theme: str | None = None  # trường `theme` của settings.json (None = theo hệ điều hành)
     accent: str | None = None  # trường `accent` (None = mặc định; mã lạ giữ nguyên)
+    stealth: bool = False
+    pending_receives: tuple[PendingReceiveItem, ...] = ()
+    promised_bytes: int = 0
 
 
 def _read_device_settings(node: Node) -> dict[str, DeviceSettings]:
     return {v.device_id: node.device_settings(v.device_id) for v in node.devices() if v.paired}
 
 
+def _read_device_names(node: Node) -> dict[str, str]:
+    devices_fn = getattr(node, "devices", None)
+    if not callable(devices_fn):
+        return {}
+    return {v.device_id: v.name for v in devices_fn() if hasattr(v, "device_id")}
+
+
 def read_snapshot(node: Node) -> SettingsSnapshot:
     """Thread node: ảnh chụp cài đặt cho trang (tên đang dùng, ẩn/hiện, cài đặt theo thiết bị)."""
     settings = node.settings
+    names = _read_device_names(node)
+    stealth = bool(getattr(node, "stealth", False))
+    transfers_mgr = getattr(node, "transfers", None)
+    pending: list[PendingReceiveItem] = []
+    transfers_fn = getattr(transfers_mgr, "transfers", None)
+    if callable(transfers_fn):
+        for info in transfers_fn():
+            if info.key.direction is Direction.RECEIVE:
+                pending.append(
+                    PendingReceiveItem(
+                        transfer_id=info.key.transfer_id,
+                        device_id=info.key.device_id,
+                        device_name=names.get(info.key.device_id) or "",
+                        files_total=len(info.files),
+                        done_bytes=info.done_bytes,
+                        total_bytes=info.total_bytes,
+                        status=str(info.status),
+                    )
+                )
+    promised_fn = getattr(transfers_mgr, "promised_bytes", None)
+    promised_bytes = max(0, int(promised_fn())) if callable(promised_fn) else 0
     return SettingsSnapshot(
         name=node.name,
         visible=node.visible,
@@ -835,6 +973,9 @@ def read_snapshot(node: Node) -> SettingsSnapshot:
         create_subfolder=settings.create_subfolder,
         theme=settings.theme,
         accent=settings.accent,
+        stealth=stealth,
+        pending_receives=tuple(pending),
+        promised_bytes=promised_bytes,
     )
 
 
@@ -1020,6 +1161,7 @@ class SettingsPage(QWidget):
 
     name_submitted = Signal(str)
     visible_toggled = Signal(bool)
+    stealth_toggled = Signal(bool)
     language_selected = Signal(object)  # mã ngôn ngữ hay None (theo hệ điều hành)
     theme_selected = Signal(object)  # None (theo hệ điều hành) | "light" | "dark"
     accent_selected = Signal(object)  # None (mặc định) | mã màu nhấn
@@ -1027,11 +1169,15 @@ class SettingsPage(QWidget):
     create_subfolder_toggled = Signal(bool)
     rate_limit_changed = Signal(object)  # byte/giây hay None
     retention_changed = Signal(object)  # ngày hay None (= mặc định)
+    cancel_pending_requested = Signal(str, str)  # device_id, transfer_id
+    cancel_all_pending_requested = Signal()
     ask_toggled = Signal(str, bool)
     clipboard_toggled = Signal(str, bool)  # device_id, bật “Đồng bộ clipboard”
     unpair_requested = Signal(str)
     clear_history_requested = Signal()
     export_logs_requested = Signal()
+    check_update_requested = Signal()
+    download_update_requested = Signal()
     open_receive_dir_requested = Signal(object)  # Path
     change_receive_dir_requested = Signal()
     discover_requested = Signal()
@@ -1044,10 +1190,15 @@ class SettingsPage(QWidget):
         self.model = model
         self._loaded = False
         self._visible = True
+        self._stealth = False
         self._name = ""
         self._autostart: autostart.AutostartState | None = autostart.AutostartState.OFF
         self._rate: int | None = None  # giá trị đã biết (đặt từ ngoài hay vừa phát)
         self._retention: int | None = None
+        self._pending_receives: tuple[PendingReceiveItem, ...] = ()
+        self._promised_bytes = 0
+        self._pending_rows: list[QFrame] = []
+        self._pending_cancel_buttons: list[QPushButton] = []
         self._device_settings: dict[str, DeviceSettings] = {}
         self._rows: dict[str, TrustedDeviceRow] = {}
         self._order: list[str] = []
@@ -1055,6 +1206,9 @@ class SettingsPage(QWidget):
         self._unavailable: Path | None = None
         self._pending: Path | None = None
         self._export_running = False
+        self._update_state = UpdateUiState.IDLE
+        self._update_info: UpdateInfo | None = None
+        self._update_progress: tuple[int, int] | None = None
         self._notices = notices_path()
         self._name_error: str | None = None
 
@@ -1243,6 +1397,13 @@ class SettingsPage(QWidget):
         self.hidden_label.setVisible(False)
         self.visible_row.add_line(self.hidden_label)
 
+        self.stealth_row = self._row(Section.PRIVACY, "stealthRow")
+        self.stealth_switch = ToggleSwitch(self.stealth_row)
+        self.stealth_switch.setObjectName("stealthSwitch")
+        self.stealth_switch.setChecked(False)
+        self.stealth_switch.clicked.connect(self._on_stealth_clicked)
+        self.stealth_row.set_control(self.stealth_switch)
+
         self.history_row = self._row(Section.PRIVACY, "historyRow")
         self.clear_history_button = QPushButton(self.history_row)
         self.clear_history_button.setObjectName("clearHistoryButton")
@@ -1299,6 +1460,22 @@ class SettingsPage(QWidget):
         self.retention_spin.valueChanged.connect(self._update_retention_suffix)
         self.retention_row.set_control(self.retention_spin)
         self._retention_commit = _CommitSpin(self.retention_spin, self._commit_retention)
+
+        self.pending_row = self._row(Section.TRANSFER, "pendingTransfersRow")
+        self.cancel_all_pending_button = QPushButton(self.pending_row)
+        self.cancel_all_pending_button.setObjectName("cancelAllPendingButton")
+        self.cancel_all_pending_button.setProperty("keepAccessible", True)
+        self.cancel_all_pending_button.setVisible(False)
+        self.cancel_all_pending_button.clicked.connect(self.cancel_all_pending_requested)
+        self.pending_row.set_control(self.cancel_all_pending_button)
+        transfer_content = self._section_widgets[Section.TRANSFER].widget()
+        self.pending_list = QWidget(transfer_content)
+        self.pending_list.setObjectName("pendingTransfersList")
+        self._pending_layout = QVBoxLayout(self.pending_list)
+        self._pending_layout.setContentsMargins(0, 0, 0, 0)
+        self._pending_layout.setSpacing(ROW_SPACING)
+        self.pending_list.setVisible(False)
+        self._section_layouts[Section.TRANSFER].addWidget(self.pending_list)
         self._section_layouts[Section.TRANSFER].addStretch(1)
 
     def _build_advanced(self) -> None:
@@ -1313,6 +1490,29 @@ class SettingsPage(QWidget):
         self.shortcuts_row.add_line(self.shortcuts_table)
 
         self.version_row = self._row(Section.ADVANCED, "versionRow")
+
+        self.update_row = self._row(Section.ADVANCED, "updateRow")
+        update_controls = QWidget(self.update_row)
+        update_layout = QHBoxLayout(update_controls)
+        update_layout.setContentsMargins(0, 0, 0, 0)
+        update_layout.setSpacing(theme.SPACING[1])
+        self.check_update_button = QPushButton(update_controls)
+        self.check_update_button.setObjectName("checkUpdateButton")
+        self.check_update_button.clicked.connect(self.check_update_requested)
+        self.download_update_button = QPushButton(update_controls)
+        self.download_update_button.setObjectName("downloadUpdateButton")
+        self.download_update_button.setProperty(theme.PRIMARY_PROPERTY, True)
+        self.download_update_button.setVisible(False)
+        self.download_update_button.clicked.connect(self.download_update_requested)
+        update_layout.addWidget(self.check_update_button)
+        update_layout.addWidget(self.download_update_button)
+        update_controls.setProperty("keepAccessible", True)
+        self.update_row.set_control(update_controls)
+        self.update_status_label = _plain(self.update_row, object_name="updateStatusLabel")
+        self.update_status_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.update_status_label.setVisible(False)
+        self.update_row.add_line(self.update_status_label)
+
         self.license_row = self._row(Section.ADVANCED, "licenseRow")
         self.notices_button = QPushButton(self.license_row)
         self.notices_button.setObjectName("noticesButton")
@@ -1369,8 +1569,10 @@ class SettingsPage(QWidget):
         """Đặt mọi giá trị từ ảnh chụp (không phát signal)."""
         self.set_name(s.name)
         self.set_visible(s.visible)
+        self.set_stealth(s.stealth)
         self.set_rate_limit(s.rate_limit)
         self.set_retention(s.temp_retention_days)
+        self.set_pending_receives(s.pending_receives, s.promised_bytes)
         self.set_language(s.language, i18n.available_languages())
         self.appearance.set_theme(s.theme)
         self.appearance.set_accent(s.accent)
@@ -1409,6 +1611,32 @@ class SettingsPage(QWidget):
         with _blocked(self.visible_switch):
             self.visible_switch.setChecked(self._visible)
         self._update_visibility_texts()
+
+    def set_stealth(self, enabled: bool) -> None:
+        self._stealth = bool(enabled)
+        with _blocked(self.stealth_switch):
+            self.stealth_switch.setChecked(self._stealth)
+
+    def set_pending_receives(self, items: Sequence[PendingReceiveItem], promised_bytes: int = 0) -> None:
+        self._pending_receives = tuple(items)
+        self._promised_bytes = max(0, int(promised_bytes))
+        self._rebuild_pending_receives()
+        self._update_tab_order()
+
+    def set_update_state(
+        self,
+        state: UpdateUiState,
+        *,
+        info: UpdateInfo | None = None,
+        progress: tuple[int, int] | None = None,
+    ) -> None:
+        state_changed = state != self._update_state
+        self._update_state = UpdateUiState(state)
+        self._update_info = info
+        self._update_progress = progress
+        self._update_update_ui()
+        if state_changed:
+            self._update_tab_order()
 
     def set_language(self, code: str | None, available: Sequence[str]) -> None:
         self.appearance.set_language(code, available)
@@ -1535,6 +1763,14 @@ class SettingsPage(QWidget):
                 "hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.",
             ),
         )
+        self.stealth_row.set_text(
+            t("Settings", "Chế độ ẩn hoàn toàn trong mạng"),
+            t(
+                "Settings",
+                "Tắt phát tín hiệu tự tìm máy trong mạng nội bộ. Máy đã ghép đôi vẫn kết nối được "
+                "khi biết địa chỉ.",
+            ),
+        )
         self.history_row.set_text(
             t("Settings", "Lịch sử truyền file"),
             t(
@@ -1593,6 +1829,7 @@ class SettingsPage(QWidget):
                 protocol=str(PROTOCOL_VERSION),
             ),
         )
+        self._update_update_ui()
         self.license_row.set_text(
             t("Settings", "Giấy phép"), t("Settings", "Phần mềm tự do theo GNU GPL phiên bản 3.")
         )
@@ -1602,10 +1839,158 @@ class SettingsPage(QWidget):
         self._update_visibility_texts()
         self._update_autostart()
         self._update_receive_dir()
+        self._rebuild_pending_receives()
+        self._update_tab_order()
         for row in self._rows.values():
             row.retranslate()
 
     # ---- Bên trong: cập nhật chữ ---------------------------------------------------------------
+
+    def _rebuild_pending_receives(self) -> None:
+        t = QCoreApplication.translate
+        for w in self._pending_rows:
+            self._pending_layout.removeWidget(w)
+            w.hide()
+            w.deleteLater()
+        self._pending_rows.clear()
+        self._pending_cancel_buttons.clear()
+
+        count = len(self._pending_receives)
+        if count == 0:
+            hint = t("Settings", "Không có lượt nhận đang chờ hoặc dở dang.")
+            self.cancel_all_pending_button.setVisible(False)
+            self.pending_list.setVisible(False)
+        else:
+            count_text = t("Settings", "%n lượt nhận đang chờ hoặc dở dang", None, count)
+            promised_text = texts.fill(
+                t("Settings", "Đang giữ chỗ {size}."), size=texts.format_size(self._promised_bytes)
+            )
+            hint = f"{count_text} · {promised_text}"
+            self.cancel_all_pending_button.setVisible(True)
+            self.pending_list.setVisible(True)
+            for item in self._pending_receives:
+                row = QFrame(self.pending_list)
+                row.setObjectName("pendingReceiveRow")
+                row.setProperty(theme.SURFACE_PROPERTY, "raised")
+                row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+                peer = texts.peer_label(item.device_name, item.device_id)
+                files_text = t("Settings", "%n file", None, item.files_total)
+                head_text = f"{peer} · {files_text}"
+                done_text = texts.format_size(item.done_bytes)
+                total_text = texts.format_size(item.total_bytes)
+                status_text = pending_status_text(item.status)
+                detail_text = f"{done_text} / {total_text} · {status_text}"
+
+                left = QVBoxLayout()
+                left.setContentsMargins(0, 0, 0, 0)
+                left.setSpacing(2)
+                head_label = _ElidedLabel(Qt.TextElideMode.ElideRight, row)
+                head_label.setObjectName("pendingReceiveTitle")
+                font = head_label.font()
+                font.setWeight(font.Weight.DemiBold)
+                head_label.setFont(font)
+                head_label.set_full_text(head_text)
+                detail_label = _plain(row, object_name="pendingReceiveDetail")
+                detail_label.setProperty(theme.TONE_PROPERTY, "muted")
+                detail_label.setText(detail_text)
+                left.addWidget(head_label)
+                left.addWidget(detail_label)
+
+                cancel_btn = QPushButton(row)
+                cancel_btn.setObjectName("cancelPendingButton")
+                cancel_btn.setText(t("Settings", "Hủy"))
+                cancel_btn.setAccessibleName(texts.fill(t("Settings", "Hủy lượt nhận từ {name}"), name=peer))
+                cancel_btn.setAccessibleDescription(f"{head_text} - {detail_text}")
+                cancel_btn.clicked.connect(
+                    functools.partial(self.cancel_pending_requested.emit, item.device_id, item.transfer_id)
+                )
+
+                box = QHBoxLayout(row)
+                box.setContentsMargins(theme.SPACING[3], theme.SPACING[1], theme.SPACING[3], theme.SPACING[1])
+                box.setSpacing(theme.SPACING[2])
+                box.addLayout(left, 1)
+                box.addWidget(cancel_btn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+                self._pending_layout.addWidget(row)
+                self._pending_rows.append(row)
+                self._pending_cancel_buttons.append(cancel_btn)
+
+        self.pending_row.set_text(t("Settings", "Lượt nhận đang chờ"), hint)
+        self.cancel_all_pending_button.setText(t("Settings", "Hủy tất cả"))
+        self.cancel_all_pending_button.setAccessibleName(t("Settings", "Hủy tất cả lượt nhận dở"))
+        self.cancel_all_pending_button.setAccessibleDescription(hint)
+
+    def _update_update_ui(self) -> None:
+        t = QCoreApplication.translate
+        hint = t("Settings", "Chỉ kiểm tra khi bạn bấm nút. Ứng dụng không tự kết nối mạng.")
+        self.update_row.set_text(t("Settings", "Cập nhật"), hint)
+
+        state = self._update_state
+        info = self._update_info
+        progress = self._update_progress
+        tone = "muted"
+        status_text = ""
+
+        self.check_update_button.setAccessibleName(t("Settings", "Kiểm tra cập nhật"))
+        self.check_update_button.setAccessibleDescription(hint)
+        self.download_update_button.setAccessibleName(t("Settings", "Tải bản cập nhật"))
+        self.download_update_button.setAccessibleDescription(hint)
+
+        if state is UpdateUiState.CHECKING:
+            self.check_update_button.setEnabled(False)
+            self.check_update_button.setText(t("Settings", "Đang kiểm tra…"))
+            self.download_update_button.setVisible(False)
+        elif state is UpdateUiState.DOWNLOADING:
+            self.check_update_button.setEnabled(False)
+            self.check_update_button.setText(t("Settings", "Kiểm tra lại"))
+            self.download_update_button.setVisible(True)
+            self.download_update_button.setEnabled(False)
+            self.download_update_button.setText(t("Settings", "Đang tải…"))
+            if progress is not None and progress[1] > 0:
+                status_text = texts.fill(
+                    t("Settings", "Đang tải bản cập nhật ({done} / {total})…"),
+                    done=texts.format_size(progress[0]),
+                    total=texts.format_size(progress[1]),
+                )
+            else:
+                status_text = t("Settings", "Đang tải bản cập nhật…")
+        elif state is UpdateUiState.UP_TO_DATE:
+            self.check_update_button.setEnabled(True)
+            self.check_update_button.setText(t("Settings", "Kiểm tra lại"))
+            self.download_update_button.setVisible(False)
+            status_text = t("Settings", "Bạn đang dùng phiên bản mới nhất.")
+        elif state is UpdateUiState.AVAILABLE:
+            self.check_update_button.setEnabled(True)
+            self.check_update_button.setText(t("Settings", "Kiểm tra lại"))
+            self.download_update_button.setVisible(True)
+            self.download_update_button.setEnabled(True)
+            self.download_update_button.setText(t("Settings", "Tải về"))
+            status_text = (
+                texts.fill(t("Settings", "Đã có bản {version}."), version=info.version)
+                if info is not None
+                else t("Settings", "Đã có bản cập nhật mới.")
+            )
+        elif state is UpdateUiState.READY:
+            self.check_update_button.setEnabled(True)
+            self.check_update_button.setText(t("Settings", "Kiểm tra lại"))
+            self.download_update_button.setVisible(False)
+            status_text = t("Settings", "Đã tải xong bộ cài cập nhật.")
+        elif state is UpdateUiState.ERROR:
+            self.check_update_button.setEnabled(True)
+            self.check_update_button.setText(t("Settings", "Thử lại"))
+            self.download_update_button.setVisible(False)
+            status_text = t("Settings", "Không thể kiểm tra hoặc tải bản cập nhật. Hãy thử lại sau.")
+            tone = "warning"
+        else:
+            self.check_update_button.setEnabled(True)
+            self.check_update_button.setText(t("Settings", "Kiểm tra"))
+            self.download_update_button.setVisible(False)
+
+        self.update_status_label.setText(status_text)
+        self.update_status_label.setVisible(bool(status_text))
+        if self.update_status_label.property(theme.TONE_PROPERTY) != tone:
+            self.update_status_label.setProperty(theme.TONE_PROPERTY, tone)
+            _repolish(self.update_status_label)
 
     def _update_visibility_texts(self) -> None:
         self.name_row.set_text(QCoreApplication.translate("Settings", "Tên thiết bị"), self.hint_for_name())
@@ -1751,9 +2136,11 @@ class SettingsPage(QWidget):
             self.name_edit,
             self.open_dir_button,
             self.change_dir_button,
+            self.create_subfolder_switch,
             self.autostart_switch,
             *self.appearance.focus_widgets(),
             self.visible_switch,
+            self.stealth_switch,
             self.clear_history_button,
         ]
         for row in self.device_rows():
@@ -1763,8 +2150,12 @@ class SettingsPage(QWidget):
             self.rate_checkbox,
             self.rate_spin,
             self.retention_spin,
+            self.cancel_all_pending_button,
+            *self._pending_cancel_buttons,
             self.export_button,
             self.shortcuts_table,
+            self.check_update_button,
+            self.download_update_button,
             self.notices_button,
         ]
         for first, second in itertools.pairwise(chain):
@@ -1801,6 +2192,10 @@ class SettingsPage(QWidget):
         self._visible = bool(checked)
         self._update_visibility_texts()
         self.visible_toggled.emit(self._visible)
+
+    def _on_stealth_clicked(self, checked: bool) -> None:
+        self._stealth = bool(checked)
+        self.stealth_toggled.emit(self._stealth)
 
     def _on_rate_checkbox(self, checked: bool) -> None:
         self.rate_spin.setEnabled(bool(checked))
@@ -1919,6 +2314,63 @@ def _deliver_export(
         relay.finished.emit((generation, dest, result))
 
 
+class _UpdateRelay(QObject):
+    """Mang kết quả kiểm tra và tải bản cập nhật từ thread nền về thread Qt (`QueuedConnection`)."""
+
+    check_finished = Signal(object)  # (generation, result: UpdateInfo | None | BaseException)
+    download_progress = Signal(object)  # (generation, done: int, total: int)
+    download_finished = Signal(object)  # (generation, info: UpdateInfo, result: Path | BaseException)
+
+
+def _deliver_check(
+    relay: _UpdateRelay, generation: int, future: concurrent.futures.Future[UpdateInfo | None]
+) -> None:
+    try:
+        result: UpdateInfo | BaseException | None = future.result()
+    except BaseException as e:
+        result = e
+    with contextlib.suppress(RuntimeError):
+        relay.check_finished.emit((generation, result))
+
+
+def _download_worker(
+    relay: _UpdateRelay,
+    generation: int,
+    info: UpdateInfo,
+    dl_fn: Callable[..., Path],
+) -> Path:
+    last_emit = 0.0
+
+    def progress(done: int, total: int) -> None:
+        nonlocal last_emit
+        now = time.monotonic()
+        if total <= 0 or done >= total or (now - last_emit) >= 0.08:
+            last_emit = now
+            with contextlib.suppress(RuntimeError):
+                relay.download_progress.emit((generation, int(done), int(total)))
+
+    path = dl_fn(info, progress_cb=progress)
+    if info.expected_sha256 and not updater.verify_file_sha256(path, info.expected_sha256):
+        with contextlib.suppress(OSError):
+            path.unlink()
+        raise ValueError("checksum mismatch")
+    return path
+
+
+def _deliver_download(
+    relay: _UpdateRelay,
+    generation: int,
+    info: UpdateInfo,
+    future: concurrent.futures.Future[Path],
+) -> None:
+    try:
+        result: Path | BaseException = future.result()
+    except BaseException as e:
+        result = e
+    with contextlib.suppress(RuntimeError):
+        relay.download_finished.emit((generation, info, result))
+
+
 class SettingsController(QObject):
     """Nối `SettingsPage` với node, registry tự khởi động, hộp thoại và việc xuất log."""
 
@@ -1951,14 +2403,31 @@ class SettingsController(QObject):
         self._saved_autostart: bool | None = None
         self._notice_action: Callable[[], None] | None = None
         self._confirm_box: QMessageBox | None = None
+        self._cancel_pending_box: QMessageBox | None = None
+        self._cancel_pending_target: tuple[str, str] | Literal["all"] | None = None
+        self._install_update_box: QMessageBox | None = None
+        self._install_version = ""
         self._dialog: QFileDialog | None = None
         self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._update_executor: concurrent.futures.ThreadPoolExecutor | None = None
         self._export_running = False
+        self._update_busy = False
+        self._update_info: UpdateInfo | None = None
+        self._downloaded_installer: tuple[Path, str | None] | None = None
         self._relay = _ExportRelay(self)
         self._relay.finished.connect(self._on_export_finished, Qt.ConnectionType.QueuedConnection)
+        self._update_relay = _UpdateRelay(self)
+        self._update_relay.check_finished.connect(self._on_check_finished, Qt.ConnectionType.QueuedConnection)
+        self._update_relay.download_progress.connect(
+            self._on_download_progress, Qt.ConnectionType.QueuedConnection
+        )
+        self._update_relay.download_finished.connect(
+            self._on_download_finished, Qt.ConnectionType.QueuedConnection
+        )
 
         page.name_submitted.connect(self._on_name)
         page.visible_toggled.connect(self._on_visible)
+        page.stealth_toggled.connect(self._on_stealth)
         page.language_selected.connect(self._on_language)
         page.theme_selected.connect(self._on_theme)
         page.accent_selected.connect(self._on_accent)
@@ -1966,10 +2435,14 @@ class SettingsController(QObject):
         page.create_subfolder_toggled.connect(self._on_create_subfolder)
         page.rate_limit_changed.connect(self._on_rate)
         page.retention_changed.connect(self._on_retention)
+        page.cancel_pending_requested.connect(self.request_cancel_pending)
+        page.cancel_all_pending_requested.connect(self.request_cancel_all_pending)
         page.ask_toggled.connect(self._on_ask)
         page.clipboard_toggled.connect(self._on_clipboard)
         page.clear_history_requested.connect(self.request_clear_history)
         page.export_logs_requested.connect(self.request_export)
+        page.check_update_requested.connect(self.request_check_update)
+        page.download_update_requested.connect(self.request_download_update)
         page.open_notices_requested.connect(self._on_open_notices)
         page.notice_action.connect(self._on_notice_action)
         model = page.model
@@ -1987,6 +2460,16 @@ class SettingsController(QObject):
     def confirm_box(self) -> QMessageBox | None:
         """Hộp xác nhận “Xóa toàn bộ lịch sử” đang mở."""
         return self._confirm_box
+
+    @property
+    def cancel_pending_box(self) -> QMessageBox | None:
+        """Hộp xác nhận hủy lượt nhận đang chờ đang mở."""
+        return self._cancel_pending_box
+
+    @property
+    def install_update_box(self) -> QMessageBox | None:
+        """Hộp xác nhận chạy bộ cài cập nhật đang mở."""
+        return self._install_update_box
 
     @property
     def dialog(self) -> QFileDialog | None:
@@ -2020,12 +2503,22 @@ class SettingsController(QObject):
             self._read_snapshot()
 
     def close_all(self) -> None:
-        """Đóng hộp xác nhận và hộp lưu file; kết quả xuất log đang chạy về sau bị bỏ."""
+        """Đóng hộp xác nhận và hộp lưu file; kết quả xuất log / cập nhật đang chạy về sau bị bỏ."""
         self._generation += 1
         box, self._confirm_box = self._confirm_box, None
         if box is not None:
             box.close()
             box.deleteLater()
+        pending_box, self._cancel_pending_box = self._cancel_pending_box, None
+        self._cancel_pending_target = None
+        if pending_box is not None:
+            pending_box.close()
+            pending_box.deleteLater()
+        install_box, self._install_update_box = self._install_update_box, None
+        self._downloaded_installer = None
+        if install_box is not None:
+            install_box.close()
+            install_box.deleteLater()
         dialog, self._dialog = self._dialog, None
         if dialog is not None:
             dialog.close()
@@ -2033,13 +2526,19 @@ class SettingsController(QObject):
         if self._export_running:
             self._export_running = False
             self.page.set_export_running(False)
+        if self._update_busy:
+            self._update_busy = False
+            self.page.set_update_state(UpdateUiState.IDLE)
 
     def shutdown(self) -> None:
-        """Thoát: bỏ việc xuất log chưa chạy, không chờ việc đang chạy."""
+        """Thoát: bỏ việc xuất log và kiểm tra cập nhật chưa chạy, không chờ việc đang chạy."""
         self.close_all()
         executor, self._executor = self._executor, None
         if executor is not None:
             executor.shutdown(wait=False, cancel_futures=True)
+        update_executor, self._update_executor = self._update_executor, None
+        if update_executor is not None:
+            update_executor.shutdown(wait=False, cancel_futures=True)
 
     # ---- Ảnh chụp ------------------------------------------------------------------------------
 
@@ -2069,6 +2568,7 @@ class SettingsController(QObject):
         self._confirmed.update(
             name=result.name,
             visible=result.visible,
+            stealth=result.stealth,
             language=result.language,
             rate=result.rate_limit,
             retention=result.temp_retention_days,
@@ -2211,6 +2711,14 @@ class SettingsController(QObject):
             lambda old: self.page.set_visible(True if old is None else bool(old)),
             lambda _r: self.visibility_changed.emit(visible),
             value=visible,
+        )
+
+    def _on_stealth(self, stealth: bool) -> None:
+        self._call(
+            "stealth",
+            lambda node: node.set_stealth(stealth),
+            lambda old: self.page.set_stealth(False if old is None else bool(old)),
+            value=stealth,
         )
 
     def _on_language(self, code: object) -> None:
@@ -2405,6 +2913,236 @@ class SettingsController(QObject):
 
         host.call(lambda node: node.transfers.clear_history(), done)
 
+    # ---- Hủy lượt nhận đang chờ ----------------------------------------------------------------
+
+    def request_cancel_pending(self, device_id: str, transfer_id: str) -> None:
+        """Mở hộp xác nhận không chặn để hủy một lượt nhận đang chờ / dở dang."""
+        self._open_cancel_pending_box((device_id, transfer_id))
+
+    def request_cancel_all_pending(self) -> None:
+        """Mở hộp xác nhận không chặn để hủy mọi lượt nhận đang chờ / dở dang."""
+        self._open_cancel_pending_box("all")
+
+    def _open_cancel_pending_box(self, target: tuple[str, str] | Literal["all"]) -> None:
+        box = self._cancel_pending_box
+        if box is not None:
+            if self._cancel_pending_target == target:
+                box.raise_()
+                box.activateWindow()
+                return
+            self._cancel_pending_box = None
+            box.close()
+            box.deleteLater()
+        box = QMessageBox(self._message_parent())
+        box.setObjectName("cancelPendingBox")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        accept = box.addButton("", QMessageBox.ButtonRole.DestructiveRole)
+        decline = box.addButton("", QMessageBox.ButtonRole.RejectRole)
+        self._cancel_pending_target = target
+        _translate_cancel_pending_box(box, target == "all")
+        box.installEventFilter(self)
+        box.setDefaultButton(decline)
+        box.setEscapeButton(decline)
+        generation = self._generation
+        box.finished.connect(lambda _r: self._on_cancel_pending_finished(box, accept, target, generation))
+        self._cancel_pending_box = box
+        motion.fade_in_on_show(box)
+        box.open()
+
+    def _on_cancel_pending_finished(
+        self,
+        box: QMessageBox,
+        accept: object,
+        target: tuple[str, str] | Literal["all"],
+        generation: int,
+    ) -> None:
+        if self._cancel_pending_box is box:
+            self._cancel_pending_box = None
+            self._cancel_pending_target = None
+        clicked = box.clickedButton()
+        box.deleteLater()
+        if clicked is not accept or generation != self._generation:
+            return
+        host = self._host
+        if host is None:
+            return
+
+        def done(result: object) -> None:
+            if generation != self._generation or host is not self._host:
+                return
+            if isinstance(result, BaseException):
+                if isinstance(result, (RuntimeError, asyncio.CancelledError)):
+                    log.debug("không hủy được lượt nhận: node không chạy")
+                    return
+                log.error("hủy lượt nhận lỗi: %s", type(result).__name__)
+                self._show_notice(InfoLevel.ERROR, pending_cancel_failed_text())
+                return
+            if target == "all":
+                self._show_notice(InfoLevel.SUCCESS, pending_all_cancelled_text())
+            elif result:
+                self._show_notice(InfoLevel.SUCCESS, pending_cancelled_text())
+            self.refresh()
+
+        if target == "all":
+
+            async def cancel_all(node: Node) -> int:
+                keys = [
+                    info.key for info in node.transfers.transfers() if info.key.direction is Direction.RECEIVE
+                ]
+                cancelled = 0
+                for key in keys:
+                    if await node.transfers.cancel_transfer(key, wait_disk=True):
+                        cancelled += 1
+                return cancelled
+
+            host.submit(cancel_all, done)
+        else:
+            device_id, transfer_id = target
+            key = TransferKey(device_id, Direction.RECEIVE, transfer_id)
+            host.submit(lambda node: node.transfers.cancel_transfer(key, wait_disk=True), done)
+
+    # ---- Kiểm tra & tải bản cập nhật thủ công --------------------------------------------------
+
+    def request_check_update(self) -> None:
+        """Kiểm tra bản cập nhật khi người dùng bấm nút (mvp N9: chạy trên thread nền)."""
+        if self._update_busy:
+            return
+        if self._update_executor is None:
+            self._update_executor = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix=UPDATE_THREAD)
+        fn = check_update_fn
+        generation = self._generation
+        try:
+            future = self._update_executor.submit(fn)
+        except RuntimeError as e:
+            log.debug("không kiểm tra được cập nhật: %s", type(e).__name__)
+            return
+        self._update_busy = True
+        self._update_info = None
+        self.page.set_update_state(UpdateUiState.CHECKING)
+        future.add_done_callback(functools.partial(_deliver_check, self._update_relay, generation))
+
+    def _on_check_finished(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        generation, result = payload
+        if generation != self._generation:
+            return
+        self._update_busy = False
+        if isinstance(result, concurrent.futures.CancelledError):
+            return
+        if result is None or isinstance(result, BaseException):
+            if isinstance(result, BaseException):
+                log.warning("kiểm tra cập nhật lỗi: %s", type(result).__name__)
+            self.page.set_update_state(UpdateUiState.ERROR)
+            return
+        if isinstance(result, UpdateInfo):
+            if result.is_newer:
+                self._update_info = result
+                self.page.set_update_state(UpdateUiState.AVAILABLE, info=result)
+            else:
+                self._update_info = None
+                self.page.set_update_state(UpdateUiState.UP_TO_DATE, info=result)
+            return
+        self.page.set_update_state(UpdateUiState.ERROR)
+
+    def request_download_update(self) -> None:
+        """Tải bộ cài cập nhật hoặc mở trang phát hành khi người dùng bấm Tải về."""
+        info = self._update_info
+        if info is None or self._update_busy:
+            return
+        if auto_install_supported() and info.download_url:
+            if self._update_executor is None:
+                self._update_executor = concurrent.futures.ThreadPoolExecutor(
+                    1, thread_name_prefix=UPDATE_THREAD
+                )
+            dl_fn = download_update_fn
+            generation = self._generation
+            try:
+                future = self._update_executor.submit(
+                    _download_worker, self._update_relay, generation, info, dl_fn
+                )
+            except RuntimeError as e:
+                log.debug("không tải được cập nhật: %s", type(e).__name__)
+                return
+            self._update_busy = True
+            self.page.set_update_state(UpdateUiState.DOWNLOADING, info=info)
+            future.add_done_callback(
+                functools.partial(_deliver_download, self._update_relay, generation, info)
+            )
+            return
+        url = info.release_url.strip()
+        if not url.startswith("https://") or self._open_url(QUrl(url)) is False:
+            log.warning("không mở được trang phát hành cập nhật")
+            self._show_notice(InfoLevel.ERROR, update_launch_failed_text())
+
+    def _on_download_progress(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 3:
+            return
+        generation, done, total = payload
+        if generation != self._generation or not self._update_busy:
+            return
+        self.page.set_update_state(UpdateUiState.DOWNLOADING, info=self._update_info, progress=(done, total))
+
+    def _on_download_finished(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 3:
+            return
+        generation, info, result = payload
+        if generation != self._generation:
+            return
+        self._update_busy = False
+        if isinstance(result, Path):
+            self._downloaded_installer = (result, info.expected_sha256)
+            self.page.set_update_state(UpdateUiState.READY, info=info)
+            self._open_install_update_box(info)
+        elif isinstance(result, concurrent.futures.CancelledError):
+            log.debug("tải cập nhật bị hủy")
+        else:
+            log.warning("tải cập nhật lỗi: %s", type(result).__name__)
+            self.page.set_update_state(UpdateUiState.ERROR, info=info)
+            self._show_notice(InfoLevel.ERROR, update_launch_failed_text())
+
+    def _open_install_update_box(self, info: UpdateInfo) -> None:
+        box = self._install_update_box
+        if box is not None:
+            box.raise_()
+            box.activateWindow()
+            return
+        box = QMessageBox(self._message_parent())
+        box.setObjectName("installUpdateBox")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        accept = box.addButton("", QMessageBox.ButtonRole.AcceptRole)
+        decline = box.addButton("", QMessageBox.ButtonRole.RejectRole)
+        self._install_version = info.version
+        _translate_install_update_box(box, info.version)
+        box.installEventFilter(self)
+        box.setDefaultButton(decline)
+        box.setEscapeButton(decline)
+        generation = self._generation
+        box.finished.connect(lambda _r: self._on_install_update_finished(box, accept, generation))
+        self._install_update_box = box
+        motion.fade_in_on_show(box)
+        box.open()
+
+    def _on_install_update_finished(self, box: QMessageBox, accept: object, generation: int) -> None:
+        if self._install_update_box is box:
+            self._install_update_box = None
+        clicked = box.clickedButton()
+        box.deleteLater()
+        pair, self._downloaded_installer = self._downloaded_installer, None
+        if clicked is not accept or generation != self._generation or pair is None:
+            return
+        installer_path, expected_sha256 = pair
+        fn = apply_update_fn
+        try:
+            ok = bool(fn(installer_path, expected_sha256=expected_sha256))
+        except Exception as e:
+            log.warning("chưa chạy được bộ cài cập nhật: %s", type(e).__name__)
+            ok = False
+        if not ok:
+            self._show_notice(InfoLevel.ERROR, update_launch_failed_text())
+
     # ---- Xuất log ------------------------------------------------------------------------------
 
     def request_export(self) -> None:
@@ -2523,13 +3261,16 @@ class SettingsController(QObject):
             action()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if (
-            event.type() == QEvent.Type.LanguageChange
-            and isinstance(watched, QMessageBox)
-            and watched is self._confirm_box
-        ):
-            _translate_clear_history_box(watched)
-            return False
+        if event.type() == QEvent.Type.LanguageChange and isinstance(watched, QMessageBox):
+            if watched is self._confirm_box:
+                _translate_clear_history_box(watched)
+                return False
+            if watched is self._cancel_pending_box and self._cancel_pending_target is not None:
+                _translate_cancel_pending_box(watched, self._cancel_pending_target == "all")
+                return False
+            if watched is self._install_update_box:
+                _translate_install_update_box(watched, self._install_version)
+                return False
         if (
             watched is self.page
             and event.type() == QEvent.Type.Show
@@ -2552,6 +3293,38 @@ def _translate_clear_history_box(box: QMessageBox) -> None:
             button.setText(QCoreApplication.translate("Settings", "Xóa lịch sử"))
         elif role == QMessageBox.ButtonRole.RejectRole:
             button.setText(QCoreApplication.translate("Settings", "Không"))
+
+
+def _translate_cancel_pending_box(box: QMessageBox, cancel_all: bool) -> None:
+    """Chữ hộp xác nhận hủy lượt nhận đang chờ theo ngôn ngữ hiện tại."""
+    title = cancel_all_pending_title() if cancel_all else cancel_pending_title()
+    box.setWindowTitle(title)
+    box.setAccessibleName(title)
+    box.setText(cancel_all_pending_question() if cancel_all else cancel_pending_question())
+    for button in box.buttons():
+        role = box.buttonRole(button)
+        if role == QMessageBox.ButtonRole.DestructiveRole:
+            button.setText(
+                QCoreApplication.translate("Settings", "Hủy tất cả")
+                if cancel_all
+                else QCoreApplication.translate("Settings", "Hủy lượt nhận")
+            )
+        elif role == QMessageBox.ButtonRole.RejectRole:
+            button.setText(QCoreApplication.translate("Settings", "Không"))
+
+
+def _translate_install_update_box(box: QMessageBox, version: str) -> None:
+    """Chữ hộp xác nhận chạy trình cài đặt bản cập nhật theo ngôn ngữ hiện tại."""
+    title = install_update_title()
+    box.setWindowTitle(title)
+    box.setAccessibleName(title)
+    box.setText(install_update_question(version))
+    for button in box.buttons():
+        role = box.buttonRole(button)
+        if role == QMessageBox.ButtonRole.AcceptRole:
+            button.setText(QCoreApplication.translate("Settings", "Cài đặt ngay"))
+        elif role == QMessageBox.ButtonRole.RejectRole:
+            button.setText(QCoreApplication.translate("Settings", "Để sau"))
 
 
 def _apply_theme(mode: theme.Mode, accent: str | None) -> None:

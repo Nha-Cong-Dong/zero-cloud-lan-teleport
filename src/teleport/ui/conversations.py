@@ -1362,6 +1362,8 @@ class ConversationList(QWidget):
 
     send_files_requested = Signal(str, list)  # device_id, list[Path] (thả)
     pick_files_requested = Signal(str)  # menu “Gửi file…”
+    pick_folder_requested = Signal(str)  # menu “Gửi thư mục…”
+    send_multi_requested = Signal()  # menu “Gửi tới nhiều máy…”
     open_requested = Signal(str)  # Enter, bấm đúp: mở cuộc trò chuyện (tiêu điểm vào thanh gửi)
     drop_hint_requested = Signal(str)  # thả chỗ không có máy: radar.drop_hint_text()
     unpair_requested = Signal(str)
@@ -1510,6 +1512,12 @@ class ConversationList(QWidget):
             action = QAction(t("Conversations", "Gửi file…"), menu)
             action.triggered.connect(lambda _=False, i=view.device_id: self._request_pick(i))
             menu.addAction(action)
+            folder_action = QAction(t("Conversations", "Gửi thư mục…"), menu)
+            folder_action.triggered.connect(lambda _=False, i=view.device_id: self._request_pick_folder(i))
+            menu.addAction(folder_action)
+            multi_action = QAction(t("Conversations", "Gửi tới nhiều máy…"), menu)
+            multi_action.triggered.connect(self.send_multi_requested)
+            menu.addAction(multi_action)
         if view.paired:
             action = QAction(t("Conversations", "Hủy ghép đôi…"), menu)
             action.triggered.connect(lambda _=False, i=view.device_id: self._request_unpair(i))
@@ -1699,13 +1707,20 @@ class ConversationList(QWidget):
         device_id = index.data(DEVICE_ID_ROLE) if index.isValid() else None
         self.drop_files(device_id if isinstance(device_id, str) else None, urls)
 
-    def _request_pick(self, device_id: str) -> bool:
-        """Phát `pick_files_requested` nếu máy vẫn còn trong danh sách và gửi tới được."""
+    def _emit_if_receivable(self, device_id: str, signal: Any) -> bool:
         view = self.model.device(device_id)
         if view is not None and can_receive_files(view):
-            self.pick_files_requested.emit(device_id)
+            signal.emit(device_id)
             return True
         return False
+
+    def _request_pick(self, device_id: str) -> bool:
+        """Phát `pick_files_requested` nếu máy vẫn còn trong danh sách và gửi tới được."""
+        return self._emit_if_receivable(device_id, self.pick_files_requested)
+
+    def _request_pick_folder(self, device_id: str) -> bool:
+        """Phát `pick_folder_requested` nếu máy vẫn còn trong danh sách và gửi tới được."""
+        return self._emit_if_receivable(device_id, self.pick_folder_requested)
 
     def _request_unpair(self, device_id: str) -> None:
         view = self.model.device(device_id)

@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import functools
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -167,6 +167,24 @@ def cancel_text() -> str:
 
 def send_text() -> str:
     return QCoreApplication.translate("SendPicker", "Gửi")
+
+
+def send_many_text(count: int) -> str:
+    return QCoreApplication.translate("SendPicker", "Gửi (%n máy)", None, count)
+
+
+def select_all_text() -> str:
+    return QCoreApplication.translate("SendPicker", "Chọn tất cả")
+
+
+def clear_selection_text() -> str:
+    return QCoreApplication.translate("SendPicker", "Bỏ chọn")
+
+
+def multi_hint_text() -> str:
+    return QCoreApplication.translate(
+        "SendPicker", "Chọn một hoặc nhiều máy nhận (có thể bấm để bật/tắt từng máy)."
+    )
 
 
 def empty_text() -> str:
@@ -294,14 +312,21 @@ class SendPickerDialog(QDialog):
     """Hộp chọn máy nhận cho các file đã điền sẵn (docstring module)."""
 
     confirmed = Signal(str, object)  # device_id, tuple[Path, ...]; hộp đã đóng
+    confirmed_many = Signal(object, object)  # tuple[str, ...], tuple[Path, ...]; hộp đã đóng
     discover_requested = Signal()  # hộp đã đóng
 
     def __init__(
-        self, paths: Sequence[Path], model: ConversationModel, parent: QWidget | None = None
+        self,
+        paths: Sequence[Path],
+        model: ConversationModel,
+        parent: QWidget | None = None,
+        *,
+        multi: bool = False,
     ) -> None:
         super().__init__(parent)
         self._paths = tuple(Path(p) for p in paths)
         self._model = model
+        self._multi = bool(multi)
         self._rows: tuple[tuple[str, str, bool], ...] | None = None  # (device_id, tên, trực tuyến)
         self._empty: bool | None = None
         self._resolved = False  # đã gửi / đã đóng: không phát gì nữa
@@ -327,8 +352,19 @@ class SendPickerDialog(QDialog):
         self.files_view.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.files_caption.setBuddy(self.files_view)
         self.devices_caption = self._label("sendPickerDevicesLabel")
+        self.select_all_button = QPushButton()
+        self.select_all_button.setObjectName("sendPickerSelectAll")
+        self.select_all_button.setAutoDefault(False)
+        self.multi_hint_label = self._label("sendPickerMultiHint")
+        self.multi_hint_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.multi_hint_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.multi_hint_label.font()))
+        self.multi_hint_label.setWordWrap(True)
         self.devices_view = _list("sendPickerDevices", _DeviceList)
-        self.devices_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.devices_view.setSelectionMode(
+            QAbstractItemView.SelectionMode.MultiSelection
+            if self._multi
+            else QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         self.devices_caption.setBuddy(self.devices_view)
         self.empty_label = self._label("sendPickerEmpty")
         self.empty_label.setWordWrap(True)
@@ -350,6 +386,11 @@ class SendPickerDialog(QDialog):
         self.notice.setObjectName("sendPickerNotice")
         self.notice.dismissed.connect(self._on_notice_dismissed)
 
+        devices_header = QHBoxLayout()
+        devices_header.addWidget(self.devices_caption, 1, Qt.AlignmentFlag.AlignVCenter)
+        devices_header.addWidget(
+            self.select_all_button, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         empty_row = QHBoxLayout()
         empty_row.addWidget(self.discover_button, 0, Qt.AlignmentFlag.AlignLeft)
         empty_row.addStretch(1)
@@ -364,7 +405,8 @@ class SendPickerDialog(QDialog):
         layout.addWidget(self.files_caption)
         layout.addWidget(self.files_view)
         layout.addSpacing(theme.SPACING[1])
-        layout.addWidget(self.devices_caption)
+        layout.addLayout(devices_header)
+        layout.addWidget(self.multi_hint_label)
         layout.addWidget(self.devices_view, 1)
         layout.addWidget(self.empty_label)
         layout.addLayout(empty_row)
@@ -373,11 +415,13 @@ class SendPickerDialog(QDialog):
         layout.addWidget(self.notice)
         layout.addSpacing(theme.SPACING[1])
         layout.addLayout(buttons)
-        QWidget.setTabOrder(self.files_view, self.devices_view)
+        QWidget.setTabOrder(self.files_view, self.select_all_button)
+        QWidget.setTabOrder(self.select_all_button, self.devices_view)
         QWidget.setTabOrder(self.devices_view, self.discover_button)
         QWidget.setTabOrder(self.discover_button, self.cancel_button)
         QWidget.setTabOrder(self.cancel_button, self.send_button)
 
+        self.select_all_button.clicked.connect(self._toggle_select_all)
         self.cancel_button.clicked.connect(self.reject)
         self.send_button.clicked.connect(self._on_send)
         self.discover_button.clicked.connect(self._on_discover)
@@ -417,27 +461,65 @@ class SendPickerDialog(QDialog):
         """Đã qua hạn chờ của nút Gửi."""
         return self._armed
 
-    def selected_device(self) -> str | None:
-        """`device_id` của máy đang chọn, hay None."""
-        for item in self.devices_view.selectedItems():
+    def selected_devices(self) -> tuple[str, ...]:
+        """Các `device_id` đang chọn theo đúng thứ tự hiện, không trùng."""
+        ids: list[str] = []
+        seen: set[str] = set()
+        for row in range(self.devices_view.count()):
+            item = self.devices_view.item(row)
+            if item is None or not item.isSelected():
+                continue
             value = item.data(_DEVICE_ID_ROLE)
-            if isinstance(value, str):
-                return value
-        return None
+            if isinstance(value, str) and value not in seen:
+                seen.add(value)
+                ids.append(value)
+        return tuple(ids)
+
+    def selected_device(self) -> str | None:
+        """`device_id` đầu tiên đang chọn, hay None."""
+        ids = self.selected_devices()
+        return ids[0] if ids else None
 
     def device_ids(self) -> list[str]:
         """Các máy đang có trong danh sách, theo thứ tự hiện."""
         return [row[0] for row in self._rows or ()]
 
     def select_device(self, device_id: str) -> bool:
-        """Chọn máy `device_id` (như bấm chuột); không có → False."""
+        """Chọn duy nhất máy `device_id` (như bấm chuột); không có → False."""
         for row in range(self.devices_view.count()):
             item = self.devices_view.item(row)
-            if item.data(_DEVICE_ID_ROLE) == device_id:
+            if item is not None and item.data(_DEVICE_ID_ROLE) == device_id:
+                self.devices_view.clearSelection()
                 self.devices_view.setCurrentItem(item)
                 item.setSelected(True)
                 return True
         return False
+
+    def select_devices(self, device_ids: Iterable[str]) -> int:
+        """Chọn đồng thời các máy có mã trong `device_ids` (bỏ chọn máy khác); trả số máy chọn được."""
+        wanted = set(device_ids)
+        selection = self.devices_view.selectionModel()
+        selected_count = 0
+        first_item: QListWidgetItem | None = None
+        selection.blockSignals(True)
+        try:
+            for row in range(self.devices_view.count()):
+                item = self.devices_view.item(row)
+                if item is None:
+                    continue
+                match = item.data(_DEVICE_ID_ROLE) in wanted
+                item.setSelected(match)
+                if match:
+                    selected_count += 1
+                    if first_item is None:
+                        first_item = item
+            if first_item is not None:
+                self.devices_view.setCurrentItem(first_item, QItemSelectionModel.SelectionFlag.NoUpdate)
+        finally:
+            selection.blockSignals(False)
+        self.devices_view.viewport().update()
+        self._refresh_send()
+        return selected_count
 
     def busy_allowed(self) -> bool:
         """`show_busy` lúc này có chạy không (đã đóng, hay chưa qua `BUSY_REPEAT_MS` → False)."""
@@ -490,16 +572,17 @@ class SendPickerDialog(QDialog):
         caption = devices_label()
         self.devices_caption.setText(caption)
         self.devices_view.setAccessibleName(caption)
+        self.multi_hint_label.setText(multi_hint_text())
         self.empty_label.setText(empty_text())
         self.discover_button.setText(discover_text())
         self.discover_button.setAccessibleName(discover_text())
         self.warning_label.setText(warning_text())
-        for button, text in ((self.cancel_button, cancel_text()), (self.send_button, send_text())):
-            button.setText(text)
-            button.setAccessibleName(text)
+        self.cancel_button.setText(cancel_text())
+        self.cancel_button.setAccessibleName(cancel_text())
         self._fill_files()
         self._rows = None
         self._sync_devices()
+        self._refresh_send()
         self._update_description()
 
     # -- Bên trong -------------------------------------------------------------------------------
@@ -534,21 +617,21 @@ class SendPickerDialog(QDialog):
         view.setFixedHeight(rows * _row_height(view) + 2 * view.frameWidth())
 
     def _sync_devices(self) -> None:
-        """Dựng lại danh sách máy khi tập máy, tên hay trạng thái đổi; giữ máy đang chọn nếu còn."""
+        """Dựng lại danh sách máy khi tập máy, tên hay trạng thái đổi; giữ các máy đang chọn nếu còn."""
         rows = tuple(
             (view.device_id, texts.peer_label(view.name, view.device_id), is_online(view))
             for view in self._model.devices()
         )
         if rows != self._rows:
             old_order = [row[0] for row in self._rows or ()]
-            selected = self.selected_device()
+            selected_set = set(self.selected_devices())
             self._rebuild_devices(rows)
             new_order = [row[0] for row in rows]
-            if (
-                selected is not None
-                and selected in old_order
-                and selected in new_order
-                and old_order.index(selected) != new_order.index(selected)
+            if any(
+                device_id in old_order
+                and device_id in new_order
+                and old_order.index(device_id) != new_order.index(device_id)
+                for device_id in selected_set
             ):
                 self._rearm()  # máy đang chọn đổi chỗ: hàng dưới con trỏ có thể đã là máy khác
         self._apply_empty(not rows)
@@ -556,7 +639,7 @@ class SendPickerDialog(QDialog):
 
     def _rebuild_devices(self, rows: tuple[tuple[str, str, bool], ...]) -> None:
         view = self.devices_view
-        selected = self.selected_device()
+        selected = set(self.selected_devices())
         current_item = view.currentItem()
         current = current_item.data(_DEVICE_ID_ROLE) if current_item is not None else None
         self._rows = rows
@@ -574,7 +657,7 @@ class SendPickerDialog(QDialog):
                 view.addItem(item)
                 if device_id == current:
                     view.setCurrentItem(item, QItemSelectionModel.SelectionFlag.NoUpdate)
-                if device_id == selected:
+                if device_id in selected:
                     item.setSelected(True)
         finally:
             selection.blockSignals(False)
@@ -582,21 +665,56 @@ class SendPickerDialog(QDialog):
 
     def _apply_empty(self, empty: bool) -> None:
         """Danh sách máy hay trạng thái rỗng; đổi khi hộp đang mở thì đặt lại tiêu điểm (D4)."""
+        many_devices = not empty and len(self._rows or ()) >= 2
         if empty == self._empty:
+            self.select_all_button.setVisible(many_devices)
+            self.multi_hint_label.setVisible(not empty and self._multi)
             return
         first = self._empty is None
-        had_focus = self.devices_view.hasFocus() or self.discover_button.hasFocus()
+        had_focus = (
+            self.devices_view.hasFocus()
+            or self.select_all_button.hasFocus()
+            or self.discover_button.hasFocus()
+        )
         self._empty = empty
         self.devices_caption.setVisible(not empty)
+        self.select_all_button.setVisible(many_devices)
+        self.multi_hint_label.setVisible(not empty and self._multi)
         self.devices_view.setVisible(not empty)
         self.empty_label.setVisible(empty)
         self.discover_button.setVisible(empty)
         if not first and (had_focus or self.focusWidget() is None):
             (self.discover_button if empty else self.devices_view).setFocus()
 
+    def _toggle_select_all(self) -> None:
+        count = self.devices_view.count()
+        if count == 0:
+            return
+        all_selected = len(self.selected_devices()) == count
+        selection = self.devices_view.selectionModel()
+        selection.blockSignals(True)
+        try:
+            for row in range(count):
+                item = self.devices_view.item(row)
+                if item is not None:
+                    item.setSelected(not all_selected)
+        finally:
+            selection.blockSignals(False)
+        self.devices_view.viewport().update()
+        self._refresh_send()
+
     def _refresh_send(self) -> None:
-        enabled = self._armed and not self._resolved and self.selected_device() is not None
+        ids = self.selected_devices()
+        count = len(ids)
+        enabled = self._armed and not self._resolved and count > 0
         self.send_button.setEnabled(enabled)
+        send_label = send_many_text(count) if count >= 2 else send_text()
+        self.send_button.setText(send_label)
+        self.send_button.setAccessibleName(send_label)
+        total = self.devices_view.count()
+        toggle_label = clear_selection_text() if total > 0 and count == total else select_all_text()
+        self.select_all_button.setText(toggle_label)
+        self.select_all_button.setAccessibleName(toggle_label)
 
     def _start_arm(self) -> None:
         if self._arm_delay <= 0:
@@ -621,12 +739,15 @@ class SendPickerDialog(QDialog):
         self._refresh_send()
 
     def _on_send(self) -> None:
-        device_id = self.selected_device()
-        if self._resolved or not self._armed or device_id is None:
+        ids = self.selected_devices()
+        if self._resolved or not self._armed or not ids:
             return
         paths = self._paths
         self.done(QDialog.DialogCode.Accepted.value)
-        self.confirmed.emit(device_id, paths)
+        if len(ids) == 1:
+            self.confirmed.emit(ids[0], paths)
+        else:
+            self.confirmed_many.emit(ids, paths)
 
     def _on_discover(self) -> None:
         if self._resolved:
@@ -642,6 +763,7 @@ class SendPickerController(QObject):
     """Một hộp “Gửi n file tới…” cùng lúc, và một yêu cầu chờ khi node chưa sẵn sàng (docstring module)."""
 
     send_confirmed = Signal(str, object)  # device_id, tuple[Path, ...]
+    send_many_confirmed = Signal(object, object)  # tuple[str, ...], tuple[Path, ...]
     discover_requested = Signal()
 
     def __init__(self, window: MainWindow, parent: QObject | None = None) -> None:
@@ -650,6 +772,7 @@ class SendPickerController(QObject):
         self._ready = False
         self._dialog: SendPickerDialog | None = None
         self._pending: tuple[Path, ...] | None = None
+        self._pending_multi = False
 
     @property
     def dialog(self) -> SendPickerDialog | None:
@@ -663,7 +786,7 @@ class SendPickerController(QObject):
     def ready(self) -> bool:
         return self._ready
 
-    def request(self, paths: Sequence[Path]) -> bool:
+    def request(self, paths: Sequence[Path], *, multi: bool = False) -> bool:
         """Yêu cầu mở hộp cho `paths`; True khi được nhận (mở ngay hay giữ chờ), False khi bị bỏ."""
         files = tuple(Path(p) for p in paths)
         if not files:
@@ -678,8 +801,9 @@ class SendPickerController(QObject):
             return False
         if not self._ready:
             self._pending = files
+            self._pending_multi = bool(multi)
             return True
-        self._open(files)
+        self._open(files, multi=bool(multi))
         return True
 
     def set_ready(self, ready: bool) -> None:
@@ -689,23 +813,27 @@ class SendPickerController(QObject):
             self._close_dialog()
             return
         pending, self._pending = self._pending, None
+        pending_multi, self._pending_multi = self._pending_multi, False
         if pending is not None and self._dialog is None:
-            self._open(pending)
+            self._open(pending, multi=pending_multi)
 
     def discard_pending(self) -> None:
         """Bỏ yêu cầu chờ mà không báo (node không khởi động được)."""
         self._pending = None
+        self._pending_multi = False
 
     def close_all(self) -> None:
         """Đóng hộp và bỏ yêu cầu chờ (Thoát, `shutdown`); gọi lặp không sao."""
         self._pending = None
+        self._pending_multi = False
         self._close_dialog()
 
-    def _open(self, paths: tuple[Path, ...]) -> None:
+    def _open(self, paths: tuple[Path, ...], *, multi: bool = False) -> None:
         window = self._window
         window.bring_to_front()
-        dialog = SendPickerDialog(paths, window.conversations.model, window)
+        dialog = SendPickerDialog(paths, window.conversations.model, window, multi=multi)
         dialog.confirmed.connect(self.send_confirmed)
+        dialog.confirmed_many.connect(self.send_many_confirmed)
         dialog.discover_requested.connect(self.discover_requested)
         dialog.finished.connect(functools.partial(self._on_finished, dialog))
         self._dialog = dialog

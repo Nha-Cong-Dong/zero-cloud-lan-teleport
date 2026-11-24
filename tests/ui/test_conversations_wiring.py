@@ -144,7 +144,7 @@ class FakeTransfers:
             raise self._history
         return tuple(self._history)
 
-    def send(self, device_id, paths):
+    def send(self, device_id, paths, allow_dirs=False):
         self.sent.append((device_id, [Path(p) for p in paths]))
         return SimpleNamespace()
 

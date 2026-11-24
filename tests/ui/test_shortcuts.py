@@ -1215,8 +1215,16 @@ def test_s18_tab_order_export_table_notices(with_notices, qtbot):
     assert QApplication.focusWidget() is table
     QTest.keyClick(table, Qt.Key.Key_Tab)
     settle()
-    assert QApplication.focusWidget() is page.notices_button, "S17b: Tab từ bảng ra nút kế, không đi qua ô"
+    assert QApplication.focusWidget() is page.check_update_button, (
+        "S17b: Tab từ bảng ra nút kế, không đi qua ô"
+    )
+    QTest.keyClick(page.check_update_button, Qt.Key.Key_Tab)
+    settle()
+    assert QApplication.focusWidget() is page.notices_button
     QTest.keyClick(page.notices_button, Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier)
+    settle()
+    assert QApplication.focusWidget() is page.check_update_button
+    QTest.keyClick(page.check_update_button, Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier)
     settle()
     assert QApplication.focusWidget() is table
     QTest.keyClick(table, Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier)
