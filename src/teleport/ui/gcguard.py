@@ -114,21 +114,35 @@ class GcGuard:
         if was_enabled:
             gc.enable()
 
-    def _tick(self) -> None:
-        # Hẹn giờ được dựng trên thread Qt nên slot này luôn chạy trên thread Qt.
-        self._ticks += 1
+    def collect_if_due(self) -> int:
+        """Thu gom trên thread gọi nếu bộ đếm GC đã vượt ngưỡng; trả số lần đã gọi `gc.collect`."""
+        collected = 0
         for _ in range(MAX_COLLECTS_PER_TICK):
             try:
                 count = _triple(gc.get_count())
                 threshold = _triple(gc.get_threshold())
             except Exception:  # pragma: no cover - API GC đổi ở bản Python sau
-                count = threshold = None
+                return collected
             if count is None or threshold is None:  # pragma: no cover - như trên
-                gc.collect(2 if self._ticks % FALLBACK_FULL_EVERY == 0 else 0)
-                self.collections += 1
-                return
+                return collected
             gen = generation_to_collect(count, threshold)
             if gen is None:
-                return
+                return collected
             gc.collect(gen)
             self.collections += 1
+            collected += 1
+        return collected
+
+    def _tick(self) -> None:
+        # Hẹn giờ được dựng trên thread Qt nên slot này luôn chạy trên thread Qt.
+        self._ticks += 1
+        try:
+            count = _triple(gc.get_count())
+            threshold = _triple(gc.get_threshold())
+        except Exception:  # pragma: no cover - API GC đổi ở bản Python sau
+            count = threshold = None
+        if count is None or threshold is None:  # pragma: no cover - như trên
+            gc.collect(2 if self._ticks % FALLBACK_FULL_EVERY == 0 else 0)
+            self.collections += 1
+            return
+        self.collect_if_due()

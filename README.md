@@ -12,7 +12,7 @@
 [![Giấy phép](https://img.shields.io/badge/gi%E1%BA%A5y%20ph%C3%A9p-GPL--3.0-blue)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 
-**[Trang web chính thức (ZCL Hub)](https://luffyreals.github.io/zcl-hub/)** · **[Tải bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
+**[Trang web chính thức (ZCL Hub)](https://tungkernel.github.io/zcl-hub/)** · **[Tải bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
 
 </div>
 

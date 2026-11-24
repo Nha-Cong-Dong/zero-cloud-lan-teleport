@@ -866,17 +866,25 @@ def make_discovered(
     )
 
 
-async def find_leaks(before: set[asyncio.Task]) -> list[str]:
+async def find_leaks(before: set[asyncio.Task], *, full_gc: bool = True) -> list[str]:
     problems: list[str] = []
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0)
     current = asyncio.current_task()
-    leftover = [t for t in asyncio.all_tasks() if t is not current and t not in before and not t.done()]
+    deadline = time.monotonic() + 0.05
+    while True:
+        leftover = [t for t in asyncio.all_tasks() if t is not current and t not in before and not t.done()]
+        if not leftover or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.005)
     named = [t for t in leftover if t.get_name().startswith(("teleport.pairing", "teleport.node"))]
     problems += [f"task của app còn chạy: {t.get_name()} {t.get_coro()!r}" for t in named]
     problems += [f"task còn chạy: {t.get_name()} {t.get_coro()!r}" for t in leftover if t not in named]
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ResourceWarning)
-        gc.collect()
+        if full_gc:
+            gc.collect()
+        else:
+            gc.collect(1)
     problems += [f"ResourceWarning: {w.message}" for w in caught if issubclass(w.category, ResourceWarning)]
     return problems
 
@@ -1506,17 +1514,43 @@ def app_helpers(fast_values):
     )
 
 
+_app_gc_clean = False
+_app_module_used_no_leaks = False
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _app_no_leaks_module_gc():
+    """Chạy một lần `gc.collect()` thế hệ 2 cuối mỗi tệp có dùng `no_leaks` để bắt mọi rò rỉ sống lâu."""
+    global _app_module_used_no_leaks, _app_gc_clean
+    _app_module_used_no_leaks = False
+    yield
+    if _app_module_used_no_leaks:
+        _app_module_used_no_leaks = False
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            gc.collect()
+        _app_gc_clean = True
+        leaks = [f"ResourceWarning: {w.message}" for w in caught if issubclass(w.category, ResourceWarning)]
+        assert not leaks, "rò rỉ tài nguyên (gen-2) cuối module:\n" + "\n".join(leaks)
+
+
 @pytest.fixture
 async def no_leaks(request):
     """Sau test async: không còn task mới nào (kể cả `teleport.pairing*`, `teleport.node*`,
     `teleport.connection*`), không có socket chưa đóng. Test đồng bộ thì bỏ qua."""
+    global _app_gc_clean, _app_module_used_no_leaks
     if not inspect.iscoroutinefunction(request.function):
+        _app_gc_clean = False
         yield
         return
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", ResourceWarning)
-        gc.collect()
+    if not _app_gc_clean:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            gc.collect(1)
+    _app_gc_clean = False
+    _app_module_used_no_leaks = True
     before = asyncio.all_tasks()
     yield
-    problems = await find_leaks(before)
+    problems = await find_leaks(before, full_gc=False)
+    _app_gc_clean = True
     assert not problems, "rò rỉ sau test:\n" + "\n".join(problems)

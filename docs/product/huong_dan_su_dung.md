@@ -126,4 +126,4 @@ Khi muốn gửi ảnh, video hoặc tài liệu giữa máy tính và điện t
 
 ---
 
-*Tài liệu được cập nhật ngày: 2026-11-18 · Tác giả: Nguyễn Hoàng Tùng (@Luffyreals)*
+*Tài liệu được cập nhật ngày: 2026-11-18 · Tác giả: Nguyễn Hoàng Tùng (@tungkernel)*

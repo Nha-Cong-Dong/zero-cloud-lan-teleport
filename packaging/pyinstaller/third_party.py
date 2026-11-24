@@ -35,8 +35,10 @@ không rõ thì báo, không đoán. Thêm hay nâng dependency mà đổi giấ
 from __future__ import annotations
 
 import contextlib
+import csv
 import fnmatch
 import importlib.metadata as md
+import io
 import json
 import os
 import platform
@@ -946,8 +948,15 @@ def _owner_index() -> dict[str, md.Distribution]:
     """Đường dẫn file (đã chuẩn hóa) -> bản phân phối có file đó trong RECORD."""
     index: dict[str, md.Distribution] = {}
     for dist in md.distributions():
-        for entry in dist.files or []:
-            index.setdefault(_norm_path(Path(str(dist.locate_file(entry)))), dist)
+        root = os.path.abspath(str(dist.locate_file("")))
+        record = dist.read_text("RECORD")
+        if record is not None:
+            for row in csv.reader(io.StringIO(record)):
+                if row and row[0]:
+                    index.setdefault(os.path.normcase(os.path.normpath(os.path.join(root, row[0]))), dist)
+        else:
+            for entry in dist.files or []:
+                index.setdefault(os.path.normcase(os.path.normpath(os.path.join(root, str(entry)))), dist)
     return index
 
 

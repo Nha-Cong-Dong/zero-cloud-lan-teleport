@@ -92,34 +92,66 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Test marker `mdns` (mDNS thật trên 127.0.0.1): bỏ qua khi `TELEPORT_SKIP_MDNS=1`; khi chạy song
     song (`-n … --dist loadgroup`) dồn vào cùng một worker, vì mọi socket zeroconf cùng bind
-    127.0.0.1:5353. `tryfirst` để nhóm có trước khi pytest-xdist đọc `xdist_group`."""
+    127.0.0.1:5353. `tryfirst` để nhóm có trước khi pytest-xdist đọc `xdist_group`.
+
+    Khi chạy song song (có `-n`), xếp các tệp có `mdns` rồi các tệp có `slow` lên trước (LPT theo
+    tệp, giữ nguyên tuyệt đối thứ tự ca test bên trong mỗi tệp) để nhóm nặng bắt đầu ngay từ t=0."""
     skip = os.environ.get("TELEPORT_SKIP_MDNS") == "1"
+    file_rank: dict[str, int] = {}
     for item in items:
-        if item.get_closest_marker("mdns") is None:
-            continue
-        item.add_marker(pytest.mark.xdist_group("mdns"))
-        if skip:
-            item.add_marker(pytest.mark.skip(reason="TELEPORT_SKIP_MDNS=1"))
+        path = item.nodeid.split("::", 1)[0]
+        rank = file_rank.get(path, 2)
+        if item.get_closest_marker("mdns") is not None:
+            item.add_marker(pytest.mark.xdist_group("mdns"))
+            if skip:
+                item.add_marker(pytest.mark.skip(reason="TELEPORT_SKIP_MDNS=1"))
+            rank = 0
+        elif rank > 1 and item.get_closest_marker("slow") is not None:
+            rank = 1
+        file_rank[path] = rank
+
+    # Chỉ xếp lại thứ tự tệp cho bộ non-GUI khi chạy nhiều worker xdist (giữ nguyên thứ tự trong từng tệp).
+    numprocesses = getattr(config.option, "numprocesses", None)
+    if numprocesses and not any(item.get_closest_marker("gui") is not None for item in items):
+        items.sort(key=lambda it: file_rank[it.nodeid.split("::", 1)[0]])
 
 
-# Trọng số thời gian cho các tệp test giao diện nặng (nhiều socket, hẹn giờ, chụp ảnh)
-# để phân bổ tải đồng đều giữa các phần (shard) trên máy chủ kiểm thử.
-_HEAVY_FILE_WEIGHTS: dict[str, int] = {
-    "test_snapshots.py": 800,
-    "test_chat.py": 600,
-    "test_translations.py": 300,
-    "test_gui_transfer.py": 300,
-    "test_pair_then_send.py": 300,
-    "test_discover.py": 200,
-    "test_diagnose.py": 200,
-    "test_wait_pairing.py": 200,
-    "test_pairing.py": 150,
-    "test_conversations.py": 150,
-    "test_single_instance.py": 150,
-    "test_start_screen.py": 150,
-    "test_main_window.py": 150,
-    "test_a11y.py": 50,
-    "test_ipc.py": 50,
+# Trọng số thời gian (đơn vị ~0,1 s đo thực tế trên Windows) cho các tệp test có thời gian chạy lệch
+# mạnh so với số ca test, để phân bổ tải đồng đều giữa các phần (shard) trên máy chủ kiểm thử.
+_FILE_WEIGHTS: dict[str, int] = {
+    "test_single_instance.py": 910,
+    "test_gui_transfer.py": 470,
+    "test_snapshots.py": 320,
+    "test_start_screen.py": 310,
+    "test_i18n_tool.py": 310,
+    "test_translations.py": 260,
+    "test_wait_pairing.py": 260,
+    "test_illustrations.py": 240,
+    "test_icons.py": 230,
+    "test_main.py": 220,
+    "test_motion_navigation.py": 220,
+    "test_pairing.py": 210,
+    "test_settings_wiring.py": 200,
+    "test_d4_tray_app.py": 200,
+    "test_gui_receive_dir.py": 180,
+    "test_shell.py": 170,
+    "test_send_picker.py": 160,
+    "test_settings_page.py": 160,
+    "test_chat_history.py": 160,
+    "test_third_party.py": 160,
+    "test_radar.py": 140,
+    "test_receive.py": 140,
+    "test_fonts.py": 140,
+    "test_quit_tray_address.py": 140,
+    "test_remember_state_app.py": 130,
+    "test_settings_controller.py": 120,
+    "test_e1_device_row.py": 120,
+    "test_chat_wiring.py": 110,
+    "test_a11y.py": 100,
+    "test_gui_reconnect.py": 90,
+    "test_ipc.py": 60,
+    "test_widgets.py": 40,
+    "test_conversations.py": 30,
 }
 
 
@@ -127,10 +159,9 @@ class _Shard:
     @pytest.hookimpl(trylast=True)
     def pytest_collection_modifyitems(self, config: pytest.Config, items: list[pytest.Item]) -> None:
         """`TELEPORT_SHARD=i/n` (1 ≤ i ≤ n): chỉ chạy phần thứ i trong n phần, chia theo file để mọi test
-        của một file ở cùng một phần. Chia tham lam theo trọng số test và độ nặng thời gian (file nặng trước,
-        vào phần đang ít nhất; hòa thì theo đường dẫn), nên cùng bộ test thì cùng cách chia trên mọi máy.
-        `trylast` để chia sau khi `-m`/`-k` đã lọc. CI dùng để chạy song song các phần tuần tự
-        (architecture.md mục 6)."""
+        của một file ở cùng một phần. Chia tham lam theo trọng số thời gian (file nặng trước, vào phần đang
+        ít nhất; hòa thì theo đường dẫn), nên cùng bộ test thì cùng cách chia trên mọi máy. `trylast` để
+        chia sau khi `-m`/`-k` đã lọc. CI dùng để chạy song song các phần tuần tự (architecture.md mục 6)."""
         spec = os.environ.get("TELEPORT_SHARD", "")
         if not spec:
             return
@@ -146,8 +177,7 @@ class _Shard:
         owner: dict[str, int] = {}
 
         def _weight(p: str) -> int:
-            base_name = os.path.basename(p)
-            return counts[p] + _HEAVY_FILE_WEIGHTS.get(base_name, 0)
+            return _FILE_WEIGHTS.get(os.path.basename(p), counts[p])
 
         for path in sorted(counts, key=lambda p: (-_weight(p), p)):
             owner[path] = load.index(min(load))
@@ -466,9 +496,14 @@ async def cli_no_leaks():
     """Không còn task nào của test hay của Teleport sau khi test xong."""
     before = asyncio.all_tasks()
     yield
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0)
     me = asyncio.current_task()
-    left = [t for t in asyncio.all_tasks() if t is not me and t not in before and not t.done()]
+    deadline = time.monotonic() + 0.05
+    while True:
+        left = [t for t in asyncio.all_tasks() if t is not me and t not in before and not t.done()]
+        if not left or time.monotonic() >= deadline:
+            break
+        await asyncio.sleep(0.005)
     assert not left, [t.get_name() for t in left]
 
 

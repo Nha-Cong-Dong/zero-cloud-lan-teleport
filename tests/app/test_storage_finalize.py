@@ -385,17 +385,28 @@ def test_existing_dangling_symlink_with_same_name(rd, new_temp, tmp_path):
 
 @pytest.mark.slow
 def test_thousand_case_variants_of_same_name(storage, rd, new_temp, monkeypatch):
-    temp = new_temp([2] * 1000)
     # Ca biên spec mục 5: 1000 tên trùng nhau, khác hoa thường. Test chỉ xét chọn tên, nên bỏ
-    # fsync (qua seam `_full_fsync` và `os.fsync`): 3000 lần fsync, nhất là F_FULLFSYNC trên macOS,
-    # làm test chậm mà không kiểm thêm gì.
+    # fsync (qua seam `_full_fsync` và `os.fsync`) và cờ WRITE_THROUGH trên Windows; chia thành
+    # 10 lượt × 100 file trong cùng thư mục nhận `rd.root` để tránh ghi lặp O(N²) transfer.json
+    # 1000 mục, trong khi vẫn chốt đủ 1000 biến thể trùng tên vào cùng một thư mục đích.
     monkeypatch.setattr(storage, "_full_fsync", lambda fd: None)
     monkeypatch.setattr(os, "fsync", lambda fd: None)
+    if WINDOWS:
+        real_move = storage._move_file_ex
+        monkeypatch.setattr(
+            storage,
+            "_move_file_ex",
+            lambda src, dst, flags: real_move(src, dst, flags & ~storage.MOVEFILE_WRITE_THROUGH),
+        )
     rng = random.Random(1000)
     finals = []
-    for i in range(1000):
-        name = "".join(c.upper() if rng.random() < 0.5 else c for c in "anh.jpg")
-        finals.append(rd.finalize(make_part(temp, i, i.to_bytes(2, "big")), name))
+    for batch in range(10):
+        tid = f"{batch + 1:032x}"
+        temp = new_temp([2] * 100, tid=tid)
+        for j in range(100):
+            i = batch * 100 + j
+            name = "".join(c.upper() if rng.random() < 0.5 else c for c in "anh.jpg")
+            finals.append(rd.finalize(make_part(temp, j, i.to_bytes(2, "big")), name))
     keys = [key(p.name) for p in finals]
     assert len(set(keys)) == 1000
     for i, path in enumerate(finals):
@@ -1145,48 +1156,59 @@ NAMES = st.one_of(
 def test_property_finalize_never_overwrites_and_names_are_distinct(storage, fn, data, record_for):
     names = data.draw(st.lists(NAMES, min_size=1, max_size=8), label="names")
     preexisting = data.draw(st.sets(st.integers(min_value=0, max_value=len(names) - 1)), label="pre")
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
-        root = Path(d) / "recv"
-        root.mkdir()
-        existing: dict[str, tuple[bytes, int]] = {}
-        seen_keys: set[str] = set()
-        for idx in sorted(preexisting):
-            base = fn.sanitize_filename(names[idx])
-            flips = data.draw(st.lists(st.booleans(), min_size=len(base), max_size=len(base)))
-            variant = "".join(c.swapcase() if f else c for c, f in zip(base, flips, strict=True))
-            if key(variant) in seen_keys:
-                continue
-            content = f"co san {idx}".encode()
-            try:
-                with open(root / variant, "xb") as f:
-                    f.write(content)
-            except OSError:
-                continue  # hệ điều hành từ chối tên lúc dựng: bỏ
-            seen_keys.add(key(variant))
-            existing[variant] = (content, os.stat(root / variant).st_ino)
-        count_before = len(os.listdir(root))
-        finals: list[tuple[Path, bytes]] = []
-        with storage.ReceiveDir.open(root) as rd:
-            root_abs = rd.root
-            sizes = [len(f"file {i} ".encode()) + 8 for i in range(len(names))]
-            temp = rd.create_temp(ID, record_for(ID, sizes))
-            for i, name in enumerate(names):
-                content = f"file {i} ".encode() + os.urandom(8)
-                finals.append((rd.finalize(make_part(temp, i, content), name), content))
-            assert rd.remove_temp(temp) is True
-            assert os.listdir(root / ".teleport") == []
-        for path, content in finals:
-            assert path.parent == root_abs
-            assert path.read_bytes() == content
-            assert fn.sanitize_filename(path.name) == path.name
-        final_keys = [key(p.name) for p, _ in finals]
-        assert len(set(final_keys)) == len(final_keys)
-        assert not set(final_keys) & seen_keys
-        for variant, (content, ino) in existing.items():
-            assert (root / variant).read_bytes() == content
-            assert os.stat(root / variant).st_ino == ino
-        after = [n for n in os.listdir(root) if n != ".teleport"]
-        assert len(after) == count_before + len(names)
+    # Chỉ kiểm chọn tên không trùng và không ghi đè; tắt fsync/WRITE_THROUGH để 40 mẫu chạy nhanh.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(storage, "_full_fsync", lambda fd: None)
+        mp.setattr(os, "fsync", lambda fd: None)
+        if WINDOWS:
+            real_move = storage._move_file_ex
+            mp.setattr(
+                storage,
+                "_move_file_ex",
+                lambda src, dst, flags: real_move(src, dst, flags & ~storage.MOVEFILE_WRITE_THROUGH),
+            )
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            root = Path(d) / "recv"
+            root.mkdir()
+            existing: dict[str, tuple[bytes, int]] = {}
+            seen_keys: set[str] = set()
+            for idx in sorted(preexisting):
+                base = fn.sanitize_filename(names[idx])
+                flips = data.draw(st.lists(st.booleans(), min_size=len(base), max_size=len(base)))
+                variant = "".join(c.swapcase() if f else c for c, f in zip(base, flips, strict=True))
+                if key(variant) in seen_keys:
+                    continue
+                content = f"co san {idx}".encode()
+                try:
+                    with open(root / variant, "xb") as f:
+                        f.write(content)
+                except OSError:
+                    continue  # hệ điều hành từ chối tên lúc dựng: bỏ
+                seen_keys.add(key(variant))
+                existing[variant] = (content, os.stat(root / variant).st_ino)
+            count_before = len(os.listdir(root))
+            finals: list[tuple[Path, bytes]] = []
+            with storage.ReceiveDir.open(root) as rd:
+                root_abs = rd.root
+                sizes = [len(f"file {i} ".encode()) + 8 for i in range(len(names))]
+                temp = rd.create_temp(ID, record_for(ID, sizes))
+                for i, name in enumerate(names):
+                    content = f"file {i} ".encode() + os.urandom(8)
+                    finals.append((rd.finalize(make_part(temp, i, content), name), content))
+                assert rd.remove_temp(temp) is True
+                assert os.listdir(root / ".teleport") == []
+            for path, content in finals:
+                assert path.parent == root_abs
+                assert path.read_bytes() == content
+                assert fn.sanitize_filename(path.name) == path.name
+            final_keys = [key(p.name) for p, _ in finals]
+            assert len(set(final_keys)) == len(final_keys)
+            assert not set(final_keys) & seen_keys
+            for variant, (content, ino) in existing.items():
+                assert (root / variant).read_bytes() == content
+                assert os.stat(root / variant).st_ino == ino
+            after = [n for n in os.listdir(root) if n != ".teleport"]
+            assert len(after) == count_before + len(names)
 
 
 def test_finalized_content_hash_matches_reread(rd, new_temp):
