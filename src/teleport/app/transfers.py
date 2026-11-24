@@ -1082,15 +1082,16 @@ class TransferManager:
             break
         key = TransferKey(device_id, Direction.SEND, transfer_id)
         self._sources[(device_id, transfer_id)] = files
-        record = OutboxRecord(
-            device_id=device_id,
-            offer=Offer(transfer_id, BLOCK_SIZE, tuple(entries)),
-            paths=tuple(str(f.path) for f in files),
-            created_at=datetime.datetime.fromtimestamp(math.floor(_wall_time()), datetime.UTC),
-        )
-        self._outbox_records[(device_id, transfer_id)] = record
-        self._outbox_dirty = True
-        self._schedule_outbox_save()
+        if self._suspend_sends:
+            record = OutboxRecord(
+                device_id=device_id,
+                offer=Offer(transfer_id, BLOCK_SIZE, tuple(entries)),
+                paths=tuple(str(f.path) for f in files),
+                created_at=datetime.datetime.fromtimestamp(math.floor(_wall_time()), datetime.UTC),
+            )
+            self._outbox_records[(device_id, transfer_id)] = record
+            self._outbox_dirty = True
+            self._schedule_outbox_save()
         self._dispatch_now(actions)
         self._drain_deferred()
         return key
@@ -2635,7 +2636,9 @@ class TransferManager:
         )
 
     async def _restore_load_outbox(self) -> list[OutboxRecord]:
-        """Đọc `outbox.json` qua executor; hạn `DISK_OP_TIMEOUT`."""
+        """Đọc `outbox.json` qua executor (chỉ khi `suspend_sends=True`); hạn `DISK_OP_TIMEOUT`."""
+        if not self._suspend_sends:
+            return []
         return await self._load_config_store(
             lambda p: outbox.load(p), outbox.OUTBOX_NAME, "bỏ qua hàng đợi gửi"
         )
@@ -2870,7 +2873,7 @@ class TransferManager:
         if restored and kept_extra:
             self._tomb_dirty = True
             self._schedule_tombstone_snapshot()
-        if restored and sends_ok and outbox_dropped:
+        if self._suspend_sends and restored and sends_ok and outbox_dropped:
             self._outbox_dirty = True
             self._schedule_outbox_save()
         return restored
@@ -3050,7 +3053,12 @@ class TransferManager:
     # ---- Hàng đợi gửi (`outbox.json`) --------------------------------------------------------
 
     def _schedule_outbox_save(self) -> None:
-        if self._outbox_scheduled or self._outbox_task is not None or self._outbox_stopped:
+        if (
+            not self._suspend_sends
+            or self._outbox_scheduled
+            or self._outbox_task is not None
+            or self._outbox_stopped
+        ):
             return
         self._outbox_scheduled = True
         self._outbox_handle = self._loop.call_soon(self._snapshot_outbox)
@@ -3103,6 +3111,8 @@ class TransferManager:
 
     async def _flush_outbox(self) -> None:
         self._stop_outbox()
+        if not self._suspend_sends:
+            return
         try:
             async with asyncio.timeout(TOMBSTONE_FLUSH_TIMEOUT):
                 task = self._outbox_task

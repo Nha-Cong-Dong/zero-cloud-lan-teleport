@@ -267,12 +267,14 @@ async def test_missing_or_modified_source_and_orderly_non_suspend_close(
     await wait_until(lambda: outbox.load(B2.dir) == [], 10, "outbox.json phải tự dọn gọn mục hỏng")
     await asyncio.wait_for(B2.close(), 20)
 
-    # (b) Mặc định CLI (`suspend_sends=False`): đóng có trật tự phải hủy lượt và dọn `outbox.json`
+    # (b) Mặc định CLI (`suspend_sends=False`): không đọc/ghi `outbox.json`, đóng hủy bằng CANCELLED_USER
+    #     và giữ nguyên `outbox.json` nếu có sẵn của tiến trình dài hạn khác
     b3_trec = _simple_recorder("B3")
     B3 = await node_factory("B", node_kwargs={"on_transfer_event": b3_trec.on_update})
     f_cli = _make_file(src_dir, "cli.bin", 2048)
     k_cli = await B3.transfers.send(a_id, [f_cli])
-    await wait_until(lambda: len(outbox.load(B3.dir)) == 1, 10)
+    await asyncio.sleep(0.05)
+    assert outbox.load(B3.dir) == []
     await asyncio.wait_for(B3.close(), 20)
     assert b3_trec.finished(k_cli.transfer_id).result is app_transfers.TransferResult.CANCELLED_USER
     assert outbox.load(B3.dir) == []
