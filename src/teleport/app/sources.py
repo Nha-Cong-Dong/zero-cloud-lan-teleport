@@ -45,7 +45,8 @@ from types import TracebackType
 from typing import Self
 
 from teleport.core import blocks
-from teleport.core.blocks import BLOCK_SIZE, block_count, block_length
+from teleport.core.bitfield import Bitfield
+from teleport.core.blocks import BLOCK_SIZE, DIGEST_SIZE, block_count, block_length
 from teleport.core.filenames import (
     OutgoingNameError,
     prepare_outgoing_name,
@@ -220,20 +221,74 @@ def _entry_for(path: Path, st: os.stat_result) -> FileEntry:
     return _entry_for_rel(path, st, "", is_dir=False)
 
 
-def check_source(path: Path, leaves: bytearray, is_dir: bool = False) -> tuple[int, int, bytes]:
+def _iter_set_bits(bits: Bitfield) -> list[int]:
+    """Các chỉ số khối có bit = 1 trong `bits`, theo thứ tự tăng dần."""
+    n = len(bits)
+    indices: list[int] = []
+    for byte_index, b in enumerate(bits.to_bytes()):
+        if not b:
+            continue
+        base = byte_index * 8
+        for bit in range(min(8, n - base)):
+            if b & (0x80 >> bit):
+                indices.append(base + bit)
+    return indices
+
+
+def _read_block_digest(file: io.FileIO, file_size: int, index: int) -> tuple[bytearray, bytes]:
+    """Đọc khối `index` từ `file` đã mở ở vị trí chuẩn; đọc thiếu → `SourceChanged`."""
+    length = block_length(file_size, index)
+    payload = bytearray(length)
+    file.seek(index * BLOCK_SIZE)
+    got = 0
+    with memoryview(payload) as view:
+        while got < length:
+            n = file.readinto(view[got:])
+            if not n:
+                break
+            got += n
+    if got < length:
+        raise SourceChanged("file nguồn ngắn hơn manifest")
+    return payload, hashlib.sha256(payload).digest()
+
+
+def check_source(
+    path: Path,
+    leaves: bytes | bytearray,
+    is_dir: bool = False,
+    *,
+    unhashed: Bitfield | None = None,
+) -> tuple[int, int, bytes]:
     """Kết quả cho `CheckSource`: `(size, mtime_ms, merkle_root(leaves))` của file nguồn.
 
     `stat` theo đường dẫn (theo symlink). Không còn là file thường (hoặc thư mục khi is_dir=True)
     → `SourceChanged`; OSError (kể cả không còn file) bay ra nguyên trạng. `leaves` là của engine: chỉ đọc.
+    Khi `unhashed` khác None (lượt khôi phục có khối bỏ qua), đọc và băm bù đúng các khối đó
+    trên bản sao cục bộ của `leaves` trước khi tính `merkle_root`.
     """
-    st = os.stat(path)
-    if is_dir:
-        if not stat.S_ISDIR(st.st_mode):
-            raise SourceChanged("thư mục nguồn không còn là thư mục")
-        return 0, mtime_ms(st.st_mtime_ns), merkle_root(leaves)
-    if not stat.S_ISREG(st.st_mode):
-        raise SourceChanged("file nguồn không còn là file thường")
-    return st.st_size, mtime_ms(st.st_mtime_ns), merkle_root(leaves)
+    if is_dir or unhashed is None:
+        st = os.stat(path)
+        if is_dir:
+            if not stat.S_ISDIR(st.st_mode):
+                raise SourceChanged("thư mục nguồn không còn là thư mục")
+            return 0, mtime_ms(st.st_mtime_ns), merkle_root(leaves)
+        if not stat.S_ISREG(st.st_mode):
+            raise SourceChanged("file nguồn không còn là file thường")
+        return st.st_size, mtime_ms(st.st_mtime_ns), merkle_root(leaves)
+    with _open_regular(path) as file:
+        st = os.fstat(file.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise SourceChanged("file nguồn không còn là file thường")
+        size = st.st_size
+        n = block_count(size)
+        if len(unhashed) != n or len(leaves) != DIGEST_SIZE * n:
+            raise SourceChanged("file nguồn đã đổi kích thước")
+        full_leaves = bytearray(leaves)
+        for index in _iter_set_bits(unhashed):
+            _, digest = _read_block_digest(file, size, index)
+            start = index * DIGEST_SIZE
+            full_leaves[start : start + DIGEST_SIZE] = digest
+        return size, mtime_ms(st.st_mtime_ns), merkle_root(full_leaves)
 
 
 def _open_regular(path: Path) -> io.FileIO:
@@ -345,19 +400,7 @@ class SourceReader:
             raise ValueError("SourceReader đã đóng")
         if type(index) is not int or not 0 <= index < self._block_count:
             raise ValueError(f"index phải là số nguyên 0…{self._block_count - 1}")
-        length = block_length(self._entry.size, index)
-        payload = bytearray(length)
-        file.seek(index * BLOCK_SIZE)
-        got = 0
-        with memoryview(payload) as view:
-            while got < length:
-                n = file.readinto(view[got:])
-                if not n:
-                    break
-                got += n
-        if got < length:
-            raise SourceChanged("file nguồn ngắn hơn manifest")
-        return payload, hashlib.sha256(payload).digest()
+        return _read_block_digest(file, self._entry.size, index)
 
     def close(self) -> None:
         """Đóng handle. Gọi lại được."""

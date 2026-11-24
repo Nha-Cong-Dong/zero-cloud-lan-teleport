@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from teleport.app.web_guest import WebGuestManager
+from teleport.app.web_guest import WebGuestManager, make_wifi_qr
+from teleport.net.web_guest import GuestScope
 from tests.test_http_client import SimpleHttpClient
 
 
@@ -104,3 +105,48 @@ async def test_web_guest_manager_shared_directory(temp_receive_dir: Path, tmp_pa
                 assert zf.read("thumuc_chiase/ghi_chu.txt") == b"THU_MUC_CHIA_SE"
     finally:
         await manager.stop_session()
+
+
+@pytest.mark.asyncio
+async def test_web_guest_manager_scope_one_shot_and_text(temp_receive_dir: Path) -> None:
+    received: list[str] = []
+    manager = WebGuestManager(
+        receive_dir=temp_receive_dir,
+        on_text_received=received.append,
+    )
+    info = await manager.start_session(
+        preferred_ip="127.0.0.1",
+        scope=GuestScope.RECEIVE_ONLY,
+        one_shot=True,
+    )
+    assert info.scope is GuestScope.RECEIVE_ONLY
+    assert info.one_shot is True
+
+    try:
+        item = manager.send_text("Ghi chú từ PC")
+        assert item["text"] == "Ghi chú từ PC"
+
+        async with SimpleHttpClient() as client:
+            resp = await client.post(
+                f"http://127.0.0.1:{info.port}/api/text",
+                params={"token": info.token},
+                content=b"Tin nhan tu dien thoai",
+                headers={"Content-Type": "text/plain"},
+            )
+            assert resp.status_code == 200
+            assert received == ["Tin nhan tu dien thoai"]
+
+            texts = (
+                await client.get(f"http://127.0.0.1:{info.port}/api/texts", params={"token": info.token})
+            ).json()["texts"]
+            assert [t["text"] for t in texts] == ["Ghi chú từ PC", "Tin nhan tu dien thoai"]
+    finally:
+        await manager.stop_session()
+
+
+def test_make_wifi_qr() -> None:
+    payload, matrix, ascii_art, svg = make_wifi_qr("Nha-WiFi", "Pass1234", security="WPA", hidden=True)
+    assert payload == "WIFI:T:WPA;S:Nha-WiFi;P:Pass1234;H:true;;"
+    assert len(matrix) > 0
+    assert ascii_art
+    assert svg.startswith("<svg")

@@ -1756,6 +1756,21 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Biên lai hợp lệ: {peer} ({size}).</source>
+        <translation>Valid receipt: {peer} ({size}).</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Biên lai không hợp lệ hoặc đã bị sửa đổi.</source>
+        <translation>Receipt is invalid or has been modified.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Biên lai truyền tệp</source>
+        <translation>Transfer receipt</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Bạn đang dùng phiên bản mới nhất.</source>
         <translation>You are using the latest version.</translation>
     </message>
@@ -1808,6 +1823,16 @@
         <location filename="../settings.py"/>
         <source>Chỉ kiểm tra khi bạn bấm nút. Ứng dụng không tự kết nối mạng.</source>
         <translation>Checks only when you click. The app never connects automatically.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chọn tệp biên lai</source>
+        <translation>Select receipt file</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chữ ký biên lai hợp lệ nhưng máy ký chưa ghép đôi ({peer}, {size}).</source>
+        <translation>Receipt signature is valid, but signer is unpaired ({peer}, {size}).</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1991,6 +2016,16 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Kiểm tra biên lai</source>
+        <translation>Verify receipt</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Kiểm tra biên lai…</source>
+        <translation>Verify receipt…</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Kiểm tra cập nhật</source>
         <translation>Check for updates</translation>
     </message>
@@ -2161,6 +2196,11 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Tệp biên lai (*.teleport-receipt.json *.json)</source>
+        <translation>Receipt files (*.teleport-receipt.json *.json)</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Tốc độ gửi tối đa (MB/s)</source>
         <translation>Maximum send speed (MB/s)</translation>
     </message>
@@ -2183,6 +2223,11 @@
         <location filename="../settings.py"/>
         <source>Xuất log…</source>
         <translation>Export logs…</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Xác minh chữ ký số và tính toàn vẹn của tệp biên lai đã lưu.</source>
+        <translation>Verify digital signature and integrity of a saved receipt file.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -3170,8 +3215,28 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Chép chữ</source>
+        <translation>Copy text</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Chưa có tệp nào chia sẻ sẵn cho điện thoại.</source>
         <translation>No files currently shared with phone.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Chỉ dùng 1 lượt</source>
+        <translation>One-shot session</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Chỉ gửi sang điện thoại</source>
+        <translation>Send to phone only</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Chỉ nhận từ điện thoại</source>
+        <translation>Receive from phone only</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
@@ -3180,13 +3245,53 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Gửi chữ</source>
+        <translation>Send text</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Hai chiều</source>
+        <translation>Two-way</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Không thể khởi động phiên khách: </source>
         <translation>Failed to start guest session: </translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Mật khẩu Wi-Fi</source>
+        <translation>Wi-Fi password</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Mở máy ảnh điện thoại quét mã bên dưới hoặc truy cập liên kết trong trình duyệt.</source>
         <translation>Open phone camera to scan QR code below or visit the link in a browser.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Nhập ghi chú hoặc liên kết để gửi sang điện thoại...</source>
+        <translation>Enter note or link to send to phone...</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Phiên khách đã kết thúc hoặc hết hạn.</source>
+        <translation>Guest session ended or expired.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>QR Wi-Fi...</source>
+        <translation>Wi-Fi QR...</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Quyền phiên khách</source>
+        <translation>Guest session permission</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Quyền phiên:</source>
+        <translation>Session scope:</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
@@ -3197,6 +3302,36 @@
         <location filename="../web_guest_dialog.py"/>
         <source>Sao chép</source>
         <translation>Copy</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Tên mạng Wi-Fi</source>
+        <translation>Wi-Fi network name</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Tên mạng Wi-Fi (SSID)</source>
+        <translation>Wi-Fi network name (SSID)</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Tên mạng hoặc mật khẩu Wi-Fi không hợp lệ.</source>
+        <translation>Invalid Wi-Fi network name or password.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Tạo QR</source>
+        <translation>Generate QR</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Từ điện thoại: {text}</source>
+        <translation>From phone: {text}</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Văn bản gửi sang điện thoại</source>
+        <translation>Text to send to phone</translation>
     </message>
     <message numerus="yes">
         <location filename="../web_guest_dialog.py"/>

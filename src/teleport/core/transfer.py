@@ -520,6 +520,7 @@ class CheckSource:
     transfer_id: str
     file_index: int
     leaves: bytearray
+    unhashed: Bitfield | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -602,6 +603,20 @@ class RestoredDone:
     device_id: str
     offer: Offer
     age: float
+
+
+@dataclass(frozen=True, slots=True)
+class RestoredSend:
+    """Lượt gửi chưa kết thúc đọc lại từ `outbox.json`.
+
+    `roots`: cặp `(file_index, merkle_root_bytes)` của các file đã từng gửi `complete` mà chưa
+    nhận `verified`. `age`: giây từ lúc tạo lượt (hoặc hoạt động cuối).
+    """
+
+    device_id: str
+    offer: Offer
+    age: float
+    roots: tuple[tuple[int, bytes], ...] = ()
 
 
 # ---- Hàm thuần -------------------------------------------------------------------------------
@@ -883,12 +898,14 @@ class _SendFile:
     """Trạng thái một file ở bên gửi, cấp ở `resume` đầu tiên của file, giải phóng khi `verified`."""
 
     n: int
-    sent: Bitfield  # khối đã qua `block_read` ít nhất một lần
+    sent: Bitfield  # khối đã qua `block_read` ít nhất một lần (hoặc đã có sẵn lúc khôi phục)
     leaves: bytearray  # hash lần đọc đầu, bất biến sau khi ghi
     sent_count: int = 0
     sent_bytes: int = 0
     root: bytes | None = None
     checking: bool = False  # đang có `CheckSource`
+    unhashed: Bitfield | None = None  # các khối đã nạp từ `have` lúc khôi phục, chưa băm lại
+    seeded: bool = True  # False khi file của lượt khôi phục chưa qua lần `resume` đầu tiên
 
 
 @dataclass(slots=True, eq=False)
@@ -913,6 +930,8 @@ class _Send:
     verified_bytes: int = 0
     states: dict[int, _SendFile] = field(default_factory=dict)
     served: bool = False  # đã từng cấp trạng thái file (đã phục vụ một `resume`)
+    restored: bool = False
+    expire_restored: bool = False
     latest: _Latest | None = None
     conn: _DataConn | None = None  # kết nối đang phục vụ
     retry_at: float | None = None  # lịch mở lại kết nối dữ liệu
@@ -1114,6 +1133,7 @@ class TransferEngine:
         tombstones: Sequence[RestoredTombstone],
         done: Sequence[RestoredDone],
         now: float,
+        sends: Sequence[RestoredSend] = (),
     ) -> list[TransferAction]:
         """Nạp trạng thái đọc lại từ đĩa; phải là lời gọi đầu tiên (sau lời gọi khác → RuntimeError).
 
@@ -1129,23 +1149,35 @@ class TransferEngine:
           thì engine giữ chính nó (app không được dùng lại); kiểu khác thì chép.
         - Lượt nhận trùng khóa một bia mộ được khôi phục (đã hủy mà chưa kịp dọn) không được khôi
           phục: chỉ phát `RemoveTemp` cho thư mục tạm app đã mở cho nó (hợp đồng mục 11).
+        - Mỗi lượt gửi khôi phục từ `outbox.json` thành lượt gửi ở trạng thái RECONNECTING với
+          `offline_since = now − tuổi`, sẵn sàng gửi lại `offer` (và các `complete` trong `roots`)
+          khi có `control_up`, hoặc hết hạn nếu tuổi ≥ `RECONNECT_GRACE`.
 
         Sai kiểu dãy hay phần tử → TypeError. ValueError khi: `device_id`/`transfer_id` sai hay là
         máy này; một thiết bị có hơn một lượt nhận; `file_index` ≥ số file; `bits` không phải
         `Bitfield` đúng số khối; `leaves` sai độ dài; `part_blocks` ngoài 0…số khối hay có bit
         bật từ `part_blocks` trở đi; tuổi không phải số hữu hạn ≥ 0; `direction`, `reason`,
-        `unsent` của bia mộ sai; lượt nhận trùng khóa một lượt đã xong còn hạn. Không có
-        `TombstonesChanged`: bảng vừa nạp đúng bằng thứ đã lưu (trừ mục hết hạn).
+        `unsent` của bia mộ sai; lượt nhận trùng khóa một lượt đã xong còn hạn; trùng
+        `(device_id, transfer_id)` trong `sends`. Không có `TombstonesChanged`: bảng vừa nạp đúng
+        bằng thứ đã lưu (trừ mục hết hạn).
         """
         if self._last_now is not None:
             raise RuntimeError("restore phải là lời gọi đầu tiên của TransferEngine")
         recvs = _check_items("receives", receives, RestoredReceive)
         stones = _check_items("tombstones", tombstones, RestoredTombstone)
         dones = _check_items("done", done, RestoredDone)
+        send_items = _check_items("sends", sends, RestoredSend)
         now = self._check_now(now)
         plans = [self._check_restored_receive(r) for r in recvs]
         if len({r.device_id for r in recvs}) != len(recvs):
             raise ValueError("mỗi thiết bị có tối đa một lượt nhận khôi phục")
+        send_plans = [self._check_restored_send(s) for s in send_items]
+        seen_send_keys: set[tuple[str, str]] = set()
+        for send_rec in send_items:
+            pair = (send_rec.device_id, send_rec.offer.transfer_id)
+            if pair in seen_send_keys:
+                raise ValueError("mỗi lượt gửi khôi phục chỉ xuất hiện một lần")
+            seen_send_keys.add(pair)
         memos: list[tuple[float, str, Direction, str, RestoredTombstone | RestoredDone]] = []
         for d in dones:
             self._check_peer_id(d.device_id)
@@ -1212,6 +1244,33 @@ class TransferEngine:
             self._add_transfer(peer, t)
             peer.running = t
             peer.offline_since = self._offline_since(now, age)
+        for send_rec, (age, roots_map) in zip(send_items, send_plans, strict=True):
+            peer = self._peer(send_rec.device_id)
+            transfer_id = send_rec.offer.transfer_id
+            if (
+                isinstance(peer.memory.get(Direction.SEND, transfer_id, now), _Tombstone)
+                or (Direction.SEND, transfer_id) in peer.transfers
+                or (Direction.RECEIVE, transfer_id) in peer.transfers
+            ):
+                continue
+            offer = send_rec.offer
+            t_send = _Send(
+                key=TransferKey(send_rec.device_id, Direction.SEND, transfer_id),
+                offer=offer,
+                names=tuple(entry.rel_path if entry.rel_path else entry.name for entry in offer.files),
+                total_size=sum(entry.size for entry in offer.files),
+                verified=bytearray(len(offer.files)),
+                restored=True,
+                expire_restored=age >= RECONNECT_GRACE,
+            )
+            for idx, digest in roots_map.items():
+                n_f = block_count(offer.files[idx].size)
+                t_send.states[idx] = _SendFile(n_f, Bitfield(n_f), bytearray(), root=digest, seeded=False)
+                t_send.served = True
+            self._add_transfer(peer, t_send)
+            since = self._offline_since(now, age)
+            if peer.offline_since is None or since < peer.offline_since:
+                peer.offline_since = since
         return self._finish()
 
     def suspend_receiving(self, now: float) -> list[TransferAction]:
@@ -1229,6 +1288,21 @@ class TransferEngine:
         self._receiving = False
         for t in list(self._transfers.values()):
             if isinstance(t, _Recv) and t.phase is _Phase.RUNNING:
+                self._suspended.add(t.key)
+                self._end(t, Outcome.SUSPENDED, advance=False)
+        return self._finish()
+
+    def suspend_sends(self, now: float) -> list[TransferAction]:
+        """Tạm dừng mọi lượt gửi (đóng node giữ hàng đợi gửi bền), không gửi `cancel`, không bia mộ.
+
+        Đóng kết nối dữ liệu của lượt gửi và kết thúc với `TransferEnded(outcome=SUSPENDED)`.
+        Từ đó mọi message điều khiển hay kết nối dữ liệu tới sau của lượt đó bị bỏ qua và
+        không tái sử dụng được `transfer_id` với thiết bị đó. Không thay đổi `receiving`.
+        """
+        now = self._check_now(now)
+        self._accept_now(now)
+        for t in list(self._transfers.values()):
+            if isinstance(t, _Send):
                 self._suspended.add(t.key)
                 self._end(t, Outcome.SUSPENDED, advance=False)
         return self._finish()
@@ -1256,7 +1330,7 @@ class TransferEngine:
         if peer is None:
             peer = self._peers[device_id] = _Peer(device_id)
         for t in list(peer.transfers.values()):
-            if isinstance(t, _Recv) and t.expire_restored:
+            if t.expire_restored:
                 self._expire(t, now)
         self._drop_data(peer)
         peer.control = (control_id, client)
@@ -1324,6 +1398,11 @@ class TransferEngine:
             and TransferKey(device_id, Direction.RECEIVE, msg.transfer_id) in self._suspended
         ):
             return []  # S1: lượt nhận đã tạm dừng, máy gửi phải thấy mất kết nối rồi nối lại
+        if (
+            isinstance(msg, Accept | Reject | Resume | Verified | Cancel)
+            and TransferKey(device_id, Direction.SEND, msg.transfer_id) in self._suspended
+        ):
+            return []  # lượt gửi đã tạm dừng, không gửi `cancel` hay xử lý message đến muộn
         if isinstance(msg, Offer):
             self._on_offer(peer, msg, now)
         elif isinstance(msg, Complete):
@@ -1364,6 +1443,7 @@ class TransferEngine:
             or (Direction.RECEIVE, transfer_id) in peer.transfers
             or peer.memory.knows(transfer_id, now)
             or TransferKey(device_id, Direction.RECEIVE, transfer_id) in self._suspended
+            or TransferKey(device_id, Direction.SEND, transfer_id) in self._suspended
         ):
             raise TransferIdInUse(f"transfer_id {transfer_id} đã được dùng với thiết bị này")
         self._accept_now(now)
@@ -1539,7 +1619,10 @@ class TransferEngine:
             return self._finish()
         transfer_id = msg.transfer_id
         t = self._find_any(peer, transfer_id)
-        if t is None and TransferKey(device_id, Direction.RECEIVE, transfer_id) in self._suspended:
+        if t is None and (
+            TransferKey(device_id, Direction.RECEIVE, transfer_id) in self._suspended
+            or TransferKey(device_id, Direction.SEND, transfer_id) in self._suspended
+        ):
             self._emit(CloseData(device_id, data_id))  # S1: lượt đã tạm dừng, không `cancel`
         elif t is None:
             tombstone = peer.memory.tombstone(transfer_id, now)
@@ -1674,6 +1757,10 @@ class TransferEngine:
             return self._finish()
         start = index * DIGEST_SIZE
         if index in state.sent:
+            if state.unhashed is not None and index in state.unhashed:
+                state.leaves[start : start + DIGEST_SIZE] = digest
+                state.unhashed.clear(index)
+                return self._finish()
             if state.leaves[start : start + DIGEST_SIZE] != digest:
                 self._fail(t, CancelReason.SOURCE_CHANGED, None, now, file_index=file_index)
             return self._finish()
@@ -1683,7 +1770,8 @@ class TransferEngine:
         state.sent_bytes += _block_len(size, index)
         if state.sent_count == state.n and state.root is None and not state.checking:
             state.checking = True
-            self._emit(CheckSource(device_id, t.key.transfer_id, file_index, state.leaves))
+            unhashed = _copy_bitfield(state.unhashed) if state.unhashed is not None else None
+            self._emit(CheckSource(device_id, t.key.transfer_id, file_index, state.leaves, unhashed=unhashed))
         return self._finish()
 
     def block_received(
@@ -2070,6 +2158,29 @@ class TransferEngine:
         if n and n - 1 in r.bits:
             have_bytes -= BLOCK_SIZE - _block_len(size, n - 1)
         return n, have_count, have_bytes, _check_age("age", r.age)
+
+    def _check_restored_send(self, s: RestoredSend) -> tuple[float, dict[int, bytes]]:
+        """Kiểm một `RestoredSend`; trả `(tuổi, {file_index: root_bytes})`."""
+        self._check_peer_id(s.device_id)
+        if not isinstance(s.offer, Offer):
+            raise ValueError("offer phải là Offer")
+        age = _check_age("age", s.age)
+        if not isinstance(s.roots, list | tuple):
+            raise TypeError("roots phải là list hoặc tuple")
+        n_files = len(s.offer.files)
+        roots: dict[int, bytes] = {}
+        for item in s.roots:
+            if not isinstance(item, list | tuple) or len(item) != 2:
+                raise ValueError("mỗi phần tử của roots phải là cặp (file_index, root)")
+            idx, digest = item
+            if (
+                type(idx) is int
+                and 0 <= idx < n_files
+                and isinstance(digest, bytes)
+                and len(digest) == DIGEST_SIZE
+            ):
+                roots[idx] = digest
+        return age, roots
 
     @staticmethod
     def _offline_since(now: float, age: float) -> float:
@@ -2559,17 +2670,34 @@ class TransferEngine:
             t.verified_bytes -= size
         state = t.states.get(index)
         if state is None:
-            state = _SendFile(n, Bitfield(n), bytearray(DIGEST_SIZE * n))
+            state = _SendFile(n, Bitfield(n), bytearray(DIGEST_SIZE * n), seeded=not t.restored)
             t.states[index] = state
             t.served = True
         # O(n) một lần mỗi `resume`, bằng số nguyên lớn (vòng lặp ở C, không lặp từng bit).
         raw = have.to_bytes()
         have_bits = int.from_bytes(raw, "big")
-        if have_bits & ~int.from_bytes(state.sent.to_bytes(), "big"):
+        full = have_bits == ((1 << n) - 1) << (8 * len(raw) - n)
+        if t.restored and not state.seeded:
+            for j in range(index):
+                if not t.verified[j]:
+                    self._mark_verified(t, j)
+            if len(state.leaves) != DIGEST_SIZE * n:
+                state.leaves = bytearray(DIGEST_SIZE * n)
+            sent_count = have_bits.bit_count()
+            sent_bytes = sent_count * BLOCK_SIZE
+            if n and (n - 1) in have:
+                sent_bytes -= BLOCK_SIZE - _block_len(size, n - 1)
+            state.sent = _copy_bitfield(have)
+            state.sent_count = sent_count
+            state.sent_bytes = sent_bytes
+            state.unhashed = _copy_bitfield(have) if have_bits else None
+            if not full:
+                state.root = None
+            state.seeded = True
+        elif have_bits & ~int.from_bytes(state.sent.to_bytes(), "big"):
             # Bên nhận khai có khối mà bên gửi chưa từng gửi.
             self._fail(t, CancelReason.ERROR, FailureDetail.PROTOCOL, now, file_index=index)
             return
-        full = have_bits == ((1 << n) - 1) << (8 * len(raw) - n)
         latest = _Latest(index, seq, have, full)
         t.latest = latest
         if full:
@@ -2577,7 +2705,8 @@ class TransferEngine:
                 self._send(peer, Complete(transfer_id, index, state.root.hex()))
             elif state.sent_count == state.n and not state.checking:
                 state.checking = True
-                self._emit(CheckSource(peer.device_id, transfer_id, index, state.leaves))
+                unhashed = _copy_bitfield(state.unhashed) if state.unhashed is not None else None
+                self._emit(CheckSource(peer.device_id, transfer_id, index, state.leaves, unhashed=unhashed))
             return
         assert peer.control is not None
         control_id, client = peer.control

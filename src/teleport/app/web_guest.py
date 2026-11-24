@@ -11,16 +11,40 @@ import logging
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from teleport.core.qr import encode_qr, render_ascii, render_svg
+from teleport.core.qr import (
+    encode_qr,
+    encode_wifi_qr,
+    format_wifi_qr,
+    render_ascii,
+    render_svg,
+)
 from teleport.net.discovery import local_ipv4_addresses
-from teleport.net.web_guest import DEFAULT_INACTIVITY_TIMEOUT, WebGuestHttpServer
+from teleport.net.web_guest import DEFAULT_INACTIVITY_TIMEOUT, GuestScope, WebGuestHttpServer
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 log = logging.getLogger("teleport.app.web_guest")
+
+
+def make_wifi_qr(
+    ssid: str,
+    password: str = "",
+    *,
+    security: str = "WPA",
+    hidden: bool = False,
+) -> tuple[str, list[list[bool]], str, str]:
+    """Sinh payload và mã QR kết nối Wi-Fi (ASCII + SVG) cho điện thoại."""
+    payload = format_wifi_qr(ssid, password, security=security, hidden=hidden)
+    matrix = encode_wifi_qr(ssid, password, security=security, hidden=hidden)
+    return (
+        payload,
+        matrix,
+        render_ascii(matrix, border=2),
+        render_svg(matrix, border=4, scale=8),
+    )
 
 
 @dataclass(frozen=True)
@@ -34,6 +58,8 @@ class GuestSessionInfo:
     qr_matrix: list[list[bool]] = field(repr=False)
     qr_ascii: str = field(repr=False)
     qr_svg: str = field(repr=False)
+    scope: GuestScope = GuestScope.BOTH
+    one_shot: bool = False
 
 
 class WebGuestManager:
@@ -48,6 +74,7 @@ class WebGuestManager:
         on_upload_progress: Callable[[str, int, int], None] | None = None,
         on_upload_complete: Callable[[str, int, Path], None] | None = None,
         on_session_timeout: Callable[[], None] | None = None,
+        on_text_received: Callable[[str], None] | None = None,
     ) -> None:
         self.receive_dir = receive_dir
         self.device_name = device_name
@@ -57,6 +84,7 @@ class WebGuestManager:
         self.on_upload_progress = on_upload_progress
         self.on_upload_complete = on_upload_complete
         self.on_session_timeout = on_session_timeout
+        self.on_text_received = on_text_received
 
         self._server: WebGuestHttpServer | None = None
         self._session_info: GuestSessionInfo | None = None
@@ -74,11 +102,15 @@ class WebGuestManager:
         shared_files: Sequence[Path] | None = None,
         preferred_ip: str | None = None,
         port: int = 0,
+        *,
+        scope: GuestScope = GuestScope.BOTH,
+        one_shot: bool = False,
     ) -> GuestSessionInfo:
         """Khởi động một phiên chế độ khách mới, sinh mã QR và URL kết nối."""
         if self._server is not None:
             await self.stop_session()
 
+        scope = GuestScope(scope)
         token = secrets.token_hex(16)
         self.receive_dir.mkdir(parents=True, exist_ok=True)
 
@@ -91,6 +123,9 @@ class WebGuestManager:
             on_upload_progress=self.on_upload_progress,
             on_upload_complete=self.on_upload_complete,
             on_session_timeout=self._handle_timeout,
+            scope=scope,
+            one_shot=one_shot,
+            on_text_received=self.on_text_received,
         )
 
         if shared_files:
@@ -116,6 +151,8 @@ class WebGuestManager:
             qr_matrix=qr_matrix,
             qr_ascii=qr_ascii,
             qr_svg=qr_svg,
+            scope=scope,
+            one_shot=one_shot,
         )
 
         log.info("Khởi tạo thành công phiên khách: %s", url)
@@ -141,6 +178,12 @@ class WebGuestManager:
         if not self._server:
             return
         self._server.remove_shared_file(file_id)
+
+    def send_text(self, text: str) -> dict[str, Any]:
+        """Gửi một tin nhắn văn bản tới các trình duyệt khách đang mở."""
+        if not self._server:
+            raise RuntimeError("Phiên chế độ khách chưa được khởi động")
+        return self._server.push_text(text)
 
     def _select_local_ip(self, preferred_ip: str | None = None) -> str:
         """Lựa chọn địa chỉ IPv4 nội bộ phù hợp để điện thoại kết nối."""

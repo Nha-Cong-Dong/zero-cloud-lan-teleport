@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
 import zipfile
 from pathlib import Path
 
 import pytest
 
-from teleport.net.web_guest import WebGuestHttpServer
+from teleport.net.web_guest import (
+    MAX_TEXT_BYTES,
+    TEXT_RATE_LIMIT_MAX,
+    GuestScope,
+    WebGuestHttpServer,
+)
 from teleport.net.web_guest_assets import WEB_GUEST_HTML
 from tests.test_http_client import SimpleHttpClient
 
@@ -295,5 +302,218 @@ async def test_web_guest_token_brute_force_rate_limit(temp_dirs: tuple[Path, Pat
             # Lần thứ 6 bị khóa 429 kể cả khi thử gửi đúng token
             locked_resp = await client.get("/api/info", params={"token": "real_secret"})
             assert locked_resp.status_code == 429
+    finally:
+        await server.stop()
+
+
+def test_web_guest_html_budget_and_camera_input() -> None:
+    """HTML nhúng nằm dưới trần 50 KiB và có nút chụp ảnh trực tiếp từ camera."""
+    assert len(WEB_GUEST_HTML.encode("utf-8")) < 50 * 1024
+    assert 'capture="environment"' in WEB_GUEST_HTML
+    assert 'accept="image/*"' in WEB_GUEST_HTML
+
+
+@pytest.mark.asyncio
+async def test_web_guest_scope_enforcement(temp_dirs: tuple[Path, Path]) -> None:
+    """RECEIVE_ONLY chặn tải về (403); SEND_ONLY chặn tải lên & gửi chữ (403)."""
+    upload_dir, shared_dir = temp_dirs
+    shared = shared_dir / "file.bin"
+    shared.write_bytes(b"DATA_OUT")
+
+    recv_srv = WebGuestHttpServer(token="r_tok", upload_dir=upload_dir, scope=GuestScope.RECEIVE_ONLY)
+    fid = recv_srv.add_shared_file(shared)
+    port_r = await recv_srv.start(host="127.0.0.1", port=0)
+    try:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port_r}") as client:
+            info = (await client.get("/api/info", params={"token": "r_tok"})).json()
+            assert info["scope"] == "receive_only"
+            assert info["files"] == []
+            assert (await client.get(f"/api/download/{fid}", params={"token": "r_tok"})).status_code == 403
+            assert (await client.get("/api/download-zip", params={"token": "r_tok"})).status_code == 403
+            up = await client.post(
+                "/api/upload",
+                params={"name": "up.txt", "token": "r_tok"},
+                content=b"IN",
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            assert up.status_code == 200
+    finally:
+        await recv_srv.stop()
+
+    send_srv = WebGuestHttpServer(token="s_tok", upload_dir=upload_dir, scope=GuestScope.SEND_ONLY)
+    fid2 = send_srv.add_shared_file(shared)
+    port_s = await send_srv.start(host="127.0.0.1", port=0)
+    try:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port_s}") as client:
+            info = (await client.get("/api/info", params={"token": "s_tok"})).json()
+            assert info["scope"] == "send_only"
+            assert len(info["files"]) == 1
+            assert (
+                await client.post(
+                    "/api/upload",
+                    params={"name": "nope.txt", "token": "s_tok"},
+                    content=b"NOPE",
+                    headers={"Content-Type": "application/octet-stream"},
+                )
+            ).status_code == 403
+            assert (
+                await client.post(
+                    "/api/text",
+                    params={"token": "s_tok"},
+                    content=b"hi",
+                    headers={"Content-Type": "text/plain"},
+                )
+            ).status_code == 403
+            assert (await client.get(f"/api/download/{fid2}", params={"token": "s_tok"})).status_code == 200
+    finally:
+        await send_srv.stop()
+
+
+@pytest.mark.asyncio
+async def test_web_guest_one_shot_expires_and_stops(temp_dirs: tuple[Path, Path]) -> None:
+    """Chế độ 1 lượt cho phép đúng 1 lượt tải lên hoặc tải về rồi trả 410 Gone và tự tắt."""
+    upload_dir, shared_dir = temp_dirs
+    timeout_called = False
+
+    def on_timeout() -> None:
+        nonlocal timeout_called
+        timeout_called = True
+
+    srv_up = WebGuestHttpServer(
+        token="once_up",
+        upload_dir=upload_dir,
+        one_shot=True,
+        on_session_timeout=on_timeout,
+    )
+    port_u = await srv_up.start(host="127.0.0.1", port=0)
+    try:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port_u}") as client:
+            first = await client.post(
+                "/api/upload",
+                params={"name": "one.bin", "token": "once_up"},
+                content=b"ONE_SHOT_UPLOAD",
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            assert first.status_code == 200
+            second = await client.post(
+                "/api/upload",
+                params={"name": "two.bin", "token": "once_up"},
+                content=b"SECOND",
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            assert second.status_code == 410
+        assert timeout_called
+        await asyncio.sleep(0.35)
+        assert srv_up._closed
+    finally:
+        await srv_up.stop()
+
+    doc = shared_dir / "once.txt"
+    doc.write_bytes(b"ONE_SHOT_DOWNLOAD")
+    srv_dl = WebGuestHttpServer(token="once_dl", upload_dir=upload_dir, one_shot=True)
+    fid = srv_dl.add_shared_file(doc)
+    port_d = await srv_dl.start(host="127.0.0.1", port=0)
+    try:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port_d}") as client:
+            dl1 = await client.get(f"/api/download/{fid}", params={"token": "once_dl"})
+            assert dl1.status_code == 200
+            assert dl1.content == b"ONE_SHOT_DOWNLOAD"
+            dl2 = await client.get(f"/api/download/{fid}", params={"token": "once_dl"})
+            assert dl2.status_code == 410
+    finally:
+        await srv_dl.stop()
+
+
+@pytest.mark.asyncio
+async def test_web_guest_two_way_text_sse_limits_and_rate(temp_dirs: tuple[Path, Path]) -> None:
+    """Trao đổi văn bản 2 chiều qua /api/text, /api/texts, push_text (SSE) + trần 64 KiB + 429."""
+    upload_dir, _ = temp_dirs
+    received_from_guest: list[str] = []
+
+    server = WebGuestHttpServer(
+        token="txt_tok",
+        upload_dir=upload_dir,
+        on_text_received=received_from_guest.append,
+    )
+    port = await server.start(host="127.0.0.1", port=0)
+
+    try:
+        # Mở stream SSE nhận sự kiện push_text trực tiếp
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"GET /api/events?token=txt_tok HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        await writer.drain()
+
+        async def _read_until_substr(target: bytes) -> str:
+            buf = b""
+            for _ in range(40):
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+                buf += chunk
+                if target in buf:
+                    return buf.decode("utf-8", errors="replace")
+            raise AssertionError(f"Không nhận được {target!r} trong SSE: {buf!r}")
+
+        init_raw = await _read_until_substr(b"event: init")
+        assert '"scope": "both"' in init_raw
+
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port}") as client:
+            # 1. Host gửi chữ sang điện thoại -> SSE phát event: text_message
+            pushed = server.push_text("https://example.org/doc")
+            assert pushed["sender"] == "host"
+            sse_msg = await _read_until_substr(b"event: text_message")
+            assert "https://example.org/doc" in sse_msg
+
+            # 2. Điện thoại gửi chữ JSON & text/plain -> callback & GET /api/texts
+            r1 = await client.post(
+                "/api/text",
+                params={"token": "txt_tok"},
+                content=json.dumps({"text": "Xin chào PC"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+            )
+            assert r1.status_code == 200
+            r2 = await client.post(
+                "/api/text",
+                params={"token": "txt_tok"},
+                content="Tin nhắn thuần".encode(),
+                headers={"Content-Type": "text/plain"},
+            )
+            assert r2.status_code == 200
+            assert received_from_guest == ["Xin chào PC", "Tin nhắn thuần"]
+
+            hist = (await client.get("/api/texts", params={"token": "txt_tok"})).json()
+            assert [m["text"] for m in hist["texts"]] == [
+                "https://example.org/doc",
+                "Xin chào PC",
+                "Tin nhắn thuần",
+            ]
+
+            # 3. Văn bản > 64 KiB trả 413
+            oversize = await client.post(
+                "/api/text",
+                params={"token": "txt_tok"},
+                content=b"a" * (MAX_TEXT_BYTES + 1),
+                headers={"Content-Type": "text/plain"},
+            )
+            assert oversize.status_code == 413
+
+            # 4. Vượt trần TEXT_RATE_LIMIT_MAX trong 10s -> 429 (đã gửi 3 POST: 2 hợp lệ + 1 quá cỡ)
+            remaining = TEXT_RATE_LIMIT_MAX - 3
+            for idx in range(remaining):
+                ok = await client.post(
+                    "/api/text",
+                    params={"token": "txt_tok"},
+                    content=f"msg-{idx}".encode(),
+                    headers={"Content-Type": "text/plain"},
+                )
+                assert ok.status_code == 200
+            limited = await client.post(
+                "/api/text",
+                params={"token": "txt_tok"},
+                content=b"overflow",
+                headers={"Content-Type": "text/plain"},
+            )
+            assert limited.status_code == 429
+
+        writer.close()
+        await writer.wait_closed()
     finally:
         await server.stop()

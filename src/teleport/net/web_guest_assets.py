@@ -284,6 +284,54 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       margin-top: auto;
       padding: 16px 0;
     }
+    .badge-scope { background: rgba(2, 132, 199, 0.14); color: var(--primary); margin-left: 6px; }
+    .text-form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+    .text-input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.92rem;
+      resize: vertical;
+    }
+    .text-form-actions { display: flex; justify-content: flex-end; }
+    .text-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .text-item-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+    .text-body { font-size: 0.92rem; white-space: pre-wrap; word-break: break-word; }
+    .text-body a { color: var(--primary); text-decoration: underline; }
+    .btn-mini {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+    .banner-expired {
+      border-color: var(--danger);
+      color: var(--danger);
+      font-weight: 600;
+      text-align: center;
+      font-size: 0.9rem;
+    }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -297,12 +345,14 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           <line x1="12" y1="12" x2="16" y2="16"></line>
         </svg>
         <div>
-          <h1>ZCL Teleport</h1>
+          <h1>ZCL Teleport <span class="badge badge-scope hidden" id="scopeBadge"></span></h1>
           <div class="peer-info" id="peerInfo">Kết nối nội bộ trực tiếp</div>
         </div>
       </div>
       <button class="lang-btn" id="langBtn" onclick="toggleLang()">EN</button>
     </header>
+
+    <div class="card banner-expired hidden" id="expiredBanner"></div>
 
     <div class="tabs">
       <button class="tab-btn active" id="tabUploadBtn" onclick="switchTab('upload')">
@@ -321,12 +371,19 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         </svg>
         <span id="tabDownloadText">Nhận về điện thoại</span>
       </button>
+      <button class="tab-btn" id="tabTextBtn" onclick="switchTab('text')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span id="tabTextLabel">Văn bản</span>
+      </button>
     </div>
 
     <!-- Tab Gửi sang máy tính -->
     <div class="card" id="uploadSection">
       <input type="file" id="filePicker" multiple style="display:none;" onchange="handleFilesSelected(this.files)">
       <input type="file" id="folderPicker" webkitdirectory directory multiple style="display:none;" onchange="handleFilesSelected(this.files)">
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;" onchange="handleFilesSelected(this.files)">
       <div class="dropzone" id="dropZone" onclick="document.getElementById('filePicker').click()">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path>
@@ -340,6 +397,7 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         <div class="btn-row">
           <button type="button" class="btn-select" id="btnSelectText" onclick="event.stopPropagation(); document.getElementById('filePicker').click()">Chọn tệp</button>
           <button type="button" class="btn-select-secondary" id="btnSelectFolderText" onclick="event.stopPropagation(); document.getElementById('folderPicker').click()">Chọn thư mục</button>
+          <button type="button" class="btn-select-secondary" id="btnCameraText" onclick="event.stopPropagation(); document.getElementById('cameraInput').click()">Chụp ảnh gửi ngay</button>
         </div>
       </div>
 
@@ -363,6 +421,19 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Tab Văn bản / Liên kết -->
+    <div class="card hidden" id="textSection">
+      <div class="text-form" id="textForm">
+        <textarea class="text-input" id="textInput" rows="3" placeholder="Nhập văn bản hoặc dán liên kết cần gửi sang máy tính..."></textarea>
+        <div class="text-form-actions">
+          <button type="button" class="btn-action" id="sendTextBtn" onclick="sendText()">Gửi văn bản</button>
+        </div>
+      </div>
+      <div class="file-list" id="textList">
+        <div class="empty-state" id="textEmpty">Chưa có tin nhắn văn bản nào trong phiên này.</div>
+      </div>
+    </div>
+
     <footer>
       <div>ZCL Teleport · Kết nối nội bộ trực tiếp · Không qua trung gian</div>
       <div style="margin-top: 4px;">Copyright (C) 2026 Nguyễn Hoàng Tùng</div>
@@ -374,16 +445,23 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     const token = urlParams.get('token') || '';
     let currentLang = 'vi';
     let lastFiles = [];
+    let lastTexts = [];
+    let currentScope = 'both';
+    let currentOneShot = false;
+    let sessionExpired = false;
+    let activeTab = 'upload';
 
     const I18N = {
       vi: {
         peer: 'Kết nối máy tính: {name}',
         tabUpload: 'Gửi sang máy tính',
         tabDownload: 'Nhận về điện thoại',
+        tabText: 'Văn bản',
         dropTitle: 'Chọn hoặc kéo thả tệp, thư mục',
         dropSub: 'Hỗ trợ chọn nhiều tệp hoặc cả thư mục cùng lúc',
         btnSelect: 'Chọn tệp',
         btnSelectFolder: 'Chọn thư mục',
+        btnCamera: 'Chụp ảnh gửi ngay',
         downloadAll: 'Tải tất cả (.zip)',
         emptyDownload: 'Không có tệp nào đang chờ nhận từ máy tính.',
         downloadBtn: 'Tải về',
@@ -392,15 +470,28 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         completed: 'Hoàn tất',
         failed: 'Thất bại: {err}',
         waiting: 'Đang chờ...',
+        textPlaceholder: 'Nhập văn bản hoặc dán liên kết cần gửi sang máy tính...',
+        sendText: 'Gửi văn bản',
+        emptyText: 'Chưa có tin nhắn văn bản nào trong phiên này.',
+        fromHost: 'Từ máy tính',
+        fromGuest: 'Từ điện thoại',
+        copy: 'Sao chép',
+        copied: 'Đã chép',
+        scopeReceiveOnly: 'Chỉ gửi sang PC',
+        scopeSendOnly: 'Chỉ nhận từ PC',
+        oneShotBadge: '1 lần',
+        expiredOneShot: 'Phiên chỉ dùng 1 lượt đã hoàn tất và tự động đóng.',
       },
       en: {
         peer: 'Connected PC: {name}',
         tabUpload: 'Send to Computer',
         tabDownload: 'Receive on Phone',
+        tabText: 'Text',
         dropTitle: 'Select or drop files & folders',
         dropSub: 'Supports multiple files or whole folders at once',
         btnSelect: 'Choose Files',
         btnSelectFolder: 'Choose Folder',
+        btnCamera: 'Take Photo & Send',
         downloadAll: 'Download All (.zip)',
         emptyDownload: 'No files waiting to download from computer.',
         downloadBtn: 'Download',
@@ -409,6 +500,17 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         completed: 'Finished',
         failed: 'Failed: {err}',
         waiting: 'Pending...',
+        textPlaceholder: 'Type text or paste link to send to computer...',
+        sendText: 'Send Text',
+        emptyText: 'No text messages in this session yet.',
+        fromHost: 'From Computer',
+        fromGuest: 'From Phone',
+        copy: 'Copy',
+        copied: 'Copied',
+        scopeReceiveOnly: 'Upload only',
+        scopeSendOnly: 'Download only',
+        oneShotBadge: 'One-shot',
+        expiredOneShot: 'This one-shot session has finished and closed.',
       }
     };
 
@@ -422,27 +524,69 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       const t = I18N[currentLang];
       document.getElementById('tabUploadText').innerText = t.tabUpload;
       document.getElementById('tabDownloadText').innerText = t.tabDownload;
+      document.getElementById('tabTextLabel').innerText = t.tabText;
       document.getElementById('dropzoneTitle').innerText = t.dropTitle;
       document.getElementById('dropzoneSub').innerText = t.dropSub;
       document.getElementById('btnSelectText').innerText = t.btnSelect;
       document.getElementById('btnSelectFolderText').innerText = t.btnSelectFolder;
+      document.getElementById('btnCameraText').innerText = t.btnCamera;
       document.getElementById('downloadAllText').innerText = t.downloadAll;
+      document.getElementById('textInput').placeholder = t.textPlaceholder;
+      document.getElementById('sendTextBtn').innerText = t.sendText;
+      updateScopeBadge();
+      if (sessionExpired) {
+        document.getElementById('expiredBanner').innerText = t.expiredOneShot;
+      }
       renderDownloadList(lastFiles);
+      renderTextList(lastTexts);
+    }
+
+    function updateScopeBadge() {
+      const t = I18N[currentLang];
+      const badge = document.getElementById('scopeBadge');
+      const labels = [];
+      if (currentScope === 'receive_only') labels.push(t.scopeReceiveOnly);
+      else if (currentScope === 'send_only') labels.push(t.scopeSendOnly);
+      if (currentOneShot) labels.push(t.oneShotBadge);
+      if (labels.length > 0) {
+        badge.innerText = labels.join(' · ');
+        badge.classList.remove('hidden');
+      } else {
+        badge.classList.add('hidden');
+      }
+    }
+
+    function applyScope(scope, oneShot) {
+      currentScope = scope || 'both';
+      currentOneShot = !!oneShot;
+      const upBtn = document.getElementById('tabUploadBtn');
+      const dlBtn = document.getElementById('tabDownloadBtn');
+      const textForm = document.getElementById('textForm');
+      upBtn.classList.toggle('hidden', currentScope === 'send_only');
+      dlBtn.classList.toggle('hidden', currentScope === 'receive_only');
+      textForm.classList.toggle('hidden', currentScope === 'send_only');
+      if (currentScope === 'send_only' && activeTab === 'upload') switchTab('download');
+      else if (currentScope === 'receive_only' && activeTab === 'download') switchTab('upload');
+      updateScopeBadge();
+    }
+
+    function markExpired() {
+      sessionExpired = true;
+      const banner = document.getElementById('expiredBanner');
+      banner.innerText = I18N[currentLang].expiredOneShot;
+      banner.classList.remove('hidden');
+      document.getElementById('sendTextBtn').disabled = true;
     }
 
     function switchTab(tab) {
-      if (tab === 'upload') {
-        document.getElementById('uploadSection').classList.remove('hidden');
-        document.getElementById('downloadSection').classList.add('hidden');
-        document.getElementById('tabUploadBtn').classList.add('active');
-        document.getElementById('tabDownloadBtn').classList.remove('active');
-      } else {
-        document.getElementById('uploadSection').classList.add('hidden');
-        document.getElementById('downloadSection').classList.remove('hidden');
-        document.getElementById('tabUploadBtn').classList.remove('active');
-        document.getElementById('tabDownloadBtn').classList.add('active');
-        fetchInfo();
-      }
+      activeTab = tab;
+      document.getElementById('uploadSection').classList.toggle('hidden', tab !== 'upload');
+      document.getElementById('downloadSection').classList.toggle('hidden', tab !== 'download');
+      document.getElementById('textSection').classList.toggle('hidden', tab !== 'text');
+      document.getElementById('tabUploadBtn').classList.toggle('active', tab === 'upload');
+      document.getElementById('tabDownloadBtn').classList.toggle('active', tab === 'download');
+      document.getElementById('tabTextBtn').classList.toggle('active', tab === 'text');
+      if (tab !== 'upload') fetchInfo();
     }
 
     function formatBytes(bytes) {
@@ -456,16 +600,121 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     async function fetchInfo() {
       try {
         const resp = await fetch('/api/info?token=' + encodeURIComponent(token));
+        if (resp.status === 410) {
+          markExpired();
+          return;
+        }
         if (!resp.ok) return;
         const data = await resp.json();
         if (data.device_name) {
           const t = I18N[currentLang];
           document.getElementById('peerInfo').innerText = t.peer.replace('{name}', data.device_name);
         }
+        applyScope(data.scope, data.one_shot);
         lastFiles = data.files || [];
         renderDownloadList(lastFiles);
+        if (Array.isArray(data.texts)) {
+          lastTexts = data.texts;
+          renderTextList(lastTexts);
+        }
       } catch (e) {
         console.error('Lỗi lấy thông tin phiên:', e);
+      }
+    }
+
+    function appendLinkSafeText(parent, text) {
+      const re = /https?:\\/\\/[^\\s<>"']+/g;
+      let last = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+        const a = document.createElement('a');
+        a.href = m[0];
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.textContent = m[0];
+        parent.appendChild(a);
+        last = m.index + m[0].length;
+      }
+      if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+    }
+
+    function copyTextValue(val, btn) {
+      const done = () => {
+        btn.innerText = I18N[currentLang].copied;
+        setTimeout(() => { btn.innerText = I18N[currentLang].copy; }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(val).then(done).catch(() => {});
+        return;
+      }
+      const ta = document.createElement('textarea');
+      ta.value = val;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+
+    function renderTextList(items) {
+      lastTexts = items || [];
+      const t = I18N[currentLang];
+      const box = document.getElementById('textList');
+      box.innerHTML = '';
+      if (lastTexts.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.id = 'textEmpty';
+        empty.innerText = t.emptyText;
+        box.appendChild(empty);
+        return;
+      }
+      [...lastTexts].reverse().forEach((item) => {
+        const card = document.createElement('div');
+        card.className = 'text-item';
+        const head = document.createElement('div');
+        head.className = 'text-item-head';
+        const who = document.createElement('span');
+        who.innerText = item.sender === 'host' ? t.fromHost : t.fromGuest;
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'btn-mini';
+        copyBtn.innerText = t.copy;
+        copyBtn.onclick = () => copyTextValue(item.text || '', copyBtn);
+        head.appendChild(who);
+        head.appendChild(copyBtn);
+        const body = document.createElement('div');
+        body.className = 'text-body';
+        appendLinkSafeText(body, item.text || '');
+        card.appendChild(head);
+        card.appendChild(body);
+        box.appendChild(card);
+      });
+    }
+
+    async function sendText() {
+      const inp = document.getElementById('textInput');
+      const val = (inp.value || '').trim();
+      if (!val || sessionExpired) return;
+      try {
+        const resp = await fetch('/api/text?token=' + encodeURIComponent(token), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: val })
+        });
+        if (resp.status === 410) { markExpired(); return; }
+        if (resp.ok) {
+          inp.value = '';
+          const data = await resp.json();
+          if (data.item && !lastTexts.some((x) => x.id === data.item.id)) {
+            lastTexts.push(data.item);
+            renderTextList(lastTexts);
+          }
+        }
+      } catch (e) {
+        console.error('Lỗi gửi văn bản:', e);
       }
     }
 
@@ -688,14 +937,35 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     function connectEvents() {
       if (!window.EventSource) return;
       const es = new EventSource('/api/events?token=' + encodeURIComponent(token));
+      const onInit = (ev) => {
+        try {
+          const payload = JSON.parse(ev.data);
+          if (payload.scope || typeof payload.one_shot === 'boolean') {
+            applyScope(payload.scope, payload.one_shot);
+          }
+          if (payload.files) renderDownloadList(payload.files);
+          if (Array.isArray(payload.texts)) renderTextList(payload.texts);
+        } catch (_) {}
+      };
       const onFiles = (ev) => {
         try {
           const payload = JSON.parse(ev.data);
           if (payload.files) renderDownloadList(payload.files);
         } catch (_) {}
       };
-      es.addEventListener('init', onFiles);
+      const onText = (ev) => {
+        try {
+          const payload = JSON.parse(ev.data);
+          if (payload.item && !lastTexts.some((x) => x.id === payload.item.id)) {
+            lastTexts.push(payload.item);
+            renderTextList(lastTexts);
+          }
+        } catch (_) {}
+      };
+      es.addEventListener('init', onInit);
       es.addEventListener('files_updated', onFiles);
+      es.addEventListener('text_message', onText);
+      es.addEventListener('session_expired', () => markExpired());
     }
 
     fetchInfo();

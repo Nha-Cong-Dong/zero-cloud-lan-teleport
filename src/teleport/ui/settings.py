@@ -178,7 +178,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 import teleport
-from teleport.app import autostart, logexport, storage, updater
+from teleport.app import autostart, logexport, receipts, storage, updater
 from teleport.app import settings as app_settings
 from teleport.app import transfers as app_transfers
 from teleport.app.devices import DeviceView
@@ -1176,6 +1176,7 @@ class SettingsPage(QWidget):
     unpair_requested = Signal(str)
     clear_history_requested = Signal()
     export_logs_requested = Signal()
+    verify_receipt_requested = Signal()
     check_update_requested = Signal()
     download_update_requested = Signal()
     open_receive_dir_requested = Signal(object)  # Path
@@ -1521,6 +1522,12 @@ class SettingsPage(QWidget):
             self.license_row.set_control(self.notices_button)
         else:
             self.notices_button.setVisible(False)
+
+        self.verify_receipt_row = self._row(Section.ADVANCED, "verifyReceiptRow")
+        self.verify_receipt_button = QPushButton(self.verify_receipt_row)
+        self.verify_receipt_button.setObjectName("verifyReceiptButton")
+        self.verify_receipt_button.clicked.connect(self.verify_receipt_requested)
+        self.verify_receipt_row.set_control(self.verify_receipt_button)
         self._section_layouts[Section.ADVANCED].addStretch(1)
 
     # ---- API -----------------------------------------------------------------------------------
@@ -1835,6 +1842,12 @@ class SettingsPage(QWidget):
         )
         self.notices_button.setText(t("Settings", "Thông báo bên thứ ba"))
         self.notices_button.setAccessibleName(t("Settings", "Thông báo bên thứ ba"))
+        self.verify_receipt_row.set_text(
+            t("Settings", "Biên lai truyền tệp"),
+            t("Settings", "Xác minh chữ ký số và tính toàn vẹn của tệp biên lai đã lưu."),
+        )
+        self.verify_receipt_button.setText(t("Settings", "Kiểm tra biên lai…"))
+        self.verify_receipt_button.setAccessibleName(t("Settings", "Kiểm tra biên lai"))
         self._update_shortcuts_table()
         self._update_visibility_texts()
         self._update_autostart()
@@ -2157,6 +2170,7 @@ class SettingsPage(QWidget):
             self.check_update_button,
             self.download_update_button,
             self.notices_button,
+            self.verify_receipt_button,
         ]
         for first, second in itertools.pairwise(chain):
             QWidget.setTabOrder(first, second)
@@ -2441,6 +2455,7 @@ class SettingsController(QObject):
         page.clipboard_toggled.connect(self._on_clipboard)
         page.clear_history_requested.connect(self.request_clear_history)
         page.export_logs_requested.connect(self.request_export)
+        page.verify_receipt_requested.connect(self.request_verify_receipt)
         page.check_update_requested.connect(self.request_check_update)
         page.download_update_requested.connect(self.request_download_update)
         page.open_notices_requested.connect(self._on_open_notices)
@@ -3225,6 +3240,68 @@ class SettingsController(QObject):
     def _on_open_notices(self, path: object) -> None:
         if isinstance(path, Path) and self._open_url(QUrl.fromLocalFile(str(path))) is False:
             log.warning("không mở được file thông báo bên thứ ba")
+
+    # ---- Biên lai truyền tệp -------------------------------------------------------------------
+
+    def request_verify_receipt(self) -> None:
+        """Hộp chọn tệp biên lai (không chặn) rồi xác minh chữ ký số và hiển thị kết quả."""
+        dialog = self._dialog
+        if dialog is not None:
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog = dialog_factory(self._message_parent())
+        dialog.setObjectName("verifyReceiptDialog")
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setWindowTitle(QCoreApplication.translate("Settings", "Chọn tệp biên lai"))
+        dialog.setNameFilter(
+            QCoreApplication.translate("Settings", "Tệp biên lai (*.teleport-receipt.json *.json)")
+        )
+        r_dir = receipts.receipts_dir(self._config_dir)
+        dialog.setDirectory(str(r_dir) if r_dir.is_dir() else default_export_dir())
+        generation = self._generation
+        dialog.fileSelected.connect(lambda path: self._on_verify_receipt_path(generation, path))
+        dialog.finished.connect(lambda _r, d=dialog: self._dialog_finished(d))
+        self._dialog = dialog
+        dialog.open()
+
+    def _on_verify_receipt_path(self, generation: int, path: str) -> None:
+        if generation != self._generation or not path:
+            return
+        receipt_file = Path(path)
+        trusted_fps = receipts.known_trusted_fingerprints(self._config_dir)
+        result = receipts.verify_receipt(receipt_file, trusted_fingerprints=trusted_fps)
+        if result.valid and result.receipt is not None:
+            payload = result.receipt.payload
+            peer = texts.peer_label(payload.peer_name, payload.peer_device_id)
+            size_text = texts.format_size(payload.total_bytes)
+            if result.trusted_signer is False:
+                self._show_notice(
+                    InfoLevel.WARNING,
+                    texts.fill(
+                        QCoreApplication.translate(
+                            "Settings",
+                            "Chữ ký biên lai hợp lệ nhưng máy ký chưa ghép đôi ({peer}, {size}).",
+                        ),
+                        peer=peer,
+                        size=size_text,
+                    ),
+                )
+            else:
+                self._show_notice(
+                    InfoLevel.SUCCESS,
+                    texts.fill(
+                        QCoreApplication.translate("Settings", "Biên lai hợp lệ: {peer} ({size})."),
+                        peer=peer,
+                        size=size_text,
+                    ),
+                )
+            return
+        self._show_notice(
+            InfoLevel.ERROR,
+            QCoreApplication.translate("Settings", "Biên lai không hợp lệ hoặc đã bị sửa đổi."),
+        )
 
     # ---- Thông báo -----------------------------------------------------------------------------
 

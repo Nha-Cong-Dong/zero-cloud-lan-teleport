@@ -30,6 +30,7 @@ import struct
 import time
 import urllib.parse
 import zlib
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +48,20 @@ MAX_FAILED_AUTH_ATTEMPTS = 5
 AUTH_LOCKOUT_SECONDS = 300.0
 _MAX_TRACKED_AUTH_IPS = 1024
 _ZIP_MAX_UINT32 = 0xFFFFFFFF
+
+MAX_TEXT_BYTES = 64 * 1024  # 64 KiB mỗi tin nhắn văn bản
+MAX_TEXT_HISTORY = 50
+TEXT_RATE_LIMIT_WINDOW = 10.0
+TEXT_RATE_LIMIT_MAX = 20
+ONE_SHOT_STOP_DELAY = 0.2
+
+
+class GuestScope(StrEnum):
+    """Phạm vi quyền của phiên chế độ khách."""
+
+    BOTH = "both"
+    RECEIVE_ONLY = "receive_only"
+    SEND_ONLY = "send_only"
 
 
 def _dos_timestamp(mtime: float) -> tuple[int, int]:
@@ -119,6 +134,9 @@ class WebGuestHttpServer:
         on_session_timeout: Callable[[], None] | None = None,
         max_failed_attempts: int = MAX_FAILED_AUTH_ATTEMPTS,
         auth_lockout_seconds: float = AUTH_LOCKOUT_SECONDS,
+        scope: GuestScope = GuestScope.BOTH,
+        one_shot: bool = False,
+        on_text_received: Callable[[str], None] | None = None,
     ) -> None:
         self.token = token
         self.upload_dir = upload_dir
@@ -126,19 +144,29 @@ class WebGuestHttpServer:
         self.inactivity_timeout = inactivity_timeout
         self.max_failed_attempts = max(1, max_failed_attempts)
         self.auth_lockout_seconds = max(0.0, auth_lockout_seconds)
+        self.scope = GuestScope(scope)
+        if type(one_shot) is not bool:
+            raise TypeError("one_shot phải là bool")
+        self.one_shot = one_shot
 
         self.on_upload_start = on_upload_start
         self.on_upload_progress = on_upload_progress
         self.on_upload_complete = on_upload_complete
         self.on_session_timeout = on_session_timeout
+        self.on_text_received = on_text_received
 
         self.shared_files: dict[str, tuple[str, Path, int]] = {}
         self._shared_dirs: set[str] = set()
         self._failed_auth: dict[str, tuple[int, float]] = {}
+        self._texts: list[dict[str, Any]] = []
+        self._text_rate: dict[str, list[float]] = {}
+        self._text_seq: int = 0
+        self._consumed: bool = False
         self._server: asyncio.Server | None = None
         self._port: int = 0
         self._last_activity = time.monotonic()
         self._watchdog_task: asyncio.Task[None] | None = None
+        self._one_shot_task: asyncio.Task[None] | None = None
         self._active_connections: set[asyncio.StreamWriter] = set()
         self._sse_writers: set[asyncio.StreamWriter] = set()
         self._closed = False
@@ -177,6 +205,8 @@ class WebGuestHttpServer:
             self._broadcast_event("files_updated", {"files": self._get_files_meta()})
 
     def _get_files_meta(self) -> list[dict[str, Any]]:
+        if self.scope is GuestScope.RECEIVE_ONLY:
+            return []
         return [
             {"id": fid, "name": name, "size": size, "is_dir": fid in self._shared_dirs}
             for fid, (name, _, size) in self.shared_files.items()
@@ -195,28 +225,82 @@ class WebGuestHttpServer:
         log.info("Máy chủ Web khách đã mở trên %s:%d (token=%s)", host, self._port, self.token)
         return self._port
 
+    def push_text(self, text: str) -> dict[str, Any]:
+        """Máy tính gửi văn bản hoặc liên kết sang trình duyệt khách theo thời gian thực."""
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("văn bản không được rỗng")
+        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+            raise ValueError(f"văn bản vượt quá {MAX_TEXT_BYTES} byte")
+        return self._append_text("host", text)
+
+    def _append_text(self, sender: str, text: str) -> dict[str, Any]:
+        self._text_seq += 1
+        item: dict[str, Any] = {
+            "id": str(self._text_seq),
+            "sender": sender,
+            "text": text,
+            "created_at": int(time.time()),
+        }
+        self._texts.append(item)
+        if len(self._texts) > MAX_TEXT_HISTORY:
+            del self._texts[: len(self._texts) - MAX_TEXT_HISTORY]
+        self._last_activity = time.monotonic()
+        self._broadcast_event("text_message", {"item": item})
+        return item
+
+    def _consume_one_shot(self) -> None:
+        if not self.one_shot or self._consumed:
+            return
+        self._consumed = True
+        self._broadcast_event("session_expired", {"reason": "one_shot"})
+        if self.on_session_timeout:
+            try:
+                self.on_session_timeout()
+            except Exception as e:
+                log.error("Lỗi callback kết thúc one-shot: %s", e)
+        if not self._closed and self._one_shot_task is None:
+            self._one_shot_task = asyncio.create_task(self._stop_after_one_shot())
+
+    async def _stop_after_one_shot(self) -> None:
+        try:
+            await asyncio.sleep(ONE_SHOT_STOP_DELAY)
+            await self.stop()
+        except asyncio.CancelledError:
+            pass
+
     async def stop(self) -> None:
         """Dừng máy chủ và đóng toàn bộ kết nối đang mở."""
         if self._closed:
             return
         self._closed = True
 
-        if self._watchdog_task:
+        current = asyncio.current_task()
+        if self._one_shot_task and self._one_shot_task is not current:
+            self._one_shot_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._one_shot_task
+
+        if self._watchdog_task and self._watchdog_task is not current:
             self._watchdog_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._watchdog_task
 
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
 
-        # Đóng toàn bộ socket khách
+        # Đóng toàn bộ socket khách (gồm kết nối SSE giữ mở) trước wait_closed() của Python 3.12+
         for writer in list(self._active_connections):
             with contextlib.suppress(Exception):
                 writer.close()
-                await writer.wait_closed()
+        for writer in list(self._active_connections):
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(writer.wait_closed(), timeout=0.5)
         self._active_connections.clear()
         self._sse_writers.clear()
+
+        if self._server:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._server.wait_closed(), timeout=1.0)
         log.info("Đã tắt máy chủ Web khách")
 
     async def _watchdog_loop(self) -> None:
@@ -321,10 +405,22 @@ class WebGuestHttpServer:
                 return
 
             # Xử lý các tuyến đường
+            if method != "OPTIONS" and self._consumed:
+                await self._send_response(
+                    writer,
+                    410,
+                    "application/json; charset=utf-8",
+                    json.dumps(
+                        {"ok": False, "error": "Phiên chỉ dùng một lần đã kết thúc"},
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                )
+                return
+
             if method == "GET":
                 await self._handle_get(path, query, headers, writer)
             elif method == "POST":
-                await self._handle_post(path, query, headers, reader, writer)
+                await self._handle_post(client_ip, path, query, headers, reader, writer)
             elif method == "OPTIONS":
                 await self._send_response(
                     writer,
@@ -405,11 +501,21 @@ class WebGuestHttpServer:
             data = {
                 "device_name": self.device_name,
                 "files": self._get_files_meta(),
+                "scope": self.scope.value,
+                "one_shot": self.one_shot,
+                "texts": list(self._texts),
             }
             body = json.dumps(data, ensure_ascii=False).encode("utf-8")
             await self._send_response(writer, 200, "application/json; charset=utf-8", body)
 
+        elif path == "/api/texts":
+            body = json.dumps({"texts": list(self._texts)}, ensure_ascii=False).encode("utf-8")
+            await self._send_response(writer, 200, "application/json; charset=utf-8", body)
+
         elif path == "/api/download-zip":
+            if self.scope is GuestScope.RECEIVE_ONLY:
+                await self._send_response(writer, 403, "text/plain; charset=utf-8", b"Forbidden\n")
+                return
             if not self.shared_files:
                 await self._send_response(writer, 404, "text/plain", b"No Files Shared\n")
                 return
@@ -419,8 +525,12 @@ class WebGuestHttpServer:
                 await self._send_response(writer, 404, "text/plain", b"No Files Available\n")
                 return
             await self._serve_zip_stream("teleport-files.zip", entries, writer)
+            self._consume_one_shot()
 
         elif path.startswith("/api/download/"):
+            if self.scope is GuestScope.RECEIVE_ONLY:
+                await self._send_response(writer, 403, "text/plain; charset=utf-8", b"Forbidden\n")
+                return
             # Tải tệp hoặc thư mục xuống điện thoại
             file_id = path.split("/api/download/", 1)[1].strip("/")
             if file_id not in self.shared_files:
@@ -438,6 +548,7 @@ class WebGuestHttpServer:
                     return
                 zip_name = f"{sanitize_filename(filename)}.zip"
                 await self._serve_zip_stream(zip_name, entries, writer)
+                self._consume_one_shot()
                 return
 
             if not file_path.is_file():
@@ -445,6 +556,7 @@ class WebGuestHttpServer:
                 return
 
             await self._serve_file_download(file_path, filename, file_size, headers, writer)
+            self._consume_one_shot()
 
         elif path == "/api/events":
             # Server-Sent Events
@@ -461,7 +573,16 @@ class WebGuestHttpServer:
             await writer.drain()
 
             # Gửi dữ liệu khởi tạo
-            init_data = json.dumps({"files": self._get_files_meta()}, ensure_ascii=False)
+            init_data = json.dumps(
+                {
+                    "device_name": self.device_name,
+                    "files": self._get_files_meta(),
+                    "scope": self.scope.value,
+                    "one_shot": self.one_shot,
+                    "texts": list(self._texts),
+                },
+                ensure_ascii=False,
+            )
             writer.write(f"event: init\ndata: {init_data}\n\n".encode())
             await writer.drain()
 
@@ -674,14 +795,121 @@ class WebGuestHttpServer:
         final_path = self._resolve_unique_path(self.upload_dir / filename)
         return final_path.name, final_path
 
+    def _check_text_rate(self, client_ip: str) -> bool:
+        now = time.monotonic()
+        cutoff = now - TEXT_RATE_LIMIT_WINDOW
+        recent = [ts for ts in self._text_rate.get(client_ip, ()) if ts >= cutoff]
+        if len(recent) >= TEXT_RATE_LIMIT_MAX:
+            self._text_rate[client_ip] = recent
+            return False
+        recent.append(now)
+        if len(self._text_rate) >= _MAX_TRACKED_AUTH_IPS and client_ip not in self._text_rate:
+            oldest = next(iter(self._text_rate))
+            del self._text_rate[oldest]
+        self._text_rate[client_ip] = recent
+        return True
+
+    async def _handle_post_text(
+        self,
+        client_ip: str,
+        headers: dict[str, str],
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        if not self._check_text_rate(client_ip):
+            await self._send_response(
+                writer,
+                429,
+                "application/json; charset=utf-8",
+                json.dumps({"ok": False, "error": "Gửi văn bản quá nhanh"}, ensure_ascii=False).encode(
+                    "utf-8"
+                ),
+            )
+            return
+
+        try:
+            content_length = int(headers.get("content-length", "0"))
+        except ValueError:
+            await self._send_response(writer, 400, "text/plain", b"Invalid Content-Length\n")
+            return
+        if content_length <= 0:
+            await self._send_response(writer, 400, "text/plain", b"Empty body\n")
+            return
+        if content_length > MAX_TEXT_BYTES + 1024:
+            await self._send_response(
+                writer,
+                413,
+                "application/json; charset=utf-8",
+                json.dumps(
+                    {"ok": False, "error": "Văn bản vượt quá giới hạn 64 KiB"}, ensure_ascii=False
+                ).encode("utf-8"),
+            )
+            return
+
+        try:
+            raw_body = await reader.readexactly(content_length)
+        except asyncio.IncompleteReadError:
+            await self._send_response(writer, 400, "text/plain", b"Incomplete body\n")
+            return
+
+        content_type = headers.get("content-type", "").lower()
+        text: str
+        if "application/json" in content_type:
+            try:
+                payload = json.loads(raw_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                await self._send_response(writer, 400, "text/plain", b"Invalid JSON\n")
+                return
+            if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
+                await self._send_response(writer, 400, "text/plain", b"Missing text field\n")
+                return
+            text = payload["text"]
+        else:
+            try:
+                text = raw_body.decode("utf-8")
+            except UnicodeDecodeError:
+                await self._send_response(writer, 400, "text/plain", b"Invalid UTF-8\n")
+                return
+
+        if not text.strip():
+            await self._send_response(writer, 400, "text/plain", b"Blank text\n")
+            return
+        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+            await self._send_response(
+                writer,
+                413,
+                "application/json; charset=utf-8",
+                json.dumps(
+                    {"ok": False, "error": "Văn bản vượt quá giới hạn 64 KiB"}, ensure_ascii=False
+                ).encode("utf-8"),
+            )
+            return
+
+        item = self._append_text("guest", text)
+        if self.on_text_received:
+            try:
+                self.on_text_received(text)
+            except Exception as e:
+                log.error("Lỗi callback nhận văn bản từ khách: %s", e)
+
+        body = json.dumps({"ok": True, "item": item}, ensure_ascii=False).encode("utf-8")
+        await self._send_response(writer, 200, "application/json; charset=utf-8", body)
+
     async def _handle_post(
         self,
+        client_ip: str,
         path: str,
         query: dict[str, list[str]],
         headers: dict[str, str],
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        if path in ("/api/upload", "/api/text") and self.scope is GuestScope.SEND_ONLY:
+            await self._send_response(writer, 403, "text/plain; charset=utf-8", b"Forbidden\n")
+            return
+        if path == "/api/text":
+            await self._handle_post_text(client_ip, headers, reader, writer)
+            return
         if path != "/api/upload":
             await self._send_response(writer, 404, "text/plain", b"Not Found\n")
             return
@@ -781,6 +1009,7 @@ class WebGuestHttpServer:
             }
             body = json.dumps(res, ensure_ascii=False).encode("utf-8")
             await self._send_response(writer, 200, "application/json; charset=utf-8", body)
+            self._consume_one_shot()
 
         except Exception as e:
             if temp_path.exists():
@@ -823,6 +1052,8 @@ class WebGuestHttpServer:
             403: "Forbidden",
             404: "Not Found",
             405: "Method Not Allowed",
+            410: "Gone",
+            413: "Payload Too Large",
             429: "Too Many Requests",
             500: "Internal Server Error",
             507: "Insufficient Storage",
