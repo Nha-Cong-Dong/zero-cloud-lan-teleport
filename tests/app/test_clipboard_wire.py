@@ -173,9 +173,11 @@ async def test_malformed_clipboard_closes_control_with_protocol_error_then_recon
     A, B = net.A, net.B
     conn_a, conn_b = control_pair(net)
     await conn_b._send_frame(raw_frame(MALFORMED[name]))
-    await app_helpers.wait_until(lambda: conn_a.closed, 3, "A chưa đóng kết nối điều khiển")
+    await app_helpers.wait_until(lambda: conn_a.closed and conn_b.closed, 5, "chưa đóng kết nối điều khiển")
     await app_helpers.wait_until(
-        lambda: A.control_connection(B.id) is not conn_a, 3, "A vẫn giữ kết nối điều khiển cũ"
+        lambda: A.control_connection(B.id) is not conn_a and B.control_connection(A.id) is not conn_b,
+        5,
+        "A hoặc B vẫn giữ kết nối điều khiển cũ",
     )
     # Bên đóng là A (nhận message sai), lý do protocol_error.
     closed_by_a = [
