@@ -63,11 +63,12 @@ tên lúc gọi (ngữ cảnh `Theme`); `accent_swatch` là màu ô chọn (= `a
 Đã biết, chấp nhận vì màu không mang thông tin: `accent_subtle` của amber gần `warning_bg`,
 `accent_strong` của graphite gần `text_muted`.
 
-**Thang chữ** (`font_for(style, base)`): TITLE +6 pt đậm (Bold), SECTION +2 pt Medium, cả hai dùng font
+**Thang chữ** (`font_for(style, base)`): TITLE +6 pt đậm (Bold), SECTION +3 pt Medium, cả hai dùng font
 điểm nhấn `ACCENT_FAMILY` nếu đã nạp (`accent_family()`), không thì font của `base`; BODY là `base`;
 CAPTION −1 pt, font của `base`, màu qua `TONE_PROPERTY`. `base` mặc định `QApplication.font()`; font
-đặt cỡ theo pixel thì cộng TITLE +8 px, SECTION +3 px, CAPTION −1 px. Không ghi cứng font thân: dùng
-font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
+đặt cỡ theo pixel thì cộng TITLE +8 px, SECTION +4 px, CAPTION −1 px. Khi `_ensure_setup` chạy, nếu font
+ứng dụng nhỏ hơn `BASE_MIN_POINT_SIZE` (10,5 pt ≈ 14 px ở 96 DPI), tăng tối thiểu lên mức này mà giữ
+nguyên họ font của hệ điều hành (cờ `_FONT_PROPERTY`). Không tải font hay ảnh nào từ mạng.
 
 **Stylesheet ứng dụng** (`stylesheet(dark, button_height, accent)`, `_reapply` đặt): mọi luật (trừ vòng
 tiêu điểm chung, cuối danh sách) có bộ chọn hẹp (`[property]` hoặc `#objectName`), nên widget không mang
@@ -141,18 +142,21 @@ PRIMARY_PROPERTY = "primary"  # dynamic property của nút chính (xem docstrin
 TONE_PROPERTY = "tone"  # QLabel[tone="muted|success|warning|danger|accent"]
 SURFACE_PROPERTY = "surface"  # QFrame[surface="sidebar|raised|card"]
 ICON_BUTTON_PROPERTY = "iconButton"  # QToolButton[iconButton="true"] (widgets.IconButton)
+ICON_BUTTON_TEXT_PROPERTY = "hasText"  # QToolButton[hasText="true"] khi nút icon có kèm chữ
 SEGMENTED_PROPERTY = "segmented"  # QFrame[segmented="true"] (khung của widgets.SegmentedControl)
 SEGMENT_PROPERTY = "segment"  # QRadioButton[segment="first|middle|last"] (nút của SegmentedControl)
 SEGMENT_SLIDING_PROPERTY = "segmentSliding"  # nút vừa chọn khi khối chọn đang trượt (spec G2 H5)
 _SEGMENT_POSITIONS = ("first", "middle", "last")
 PRIMARY_BORDER_WIDTH = 2  # px, viền của nút chính (`stylesheet`, lớp phủ của `buttons.AnimatedButton`)
 _PRIMARY_FRAME = 2 * 2 + 2 * PRIMARY_BORDER_WIDTH  # px: padding dọc 2·2 + viền hai cạnh (`stylesheet`)
-DIALOG_MIN_WIDTH = 420  # px, hộp nhận file và hộp ghép đôi
+DIALOG_MIN_WIDTH = 460  # px, hộp nhận file và hộp ghép đôi
 SPACING = (4, 8, 12, 16, 24, 32)  # px
 RADIUS_CONTROL, RADIUS_CARD, RADIUS_BLOCK, RADIUS_BUBBLE, RADIUS_BUBBLE_TAIL = 6, 8, 12, 14, 4
 ACCENT_FAMILY = "Bricolage Grotesque"
+BASE_MIN_POINT_SIZE = 10.5  # pt (≈ 14 px ở 96 DPI), cỡ chữ thân tối thiểu
 _CONNECTED_PROPERTY = "teleport_theme_connected"  # đã nối `colorSchemeChanged`
 _STYLE_PROPERTY = "teleport_theme_fusion"  # đã đặt style Fusion
+_FONT_PROPERTY = "teleport_theme_font"  # đã áp cỡ font thân tối thiểu
 BACKDROP_PROPERTY = "backdrop"  # QFrame[surface="sidebar"][backdrop="mica"] (ui/backdrop.py)
 MICA_TINT_ALPHA = 178  # ≈ 0,70: alpha lớp màu `sidebar` phủ trên Mica
 MICA_RANGE: dict[bool, tuple[int, int]] = {False: (0xE0, 0xFF), True: (0x10, 0x40)}  # mức xám Mica giả định
@@ -314,7 +318,7 @@ class TextStyle(Enum):
 # Cộng thêm vào cỡ của font gốc: (pt, px) cho font cỡ điểm / font cỡ pixel.
 _SIZE_DELTA: dict[TextStyle, tuple[float, int]] = {
     TextStyle.TITLE: (6.0, 8),
-    TextStyle.SECTION: (2.0, 3),
+    TextStyle.SECTION: (3.0, 4),
     TextStyle.BODY: (0.0, 0),
     TextStyle.CAPTION: (-1.0, -1),
 }
@@ -516,8 +520,9 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f"  color: {colors['normal'][0].name()};",
         f"  border: {PRIMARY_BORDER_WIDTH}px solid {edge};",
         f"  border-radius: {RADIUS_CONTROL}px;",
-        "  padding: 2px 12px;",  # + viền 2 px: cao bằng nút Fusion (chữ + 8 px)
-        "  min-width: 52px;",  # Fusion cho nút có chữ rộng ít nhất 80 px: 52 + 2·12 + 2·2
+        "  padding: 2px 16px;",
+        "  min-width: 64px;",
+        "  font-weight: 600;",
         *([f"  min-height: {max(0, button_height - _PRIMARY_FRAME)}px;"] if button_height else []),
         "}",
         f"{primary}:hover {{ background-color: {colors['hover'][1].name()};"
@@ -532,31 +537,34 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
     lines += [
         f"{icon_button} {{ background: transparent; border: 2px solid transparent;"
         f" border-radius: {RADIUS_CONTROL}px; padding: 4px; color: {t.text.name()}; }}",
+        f'{icon_button}[{ICON_BUTTON_TEXT_PROPERTY}="true"] {{ padding: 4px 10px; }}',
         f"{icon_button}:hover {{ background: {t.selected.name()}; }}",
         f"{icon_button}:pressed {{ background: {t.border.name()}; }}",
         f"{icon_button}:focus {{ border-color: {ring}; }}",
         f"{icon_button}:disabled {{ color: {t.text_muted.name()}; }}",
         f"{icon_button}::menu-indicator {{ image: none; width: 0px; }}",
         f"QToolButton#addDeviceButton {{ background: transparent; border: 1px solid {t.border_strong.name()};"
-        f" border-radius: {RADIUS_BLOCK}px; padding: 2px 4px; color: {t.text.name()}; }}",
+        f" border-radius: {RADIUS_CARD}px; padding: 4px; color: {t.text.name()}; }}",
+        f'QToolButton#addDeviceButton[{ICON_BUTTON_TEXT_PROPERTY}="true"] {{ padding: 6px 12px;'
+        " font-weight: 500; }",
         f"QToolButton#addDeviceButton:hover {{ background: {t.selected.name()}; border-color: {edge}; }}",
         f"QToolButton#addDeviceButton:pressed {{ background: {t.border.name()}; }}",
         f"QToolButton#addDeviceButton:focus {{ border-color: {ring}; }}",
         f'QPushButton[bubbleAction="true"] {{ background: transparent; border: 1px solid {t.border.name()};'
-        f" border-radius: {RADIUS_CONTROL}px; padding: 2px 10px; color: {t.text.name()}; }}",
+        f" border-radius: {RADIUS_CONTROL}px; padding: 5px 12px; color: {t.text.name()}; }}",
         f'QPushButton[bubbleAction="true"]:hover {{ background: {t.selected.name()};'
         f" border-color: {t.border_strong.name()}; }}",
         f'QPushButton[bubbleAction="true"]:pressed {{ background: {t.border.name()}; }}',
         f'QPushButton[bubbleAction="true"]:focus {{ border-color: {ring}; }}',
         f"#emptyActionButton {{ background-color: {colors['normal'][1].name()};"
-        f" color: {colors['normal'][0].name()}; border: 2px solid {edge}; border-radius: 18px;"
-        " padding: 6px 24px; font-weight: 600; }",
+        f" color: {colors['normal'][0].name()}; border: 2px solid {edge}; border-radius: {RADIUS_CARD}px;"
+        " padding: 8px 28px; font-weight: 600; }",
         f"#emptyActionButton:hover {{ background-color: {colors['hover'][1].name()};"
         f" border-color: {ring}; }}",
         f"#emptyActionButton:pressed {{ background-color: {colors['pressed'][1].name()}; }}",
         f"QToolButton#chatSendButton {{ background: {colors['normal'][1].name()};"
         f" color: {colors['normal'][0].name()}; border: 2px solid {edge};"
-        f" border-radius: {RADIUS_BLOCK}px; padding: 4px 14px; font-weight: 600; }}",
+        f" border-radius: {RADIUS_CARD}px; padding: 6px 16px; font-weight: 600; }}",
         f"QToolButton#chatSendButton:hover {{ background: {colors['hover'][1].name()}; }}",
         f"QToolButton#chatSendButton:pressed {{ background: {colors['pressed'][1].name()}; }}",
         f"QToolButton#chatSendButton:focus {{ border-color: {ring}; }}",
@@ -598,7 +606,7 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f'QFrame[{SEGMENTED_PROPERTY}="true"] {{ background-color: {t.surface_raised.name()};'
         f" border: 1px solid {t.border_strong.name()}; border-radius: {RADIUS_CONTROL}px; }}",
         f"{segment()} {{ background: transparent; color: {t.text.name()}; border: 2px solid transparent;"
-        f" border-radius: {RADIUS_CONTROL - 2}px; padding: 2px 12px; spacing: 0px; }}",
+        f" border-radius: {RADIUS_CONTROL - 2}px; padding: 5px 14px; spacing: 0px; }}",
         f"{segment('::indicator')} {{ width: 0px; height: 0px; border: none; image: none; }}",
         f"{segment(':hover')} {{ background: {t.selected.name()}; }}",
         # Khối chọn (nền `accent`, viền `accent_strong`) do khung tự vẽ để trượt (widgets.SegmentedControl).
@@ -679,12 +687,23 @@ def _reapply(app: QGuiApplication) -> None:
 
 
 def _ensure_setup(app: QGuiApplication) -> None:
-    """Đặt style Fusion và nối `colorSchemeChanged` (mỗi việc một lần cho mỗi `app`)."""
+    """Đặt style Fusion, cỡ font thân tối thiểu và nối `colorSchemeChanged` (mỗi việc một lần)."""
     _set_style(app)
+    _set_base_font(app)
     if not app.property(_CONNECTED_PROPERTY):
         app.setProperty(_CONNECTED_PROPERTY, True)
         # Không dùng giá trị tín hiệu: khi đang ép sáng/tối, đổi của hệ điều hành không có tác dụng.
         app.styleHints().colorSchemeChanged.connect(lambda _scheme: _reapply(app))
+
+
+def _set_base_font(app: QGuiApplication) -> None:
+    """Nâng cỡ font ứng dụng tối thiểu lên `BASE_MIN_POINT_SIZE` một lần (giữ họ font hệ điều hành)."""
+    if isinstance(app, QApplication) and not app.property(_FONT_PROPERTY):
+        app.setProperty(_FONT_PROPERTY, True)
+        font = QFont(app.font())
+        if 0 < font.pointSizeF() < BASE_MIN_POINT_SIZE:
+            font.setPointSizeF(BASE_MIN_POINT_SIZE)
+            app.setFont(font)
 
 
 def _plain_button_height() -> int:

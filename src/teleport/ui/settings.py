@@ -213,9 +213,10 @@ from teleport.ui.widgets import (
 
 log = logging.getLogger(__name__)
 
-NAV_WIDTH = 184  # px, cột chọn mục
+NAV_WIDTH = 224  # px, cột chọn mục
+CONTENT_MAX_WIDTH = 860  # px, độ rộng tối đa khối nội dung (tránh dàn trải ở màn hình rộng)
 SECTION_MARGIN = theme.SPACING[4]  # 24 px, lề nội dung của mỗi mục
-ROW_SPACING = theme.SPACING[1]  # 8 px, khoảng giữa hai hàng
+ROW_SPACING = theme.SPACING[2]  # 12 px, khoảng giữa hai hàng
 SPIN_COMMIT_MS = 600  # ms không đổi sau khi bấm mũi tên thì chốt giá trị ô số
 MB = 1024 * 1024  # byte của “MB” trong ô tốc độ
 RATE_MIN_MB = 0.1
@@ -226,12 +227,12 @@ NOTICES_FILE = "THIRD-PARTY-NOTICES.txt"
 EXPORT_THREAD = "teleport-logexport"
 UPDATE_THREAD = "teleport-update"
 _NAV_ICON = 20  # px (`shield_checkmark` có cỡ 20)
-_NAV_ROW_HEIGHT = 36  # px
+_NAV_ROW_HEIGHT = 44  # px
 _NAV_PILL_WIDTH = 3  # px, vạch nhấn của mục được chọn
-_NAV_PILL_HEIGHT = 16  # px
+_NAV_PILL_HEIGHT = 20  # px
 _NAV_PILL_RADIUS = 1.5  # px
-_NAV_PILL_INSET = 2  # px, từ mép item (nằm trên viền trong suốt 2 px)
-_AVATAR = 32  # px
+_NAV_PILL_INSET = 4  # px, từ mép item (nằm trên viền trong suốt 2 px)
+_AVATAR = 36  # px
 _ACTIONS_INDENT = _AVATAR + theme.SPACING[2]  # px, lề trái của ô và nút dưới tên (thẳng cột chữ)
 _PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
 _FIT_PASSES = 4  # số lượt tối đa tính lại chiều cao bảng Phím tắt tới khi đứng yên
@@ -714,6 +715,7 @@ class TrustedDeviceRow(QFrame):
         self.name_label.setFont(font)
         self.detail_label = _plain(self, object_name="")  # ngắn; xuống dòng thay vì cắt
         self.detail_label.setObjectName("trustedDeviceDetail")
+        self.detail_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.detail_label.font()))
         self.detail_label.setProperty(theme.TONE_PROPERTY, "muted")
         self.ask_checkbox = QCheckBox(self)
         self.ask_checkbox.setObjectName("askBeforeReceive")
@@ -750,7 +752,7 @@ class TrustedDeviceRow(QFrame):
         self._actions.addStretch(0)
         # Kiểu bố cục (`_RowShape`) chỉ đổi hướng của `_box` và `_actions` (`_place_actions`).
         self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
-        self._box.setContentsMargins(theme.SPACING[2], theme.SPACING[1], theme.SPACING[3], theme.SPACING[1])
+        self._box.setContentsMargins(theme.SPACING[3], theme.SPACING[2], theme.SPACING[3], theme.SPACING[2])
         self._box.setSpacing(theme.SPACING[3])
         self._box.addLayout(self._head, 1)
         self._box.addLayout(self._actions, 0)
@@ -1259,6 +1261,7 @@ class SettingsPage(QWidget):
         self.sections = QStackedWidget(self)
         self.sections.setObjectName("settingsSections")
         self._section_widgets: dict[Section, QScrollArea] = {}
+        self._section_contents: dict[Section, QWidget] = {}
         self._section_titles: dict[Section, QLabel] = {}
         self._section_layouts: dict[Section, QVBoxLayout] = {}
         for section in Section:
@@ -1274,9 +1277,17 @@ class SettingsPage(QWidget):
         right = QVBoxLayout()
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
+        self.info_bar.setMaximumWidth(CONTENT_MAX_WIDTH)
+        self.info_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        bar_row = QHBoxLayout()
+        bar_row.setContentsMargins(0, 0, 0, 0)
+        bar_row.setSpacing(0)
+        bar_row.addStretch(1)
+        bar_row.addWidget(self.info_bar, 1000)
+        bar_row.addStretch(1)
         bar_box = QVBoxLayout()
-        bar_box.setContentsMargins(SECTION_MARGIN, theme.SPACING[3], SECTION_MARGIN, 0)
-        bar_box.addWidget(self.info_bar)
+        bar_box.setContentsMargins(SECTION_MARGIN, theme.SPACING[2], SECTION_MARGIN, 0)
+        bar_box.addLayout(bar_row)
         right.addLayout(bar_box)
         right.addWidget(self.sections, 1)
         body = QHBoxLayout()
@@ -1317,27 +1328,39 @@ class SettingsPage(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        content = QWidget()
+        viewport_host = QWidget()
+        viewport_host.setObjectName(f"settingsHost_{section.value}")
+        viewport_host.setAutoFillBackground(False)
+        content = QWidget(viewport_host)
         content.setObjectName(f"settingsContent_{section.value}")
+        content.setMaximumWidth(CONTENT_MAX_WIDTH)
+        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        content.setAutoFillBackground(False)
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(SECTION_MARGIN, theme.SPACING[3], SECTION_MARGIN, SECTION_MARGIN)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(ROW_SPACING)
         title = _plain(content, object_name=f"settingsTitle_{section.value}")
-        title.setFont(theme.font_for(theme.TextStyle.SECTION, title.font()))
+        title.setFont(theme.font_for(theme.TextStyle.TITLE, title.font()))
         layout.addWidget(title)
-        layout.addSpacing(theme.SPACING[0])
-        scroll.setWidget(content)
+        layout.addSpacing(theme.SPACING[1])
+        host_layout = QHBoxLayout(viewport_host)
+        host_layout.setContentsMargins(SECTION_MARGIN, theme.SPACING[3], SECTION_MARGIN, SECTION_MARGIN)
+        host_layout.setSpacing(0)
+        host_layout.addStretch(1)
+        host_layout.addWidget(content, 1000)
+        host_layout.addStretch(1)
+        scroll.setWidget(viewport_host)
         viewport = scroll.viewport()
         if viewport is not None:
             viewport.setAutoFillBackground(False)
-        content.setAutoFillBackground(False)
         self.sections.addWidget(scroll)
         self._section_widgets[section] = scroll
+        self._section_contents[section] = content
         self._section_titles[section] = title
         self._section_layouts[section] = layout
 
     def _row(self, section: Section, object_name: str) -> SettingsRow:
-        row = SettingsRow(self._section_widgets[section].widget(), object_name=object_name)
+        row = SettingsRow(self._section_contents[section], object_name=object_name)
         self._section_layouts[section].addWidget(row)
         return row
 
@@ -1345,7 +1368,7 @@ class SettingsPage(QWidget):
         self.name_row = self._row(Section.GENERAL, "nameRow")
         self.name_edit = _NameField(self.name_row)
         self.name_edit.setObjectName("deviceNameEdit")
-        self.name_edit.setMinimumWidth(220)
+        self.name_edit.setMinimumWidth(240)
         self.name_edit.editingFinished.connect(self._on_name_finished)
         self.name_edit.textEdited.connect(lambda _text: self.set_name_error(None))
         self.name_edit.reverted.connect(lambda: self.set_name_error(None))
@@ -1398,7 +1421,7 @@ class SettingsPage(QWidget):
 
     def _build_appearance(self) -> None:
         layout = self._section_layouts[Section.APPEARANCE]
-        self.appearance = AppearanceSection(self._section_widgets[Section.APPEARANCE].widget())
+        self.appearance = AppearanceSection(self._section_contents[Section.APPEARANCE])
         self.appearance.theme_selected.connect(self.theme_selected)
         self.appearance.accent_selected.connect(self.accent_selected)
         self.appearance.language_selected.connect(self.language_selected)
@@ -1440,7 +1463,7 @@ class SettingsPage(QWidget):
         self._section_layouts[Section.PRIVACY].addStretch(1)
 
     def _build_devices(self) -> None:
-        content = self._section_widgets[Section.DEVICES].widget()
+        content = self._section_contents[Section.DEVICES]
         layout = self._section_layouts[Section.DEVICES]
         self.devices_intro = _plain(content, object_name="trustedIntro")
         self.devices_intro.setProperty(theme.TONE_PROPERTY, "muted")
@@ -1496,7 +1519,7 @@ class SettingsPage(QWidget):
         self.cancel_all_pending_button.setVisible(False)
         self.cancel_all_pending_button.clicked.connect(self.cancel_all_pending_requested)
         self.pending_row.set_control(self.cancel_all_pending_button)
-        transfer_content = self._section_widgets[Section.TRANSFER].widget()
+        transfer_content = self._section_contents[Section.TRANSFER]
         self.pending_list = QWidget(transfer_content)
         self.pending_list.setObjectName("pendingTransfersList")
         self._pending_layout = QVBoxLayout(self.pending_list)
@@ -1626,9 +1649,8 @@ class SettingsPage(QWidget):
         được."""
         self._loaded = bool(loaded)
         for section in (Section.PRIVACY, Section.DEVICES, Section.TRANSFER):
-            content = self._section_widgets[section].widget()
-            if content is not None:
-                content.setEnabled(self._loaded)
+            content = self._section_contents[section]
+            content.setEnabled(self._loaded)
         for row in (self.name_row, self.create_subfolder_row, self.autostart_row):
             row.setEnabled(self._loaded)
         self.appearance.set_loaded(self._loaded)
@@ -2746,11 +2768,11 @@ class SettingsPage(QWidget):
         ring = theme.focus_ring_color(dark).name()
         self.nav.setStyleSheet(
             f"QListWidget#settingsNav {{ background: {t.sidebar.name()}; border: none;"
-            f" border-right: 1px solid {t.border.name()}; padding: {theme.SPACING[1]}px; outline: 0; }}"
+            f" border-right: 1px solid {t.border.name()}; padding: 12px 10px; outline: 0; }}"
             f" QListWidget#settingsNav::item {{ color: {t.text.name()};"
-            f" border-radius: {theme.RADIUS_CONTROL}px;"
+            f" border-radius: {theme.RADIUS_CARD}px;"
             # Lề trái thêm 2 px bù cho vạch 4 px cũ: chữ và icon không dời. Vạch nhấn do `_NavList` vẽ.
-            f" padding: 0px {theme.SPACING[1]}px 0px {theme.SPACING[1] + 2}px;"
+            f" padding: 0px 12px 0px 14px;"
             " border: 2px solid transparent; }"
             f" QListWidget#settingsNav::item:hover {{ background: {t.selected.name()}; }}"
             f" QListWidget#settingsNav::item:selected {{ background: {t.selected.name()};"

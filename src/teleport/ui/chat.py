@@ -250,7 +250,7 @@ _clipboard_mime: Callable[[], QMimeData | None] = _system_clipboard_mime
 HISTORY_DEBOUNCE_MS = 120
 MAX_THREAD_BUBBLES = 200
 PIN_SLACK = 24  # px
-_AVATAR = 36  # px, avatar ở đầu luồng
+_AVATAR = 40  # px, avatar ở đầu luồng
 _ICON = 20  # px
 _PAGE_STEP = 5  # bong bóng mỗi lần PageUp / PageDown
 _MARGIN = theme.SPACING[3]
@@ -777,13 +777,13 @@ class ChatHeader(QWidget):
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         column = QVBoxLayout()
         column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(0)
+        column.setSpacing(2)
         column.addWidget(self.name_label)
         column.addWidget(self.status_label)
         self.action_row = QHBoxLayout()  # chỗ cho nút đầu luồng (B3c)
         self.action_row.setContentsMargins(0, 0, 0, 0)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(_MARGIN, theme.SPACING[2], _MARGIN, theme.SPACING[2])
+        layout.setContentsMargins(20, 14, 20, 14)
         layout.setSpacing(theme.SPACING[2])
         layout.addWidget(self.avatar, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(column, 1)
@@ -862,8 +862,8 @@ class ChatComposer(QWidget):
         self.hint_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._offline = False
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(_MARGIN, theme.SPACING[1] + 2, _MARGIN, theme.SPACING[1] + 2)
-        layout.setSpacing(theme.SPACING[1])
+        layout.setContentsMargins(20, 12, 20, 12)
+        layout.setSpacing(10)
         layout.addWidget(self.send_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.send_folder_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.send_multi_button, 0, Qt.AlignmentFlag.AlignVCenter)

@@ -140,11 +140,11 @@ def assert_color(c: QColor, rgb: QColor, alpha: int, what: str) -> None:
 
 
 def sidebar_gap(window) -> tuple:
-    """Điểm trống của cột trái (bên phải nút “＋ Ghép đôi máy mới”, như L4): (widget, QPoint)."""
+    """Điểm trống của cột trái (bên dưới nút “＋ Ghép đôi máy mới”): (widget, QPoint)."""
     conv = window.conversations
     btn = conv.add_button
-    gap = QPoint(conv.width() - 4, btn.mapTo(conv, btn.rect().center()).y())
-    assert btn.mapTo(conv, QPoint(btn.width(), 0)).x() < gap.x(), "tiền đề: điểm nằm ngoài nút"
+    gap = QPoint(conv.width() // 2, btn.mapTo(conv, QPoint(0, btn.height())).y() + 12)
+    assert gap.y() < conv.height(), "tiền đề: điểm nằm dưới nút"
     return conv, gap
 
 

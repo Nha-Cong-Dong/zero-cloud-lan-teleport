@@ -371,7 +371,7 @@ def test_safe_tooltip_keeps_line_breaks():
 def test_icon_button_size_constant():
     from teleport.ui import widgets
 
-    assert widgets.ICON_BUTTON_SIZE == 32
+    assert widgets.ICON_BUTTON_SIZE == 36
 
 
 @pytest.mark.parametrize("label", ["", " ", "\t\n "])
@@ -436,27 +436,27 @@ def test_icon_button_markup_label_tooltip_is_literal(qtbot):
 
 
 def test_icon_only_button_is_fixed_32_square(qtbot):
-    from teleport.ui.widgets import IconButton
+    from teleport.ui.widgets import ICON_BUTTON_SIZE, IconButton
 
     btn = IconButton("settings", "Cài đặt")
     _show(qtbot, btn)
     btn.resize(80, 80)  # cỡ cố định: resize không đổi được
     QApplication.processEvents()
-    assert btn.size() == QSize(32, 32)
-    assert btn.minimumSize() == QSize(32, 32)
-    assert btn.maximumSize() == QSize(32, 32)
+    assert btn.size() == QSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+    assert btn.minimumSize() == QSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
+    assert btn.maximumSize() == QSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
     assert btn.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
 
 
 def test_icon_button_with_text_shows_label_beside_icon_32_high(qtbot):
-    from teleport.ui.widgets import IconButton
+    from teleport.ui.widgets import ICON_BUTTON_SIZE, IconButton
 
     btn = IconButton("chevron_left", "Quay lại", show_text=True)
     _show(qtbot, btn)
     assert btn.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonTextBesideIcon
     assert btn.text() == "Quay lại"
-    assert btn.height() == 32
-    assert btn.width() > 32
+    assert btn.height() == ICON_BUTTON_SIZE
+    assert btn.width() > ICON_BUTTON_SIZE
 
 
 def test_icon_button_flags(qtbot):
@@ -999,8 +999,8 @@ def test_chat_bubble_body_margins_and_content(qtbot):
     b = ChatBubble(Direction.OUT)
     body = b.body()
     assert isinstance(body, QVBoxLayout)
-    assert body.contentsMargins() == QMargins(12, 8, 12, 8)
-    assert body.spacing() == 4
+    assert body.contentsMargins() == QMargins(14, 10, 14, 10)
+    assert body.spacing() == 6
     label = QLabel("phim-4k.mkv")
     body.addWidget(label)
     _show(qtbot, b, 240, 80)
@@ -1414,7 +1414,7 @@ def test_empty_state_content_block_is_centered(qtbot):
     center = block.center()
     assert abs(center.x() - es.width() / 2) <= 2, f"lệch ngang: khối {block} trong {es.size()}"
     assert abs(center.y() - es.height() / 2) <= 2, f"lệch dọc: khối {block} trong {es.size()}"
-    assert block.width() <= 360
+    assert block.width() <= 440
 
 
 def test_empty_state_vertical_order_and_spacing(qtbot):
@@ -1528,7 +1528,7 @@ def test_empty_state_with_scene_block_is_centered(qtbot):
     assert abs(center.y() - es.height() / 2) <= 2, f"lệch dọc: khối {block} trong {es.size()}"
     ill = _geom_in(es.illustration, es)
     assert abs(ill.center().x() - es.width() / 2) <= 2, f"minh họa lệch ngang: {ill}"
-    assert block.width() <= 360
+    assert block.width() <= 440
 
 
 def test_empty_state_with_scene_keeps_16_px_to_title(qtbot):

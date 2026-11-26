@@ -235,11 +235,11 @@ def test_wave_total_fits_motion_loop_cap():
 
 
 def test_illustration_size_fits_empty_state_block():
-    """Mục 7: `ILLUSTRATION_SIZE` 160×96 (giảm được nếu vỡ 720×460, không tăng); khối EmptyState rộng 360."""
+    """Mục 7: `ILLUSTRATION_SIZE` 200×120 (giữ tỉ lệ 5:3); khối EmptyState rộng 440."""
     from teleport.ui import illustrations
 
     size = size_of(illustrations.ILLUSTRATION_SIZE)
-    assert 0 < size.width() <= 160 and 0 < size.height() <= 96, size
+    assert 0 < size.width() <= 200 and 0 < size.height() <= 120, size
 
 
 @pytest.mark.parametrize("name", ["NOT_PAIRED", "NO_DEVICES", "NO_TRANSFERS"])

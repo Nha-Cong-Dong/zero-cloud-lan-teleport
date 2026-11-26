@@ -454,10 +454,11 @@ def theme_state_reset(qapp):
     `theme` chưa có `_reset_for_tests` (code đang viết dở) thì bỏ bước đó; test
     `test_autouse_reset_restores_system_and_default` sẽ đỏ thay vì mọi test ui.
     """
-    from PySide6.QtGui import QPalette
+    from PySide6.QtGui import QFont, QPalette
 
     old_palette = QPalette(qapp.palette())
     old_css = qapp.styleSheet()
+    old_font = QFont(qapp.font())
     yield
     try:
         from teleport.ui import theme
@@ -466,6 +467,9 @@ def theme_state_reset(qapp):
     reset = getattr(theme, "_reset_for_tests", None)
     if reset is not None:
         reset()
+    font_prop = getattr(theme, "_FONT_PROPERTY", None)
+    if font_prop is not None:
+        qapp.setProperty(font_prop, None)
     hints = qapp.styleHints()
     if hasattr(hints, "unsetColorScheme"):
         hints.unsetColorScheme()
@@ -474,6 +478,8 @@ def theme_state_reset(qapp):
         qapp.setStyleSheet(old_css)
     if qapp.palette() != old_palette:
         qapp.setPalette(old_palette)
+    if qapp.font() != old_font:
+        qapp.setFont(old_font)
 
 
 @pytest.fixture(autouse=True)

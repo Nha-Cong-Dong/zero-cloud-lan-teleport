@@ -107,7 +107,7 @@ from teleport.ui.widgets import (
 
 # Chọn bằng chuột để chép; không `TextSelectableByKeyboard`: Tab tới nhãn sẽ hiện con trỏ chữ nhấp nháy.
 _TEXT_FLAGS = Qt.TextInteractionFlag.TextSelectableByMouse
-START_PANEL_MAX_WIDTH = 460  # px, khối căn giữa của màn Bắt đầu / Lỗi
+START_PANEL_MAX_WIDTH = 520  # px, khối căn giữa của màn Bắt đầu / Lỗi
 _STATUS_ICON = 20  # px
 _LOGO_SIZE = 40  # px, logo trong khối căn giữa
 _STARTING_BAR = (160, 4)  # px
@@ -200,7 +200,7 @@ class StartPanel(QWidget):
         self.start_button.setProperty(theme.PRIMARY_PROPERTY, True)
 
         column = QVBoxLayout(self.card)
-        column.setContentsMargins(*(theme.SPACING[5],) * 4)
+        column.setContentsMargins(*(theme.SPACING[4],) * 4)
         column.setSpacing(theme.SPACING[2])
         brand = QHBoxLayout()
         brand.setSpacing(theme.SPACING[2])
@@ -230,7 +230,7 @@ class StartPanel(QWidget):
         row.addWidget(self.card, 1000)
         row.addStretch(1)
         outer = QVBoxLayout(center)
-        outer.setContentsMargins(*(theme.SPACING[4],) * 4)
+        outer.setContentsMargins(*(theme.SPACING[3],) * 4)
         outer.addStretch(1)
         outer.addLayout(row)
         outer.addStretch(1)
@@ -308,7 +308,7 @@ class MachineCard(QFrame):
 
         self.avatar = DeviceAvatar(
             self,
-            diameter=38,
+            diameter=44,
             kind=AvatarKind.DESKTOP,
             presence=Presence.NONE,
             emphasis=True,
@@ -336,7 +336,7 @@ class MachineCard(QFrame):
 
         text_column = QVBoxLayout()
         text_column.setContentsMargins(0, 0, 0, 0)
-        text_column.setSpacing(2)
+        text_column.setSpacing(4)
         text_column.addWidget(self.caption_label)
         text_column.addWidget(self.name_label)
         address_row = QHBoxLayout()
@@ -351,7 +351,7 @@ class MachineCard(QFrame):
         self.address_row = address_row
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(theme.SPACING[3], theme.SPACING[2], theme.SPACING[2], theme.SPACING[2])
+        layout.setContentsMargins(16, 14, 14, 14)
         layout.setSpacing(theme.SPACING[2])
         layout.addWidget(self.avatar, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(text_column, 1)
@@ -574,8 +574,8 @@ class SaveBar(QFrame):
         self.change_button.clicked.connect(self.change_requested)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(theme.SPACING[3], 6, theme.SPACING[2], 6)
-        layout.setSpacing(theme.SPACING[1])
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(10)
         layout.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.save_label, 1)
         layout.addWidget(self.open_button)

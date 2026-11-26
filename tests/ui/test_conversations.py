@@ -52,11 +52,11 @@ OFFLINE = "Ngoại tuyến"
 THIS_MACHINE = "Máy này"
 SEP = " · "
 
-SIDEBAR_WIDTH = 288
+SIDEBAR_WIDTH = 340
 SIDEBAR_COMPACT_WIDTH = 80  # spec 12.5 (không phải 72)
 COMPACT_BELOW = 820
-MIN_ROW_HEIGHT = 56
-ICON_BUTTON_SIZE = 32
+MIN_ROW_HEIGHT = 64
+ICON_BUTTON_SIZE = 36
 
 NOW = datetime.datetime(2026, 10, 31, 10, 45).timestamp()  # giờ địa phương
 
@@ -1279,9 +1279,11 @@ def test_row_colors(window, qtbot, ui_theme, tmp_path, dark):
     # Nửa dưới của khối chữ = dòng phụ (tên ở nửa trên). Chữ nhỏ được khử răng cưa: trên Linux
     # (FreeType) có thể không điểm ảnh nào đạt đúng màu chữ, nên tìm điểm pha giữa nền và màu chữ.
     half = busy_rect.height() // 2
-    status_block = QRect(busy_rect.left() + 8 + 40 + 12, busy_rect.top() + half, busy_rect.width() - 60, half)
+    status_block = QRect(
+        busy_rect.left() + 10 + 42 + 12, busy_rect.top() + half, busy_rect.width() - 64, half
+    )
     assert has_blend(image, status_block, tok.sidebar, tok.accent_text), "dòng phụ BUSY màu accent_text"
-    avatar = QRect(off_rect.left(), off_rect.top(), 8 + 40 + 4, off_rect.height())
+    avatar = QRect(off_rect.left(), off_rect.top(), 10 + 42 + 4, off_rect.height())
     assert has_color(image, avatar, tok.offline, 16), "chấm ngoại tuyến có vòng offline"
 
 

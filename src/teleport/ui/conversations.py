@@ -155,6 +155,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QListView,
     QMenu,
+    QSizePolicy,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -208,18 +209,18 @@ STATUS_ROLE = Qt.ItemDataRole.UserRole + 21  # chữ dòng phụ
 TONE_ROLE = Qt.ItemDataRole.UserRole + 22  # StatusTone của dòng phụ
 TIME_ROLE = Qt.ItemDataRole.UserRole + 23  # chữ giờ (rỗng nếu chưa có hoạt động)
 
-MIN_ROW_HEIGHT = 56  # px, nền của một hàng (chưa tính khe giữa hai hàng)
+MIN_ROW_HEIGHT = 64  # px, nền của một hàng (chưa tính khe giữa hai hàng)
 ROW_GAP = 2  # px, khe giữa hai hàng, nằm trong sizeHint (nền chừa 1 px trên, 1 px dưới)
-AVATAR_SIZE = 40  # px
+AVATAR_SIZE = 42  # px
 COMPACT_CELL = 48  # px, ô bo quanh avatar ở dạng thu gọn
-_PADDING = 8  # px, lề trong của hàng
+_PADDING = 10  # px, lề trong của hàng
 _AVATAR_GAP = 12  # px, avatar → khối chữ
 _TIME_GAP = 8  # px, tên → giờ
-_LINE_GAP = 2  # px, dòng tên → dòng phụ
+_LINE_GAP = 3  # px, dòng tên → dòng phụ
 _WARNING_ICON = 16  # px, icon cảnh báo đầu dòng phụ / góc ô thu gọn
 _WARNING_SOURCE = 20  # px, cỡ có trong `icons.SIZES` (vẽ thu vào ô 16×16)
 _PERCENT_CAP = 99  # chưa xong thì không hiện 100%
-_LIST_SPACING = 4  # px, danh sách → nút “＋”
+_LIST_SPACING = 8  # px, danh sách → nút “＋”
 _DROP_GLOW_MAX = 1.0  # mức phủ `accent_subtle` khi kéo file qua hàng (tương phản: docstring module)
 # (token chữ/icon, tỉ lệ tối thiểu) trên `blend(sidebar, accent_subtle, _DROP_GLOW_MAX)`.
 DROP_GLOW_CONTRAST_PAIRS: tuple[tuple[str, float], ...] = (
@@ -1411,13 +1412,15 @@ class ConversationList(QWidget):
             show_text=True,
         )
         self.add_button.setObjectName("addDeviceButton")
+        self.add_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.add_button.setMinimumHeight(40)
         self.add_button.clicked.connect(self.add_device_requested)
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(_LIST_SPACING)
         self._layout.addWidget(self.list_view)
-        self._layout.addWidget(self.add_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self._layout.addWidget(self.add_button)
         self._layout.addStretch(1)
         QWidget.setTabOrder(self.list_view, self.add_button)
 
@@ -1556,14 +1559,23 @@ class ConversationList(QWidget):
         button = self.add_button
         if compact:
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setProperty(theme.ICON_BUTTON_TEXT_PROPERTY, False)
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             button.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
             self._layout.setAlignment(button, Qt.AlignmentFlag.AlignHCenter)
         else:
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setProperty(theme.ICON_BUTTON_TEXT_PROPERTY, True)
+            button.style().unpolish(button)
+            button.style().polish(button)
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             button.setMinimumWidth(0)
             button.setMaximumWidth(16777215)  # QWIDGETSIZE_MAX
-            button.setFixedHeight(ICON_BUTTON_SIZE)
-            self._layout.setAlignment(button, Qt.AlignmentFlag.AlignLeft)
+            button.setMinimumHeight(40)
+            button.setMaximumHeight(16777215)
+            self._layout.setAlignment(button, Qt.AlignmentFlag(0))
         self.list_view.note_layout_changed()
         self.list_view.doItemsLayout()
         self.list_view.viewport().update()

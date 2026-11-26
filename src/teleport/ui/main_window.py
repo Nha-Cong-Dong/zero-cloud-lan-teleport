@@ -210,9 +210,9 @@ from teleport.ui.widgets import (
     safe_tooltip,
 )
 
-DEFAULT_SIZE = QSize(980, 660)  # cỡ cửa sổ lúc mở khi màn hình đủ rộng
+DEFAULT_SIZE = QSize(1120, 720)  # cỡ cửa sổ lúc mở khi màn hình đủ rộng
 MIN_SIZE = QSize(720, 460)
-SIDEBAR_WIDTH = 288  # px, cột trái (kể cả viền phải 1 px)
+SIDEBAR_WIDTH = 340  # px, cột trái (kể cả viền phải 1 px)
 SIDEBAR_COMPACT_WIDTH = 80  # px, cột trái thu gọn (chỉ còn avatar) khi cửa sổ hẹp
 COMPACT_BELOW = 820  # px: cửa sổ hẹp hơn thì cột trái thu gọn
 SETTINGS_SHORTCUT = shortcuts.portable_text(Shortcut.SETTINGS)  # mở trang Cài đặt
@@ -221,7 +221,7 @@ _LAYOUT_PASSES = 5  # tối đa số lượt chạy layout trước khi cuộn t
 _COMPACT_MACHINE = 48  # px, nút “Máy này” khi cột trái thu gọn
 _COMPACT_AVATAR = 40  # px
 _COPIED_TOOLTIP_MS = 2000
-_HEADER_MARGINS = (16, 16, 12, 8)  # px, đầu cột trái dạng đầy đủ
+_HEADER_MARGINS = (16, 16, 12, 12)  # px, đầu cột trái dạng đầy đủ
 _HEADER_COMPACT_MARGINS = (0, 12, 0, 8)
 _CONTENT_MARGINS = (theme.SPACING[2], 0, theme.SPACING[2], theme.SPACING[2])  # px, lề `sidebarContent`
 _CONTENT_COMPACT_MARGINS = (4, 0, 4, 8)
@@ -529,7 +529,9 @@ class MainWindow(QMainWindow):
         self.brand_label = QLabel(self.sidebar_header)
         self.brand_label.setObjectName("brandLabel")
         self.brand_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.brand_label.setFont(theme.font_for(theme.TextStyle.TITLE, self.brand_label.font()))
+        brand_font = theme.font_for(theme.TextStyle.SECTION, self.brand_label.font())
+        brand_font.setWeight(brand_font.Weight.Bold)
+        self.brand_label.setFont(brand_font)
         self.brand_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.web_guest_button = IconButton(
             "globe",
@@ -557,7 +559,7 @@ class MainWindow(QMainWindow):
         # Thu gọn thì cả hai hàng xếp dọc (`setDirection`) và căn giữa (`_apply_compact`).
         self.header_layout = QHBoxLayout(self.sidebar_header)
         self.header_layout.setContentsMargins(*_HEADER_MARGINS)
-        self.header_layout.setSpacing(theme.SPACING[1])
+        self.header_layout.setSpacing(10)
         self.header_layout.addWidget(self.brand_logo, 0, Qt.AlignmentFlag.AlignVCenter)
         self.header_layout.addWidget(self.brand_label, 0, Qt.AlignmentFlag.AlignVCenter)
         self.header_layout.addStretch(1)

@@ -421,7 +421,7 @@ def test_nav_six_sections_order_icons_names(qtbot, monkeypatch):
     for name in NAV_ICONS:
         assert (name, 20) in requested, f"icon {name!r} cỡ 20 của nav (9.2)"
     assert page.sections.count() == 6
-    assert page.nav.width() == 184 or page.nav.maximumWidth() == 184 or page.nav.minimumWidth() == 184
+    assert page.nav.width() == 224 or page.nav.maximumWidth() == 224 or page.nav.minimumWidth() == 224
     assert TITLE in joined(page)
 
 
@@ -1396,3 +1396,24 @@ def test_line_edit_and_spin_are_real_controls(ui):
     assert isinstance(ui.page.name_edit, QLineEdit)
     assert isinstance(ui.page.rate_spin, QAbstractSpinBox)
     assert isinstance(ui.page.retention_spin, QAbstractSpinBox)
+
+
+def test_sections_capped_and_centered_on_wide_screen(ui):
+    from teleport.ui.settings import CONTENT_MAX_WIDTH, Section
+
+    page = ui.page
+    page.resize(1920, 1040)
+    settle(ui.qtbot, 40)
+    for sec in Section:
+        w = open_section(page, sec.name)
+        settle(ui.qtbot, 20)
+        assert isinstance(w, QScrollArea)
+        viewport = w.viewport()
+        content = page.findChild(QWidget, f"settingsContent_{sec.value}")
+        assert content is not None
+        assert content.width() <= CONTENT_MAX_WIDTH, f"{sec.name}: {content.width()} > {CONTENT_MAX_WIDTH}"
+        left = content.mapTo(viewport, content.rect().topLeft()).x()
+        center = left + content.width() / 2
+        assert abs(center - viewport.width() / 2) <= 2, (
+            f"{sec.name}: không căn giữa ({center} vs {viewport.width() / 2})"
+        )

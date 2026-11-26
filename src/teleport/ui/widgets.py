@@ -166,11 +166,11 @@ from teleport.ui.illustrations import Illustration, scene_for_icon
 from teleport.ui.texts import Text
 from teleport.ui.theme import Tokens
 
-ICON_BUTTON_SIZE = 32  # px, cạnh của nút chỉ có icon (vùng chạm ≥ 24, WCAG 2.5.8)
+ICON_BUTTON_SIZE = 36  # px, cạnh của nút chỉ có icon (vùng chạm ≥ 24, WCAG 2.5.8)
 _ICON_SIZE = 20  # px, icon của nút và của InfoBar
 _BADGE_DOT = 8  # px, chấm của StatusBadge
 _EMPTY_BADGE = 56  # px, vòng tròn icon của EmptyState
-_EMPTY_MAX_WIDTH = 360  # px, khối nội dung của EmptyState
+_EMPTY_MAX_WIDTH = 440  # px, khối nội dung của EmptyState
 BUBBLE_MAX_RATIO = 0.62
 _OFFLINE_ICON_OPACITY = 0.6
 _TEXT_FLAGS = Qt.TextInteractionFlag.TextSelectableByMouse  # như nhãn của `main_window`
@@ -265,12 +265,13 @@ class IconButton(QToolButton):
         self._label = ""
         self._shortcut = QKeySequence(shortcut) if shortcut is not None else None
         self.setProperty(theme.ICON_BUTTON_PROPERTY, True)
+        self.setProperty(theme.ICON_BUTTON_TEXT_PROPERTY, bool(show_text))
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAutoRaise(True)
         self.setIconSize(QSize(_ICON_SIZE, _ICON_SIZE))
         if show_text:
             self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            self.setFixedHeight(ICON_BUTTON_SIZE)
+            self.setMinimumHeight(ICON_BUTTON_SIZE)
         else:
             self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             self.setFixedSize(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)
@@ -903,8 +904,8 @@ class ChatBubble(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._body = QVBoxLayout(self)
-        self._body.setContentsMargins(theme.SPACING[2], theme.SPACING[1], theme.SPACING[2], theme.SPACING[1])
-        self._body.setSpacing(theme.SPACING[0])
+        self._body.setContentsMargins(14, 10, 14, 10)
+        self._body.setSpacing(6)
         self.retranslate()
 
     @property
@@ -1403,10 +1404,8 @@ class PageHeader(QWidget):
         self.title_label.setFont(theme.font_for(theme.TextStyle.SECTION, self.title_label.font()))
         self.title_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # tên trang đã đọc qua tên của trang
         self._layout = QHBoxLayout(self)
-        self._layout.setContentsMargins(
-            theme.SPACING[3], theme.SPACING[2], theme.SPACING[3], theme.SPACING[2]
-        )
-        self._layout.setSpacing(theme.SPACING[2])
+        self._layout.setContentsMargins(theme.SPACING[3], 12, theme.SPACING[3], 12)
+        self._layout.setSpacing(theme.SPACING[1])
         self._layout.addWidget(self.back_button)
         self._layout.addWidget(self.title_label, 1)
         self.set_title(title)
@@ -1439,9 +1438,9 @@ class PageHeader(QWidget):
 
 # ---- ToggleSwitch ------------------------------------------------------------------------------
 
-TOGGLE_TRACK = QSize(40, 20)  # px, rãnh của công tắc
+TOGGLE_TRACK = QSize(44, 24)  # px, rãnh của công tắc
 _TOGGLE_KNOB_MARGIN = 3  # px, từ mép rãnh tới núm
-_TOGGLE_TEXT_GAP = 8  # px, từ rãnh tới chữ “Bật”/“Tắt”
+_TOGGLE_TEXT_GAP = 10  # px, từ rãnh tới chữ “Bật”/“Tắt”
 _TOGGLE_RING = 2  # px, vòng tiêu điểm (ngoài rãnh, trong vùng của widget)
 _TOGGLE_DISABLED_OPACITY = 0.5
 # (token, token nền) phải ≥ 3:1 (WCAG 1.4.11) ở cả hai chế độ.
@@ -1635,6 +1634,7 @@ class SettingsRow(QFrame):
         self.label = _row_label(self, f"{object_name}Label" if object_name else "")
         self.label.setFont(_demibold(self.label.font()))
         self.hint_label = _row_label(self, f"{object_name}Hint" if object_name else "")
+        self.hint_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.hint_label.font()))
         self.hint_label.setProperty(theme.TONE_PROPERTY, "muted")
         self.hint_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.hint_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1643,12 +1643,12 @@ class SettingsRow(QFrame):
 
         self._text_column = QVBoxLayout()
         self._text_column.setContentsMargins(0, 0, 0, 0)
-        self._text_column.setSpacing(2)
+        self._text_column.setSpacing(4)
         self._text_column.addWidget(self.label)
         self._text_column.addWidget(self.hint_label)
         self._grid = QGridLayout(self)
-        self._grid.setContentsMargins(theme.SPACING[3], theme.SPACING[2], theme.SPACING[3], theme.SPACING[2])
-        self._grid.setHorizontalSpacing(theme.SPACING[3])
+        self._grid.setContentsMargins(20, 16, 20, 16)
+        self._grid.setHorizontalSpacing(theme.SPACING[4])
         self._grid.setVerticalSpacing(theme.SPACING[1])
         self._grid.addLayout(self._text_column, 0, 0)
         self._grid.setColumnStretch(0, 1)
