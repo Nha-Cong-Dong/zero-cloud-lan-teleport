@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -134,3 +135,20 @@ async def test_try_connect_ipc_stale_file_cleanup(tmp_path: Path):
     assert client is None
     # Tệp mồ côi phải tự động bị dọn dẹp
     assert not info_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_ipc_server_close_does_not_hang_with_open_client(tmp_path: Path, mock_node):
+    """Đóng IpcServer khi còn client đang mở kết nối không bị treo."""
+    server = IpcServer(tmp_path, mock_node)
+    await server.start()
+
+    client = await try_connect_ipc(tmp_path)
+    assert client is not None
+    try:
+        pong = await client.ping()
+        assert pong["status"] == "ok"
+        await asyncio.wait_for(server.close(), timeout=2.0)
+        assert not (tmp_path / IPC_INFO_FILE).exists()
+    finally:
+        await client.close()

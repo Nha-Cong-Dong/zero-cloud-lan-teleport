@@ -759,10 +759,10 @@ def test_busy_or_rejected_text_promises_no_seconds(outcome, name, port):
 @pytest.mark.parametrize(
     ("available", "expected"),
     [
-        ((1920, 1080), (980, 660)),
-        ((980, 660), (980, 660)),
-        ((1366, 600), (980, 600)),
-        ((900, 2000), (900, 660)),
+        ((1920, 1080), (1120, 720)),
+        ((1120, 720), (1120, 720)),
+        ((1366, 600), (1120, 600)),
+        ((900, 2000), (900, 720)),
         ((800, 600), (800, 600)),
         ((640, 400), (640, 400)),
     ],
@@ -776,7 +776,7 @@ def test_default_size_clamps_to_available(available, expected):
 def test_default_size_constant():
     from teleport.ui.main_window import DEFAULT_SIZE
 
-    assert QSize(980, 660) == DEFAULT_SIZE
+    assert QSize(1120, 720) == DEFAULT_SIZE
 
 
 def test_main_window_starts_at_default_size_of_primary_screen(window):

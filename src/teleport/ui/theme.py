@@ -63,11 +63,12 @@ tên lúc gọi (ngữ cảnh `Theme`); `accent_swatch` là màu ô chọn (= `a
 Đã biết, chấp nhận vì màu không mang thông tin: `accent_subtle` của amber gần `warning_bg`,
 `accent_strong` của graphite gần `text_muted`.
 
-**Thang chữ** (`font_for(style, base)`): TITLE +6 pt đậm (Bold), SECTION +2 pt Medium, cả hai dùng font
+**Thang chữ** (`font_for(style, base)`): TITLE +6 pt đậm (Bold), SECTION +3 pt Medium, cả hai dùng font
 điểm nhấn `ACCENT_FAMILY` nếu đã nạp (`accent_family()`), không thì font của `base`; BODY là `base`;
 CAPTION −1 pt, font của `base`, màu qua `TONE_PROPERTY`. `base` mặc định `QApplication.font()`; font
-đặt cỡ theo pixel thì cộng TITLE +8 px, SECTION +3 px, CAPTION −1 px. Không ghi cứng font thân: dùng
-font của hệ điều hành. Không tải font hay ảnh nào từ mạng.
+đặt cỡ theo pixel thì cộng TITLE +8 px, SECTION +4 px, CAPTION −1 px. Khi `_ensure_setup` chạy, nếu font
+ứng dụng nhỏ hơn `BASE_MIN_POINT_SIZE` (10,5 pt ≈ 14 px ở 96 DPI), tăng tối thiểu lên mức này mà giữ
+nguyên họ font của hệ điều hành (cờ `_FONT_PROPERTY`). Không tải font hay ảnh nào từ mạng.
 
 **Stylesheet ứng dụng** (`stylesheet(dark, button_height, accent)`, `_reapply` đặt): mọi luật (trừ vòng
 tiêu điểm chung, cuối danh sách) có bộ chọn hẹp (`[property]` hoặc `#objectName`), nên widget không mang
@@ -131,28 +132,55 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, StrEnum
+from typing import cast
 
-from PySide6.QtCore import QCoreApplication, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPalette
-from PySide6.QtWidgets import QApplication, QPushButton, QWidget
+from PySide6.QtCore import QCoreApplication, QPointF, QRect, QRectF, QSize, Qt
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QGuiApplication,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+)
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
+    QProxyStyle,
+    QPushButton,
+    QStyle,
+    QStyleOption,
+    QStyleOptionButton,
+    QStyleOptionComboBox,
+    QStyleOptionComplex,
+    QStyleOptionSlider,
+    QStyleOptionSpinBox,
+    QWidget,
+)
 
 MIN_CONTRAST = 4.5
 PRIMARY_PROPERTY = "primary"  # dynamic property của nút chính (xem docstring module)
 TONE_PROPERTY = "tone"  # QLabel[tone="muted|success|warning|danger|accent"]
 SURFACE_PROPERTY = "surface"  # QFrame[surface="sidebar|raised|card"]
 ICON_BUTTON_PROPERTY = "iconButton"  # QToolButton[iconButton="true"] (widgets.IconButton)
+ICON_BUTTON_TEXT_PROPERTY = "hasText"  # QToolButton[hasText="true"] khi nút icon có kèm chữ
 SEGMENTED_PROPERTY = "segmented"  # QFrame[segmented="true"] (khung của widgets.SegmentedControl)
 SEGMENT_PROPERTY = "segment"  # QRadioButton[segment="first|middle|last"] (nút của SegmentedControl)
 SEGMENT_SLIDING_PROPERTY = "segmentSliding"  # nút vừa chọn khi khối chọn đang trượt (spec G2 H5)
 _SEGMENT_POSITIONS = ("first", "middle", "last")
 PRIMARY_BORDER_WIDTH = 2  # px, viền của nút chính (`stylesheet`, lớp phủ của `buttons.AnimatedButton`)
 _PRIMARY_FRAME = 2 * 2 + 2 * PRIMARY_BORDER_WIDTH  # px: padding dọc 2·2 + viền hai cạnh (`stylesheet`)
-DIALOG_MIN_WIDTH = 420  # px, hộp nhận file và hộp ghép đôi
+DIALOG_MIN_WIDTH = 460  # px, hộp nhận file và hộp ghép đôi
 SPACING = (4, 8, 12, 16, 24, 32)  # px
 RADIUS_CONTROL, RADIUS_CARD, RADIUS_BLOCK, RADIUS_BUBBLE, RADIUS_BUBBLE_TAIL = 6, 8, 12, 14, 4
 ACCENT_FAMILY = "Bricolage Grotesque"
+BASE_MIN_POINT_SIZE = 10.5  # pt (≈ 14 px ở 96 DPI), cỡ chữ thân tối thiểu
 _CONNECTED_PROPERTY = "teleport_theme_connected"  # đã nối `colorSchemeChanged`
 _STYLE_PROPERTY = "teleport_theme_fusion"  # đã đặt style Fusion
+_FONT_PROPERTY = "teleport_theme_font"  # đã áp cỡ font thân tối thiểu
 BACKDROP_PROPERTY = "backdrop"  # QFrame[surface="sidebar"][backdrop="mica"] (ui/backdrop.py)
 MICA_TINT_ALPHA = 178  # ≈ 0,70: alpha lớp màu `sidebar` phủ trên Mica
 MICA_RANGE: dict[bool, tuple[int, int]] = {False: (0xE0, 0xFF), True: (0x10, 0x40)}  # mức xám Mica giả định
@@ -314,7 +342,7 @@ class TextStyle(Enum):
 # Cộng thêm vào cỡ của font gốc: (pt, px) cho font cỡ điểm / font cỡ pixel.
 _SIZE_DELTA: dict[TextStyle, tuple[float, int]] = {
     TextStyle.TITLE: (6.0, 8),
-    TextStyle.SECTION: (2.0, 3),
+    TextStyle.SECTION: (3.0, 4),
     TextStyle.BODY: (0.0, 0),
     TextStyle.CAPTION: (-1.0, -1),
 }
@@ -516,8 +544,9 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f"  color: {colors['normal'][0].name()};",
         f"  border: {PRIMARY_BORDER_WIDTH}px solid {edge};",
         f"  border-radius: {RADIUS_CONTROL}px;",
-        "  padding: 2px 12px;",  # + viền 2 px: cao bằng nút Fusion (chữ + 8 px)
-        "  min-width: 52px;",  # Fusion cho nút có chữ rộng ít nhất 80 px: 52 + 2·12 + 2·2
+        "  padding: 2px 16px;",
+        "  min-width: 64px;",
+        "  font-weight: 600;",
         *([f"  min-height: {max(0, button_height - _PRIMARY_FRAME)}px;"] if button_height else []),
         "}",
         f"{primary}:hover {{ background-color: {colors['hover'][1].name()};"
@@ -532,31 +561,34 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
     lines += [
         f"{icon_button} {{ background: transparent; border: 2px solid transparent;"
         f" border-radius: {RADIUS_CONTROL}px; padding: 4px; color: {t.text.name()}; }}",
+        f'{icon_button}[{ICON_BUTTON_TEXT_PROPERTY}="true"] {{ padding: 4px 10px; }}',
         f"{icon_button}:hover {{ background: {t.selected.name()}; }}",
         f"{icon_button}:pressed {{ background: {t.border.name()}; }}",
         f"{icon_button}:focus {{ border-color: {ring}; }}",
         f"{icon_button}:disabled {{ color: {t.text_muted.name()}; }}",
         f"{icon_button}::menu-indicator {{ image: none; width: 0px; }}",
         f"QToolButton#addDeviceButton {{ background: transparent; border: 1px solid {t.border_strong.name()};"
-        f" border-radius: {RADIUS_BLOCK}px; padding: 2px 4px; color: {t.text.name()}; }}",
+        f" border-radius: {RADIUS_CARD}px; padding: 4px; color: {t.text.name()}; }}",
+        f'QToolButton#addDeviceButton[{ICON_BUTTON_TEXT_PROPERTY}="true"] {{ padding: 6px 12px;'
+        " font-weight: 500; }",
         f"QToolButton#addDeviceButton:hover {{ background: {t.selected.name()}; border-color: {edge}; }}",
         f"QToolButton#addDeviceButton:pressed {{ background: {t.border.name()}; }}",
         f"QToolButton#addDeviceButton:focus {{ border-color: {ring}; }}",
         f'QPushButton[bubbleAction="true"] {{ background: transparent; border: 1px solid {t.border.name()};'
-        f" border-radius: {RADIUS_CONTROL}px; padding: 2px 10px; color: {t.text.name()}; }}",
+        f" border-radius: {RADIUS_CONTROL}px; padding: 5px 12px; color: {t.text.name()}; }}",
         f'QPushButton[bubbleAction="true"]:hover {{ background: {t.selected.name()};'
         f" border-color: {t.border_strong.name()}; }}",
         f'QPushButton[bubbleAction="true"]:pressed {{ background: {t.border.name()}; }}',
         f'QPushButton[bubbleAction="true"]:focus {{ border-color: {ring}; }}',
         f"#emptyActionButton {{ background-color: {colors['normal'][1].name()};"
-        f" color: {colors['normal'][0].name()}; border: 2px solid {edge}; border-radius: 18px;"
-        " padding: 6px 24px; font-weight: 600; }",
+        f" color: {colors['normal'][0].name()}; border: 2px solid {edge}; border-radius: {RADIUS_CARD}px;"
+        " padding: 8px 28px; font-weight: 600; }",
         f"#emptyActionButton:hover {{ background-color: {colors['hover'][1].name()};"
         f" border-color: {ring}; }}",
         f"#emptyActionButton:pressed {{ background-color: {colors['pressed'][1].name()}; }}",
         f"QToolButton#chatSendButton {{ background: {colors['normal'][1].name()};"
         f" color: {colors['normal'][0].name()}; border: 2px solid {edge};"
-        f" border-radius: {RADIUS_BLOCK}px; padding: 4px 14px; font-weight: 600; }}",
+        f" border-radius: {RADIUS_CARD}px; padding: 6px 16px; font-weight: 600; }}",
         f"QToolButton#chatSendButton:hover {{ background: {colors['hover'][1].name()}; }}",
         f"QToolButton#chatSendButton:pressed {{ background: {colors['pressed'][1].name()}; }}",
         f"QToolButton#chatSendButton:focus {{ border-color: {ring}; }}",
@@ -598,7 +630,7 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
         f'QFrame[{SEGMENTED_PROPERTY}="true"] {{ background-color: {t.surface_raised.name()};'
         f" border: 1px solid {t.border_strong.name()}; border-radius: {RADIUS_CONTROL}px; }}",
         f"{segment()} {{ background: transparent; color: {t.text.name()}; border: 2px solid transparent;"
-        f" border-radius: {RADIUS_CONTROL - 2}px; padding: 2px 12px; spacing: 0px; }}",
+        f" border-radius: {RADIUS_CONTROL - 2}px; padding: 5px 14px; spacing: 0px; }}",
         f"{segment('::indicator')} {{ width: 0px; height: 0px; border: none; image: none; }}",
         f"{segment(':hover')} {{ background: {t.selected.name()}; }}",
         # Khối chọn (nền `accent`, viền `accent_strong`) do khung tự vẽ để trượt (widgets.SegmentedControl).
@@ -679,12 +711,23 @@ def _reapply(app: QGuiApplication) -> None:
 
 
 def _ensure_setup(app: QGuiApplication) -> None:
-    """Đặt style Fusion và nối `colorSchemeChanged` (mỗi việc một lần cho mỗi `app`)."""
+    """Đặt style Fusion, cỡ font thân tối thiểu và nối `colorSchemeChanged` (mỗi việc một lần)."""
     _set_style(app)
+    _set_base_font(app)
     if not app.property(_CONNECTED_PROPERTY):
         app.setProperty(_CONNECTED_PROPERTY, True)
         # Không dùng giá trị tín hiệu: khi đang ép sáng/tối, đổi của hệ điều hành không có tác dụng.
         app.styleHints().colorSchemeChanged.connect(lambda _scheme: _reapply(app))
+
+
+def _set_base_font(app: QGuiApplication) -> None:
+    """Nâng cỡ font ứng dụng tối thiểu lên `BASE_MIN_POINT_SIZE` một lần (giữ họ font hệ điều hành)."""
+    if isinstance(app, QApplication) and not app.property(_FONT_PROPERTY):
+        app.setProperty(_FONT_PROPERTY, True)
+        font = QFont(app.font())
+        if 0 < font.pointSizeF() < BASE_MIN_POINT_SIZE:
+            font.setPointSizeF(BASE_MIN_POINT_SIZE)
+            app.setFont(font)
 
 
 def _plain_button_height() -> int:
@@ -696,8 +739,458 @@ def _plain_button_height() -> int:
         probe.deleteLater()
 
 
+class _TeleportStyle(QProxyStyle):
+    """Style phẳng hiện đại kế thừa Fusion cho các control chuẩn Qt."""
+
+    def __init__(self) -> None:
+        super().__init__("Fusion")
+
+    @staticmethod
+    def _mode_tokens(option: QStyleOption | None) -> tuple[bool, Tokens]:
+        app = QApplication.instance()
+        if isinstance(app, QGuiApplication):
+            dark = is_dark_palette(app.palette())
+        elif option is not None:
+            dark = is_dark_palette(option.palette)
+        else:
+            dark = False
+        return dark, tokens(dark)
+
+    @staticmethod
+    def _paint_box(
+        painter: QPainter,
+        rect: QRectF,
+        radius: float,
+        fill: QColor,
+        border: QColor,
+        border_width: float,
+    ) -> None:
+        inset = border_width / 2.0
+        target = rect.adjusted(inset, inset, -inset, -inset)
+        if target.isEmpty():
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(border, border_width)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen if border_width > 0 else Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(target, max(0.0, radius - inset), max(0.0, radius - inset))
+        painter.restore()
+
+    @staticmethod
+    def _scrollbar_slider_rect(option: QStyleOptionSlider, groove: QRect) -> QRect:
+        span_vals = option.maximum - option.minimum
+        if span_vals <= 0 or groove.isEmpty():
+            return QRect()
+        horizontal = option.orientation == Qt.Orientation.Horizontal
+        extent = groove.width() if horizontal else groove.height()
+        if extent <= 0:
+            return QRect()
+        page = max(1, option.pageStep)
+        slider_len = min(extent, max(28, round(extent * page / (span_vals + page))))
+        avail = max(0, extent - slider_len)
+        pos = QStyle.sliderPositionFromValue(
+            option.minimum,
+            option.maximum,
+            option.sliderPosition,
+            avail,
+            option.upsideDown,
+        )
+        if horizontal:
+            return QRect(groove.left() + pos, groove.top(), slider_len, groove.height())
+        return QRect(groove.left(), groove.top() + pos, groove.width(), slider_len)
+
+    def pixelMetric(
+        self,
+        metric: QStyle.PixelMetric,
+        option: QStyleOption | None = None,
+        widget: QWidget | None = None,
+    ) -> int:
+        if metric == QStyle.PixelMetric.PM_ScrollBarExtent:
+            return 10
+        if metric in (
+            QStyle.PixelMetric.PM_IndicatorWidth,
+            QStyle.PixelMetric.PM_IndicatorHeight,
+        ):
+            return 18
+        return super().pixelMetric(metric, option, widget)
+
+    def sizeFromContents(
+        self,
+        contents_type: QStyle.ContentsType,
+        option: QStyleOption,
+        size: QSize,
+        widget: QWidget | None = None,
+    ) -> QSize:
+        base = super().sizeFromContents(contents_type, option, size, cast(QWidget, widget))
+        if contents_type == QStyle.ContentsType.CT_PushButton and isinstance(option, QStyleOptionButton):
+            if option.text:
+                return QSize(max(base.width() + 12, 72), max(base.height() + 4, 34))
+            return QSize(base.width() + 4, max(base.height() + 4, 34))
+        if contents_type in (
+            QStyle.ContentsType.CT_ComboBox,
+            QStyle.ContentsType.CT_SpinBox,
+        ):
+            return QSize(base.width() + 6, max(base.height() + 4, 34))
+        if contents_type == QStyle.ContentsType.CT_LineEdit:
+            return QSize(base.width(), max(base.height() + 4, 34))
+        return base
+
+    def subControlRect(
+        self,
+        control: QStyle.ComplexControl,
+        option: QStyleOptionComplex,
+        sub_control: QStyle.SubControl,
+        widget: QWidget | None = None,
+    ) -> QRect:
+        if control == QStyle.ComplexControl.CC_ScrollBar and isinstance(option, QStyleOptionSlider):
+            if sub_control in (
+                QStyle.SubControl.SC_ScrollBarAddLine,
+                QStyle.SubControl.SC_ScrollBarSubLine,
+            ):
+                return QRect()
+            groove = QRect(option.rect)
+            if sub_control == QStyle.SubControl.SC_ScrollBarGroove:
+                return groove
+            if sub_control in (
+                QStyle.SubControl.SC_ScrollBarSlider,
+                QStyle.SubControl.SC_ScrollBarSubPage,
+                QStyle.SubControl.SC_ScrollBarAddPage,
+            ):
+                slider = self._scrollbar_slider_rect(option, groove)
+                if sub_control == QStyle.SubControl.SC_ScrollBarSlider:
+                    return slider
+                if slider.isEmpty():
+                    return QRect()
+                horizontal = option.orientation == Qt.Orientation.Horizontal
+                if sub_control == QStyle.SubControl.SC_ScrollBarSubPage:
+                    return (
+                        QRect(
+                            groove.left(),
+                            groove.top(),
+                            max(0, slider.left() - groove.left()),
+                            groove.height(),
+                        )
+                        if horizontal
+                        else QRect(
+                            groove.left(),
+                            groove.top(),
+                            groove.width(),
+                            max(0, slider.top() - groove.top()),
+                        )
+                    )
+                return (
+                    QRect(
+                        slider.right() + 1,
+                        groove.top(),
+                        max(0, groove.right() - slider.right()),
+                        groove.height(),
+                    )
+                    if horizontal
+                    else QRect(
+                        groove.left(),
+                        slider.bottom() + 1,
+                        groove.width(),
+                        max(0, groove.bottom() - slider.bottom()),
+                    )
+                )
+        return super().subControlRect(control, option, sub_control, cast(QWidget, widget))
+
+    def drawControl(
+        self,
+        element: QStyle.ControlElement,
+        option: QStyleOption,
+        painter: QPainter,
+        widget: QWidget | None = None,
+    ) -> None:
+        if element == QStyle.ControlElement.CE_PushButtonBevel:
+            enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
+            hover = enabled and bool(option.state & QStyle.StateFlag.State_MouseOver)
+            pressed = enabled and bool(
+                option.state & (QStyle.StateFlag.State_Sunken | QStyle.StateFlag.State_On)
+            )
+            focused = (
+                enabled
+                and bool(option.state & QStyle.StateFlag.State_HasFocus)
+                and bool(option.state & QStyle.StateFlag.State_KeyboardFocusChange)
+            )
+            flat = isinstance(option, QStyleOptionButton) and bool(
+                option.features & QStyleOptionButton.ButtonFeature.Flat
+            )
+            is_default = isinstance(option, QStyleOptionButton) and bool(
+                option.features & QStyleOptionButton.ButtonFeature.DefaultButton
+            )
+            if flat and not hover and not pressed and not focused:
+                return
+            dark, t = self._mode_tokens(option)
+            base = (t.selected if dark else t.surface_raised) if enabled else t.sidebar
+            if pressed:
+                bg = blend(base, t.text, 0.14)
+            elif hover:
+                bg = blend(base, t.text, 0.08)
+            else:
+                bg = base
+            if focused:
+                border, border_w = focus_ring_color(dark), 2.0
+            elif hover:
+                border, border_w = t.text_muted, 1.0
+            elif is_default and enabled:
+                border, border_w = t.border_strong, 1.5
+            else:
+                border, border_w = (t.border_strong if enabled else t.border), 1.0
+            self._paint_box(painter, QRectF(option.rect), float(RADIUS_CONTROL), bg, border, border_w)
+            return
+        super().drawControl(element, option, painter, widget)
+
+    def drawPrimitive(
+        self,
+        element: QStyle.PrimitiveElement,
+        option: QStyleOption,
+        painter: QPainter,
+        widget: QWidget | None = None,
+    ) -> None:
+        if element == QStyle.PrimitiveElement.PE_FrameFocusRect and isinstance(widget, QPushButton):
+            return
+        if element == QStyle.PrimitiveElement.PE_IndicatorCheckBox:
+            dark, t = self._mode_tokens(option)
+            enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
+            hover = enabled and bool(option.state & QStyle.StateFlag.State_MouseOver)
+            focused = (
+                enabled
+                and bool(option.state & QStyle.StateFlag.State_HasFocus)
+                and bool(option.state & QStyle.StateFlag.State_KeyboardFocusChange)
+            )
+            checked = bool(option.state & QStyle.StateFlag.State_On)
+            partial = bool(option.state & QStyle.StateFlag.State_NoChange)
+            rect = QRectF(option.rect).adjusted(1.0, 1.0, -1.0, -1.0)
+            if checked or partial:
+                fill = (
+                    blend(t.accent_strong, t.text, 0.12)
+                    if hover
+                    else (t.accent_strong if enabled else t.border_strong)
+                )
+                border = focus_ring_color(dark) if focused else fill
+                border_w = 2.0 if focused else 1.5
+                self._paint_box(painter, rect, 5.0, fill, border, border_w)
+                mark_color = t.surface if dark else t.surface_raised
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                pen = QPen(mark_color, 2.2)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                cx, cy, w, h = rect.x(), rect.y(), rect.width(), rect.height()
+                if checked:
+                    path = QPainterPath()
+                    path.moveTo(cx + w * 0.24, cy + h * 0.52)
+                    path.lineTo(cx + w * 0.43, cy + h * 0.70)
+                    path.lineTo(cx + w * 0.76, cy + h * 0.31)
+                    painter.drawPath(path)
+                else:
+                    painter.drawLine(
+                        QPointF(cx + w * 0.25, cy + h * 0.5), QPointF(cx + w * 0.75, cy + h * 0.5)
+                    )
+                painter.restore()
+            else:
+                fill = t.selected if hover else (t.surface if enabled else t.sidebar)
+                if focused:
+                    border = focus_ring_color(dark)
+                elif hover:
+                    border = t.accent_strong
+                elif enabled:
+                    border = t.border_strong
+                else:
+                    border = t.border
+                self._paint_box(painter, rect, 5.0, fill, border, 2.0 if enabled else 1.5)
+            return
+        if element == QStyle.PrimitiveElement.PE_PanelLineEdit:
+            if widget is not None and isinstance(widget.parent(), (QAbstractSpinBox, QComboBox)):
+                return
+            dark, t = self._mode_tokens(option)
+            enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
+            hover = enabled and bool(option.state & QStyle.StateFlag.State_MouseOver)
+            focused = enabled and bool(option.state & QStyle.StateFlag.State_HasFocus)
+            fill = (t.surface if dark else t.surface_raised) if enabled else t.sidebar
+            if focused:
+                border, border_w = focus_ring_color(dark), 2.0
+            elif hover:
+                border, border_w = t.text_muted, 1.0
+            else:
+                border, border_w = (t.border_strong if enabled else t.border), 1.0
+            self._paint_box(painter, QRectF(option.rect), float(RADIUS_CONTROL), fill, border, border_w)
+            return
+        super().drawPrimitive(element, option, painter, widget)
+
+    def drawComplexControl(
+        self,
+        control: QStyle.ComplexControl,
+        option: QStyleOptionComplex,
+        painter: QPainter,
+        widget: QWidget | None = None,
+    ) -> None:
+        if control == QStyle.ComplexControl.CC_ScrollBar and isinstance(option, QStyleOptionSlider):
+            if not (option.subControls & QStyle.SubControl.SC_ScrollBarSlider):
+                return
+            slider = self.subControlRect(control, option, QStyle.SubControl.SC_ScrollBarSlider, widget)
+            if slider.isEmpty():
+                return
+            _, t = self._mode_tokens(option)
+            on_slider = bool(option.activeSubControls & QStyle.SubControl.SC_ScrollBarSlider)
+            sunken = on_slider and bool(option.state & QStyle.StateFlag.State_Sunken)
+            hover = on_slider and bool(option.state & QStyle.StateFlag.State_MouseOver)
+            if sunken:
+                color = t.accent_strong
+            elif hover:
+                color = t.text_muted
+            else:
+                color = QColor(t.border_strong)
+                color.setAlpha(160)
+            inset = 1.0 if (hover or sunken) else 2.0
+            if option.orientation == Qt.Orientation.Horizontal:
+                pill = QRectF(slider).adjusted(2.0, inset, -2.0, -inset)
+                radius = pill.height() / 2.0
+            else:
+                pill = QRectF(slider).adjusted(inset, 2.0, -inset, -2.0)
+                radius = pill.width() / 2.0
+            if not pill.isEmpty():
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                painter.drawRoundedRect(pill, radius, radius)
+                painter.restore()
+            return
+        if control == QStyle.ComplexControl.CC_ComboBox and isinstance(option, QStyleOptionComboBox):
+            dark, t = self._mode_tokens(option)
+            enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
+            hover = enabled and bool(option.state & QStyle.StateFlag.State_MouseOver)
+            opened = enabled and bool(option.state & QStyle.StateFlag.State_On)
+            focused = enabled and (bool(option.state & QStyle.StateFlag.State_HasFocus) or opened)
+            frame = self.subControlRect(control, option, QStyle.SubControl.SC_ComboBoxFrame, widget)
+            if frame.isEmpty():
+                frame = option.rect
+            if not enabled:
+                fill = t.sidebar
+            elif opened:
+                fill = t.selected
+            elif hover:
+                fill = t.selected if dark else t.surface_raised
+            else:
+                fill = t.surface if dark else t.surface_raised
+            if focused:
+                border, border_w = focus_ring_color(dark), 2.0
+            elif hover:
+                border, border_w = t.text_muted, 1.0
+            else:
+                border, border_w = (t.border_strong if enabled else t.border), 1.0
+            if option.subControls & QStyle.SubControl.SC_ComboBoxFrame:
+                self._paint_box(painter, QRectF(frame), float(RADIUS_CONTROL), fill, border, border_w)
+            if option.subControls & QStyle.SubControl.SC_ComboBoxArrow:
+                arrow = self.subControlRect(control, option, QStyle.SubControl.SC_ComboBoxArrow, widget)
+                if not arrow.isEmpty():
+                    cx, cy = arrow.center().x() + 0.5, arrow.center().y() + 0.5
+                    arrow_color = (
+                        t.text if (hover or opened) else (t.text_muted if enabled else t.border_strong)
+                    )
+                    painter.save()
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    pen = QPen(arrow_color, 1.8)
+                    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                    painter.setPen(pen)
+                    path = QPainterPath()
+                    path.moveTo(cx - 4.0, cy - 2.0)
+                    path.lineTo(cx, cy + 2.5)
+                    path.lineTo(cx + 4.0, cy - 2.0)
+                    painter.drawPath(path)
+                    painter.restore()
+            return
+        if control == QStyle.ComplexControl.CC_SpinBox and isinstance(option, QStyleOptionSpinBox):
+            dark, t = self._mode_tokens(option)
+            enabled = bool(option.state & QStyle.StateFlag.State_Enabled)
+            hover = enabled and bool(option.state & QStyle.StateFlag.State_MouseOver)
+            focused = enabled and bool(option.state & QStyle.StateFlag.State_HasFocus)
+            frame = self.subControlRect(control, option, QStyle.SubControl.SC_SpinBoxFrame, widget)
+            if frame.isEmpty():
+                frame = option.rect
+            fill = (t.surface if dark else t.surface_raised) if enabled else t.sidebar
+            if focused:
+                border, border_w = focus_ring_color(dark), 2.0
+            elif hover:
+                border, border_w = t.text_muted, 1.0
+            else:
+                border, border_w = (t.border_strong if enabled else t.border), 1.0
+            if option.subControls & QStyle.SubControl.SC_SpinBoxFrame:
+                self._paint_box(painter, QRectF(frame), float(RADIUS_CONTROL), fill, border, border_w)
+            up_rect = self.subControlRect(control, option, QStyle.SubControl.SC_SpinBoxUp, widget)
+            down_rect = self.subControlRect(control, option, QStyle.SubControl.SC_SpinBoxDown, widget)
+            if not up_rect.isEmpty() and not down_rect.isEmpty():
+                divider_x = float(min(up_rect.left(), down_rect.left()))
+                painter.save()
+                painter.setPen(QPen(t.border, 1.0))
+                painter.drawLine(
+                    QPointF(divider_x, frame.top() + 2.0),
+                    QPointF(divider_x, frame.bottom() - 2.0),
+                )
+                painter.restore()
+            for sub, sub_rect, step_flag, is_up in (
+                (
+                    QStyle.SubControl.SC_SpinBoxUp,
+                    up_rect,
+                    QAbstractSpinBox.StepEnabledFlag.StepUpEnabled,
+                    True,
+                ),
+                (
+                    QStyle.SubControl.SC_SpinBoxDown,
+                    down_rect,
+                    QAbstractSpinBox.StepEnabledFlag.StepDownEnabled,
+                    False,
+                ),
+            ):
+                if not (option.subControls & sub) or sub_rect.isEmpty():
+                    continue
+                step_ok = enabled and bool(option.stepEnabled & step_flag)
+                active = step_ok and bool(option.activeSubControls & sub)
+                sub_sunken = active and bool(option.state & QStyle.StateFlag.State_Sunken)
+                sub_hover = active and bool(option.state & QStyle.StateFlag.State_MouseOver)
+                if sub_sunken or sub_hover:
+                    tint = blend(t.selected, t.text, 0.10) if sub_sunken else t.selected
+                    tint_rect = QRectF(sub_rect).adjusted(1.5, 1.5, -2.0, -1.5)
+                    if not tint_rect.isEmpty():
+                        painter.save()
+                        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(tint)
+                        painter.drawRoundedRect(tint_rect, 3.0, 3.0)
+                        painter.restore()
+                cx, cy = sub_rect.center().x() + 0.5, sub_rect.center().y() + 0.5
+                chevron_color = (
+                    t.text if (sub_hover or sub_sunken) else (t.text_muted if step_ok else t.border)
+                )
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                pen = QPen(chevron_color, 1.6)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                path = QPainterPath()
+                if is_up:
+                    path.moveTo(cx - 3.5, cy + 1.5)
+                    path.lineTo(cx, cy - 2.0)
+                    path.lineTo(cx + 3.5, cy + 1.5)
+                else:
+                    path.moveTo(cx - 3.5, cy - 1.5)
+                    path.lineTo(cx, cy + 2.0)
+                    path.lineTo(cx + 3.5, cy - 1.5)
+                painter.drawPath(path)
+                painter.restore()
+            return
+        super().drawComplexControl(control, option, painter, widget)
+
+
 def _set_style(app: QGuiApplication) -> None:
-    """Đặt style Fusion một lần (cờ `_STYLE_PROPERTY`; `style().name()` rỗng khi có stylesheet)."""
+    """Đặt `_TeleportStyle` (nền Fusion) một lần (`_STYLE_PROPERTY`; `style().name()` rỗng khi có QSS)."""
     if isinstance(app, QApplication) and not app.property(_STYLE_PROPERTY):
         app.setProperty(_STYLE_PROPERTY, True)
-        app.setStyle("Fusion")
+        app.setStyle(_TeleportStyle())

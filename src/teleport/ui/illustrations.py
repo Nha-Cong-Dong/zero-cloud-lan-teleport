@@ -51,11 +51,11 @@ from shiboken6 import isValid
 
 from teleport.ui import motion, theme
 
-ILLUSTRATION_SIZE = QSize(160, 96)  # px logic, cảnh trong `EmptyState` và Discover
+ILLUSTRATION_SIZE = QSize(200, 120)  # px logic, cảnh trong `EmptyState` và Discover
 # px logic, cảnh WELCOME: không hẹp hơn cảnh khác (khung gốc rộng, hai máy), thấp hơn để thẻ khởi
 # động vẫn vừa cửa sổ mặc định không cuộn (`tests/ui/test_home_layout.py`); vẽ giữ tỉ lệ khung gốc
 # nên chỉ co lại, không méo.
-WELCOME_SIZE = QSize(168, 64)
+WELCOME_SIZE = QSize(200, 72)
 PLAY_MS = 2400  # một lần chạy (≤ `motion.MAX_LOOP_MS`), đọc lúc chạy
 
 # (chi tiết mang nghĩa, nền thật phía sau): tên token của `theme.Tokens`, ≥ 3:1 ở mọi màu nhấn ×

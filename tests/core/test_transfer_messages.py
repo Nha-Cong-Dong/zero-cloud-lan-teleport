@@ -770,8 +770,11 @@ SAMPLE_TRANSFER_MESSAGES = [
 
 
 def test_control_allows_exactly_ping_pong_clipboard_and_transfer_messages():
-    # GĐ5 P5-0 thêm `clipboard` vào kết nối điều khiển (spec-p5-0 mục 2.2).
-    assert allowed_types(ConnectionKind.CONTROL) == frozenset({"ping", "pong", "clipboard"}) | TRANSFER_TYPES
+    # GĐ5 P5-0 thêm `clipboard`, v1.6.0 thêm `delta_probe`/`delta_match` vào kết nối điều khiển.
+    assert (
+        allowed_types(ConnectionKind.CONTROL)
+        == frozenset({"ping", "pong", "clipboard", "delta_probe", "delta_match"}) | TRANSFER_TYPES
+    )
 
 
 def test_pairing_allows_no_transfer_message():

@@ -196,7 +196,7 @@ from teleport.ui.widgets import BubbleEmphasis, ChatBubble, IconButton, bubble_p
 from teleport.ui.widgets import Direction as Side
 
 SEPARATOR_GAP = 3600.0  # giây; cách bong bóng trước ≥ mức này thì có dòng mốc
-BUBBLE_MIN_WIDTH = 220  # px
+BUBBLE_MIN_WIDTH = 260  # px
 _ICON = 20  # px, icon loại file
 _STATUS_ICON = 16  # px, icon trạng thái (pixmap 20 thu vào)
 _FOCUS_INSET = 3  # px, vòng tiêu điểm thụt vào trong bong bóng

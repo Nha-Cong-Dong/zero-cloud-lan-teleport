@@ -437,6 +437,7 @@ async def test_web_guest_two_way_text_sse_limits_and_rate(temp_dirs: tuple[Path,
     )
     port = await server.start(host="127.0.0.1", port=0)
 
+    writer = None
     try:
         # Mở stream SSE nhận sự kiện push_text trực tiếp
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -513,7 +514,13 @@ async def test_web_guest_two_way_text_sse_limits_and_rate(temp_dirs: tuple[Path,
             )
             assert limited.status_code == 429
 
-        writer.close()
-        await writer.wait_closed()
     finally:
+        if writer is not None:
+            writer.close()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+            except TimeoutError:
+                writer.transport.abort()
+            except OSError:
+                pass
         await server.stop()

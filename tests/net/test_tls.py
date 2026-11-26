@@ -34,28 +34,60 @@ def identity(tmp_path):
     return load_or_create_identity(tmp_path / "server")
 
 
+async def close_writer(writer: asyncio.StreamWriter, timeout: float = 2.0) -> None:
+    """Đóng StreamWriter có giới hạn thời gian; quá hạn thì abort transport."""
+    with contextlib.suppress(ssl.SSLError, ConnectionError, OSError):
+        writer.close()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
+        except TimeoutError:
+            transport = getattr(writer, "transport", None)
+            if transport is not None:
+                transport.abort()
+
+
+@contextlib.asynccontextmanager
+async def running_server(server: asyncio.Server):
+    """Giữ asyncio.Server và đóng gọn có hạn (tránh treo `wait_closed()` trên Windows 3.12)."""
+    try:
+        yield server
+    finally:
+        server.close()
+        for writer in list(getattr(server, "_test_writers", ())):
+            await close_writer(writer)
+        with contextlib.suppress(TimeoutError, OSError, ssl.SSLError):
+            await asyncio.wait_for(server.wait_closed(), 2.0)
+
+
 async def start_echo_server(ctx: ssl.SSLContext):
     """Server trả lại mọi message, kèm fingerprint chứng chỉ client nếu có.
 
     `server.handled` đếm số kết nối đã bắt tay xong (asyncio chỉ gọi handler sau bắt tay).
     """
     handled: list[str | None] = []
+    writers: set[asyncio.StreamWriter] = set()
 
     async def on_connect(reader, writer):
+        writers.add(writer)
         try:
-            client_fp = peer_fingerprint(writer)
-        except ValueError:
-            client_fp = None
-        handled.append(client_fp)
-        try:
-            while (msg := await read_message(reader)) is not None:
-                await write_message(writer, {"echo": msg, "client_fp": client_fp})
-        except (ssl.SSLError, ConnectionError, FramingError):
-            pass
-        writer.close()
+            try:
+                client_fp = peer_fingerprint(writer)
+            except ValueError:
+                client_fp = None
+            handled.append(client_fp)
+            try:
+                while (msg := await read_message(reader)) is not None:
+                    await write_message(writer, {"echo": msg, "client_fp": client_fp})
+            except (ssl.SSLError, ConnectionError, FramingError):
+                pass
+        finally:
+            writers.discard(writer)
+            with contextlib.suppress(Exception):
+                writer.close()
 
     server = await asyncio.start_server(on_connect, "127.0.0.1", 0, ssl=ctx)
     server.handled = handled
+    server._test_writers = writers
     return server, server.sockets[0].getsockname()[1]
 
 
@@ -68,9 +100,7 @@ async def round_trip(port: int, ctx: ssl.SSLContext) -> dict | None:
     except (ssl.SSLError, ConnectionError, FramingError):
         return None
     finally:
-        writer.close()
-        with contextlib.suppress(ssl.SSLError, ConnectionError):
-            await writer.wait_closed()
+        await close_writer(writer)
 
 
 def write_identity(
@@ -145,7 +175,7 @@ VALIDITY = {
 @pytest.mark.integration
 async def test_tls13_connection_exposes_server_fingerprint(identity):
     server, port = await start_echo_server(server_context(identity, [], allow_anonymous=True))
-    async with server:
+    async with running_server(server):
         reader, writer = await asyncio.open_connection("127.0.0.1", port, ssl=client_context())
         try:
             assert writer.get_extra_info("ssl_object").version() == "TLSv1.3"
@@ -154,29 +184,27 @@ async def test_tls13_connection_exposes_server_fingerprint(identity):
             reply = await read_message(reader)
             assert reply == {"echo": {"text": "xin chào qua TLS"}, "client_fp": None}
         finally:
-            writer.close()
-            await writer.wait_closed()
+            await close_writer(writer)
 
 
 @pytest.mark.integration
 async def test_client_detects_wrong_server(identity, tmp_path):
     impostor = load_or_create_identity(tmp_path / "impostor")
     server, port = await start_echo_server(server_context(impostor, [], allow_anonymous=True))
-    async with server:
+    async with running_server(server):
         _, writer = await asyncio.open_connection("127.0.0.1", port, ssl=client_context())
         try:
             with pytest.raises(FingerprintMismatch):
                 verify_fingerprint(peer_fingerprint(writer), identity.fingerprint)
         finally:
-            writer.close()
-            await writer.wait_closed()
+            await close_writer(writer)
 
 
 @pytest.mark.integration
 async def test_mtls_accepts_trusted_client_and_sees_its_fingerprint(identity, tmp_path, cert_client):
     trusted = load_or_create_identity(tmp_path / "trusted")
     server, port = await start_echo_server(server_context(identity, [trusted.cert_pem()]))
-    async with server:
+    async with running_server(server):
         reply = await round_trip(port, cert_client(trusted))
     assert reply is not None
     assert reply["client_fp"] == trusted.fingerprint
@@ -189,7 +217,7 @@ async def test_mtls_rejects_unknown_or_anonymous_client(identity, tmp_path, clie
     stranger = load_or_create_identity(tmp_path / "stranger")
     ctx = cert_client(stranger) if client == "stranger" else client_context()
     server, port = await start_echo_server(server_context(identity, [trusted.cert_pem()]))
-    async with server:
+    async with running_server(server):
         assert await round_trip(port, ctx) is None
 
 
@@ -197,7 +225,7 @@ async def test_mtls_rejects_unknown_or_anonymous_client(identity, tmp_path, clie
 async def test_mtls_with_empty_trust_list_rejects_everyone(identity, tmp_path, cert_client):
     someone = load_or_create_identity(tmp_path / "someone")
     server, port = await start_echo_server(server_context(identity, []))
-    async with server:
+    async with running_server(server):
         assert await round_trip(port, cert_client(someone)) is None
 
 
@@ -207,7 +235,7 @@ async def test_single_port_accepts_trusted_and_anonymous_clients(identity, tmp_p
     trusted = load_or_create_identity(tmp_path / "trusted")
     ctx = server_context(identity, [trusted.cert_pem()], allow_anonymous=True)
     server, port = await start_echo_server(ctx)
-    async with server:
+    async with running_server(server):
         trusted_reply = await round_trip(port, cert_client(trusted))
         anonymous_reply = await round_trip(port, client_context())
     assert trusted_reply is not None
@@ -226,7 +254,7 @@ async def test_single_port_still_rejects_client_with_unknown_cert(
     stranger = load_or_create_identity(tmp_path / "stranger")
     certs = [trusted.cert_pem()] if trusted_list == "one" else []
     server, port = await start_echo_server(server_context(identity, certs, allow_anonymous=True))
-    async with server:
+    async with running_server(server):
         assert await round_trip(port, cert_client(stranger)) is None
 
 
@@ -237,7 +265,7 @@ async def test_server_issues_no_session_ticket(identity, tmp_path):
     ctx = server_context(identity, [trusted.cert_pem()], allow_anonymous=True)
     assert ctx.num_tickets == 0
     server, port = await start_echo_server(ctx)
-    async with server:
+    async with running_server(server):
         client = trusted_client_context(trusted, identity.cert_pem())
         reader, writer = await asyncio.open_connection("127.0.0.1", port, ssl=client)
         try:
@@ -246,8 +274,7 @@ async def test_server_issues_no_session_ticket(identity, tmp_path):
             session = writer.get_extra_info("ssl_object").session
             assert session is None or not session.has_ticket
         finally:
-            writer.close()
-            await writer.wait_closed()
+            await close_writer(writer)
 
 
 def test_server_context_accepts_pem_without_trailing_newline(identity, tmp_path):
@@ -329,7 +356,7 @@ async def test_trusted_client_completes_mtls_with_the_right_server(identity, tmp
     server, port = await start_echo_server(
         server_context(identity, [client.cert_pem()], allow_anonymous=True)
     )
-    async with server:
+    async with running_server(server):
         reply = await round_trip(port, trusted_client_context(client, identity.cert_pem()))
     assert reply is not None
     assert reply["client_fp"] == client.fingerprint
@@ -345,7 +372,7 @@ async def test_impostor_server_never_completes_handshake_nor_sees_client_cert(id
     server, port = await start_echo_server(
         server_context(impostor, [client.cert_pem()], allow_anonymous=True)
     )
-    async with server:
+    async with running_server(server):
         with pytest.raises(ssl.SSLCertVerificationError):
             await asyncio.wait_for(
                 asyncio.open_connection(
@@ -374,7 +401,7 @@ async def test_impostor_with_same_subject_issuer_and_serial_but_other_key_fails_
     assert fake_cert.public_key().public_numbers() != real_cert.public_key().public_numbers()
     assert fake.fingerprint != identity.fingerprint
     server, port = await start_echo_server(server_context(fake, [client.cert_pem()], allow_anonymous=True))
-    async with server:
+    async with running_server(server):
         # Đối chứng: server giả là server TLS hợp lệ (client ẩn danh bắt tay xong), nên lỗi dưới là do ghim.
         assert await round_trip(port, client_context()) is not None
         assert server.handled == [None]
@@ -404,7 +431,7 @@ async def test_handshake_ignores_certificate_dates_both_ways(tmp_path, server_va
     server, port = await start_echo_server(
         server_context(server_id, [client_id.cert_pem()], allow_anonymous=True)
     )
-    async with server:
+    async with running_server(server):
         reply = await round_trip(port, trusted_client_context(client_id, server_id.cert_pem()))
     assert reply is not None, f"server {server_validity}, client {client_validity}: bắt tay hỏng"
     assert reply["client_fp"] == client_id.fingerprint
@@ -417,7 +444,7 @@ async def test_no_check_time_does_not_loosen_pinning(identity, tmp_path, validit
     client = load_or_create_identity(tmp_path / "client")
     other = write_identity(tmp_path / "o", not_before=VALIDITY[validity][0], not_after=VALIDITY[validity][1])
     server, port = await start_echo_server(server_context(other, [client.cert_pem()], allow_anonymous=True))
-    async with server:
+    async with running_server(server):
         with pytest.raises(ssl.SSLCertVerificationError):
             await asyncio.wait_for(
                 asyncio.open_connection(

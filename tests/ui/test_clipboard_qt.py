@@ -976,3 +976,82 @@ def test_prescreen_checks_cancel_between_chunks(monkeypatch):
         return len(seen) > 3
 
     assert clipboard_qt.encode_image(noise_image(64, 64), later).status is ReadStatus.FAILED
+
+
+def test_encode_raw_png_preserves_bytes_and_matches_pixel_fingerprint():
+    from teleport.app.clipboard import ReadStatus
+    from teleport.ui.clipboard_qt import MAX_PNG_BYTES, _fingerprint, _rgba, encode_raw_png
+
+    w, h = 16, 12
+    pixels = make_pixels(w, h)
+    raw = encode_png(w, h, pixels, level=9)
+    res = encode_raw_png(raw)
+    assert res.status is ReadStatus.OK
+    assert res.content is not None
+    assert res.content.data is raw  # không mã hóa lại byte PNG gốc
+    qimg = _rgba(QImage.fromData(raw))
+    assert res.content.fingerprint == _fingerprint(qimg)
+
+    assert encode_raw_png(b"not-a-png").status is ReadStatus.FAILED
+    oversized = PNG_SIGNATURE + (b"\x00" * MAX_PNG_BYTES)
+    assert encode_raw_png(oversized).status is ReadStatus.TOO_LARGE
+
+
+def test_fast_encode_rgba_png_roundtrip_and_cancel():
+    from teleport.ui.clipboard_qt import _fast_encode_rgba_png, _fingerprint, _rgba, decode_png
+
+    w, h = 64, 48
+    img = QImage(w, h, QImage.Format.Format_RGBA8888)
+    for y in range(h):
+        for x in range(w):
+            img.setPixelColor(x, y, 0xFF000000 | ((x * 3) << 16) | ((y * 5) << 8) | ((x + y) & 0xFF))
+    rgba = _rgba(img)
+    encoded = _fast_encode_rgba_png(rgba)
+    assert encoded is not None and encoded.startswith(PNG_SIGNATURE)
+    decoded = decode_png(encoded)
+    assert decoded is not None
+    dec_img, dec_fp = decoded
+    assert (dec_img.width(), dec_img.height()) == (w, h)
+    assert dec_fp == _fingerprint(rgba)
+
+    assert _fast_encode_rgba_png(rgba, lambda: True) is None
+
+
+def test_read_now_bypasses_echo_and_uses_raw_mime_png(env):
+    from teleport.app.clipboard import ReadStatus
+    from teleport.core.messages import ClipKind
+    from teleport.ui.clipboard_qt import _fingerprint, _rgba
+
+    w, h = 8, 8
+    raw = encode_png(w, h, make_pixels(w, h), level=9)
+    written = env.write(ClipKind.PNG, raw)
+    assert str(written.status) == "ok"
+
+    # Đọc thường: gặp ảnh vọng trả data=b""
+    normal = env.read()
+    assert normal.status is ReadStatus.OK and normal.content.data == b""
+
+    # `read_now()` bỏ qua lọc vọng để người dùng gửi thủ công
+    forced = env.loop.run(env.qtbot, env.backend.read_now)
+    assert forced.status is ReadStatus.OK
+    assert forced.content.data.startswith(PNG_SIGNATURE)
+
+    # Khi MIME mang `"image/png"`, giữ nguyên byte gốc không mã hóa lại
+    env.clip.clear()
+    mime = QMimeData()
+    mime.setData("image/png", QByteArray(raw))
+    env.clip.setMimeData(mime)
+    raw_read = env.read()
+    assert raw_read.status is ReadStatus.OK
+    assert raw_read.content.data == raw
+    assert raw_read.content.fingerprint == _fingerprint(_rgba(QImage.fromData(raw)))
+
+
+def test_application_active_triggers_on_change(env):
+    from PySide6.QtCore import Qt
+
+    before = len(env.changes)
+    env.backend._on_app_state_changed(Qt.ApplicationState.ApplicationInactive)
+    assert len(env.changes) == before
+    env.backend._on_app_state_changed(Qt.ApplicationState.ApplicationActive)
+    assert len(env.changes) == before + 1

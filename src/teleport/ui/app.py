@@ -315,7 +315,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMenu, QMessag
 from teleport import paths
 from teleport.app import autostart
 from teleport.app import node as app_node
-from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipOutcome
+from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipOutcome, ClipPushResult
 from teleport.app.devices import DeviceView
 from teleport.app.firewall import FirewallIssue, check_firewall_status
 from teleport.app.node import NodeEvent
@@ -831,6 +831,7 @@ class GuiApp(QObject):
         self.tray.pause_toggled.connect(self._on_pause_toggled)
         self.transfers.view.change_receive_dir_requested.connect(self._choose_receive_dir)
         self.transfers.view.retry_clipboard_requested.connect(self._on_clipboard_retry)
+        self.transfers.view.push_clipboard_requested.connect(self._on_push_clipboard)
         self.transfers.view.clipboard_settings_requested.connect(self._open_clipboard_settings)
         app.commitDataRequest.connect(self._on_commit_data)
         self.window.conversations.unpair_requested.connect(self._on_unpair_requested)
@@ -1790,6 +1791,90 @@ class GuiApp(QObject):
         available = result is not ClipOutcome.NOTHING_TO_RETRY
         self.transfers.view.finish_clipboard_retry(device_id, available=available)
 
+    def _on_push_clipboard(self, device_id: str) -> None:
+        """Nút “Gửi clipboard” trong luồng chat: đọc và gửi ngay clipboard tới `device_id`."""
+        host = self.host
+        if host is None or self._quitting or not host.running:
+            self.transfers.view.show_notice(
+                lambda: texts.fill(
+                    QCoreApplication.translate("GuiApp", "Chưa gửi được clipboard vì {name} chưa kết nối."),
+                    name=self._peer_label(device_id),
+                ),
+                level=InfoLevel.WARNING,
+            )
+            return
+        host.submit(
+            functools.partial(_push_clipboard, device_id=device_id),
+            functools.partial(self._on_push_clipboard_done, host, device_id),
+        )
+
+    def _on_push_clipboard_done(self, host: NodeHost, device_id: str, result: object) -> None:
+        if host is not self.host or self._quitting:
+            return
+        t = QCoreApplication.translate
+        if isinstance(result, BaseException):
+            log.debug("không gửi được clipboard: %s", type(result).__name__)
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Không đọc hoặc gửi được clipboard lúc này."),
+                level=InfoLevel.WARNING,
+            )
+            return
+        push = result if isinstance(result, ClipPushResult) else ClipPushResult.FAILED
+        if push is ClipPushResult.SENT:
+            self.transfers.view.show_notice(
+                lambda: texts.fill(
+                    t("GuiApp", "Đã gửi clipboard tới {name}."),
+                    name=self._peer_label(device_id),
+                ),
+                level=InfoLevel.SUCCESS,
+            )
+        elif push is ClipPushResult.NOT_CONNECTED:
+            self.transfers.view.show_notice(
+                lambda: texts.fill(
+                    t("GuiApp", "Chưa gửi được clipboard vì {name} chưa kết nối."),
+                    name=self._peer_label(device_id),
+                ),
+                level=InfoLevel.WARNING,
+            )
+        elif push is ClipPushResult.NOT_ENABLED:
+            self.transfers.view.show_notice(
+                lambda: texts.fill(
+                    t(
+                        "GuiApp",
+                        "Hãy bật “Đồng bộ clipboard” cho {name} để gửi nội dung trong khay nhớ tạm.",
+                    ),
+                    name=self._peer_label(device_id),
+                ),
+                lambda: t("GuiApp", "Mở Cài đặt"),
+                lambda: self._open_clipboard_settings(device_id),
+                level=InfoLevel.INFO,
+            )
+        elif push is ClipPushResult.EMPTY:
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Clipboard hiện đang trống."),
+                level=InfoLevel.INFO,
+            )
+        elif push is ClipPushResult.SENSITIVE:
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Clipboard đang chứa nội dung nhạy cảm nên không thể gửi."),
+                level=InfoLevel.WARNING,
+            )
+        elif push is ClipPushResult.TOO_LARGE:
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Nội dung clipboard quá lớn nên không thể gửi."),
+                level=InfoLevel.WARNING,
+            )
+        elif push is ClipPushResult.UNSUPPORTED:
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Chỉ hỗ trợ gửi nhanh văn bản hoặc ảnh từ clipboard."),
+                level=InfoLevel.INFO,
+            )
+        else:
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Không đọc hoặc gửi được clipboard lúc này."),
+                level=InfoLevel.WARNING,
+            )
+
     # ---- Khay: Gửi file…, Tạm dừng nhận ---------------------------------------------------------
 
     def _send_targets(self) -> list[SendTarget]:
@@ -1955,6 +2040,14 @@ async def _retry_clipboard(node: app_node.Node, *, device_id: str) -> ClipOutcom
     if sync is None:
         return ClipOutcome.NOTHING_TO_RETRY
     return await sync.retry_write(device_id)
+
+
+async def _push_clipboard(node: app_node.Node, *, device_id: str) -> ClipPushResult:
+    """Thread node: “Gửi clipboard” thủ công tới `device_id`."""
+    sync = node.clipboard
+    if sync is None:
+        return ClipPushResult.FAILED
+    return await sync.push_now(device_id)
 
 
 def _mark_first_run_done(node: app_node.Node) -> bool:

@@ -64,6 +64,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import struct
 import threading
 import zlib
 from collections.abc import Callable
@@ -98,6 +99,9 @@ WRITE_RETRY_MS = 50
 PRESCREEN_ZLIB_LEVEL = 1  # mức zlib của bước kiểm sơ bộ ảnh trước khi mã hóa PNG
 PRESCREEN_CHUNK_BYTES = 4 * 1024 * 1024  # mỗi lần nén bao nhiêu byte pixel (kiểm cờ hủy giữa các khối)
 PRESCREEN_LIMIT_BYTES = 2 * MAX_PNG_BYTES  # đầu ra kiểm sơ bộ vượt mức này → `TOO_LARGE`, không mã hóa PNG
+FAST_PNG_PIXELS = 4096 * 4096  # ngưỡng số điểm ảnh dùng bộ mã hóa PNG nhanh (filter 0 + zlib level 1)
+FAST_PNG_CHUNK_ROWS = 64
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 DISPOSE_RETRY_MS = 100  # `dispose()`: pool còn việc đang chạy thì hẹn lại sau chừng này
 
 _Result = ClipRead | ClipWrite
@@ -184,6 +188,101 @@ def prescreen(image: QImage, cancelled: _Cancelled = _never) -> int | None:
     return out + len(compressor.flush())
 
 
+def _png_chunk(tag: bytes, payload: bytes) -> bytes:
+    crc = zlib.crc32(tag)
+    crc = zlib.crc32(payload, crc) & 0xFFFFFFFF
+    return struct.pack("!I", len(payload)) + tag + payload + struct.pack("!I", crc)
+
+
+def _fast_encode_rgba_png(rgba: QImage, cancelled: _Cancelled = _never) -> bytes | None:
+    """Mã hóa nhanh ảnh RGBA8888 thành PNG chuẩn RFC 2083 (filter 0, zlib level 1).
+
+    Trả `None` khi bị hủy hoặc dung lượng vượt `MAX_PNG_BYTES` để rơi về đường dự phòng.
+    """
+    width, height = rgba.width(), rgba.height()
+    if width <= 0 or height <= 0 or cancelled():
+        return None
+    row_bytes = 4 * width
+    stride = rgba.bytesPerLine()
+    if stride < row_bytes:
+        return None
+    bits = rgba.constBits()
+    view = bits if isinstance(bits, memoryview) else memoryview(bits)
+    compressor = zlib.compressobj(PRESCREEN_ZLIB_LEVEL)
+    idat_parts: list[bytes] = []
+    compressed_len = 0
+    ihdr = _png_chunk(b"IHDR", struct.pack("!IIBBBBB", width, height, 8, 6, 0, 0, 0))
+    iend = _png_chunk(b"IEND", b"")
+    overhead = len(_PNG_SIGNATURE) + len(ihdr) + 12 + len(iend)
+    max_idat = MAX_PNG_BYTES - overhead
+    if max_idat <= 0:
+        return None
+
+    for y_start in range(0, height, FAST_PNG_CHUNK_ROWS):
+        if cancelled():
+            return None
+        y_end = min(height, y_start + FAST_PNG_CHUNK_ROWS)
+        block = bytearray()
+        for y in range(y_start, y_end):
+            off = y * stride
+            block.append(0)
+            block.extend(view[off : off + row_bytes])
+        piece = compressor.compress(block)
+        if piece:
+            compressed_len += len(piece)
+            if compressed_len > max_idat:
+                return None
+            idat_parts.append(piece)
+
+    tail = compressor.flush()
+    if tail:
+        compressed_len += len(tail)
+        if compressed_len > max_idat:
+            return None
+        idat_parts.append(tail)
+
+    idat_payload = b"".join(idat_parts)
+    if not idat_payload:
+        return None
+    return _PNG_SIGNATURE + ihdr + _png_chunk(b"IDAT", idat_payload) + iend
+
+
+def encode_raw_png(raw: bytes, cancelled: _Cancelled = _never) -> ClipRead:
+    """Kiểm tra PNG gốc từ clipboard (`image/png`) và tính fingerprint pixel mà không mã hóa lại."""
+    if not raw.startswith(_PNG_SIGNATURE) or cancelled():
+        return ClipRead(ReadStatus.FAILED)
+    if len(raw) > MAX_PNG_BYTES:
+        return ClipRead(ReadStatus.TOO_LARGE, size=len(raw))
+    buffer = QBuffer()
+    buffer.setData(QByteArray(raw))
+    if not buffer.open(QIODevice.OpenModeFlag.ReadOnly):
+        return ClipRead(ReadStatus.FAILED)
+    try:
+        reader = QImageReader(buffer, QByteArray(b"png"))
+        reader.setDecideFormatFromContent(False)
+        reader.setAllocationLimit(IMAGE_ALLOCATION_LIMIT_MB)
+        size = reader.size()
+        width, height = size.width(), size.height()
+        if not size.isValid() or width <= 0 or height <= 0:
+            return ClipRead(ReadStatus.FAILED)
+        if width > MAX_IMAGE_SIDE or height > MAX_IMAGE_SIDE:
+            return ClipRead(ReadStatus.TOO_LARGE, size=max(len(raw), 4 * width * height))
+        if cancelled():
+            return ClipRead(ReadStatus.FAILED)
+        image = reader.read()
+    finally:
+        buffer.close()
+    if image.isNull() or cancelled():
+        return ClipRead(ReadStatus.FAILED)
+    rgba = _rgba(image)
+    if rgba.isNull() or cancelled():
+        return ClipRead(ReadStatus.FAILED)
+    fingerprint = _fingerprint(rgba)
+    if cancelled():
+        return ClipRead(ReadStatus.FAILED)
+    return ClipRead(ReadStatus.OK, ClipContent(ClipKind.PNG, raw, fingerprint), len(raw))
+
+
 def encode_image(image: QImage, cancelled: _Cancelled = _never) -> ClipRead:
     """Ảnh clipboard máy này → `ClipRead` (chạy trong pool): RGBA8888 (tại chỗ: bên gọi nhường
     `image`), fingerprint, kiểm sơ bộ (`prescreen`), mã hóa PNG. `cancelled()` True giữa các bước →
@@ -199,6 +298,12 @@ def encode_image(image: QImage, cancelled: _Cancelled = _never) -> ClipRead:
         return ClipRead(ReadStatus.FAILED)
     if estimate > PRESCREEN_LIMIT_BYTES:
         return ClipRead(ReadStatus.TOO_LARGE, size=estimate)
+    if rgba.width() * rgba.height() >= FAST_PNG_PIXELS:
+        fast_png = _fast_encode_rgba_png(rgba, cancelled)
+        if cancelled():
+            return ClipRead(ReadStatus.FAILED)
+        if fast_png is not None:
+            return ClipRead(ReadStatus.OK, ClipContent(ClipKind.PNG, fast_png, fingerprint), len(fast_png))
     buffer = QBuffer()
     buffer.open(QIODevice.OpenModeFlag.WriteOnly)
     writer = QImageWriter(buffer, QByteArray(b"png"))
@@ -265,6 +370,10 @@ class QtClipboardBackend(QObject):
         self._pool.setMaxThreadCount(1)
         self._request.connect(self._on_request, Qt.ConnectionType.QueuedConnection)
         self._clipboard.dataChanged.connect(self._on_data_changed)
+        app = QGuiApplication.instance()
+        self._app = app if isinstance(app, QGuiApplication) else None
+        if self._app is not None:
+            self._app.applicationStateChanged.connect(self._on_app_state_changed)
 
     # ---- Hợp đồng `ClipboardBackend` (loop của node) ---------------------------------------------
 
@@ -281,7 +390,12 @@ class QtClipboardBackend(QObject):
             self._echo = None
 
     async def read(self) -> ClipRead:
-        result = await self._run(self._read_on_qt)
+        result = await self._run(lambda reply: self._read_on_qt(reply, ignore_echo=False))
+        return result if isinstance(result, ClipRead) else ClipRead(ReadStatus.FAILED)
+
+    async def read_now(self) -> ClipRead:
+        """Đọc chủ động bỏ qua bộ lọc ảnh vọng vừa ghi (dùng cho nút gửi clipboard thủ công)."""
+        result = await self._run(lambda reply: self._read_on_qt(reply, ignore_echo=True))
         return result if isinstance(result, ClipRead) else ClipRead(ReadStatus.FAILED)
 
     async def write(self, kind: ClipKind, data: str | bytes) -> ClipWrite:
@@ -299,6 +413,10 @@ class QtClipboardBackend(QObject):
         """Thread Qt, sau khi node dùng backend này đã dừng: `stop()` rồi `deleteLater()` khi pool không
         còn việc đang chạy (còn thì hẹn lại sau `DISPOSE_RETRY_MS`; không chờ chặn)."""
         self.stop()
+        if self._app is not None:
+            with contextlib.suppress(RuntimeError):
+                self._app.applicationStateChanged.disconnect(self._on_app_state_changed)
+            self._app = None
         try:
             busy = self._pool.activeThreadCount() > 0
         except RuntimeError:  # đã bị xóa
@@ -390,6 +508,10 @@ class QtClipboardBackend(QObject):
         except Exception as e:
             log.warning("clipboard Qt lỗi: %s", type(e).__name__)
 
+    def _on_app_state_changed(self, state: Qt.ApplicationState) -> None:
+        if state == Qt.ApplicationState.ApplicationActive:
+            self._on_data_changed()
+
     def _on_data_changed(self) -> None:
         with self._guard:
             callback = None if self._stopped else self._on_change
@@ -402,7 +524,7 @@ class QtClipboardBackend(QObject):
 
     # ---- Nội bộ: đọc ------------------------------------------------------------------------------
 
-    def _read_on_qt(self, reply: _Reply) -> None:
+    def _read_on_qt(self, reply: _Reply, *, ignore_echo: bool = False) -> None:
         mime = self._clipboard.mimeData()
         if mime is None:
             reply(ClipRead(ReadStatus.EMPTY))
@@ -419,20 +541,33 @@ class QtClipboardBackend(QObject):
                 else:
                     reply(ClipRead(ReadStatus.OK, ClipContent(ClipKind.TEXT, text, ""), len(text)))
                 return
-        if mime.hasImage():
+        if mime.hasImage() or mime.hasFormat("image/png"):
             image = self._clipboard.image()
+            raw_png = bytes(mime.data("image/png").data()) if mime.hasFormat("image/png") else b""
+            if not image.isNull():
+                width, height = image.width(), image.height()
+                if width > MAX_IMAGE_SIDE or height > MAX_IMAGE_SIDE:
+                    reply(ClipRead(ReadStatus.TOO_LARGE, size=4 * width * height))
+                    return
+                with self._guard:
+                    echo = self._echo
+                if not ignore_echo and echo is not None and image.cacheKey() == echo[0]:
+                    # Vọng của lần ghi ảnh gần nhất: không mã hóa PNG (docstring module, “Đọc”).
+                    reply(ClipRead(ReadStatus.OK, ClipContent(ClipKind.PNG, b"", echo[1])))
+                    return
+            if raw_png.startswith(_PNG_SIGNATURE) and len(raw_png) <= MAX_PNG_BYTES:
+
+                def run_raw_or_image() -> None:
+                    res = encode_raw_png(raw_png, lambda: reply.dead)
+                    if res.status is ReadStatus.FAILED and not reply.dead and not image.isNull():
+                        res = encode_image(image, lambda: reply.dead)
+                    reply(res)
+
+                self._pool_start(run_raw_or_image, reply)
+                return
             if image.isNull():
-                reply(ClipRead(ReadStatus.UNSUPPORTED))
-                return
-            width, height = image.width(), image.height()
-            if width > MAX_IMAGE_SIDE or height > MAX_IMAGE_SIDE:
-                reply(ClipRead(ReadStatus.TOO_LARGE, size=4 * width * height))
-                return
-            with self._guard:
-                echo = self._echo
-            if echo is not None and image.cacheKey() == echo[0]:
-                # Vọng của lần ghi ảnh gần nhất: không mã hóa PNG (docstring module, “Đọc”).
-                reply(ClipRead(ReadStatus.OK, ClipContent(ClipKind.PNG, b"", echo[1])))
+                status = ReadStatus.TOO_LARGE if len(raw_png) > MAX_PNG_BYTES else ReadStatus.UNSUPPORTED
+                reply(ClipRead(status, size=len(raw_png) if status is ReadStatus.TOO_LARGE else 0))
                 return
             self._pool_start(lambda: reply(encode_image(image, lambda: reply.dead)), reply)
             return

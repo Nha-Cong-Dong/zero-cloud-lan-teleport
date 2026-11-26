@@ -162,6 +162,8 @@ from teleport.core.messages import (
     CancelReason,
     Complete,
     DataOpen,
+    DeltaMatch,
+    DeltaProbe,
     FileEntry,
     MessageError,
     Offer,
@@ -250,8 +252,18 @@ class TransferIdInUse(ValueError):
     """`send()`: `transfer_id` đã có trong bảng của thiết bị đó (protocol §6.3, gạch “Khóa”)."""
 
 
-TransferMessage = Offer | Accept | Reject | Resume | Complete | Verified | Cancel
-_TRANSFER_MESSAGE_TYPES = (Offer, Accept, Reject, Resume, Complete, Verified, Cancel)
+TransferMessage = Offer | Accept | Reject | Resume | Complete | Verified | Cancel | DeltaProbe | DeltaMatch
+_TRANSFER_MESSAGE_TYPES = (
+    Offer,
+    Accept,
+    Reject,
+    Resume,
+    Complete,
+    Verified,
+    Cancel,
+    DeltaProbe,
+    DeltaMatch,
+)
 
 
 def _clean_offer_names(files: Sequence[FileEntry]) -> tuple[str, ...]:
@@ -288,6 +300,7 @@ class TransferInfo:
     done_bytes: int
     total_bytes: int
     unsynced_bytes: int = 0
+    delta_reused_bytes: int = 0
 
 
 # ---- Sự kiện báo giao diện -------------------------------------------------------------------
@@ -320,6 +333,7 @@ class TransferEnded:
     file_index: int | None
     reject: Reject | None
     info: TransferInfo
+    delta_reused_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,6 +538,38 @@ class CheckSource:
 
 
 @dataclass(frozen=True, slots=True)
+class CheckDelta:
+    """Bên gửi băm lại các khối trong `hashes` từ file nguồn để trả lời `delta_probe`."""
+
+    device_id: str
+    transfer_id: str
+    file_index: int
+    seq: int
+    hashes: tuple[tuple[int, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PrepareDelta:
+    """Bên nhận tìm bản nền cục bộ, gửi `delta_probe` và chép các khối khớp vào `.part`."""
+
+    device_id: str
+    transfer_id: str
+    file_index: int
+    entry: FileEntry
+
+
+@dataclass(frozen=True, slots=True)
+class DeltaMatched:
+    """Thông báo `delta_match` từ bên gửi cho lượt đang chờ trong `PrepareDelta`."""
+
+    device_id: str
+    transfer_id: str
+    file_index: int
+    seq: int
+    matched: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class TombstonesChanged:
     """Bảng bia mộ đã đổi (thêm, ghi đè, bị đẩy ra, hay cờ `unsent` đổi): lưu lại `tombstones.json`.
 
@@ -557,6 +603,9 @@ TransferAction = (
     | CheckSpace
     | AskUser
     | CheckSource
+    | CheckDelta
+    | PrepareDelta
+    | DeltaMatched
     | TombstonesChanged
     | Report
 )
@@ -938,6 +987,7 @@ class _Send:
     retry_msg: DataOpen | None = None
     idle_rounds: int = 0
     reported: TransferStatus | None = None
+    delta_reused_bytes: int = 0
 
 
 class _Phase(StrEnum):
@@ -987,6 +1037,8 @@ class _Recv:
     open_wait_at: float | None = None  # máy này là server: hạn chờ `data_open` của `resume` vừa gửi
     rereading: bool = False
     finalizing: bool = False
+    delta_pending: bool = False
+    delta_reused_bytes: int = 0
     conn: _DataConn | None = None  # kết nối đang nhận
     reported: TransferStatus | None = None
 
@@ -1021,9 +1073,10 @@ class TransferEngine:
     trả `[]`: đó là chuyện đua bình thường. `restore` phải là lời gọi đầu tiên (hợp đồng mục 11).
     """
 
-    def __init__(self, own_device_id: str, *, receiving: bool) -> None:
+    def __init__(self, own_device_id: str, *, receiving: bool, delta_enabled: bool = False) -> None:
         self._own_id = validate_device_id(own_device_id)
         self._receiving = _check_bool("receiving", receiving)
+        self._delta_enabled = _check_bool("delta_enabled", delta_enabled)
         self._peers: dict[str, _Peer] = {}
         self._transfers: dict[TransferKey, _Transfer] = {}  # lượt chưa kết thúc, thứ tự tạo
         self._conns: dict[int, _DataConn] = {}  # mọi kết nối dữ liệu đang theo dõi
@@ -1046,6 +1099,15 @@ class TransferEngine:
     @receiving.setter
     def receiving(self, value: bool) -> None:
         self._receiving = _check_bool("receiving", value)
+
+    @property
+    def delta_enabled(self) -> bool:
+        """Bật/tắt chế độ dò và tái sử dụng khối bản nền (Smart Delta)."""
+        return self._delta_enabled
+
+    @delta_enabled.setter
+    def delta_enabled(self, value: bool) -> None:
+        self._delta_enabled = _check_bool("delta_enabled", value)
 
     def info(self, key: TransferKey) -> TransferInfo | None:
         """Bản chụp lượt `key`; None nếu không biết hoặc đã kết thúc."""
@@ -1359,7 +1421,8 @@ class TransferEngine:
         running = peer.running
         if running is not None and running.created:
             self._send(peer, Accept(running.key.transfer_id))
-            self._request_resume(peer, running, now)
+            if not running.delta_pending:
+                self._request_resume(peer, running, now)
         return self._finish()
 
     def control_lost(self, device_id: str, control_id: int, now: float) -> list[TransferAction]:
@@ -1394,12 +1457,12 @@ class TransferEngine:
         if peer is None:
             return []
         if (
-            isinstance(msg, Offer | Complete | Cancel)
+            isinstance(msg, Offer | Complete | Cancel | DeltaMatch)
             and TransferKey(device_id, Direction.RECEIVE, msg.transfer_id) in self._suspended
         ):
             return []  # S1: lượt nhận đã tạm dừng, máy gửi phải thấy mất kết nối rồi nối lại
         if (
-            isinstance(msg, Accept | Reject | Resume | Verified | Cancel)
+            isinstance(msg, Accept | Reject | Resume | Verified | Cancel | DeltaProbe)
             and TransferKey(device_id, Direction.SEND, msg.transfer_id) in self._suspended
         ):
             return []  # lượt gửi đã tạm dừng, không gửi `cancel` hay xử lý message đến muộn
@@ -1415,6 +1478,10 @@ class TransferEngine:
             self._on_resume(peer, msg, now)
         elif isinstance(msg, Verified):
             self._on_verified(peer, msg, now)
+        elif isinstance(msg, DeltaProbe):
+            self._on_delta_probe(peer, msg, now)
+        elif isinstance(msg, DeltaMatch):
+            self._on_delta_match(peer, msg)
         else:
             self._on_cancel(peer, msg, now)
         return self._finish()
@@ -1422,7 +1489,13 @@ class TransferEngine:
     # ---- Người dùng / app ----------------------------------------------------------------
 
     def send(
-        self, device_id: str, transfer_id: str, files: Sequence[FileEntry], now: float
+        self,
+        device_id: str,
+        transfer_id: str,
+        files: Sequence[FileEntry],
+        now: float,
+        *,
+        delta: bool | None = None,
     ) -> list[TransferAction]:
         """Tạo lượt gửi `files` tới `device_id` với mã `transfer_id` (do bên gọi sinh, UUID4).
 
@@ -1433,7 +1506,8 @@ class TransferEngine:
         validate_transfer_id(transfer_id)
         if isinstance(files, str | bytes) or not isinstance(files, Sequence):
             raise MessageError("files phải là một dãy FileEntry")
-        offer = Offer(transfer_id, BLOCK_SIZE, tuple(files))
+        use_delta = self._delta_enabled if delta is None else _check_bool("delta", delta)
+        offer = Offer(transfer_id, BLOCK_SIZE, tuple(files), delta=use_delta)
         now = self._check_now(now)
         if device_id == self._own_id:
             raise ValueError("không gửi file cho chính máy này")
@@ -1576,7 +1650,161 @@ class TransferEngine:
         t.created = True
         if peer.control is not None:
             self._send(peer, Accept(transfer_id))
-            self._request_resume(peer, t, now)
+            if not t.delta_pending:
+                self._request_resume(peer, t, now)
+        return self._finish()
+
+    def send_delta_probe(
+        self,
+        device_id: str,
+        transfer_id: str,
+        file_index: int,
+        seq: int,
+        hashes: Sequence[tuple[int, str]],
+        now: float,
+    ) -> list[TransferAction]:
+        """Bên nhận gửi một lô `delta_probe` trong lúc chuẩn bị delta."""
+        validate_device_id(device_id)
+        validate_transfer_id(transfer_id)
+        _check_range("file_index", file_index, MAX_OFFER_FILES - 1)
+        _check_id("seq", seq)
+        msg = DeltaProbe(transfer_id, file_index, seq, tuple(hashes))
+        now = self._check_now(now)
+        self._accept_now(now)
+        found = self._running_recv(device_id, transfer_id)
+        if found is None:
+            return []
+        peer, t = found
+        if not t.delta_pending or t.file_index != file_index:
+            return []
+        for idx, _ in msg.hashes:
+            if idx >= t.n_f:
+                raise ValueError(f"chỉ số khối {idx} ngoài phạm vi file {file_index}")
+        if t.created and peer.control is not None:
+            self._send(peer, msg)
+        return self._finish()
+
+    def delta_done(
+        self,
+        device_id: str,
+        transfer_id: str,
+        file_index: int,
+        matched: Sequence[tuple[int, bytes]],
+        part_blocks: int,
+        now: float,
+    ) -> list[TransferAction]:
+        """Hoàn tất chuẩn bị delta cho `file_index`: đánh dấu khối đã chép vào `.part`, rồi xin `resume`."""
+        validate_device_id(device_id)
+        validate_transfer_id(transfer_id)
+        _check_range("file_index", file_index, MAX_OFFER_FILES - 1)
+        _check_range("part_blocks", part_blocks, MAX_BLOCKS)
+        if isinstance(matched, str | bytes) or not isinstance(matched, Sequence):
+            raise TypeError("matched phải là dãy cặp (index, digest)")
+        pairs: list[tuple[int, bytes]] = []
+        for item in matched:
+            if not isinstance(item, list | tuple) or len(item) != 2:
+                raise ValueError("mỗi phần tử của matched phải là cặp (index, digest)")
+            idx, digest = item
+            _check_range("index", idx, max(part_blocks - 1, 0))
+            if part_blocks == 0:
+                raise ValueError("matched phải rỗng khi part_blocks == 0")
+            pairs.append((idx, _check_digest("digest", digest)))
+        now = self._check_now(now)
+        self._accept_now(now)
+        found = self._running_recv(device_id, transfer_id)
+        if found is None:
+            return []
+        peer, t = found
+        if not t.delta_pending or t.file_index != file_index:
+            return []
+        if part_blocks > t.n_f:
+            raise ValueError(f"part_blocks ({part_blocks}) vượt số khối của file ({t.n_f})")
+        t.delta_pending = False
+        t.hw = max(t.hw, part_blocks - 1)
+        for idx, digest in pairs:
+            if idx not in t.bits:
+                t.bits.set(idx)
+                start = idx * DIGEST_SIZE
+                t.leaves[start : start + DIGEST_SIZE] = digest
+                blen = _block_len(t.size_f, idx)
+                t.have_count += 1
+                t.have_bytes += blen
+                t.delta_reused_bytes += blen
+        self._request_resume(peer, t, now)
+        return self._finish()
+
+    def delta_checked(
+        self,
+        device_id: str,
+        transfer_id: str,
+        file_index: int,
+        seq: int,
+        matched: Sequence[tuple[int, bytes]],
+        now: float,
+    ) -> list[TransferAction]:
+        """Bên gửi hoàn tất kiểm tra `CheckDelta`: ghi nhận khối khớp và gửi `delta_match`."""
+        validate_device_id(device_id)
+        validate_transfer_id(transfer_id)
+        _check_range("file_index", file_index, MAX_OFFER_FILES - 1)
+        _check_id("seq", seq)
+        if isinstance(matched, str | bytes) or not isinstance(matched, Sequence):
+            raise TypeError("matched phải là dãy cặp (index, digest)")
+        pairs: list[tuple[int, bytes]] = []
+        previous = -1
+        for item in matched:
+            if not isinstance(item, list | tuple) or len(item) != 2:
+                raise ValueError("mỗi phần tử của matched phải là cặp (index, digest)")
+            idx, digest = item
+            _check_range("index", idx, MAX_BLOCKS - 1)
+            if idx <= previous:
+                raise ValueError("chỉ số khối trong matched phải tăng ngặt")
+            previous = idx
+            pairs.append((idx, _check_digest("digest", digest)))
+        now = self._check_now(now)
+        self._accept_now(now)
+        found = self._lookup(device_id, Direction.SEND, transfer_id)
+        if found is None:
+            return []
+        peer, t = found
+        assert isinstance(t, _Send)
+        if file_index >= len(t.offer.files) or t.verified[file_index]:
+            return []
+        size = t.offer.files[file_index].size
+        n = block_count(size)
+        for idx, _ in pairs:
+            if idx >= n:
+                raise ValueError(f"chỉ số khối {idx} ngoài phạm vi file {file_index}")
+        if t.restored:
+            for j in range(file_index):
+                if not t.verified[j]:
+                    self._mark_verified(t, j)
+        state = t.states.get(file_index)
+        if state is None:
+            state = _SendFile(n, Bitfield(n), bytearray(DIGEST_SIZE * n), seeded=True)
+            t.states[file_index] = state
+            t.served = True
+        elif t.restored and not state.seeded:
+            if len(state.leaves) != DIGEST_SIZE * n:
+                state.leaves = bytearray(DIGEST_SIZE * n)
+            state.seeded = True
+        for idx, digest in pairs:
+            start = idx * DIGEST_SIZE
+            if idx in state.sent:
+                if state.unhashed is not None and idx in state.unhashed:
+                    state.leaves[start : start + DIGEST_SIZE] = digest
+                    state.unhashed.clear(idx)
+                elif state.leaves[start : start + DIGEST_SIZE] != digest:
+                    self._fail(t, CancelReason.SOURCE_CHANGED, None, now, file_index=file_index)
+                    return self._finish()
+            else:
+                state.leaves[start : start + DIGEST_SIZE] = digest
+                state.sent.set(idx)
+                state.sent_count += 1
+                blen = _block_len(size, idx)
+                state.sent_bytes += blen
+                t.delta_reused_bytes += blen
+        if peer.control is not None:
+            self._send(peer, DeltaMatch(transfer_id, file_index, seq, tuple(idx for idx, _ in pairs)))
         return self._finish()
 
     def cancel(self, key: TransferKey, now: float) -> list[TransferAction]:
@@ -2363,7 +2591,17 @@ class TransferEngine:
             file_index = t.file_index
             done = t.verified_bytes + t.have_bytes
             unsynced = t.pending_bytes
-        return TransferInfo(t.key, status, t.offer.files, t.names, file_index, done, t.total_size, unsynced)
+        return TransferInfo(
+            t.key,
+            status,
+            t.offer.files,
+            t.names,
+            file_index,
+            done,
+            t.total_size,
+            unsynced,
+            t.delta_reused_bytes,
+        )
 
     def _default_file_index(self, t: _Transfer) -> int | None:
         n = len(t.offer.files)
@@ -2431,7 +2669,19 @@ class TransferEngine:
                 peer.running = None
         del peer.transfers[(t.key.direction, t.key.transfer_id)]
         del self._transfers[t.key]
-        self._report(TransferEnded(t.key, outcome, reason, by_peer, detail, index, reject, info))
+        self._report(
+            TransferEnded(
+                t.key,
+                outcome,
+                reason,
+                by_peer,
+                detail,
+                index,
+                reject,
+                info,
+                t.delta_reused_bytes,
+            )
+        )
         if not peer.transfers:
             peer.offline_since = None
         if isinstance(t, _Recv) and advance:
@@ -2748,7 +2998,7 @@ class TransferEngine:
         if isinstance(t, _Recv):
             if t.phase is _Phase.RUNNING and t.created:
                 self._send(peer, Accept(transfer_id))
-                if not t.sent_resume and not t.want_resume and t.resume_at is None:
+                if not t.delta_pending and not t.sent_resume and not t.want_resume and t.resume_at is None:
                     self._request_resume(peer, t, now)
             return  # đang chờ người dùng, đang xếp hàng hay chưa `temp_created`: im lặng
         if isinstance(memo, _DoneMemo):
@@ -2845,11 +3095,43 @@ class TransferEngine:
         t.root = root
         self._maybe_reread(peer, t)
 
+    def _on_delta_probe(self, peer: _Peer, msg: DeltaProbe, now: float) -> None:
+        transfer_id = msg.transfer_id
+        memo = peer.memory.get(Direction.SEND, transfer_id, now)
+        if isinstance(memo, _Tombstone):
+            self._send(peer, Cancel(transfer_id, memo.reason))
+            return
+        t = peer.transfers.get((Direction.SEND, transfer_id))
+        if not isinstance(t, _Send) or not t.offer.delta:
+            return
+        if msg.file_index >= len(t.offer.files):
+            self._fail(t, CancelReason.ERROR, FailureDetail.PROTOCOL, now, file_index=None)
+            return
+        n = block_count(t.offer.files[msg.file_index].size)
+        for idx, _ in msg.hashes:
+            if idx >= n:
+                self._fail(t, CancelReason.ERROR, FailureDetail.PROTOCOL, now, file_index=msg.file_index)
+                return
+        t.accepted = True
+        self._emit(CheckDelta(peer.device_id, transfer_id, msg.file_index, msg.seq, msg.hashes))
+
+    def _on_delta_match(self, peer: _Peer, msg: DeltaMatch) -> None:
+        t = peer.transfers.get((Direction.RECEIVE, msg.transfer_id))
+        if (
+            not isinstance(t, _Recv)
+            or t.phase is not _Phase.RUNNING
+            or not t.delta_pending
+            or t.file_index != msg.file_index
+        ):
+            return
+        self._emit(DeltaMatched(peer.device_id, msg.transfer_id, msg.file_index, msg.seq, msg.matched))
+
     def _start_file(self, peer: _Peer, t: _Recv, index: int, now: float) -> None:
-        """Bắt đầu nhận file `index`: `OpenPart`, trạng thái mới, xin `resume` ngay."""
+        """Bắt đầu nhận file `index`: `OpenPart`, chuẩn bị delta (nếu bật) hoặc xin `resume` ngay."""
         t.resume_at = None
         t.file_index = index
-        size = t.offer.files[index].size
+        entry = t.offer.files[index]
+        size = entry.size
         n = block_count(size)
         self._emit(OpenPart(peer.device_id, t.key.transfer_id, index, size))
         t.size_f = size
@@ -2869,7 +3151,12 @@ class TransferEngine:
         t.idle_rounds = 0
         t.rereading = False
         t.finalizing = False
-        self._request_resume(peer, t, now)
+        if self._delta_enabled and t.offer.delta and size > 0 and not entry.is_dir:
+            t.delta_pending = True
+            self._emit(PrepareDelta(peer.device_id, t.key.transfer_id, index, entry))
+        else:
+            t.delta_pending = False
+            self._request_resume(peer, t, now)
 
     def _request_resume(self, peer: _Peer, t: _Recv, now: float) -> None:
         """Xin `resume` ngay: đóng kết nối dữ liệu của lượt, `fsync` phần còn lại rồi mới gửi.
@@ -2886,8 +3173,8 @@ class TransferEngine:
         if t.unbatched:
             self._push_batch(peer, t)
         t.want_resume = True
-        if peer.control is not None and not t.batches and t.created:
-            self._send_resume(peer, t, now)  # chưa `temp_created`: giữ tới `temp_created`
+        if peer.control is not None and not t.batches and t.created and not t.delta_pending:
+            self._send_resume(peer, t, now)  # chưa `temp_created` hay đang delta: giữ lại
 
     def _send_resume(self, peer: _Peer, t: _Recv, now: float) -> None:
         """Gửi `resume` cho file hiện tại. Thiếu khối: là client thì mở kết nối dữ liệu; là server

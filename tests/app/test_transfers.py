@@ -498,7 +498,16 @@ def test_transfer_result_has_exactly_planned_members(T):
         ("FileDone", ["key", "file_index", "name", "path"]),
         (
             "TransferFinished",
-            ["info", "result", "by_peer", "reason", "file_index", "reject", "payload_sent"],
+            [
+                "info",
+                "result",
+                "by_peer",
+                "reason",
+                "file_index",
+                "reject",
+                "payload_sent",
+                "delta_reused_bytes",
+            ],
         ),
         ("TransferResumed", ["info"]),
     ],

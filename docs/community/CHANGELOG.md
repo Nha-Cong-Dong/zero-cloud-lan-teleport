@@ -6,6 +6,17 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ## [Unreleased]
 
 ### Added
+- **Cột mốc 3 (`v1.6.0`) — Truyền thông minh phần thay đổi (Smart Delta), Tự động phân loại & Đẩy thư mục, Gửi nhanh Clipboard:**
+  - **Truyền thông minh phần thay đổi — Smart Delta (`core/delta.py`, `app/delta.py`, `core/messages.py`, `core/transfer.py`, `app/transfers.py`, `cli.py`, `ui/settings.py`):**
+    - Tương thích ngược hoàn toàn `protocol = 1` thông qua cờ tùy chọn `offer.delta` cùng hai thông điệp điều khiển mới `delta_probe` và `delta_match` (`MAX_DELTA_PROBE = 256`).
+    - Tự động nhận diện tệp trùng toàn phần (Level 1 — 0 byte dữ liệu đi qua mạng) hoặc tệp chỉnh sửa một phần theo khối 1 MiB (Level 2 — dò trước 4 khối mẫu để thoát sớm nếu khác biệt, chép sẵn khối khớp vào `.part` rồi chỉ truyền khối mới). Báo cáo số byte tiết kiệm được (`delta_reused_bytes`) ở kết quả CLI và hỗ trợ tắt tạm bằng `--no-delta` hoặc công tắc trong **Cài đặt → Truyền file**.
+  - **Tự phân loại thư mục nhận & Cổng đẩy tự động (`core/routing.py`, `app/routing.py`, `core/watch.py`, `app/watch.py`, `app/settings.py`, `app/node.py`, `cli.py`, `ui/settings.py`):**
+    - Hỗ trợ quy tắc tự phân loại thư mục nhận (`RoutingRule`, tối đa `64` quy tắc) theo mẫu tên tệp và thiết bị gửi với cơ chế di chuyển an toàn không ghi đè (`numbered()`, chống thoát thư mục và bỏ qua symlink/junction).
+    - Hỗ trợ cổng đẩy thư mục một chiều (`WatchPortalRule`, tối đa `32` cổng) tự động gửi tệp mới sau thời gian chờ ổn định (`2.0 s`, bỏ qua tệp tạm, tiêu tốn 0% CPU khi không có cổng bật) cùng nhóm lệnh `teleport routing list|add|remove`, `teleport watch list|add|remove` và giao diện quản lý trực quan trong **Cài đặt → Truyền file**.
+  - **Gửi nhanh Clipboard thủ công & Tối ưu ảnh PNG lớn (`app/clipboard.py`, `ui/clipboard_qt.py`, `ui/chat.py`, `ui/app.py`, `teleport_en.ts`/`.qm`):**
+    - Bổ sung nút **"Gửi clipboard"** (`chatPushClipboardButton`) ngay thanh gửi luồng chat cùng `ClipboardSync.push_now` (`ClipPushResult`), thông báo trạng thái rõ ràng và nút dẫn thẳng **"Mở Cài đặt"** khi thiết bị chưa bật đồng bộ.
+    - Đọc trực tiếp luồng `"image/png"` sẵn có trong clipboard mà không nén lại (`encode_raw_png`), bổ sung bộ mã hóa PNG RGBA8888 chuẩn RFC 2083 nhanh cho ảnh độ phân giải cực lớn (`FAST_PNG_PIXELS = 4096 * 4096`), và tự làm mới clipboard khi cửa sổ quay lại trạng thái hoạt động (`applicationStateChanged`).
+
 - **Cột mốc 2 (`v1.5.0`) — Phục hồi gửi hai đầu, Web QR 2.0 & Biên lai truyền tệp có chữ ký số (`protocol = 1`):**
   - **Phục hồi gửi hai đầu khi tắt/sập app & hàng đợi gửi ngoại tuyến (`core/outbox.py`, `app/outbox.py`, `core/transfer.py`, `app/sources.py`, `app/transfers.py`, `app/node.py`, `ui/bridge.py`):**
     - Lưu bền danh sách lượt gửi chưa kết thúc vào `<config_dir>/outbox.json` (tối đa `64` mục / `4 MiB`), bao gồm cặp `(file_index, merkle_root)` của những tệp đã từng gửi `complete`.

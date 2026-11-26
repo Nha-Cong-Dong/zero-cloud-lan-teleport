@@ -4599,8 +4599,12 @@ async def test_probe_server_cert_sends_no_client_cert_and_no_app_bytes(ids):
                 observed["app_bytes"] = b""
         finally:
             writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+            except TimeoutError:
+                writer.transport.abort()
+            except (OSError, ssl.SSLError):
+                pass
             done.set()
 
     server = await asyncio.start_server(handle, LOCAL, 0, ssl=ctx)
@@ -4610,7 +4614,8 @@ async def test_probe_server_cert_sends_no_client_cert_and_no_app_bytes(ids):
         await asyncio.wait_for(done.wait(), timeout=2.0)
     finally:
         server.close()
-        await server.wait_closed()
+        with contextlib.suppress(TimeoutError, OSError, ssl.SSLError):
+            await asyncio.wait_for(server.wait_closed(), timeout=2.0)
 
     assert cert is not None
     assert cert.device_id == ids.server.device_id
@@ -4641,8 +4646,12 @@ async def test_probe_server_cert_returns_none_on_non_tls_server():
         writer.write(b"NOT_TLS\r\n")
         await writer.drain()
         writer.close()
-        with contextlib.suppress(Exception):
-            await writer.wait_closed()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+        except TimeoutError:
+            writer.transport.abort()
+        except (OSError, ssl.SSLError):
+            pass
 
     server = await asyncio.start_server(handle, LOCAL, 0)
     try:
@@ -4650,4 +4659,5 @@ async def test_probe_server_cert_returns_none_on_non_tls_server():
         assert await connection.probe_server_cert(LOCAL, port) is None
     finally:
         server.close()
-        await server.wait_closed()
+        with contextlib.suppress(TimeoutError, OSError, ssl.SSLError):
+            await asyncio.wait_for(server.wait_closed(), timeout=2.0)

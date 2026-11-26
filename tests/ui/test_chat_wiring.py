@@ -926,3 +926,84 @@ def offers_as_boxes(monkeypatch):
     from teleport.ui import transfers
 
     monkeypatch.setattr(transfers, "default_window_active", lambda: False)
+
+
+def test_push_clipboard_button_state_signal_and_retranslate(env):
+    btn = env.view.composer.push_clipboard_button
+    assert btn.objectName() == "chatPushClipboardButton"
+    assert not btn.isEnabled()
+
+    env.model.reset([dview()])
+    env.view.set_device(PEER_ID)
+    assert btn.isEnabled()
+    assert btn.accessibleName() == "Gửi clipboard"
+
+    emitted: list[str] = []
+    env.view.push_clipboard_requested.connect(emitted.append)
+    btn.click()
+    assert emitted == [PEER_ID]
+
+    env.view.retranslate()
+    assert btn.accessibleName() == "Gửi clipboard"
+
+
+def test_gui_push_clipboard_result_notices(env):
+    from teleport.app.clipboard import ClipPushResult
+    from teleport.ui.app import GuiApp
+    from teleport.ui.widgets import InfoLevel
+
+    env.model.reset([dview()])
+    env.view.set_device(PEER_ID)
+    submits: list[tuple] = []
+    opened_settings: list[str] = []
+    host = SimpleNamespace(
+        running=True,
+        submit=lambda fn, on_done: submits.append((fn, on_done)),
+    )
+    app_stub = SimpleNamespace(
+        host=host,
+        _quitting=False,
+        transfers=SimpleNamespace(view=env.view),
+        _peer_label=lambda dev: PEER,
+        _open_clipboard_settings=opened_settings.append,
+        _on_push_clipboard_done=None,
+    )
+    app_stub._on_push_clipboard_done = lambda h, dev, res: GuiApp._on_push_clipboard_done(
+        app_stub, h, dev, res
+    )
+
+    GuiApp._on_push_clipboard(app_stub, PEER_ID)
+    assert len(submits) == 1
+
+    # Mỗi mã ClipPushResult map ra đúng thông báo trên chat.info_bar
+    cases = [
+        (ClipPushResult.SENT, InfoLevel.SUCCESS, f"Đã gửi clipboard tới {PEER}."),
+        (ClipPushResult.NOT_CONNECTED, InfoLevel.WARNING, f"Chưa gửi được clipboard vì {PEER} chưa kết nối."),
+        (ClipPushResult.EMPTY, InfoLevel.INFO, "Clipboard hiện đang trống."),
+        (
+            ClipPushResult.SENSITIVE,
+            InfoLevel.WARNING,
+            "Clipboard đang chứa nội dung nhạy cảm nên không thể gửi.",
+        ),
+        (ClipPushResult.TOO_LARGE, InfoLevel.WARNING, "Nội dung clipboard quá lớn nên không thể gửi."),
+        (ClipPushResult.UNSUPPORTED, InfoLevel.INFO, "Chỉ hỗ trợ gửi nhanh văn bản hoặc ảnh từ clipboard."),
+        (ClipPushResult.FAILED, InfoLevel.WARNING, "Không đọc hoặc gửi được clipboard lúc này."),
+    ]
+    for code, level, expected in cases:
+        GuiApp._on_push_clipboard_done(app_stub, host, PEER_ID, code)
+        assert env.view.info_bar.is_open
+        assert env.view.info_bar.level is level
+        assert env.view.info_bar.title == expected
+
+    # NOT_ENABLED hiện nút “Mở Cài đặt” gọi `_open_clipboard_settings(PEER_ID)`
+    GuiApp._on_push_clipboard_done(app_stub, host, PEER_ID, ClipPushResult.NOT_ENABLED)
+    assert env.view.info_bar.action_button.isVisible()
+    assert env.view.info_bar.action_button.text() == "Mở Cài đặt"
+    env.view.info_bar.action_button.click()
+    assert opened_settings == [PEER_ID]
+
+    # Khi node không chạy: báo chưa kết nối ngay, không gọi submit
+    host.running = False
+    GuiApp._on_push_clipboard(app_stub, PEER_ID)
+    assert len(submits) == 1
+    assert env.view.info_bar.level is InfoLevel.WARNING

@@ -39,8 +39,21 @@ IPC_VERSION = 1
 IPC_HANDSHAKE_TIMEOUT = 5.0
 IPC_COMMAND_TIMEOUT = 10.0
 IPC_TRANSFER_CANCEL_TIMEOUT = 65.0
+IPC_CLOSE_TIMEOUT = 1.0
 IPC_MAX_LINE_BYTES = 131_072  # 128 KiB trần cho một thông điệp JSON
 _TRANSFER_QUERY_RE = re.compile(r"^[0-9a-f]{4,32}$")
+
+
+async def _close_writer(writer: asyncio.StreamWriter, timeout: float = IPC_CLOSE_TIMEOUT) -> None:
+    """Đóng StreamWriter có giới hạn thời gian; quá hạn thì abort transport."""
+    with contextlib.suppress(Exception):
+        writer.close()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
+        except TimeoutError:
+            transport = getattr(writer, "transport", None)
+            if transport is not None:
+                transport.abort()
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +104,7 @@ class IpcServer:
         self._info_path = self._config_dir / IPC_INFO_FILE
         self._closing = False
         self._active_connections: set[asyncio.Task[None]] = set()
+        self._active_writers: set[asyncio.StreamWriter] = set()
 
     @property
     def port(self) -> int | None:
@@ -122,18 +136,33 @@ class IpcServer:
     async def close(self) -> None:
         """Đóng máy chủ IPC và dọn dẹp tệp cấu hình."""
         self._closing = True
-        if self._server is not None:
-            self._server.close()
+        server, self._server = self._server, None
+        if server is not None:
+            server.close()
+
+        for writer in list(self._active_writers):
             with contextlib.suppress(Exception):
-                await self._server.wait_closed()
-            self._server = None
+                writer.close()
 
         # Hủy các task đang phục vụ client
-        for task in list(self._active_connections):
+        tasks = list(self._active_connections)
+        for task in tasks:
             task.cancel()
-        if self._active_connections:
-            await asyncio.gather(*self._active_connections, return_exceptions=True)
-            self._active_connections.clear()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=IPC_CLOSE_TIMEOUT)
+            for task in pending:
+                task.cancel()
+        for writer in list(self._active_writers):
+            transport = getattr(writer, "transport", None)
+            if transport is not None:
+                with contextlib.suppress(Exception):
+                    transport.abort()
+        self._active_connections.clear()
+        self._active_writers.clear()
+
+        if server is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(server.wait_closed(), timeout=IPC_CLOSE_TIMEOUT)
 
         # Dọn dẹp tệp ipc.json
         try:
@@ -148,6 +177,7 @@ class IpcServer:
         if task is not None:
             self._active_connections.add(task)
             task.add_done_callback(self._active_connections.discard)
+        self._active_writers.add(writer)
 
         try:
             # 1. Xác thực handshake
@@ -193,9 +223,8 @@ class IpcServer:
         except Exception as e:
             log.debug("Loi xu ly ket noi IPC: %s", e, exc_info=True)
         finally:
-            with contextlib.suppress(Exception):
-                writer.close()
-                await writer.wait_closed()
+            self._active_writers.discard(writer)
+            await _close_writer(writer)
 
     async def _dispatch_command(self, cmd_obj: dict[str, Any], writer: asyncio.StreamWriter) -> None:
         """Điều phối và thực thi lệnh từ CLI."""
@@ -549,9 +578,7 @@ class IpcClient:
     async def close(self) -> None:
         """Đóng kết nối client."""
         if self._writer is not None:
-            with contextlib.suppress(Exception):
-                self._writer.close()
-                await self._writer.wait_closed()
+            await _close_writer(self._writer)
             self._writer = None
             self._reader = None
 

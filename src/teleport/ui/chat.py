@@ -250,7 +250,7 @@ _clipboard_mime: Callable[[], QMimeData | None] = _system_clipboard_mime
 HISTORY_DEBOUNCE_MS = 120
 MAX_THREAD_BUBBLES = 200
 PIN_SLACK = 24  # px
-_AVATAR = 36  # px, avatar ở đầu luồng
+_AVATAR = 40  # px, avatar ở đầu luồng
 _ICON = 20  # px
 _PAGE_STEP = 5  # bong bóng mỗi lần PageUp / PageDown
 _MARGIN = theme.SPACING[3]
@@ -777,13 +777,13 @@ class ChatHeader(QWidget):
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         column = QVBoxLayout()
         column.setContentsMargins(0, 0, 0, 0)
-        column.setSpacing(0)
+        column.setSpacing(2)
         column.addWidget(self.name_label)
         column.addWidget(self.status_label)
         self.action_row = QHBoxLayout()  # chỗ cho nút đầu luồng (B3c)
         self.action_row.setContentsMargins(0, 0, 0, 0)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(_MARGIN, theme.SPACING[2], _MARGIN, theme.SPACING[2])
+        layout.setContentsMargins(20, 14, 20, 14)
         layout.setSpacing(theme.SPACING[2])
         layout.addWidget(self.avatar, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(column, 1)
@@ -842,6 +842,13 @@ class ChatComposer(QWidget):
             show_text=False,
         )
         self.send_multi_button.setObjectName("chatSendMultiButton")
+        self.push_clipboard_button = IconButton(
+            "clipboard_paste",
+            t("Chat", "Gửi clipboard"),
+            self,
+            show_text=False,
+        )
+        self.push_clipboard_button.setObjectName("chatPushClipboardButton")
         self.hint_icon = QLabel(self)
         self.hint_icon.setFixedSize(_ICON, _ICON)
         self.hint_icon.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -855,11 +862,12 @@ class ChatComposer(QWidget):
         self.hint_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._offline = False
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(_MARGIN, theme.SPACING[1] + 2, _MARGIN, theme.SPACING[1] + 2)
-        layout.setSpacing(theme.SPACING[1])
+        layout.setContentsMargins(20, 12, 20, 12)
+        layout.setSpacing(10)
         layout.addWidget(self.send_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.send_folder_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.send_multi_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.push_clipboard_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.hint_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.hint_label, 1)
 
@@ -879,6 +887,8 @@ class ChatComposer(QWidget):
         desc = text if offline else ""
         self.send_button.setAccessibleDescription(desc)
         self.send_folder_button.setAccessibleDescription(desc)
+        self.send_multi_button.setAccessibleDescription(desc)
+        self.push_clipboard_button.setAccessibleDescription(desc)
 
     def _refresh_icon(self) -> None:
         if self._offline:
@@ -910,6 +920,7 @@ class ChatView(QWidget):
     pick_files_requested = Signal(str)  # nút “Gửi file”, phím Chọn file
     pick_folder_requested = Signal(str)  # nút “Gửi thư mục”
     send_multi_requested = Signal()  # nút “Gửi tới nhiều máy”
+    push_clipboard_requested = Signal(str)  # nút “Gửi clipboard”: device_id
     send_files_requested = Signal(str, list)  # thả hay dán vào luồng: device_id, list[Path]
     drop_hint_requested = Signal(str)  # thả hay dán khi chưa chọn máy
     clipboard_settings_requested = Signal(str)  # “Mở Cài đặt” của gợi ý khi dán không phải file
@@ -976,6 +987,7 @@ class ChatView(QWidget):
         self.composer.send_button.clicked.connect(self._request_pick)
         self.composer.send_folder_button.clicked.connect(self._request_pick_folder)
         self.composer.send_multi_button.clicked.connect(self.send_multi_requested)
+        self.composer.push_clipboard_button.clicked.connect(self._request_push_clipboard)
         self._drop_overlay = DropOverlay(self)
 
         info_wrap = QVBoxLayout()
@@ -1009,6 +1021,7 @@ class ChatView(QWidget):
             self.composer.send_button,
             self.composer.send_folder_button,
             self.composer.send_multi_button,
+            self.composer.push_clipboard_button,
         ]
         for first, second in pairwise(chain):
             QWidget.setTabOrder(first, second)
@@ -1616,6 +1629,7 @@ class ChatView(QWidget):
         self.composer.send_button.set_label(t("Chat", "Gửi file"))
         self.composer.send_folder_button.set_label(t("Chat", "Gửi thư mục"))
         self.composer.send_multi_button.set_label(t("Chat", "Gửi tới nhiều máy"))
+        self.composer.push_clipboard_button.set_label(t("Chat", "Gửi clipboard"))
         shortcuts.retranslate_actions(self)
         self.threads.setAccessibleName(t("Chat", "Lượt gửi nhận"))
         self._set_new_count(self._new_count(), force=True)
@@ -1841,6 +1855,7 @@ class ChatView(QWidget):
         self.composer.send_button.setEnabled(enabled)
         self.composer.send_folder_button.setEnabled(enabled)
         self.composer.send_multi_button.setEnabled(enabled)
+        self.composer.push_clipboard_button.setEnabled(enabled)
         self._pick_action.setEnabled(enabled)
         self._set_new_count(thread.unseen() if thread is not None else 0)
 
@@ -1948,6 +1963,10 @@ class ChatView(QWidget):
     def _request_pick_folder(self) -> None:
         if self._device_id is not None:
             self.pick_folder_requested.emit(self._device_id)
+
+    def _request_push_clipboard(self) -> None:
+        if self._device_id is not None:
+            self.push_clipboard_requested.emit(self._device_id)
 
     def _on_pick_shortcut(self) -> None:
         if self._device_id is not None and self.isVisible():

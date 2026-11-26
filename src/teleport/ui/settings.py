@@ -117,10 +117,11 @@ import sys
 import time
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 from PySide6.QtCore import (
     QCoreApplication,
@@ -154,8 +155,11 @@ from PySide6.QtWidgets import (
     QBoxLayout,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -186,7 +190,9 @@ from teleport.app.node import Node
 from teleport.app.settings import DeviceSettings, SettingsSaveError
 from teleport.app.updater import UpdateInfo
 from teleport.core.messages import PROTOCOL_VERSION, MessageError, validate_device_name
+from teleport.core.routing import RoutingRule, parse_patterns
 from teleport.core.transfer import Direction, TransferKey, TransferStatus
+from teleport.core.watch import WatchPortalRule
 from teleport.ui import i18n, icons, motion, shortcuts, texts, theme
 from teleport.ui.appearance import AppearanceSection
 from teleport.ui.appearance import section_title as appearance_title
@@ -207,9 +213,10 @@ from teleport.ui.widgets import (
 
 log = logging.getLogger(__name__)
 
-NAV_WIDTH = 184  # px, cột chọn mục
+NAV_WIDTH = 224  # px, cột chọn mục
+CONTENT_MAX_WIDTH = 860  # px, độ rộng tối đa khối nội dung (tránh dàn trải ở màn hình rộng)
 SECTION_MARGIN = theme.SPACING[4]  # 24 px, lề nội dung của mỗi mục
-ROW_SPACING = theme.SPACING[1]  # 8 px, khoảng giữa hai hàng
+ROW_SPACING = theme.SPACING[2]  # 12 px, khoảng giữa hai hàng
 SPIN_COMMIT_MS = 600  # ms không đổi sau khi bấm mũi tên thì chốt giá trị ô số
 MB = 1024 * 1024  # byte của “MB” trong ô tốc độ
 RATE_MIN_MB = 0.1
@@ -220,12 +227,12 @@ NOTICES_FILE = "THIRD-PARTY-NOTICES.txt"
 EXPORT_THREAD = "teleport-logexport"
 UPDATE_THREAD = "teleport-update"
 _NAV_ICON = 20  # px (`shield_checkmark` có cỡ 20)
-_NAV_ROW_HEIGHT = 36  # px
+_NAV_ROW_HEIGHT = 44  # px
 _NAV_PILL_WIDTH = 3  # px, vạch nhấn của mục được chọn
-_NAV_PILL_HEIGHT = 16  # px
+_NAV_PILL_HEIGHT = 20  # px
 _NAV_PILL_RADIUS = 1.5  # px
-_NAV_PILL_INSET = 2  # px, từ mép item (nằm trên viền trong suốt 2 px)
-_AVATAR = 32  # px
+_NAV_PILL_INSET = 4  # px, từ mép item (nằm trên viền trong suốt 2 px)
+_AVATAR = 36  # px
 _ACTIONS_INDENT = _AVATAR + theme.SPACING[2]  # px, lề trái của ô và nút dưới tên (thẳng cột chữ)
 _PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
 _FIT_PASSES = 4  # số lượt tối đa tính lại chiều cao bảng Phím tắt tới khi đứng yên
@@ -708,6 +715,7 @@ class TrustedDeviceRow(QFrame):
         self.name_label.setFont(font)
         self.detail_label = _plain(self, object_name="")  # ngắn; xuống dòng thay vì cắt
         self.detail_label.setObjectName("trustedDeviceDetail")
+        self.detail_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.detail_label.font()))
         self.detail_label.setProperty(theme.TONE_PROPERTY, "muted")
         self.ask_checkbox = QCheckBox(self)
         self.ask_checkbox.setObjectName("askBeforeReceive")
@@ -744,7 +752,7 @@ class TrustedDeviceRow(QFrame):
         self._actions.addStretch(0)
         # Kiểu bố cục (`_RowShape`) chỉ đổi hướng của `_box` và `_actions` (`_place_actions`).
         self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
-        self._box.setContentsMargins(theme.SPACING[2], theme.SPACING[1], theme.SPACING[3], theme.SPACING[1])
+        self._box.setContentsMargins(theme.SPACING[3], theme.SPACING[2], theme.SPACING[3], theme.SPACING[2])
         self._box.setSpacing(theme.SPACING[3])
         self._box.addLayout(self._head, 1)
         self._box.addLayout(self._actions, 0)
@@ -925,6 +933,10 @@ class SettingsSnapshot:
     stealth: bool = False
     pending_receives: tuple[PendingReceiveItem, ...] = ()
     promised_bytes: int = 0
+    delta_sync: bool = True
+    routing_rules: tuple[RoutingRule, ...] = ()
+    watch_portals: tuple[WatchPortalRule, ...] = ()
+    device_names: Mapping[str, str] = field(default_factory=dict)
 
 
 def _read_device_settings(node: Node) -> dict[str, DeviceSettings]:
@@ -976,6 +988,10 @@ def read_snapshot(node: Node) -> SettingsSnapshot:
         stealth=stealth,
         pending_receives=tuple(pending),
         promised_bytes=promised_bytes,
+        delta_sync=bool(getattr(settings, "delta_sync", True)),
+        routing_rules=tuple(getattr(settings, "routing_rules", ())),
+        watch_portals=tuple(getattr(settings, "watch_portals", ())),
+        device_names=names,
     )
 
 
@@ -1169,6 +1185,9 @@ class SettingsPage(QWidget):
     create_subfolder_toggled = Signal(bool)
     rate_limit_changed = Signal(object)  # byte/giây hay None
     retention_changed = Signal(object)  # ngày hay None (= mặc định)
+    delta_sync_toggled = Signal(bool)
+    routing_rules_changed = Signal(object)  # tuple[RoutingRule, ...]
+    watch_portals_changed = Signal(object)  # tuple[WatchPortalRule, ...]
     cancel_pending_requested = Signal(str, str)  # device_id, transfer_id
     cancel_all_pending_requested = Signal()
     ask_toggled = Signal(str, bool)
@@ -1200,6 +1219,16 @@ class SettingsPage(QWidget):
         self._promised_bytes = 0
         self._pending_rows: list[QFrame] = []
         self._pending_cancel_buttons: list[QPushButton] = []
+        self._delta_sync = True
+        self._routing_rules: tuple[RoutingRule, ...] = ()
+        self._watch_portals: tuple[WatchPortalRule, ...] = ()
+        self._device_names: dict[str, str] = {}
+        self._routing_rows: list[QFrame] = []
+        self._routing_controls: list[QWidget] = []
+        self._watch_rows: list[QFrame] = []
+        self._watch_controls: list[QWidget] = []
+        self._rule_dialog: QDialog | None = None
+        self._dir_picker: QFileDialog | None = None
         self._device_settings: dict[str, DeviceSettings] = {}
         self._rows: dict[str, TrustedDeviceRow] = {}
         self._order: list[str] = []
@@ -1232,6 +1261,7 @@ class SettingsPage(QWidget):
         self.sections = QStackedWidget(self)
         self.sections.setObjectName("settingsSections")
         self._section_widgets: dict[Section, QScrollArea] = {}
+        self._section_contents: dict[Section, QWidget] = {}
         self._section_titles: dict[Section, QLabel] = {}
         self._section_layouts: dict[Section, QVBoxLayout] = {}
         for section in Section:
@@ -1247,9 +1277,17 @@ class SettingsPage(QWidget):
         right = QVBoxLayout()
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
+        self.info_bar.setMaximumWidth(CONTENT_MAX_WIDTH)
+        self.info_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        bar_row = QHBoxLayout()
+        bar_row.setContentsMargins(0, 0, 0, 0)
+        bar_row.setSpacing(0)
+        bar_row.addStretch(1)
+        bar_row.addWidget(self.info_bar, 1000)
+        bar_row.addStretch(1)
         bar_box = QVBoxLayout()
-        bar_box.setContentsMargins(SECTION_MARGIN, theme.SPACING[3], SECTION_MARGIN, 0)
-        bar_box.addWidget(self.info_bar)
+        bar_box.setContentsMargins(SECTION_MARGIN, theme.SPACING[2], SECTION_MARGIN, 0)
+        bar_box.addLayout(bar_row)
         right.addLayout(bar_box)
         right.addWidget(self.sections, 1)
         body = QHBoxLayout()
@@ -1290,27 +1328,39 @@ class SettingsPage(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        content = QWidget()
+        viewport_host = QWidget()
+        viewport_host.setObjectName(f"settingsHost_{section.value}")
+        viewport_host.setAutoFillBackground(False)
+        content = QWidget(viewport_host)
         content.setObjectName(f"settingsContent_{section.value}")
+        content.setMaximumWidth(CONTENT_MAX_WIDTH)
+        content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        content.setAutoFillBackground(False)
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(SECTION_MARGIN, theme.SPACING[3], SECTION_MARGIN, SECTION_MARGIN)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(ROW_SPACING)
         title = _plain(content, object_name=f"settingsTitle_{section.value}")
-        title.setFont(theme.font_for(theme.TextStyle.SECTION, title.font()))
+        title.setFont(theme.font_for(theme.TextStyle.TITLE, title.font()))
         layout.addWidget(title)
-        layout.addSpacing(theme.SPACING[0])
-        scroll.setWidget(content)
+        layout.addSpacing(theme.SPACING[1])
+        host_layout = QHBoxLayout(viewport_host)
+        host_layout.setContentsMargins(SECTION_MARGIN, theme.SPACING[3], SECTION_MARGIN, SECTION_MARGIN)
+        host_layout.setSpacing(0)
+        host_layout.addStretch(1)
+        host_layout.addWidget(content, 1000)
+        host_layout.addStretch(1)
+        scroll.setWidget(viewport_host)
         viewport = scroll.viewport()
         if viewport is not None:
             viewport.setAutoFillBackground(False)
-        content.setAutoFillBackground(False)
         self.sections.addWidget(scroll)
         self._section_widgets[section] = scroll
+        self._section_contents[section] = content
         self._section_titles[section] = title
         self._section_layouts[section] = layout
 
     def _row(self, section: Section, object_name: str) -> SettingsRow:
-        row = SettingsRow(self._section_widgets[section].widget(), object_name=object_name)
+        row = SettingsRow(self._section_contents[section], object_name=object_name)
         self._section_layouts[section].addWidget(row)
         return row
 
@@ -1318,7 +1368,7 @@ class SettingsPage(QWidget):
         self.name_row = self._row(Section.GENERAL, "nameRow")
         self.name_edit = _NameField(self.name_row)
         self.name_edit.setObjectName("deviceNameEdit")
-        self.name_edit.setMinimumWidth(220)
+        self.name_edit.setMinimumWidth(240)
         self.name_edit.editingFinished.connect(self._on_name_finished)
         self.name_edit.textEdited.connect(lambda _text: self.set_name_error(None))
         self.name_edit.reverted.connect(lambda: self.set_name_error(None))
@@ -1371,7 +1421,7 @@ class SettingsPage(QWidget):
 
     def _build_appearance(self) -> None:
         layout = self._section_layouts[Section.APPEARANCE]
-        self.appearance = AppearanceSection(self._section_widgets[Section.APPEARANCE].widget())
+        self.appearance = AppearanceSection(self._section_contents[Section.APPEARANCE])
         self.appearance.theme_selected.connect(self.theme_selected)
         self.appearance.accent_selected.connect(self.accent_selected)
         self.appearance.language_selected.connect(self.language_selected)
@@ -1413,7 +1463,7 @@ class SettingsPage(QWidget):
         self._section_layouts[Section.PRIVACY].addStretch(1)
 
     def _build_devices(self) -> None:
-        content = self._section_widgets[Section.DEVICES].widget()
+        content = self._section_contents[Section.DEVICES]
         layout = self._section_layouts[Section.DEVICES]
         self.devices_intro = _plain(content, object_name="trustedIntro")
         self.devices_intro.setProperty(theme.TONE_PROPERTY, "muted")
@@ -1469,7 +1519,7 @@ class SettingsPage(QWidget):
         self.cancel_all_pending_button.setVisible(False)
         self.cancel_all_pending_button.clicked.connect(self.cancel_all_pending_requested)
         self.pending_row.set_control(self.cancel_all_pending_button)
-        transfer_content = self._section_widgets[Section.TRANSFER].widget()
+        transfer_content = self._section_contents[Section.TRANSFER]
         self.pending_list = QWidget(transfer_content)
         self.pending_list.setObjectName("pendingTransfersList")
         self._pending_layout = QVBoxLayout(self.pending_list)
@@ -1477,6 +1527,40 @@ class SettingsPage(QWidget):
         self._pending_layout.setSpacing(ROW_SPACING)
         self.pending_list.setVisible(False)
         self._section_layouts[Section.TRANSFER].addWidget(self.pending_list)
+
+        self.delta_row = self._row(Section.TRANSFER, "deltaSyncRow")
+        self.delta_switch = ToggleSwitch(self.delta_row)
+        self.delta_switch.setObjectName("deltaSyncSwitch")
+        self.delta_switch.setChecked(True)
+        self.delta_switch.clicked.connect(self._on_delta_clicked)
+        self.delta_row.set_control(self.delta_switch)
+
+        self.routing_row = self._row(Section.TRANSFER, "routingRulesRow")
+        self.add_routing_button = QPushButton(self.routing_row)
+        self.add_routing_button.setObjectName("addRoutingRuleButton")
+        self.add_routing_button.clicked.connect(self._open_add_routing_dialog)
+        self.routing_row.set_control(self.add_routing_button)
+        self.routing_list = QWidget(transfer_content)
+        self.routing_list.setObjectName("routingRulesList")
+        self._routing_layout = QVBoxLayout(self.routing_list)
+        self._routing_layout.setContentsMargins(0, 0, 0, 0)
+        self._routing_layout.setSpacing(ROW_SPACING)
+        self.routing_list.setVisible(False)
+        self._section_layouts[Section.TRANSFER].addWidget(self.routing_list)
+
+        self.watch_row = self._row(Section.TRANSFER, "watchPortalsRow")
+        self.add_watch_button = QPushButton(self.watch_row)
+        self.add_watch_button.setObjectName("addWatchPortalButton")
+        self.add_watch_button.clicked.connect(self._open_add_watch_dialog)
+        self.watch_row.set_control(self.add_watch_button)
+        self.watch_list = QWidget(transfer_content)
+        self.watch_list.setObjectName("watchPortalsList")
+        self._watch_layout = QVBoxLayout(self.watch_list)
+        self._watch_layout.setContentsMargins(0, 0, 0, 0)
+        self._watch_layout.setSpacing(ROW_SPACING)
+        self.watch_list.setVisible(False)
+        self._section_layouts[Section.TRANSFER].addWidget(self.watch_list)
+
         self._section_layouts[Section.TRANSFER].addStretch(1)
 
     def _build_advanced(self) -> None:
@@ -1565,9 +1649,8 @@ class SettingsPage(QWidget):
         được."""
         self._loaded = bool(loaded)
         for section in (Section.PRIVACY, Section.DEVICES, Section.TRANSFER):
-            content = self._section_widgets[section].widget()
-            if content is not None:
-                content.setEnabled(self._loaded)
+            content = self._section_contents[section]
+            content.setEnabled(self._loaded)
         for row in (self.name_row, self.create_subfolder_row, self.autostart_row):
             row.setEnabled(self._loaded)
         self.appearance.set_loaded(self._loaded)
@@ -1580,6 +1663,10 @@ class SettingsPage(QWidget):
         self.set_rate_limit(s.rate_limit)
         self.set_retention(s.temp_retention_days)
         self.set_pending_receives(s.pending_receives, s.promised_bytes)
+        self._device_names = dict(s.device_names)
+        self.set_delta_sync(s.delta_sync)
+        self.set_routing_rules(s.routing_rules)
+        self.set_watch_portals(s.watch_portals)
         self.set_language(s.language, i18n.available_languages())
         self.appearance.set_theme(s.theme)
         self.appearance.set_accent(s.accent)
@@ -1629,6 +1716,32 @@ class SettingsPage(QWidget):
         self._promised_bytes = max(0, int(promised_bytes))
         self._rebuild_pending_receives()
         self._update_tab_order()
+
+    def set_delta_sync(self, enabled: bool) -> None:
+        self._delta_sync = bool(enabled)
+        with _blocked(self.delta_switch):
+            self.delta_switch.setChecked(self._delta_sync)
+
+    def set_routing_rules(self, rules: Sequence[RoutingRule]) -> None:
+        self._routing_rules = tuple(rules)
+        self._rebuild_routing_rules()
+        self._update_tab_order()
+
+    def set_watch_portals(self, rules: Sequence[WatchPortalRule]) -> None:
+        self._watch_portals = tuple(rules)
+        self._rebuild_watch_portals()
+        self._update_tab_order()
+
+    def close_dialogs(self) -> None:
+        """Đóng hộp thoại tạo quy tắc / chọn thư mục đang mở."""
+        picker, self._dir_picker = self._dir_picker, None
+        if picker is not None and isValid(picker):
+            picker.close()
+            picker.deleteLater()
+        dlg, self._rule_dialog = self._rule_dialog, None
+        if dlg is not None and isValid(dlg):
+            dlg.close()
+            dlg.deleteLater()
 
     def set_update_state(
         self,
@@ -1816,6 +1929,18 @@ class SettingsPage(QWidget):
         )
         self.retention_row.set_text(t("Settings", "Dọn phần nhận dở sau"), retention_hint)
         self._update_retention_suffix()
+        self.delta_row.set_text(
+            t("Settings", "Truyền thông minh phần thay đổi (Delta)"),
+            t(
+                "Settings",
+                "Chỉ gửi các khối dữ liệu mới hoặc đã sửa khi máy nhận đã có tệp giống hoặc tương tự.",
+            ),
+        )
+        self.delta_switch.setAccessibleName(t("Settings", "Truyền thông minh phần thay đổi (Delta)"))
+        self.add_routing_button.setText(t("Settings", "Thêm quy tắc…"))
+        self.add_routing_button.setAccessibleName(t("Settings", "Thêm quy tắc phân loại thư mục nhận"))
+        self.add_watch_button.setText(t("Settings", "Thêm cổng đẩy…"))
+        self.add_watch_button.setAccessibleName(t("Settings", "Thêm cổng đẩy thư mục tự động"))
         # Dấu thập phân của ô tốc độ theo ngôn ngữ giao diện (“2,5” / “2.5”), không theo hệ điều hành.
         self.rate_spin.setLocale(QLocale(i18n.current_language()))
         self.export_row.set_text(
@@ -1853,6 +1978,8 @@ class SettingsPage(QWidget):
         self._update_autostart()
         self._update_receive_dir()
         self._rebuild_pending_receives()
+        self._rebuild_routing_rules()
+        self._rebuild_watch_portals()
         self._update_tab_order()
         for row in self._rows.values():
             row.retranslate()
@@ -1932,6 +2059,169 @@ class SettingsPage(QWidget):
         self.cancel_all_pending_button.setText(t("Settings", "Hủy tất cả"))
         self.cancel_all_pending_button.setAccessibleName(t("Settings", "Hủy tất cả lượt nhận dở"))
         self.cancel_all_pending_button.setAccessibleDescription(hint)
+
+    def _device_label(self, device_id: str) -> str:
+        for view in self.model.devices():
+            if view.device_id == device_id:
+                return texts.peer_label(view.name, device_id)
+        return texts.peer_label(self._device_names.get(device_id, ""), device_id)
+
+    def _paired_choices(self) -> list[tuple[str, str]]:
+        seen: dict[str, str] = {}
+        for view in trusted_devices(self.model.devices()):
+            seen[view.device_id] = texts.peer_label(view.name, view.device_id)
+        for device_id in self._device_settings:
+            if device_id not in seen:
+                seen[device_id] = texts.peer_label(self._device_names.get(device_id, ""), device_id)
+        return sorted(seen.items(), key=lambda pair: (pair[1].casefold(), pair[0]))
+
+    def _clear_rule_cards(
+        self,
+        layout: QVBoxLayout,
+        rows: list[QFrame],
+        controls: list[QWidget],
+    ) -> None:
+        for row in rows:
+            layout.removeWidget(row)
+            row.hide()
+            row.setParent(None)
+            row.deleteLater()
+        rows.clear()
+        controls.clear()
+
+    def _add_rule_card(
+        self,
+        container: QWidget,
+        layout: QVBoxLayout,
+        rows: list[QFrame],
+        controls: list[QWidget],
+        *,
+        row_name: str,
+        title: str,
+        detail: str,
+        enabled: bool,
+        toggle_label: str,
+        remove_label: str,
+        on_toggle: Callable[[bool], None],
+        on_remove: Callable[[], None],
+    ) -> None:
+        t = QCoreApplication.translate
+        row = QFrame(container)
+        row.setObjectName(row_name)
+        row.setProperty(theme.SURFACE_PROPERTY, "raised")
+        row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        left = QVBoxLayout()
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(2)
+        head = _ElidedLabel(Qt.TextElideMode.ElideRight, row)
+        head.setObjectName(f"{row_name}Title")
+        font = head.font()
+        font.setWeight(font.Weight.DemiBold)
+        head.setFont(font)
+        head.set_full_text(title)
+        info = _plain(row, object_name=f"{row_name}Detail")
+        info.setProperty(theme.TONE_PROPERTY, "muted")
+        info.setText(detail)
+        left.addWidget(head)
+        left.addWidget(info)
+
+        toggle = ToggleSwitch(row)
+        toggle.setObjectName(f"{row_name}Toggle")
+        toggle.setChecked(enabled)
+        toggle.setAccessibleName(toggle_label)
+        toggle.clicked.connect(lambda checked: on_toggle(bool(checked)))
+
+        remove_btn = QPushButton(row)
+        remove_btn.setObjectName(f"{row_name}Remove")
+        remove_btn.setText(t("Settings", "Xóa"))
+        remove_btn.setAccessibleName(remove_label)
+        remove_btn.clicked.connect(on_remove)
+
+        box = QHBoxLayout(row)
+        box.setContentsMargins(theme.SPACING[3], theme.SPACING[1], theme.SPACING[3], theme.SPACING[1])
+        box.setSpacing(theme.SPACING[2])
+        box.addLayout(left, 1)
+        box.addWidget(toggle, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        box.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        layout.addWidget(row)
+        rows.append(row)
+        controls.extend((toggle, remove_btn))
+
+    def _rebuild_routing_rules(self) -> None:
+        t = QCoreApplication.translate
+        self._clear_rule_cards(self._routing_layout, self._routing_rows, self._routing_controls)
+        count = len(self._routing_rules)
+        if count == 0:
+            hint = t(
+                "Settings",
+                "Chưa có quy tắc nào. File nhận về có thể được tự động đưa vào thư mục riêng theo tên "
+                "file hoặc máy gửi.",
+            )
+            self.routing_list.setVisible(False)
+        else:
+            hint = t("Settings", "%n quy tắc phân loại thư mục nhận đang cấu hình.", None, count)
+            self.routing_list.setVisible(True)
+            for idx, rule in enumerate(self._routing_rules):
+                peer = (
+                    self._device_label(rule.device_id)
+                    if rule.device_id is not None
+                    else t("Settings", "Mọi máy")
+                )
+                pats = ", ".join(rule.patterns) if rule.patterns else t("Settings", "Mọi file")
+                detail = f"{rule.destination} · {peer} · {pats}"
+                self._add_rule_card(
+                    self.routing_list,
+                    self._routing_layout,
+                    self._routing_rows,
+                    self._routing_controls,
+                    row_name="routingRuleRow",
+                    title=rule.name,
+                    detail=detail,
+                    enabled=rule.enabled,
+                    toggle_label=texts.fill(t("Settings", "Bật hoặc tắt quy tắc {name}"), name=rule.name),
+                    remove_label=texts.fill(t("Settings", "Xóa quy tắc {name}"), name=rule.name),
+                    on_toggle=functools.partial(self._toggle_routing_rule, idx),
+                    on_remove=functools.partial(self._remove_routing_rule, idx),
+                )
+        self.routing_row.set_text(t("Settings", "Tự phân loại thư mục nhận"), hint)
+
+    def _rebuild_watch_portals(self) -> None:
+        t = QCoreApplication.translate
+        self._clear_rule_cards(self._watch_layout, self._watch_rows, self._watch_controls)
+        count = len(self._watch_portals)
+        if count == 0:
+            hint = t(
+                "Settings",
+                "Chưa có cổng đẩy nào. Khi có file mới đặt vào thư mục theo dõi, Teleport tự gửi "
+                "sang máy đã chọn.",
+            )
+            self.watch_list.setVisible(False)
+        else:
+            hint = t("Settings", "%n cổng đẩy tự động đang cấu hình.", None, count)
+            self.watch_list.setVisible(True)
+            for idx, portal in enumerate(self._watch_portals):
+                peer = self._device_label(portal.device_id)
+                pats = ", ".join(portal.patterns) if portal.patterns else t("Settings", "Mọi file")
+                mode = (
+                    t("Settings", "gồm thư mục con") if portal.recursive else t("Settings", "chỉ cấp ngoài")
+                )
+                detail = f"{portal.source_dir} → {peer} · {pats} · {mode}"
+                self._add_rule_card(
+                    self.watch_list,
+                    self._watch_layout,
+                    self._watch_rows,
+                    self._watch_controls,
+                    row_name="watchPortalRow",
+                    title=portal.name,
+                    detail=detail,
+                    enabled=portal.enabled,
+                    toggle_label=texts.fill(t("Settings", "Bật hoặc tắt cổng đẩy {name}"), name=portal.name),
+                    remove_label=texts.fill(t("Settings", "Xóa cổng đẩy {name}"), name=portal.name),
+                    on_toggle=functools.partial(self._toggle_watch_portal, idx),
+                    on_remove=functools.partial(self._remove_watch_portal, idx),
+                )
+        self.watch_row.set_text(t("Settings", "Cổng đẩy thư mục tự động"), hint)
 
     def _update_update_ui(self) -> None:
         t = QCoreApplication.translate
@@ -2165,6 +2455,11 @@ class SettingsPage(QWidget):
             self.retention_spin,
             self.cancel_all_pending_button,
             *self._pending_cancel_buttons,
+            self.delta_switch,
+            self.add_routing_button,
+            *self._routing_controls,
+            self.add_watch_button,
+            *self._watch_controls,
             self.export_button,
             self.shortcuts_table,
             self.check_update_button,
@@ -2210,6 +2505,216 @@ class SettingsPage(QWidget):
     def _on_stealth_clicked(self, checked: bool) -> None:
         self._stealth = bool(checked)
         self.stealth_toggled.emit(self._stealth)
+
+    def _on_delta_clicked(self, checked: bool) -> None:
+        self._delta_sync = bool(checked)
+        self.delta_sync_toggled.emit(self._delta_sync)
+
+    def _toggle_routing_rule(self, index: int, enabled: bool) -> None:
+        if not (0 <= index < len(self._routing_rules)):
+            return
+        updated = list(self._routing_rules)
+        updated[index] = replace(updated[index], enabled=bool(enabled))
+        self.set_routing_rules(updated)
+        self.routing_rules_changed.emit(self._routing_rules)
+
+    def _remove_routing_rule(self, index: int) -> None:
+        if not (0 <= index < len(self._routing_rules)):
+            return
+        updated = [rule for idx, rule in enumerate(self._routing_rules) if idx != index]
+        self.set_routing_rules(updated)
+        self.routing_rules_changed.emit(self._routing_rules)
+
+    def _toggle_watch_portal(self, index: int, enabled: bool) -> None:
+        if not (0 <= index < len(self._watch_portals)):
+            return
+        updated = list(self._watch_portals)
+        updated[index] = replace(updated[index], enabled=bool(enabled))
+        self.set_watch_portals(updated)
+        self.watch_portals_changed.emit(self._watch_portals)
+
+    def _remove_watch_portal(self, index: int) -> None:
+        if not (0 <= index < len(self._watch_portals)):
+            return
+        updated = [portal for idx, portal in enumerate(self._watch_portals) if idx != index]
+        self.set_watch_portals(updated)
+        self.watch_portals_changed.emit(self._watch_portals)
+
+    def _open_dir_picker(self, parent: QDialog, target_edit: QLineEdit, title: str) -> None:
+        old, self._dir_picker = self._dir_picker, None
+        if old is not None and isValid(old):
+            old.close()
+            old.deleteLater()
+        picker = QFileDialog(parent, title)
+        picker.setFileMode(QFileDialog.FileMode.Directory)
+        picker.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        current = target_edit.text().strip()
+        if current and Path(current).is_dir():
+            picker.setDirectory(current)
+        picker.fileSelected.connect(target_edit.setText)
+
+        def cleanup(_result: int) -> None:
+            if self._dir_picker is picker:
+                self._dir_picker = None
+            if isValid(picker):
+                picker.deleteLater()
+
+        picker.finished.connect(cleanup)
+        self._dir_picker = picker
+        picker.open()
+
+    def _open_add_routing_dialog(self) -> None:
+        self._open_rule_dialog(is_watch=False)
+
+    def _open_add_watch_dialog(self) -> None:
+        t = QCoreApplication.translate
+        if not self._paired_choices():
+            self.show_notice(
+                InfoLevel.INFO,
+                t("Settings", "Hãy ghép đôi với ít nhất một máy trước khi tạo cổng đẩy tự động."),
+            )
+            return
+        self._open_rule_dialog(is_watch=True)
+
+    def _open_rule_dialog(self, *, is_watch: bool) -> None:
+        t = QCoreApplication.translate
+        self.close_dialogs()
+        dlg = QDialog(self)
+        dlg.setObjectName("addWatchPortalDialog" if is_watch else "addRoutingRuleDialog")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setWindowTitle(
+            t("Settings", "Thêm cổng đẩy tự động")
+            if is_watch
+            else t("Settings", "Thêm quy tắc phân loại thư mục nhận")
+        )
+        form = QFormLayout(dlg)
+        form.setContentsMargins(theme.SPACING[3], theme.SPACING[3], theme.SPACING[3], theme.SPACING[3])
+        form.setSpacing(theme.SPACING[2])
+
+        name_edit = QLineEdit(dlg)
+        name_edit.setObjectName("ruleNameEdit")
+        name_edit.setPlaceholderText(t("Settings", "Ví dụ: Ảnh chụp, Tài liệu công việc"))
+        name_edit.setAccessibleName(t("Settings", "Tên gợi nhớ"))
+        form.addRow(t("Settings", "Tên gợi nhớ"), name_edit)
+
+        dir_wrap = QWidget(dlg)
+        dir_layout = QHBoxLayout(dir_wrap)
+        dir_layout.setContentsMargins(0, 0, 0, 0)
+        dir_layout.setSpacing(theme.SPACING[1])
+        dir_edit = QLineEdit(dir_wrap)
+        dir_edit.setObjectName("rulePathEdit")
+        dir_title = t("Settings", "Chọn thư mục theo dõi") if is_watch else t("Settings", "Chọn thư mục đích")
+        dir_edit.setAccessibleName(dir_title)
+        browse_btn = QPushButton(t("Settings", "Chọn…"), dir_wrap)
+        browse_btn.setObjectName("ruleBrowseButton")
+        browse_btn.setAccessibleName(dir_title)
+        browse_btn.clicked.connect(lambda: self._open_dir_picker(dlg, dir_edit, dir_title))
+        dir_layout.addWidget(dir_edit, 1)
+        dir_layout.addWidget(browse_btn, 0)
+        form.addRow(
+            t("Settings", "Thư mục theo dõi") if is_watch else t("Settings", "Thư mục đích"),
+            dir_wrap,
+        )
+
+        device_combo = QComboBox(dlg)
+        device_combo.setObjectName("ruleDeviceCombo")
+        device_label = t("Settings", "Máy nhận") if is_watch else t("Settings", "Áp dụng cho máy gửi")
+        device_combo.setAccessibleName(device_label)
+        if not is_watch:
+            device_combo.addItem(t("Settings", "Mọi máy đã ghép đôi"), None)
+        for dev_id, label in self._paired_choices():
+            device_combo.addItem(label, dev_id)
+        form.addRow(device_label, device_combo)
+
+        patterns_edit = QLineEdit(dlg)
+        patterns_edit.setObjectName("rulePatternsEdit")
+        patterns_edit.setPlaceholderText(t("Settings", "Để trống = mọi file; ví dụ: *.jpg, *.png"))
+        patterns_edit.setAccessibleName(t("Settings", "Mẫu tên file"))
+        form.addRow(t("Settings", "Mẫu tên file"), patterns_edit)
+
+        recursive_cb: QCheckBox | None = None
+        if is_watch:
+            recursive_cb = QCheckBox(t("Settings", "Theo dõi cả thư mục con bên trong"), dlg)
+            recursive_cb.setObjectName("ruleRecursiveCheckbox")
+            recursive_cb.setAccessibleName(t("Settings", "Theo dõi cả thư mục con bên trong"))
+            form.addRow("", recursive_cb)
+
+        error_label = _plain(dlg, object_name="ruleDialogError")
+        error_label.setProperty(theme.TONE_PROPERTY, "danger")
+        error_label.setVisible(False)
+        form.addRow("", error_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, dlg
+        )
+        ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if ok_btn is not None:
+            ok_btn.setText(t("Settings", "Thêm"))
+            ok_btn.setAccessibleName(t("Settings", "Thêm"))
+        if cancel_btn is not None:
+            cancel_btn.setText(t("Settings", "Hủy"))
+            cancel_btn.setAccessibleName(t("Settings", "Hủy"))
+        form.addRow(buttons)
+
+        def accept_rule() -> None:
+            raw_name = name_edit.text().strip()
+            raw_dir = dir_edit.text().strip()
+            if not raw_name:
+                error_label.setText(t("Settings", "Vui lòng nhập tên gợi nhớ."))
+                error_label.setVisible(True)
+                return
+            if not raw_dir or not Path(raw_dir).is_dir():
+                error_label.setText(t("Settings", "Vui lòng chọn một thư mục đang tồn tại."))
+                error_label.setVisible(True)
+                return
+            try:
+                patterns = parse_patterns(patterns_edit.text())
+                chosen_device = device_combo.currentData()
+                if is_watch:
+                    if not isinstance(chosen_device, str) or not chosen_device:
+                        error_label.setText(t("Settings", "Vui lòng chọn máy nhận."))
+                        error_label.setVisible(True)
+                        return
+                    portal = WatchPortalRule(
+                        id=uuid4().hex,
+                        name=raw_name,
+                        source_dir=raw_dir,
+                        device_id=chosen_device,
+                        patterns=patterns,
+                        recursive=bool(recursive_cb is not None and recursive_cb.isChecked()),
+                    )
+                    updated_portals = (*self._watch_portals, portal)
+                    self.set_watch_portals(updated_portals)
+                    self.watch_portals_changed.emit(self._watch_portals)
+                else:
+                    rule = RoutingRule(
+                        id=uuid4().hex,
+                        name=raw_name,
+                        destination=raw_dir,
+                        device_id=chosen_device if isinstance(chosen_device, str) else None,
+                        patterns=patterns,
+                    )
+                    updated_rules = (*self._routing_rules, rule)
+                    self.set_routing_rules(updated_rules)
+                    self.routing_rules_changed.emit(self._routing_rules)
+            except ValueError as err:
+                error_label.setText(str(err))
+                error_label.setVisible(True)
+                return
+            dlg.accept()
+
+        def finish(_result: int) -> None:
+            if self._rule_dialog is dlg:
+                self._rule_dialog = None
+            if isValid(dlg):
+                dlg.deleteLater()
+
+        buttons.accepted.connect(accept_rule)
+        buttons.rejected.connect(dlg.reject)
+        dlg.finished.connect(finish)
+        self._rule_dialog = dlg
+        dlg.open()
 
     def _on_rate_checkbox(self, checked: bool) -> None:
         self.rate_spin.setEnabled(bool(checked))
@@ -2263,11 +2768,11 @@ class SettingsPage(QWidget):
         ring = theme.focus_ring_color(dark).name()
         self.nav.setStyleSheet(
             f"QListWidget#settingsNav {{ background: {t.sidebar.name()}; border: none;"
-            f" border-right: 1px solid {t.border.name()}; padding: {theme.SPACING[1]}px; outline: 0; }}"
+            f" border-right: 1px solid {t.border.name()}; padding: 12px 10px; outline: 0; }}"
             f" QListWidget#settingsNav::item {{ color: {t.text.name()};"
-            f" border-radius: {theme.RADIUS_CONTROL}px;"
+            f" border-radius: {theme.RADIUS_CARD}px;"
             # Lề trái thêm 2 px bù cho vạch 4 px cũ: chữ và icon không dời. Vạch nhấn do `_NavList` vẽ.
-            f" padding: 0px {theme.SPACING[1]}px 0px {theme.SPACING[1] + 2}px;"
+            f" padding: 0px 12px 0px 14px;"
             " border: 2px solid transparent; }"
             f" QListWidget#settingsNav::item:hover {{ background: {t.selected.name()}; }}"
             f" QListWidget#settingsNav::item:selected {{ background: {t.selected.name()};"
@@ -2449,6 +2954,9 @@ class SettingsController(QObject):
         page.create_subfolder_toggled.connect(self._on_create_subfolder)
         page.rate_limit_changed.connect(self._on_rate)
         page.retention_changed.connect(self._on_retention)
+        page.delta_sync_toggled.connect(self._on_delta_sync)
+        page.routing_rules_changed.connect(self._on_routing_rules)
+        page.watch_portals_changed.connect(self._on_watch_portals)
         page.cancel_pending_requested.connect(self.request_cancel_pending)
         page.cancel_all_pending_requested.connect(self.request_cancel_all_pending)
         page.ask_toggled.connect(self._on_ask)
@@ -2538,6 +3046,7 @@ class SettingsController(QObject):
         if dialog is not None:
             dialog.close()
             dialog.deleteLater()
+        self.page.close_dialogs()
         if self._export_running:
             self._export_running = False
             self.page.set_export_running(False)
@@ -2589,6 +3098,9 @@ class SettingsController(QObject):
             retention=result.temp_retention_days,
             theme=result.theme,
             accent=result.accent,
+            delta_sync=result.delta_sync,
+            routing_rules=result.routing_rules,
+            watch_portals=result.watch_portals,
         )
         self._devices = dict(result.devices)
         self._saved_autostart = result.autostart
@@ -2876,6 +3388,46 @@ class SettingsController(QObject):
         host = self._host
         if host is not None:
             host.call(lambda node: node.set_create_subfolder(enabled), _warn("lưu cài đặt tạo thư mục con"))
+
+    def _on_delta_sync(self, enabled: bool) -> None:
+        self._call(
+            "delta_sync",
+            lambda node: node.set_delta_sync(enabled),
+            lambda old: self.page.set_delta_sync(True if old is None else bool(old)),
+            value=bool(enabled),
+        )
+
+    def _on_routing_rules(self, rules: object) -> None:
+        next_rules = tuple(rules) if isinstance(rules, (tuple, list)) else ()
+
+        def ok(result: object) -> None:
+            if isinstance(result, tuple):
+                self._confirmed["routing_rules"] = result
+                self.page.set_routing_rules(result)
+
+        self._call(
+            "routing_rules",
+            lambda node: node.set_routing_rules(next_rules),
+            lambda old: self.page.set_routing_rules(old if isinstance(old, tuple) else ()),
+            ok,
+            value=next_rules,
+        )
+
+    def _on_watch_portals(self, rules: object) -> None:
+        next_rules = tuple(rules) if isinstance(rules, (tuple, list)) else ()
+
+        def ok(result: object) -> None:
+            if isinstance(result, tuple):
+                self._confirmed["watch_portals"] = result
+                self.page.set_watch_portals(result)
+
+        self._call(
+            "watch_portals",
+            lambda node: node.set_watch_portals(next_rules),
+            lambda old: self.page.set_watch_portals(old if isinstance(old, tuple) else ()),
+            ok,
+            value=next_rules,
+        )
 
     # ---- Xóa toàn bộ lịch sử -------------------------------------------------------------------
 

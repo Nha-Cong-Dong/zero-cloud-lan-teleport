@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QCoreApplication, Qt, Signal
-from PySide6.QtGui import QBrush, QFont, QGuiApplication, QImage, QPainter, QPixmap
+from PySide6.QtGui import QBrush, QGuiApplication, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,6 +31,7 @@ from teleport.core.display import format_size
 from teleport.core.qr import encode_wifi_qr
 from teleport.net.web_guest import GuestScope
 from teleport.paths import default_receive_dir
+from teleport.ui import theme
 from teleport.ui.theme import tokens
 
 if TYPE_CHECKING:
@@ -92,7 +93,7 @@ class WebGuestDialog(QDialog):
         self._stopped_host = False
 
         self.setWindowTitle(QCoreApplication.translate("WebGuest", "Chuyển tệp với điện thoại"))
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(520)
         self.setModal(True)
 
         self._build_ui()
@@ -118,10 +119,7 @@ class WebGuestDialog(QDialog):
             QCoreApplication.translate("WebGuest", "Quét mã QR để chuyển tệp"),
             self,
         )
-        title_font = QFont()
-        title_font.setPointSize(13)
-        title_font.setBold(True)
-        title.setFont(title_font)
+        title.setFont(theme.font_for(theme.TextStyle.TITLE, title.font()))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 

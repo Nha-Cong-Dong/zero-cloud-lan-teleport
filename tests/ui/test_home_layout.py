@@ -54,10 +54,10 @@ TRANSFERS = "Lượt truyền"
 ADDRESS_A11Y = "Địa chỉ của máy này"
 
 # ---- Hằng của spec (2.3) --------------------------------------------------------------------------
-SIDEBAR_WIDTH = 288
+SIDEBAR_WIDTH = 340
 SIDEBAR_COMPACT_WIDTH = 80  # spec B2 mục 12.5 (B1 là 248)
 COMPACT_BELOW = 820
-START_PANEL_MAX_WIDTH = 460
+START_PANEL_MAX_WIDTH = 520
 MIN_W, MIN_H = 720, 460
 
 PEER_ID = "a71c04d2" + "e" * 24
@@ -529,12 +529,12 @@ def test_l4_region_colors(make_window, qtbot, ui_theme, tmp_path, dark):
     assert not wrong, f"mép phải cột trái không phải `border` ở y = {wrong[:5]}…"
     card = window.machine_card
     assert color_at(image, card, window, QPoint(card.width() // 2, 0)) == border, "đường kẻ trên machine_card"
-    # 12.2 (B2 mục 8(d)): nền trong suốt của vùng cuộn và danh sách: điểm trống bên phải nút “＋ Ghép đôi
-    # máy mới” (căn trái) là `sidebar`.
+    # 12.2 (B2 mục 8(d)): nền trong suốt của vùng cuộn và danh sách: điểm trống bên dưới nút “＋ Ghép đôi
+    # máy mới” (nút giãn ngang hết cột) là `sidebar`.
     conv = window.conversations
     btn = conv.add_button
-    gap = QPoint(conv.width() - 4, btn.mapTo(conv, btn.rect().center()).y())
-    assert btn.mapTo(conv, QPoint(btn.width(), 0)).x() < gap.x(), "tiền đề: điểm nằm ngoài nút"
+    gap = QPoint(conv.width() // 2, btn.mapTo(conv, QPoint(0, btn.height())).y() + 12)
+    assert gap.y() < conv.height(), "tiền đề: điểm nằm dưới nút"
     assert color_at(image, conv, window, gap) == sidebar, "điểm trống của cột trái"
 
 
@@ -665,6 +665,21 @@ def test_l6_header_buttons_names_and_tooltips(window):
     assert window.settings_button.accessibleName() == SETTINGS
     assert window.discover_button.toolTip()
     assert window.settings_button.toolTip()
+
+
+def test_l6_brand_label_not_clipped_with_accent_font(qapp, make_window, qtbot, tmp_path):
+    """Tên app ở đầu cột trái không bị cắt chữ khi áp theme và font điểm nhấn."""
+    from teleport.ui import fonts, theme
+    from teleport.ui.main_window import Page
+
+    fonts.install()
+    theme.apply(qapp)
+    w = make_window()
+    w.add_page(Page.SETTINGS, make_page())
+    running(w, tmp_path)
+    show_window(w, qtbot, 1120, 720)
+    needed = QFontMetrics(w.brand_label.font()).horizontalAdvance(w.brand_label.text())
+    assert w.brand_label.width() >= needed, f"brand_label rộng {w.brand_label.width()} < cần {needed}"
 
 
 # =================================================================================================
