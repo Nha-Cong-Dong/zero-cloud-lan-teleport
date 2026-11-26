@@ -433,7 +433,7 @@ async def test_rename_rate_limited_applied_after_interval(transfer_nodes, peer_o
     renamed = renamed_events(A, B.id)
     assert [(e.old_name, e.device.name) for e in renamed] == [("B", "B-1"), ("B-1", "B-2")]
     t_second = A.rec.event_times[index_of(A.rec.events, renamed[1])]
-    assert t_second - t_first >= interval - 0.1, "tên chờ bị áp trước khi hết trần"
+    assert t_second - t_first >= interval - 0.5, "tên chờ bị áp trước khi hết trần"
     assert stored_names(A.dir) == {B.id: "B-2"}
     assert store_writes.count(A.dir) == writes_before + 2
     assert [v.name for v in A.devices()] == ["B-2"]

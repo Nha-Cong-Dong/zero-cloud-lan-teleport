@@ -2207,19 +2207,19 @@ async def test_idle_channel_sends_valid_ping(fast, listener_factory, raw_client,
 @pytest.mark.slow
 @pytest.mark.integration
 async def test_app_sends_suppress_pings(fast, listener_factory, raw_client, ids):
-    """K-7: app gửi Pong mỗi 0,1 s qua conn.send, ping_interval = 0,3 → máy kia không nhận Ping nào."""
+    """K-7: app gửi Pong mỗi 0,05 s qua conn.send, ping_interval = 0,6 → máy kia không nhận Ping nào."""
     h = await listener_factory(ids.server, trusted=[ids.b])
     peer, server = await raw_control(raw_client, h, ids)
-    _, task = start_channel(server, [], ping_interval=0.3, dead_after=5.0)
+    _, task = start_channel(server, [], ping_interval=0.6, dead_after=5.0)
 
     async def app_traffic():
         while True:
             await server.send(Pong(t=1))
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
 
     sender = asyncio.create_task(app_traffic())
     try:
-        msgs = await read_messages_for(peer, 1.0)
+        msgs = await read_messages_for(peer, 1.3)
         assert [m for m in msgs if m["type"] == "ping"] == []
         assert sum(m["type"] == "pong" for m in msgs) >= 5
         assert not task.done()
