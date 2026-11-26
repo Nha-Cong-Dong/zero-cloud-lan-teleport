@@ -332,12 +332,22 @@ class WebGuestHttpServer:
         for w in dead:
             self._sse_writers.discard(w)
 
+    async def _close_writer(self, writer: asyncio.StreamWriter, timeout: float = 0.5) -> None:
+        """Đóng StreamWriter có giới hạn thời gian; quá hạn thì abort transport."""
+        with contextlib.suppress(Exception):
+            writer.close()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
+            except TimeoutError:
+                transport = getattr(writer, "transport", None)
+                if transport is not None:
+                    transport.abort()
+
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self._active_connections.add(writer)
         peer = writer.get_extra_info("peername")
         if not peer:
-            writer.close()
-            await writer.wait_closed()
+            await self._close_writer(writer)
             self._active_connections.discard(writer)
             return
 
@@ -436,11 +446,7 @@ class WebGuestHttpServer:
             log.error("Lỗi xử lý yêu cầu HTTP từ %s: %s", client_ip, e)
         finally:
             if writer not in self._sse_writers:
-                try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception:
-                    pass
+                await self._close_writer(writer)
                 self._active_connections.discard(writer)
 
     def _verify_client_auth(self, client_ip: str, req_token: str) -> int | None:

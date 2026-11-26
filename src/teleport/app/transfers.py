@@ -985,6 +985,7 @@ class TransferManager:
         self._outbox_stopped = False
         self._file_roots: dict[tuple[Direction, str, str, int], str] = {}
         self._next_delta_seq = 1
+        self._last_delta_probe: tuple[str, str, int, int] | None = None
         self._delta_index = delta.DeltaIndexStore()
         self._delta_index_dirty = False
         self._delta_index_scheduled = False
@@ -1450,6 +1451,9 @@ class TransferManager:
         old = self._controls.pop(device_id, None)
         if old is not None:
             old.outbox.close()
+            for (dev, _tid), lane in list(self._lanes.items()):
+                if dev == device_id:
+                    self._cancel_delta_waiters(lane)
         outbox = _Outbox(device_id, conn)
         self._tasks.add(outbox.task)
         outbox.task.add_done_callback(self._tasks.discard)
@@ -1734,6 +1738,13 @@ class TransferManager:
             ctl = self._controls.get(action.device_id)
             if ctl is not None and ctl.control_id == action.control_id:
                 ctl.outbox.put(action.message)
+                if isinstance(action.message, DeltaProbe):
+                    self._last_delta_probe = (
+                        action.device_id,
+                        action.message.transfer_id,
+                        action.message.file_index,
+                        action.message.seq,
+                    )
             if isinstance(action.message, Complete):
                 pair = (action.device_id, action.message.transfer_id)
                 self._file_roots[(Direction.SEND, *pair, action.message.file_index)] = (
@@ -2599,6 +2610,7 @@ class TransferManager:
         """Thao tác lỗi: bỏ các thao tác còn lại của lượt (trừ dọn), báo `storage_failed`."""
         lane.failed = True
         self._drop_ops(lane)
+        self._cancel_delta_waiters(lane)
         self._notify_lane(lane)
         if not lane.closing:
             self._call(self._engine.storage_failed, lane.device_id, lane.transfer_id, op, detail=detail)
@@ -2833,6 +2845,7 @@ class TransferManager:
             fut: asyncio.Future[tuple[int, ...] | None] = self._loop.create_future()
             lane.delta_waiters[(file_index, seq)] = fut
             try:
+                self._last_delta_probe = None
                 ok = self._call(
                     self._engine.send_delta_probe,
                     device_id,
@@ -2841,7 +2854,10 @@ class TransferManager:
                     seq,
                     batch_hashes,
                 )
-                if not ok:
+                if not ok or (
+                    not self._dispatching
+                    and self._last_delta_probe != (device_id, transfer_id, file_index, seq)
+                ):
                     return None
                 async with asyncio.timeout(DELTA_PROBE_TIMEOUT):
                     return await fut

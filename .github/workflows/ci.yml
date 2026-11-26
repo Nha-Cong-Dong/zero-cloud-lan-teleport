@@ -147,14 +147,14 @@ jobs:
       # Worker crash thì dừng ngay: xdist chạy lại test vừa crash ở worker mới và từng treo tới hết
       # timeout-minutes.
       - if: matrix.suite == 'core'
-        run: pytest -q -n auto --dist loadgroup --max-worker-restart=0 --ignore=tests/ui --ignore=tests/packaging
+        run: pytest -q -n auto --dist loadgroup --max-worker-restart=0 -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true --ignore=tests/ui --ignore=tests/packaging
       # Test tests/ui không chạy chung lần chạy với test tầng khác, và trên Windows chạy tuần tự: trong
       # worker xdist, vòng sự kiện Qt từng abort (chưa rõ nguyên nhân; architecture.md mục 6).
       # tests/packaging dùng PySide6 (lrelease, kiểm giấy phép Qt) nên chạy cùng suite gui trên mọi OS.
       - if: matrix.suite == 'gui' && runner.os != 'Windows'
-        run: pytest -q -n auto --dist loadgroup --max-worker-restart=0 tests/ui tests/packaging
+        run: pytest -q -n auto --dist loadgroup --max-worker-restart=0 -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true tests/ui tests/packaging
       - if: matrix.suite == 'gui' && runner.os == 'Windows'
-        run: pytest -q tests/ui tests/packaging
+        run: pytest -q -o faulthandler_timeout=300 -o faulthandler_exit_on_timeout=true tests/ui tests/packaging
         env:
           TELEPORT_SHARD: ${{ matrix.shard }}
 
