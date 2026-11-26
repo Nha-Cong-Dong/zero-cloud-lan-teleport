@@ -32,7 +32,7 @@ from enum import StrEnum
 from typing import Any, ClassVar
 
 from teleport.core.bitfield import MAX_BITFIELD_BASE64_LEN, MAX_BITFIELD_BYTES, decode_base64
-from teleport.core.blocks import BLOCK_SIZE, MAX_FILE_SIZE
+from teleport.core.blocks import BLOCK_SIZE, MAX_BLOCKS, MAX_FILE_SIZE
 from teleport.core.pairing_code import PROOF_SIGNATURE_SIZE
 
 PROTOCOL_VERSION = 1
@@ -45,6 +45,7 @@ MAX_SAFE_INTEGER = 2**53 - 1
 MAX_OFFER_FILES = 1000
 MAX_FILE_NAME_BYTES = 255  # độ dài tên file trong `offer`, tính bằng byte UTF-8
 MAX_REL_PATH_BYTES = 4096  # độ dài đường dẫn tương đối trong `offer`, tính bằng byte UTF-8
+MAX_DELTA_PROBE = 256  # số khối tối đa trong một message `delta_probe` / `delta_match`
 MAX_CLIP_KIND_LEN = 64
 
 CERT_PEM_HEADER = "-----BEGIN CERTIFICATE-----"
@@ -490,6 +491,7 @@ class Offer:
     transfer_id: str
     block_size: int  # luôn = BLOCK_SIZE (1 MiB)
     files: tuple[FileEntry, ...]
+    delta: bool = False
 
     def __post_init__(self) -> None:
         _validate_transfer_id(self.transfer_id)
@@ -500,6 +502,8 @@ class Offer:
             raise MessageError("files phải là một mảng")
         if not 1 <= len(files) <= MAX_OFFER_FILES:
             raise MessageError(f"files phải có 1–{MAX_OFFER_FILES} phần tử")
+        if type(self.delta) is not bool:
+            raise MessageError("delta phải là bool")
         entries = tuple(f if isinstance(f, FileEntry) else FileEntry.from_dict(f) for f in files)
         object.__setattr__(self, "files", entries)
 
@@ -637,6 +641,72 @@ class Cancel:
         object.__setattr__(self, "reason", _validate_reason(self.reason))
 
 
+@dataclass(frozen=True, slots=True)
+class DeltaProbe:
+    """Bên nhận gửi danh sách `(block_index, sha256_hex)` của bản nền cục bộ để dò khối khớp."""
+
+    TYPE: ClassVar[str] = "delta_probe"
+
+    transfer_id: str
+    file_index: int
+    seq: int
+    hashes: tuple[tuple[int, str], ...]
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        _validate_file_index(self.file_index)
+        _validate_int(self.seq, "seq", 1, MAX_SAFE_INTEGER)
+        raw_hashes: object = self.hashes
+        if not isinstance(raw_hashes, list | tuple):
+            raise MessageError("hashes phải là mảng các cặp [index, sha256]")
+        if not 1 <= len(raw_hashes) <= MAX_DELTA_PROBE:
+            raise MessageError(f"hashes phải có 1–{MAX_DELTA_PROBE} phần tử")
+        normalized: list[tuple[int, str]] = []
+        previous = -1
+        for item in raw_hashes:
+            if not isinstance(item, list | tuple) or len(item) != 2:
+                raise MessageError("mỗi phần tử của hashes phải là cặp [index, sha256]")
+            idx, digest = item
+            _validate_int(idx, "index", 0, MAX_BLOCKS - 1)
+            if idx <= previous:
+                raise MessageError("chỉ số khối trong hashes phải tăng ngặt")
+            previous = idx
+            digest_str = _validate_hex32(digest, "sha256")
+            normalized.append((idx, digest_str if type(digest_str) is str else str.__str__(digest_str)))
+        object.__setattr__(self, "hashes", tuple(normalized))
+
+
+@dataclass(frozen=True, slots=True)
+class DeltaMatch:
+    """Bên gửi xác nhận danh sách chỉ số khối trong `delta_probe` có hash khớp với tệp nguồn."""
+
+    TYPE: ClassVar[str] = "delta_match"
+
+    transfer_id: str
+    file_index: int
+    seq: int
+    matched: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        _validate_transfer_id(self.transfer_id)
+        _validate_file_index(self.file_index)
+        _validate_int(self.seq, "seq", 1, MAX_SAFE_INTEGER)
+        raw_matched: object = self.matched
+        if not isinstance(raw_matched, list | tuple):
+            raise MessageError("matched phải là mảng chỉ số khối")
+        if len(raw_matched) > MAX_DELTA_PROBE:
+            raise MessageError(f"matched không quá {MAX_DELTA_PROBE} phần tử")
+        normalized: list[int] = []
+        previous = -1
+        for idx in raw_matched:
+            _validate_int(idx, "matched_index", 0, MAX_BLOCKS - 1)
+            if idx <= previous:
+                raise MessageError("chỉ số khối trong matched phải tăng ngặt")
+            previous = idx
+            normalized.append(idx)
+        object.__setattr__(self, "matched", tuple(normalized))
+
+
 # ---- Clipboard (protocol mục 3.2, 3.3) -----------------------------------------------------
 
 
@@ -719,6 +789,8 @@ Message = (
     | Complete
     | Verified
     | Cancel
+    | DeltaProbe
+    | DeltaMatch
     | Clipboard
 )
 
@@ -743,6 +815,8 @@ _MESSAGE_TYPES: dict[str, type[Message]] = {
         Complete,
         Verified,
         Cancel,
+        DeltaProbe,
+        DeltaMatch,
         Clipboard,
     )
 }
@@ -800,6 +874,8 @@ def to_dict(msg: Message) -> dict:
         value = getattr(msg, f.name)
         if value is None and f.default is not MISSING:
             continue
+        if isinstance(msg, Offer) and f.name == "delta" and value is False:
+            continue
         result[f.name] = _wire_value(value)
     return result
 
@@ -837,6 +913,8 @@ _ALLOWED_TYPES: dict[ConnectionKind, frozenset[str]] = {
             Complete,
             Verified,
             Cancel,
+            DeltaProbe,
+            DeltaMatch,
             Clipboard,
         )
     ),

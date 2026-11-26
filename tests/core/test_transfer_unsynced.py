@@ -35,9 +35,10 @@ def info_of(r):
 
 def test_unsynced_bytes_is_last_field_with_default_zero():
     fields = dataclasses.fields(transfer.TransferInfo)
-    assert fields[-1].name == "unsynced_bytes"
-    assert fields[-1].default == 0
-    assert [f.name for f in fields[:-1]] == [
+    by_name = {f.name: f for f in fields}
+    assert by_name["unsynced_bytes"].default == 0
+    assert by_name["delta_reused_bytes"].default == 0
+    assert [f.name for f in fields[:7]] == [
         "key",
         "status",
         "files",
@@ -46,6 +47,7 @@ def test_unsynced_bytes_is_last_field_with_default_zero():
         "done_bytes",
         "total_bytes",
     ]
+    assert [f.name for f in fields[7:]] == ["unsynced_bytes", "delta_reused_bytes"]
 
 
 def test_receiver_counts_written_blocks_until_synced(tx):

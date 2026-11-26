@@ -98,6 +98,7 @@ from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt,
 from teleport.app.settings import DeviceSettings, Settings, SettingsSaveError, WindowGeometry
 from teleport.app.storage import ReceiveDir, TempKind
 from teleport.app.transfers import ReceiveDirBusy, TransferManager, TransferUpdate
+from teleport.app.watch import WatchPortalEvent, WatchPortalService
 from teleport.app.web_guest import GuestSessionInfo, WebGuestManager
 from teleport.core.discovery import (
     PROBE_INTERVAL,
@@ -139,7 +140,9 @@ from teleport.core.messages import (
     validate_os,
 )
 from teleport.core.resume_state import TombstoneRecord
+from teleport.core.routing import RoutingRule
 from teleport.core.transfer import Direction
+from teleport.core.watch import WatchPortalRule
 from teleport.lock import NodeLock
 from teleport.net import connection as net_connection
 from teleport.net import discovery as net_discovery
@@ -437,8 +440,12 @@ def find_trusted(config_dir: Path, query: str) -> TrustedDevice:
 
 
 def _mentions_device(settings: Settings, device_id: str) -> bool:
-    """`settings` có gì của `device_id` phải bỏ khi hủy ghép đôi: mục `devices` hay `last_conversation`."""
-    return device_id in settings.devices or settings.last_conversation == device_id
+    """`settings` có gì của `device_id` phải bỏ khi hủy ghép đôi."""
+    return (
+        device_id in settings.devices
+        or settings.last_conversation == device_id
+        or any(w.device_id == device_id for w in settings.watch_portals)
+    )
 
 
 def unpair_offline(config_dir: Path, query: str, *, lock_timeout: float | None = None) -> TrustedDevice:
@@ -784,6 +791,8 @@ class Node:
         stealth: bool | None = None,
         enable_ipc: bool = False,
         suspend_sends: bool = False,
+        delta_sync: bool | None = None,
+        on_watch_event: Callable[[WatchPortalEvent], None] | None = None,
     ) -> None:
         """`name` sai → MessageError (lớp con ValueError); `port` không phải None hay 0–65535 → ValueError.
 
@@ -873,6 +882,10 @@ class Node:
             raise ValueError("save_args phải là bool")
         if type(suspend_sends) is not bool:
             raise ValueError("suspend_sends phải là bool")
+        if delta_sync is not None and type(delta_sync) is not bool:
+            raise ValueError("delta_sync phải là bool")
+        if on_watch_event is not None and not callable(on_watch_event):
+            raise TypeError("on_watch_event phải là hàm")
         if on_clipboard_event is not None and not callable(on_clipboard_event):
             raise TypeError("on_clipboard_event phải là hàm")
         self._config_dir = Path(config_dir)
@@ -902,7 +915,10 @@ class Node:
         self._stealth = False  # đọc lúc `start`, đổi bằng `set_stealth`
         self._enable_ipc = enable_ipc
         self._suspend_sends = suspend_sends
+        self._delta_sync_arg = delta_sync
+        self._on_watch_event = on_watch_event
         self._ipc: Any = None
+        self._watch_portals: WatchPortalService | None = None
 
         self._started = False  # start() đã được gọi (thành công hay không)
         self._running = False  # start() thành công, close() chưa xong
@@ -1052,6 +1068,8 @@ class Node:
                 ask_before_receive=self._asks_before_receive,
                 create_subfolder=settings.create_subfolder,
                 suspend_sends=self._suspend_sends,
+                delta_enabled=settings.delta_sync if self._delta_sync_arg is None else self._delta_sync_arg,
+                routing_rules=settings.routing_rules,
             )
             if settings.temp_retention_days is not None:
                 transfers.set_temp_retention(settings.temp_retention_days * 86400.0)
@@ -1087,6 +1105,16 @@ class Node:
                 self._cleanup_task = asyncio.create_task(
                     self._cleanup_temps(transfers), name=f"{_TASK_NAME}.cleanup-temps"
                 )
+            watch = WatchPortalService(
+                executor=disk,
+                is_trusted=lambda d: self._store is not None and self._store.get(d) is not None,
+                is_connected=lambda d: self._links is not None and d in self._links.connected(),
+                send_files=lambda d, p: transfers.send(d, p, allow_dirs=False),
+                on_event=self._on_watch_event,
+            )
+            watch.set_rules(settings.watch_portals)
+            watch.start()
+            self._watch_portals = watch
             if self._enable_ipc:
                 from teleport.app.ipc import IpcServer
 
@@ -1125,6 +1153,10 @@ class Node:
             with contextlib.suppress(Exception):
                 await self._ipc.close()
             self._ipc = None
+        if self._watch_portals is not None:
+            with contextlib.suppress(Exception):
+                await self._watch_portals.close()
+            self._watch_portals = None
         tasks = [t for t in (self._timer_task, self._netwatch_task, self._cleanup_task) if t is not None]
         tasks += [*self._attempts.values(), *self._link_tasks]
         for task in tasks:
@@ -1288,6 +1320,10 @@ class Node:
                 transfers.begin_close()
             if self._clipboard is not None:
                 self._clipboard.close()  # đồng bộ: không đọc/ghi/gửi clip mới nữa
+            if self._watch_portals is not None:
+                with contextlib.suppress(Exception):
+                    await self._watch_portals.close()
+                self._watch_portals = None
             await self._stop_tasks([self._timer_task, self._netwatch_task, self._cleanup_task])
             if self._clipboard is not None:
                 # Mảnh clip đang gửi dở giữ khóa gửi của kết nối điều khiển: chờ nó xong trước khi
@@ -1770,6 +1806,42 @@ class Node:
         if self._transfers is not None:
             self._transfers.create_subfolder = create
 
+    def set_delta_sync(self, enabled: bool) -> None:
+        """Bật/tắt chế độ Smart Delta Teleport và lưu; không phải bool → TypeError."""
+        self._check_running()
+        if type(enabled) is not bool:
+            raise TypeError("delta_sync phải là bool")
+        assert self._settings is not None
+        if self._settings.delta_sync != enabled:
+            self._save_settings(dataclasses.replace(self._settings, delta_sync=enabled))
+        if self._delta_sync_arg is None and self._transfers is not None:
+            self._transfers.delta_enabled = enabled
+
+    def set_routing_rules(self, rules: Sequence[RoutingRule]) -> None:
+        """Lưu và áp danh sách quy tắc phân loại thư mục nhận (`RoutingRule`)."""
+        self._check_running()
+        assert self._settings is not None
+        items = tuple(rules)
+        new_settings = dataclasses.replace(self._settings, routing_rules=items)
+        self._save_settings(new_settings)
+        if self._transfers is not None:
+            self._transfers.routing_rules = self._settings.routing_rules
+
+    def set_watch_portals(self, rules: Sequence[WatchPortalRule]) -> None:
+        """Lưu và áp danh sách cổng đẩy tự động (`WatchPortalRule`)."""
+        self._check_running()
+        assert self._settings is not None
+        items = tuple(rules)
+        new_settings = dataclasses.replace(self._settings, watch_portals=items)
+        self._save_settings(new_settings)
+        if self._watch_portals is not None:
+            self._watch_portals.set_rules(self._settings.watch_portals)
+
+    @property
+    def watch_portals(self) -> WatchPortalService:
+        """Dịch vụ Watch Portal đẩy tự động của node."""
+        return self._need(self._watch_portals)
+
     def _allows_anonymous(self, ip: str) -> bool:
         """`Listener`: gửi `hello` cho kết nối ẩn danh từ `ip` không (đồng bộ, protocol mục 2.3).
 
@@ -2152,6 +2224,8 @@ class Node:
                     type(e.__cause__).__name__,
                 )
         closes = self._trust_changed()
+        if self._watch_portals is not None and self._settings is not None:
+            self._watch_portals.set_rules(self._settings.watch_portals)
         if self._transfers is not None:
             self._transfers.forget_device(device.device_id)
             if clear_history:  # sau `forget_device`: các mục `UNPAIRED` của nó cũng bị xóa
@@ -2431,6 +2505,8 @@ class Node:
             self._refresh_peer(event.device_id, self._conns.get(event.conn_id))
             self._transfer_control_up(event.device_id, event.conn_id, event.outgoing)
             self._clipboard_link_up(event.device_id, event.conn_id)
+            if self._watch_portals is not None:
+                self._watch_portals.on_peer_connected(event.device_id)
             registry.set_connected(event.device_id, True)
             log.info("đã kết nối với %s", event.device_id[:8])
             view = registry.get(event.device_id)

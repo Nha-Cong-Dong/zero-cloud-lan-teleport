@@ -138,6 +138,8 @@ class OutboxRecord:
             "paths": list(self.paths),
             "created_at": format_time(self.created_at),
         }
+        if self.offer.delta:
+            obj["delta"] = True
         if self.roots:
             obj["roots"] = {str(idx): digest for idx, digest in self.roots}
         return obj
@@ -202,9 +204,12 @@ def _record_from_dict(obj: object) -> OutboxRecord:
     if type(obj["block_size"]) is not int or obj["block_size"] != BLOCK_SIZE:
         raise OutboxError(f"block_size phải là {BLOCK_SIZE}")
     transfer_id = obj["transfer_id"]
+    delta_flag = obj.get("delta", False)
+    if type(delta_flag) is not bool:
+        raise OutboxError("trường delta phải là bool")
     try:
         validate_transfer_id(transfer_id)
-        offer = Offer(transfer_id=transfer_id, block_size=BLOCK_SIZE, files=obj["files"])
+        offer = Offer(transfer_id=transfer_id, block_size=BLOCK_SIZE, files=obj["files"], delta=delta_flag)
         created_at = parse_time(obj["created_at"], "created_at")
     except (MessageError, StateError) as e:
         raise OutboxError(f"mục outbox không hợp lệ: {e}") from None

@@ -80,6 +80,7 @@ import math
 import ntpath
 import os
 import re
+import secrets
 import shutil
 import signal
 import sys
@@ -88,7 +89,7 @@ import time
 import unicodedata
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any, TextIO
@@ -156,7 +157,14 @@ from teleport.core.links import ConnectResult, is_saveable
 from teleport.core.messages import MAX_OFFER_FILES, MessageError, validate_device_name
 from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
-from teleport.lock import NodeLockedError
+from teleport.core.routing import (
+    MAX_ROUTING_RULES,
+    RoutingRule,
+    parse_patterns,
+    routing_rule_to_dict,
+)
+from teleport.core.watch import MAX_WATCH_PORTALS, WatchPortalRule, watch_portal_to_dict
+from teleport.lock import NodeLock, NodeLockedError
 from teleport.net.connection import DEFAULT_PORT
 from teleport.paths import ENV_HOME, config_dir, default_receive_dir
 from teleport.trust.identity import IdentityError, format_fingerprint, load_or_create_identity
@@ -1494,6 +1502,11 @@ def _send_result(finished: TransferFinished, p: str) -> str:
     info, result, reject = finished.info, finished.result, finished.reject
     file = _file_at(info, finished.file_index)
     if result is TransferResult.DONE:
+        if finished.delta_reused_bytes > 0:
+            return (
+                f"Đã gửi xong {len(info.files)} file ({format_size(info.total_bytes)}, "
+                f"tái sử dụng {format_size(finished.delta_reused_bytes)} phần không đổi) tới {p}."
+            )
         return f"Đã gửi xong {len(info.files)} file ({format_size(info.total_bytes)}) tới {p}."
     if (
         result is TransferResult.REJECTED_NO_SPACE
@@ -1579,6 +1592,11 @@ def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None
     file = _file_at(info, finished.file_index)
     n = len(info.files)
     if result is TransferResult.DONE:
+        if finished.delta_reused_bytes > 0:
+            return [
+                f"Đã nhận xong {n} file ({format_size(info.total_bytes)}, "
+                f"tái sử dụng {format_size(finished.delta_reused_bytes)} phần không đổi) từ {s}."
+            ]
         return [f"Đã nhận xong {n} file ({format_size(info.total_bytes)}) từ {s}."]
     if result is TransferResult.REJECTED_USER and not finished.by_peer:
         return [_RECEIVE_REJECTED]
@@ -2568,6 +2586,7 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
 
     port = getattr(args, "port", None)
     stealth = True if getattr(args, "stealth", False) else None
+    delta_sync = False if getattr(args, "no_delta", False) else None
     node = Node(
         _config(args),
         name=getattr(args, "name", None),
@@ -2578,6 +2597,7 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
         auto_connect=True,
         auto_connect_to={dev.device_id for dev in devices},
         stealth=stealth,
+        delta_sync=delta_sync,
         on_event=session.on_event,
         rate_limit=rate,
         on_transfer_event=session.on_transfer_event,
@@ -3037,6 +3057,7 @@ async def _receive_main(
     )
     mdns = _mdns_options(args, advertise=True)
     stealth = True if getattr(args, "stealth", False) else None
+    delta_sync = False if getattr(args, "no_delta", False) else None
     node = Node(
         _config(args),
         name=getattr(args, "name", None),
@@ -3046,6 +3067,7 @@ async def _receive_main(
         mdns=mdns,
         auto_connect=True,
         stealth=stealth,
+        delta_sync=delta_sync,
         on_event=session.on_event,
         receive_dir=receive_dir,
         auto_accept=auto_accept,
@@ -3740,6 +3762,259 @@ def cmd_receipt_list(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---- Quy tắc phân loại thư mục nhận (`routing`) & Cổng đẩy tự động (`watch`) ---------------
+
+
+def _collect_cli_patterns(raw_patterns: Sequence[str] | None) -> tuple[str, ...]:
+    if not raw_patterns:
+        return ()
+    joined = ",".join(raw_patterns)
+    return parse_patterns(joined)
+
+
+def _remove_by_prefix[T: (RoutingRule, WatchPortalRule)](
+    items: tuple[T, ...], query: str
+) -> tuple[tuple[T, ...], T | None, list[T]]:
+    exact = [item for item in items if item.id == query]
+    if len(exact) == 1:
+        chosen = exact[0]
+        return tuple(item for item in items if item is not chosen), chosen, []
+    matches = [item for item in items if item.id.startswith(query)]
+    if len(matches) == 1:
+        chosen = matches[0]
+        return tuple(item for item in items if item is not chosen), chosen, []
+    return items, None, matches
+
+
+def cmd_routing_list(args: argparse.Namespace) -> int:
+    directory = _config(args)
+    settings = Settings.load(directory)
+    items = [routing_rule_to_dict(r) for r in settings.routing_rules]
+    if getattr(args, "json", False):
+        print(json.dumps({"routing_rules": items}, ensure_ascii=False))
+        return 0
+    if not settings.routing_rules:
+        print("Chưa có quy tắc phân loại thư mục nhận nào.")
+        return 0
+    for r in settings.routing_rules:
+        pats = ", ".join(r.patterns) if r.patterns else "*"
+        src = r.device_id[:8] if r.device_id else "mọi máy"
+        state = "bật" if r.enabled else "tắt"
+        print(f"{r.id}  {r.name}  [{pats}]  ({src}) -> {r.destination}  [{state}]")
+    return 0
+
+
+def cmd_routing_add(args: argparse.Namespace) -> int:
+    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
+    directory = _config(args)
+    from_query = getattr(args, "from_device", None)
+    device_id: str | None = None
+    if from_query is not None:
+        try:
+            dev = find_trusted(directory, from_query)
+        except ConfigDirError as e:
+            _config_dir_error(output, e.path, e.error)
+            return 1
+        except TrustStoreError as e:
+            output.error("trust_store_error", str(e))
+            return 1
+        except (DeviceNotFound, AmbiguousDevice) as e:
+            _trusted_lookup_error(output, from_query, e)
+            return 1
+        device_id = dev.device_id
+
+    try:
+        patterns = _collect_cli_patterns(getattr(args, "pattern", None))
+        dest = os.path.abspath(os.path.expanduser(args.dest))
+        rule = RoutingRule(
+            id=secrets.token_hex(4),
+            name=args.name,
+            destination=dest,
+            device_id=device_id,
+            patterns=patterns,
+        )
+    except (ValueError, TypeError) as e:
+        output.error("invalid_argument", str(e))
+        return 2
+
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        lock = NodeLock(directory)
+        lock.acquire(timeout=app_node.LOCK_TIMEOUT)
+    except OSError as e:
+        _config_dir_error(output, directory, e)
+        return 1
+    except NodeLockedError:
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
+        return 1
+    try:
+        settings = Settings.load(directory)
+        if len(settings.routing_rules) >= MAX_ROUTING_RULES:
+            output.error("limit_reached", f"Tối đa {MAX_ROUTING_RULES} quy tắc phân loại.")
+            return 1
+        updated = replace(settings, routing_rules=(*settings.routing_rules, rule))
+        updated.save(directory)
+    except OSError as e:
+        _config_dir_error(output, directory, e)
+        return 1
+    finally:
+        lock.release()
+
+    if output.json:
+        print(json.dumps({"added": routing_rule_to_dict(rule)}, ensure_ascii=False))
+    else:
+        print(f"Đã thêm quy tắc {rule.id}: “{rule.name}” -> {rule.destination}")
+    return 0
+
+
+def cmd_routing_remove(args: argparse.Namespace) -> int:
+    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
+    directory = _config(args)
+    if not directory.exists():
+        output.error("not_found", f"Không tìm thấy quy tắc “{args.rule_id}”.")
+        return 1
+    lock = NodeLock(directory)
+    try:
+        lock.acquire(timeout=app_node.LOCK_TIMEOUT)
+    except OSError as e:
+        _config_dir_error(output, directory, e)
+        return 1
+    except NodeLockedError:
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
+        return 1
+    try:
+        settings = Settings.load(directory)
+        remaining, removed, matches = _remove_by_prefix(settings.routing_rules, args.rule_id)
+        if removed is None:
+            if len(matches) > 1:
+                output.error("ambiguous", f"“{args.rule_id}” khớp nhiều quy tắc; hãy nhập mã đầy đủ.")
+            else:
+                output.error("not_found", f"Không tìm thấy quy tắc “{args.rule_id}”.")
+            return 1
+        replace(settings, routing_rules=remaining).save(directory)
+    finally:
+        lock.release()
+
+    if output.json:
+        print(json.dumps({"removed": routing_rule_to_dict(removed)}, ensure_ascii=False))
+    else:
+        print(f"Đã xóa quy tắc {removed.id}: “{removed.name}”.")
+    return 0
+
+
+def cmd_watch_list(args: argparse.Namespace) -> int:
+    directory = _config(args)
+    settings = Settings.load(directory)
+    items = [watch_portal_to_dict(w) for w in settings.watch_portals]
+    if getattr(args, "json", False):
+        print(json.dumps({"watch_portals": items}, ensure_ascii=False))
+        return 0
+    if not settings.watch_portals:
+        print("Chưa có cổng đẩy tự động nào.")
+        return 0
+    for w in settings.watch_portals:
+        pats = ", ".join(w.patterns) if w.patterns else "*"
+        rec_note = ", đệ quy" if w.recursive else ""
+        state = "bật" if w.enabled else "tắt"
+        print(f"{w.id}  {w.name}  {w.source_dir}  [{pats}{rec_note}] -> {w.device_id[:8]}  [{state}]")
+    return 0
+
+
+def cmd_watch_add(args: argparse.Namespace) -> int:
+    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
+    directory = _config(args)
+    try:
+        dev = find_trusted(directory, args.to)
+    except ConfigDirError as e:
+        _config_dir_error(output, e.path, e.error)
+        return 1
+    except TrustStoreError as e:
+        output.error("trust_store_error", str(e))
+        return 1
+    except (DeviceNotFound, AmbiguousDevice) as e:
+        _trusted_lookup_error(output, args.to, e)
+        return 1
+
+    try:
+        patterns = _collect_cli_patterns(getattr(args, "pattern", None))
+        source_dir = os.path.abspath(os.path.expanduser(args.dir))
+        rule = WatchPortalRule(
+            id=secrets.token_hex(4),
+            name=args.name,
+            source_dir=source_dir,
+            device_id=dev.device_id,
+            patterns=patterns,
+            recursive=bool(getattr(args, "recursive", False)),
+        )
+    except (ValueError, TypeError) as e:
+        output.error("invalid_argument", str(e))
+        return 2
+
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        lock = NodeLock(directory)
+        lock.acquire(timeout=app_node.LOCK_TIMEOUT)
+    except OSError as e:
+        _config_dir_error(output, directory, e)
+        return 1
+    except NodeLockedError:
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
+        return 1
+    try:
+        settings = Settings.load(directory)
+        if len(settings.watch_portals) >= MAX_WATCH_PORTALS:
+            output.error("limit_reached", f"Tối đa {MAX_WATCH_PORTALS} cổng đẩy tự động.")
+            return 1
+        updated = replace(settings, watch_portals=(*settings.watch_portals, rule))
+        updated.save(directory)
+    except OSError as e:
+        _config_dir_error(output, directory, e)
+        return 1
+    finally:
+        lock.release()
+
+    if output.json:
+        print(json.dumps({"added": watch_portal_to_dict(rule)}, ensure_ascii=False))
+    else:
+        print(f"Đã thêm cổng đẩy {rule.id}: {rule.source_dir} -> {_name_label(dev.name)}")
+    return 0
+
+
+def cmd_watch_remove(args: argparse.Namespace) -> int:
+    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
+    directory = _config(args)
+    if not directory.exists():
+        output.error("not_found", f"Không tìm thấy cổng đẩy “{args.portal_id}”.")
+        return 1
+    lock = NodeLock(directory)
+    try:
+        lock.acquire(timeout=app_node.LOCK_TIMEOUT)
+    except OSError as e:
+        _config_dir_error(output, directory, e)
+        return 1
+    except NodeLockedError:
+        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
+        return 1
+    try:
+        settings = Settings.load(directory)
+        remaining, removed, matches = _remove_by_prefix(settings.watch_portals, args.portal_id)
+        if removed is None:
+            if len(matches) > 1:
+                output.error("ambiguous", f"“{args.portal_id}” khớp nhiều cổng đẩy; hãy nhập mã đầy đủ.")
+            else:
+                output.error("not_found", f"Không tìm thấy cổng đẩy “{args.portal_id}”.")
+            return 1
+        replace(settings, watch_portals=remaining).save(directory)
+    finally:
+        lock.release()
+
+    if output.json:
+        print(json.dumps({"removed": watch_portal_to_dict(removed)}, ensure_ascii=False))
+    else:
+        print(f"Đã xóa cổng đẩy {removed.id}: “{removed.name}”.")
+    return 0
+
+
 # ---- Tham số -------------------------------------------------------------------------------
 
 
@@ -3856,6 +4131,11 @@ def build_parser() -> argparse.ArgumentParser:
             "(mặc định: theo cài đặt)"
         ),
     )
+    send.add_argument(
+        "--no-delta",
+        action="store_true",
+        help="tắt chế độ truyền thông minh phần thay đổi (gửi đầy đủ mọi khối)",
+    )
     _add_node_options(send)
     send.set_defaults(handler=cmd_send)
 
@@ -3870,6 +4150,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     receive.add_argument(
         "--yes", action="store_true", help="tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi"
+    )
+    receive.add_argument(
+        "--no-delta",
+        action="store_true",
+        help="tắt chế độ dò và tái sử dụng phần không đổi từ tệp cũ",
     )
     _add_node_options(receive)
     receive.add_argument("--advertise-address", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
@@ -3970,6 +4255,65 @@ def build_parser() -> argparse.ArgumentParser:
     receipt_list = receipt_sub.add_parser("list", help="liệt kê các biên lai đã lưu")
     receipt_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
     receipt_list.set_defaults(handler=cmd_receipt_list, _parser=receipt_list)
+
+    routing_p = sub.add_parser("routing", help="quản lý quy tắc phân loại thư mục nhận tự động")
+    routing_sub = routing_p.add_subparsers(dest="routing_command", required=True, metavar="<thao tác>")
+
+    routing_list = routing_sub.add_parser("list", help="liệt kê quy tắc phân loại thư mục nhận")
+    routing_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    routing_list.set_defaults(handler=cmd_routing_list)
+
+    routing_add = routing_sub.add_parser("add", help="thêm quy tắc phân loại thư mục nhận mới")
+    routing_add.add_argument("--name", required=True, metavar="<tên>", help="tên gợi nhớ cho quy tắc")
+    routing_add.add_argument(
+        "--dest", required=True, metavar="<thư mục>", help="thư mục đích khi khớp quy tắc"
+    )
+    routing_add.add_argument(
+        "--from",
+        dest="from_device",
+        default=None,
+        metavar="<thiết bị>",
+        help="chỉ áp dụng khi nhận từ thiết bị này",
+    )
+    routing_add.add_argument(
+        "--pattern",
+        action="append",
+        metavar="<mẫu>",
+        help="mẫu tên tệp (ví dụ *.mp4, *.pdf); lặp lại hoặc cách nhau bằng dấu phẩy",
+    )
+    routing_add.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    routing_add.set_defaults(handler=cmd_routing_add)
+
+    routing_remove = routing_sub.add_parser("remove", help="xóa một quy tắc phân loại theo mã")
+    routing_remove.add_argument("rule_id", metavar="<mã>", help="mã hoặc tiền tố mã quy tắc")
+    routing_remove.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    routing_remove.set_defaults(handler=cmd_routing_remove)
+
+    watch_p = sub.add_parser("watch", help="quản lý cổng thư mục đẩy tự động một chiều")
+    watch_sub = watch_p.add_subparsers(dest="watch_command", required=True, metavar="<thao tác>")
+
+    watch_list = watch_sub.add_parser("list", help="liệt kê các cổng đẩy tự động")
+    watch_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    watch_list.set_defaults(handler=cmd_watch_list)
+
+    watch_add = watch_sub.add_parser("add", help="thêm cổng thư mục đẩy tự động mới")
+    watch_add.add_argument("--name", required=True, metavar="<tên>", help="tên gợi nhớ cho cổng đẩy")
+    watch_add.add_argument("--dir", required=True, metavar="<thư mục>", help="thư mục nguồn cần theo dõi")
+    watch_add.add_argument("--to", required=True, metavar="<thiết bị>", help="thiết bị tin cậy đích")
+    watch_add.add_argument(
+        "--pattern",
+        action="append",
+        metavar="<mẫu>",
+        help="lọc theo mẫu tên tệp (ví dụ *.mp4, *.apk); bỏ trống để gửi mọi tệp mới",
+    )
+    watch_add.add_argument("--recursive", action="store_true", help="theo dõi cả thư mục con bên trong")
+    watch_add.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    watch_add.set_defaults(handler=cmd_watch_add)
+
+    watch_remove = watch_sub.add_parser("remove", help="xóa một cổng đẩy tự động theo mã")
+    watch_remove.add_argument("portal_id", metavar="<mã>", help="mã hoặc tiền tố mã cổng đẩy")
+    watch_remove.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
+    watch_remove.set_defaults(handler=cmd_watch_remove)
 
     return parser
 

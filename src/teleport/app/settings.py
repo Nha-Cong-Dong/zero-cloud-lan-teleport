@@ -23,7 +23,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -32,6 +32,18 @@ from typing import Any
 from teleport.atomic import write_atomic
 from teleport.core import ratelimit
 from teleport.core.messages import validate_device_id, validate_device_name
+from teleport.core.routing import (
+    MAX_ROUTING_RULES,
+    RoutingRule,
+    routing_rule_from_dict,
+    routing_rule_to_dict,
+)
+from teleport.core.watch import (
+    MAX_WATCH_PORTALS,
+    WatchPortalRule,
+    watch_portal_from_dict,
+    watch_portal_to_dict,
+)
 
 SETTINGS_FILE = "settings.json"
 BACKUP_FILE = "settings.json.bak"
@@ -60,6 +72,9 @@ _FIELDS = (
     "name",
     "receive_dir",
     "create_subfolder",
+    "delta_sync",
+    "routing_rules",
+    "watch_portals",
     "visible",
     "stealth",
     "rate_limit",
@@ -196,6 +211,7 @@ _CHECKS: dict[str, Any] = {
     "name": _check_name,
     "receive_dir": _check_receive_dir,
     "create_subfolder": lambda v: _check_bool("create_subfolder", v),
+    "delta_sync": lambda v: _check_bool("delta_sync", v),
     "visible": lambda v: _check_bool("visible", v),
     "stealth": lambda v: _check_bool("stealth", v),
     "rate_limit": _check_rate_limit,
@@ -211,8 +227,48 @@ _CHECKS: dict[str, Any] = {
 }
 # Trường bool: `null` trong file không hợp lệ (khác các trường có thể là None).
 _BOOL_FIELDS = frozenset(
-    {"visible", "stealth", "autostart", "first_run_done", "tray_hint_shown", "create_subfolder"}
+    {
+        "visible",
+        "stealth",
+        "autostart",
+        "first_run_done",
+        "tray_hint_shown",
+        "create_subfolder",
+        "delta_sync",
+    }
 )
+
+
+def _check_routing_rules(value: object) -> tuple[RoutingRule, ...]:
+    if isinstance(value, str | bytes | bytearray) or not isinstance(value, Sequence):
+        raise TypeError("routing_rules phải là dãy RoutingRule")
+    if len(value) > MAX_ROUTING_RULES:
+        raise ValueError(f"routing_rules tối đa {MAX_ROUTING_RULES} mục")
+    items = tuple(value)
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, RoutingRule):
+            raise TypeError("mỗi phần tử của routing_rules phải là RoutingRule")
+        if item.id in seen:
+            raise ValueError("routing_rules có id trùng lặp")
+        seen.add(item.id)
+    return items
+
+
+def _check_watch_portals(value: object) -> tuple[WatchPortalRule, ...]:
+    if isinstance(value, str | bytes | bytearray) or not isinstance(value, Sequence):
+        raise TypeError("watch_portals phải là dãy WatchPortalRule")
+    if len(value) > MAX_WATCH_PORTALS:
+        raise ValueError(f"watch_portals tối đa {MAX_WATCH_PORTALS} mục")
+    items = tuple(value)
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, WatchPortalRule):
+            raise TypeError("mỗi phần tử của watch_portals phải là WatchPortalRule")
+        if item.id in seen:
+            raise ValueError("watch_portals có id trùng lặp")
+        seen.add(item.id)
+    return items
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +379,9 @@ class Settings:
     name: str | None = None  # None = hostname (`default_device_name`)
     receive_dir: str | None = None  # None = `paths.default_receive_dir()`
     create_subfolder: bool = True  # True = tự tạo thư mục con [tên máy] (ngày-tháng) cho mỗi lần nhận
+    delta_sync: bool = True  # True = bật Smart Delta Teleport tái sử dụng phần không đổi
+    routing_rules: tuple[RoutingRule, ...] = ()
+    watch_portals: tuple[WatchPortalRule, ...] = ()
     visible: bool = True
     stealth: bool = False
     rate_limit: int | None = None  # byte/giây; None = không giới hạn
@@ -346,6 +405,8 @@ class Settings:
             raise ValueError("port phải là None hoặc số nguyên 1–65535")
         for name, check in _CHECKS.items():
             check(getattr(self, name))
+        object.__setattr__(self, "routing_rules", _check_routing_rules(self.routing_rules))
+        object.__setattr__(self, "watch_portals", _check_watch_portals(self.watch_portals))
         object.__setattr__(self, "extra", _check_extra(self.extra, _FIELDS))
         if self.window is not None and not isinstance(self.window, WindowGeometry):
             raise TypeError("window phải là None hoặc WindowGeometry")
@@ -376,18 +437,22 @@ class Settings:
         return replace(self, devices=devices)
 
     def pruned(self, trusted_ids: Iterable[str]) -> Settings:
-        """Bản sao bỏ mục `devices` và `last_conversation` của thiết bị không có trong `trusted_ids`.
+        """Bản sao bỏ mục `devices`, `last_conversation` và `watch_portals` của thiết bị không còn
+        trong `trusted_ids`.
 
         Không có gì để bỏ: trả `self`.
         """
         keep = set(trusted_ids)
         stale_conversation = self.last_conversation is not None and self.last_conversation not in keep
-        if not stale_conversation and all(device_id in keep for device_id in self.devices):
+        stale_watch = any(w.device_id not in keep for w in self.watch_portals)
+        all_devices_kept = all(device_id in keep for device_id in self.devices)
+        if not stale_conversation and not stale_watch and all_devices_kept:
             return self
         return replace(
             self,
             devices={k: v for k, v in self.devices.items() if k in keep},
             last_conversation=None if stale_conversation else self.last_conversation,
+            watch_portals=tuple(w for w in self.watch_portals if w.device_id in keep),
         )
 
     # ---- Đọc / ghi --------------------------------------------------------------------------
@@ -445,6 +510,12 @@ class Settings:
             data["visible"] = False
         if not self.create_subfolder:
             data["create_subfolder"] = False
+        if not self.delta_sync:
+            data["delta_sync"] = False
+        if self.routing_rules:
+            data["routing_rules"] = [routing_rule_to_dict(r) for r in self.routing_rules]
+        if self.watch_portals:
+            data["watch_portals"] = [watch_portal_to_dict(w) for w in self.watch_portals]
         if self.stealth:
             data["stealth"] = True
         if self.autostart:
@@ -528,6 +599,12 @@ def _parse(raw: bytes) -> tuple[Settings, list[str]]:
         elif key == "devices":
             if value is not None:  # `null` = không có mục nào
                 values["devices"] = _parse_devices(value, problems)
+        elif key == "routing_rules":
+            if value is not None:
+                values["routing_rules"] = _parse_routing_rules(value, problems)
+        elif key == "watch_portals":
+            if value is not None:
+                values["watch_portals"] = _parse_watch_portals(value, problems)
         elif key in _CHECKS:
             if value is None and key not in _BOOL_FIELDS:
                 continue  # `null` = mặc định
@@ -567,3 +644,43 @@ def _parse_devices(value: object, problems: list[str]) -> dict[str, DeviceSettin
                 extra[key] = item
         devices[device_id] = DeviceSettings(extra=extra, **fields)
     return devices
+
+
+def _parse_routing_rules(value: object, problems: list[str]) -> tuple[RoutingRule, ...]:
+    if not isinstance(value, list):
+        problems.append("trường routing_rules không phải mảng, bỏ qua")
+        return ()
+    rules: list[RoutingRule] = []
+    seen: set[str] = set()
+    for item in value:
+        try:
+            rule = routing_rule_from_dict(item)
+        except (ValueError, TypeError):
+            problems.append("trường routing_rules có mục không hợp lệ, bỏ qua")
+            continue
+        if rule.id in seen or len(rules) >= MAX_ROUTING_RULES:
+            problems.append("trường routing_rules vượt trần hoặc trùng id, bỏ qua mục thừa")
+            continue
+        seen.add(rule.id)
+        rules.append(rule)
+    return tuple(rules)
+
+
+def _parse_watch_portals(value: object, problems: list[str]) -> tuple[WatchPortalRule, ...]:
+    if not isinstance(value, list):
+        problems.append("trường watch_portals không phải mảng, bỏ qua")
+        return ()
+    rules: list[WatchPortalRule] = []
+    seen: set[str] = set()
+    for item in value:
+        try:
+            rule = watch_portal_from_dict(item)
+        except (ValueError, TypeError):
+            problems.append("trường watch_portals có mục không hợp lệ, bỏ qua")
+            continue
+        if rule.id in seen or len(rules) >= MAX_WATCH_PORTALS:
+            problems.append("trường watch_portals vượt trần hoặc trùng id, bỏ qua mục thừa")
+            continue
+        seen.add(rule.id)
+        rules.append(rule)
+    return tuple(rules)

@@ -216,6 +216,19 @@ class ClipOutcome(StrEnum):
     NOTHING_TO_RETRY = "nothing_to_retry"  # `retry_write`: không còn clip để chép lại
 
 
+class ClipPushResult(StrEnum):
+    """Kết quả gửi clipboard thủ công (`ClipboardSync.push_now`)."""
+
+    SENT = "sent"
+    NOT_CONNECTED = "not_connected"
+    NOT_ENABLED = "not_enabled"
+    EMPTY = "empty"
+    SENSITIVE = "sensitive"
+    TOO_LARGE = "too_large"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True, slots=True)
 class ClipboardEvent:
     """Một kết quả cho giao diện. `device_id` None với `TOO_LARGE` (không gắn với máy nào).
@@ -750,15 +763,109 @@ class ClipboardSync:
             self._enqueue_send(device_id, clip)
         log.debug("gửi clipboard %s, %d byte", content.kind.value, clip[0].total)
 
-    async def _read(self) -> ClipRead | None:
+    async def _read(self, *, force: bool = False) -> ClipRead | None:
+        read_fn = getattr(self._backend, "read_now", self._backend.read) if force else self._backend.read
         try:
             async with asyncio.timeout(CLIP_READ_TIMEOUT):
-                return await self._backend.read()
+                return await read_fn()
         except TimeoutError:
             log.warning("đọc clipboard quá %.0f s", CLIP_READ_TIMEOUT)
         except Exception as e:
             log.warning("không đọc được clipboard (%s)", type(e).__name__)
         return None
+
+    async def push_now(self, device_id: str) -> ClipPushResult:
+        """Gửi ngay nội dung clipboard hiện tại sang `device_id` khi người dùng bấm nút."""
+        if self._closed or self._loop is None or device_id not in self._links:
+            return ClipPushResult.NOT_CONNECTED
+        if not self._enabled(device_id):
+            return ClipPushResult.NOT_ENABLED
+        while self._op is not None and not self._closed:
+            with contextlib.suppress(BaseException):
+                await asyncio.shield(self._op)
+        if self._closed or device_id not in self._links:
+            return ClipPushResult.NOT_CONNECTED
+        if not self._enabled(device_id):
+            return ClipPushResult.NOT_ENABLED
+        if self._debounce is not None:
+            self._debounce.cancel()
+            self._debounce = None
+
+        done: asyncio.Future[ClipPushResult] = self._loop.create_future()
+
+        async def run_push() -> None:
+            result = ClipPushResult.FAILED
+            try:
+                read = await self._read(force=True)
+                if self._closed or device_id not in self._links:
+                    result = ClipPushResult.NOT_CONNECTED
+                    return
+                if not self._enabled(device_id):
+                    result = ClipPushResult.NOT_ENABLED
+                    return
+                if read is None:
+                    result = ClipPushResult.FAILED
+                    return
+                status_map = {
+                    ReadStatus.EMPTY: ClipPushResult.EMPTY,
+                    ReadStatus.SENSITIVE: ClipPushResult.SENSITIVE,
+                    ReadStatus.TOO_LARGE: ClipPushResult.TOO_LARGE,
+                    ReadStatus.UNSUPPORTED: ClipPushResult.UNSUPPORTED,
+                    ReadStatus.FAILED: ClipPushResult.FAILED,
+                }
+                if read.status is not ReadStatus.OK:
+                    result = status_map.get(read.status, ClipPushResult.FAILED)
+                    return
+                content = read.content
+                if content is None or not _content_ok(content.kind, content.data):
+                    result = ClipPushResult.FAILED
+                    return
+                if content.kind == ClipKind.PNG and not content.data:
+                    result = ClipPushResult.EMPTY
+                    return
+                if content.kind == ClipKind.TEXT:
+                    fingerprint = await self._offload(text_fingerprint, content.data)
+                    if fingerprint is None:
+                        result = ClipPushResult.FAILED
+                        return
+                else:
+                    fingerprint = content.fingerprint
+                self._guard.local_changed(fingerprint)
+                self._generation += 1
+                self._failed = None
+                self._failed_fp = None
+                try:
+                    msgs = await self._offload(split_clip, uuid4().hex, content.kind, content.data)
+                except ClipTooLarge:
+                    result = ClipPushResult.TOO_LARGE
+                    return
+                except ValueError:
+                    result = ClipPushResult.UNSUPPORTED
+                    return
+                if msgs is None:
+                    result = ClipPushResult.FAILED
+                    return
+                if self._closed or device_id not in self._links:
+                    result = ClipPushResult.NOT_CONNECTED
+                    return
+                if not self._enabled(device_id):
+                    result = ClipPushResult.NOT_ENABLED
+                    return
+                clip = tuple(msgs)
+                self._enqueue_send(device_id, clip)
+                log.debug(
+                    "gửi thủ công clipboard %s tới %s, %d byte",
+                    content.kind.value,
+                    device_id[:8],
+                    clip[0].total,
+                )
+                result = ClipPushResult.SENT
+            finally:
+                if not done.done():
+                    done.set_result(result)
+
+        self._start_op(run_push(), "push")
+        return await asyncio.shield(done)
 
     def _too_large(self, kind: ClipKind | None, size: int) -> None:
         if not self._targets():

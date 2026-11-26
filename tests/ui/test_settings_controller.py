@@ -137,6 +137,9 @@ class FakeNode:
         self.retention: int | None = None
         self.language: str | None = None
         self.autostart = False
+        self.delta_sync = True
+        self.routing_rules: tuple = ()
+        self.watch_portals: tuple = ()
         self.devices_settings: dict = {}
         self.transfers = FakeTransfers(self)
         self.threads: set[str] = set()
@@ -191,6 +194,9 @@ class FakeNode:
             stealth=self.stealth,
             pending_receives=pending,
             promised_bytes=self.transfers.promised_bytes(),
+            delta_sync=self.delta_sync,
+            routing_rules=self.routing_rules,
+            watch_portals=self.watch_portals,
         )
 
     def set_name(self, name: str) -> str:
@@ -205,6 +211,18 @@ class FakeNode:
     def set_stealth(self, stealth: bool) -> None:
         self._enter("set_stealth", stealth)
         self.stealth = stealth
+
+    def set_delta_sync(self, enabled: bool) -> None:
+        self._enter("set_delta_sync", enabled)
+        self.delta_sync = enabled
+
+    def set_routing_rules(self, rules) -> None:
+        self._enter("set_routing_rules", rules)
+        self.routing_rules = tuple(rules)
+
+    def set_watch_portals(self, rules) -> None:
+        self._enter("set_watch_portals", rules)
+        self.watch_portals = tuple(rules)
 
     def set_ui_preferences(self, **kw) -> None:
         self._enter("set_ui_preferences", kw)
@@ -1490,3 +1508,67 @@ def test_manual_update_checksum_mismatch_rejects_and_unlinks(env, monkeypatch, t
     assert applied == []
     assert not installer.exists()
     assert notice(env.page)[0] is InfoLevel.ERROR
+
+
+def test_delta_routing_watch_load_toggle_remove_and_add_dialogs(env, tmp_path: Path):
+    from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLineEdit, QPushButton
+
+    from teleport.core.routing import RoutingRule
+    from teleport.core.watch import WatchPortalRule
+
+    peer = view("May-Nhan")
+    env.model.reset([peer])
+    dest_dir = tmp_path / "Videos"
+    dest_dir.mkdir()
+    src_dir = tmp_path / "Drop"
+    src_dir.mkdir()
+
+    env.node.delta_sync = False
+    env.node.routing_rules = (
+        RoutingRule(id="r1", name="Clip", destination=str(dest_dir), patterns=("*.mp4",)),
+    )
+    env.node.watch_portals = (
+        WatchPortalRule(id="w1", name="Auto", source_dir=str(src_dir), device_id=peer.device_id),
+    )
+    env.start()
+
+    assert env.page.delta_switch.isChecked() is False
+    assert [w.objectName() for w in env.page._routing_rows] == ["routingRuleRow"]
+    assert [w.objectName() for w in env.page._watch_rows] == ["watchPortalRow"]
+
+    # Tắt/bật Smart Delta lưu lên NodeHost
+    env.page.delta_switch.click()
+    env.host.run_calls()
+    assert env.node.delta_sync is True
+
+    # Mở hộp thoại thêm quy tắc phân loại (không chặn)
+    env.page.add_routing_button.click()
+    dlg = env.page.findChild(QDialog, "addRoutingRuleDialog")
+    assert dlg is not None and dlg.isVisible()
+    dlg.findChild(QLineEdit, "ruleNameEdit").setText("Docs")
+    dlg.findChild(QLineEdit, "rulePathEdit").setText(str(dest_dir))
+    dlg.findChild(QLineEdit, "rulePatternsEdit").setText("*.pdf")
+    dlg.findChild(QDialogButtonBox).accepted.emit()
+    env.host.run_calls()
+    assert len(env.node.routing_rules) == 2
+    assert env.node.routing_rules[-1].name == "Docs"
+    assert env.node.routing_rules[-1].patterns == ("*.pdf",)
+
+    # Mở hộp thoại thêm Watch Portal (không chặn)
+    env.page.add_watch_button.click()
+    wdlg = env.page.findChild(QDialog, "addWatchPortalDialog")
+    assert wdlg is not None and wdlg.isVisible()
+    wdlg.findChild(QLineEdit, "ruleNameEdit").setText("Export")
+    wdlg.findChild(QLineEdit, "rulePathEdit").setText(str(src_dir))
+    wdlg.findChild(QCheckBox, "ruleRecursiveCheckbox").setChecked(True)
+    wdlg.findChild(QDialogButtonBox).accepted.emit()
+    env.host.run_calls()
+    assert len(env.node.watch_portals) == 2
+    assert env.node.watch_portals[-1].recursive is True
+
+    # Xóa bớt một quy tắc phân loại trên giao diện
+    remove_btns = env.page.routing_list.findChildren(QPushButton, "routingRuleRowRemove")
+    assert len(remove_btns) == 2
+    remove_btns[0].click()
+    env.host.run_calls()
+    assert [r.name for r in env.node.routing_rules] == ["Docs"]

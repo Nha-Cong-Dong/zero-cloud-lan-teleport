@@ -112,7 +112,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from teleport.app import diskio, outbox, receipts, sources, storage, tombstones
+from teleport.app import delta, diskio, outbox, receipts, routing, sources, storage, tombstones
 from teleport.app.diskio import DiskExecutor, DiskJob, DiskTimeout
 from teleport.app.history import HistoryStore
 from teleport.app.sources import SourceChanged, SourceError, SourceErrorKind, SourceFile, SourceReader
@@ -132,7 +132,13 @@ from teleport.app.storage import (
 )
 from teleport.core import ratelimit
 from teleport.core import transfer as core_transfer
-from teleport.core.blocks import BLOCK_SIZE, DIGEST_SIZE, BlockError
+from teleport.core.blocks import BLOCK_SIZE, DIGEST_SIZE, BlockError, block_count
+from teleport.core.delta import (
+    DELTA_SAMPLE_THRESHOLD,
+    delta_lookup_key,
+    remaining_batches,
+    sample_block_indices,
+)
 from teleport.core.filenames import fit_filename, sanitize_filename, sanitize_rel_path
 from teleport.core.history import HistoryEntry, HistoryError, entry_from_info
 from teleport.core.merkle import merkle_root
@@ -142,6 +148,8 @@ from teleport.core.messages import (
     CancelReason,
     Complete,
     DataOpen,
+    DeltaMatch,
+    DeltaProbe,
     FileEntry,
     Hello,
     Offer,
@@ -155,14 +163,17 @@ from teleport.core.outbox import OutboxRecord
 from teleport.core.ratelimit import TokenBucket
 from teleport.core.receipts import ReceiptFile
 from teleport.core.resume_state import TombstoneRecord, TransferRecord
+from teleport.core.routing import RoutingRule, match_routing_rule
 from teleport.core.transfer import (
     AskUser,
+    CheckDelta,
     CheckSource,
     CheckSpace,
     ClearBlocks,
     CloseData,
     CreateTemp,
     DataUnreachable,
+    DeltaMatched,
     Direction,
     DiskOp,
     FailureDetail,
@@ -171,6 +182,7 @@ from teleport.core.transfer import (
     OpenData,
     OpenPart,
     Outcome,
+    PrepareDelta,
     ReceiveBlocks,
     RemoveTemp,
     Report,
@@ -260,6 +272,7 @@ MIN_RATE_LIMIT = ratelimit.CHUNK_SIZE  # byte/giây: mỗi lần chờ một đo
 PROGRESS_INTERVAL = 1.0  # giây giữa hai lần báo tiến độ
 SPEED_WINDOW = 5.0  # tốc độ tính trên các mẫu trong 5 s gần nhất
 WRITE_QUEUE_BLOCKS = 8  # protocol §4.3: khối đã nhận chờ ghi đĩa tối đa
+DELTA_PROBE_TIMEOUT = 15.0  # giây chờ phản hồi `delta_match` cho mỗi lô dò delta
 
 _TASK_NAME = "teleport.node"
 
@@ -285,7 +298,17 @@ def _keep_detached(task: asyncio.Task[Any]) -> None:
 # Giờ tường (seam cho test, đọc lúc dùng): tuổi khi khôi phục, mốc `at` của bia mộ, `cleanup`.
 _wall_time = time.time
 
-_TRANSFER_MESSAGE_TYPES = (Offer, Accept, Reject, Resume, Complete, Verified, Cancel)
+_TRANSFER_MESSAGE_TYPES = (
+    Offer,
+    Accept,
+    Reject,
+    Resume,
+    Complete,
+    Verified,
+    Cancel,
+    DeltaProbe,
+    DeltaMatch,
+)
 
 # Lời gọi engine bị hoãn (phương thức, đối số, đối số từ khóa); `now` thêm lúc thật sự gọi.
 _Deferred = tuple[Callable[..., list[TransferAction]], tuple[Any, ...], dict[str, Any]]
@@ -393,6 +416,7 @@ class TransferFinished:
     file_index: int | None
     reject: Reject | None
     payload_sent: int = 0
+    delta_reused_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -571,6 +595,60 @@ def _verify_outbox_entry(record: OutboxRecord) -> list[SourceFile] | None:
     return outbox.verify_record_sources(record)
 
 
+def _save_delta_index_store(config_dir: Path, store: delta.DeltaIndexStore) -> None:
+    """(thread) Ghi nguyên tử `delta_index.json`."""
+    store.save(config_dir)
+
+
+def _deliver_routed_and_prune(
+    src_path: Path,
+    dest_dir: Path,
+    *,
+    name: str,
+    rel_path: str,
+    mtime_ms: int,
+    is_dir: bool,
+    subfolder_dir: Path | None,
+) -> Path:
+    """(thread) Chuyển tệp nhận xong sang thư mục quy tắc và dọn thư mục con ngày-giờ nếu rỗng."""
+    routed = routing.deliver_to_routed_dir(
+        src_path,
+        dest_dir,
+        name=name,
+        rel_path=rel_path,
+        mtime_ms=mtime_ms,
+        is_dir=is_dir,
+    )
+    if subfolder_dir is not None and subfolder_dir.is_dir():
+        with contextlib.suppress(OSError):
+            for dirpath, _dirnames, _filenames in os.walk(subfolder_dir, topdown=False, followlinks=False):
+                with contextlib.suppress(OSError):
+                    os.rmdir(dirpath)
+    return routed
+
+
+def _load_delta_index_store(config_dir: Path) -> delta.DeltaIndexStore:
+    """(thread) Đọc `delta_index.json`."""
+    return delta.DeltaIndexStore.load(config_dir)
+
+
+def _find_basis_with_size(
+    entry: FileEntry,
+    dest_dir: Path | None,
+    index_store: delta.DeltaIndexStore,
+    subfolder: str | None,
+) -> tuple[Path, int] | None:
+    """(thread) Tìm bản nền cục bộ hợp lệ kèm kích thước theo byte."""
+    basis = delta.find_basis_file(entry, dest_dir, index_store, subfolder=subfolder)
+    if basis is None:
+        return None
+    try:
+        size = os.lstat(basis).st_size
+    except OSError:
+        return None
+    return (basis, size) if size > 0 else None
+
+
 def _create_and_save_receipt(
     identity: Identity,
     path: Path,
@@ -620,6 +698,7 @@ def _error_label(e: BaseException) -> str:
 _DISK_OPS: dict[type, DiskOp] = {
     CreateTemp: DiskOp.CREATE_TEMP,
     OpenPart: DiskOp.OPEN_PART,
+    PrepareDelta: DiskOp.OPEN_PART,
     WriteBlock: DiskOp.WRITE,
     SyncPart: DiskOp.SYNC,
     ClearBlocks: DiskOp.SYNC,  # lỗi ghi `.state` như lỗi ghi `.state` khác (`ClearBlocks` docstring)
@@ -627,7 +706,11 @@ _DISK_OPS: dict[type, DiskOp] = {
     Finalize: DiskOp.FINALIZE,
 }
 
-_LaneAction = CreateTemp | OpenPart | WriteBlock | SyncPart | ClearBlocks | Reread | Finalize
+_LaneAction = CreateTemp | OpenPart | PrepareDelta | WriteBlock | SyncPart | ClearBlocks | Reread | Finalize
+
+
+class _DeltaAborted(Exception):
+    """Mất kết nối điều khiển, đóng lane hoặc quá hạn khi đang dò khối delta."""
 
 
 @dataclass(eq=False)
@@ -658,6 +741,7 @@ class _DiskLane:
     create_job: DiskJob[TransferTemp] | None = None
     finalize_job: DiskJob[Path] | None = None  # `Finalize` đã giao cho executor, chưa xong
     waiters: set[asyncio.Event] = field(default_factory=set)  # bên đọc khung chờ chỗ trong hàng ghi
+    delta_waiters: dict[tuple[int, int], asyncio.Future[tuple[int, ...] | None]] = field(default_factory=dict)
     done: asyncio.Event = field(default_factory=asyncio.Event)  # đặt khi `_run_lane` kết thúc
     subfolder: str = ""
 
@@ -813,6 +897,8 @@ class TransferManager:
         ask_before_receive: Callable[[str], bool] | None = None,
         create_subfolder: bool = True,
         suspend_sends: bool = False,
+        delta_enabled: bool = True,
+        routing_rules: Sequence[RoutingRule] = (),
     ) -> None:
         """Gọi trong event loop. `new_id` cấp `data_id`; `set_hold(device_id, held)` → `LinkTracker.hold`.
 
@@ -822,6 +908,8 @@ class TransferManager:
         """
         if type(suspend_sends) is not bool:
             raise TypeError("suspend_sends phải là bool")
+        if type(delta_enabled) is not bool:
+            raise TypeError("delta_enabled phải là bool")
         self._identity = identity
         self._hello = hello
         self._store = store
@@ -834,8 +922,14 @@ class TransferManager:
         self._ask_before_receive = ask_before_receive
         self._create_subfolder = bool(create_subfolder)
         self._suspend_sends = suspend_sends
+        self._delta_enabled = delta_enabled
+        self._routing_rules: tuple[RoutingRule, ...] = tuple(routing_rules)
         self._loop = asyncio.get_running_loop()
-        self._engine = TransferEngine(identity.device_id, receiving=receive_dir is not None)
+        self._engine = TransferEngine(
+            identity.device_id,
+            receiving=receive_dir is not None,
+            delta_enabled=delta_enabled,
+        )
         self._paused = False  # `pause_receiving`: chỉ trong phiên, không lưu
         self._retention: float | None = None  # `set_temp_retention`; None: `storage.TEMP_RETENTION`
         self._dir_uses: dict[ReceiveDir, _DirUse] = {}  # thư mục nhận → ai đang dùng (`_DirUse`)
@@ -890,6 +984,14 @@ class TransferManager:
         self._outbox_job: DiskJob[None] | None = None
         self._outbox_stopped = False
         self._file_roots: dict[tuple[Direction, str, str, int], str] = {}
+        self._next_delta_seq = 1
+        self._delta_index = delta.DeltaIndexStore()
+        self._delta_index_dirty = False
+        self._delta_index_scheduled = False
+        self._delta_index_handle: asyncio.Handle | None = None
+        self._delta_index_task: asyncio.Task[None] | None = None
+        self._delta_index_job: DiskJob[None] | None = None
+        self._delta_index_stopped = False
         self._receipt_tasks: set[asyncio.Task[None]] = set()
         self._receipt_jobs: set[DiskJob[Path]] = set()
         self._cleanup_job: DiskJob[int] | None = None  # lần dọn tạm gần nhất
@@ -1030,6 +1132,30 @@ class TransferManager:
         self._create_subfolder = value
 
     @property
+    def delta_enabled(self) -> bool:
+        """Bật/tắt chế độ dò và tái sử dụng khối bản nền (Smart Delta)."""
+        return self._delta_enabled
+
+    @delta_enabled.setter
+    def delta_enabled(self, value: bool) -> None:
+        if type(value) is not bool:
+            raise ValueError("delta_enabled phải là bool")
+        self._delta_enabled = value
+        self._engine.delta_enabled = value
+
+    @property
+    def routing_rules(self) -> tuple[RoutingRule, ...]:
+        """Danh sách quy tắc phân loại thư mục nhận tự động."""
+        return self._routing_rules
+
+    @routing_rules.setter
+    def routing_rules(self, value: Sequence[RoutingRule]) -> None:
+        items = tuple(value)
+        if not all(isinstance(r, RoutingRule) for r in items):
+            raise TypeError("routing_rules phải gồm các RoutingRule")
+        self._routing_rules = items
+
+    @property
     def rate_limit(self) -> int | None:
         """Giới hạn tốc độ gửi chung (byte/giây); None: không giới hạn. Sai → ValueError."""
         return self._rate_limit
@@ -1073,10 +1199,13 @@ class TransferManager:
         if self._dispatching:
             raise RuntimeError("send() không được gọi trong lúc đang thực hiện hành động của engine")
         entries = [f.entry for f in files]
+        use_delta = self._delta_enabled
         while True:
             transfer_id = uuid4().hex
             try:
-                actions = self._engine.send(device_id, transfer_id, entries, self._loop.time())
+                actions = self._engine.send(
+                    device_id, transfer_id, entries, self._loop.time(), delta=use_delta
+                )
             except TransferIdInUse:
                 continue
             break
@@ -1085,7 +1214,7 @@ class TransferManager:
         if self._suspend_sends:
             record = OutboxRecord(
                 device_id=device_id,
-                offer=Offer(transfer_id, BLOCK_SIZE, tuple(entries)),
+                offer=Offer(transfer_id, BLOCK_SIZE, tuple(entries), delta=use_delta),
                 paths=tuple(str(f.path) for f in files),
                 created_at=datetime.datetime.fromtimestamp(math.floor(_wall_time()), datetime.UTC),
             )
@@ -1206,11 +1335,14 @@ class TransferManager:
         own = self._identity.device_id
         # Lịch sử nạp song song với bia mộ (cả hai chỉ ném CancelledError), xong trước
         # `_restore_apply` vì `engine.restore` có thể sinh `TransferEnded`.
-        records, outbox_records, _ = await asyncio.gather(
+        records, outbox_records, _, delta_store = await asyncio.gather(
             self._restore_load_tombstones(),
             self._restore_load_outbox(),
             self._history.load(DISK_OP_TIMEOUT),
+            self._restore_load_delta_index(),
         )
+        if not self._closing:
+            self._delta_index = delta_store
         rd = self._receive_dir
         scans: list[TempScan] = []
         if rd is not None and not self._closing:
@@ -1330,6 +1462,9 @@ class TransferManager:
         if ctl is not None and ctl.control_id == control_id:
             del self._controls[device_id]
             ctl.outbox.close()
+        for (dev, _tid), lane in list(self._lanes.items()):
+            if dev == device_id:
+                self._cancel_delta_waiters(lane)
         self._call(self._engine.control_lost, device_id, control_id)
 
     def on_message(self, device_id: str, control_id: int, msg: object) -> None:
@@ -1447,6 +1582,7 @@ class TransferManager:
         await asyncio.gather(
             self._flush_tombstones(),
             self._flush_outbox(),
+            self._flush_delta_index(),
             self._flush_receipts(),
             self._history.flush(TOMBSTONE_FLUSH_TIMEOUT),
         )
@@ -1467,6 +1603,7 @@ class TransferManager:
         self._closed = True
         self._stop_tombstones()
         self._stop_outbox()
+        self._stop_delta_index()
         self._history.stop()
         for job in list(self._receipt_jobs):
             job.cancel()
@@ -1479,6 +1616,7 @@ class TransferManager:
             self._progress_task,
             self._tomb_task,
             self._outbox_task,
+            self._delta_index_task,
             *self._receipt_tasks,
             *self._tasks,
         )
@@ -1610,8 +1748,14 @@ class TransferManager:
                         self._schedule_outbox_save()
         elif isinstance(action, WriteBlock):
             self._enqueue_write(action)
-        elif isinstance(action, SyncPart | ClearBlocks | OpenPart | Reread | Finalize):
+        elif isinstance(action, SyncPart | ClearBlocks | OpenPart | PrepareDelta | Reread | Finalize):
             self._enqueue_disk(action)
+        elif isinstance(action, DeltaMatched):
+            lane = self._lanes.get((action.device_id, action.transfer_id))
+            if lane is not None:
+                fut = lane.delta_waiters.pop((action.file_index, action.seq), None)
+                if fut is not None and not fut.done():
+                    fut.set_result(action.matched)
         elif isinstance(action, Report):
             self._report(action.event)
         elif isinstance(action, CloseData):
@@ -1644,6 +1788,8 @@ class TransferManager:
             self._spawn(self._check_space(action, rd), f"transfer-check {action.transfer_id[:8]}", rd=rd)
         elif isinstance(action, CheckSource):
             self._spawn(self._check_source(action), f"transfer-check {action.transfer_id[:8]}")
+        elif isinstance(action, CheckDelta):
+            self._spawn(self._check_delta(action), f"transfer-delta {action.transfer_id[:8]}")
         elif isinstance(action, AskUser):
             self._ask_user(action)
 
@@ -1814,7 +1960,14 @@ class TransferManager:
                 self._record_history(event.info, result)
             self._forget_transfer(event.key)
             ended = TransferFinished(
-                event.info, result, event.by_peer, event.reason, event.file_index, event.reject, sent
+                event.info,
+                result,
+                event.by_peer,
+                event.reason,
+                event.file_index,
+                event.reject,
+                sent,
+                event.delta_reused_bytes,
             )
             self._emit(ended)
         elif isinstance(event, DataUnreachable):
@@ -2278,6 +2431,42 @@ class TransferManager:
             return
         self._call(self._engine.source_checked, a.device_id, a.transfer_id, a.file_index, size, mtime, root)
 
+    async def _check_delta(self, a: CheckDelta) -> None:
+        files = self._sources.get((a.device_id, a.transfer_id))
+        if files is None or a.file_index >= len(files):
+            self._call(self._engine.delta_checked, a.device_id, a.transfer_id, a.file_index, a.seq, ())
+            return
+        src_file = files[a.file_index]
+        job: DiskJob[list[tuple[int, bytes]]] | None = None
+        try:
+            job = self._executor.submit(
+                functools.partial(
+                    delta.check_source_blocks,
+                    src_file.path,
+                    src_file.entry.size,
+                    a.hashes,
+                    expected_mtime=src_file.entry.mtime,
+                )
+            )
+            matched = await _job_result(job, DISK_OP_TIMEOUT)
+        except asyncio.CancelledError:
+            if job is not None:
+                job.cancel()
+            raise
+        except SourceChanged:
+            self._call(self._engine.source_failed, a.device_id, a.transfer_id, a.file_index, True)
+            return
+        except Exception as e:
+            log.debug(
+                "kiểm khối delta của lượt %s, file %d lỗi: %s",
+                a.transfer_id[:8],
+                a.file_index,
+                _error_label(e),
+            )
+            self._call(self._engine.delta_checked, a.device_id, a.transfer_id, a.file_index, a.seq, ())
+            return
+        self._call(self._engine.delta_checked, a.device_id, a.transfer_id, a.file_index, a.seq, matched)
+
     # ---- Hàng đĩa ---------------------------------------------------------------------------
 
     def _create_lane(self, a: CreateTemp) -> None:
@@ -2322,12 +2511,21 @@ class TransferManager:
         lane.pending_writes += 1
         lane.wake.set()
 
-    def _enqueue_disk(self, action: OpenPart | SyncPart | ClearBlocks | Reread | Finalize) -> None:
+    def _enqueue_disk(
+        self, action: OpenPart | PrepareDelta | SyncPart | ClearBlocks | Reread | Finalize
+    ) -> None:
         lane = self._lane_for(action)
         if lane is None or lane.failed or lane.closing:
             return
         lane.ops.append((action, None))
         lane.wake.set()
+
+    @staticmethod
+    def _cancel_delta_waiters(lane: _DiskLane) -> None:
+        for key in list(lane.delta_waiters):
+            fut = lane.delta_waiters.pop(key, None)
+            if fut is not None and not fut.done():
+                fut.set_result(None)
 
     @staticmethod
     def _notify_lane(lane: _DiskLane) -> None:
@@ -2343,12 +2541,14 @@ class TransferManager:
 
     @staticmethod
     def _drop_suspended_ops(lane: _DiskLane) -> None:
-        """Lane tạm dừng: bỏ `Finalize` và `Reread` chưa bắt đầu, giữ các thao tác làm `MARK` bền.
+        """Lane tạm dừng: bỏ `Finalize`, `Reread` và `PrepareDelta` chưa bắt đầu, giữ `MARK` bền.
 
         Phòng thủ: `Finalize` thường đã được `submit` ngay khi tới lượt trong hàng, nên đường thực
         tế là `finalize_job.cancel()` ở `_close_lane`; lọc `lane.ops` chỉ bắt ca còn nằm trong hàng.
         """
-        lane.ops = deque(item for item in lane.ops if not isinstance(item[0], Finalize | Reread))
+        lane.ops = deque(
+            item for item in lane.ops if not isinstance(item[0], Finalize | Reread | PrepareDelta)
+        )
 
     def _close_lane(self, lane: _DiskLane, *, abandon: bool = False) -> None:
         """`RemoveTemp`, `SuspendTemp` hay lượt đã kết thúc: dừng `Reread`, gỡ hàng, thôi báo engine.
@@ -2378,6 +2578,7 @@ class TransferManager:
             self._drop_ops(lane)
             if lane.finalize_job is not None:
                 lane.finalize_job.cancel()  # chỉ bỏ được khi thread chưa nhận việc
+            self._cancel_delta_waiters(lane)
             self._notify_lane(lane)
             lane.wake.set()
         if lane.closing:
@@ -2390,6 +2591,7 @@ class TransferManager:
                 lane.finalize_job.cancel()  # chỉ bỏ được khi thread chưa nhận việc
         else:
             self._drop_ops(lane)
+        self._cancel_delta_waiters(lane)
         self._notify_lane(lane)
         lane.wake.set()
 
@@ -2468,6 +2670,17 @@ class TransferManager:
                     raise ValueError("chưa có thư mục tạm")
                 job = submit(lane.temp.create_part, action.file_index, action.size)
                 lane.parts[action.file_index] = await self._lane_job(lane, job, DISK_OP_TIMEOUT)
+            elif isinstance(action, PrepareDelta):
+                committed, part_blocks = await self._prepare_delta_op(lane, action, submit)
+                if not lane.closing:
+                    self._call(
+                        self._engine.delta_done,
+                        device_id,
+                        transfer_id,
+                        action.file_index,
+                        committed,
+                        part_blocks,
+                    )
             elif isinstance(action, WriteBlock):
                 part = self._part(lane, action.file_index)
                 await self._lane_job(lane, submit(part.write_at, action.index, payload), DISK_OP_TIMEOUT)
@@ -2512,9 +2725,53 @@ class TransferManager:
                     path = await self._lane_job(lane, lane.finalize_job, DISK_SYNC_TIMEOUT)
                 finally:
                     lane.finalize_job = None
+                if not lane.closing:
+                    rule = match_routing_rule(
+                        self._routing_rules,
+                        device_id=device_id,
+                        filename=action.name,
+                        rel_path=action.rel_path,
+                    )
+                    if rule is not None:
+                        sub_dir = (rd.root / lane.subfolder) if lane.subfolder else None
+                        deliver = functools.partial(
+                            _deliver_routed_and_prune,
+                            path,
+                            Path(rule.destination),
+                            name=action.name,
+                            rel_path=action.rel_path,
+                            mtime_ms=action.mtime,
+                            is_dir=action.is_dir,
+                            subfolder_dir=sub_dir,
+                        )
+                        try:
+                            path = await self._lane_job(lane, submit(deliver), DISK_SYNC_TIMEOUT)
+                        except (RereadStopped, _JobDropped):
+                            raise
+                        except Exception as e:
+                            log.warning(
+                                "chuyển hướng tệp lượt %s, file %d lỗi: %s",
+                                transfer_id[:8],
+                                action.file_index,
+                                _error_label(e),
+                            )
                 # `Finalize` đã bắt đầu thì chạy tới cùng (hợp đồng mục 5); lượt đã kết thúc giữa
                 # chừng thì file vẫn mang tên thật, chỉ không báo nữa.
                 if not lane.closing:
+                    if not action.is_dir and part._size > 0:
+                        dkey = delta_lookup_key(action.name, action.rel_path)
+                        root_hex = self._file_roots.get(
+                            (Direction.RECEIVE, device_id, transfer_id, action.file_index), ""
+                        )
+                        self._delta_index.record(
+                            dkey,
+                            path,
+                            part._size,
+                            max(0, action.mtime) * 1_000_000,
+                            root_hex,
+                        )
+                        self._delta_index_dirty = True
+                        self._schedule_delta_index_save()
                     self._final_paths[(device_id, transfer_id, action.file_index)] = path
                     self._call(self._engine.finalized, device_id, transfer_id, action.file_index, path.name)
         except RereadStopped:
@@ -2546,6 +2803,124 @@ class TransferManager:
         if part is None:
             raise ValueError(f"chưa có .part của file {file_index}")
         return part
+
+    async def _prepare_delta_op(
+        self,
+        lane: _DiskLane,
+        action: PrepareDelta,
+        submit: Any,
+    ) -> tuple[list[tuple[int, bytes]], int]:
+        """Tìm bản nền, dò khối khớp với bên gửi và chép trước các khối khớp vào `.part`.
+
+        Mọi lỗi I/O của bản nền hay quá hạn dò mạng đều rơi về `([], 0)` để nhận đủ như thường.
+        """
+        device_id, transfer_id, file_index = lane.device_id, lane.transfer_id, action.file_index
+        rd = lane.rd
+        if (
+            rd is None
+            or not self._delta_enabled
+            or lane.closing
+            or lane.stop.is_set()
+            or device_id not in self._controls
+        ):
+            return ([], 0)
+
+        async def probe_batch(batch_hashes: Sequence[tuple[int, str]]) -> tuple[int, ...] | None:
+            if lane.closing or lane.stop.is_set() or device_id not in self._controls:
+                return None
+            seq = self._next_delta_seq
+            self._next_delta_seq += 1
+            fut: asyncio.Future[tuple[int, ...] | None] = self._loop.create_future()
+            lane.delta_waiters[(file_index, seq)] = fut
+            try:
+                ok = self._call(
+                    self._engine.send_delta_probe,
+                    device_id,
+                    transfer_id,
+                    file_index,
+                    seq,
+                    batch_hashes,
+                )
+                if not ok:
+                    return None
+                async with asyncio.timeout(DELTA_PROBE_TIMEOUT):
+                    return await fut
+            except TimeoutError:
+                return None
+            finally:
+                lane.delta_waiters.pop((file_index, seq), None)
+
+        try:
+            index_snapshot = delta.DeltaIndexStore(self._delta_index.entries())
+            found_basis: tuple[Path, int] | None = await self._lane_job(
+                lane,
+                submit(_find_basis_with_size, action.entry, rd.root, index_snapshot, lane.subfolder or None),
+                DISK_OP_TIMEOUT,
+            )
+            if found_basis is None or lane.closing or lane.stop.is_set():
+                return ([], 0)
+            basis_path, basis_size = found_basis
+            offer_size = action.entry.size
+            total_offer_blocks = block_count(offer_size)
+            min_blocks = min(total_offer_blocks, block_count(basis_size))
+            sample_indices = sample_block_indices(min_blocks)
+            if not sample_indices:
+                return ([], 0)
+            sample_hashes: list[tuple[int, str]] = await self._lane_job(
+                lane,
+                submit(delta.hash_basis_blocks, basis_path, sample_indices, offer_size, lane.stop),
+                DISK_OP_TIMEOUT,
+            )
+            if not sample_hashes or lane.closing or lane.stop.is_set():
+                return ([], 0)
+            sample_matched = await probe_batch(sample_hashes)
+            if sample_matched is None:
+                return ([], 0)
+            if not sample_matched and total_offer_blocks > DELTA_SAMPLE_THRESHOLD:
+                return ([], 0)
+            sample_map = dict(sample_hashes)
+            matched_hex: dict[int, str] = {
+                idx: sample_map[idx] for idx in sample_matched if idx in sample_map
+            }
+            probed = {idx for idx, _ in sample_hashes}
+            for batch in remaining_batches(min_blocks, probed):
+                if lane.closing or lane.stop.is_set():
+                    return ([], 0)
+                batch_hashes: list[tuple[int, str]] = await self._lane_job(
+                    lane,
+                    submit(delta.hash_basis_blocks, basis_path, batch, offer_size, lane.stop),
+                    DISK_OP_TIMEOUT,
+                )
+                if not batch_hashes:
+                    continue
+                batch_matched = await probe_batch(batch_hashes)
+                if batch_matched is None:
+                    return ([], 0)
+                bmap = dict(batch_hashes)
+                for idx in batch_matched:
+                    if idx in bmap:
+                        matched_hex[idx] = bmap[idx]
+            if not matched_hex or lane.closing or lane.stop.is_set():
+                return ([], 0)
+            part = self._part(lane, file_index)
+            committed, part_blocks = await self._lane_job(
+                lane,
+                submit(delta.seed_part_from_basis, part, basis_path, offer_size, matched_hex, lane.stop),
+                DISK_SYNC_TIMEOUT,
+            )
+            return (committed, part_blocks)
+        except RereadStopped:
+            raise
+        except _JobDropped:
+            raise
+        except Exception as e:
+            log.debug(
+                "chuẩn bị delta lượt %s, file %d rơi về truyền đủ (%s)",
+                transfer_id[:8],
+                file_index,
+                _error_label(e),
+            )
+            return ([], 0)
 
     async def _cleanup_lane(self, lane: _DiskLane) -> None:
         """Chờ mọi việc của hàng thật sự xong, rồi dọn thư mục tạm của chính lượt này (nếu có).
@@ -2642,6 +3017,27 @@ class TransferManager:
         return await self._load_config_store(
             lambda p: outbox.load(p), outbox.OUTBOX_NAME, "bỏ qua hàng đợi gửi"
         )
+
+    async def _restore_load_delta_index(self) -> delta.DeltaIndexStore:
+        """Đọc `delta_index.json` qua executor; lỗi trả kho rỗng."""
+        try:
+            job = self._executor.submit(_load_delta_index_store, self._config_dir)
+        except RuntimeError:
+            return delta.DeltaIndexStore()
+        try:
+            async with asyncio.timeout(DISK_OP_TIMEOUT):
+                return await _job_result(job, None)
+        except asyncio.CancelledError:
+            job.cancel()
+            raise
+        except Exception as e:
+            job.cancel()
+            log.debug(
+                "không đọc được %s (%s), khởi tạo chỉ mục rỗng",
+                delta.DELTA_INDEX_FILE,
+                _error_label(e),
+            )
+            return delta.DeltaIndexStore()
 
     async def _restore_verify_outbox(
         self, records: list[OutboxRecord]
@@ -3131,6 +3527,80 @@ class TransferManager:
             if task is not None:
                 task.cancel()
             log.warning("ghi %s chưa xong sau %g s khi đóng", outbox.OUTBOX_NAME, TOMBSTONE_FLUSH_TIMEOUT)
+
+    # ---- Chỉ mục bản nền delta (`delta_index.json`) -----------------------------------------
+
+    def _schedule_delta_index_save(self) -> None:
+        if self._delta_index_scheduled or self._delta_index_task is not None or self._delta_index_stopped:
+            return
+        self._delta_index_scheduled = True
+        self._delta_index_handle = self._loop.call_soon(self._snapshot_delta_index)
+
+    def _snapshot_delta_index(self, *, flush: bool = False) -> None:
+        self._delta_index_scheduled = False
+        self._delta_index_handle = None
+        if self._delta_index_task is not None or self._closed or (self._delta_index_stopped and not flush):
+            return
+        self._delta_index_dirty = False
+        snapshot = delta.DeltaIndexStore(self._delta_index.entries())
+        self._delta_index_task = asyncio.create_task(
+            self._write_delta_index(snapshot), name=f"{_TASK_NAME}.transfer-delta-index-save"
+        )
+
+    async def _write_delta_index(self, store: delta.DeltaIndexStore) -> None:
+        failed = False
+        try:
+            try:
+                job = self._executor.submit(_save_delta_index_store, self._config_dir, store)
+            except RuntimeError:
+                return
+            self._delta_index_job = job
+            try:
+                await _job_result(job, DISK_OP_TIMEOUT)
+            except DiskTimeout:
+                log.warning("ghi %s quá %g s", delta.DELTA_INDEX_FILE, DISK_OP_TIMEOUT)
+            except _JobDropped:
+                return
+            except Exception as e:
+                log.warning("không ghi được %s: %s", delta.DELTA_INDEX_FILE, _error_label(e))
+                failed = True
+            await job.settled()
+        finally:
+            if self._delta_index_task is asyncio.current_task():
+                self._delta_index_task = None
+        if failed and not self._delta_index_dirty:
+            self._delta_index_dirty = True
+            return
+        if self._delta_index_dirty and not self._delta_index_stopped:
+            self._schedule_delta_index_save()
+
+    def _stop_delta_index(self) -> None:
+        self._delta_index_stopped = True
+        self._delta_index_scheduled = False
+        handle, self._delta_index_handle = self._delta_index_handle, None
+        if handle is not None:
+            handle.cancel()
+
+    async def _flush_delta_index(self) -> None:
+        self._stop_delta_index()
+        try:
+            async with asyncio.timeout(TOMBSTONE_FLUSH_TIMEOUT):
+                task = self._delta_index_task
+                if task is not None:
+                    await asyncio.wait({task})
+                if self._delta_index_task is None and self._delta_index_dirty:
+                    self._snapshot_delta_index(flush=True)
+                    task = self._delta_index_task
+                    if task is not None:
+                        await asyncio.wait({task})
+        except TimeoutError:
+            job = self._delta_index_job
+            if job is not None:
+                job.cancel()
+            task = self._delta_index_task
+            if task is not None:
+                task.cancel()
+            log.warning("ghi %s chưa xong sau %g s khi đóng", delta.DELTA_INDEX_FILE, TOMBSTONE_FLUSH_TIMEOUT)
 
     # ---- Biên lai truyền tệp (teleport-receipt-v1) ------------------------------------------
 

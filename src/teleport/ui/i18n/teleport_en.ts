@@ -114,6 +114,11 @@
     </message>
     <message>
         <location filename="../chat.py"/>
+        <source>Gửi clipboard</source>
+        <translation>Send clipboard</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
         <source>Gửi file</source>
         <translation>Send files</translation>
     </message>
@@ -900,6 +905,16 @@
     </message>
     <message>
         <location filename="../app.py"/>
+        <source>Chưa gửi được clipboard vì {name} chưa kết nối.</source>
+        <translation>Could not send clipboard because {name} is not connected.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Chỉ hỗ trợ gửi nhanh văn bản hoặc ảnh từ clipboard.</source>
+        <translation>Only clipboard text and images can be sent directly.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Chọn file gửi tới nhiều máy</source>
         <translation>Choose files to send to multiple devices</translation>
     </message>
@@ -920,8 +935,23 @@
     </message>
     <message>
         <location filename="../app.py"/>
+        <source>Clipboard hiện đang trống.</source>
+        <translation>The clipboard is currently empty.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Clipboard đang chứa nội dung nhạy cảm nên không thể gửi.</source>
+        <translation>The clipboard contains sensitive content and cannot be sent.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Gửi tới nhiều máy</source>
         <translation>Send to multiple devices</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Hãy bật “Đồng bộ clipboard” cho {name} để gửi nội dung trong khay nhớ tạm.</source>
+        <translation>Enable “Clipboard sync” for {name} to send clipboard content.</translation>
     </message>
     <message>
         <location filename="../app.py"/>
@@ -932,6 +962,21 @@
         <location filename="../app.py"/>
         <source>Không mở được hộp gửi file.</source>
         <translation>Couldn't open the send dialog.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Không đọc hoặc gửi được clipboard lúc này.</source>
+        <translation>Could not read or send the clipboard right now.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Mở Cài đặt</source>
+        <translation>Open Settings</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Nội dung clipboard quá lớn nên không thể gửi.</source>
+        <translation>The clipboard content is too large to send.</translation>
     </message>
     <message>
         <location filename="../app.py"/>
@@ -955,6 +1000,11 @@
         <location filename="../app.py"/>
         <source>Đang gửi file tới {name}. Thoát bây giờ sẽ hủy lượt gửi.</source>
         <translation>Sending files to {name}. Exiting now will cancel the transfer.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Đã gửi clipboard tới {name}.</source>
+        <translation>Clipboard sent to {name}.</translation>
     </message>
 </context>
 <context>
@@ -1731,6 +1781,14 @@
     </message>
     <message numerus="yes">
         <location filename="../settings.py"/>
+        <source>%n cổng đẩy tự động đang cấu hình.</source>
+        <translation>
+            <numerusform>%n watch portal configured.</numerusform>
+            <numerusform>%n watch portals configured.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../settings.py"/>
         <source>%n file</source>
         <translation>
             <numerusform>%n file</numerusform>
@@ -1752,6 +1810,14 @@
         <translation>
             <numerusform>%n day</numerusform>
             <numerusform>%n days</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../settings.py"/>
+        <source>%n quy tắc phân loại thư mục nhận đang cấu hình.</source>
+        <translation>
+            <numerusform>%n receive routing rule configured.</numerusform>
+            <numerusform>%n receive routing rules configured.</numerusform>
         </translation>
     </message>
     <message>
@@ -1776,6 +1842,16 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Bật hoặc tắt cổng đẩy {name}</source>
+        <translation>Enable or disable watch portal {name}</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Bật hoặc tắt quy tắc {name}</source>
+        <translation>Enable or disable routing rule {name}</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Cho máy chưa ghép đôi thấy máy này</source>
         <translation>Let unpaired devices see this device</translation>
     </message>
@@ -1783,6 +1859,16 @@
         <location filename="../settings.py"/>
         <source>Chung</source>
         <translation>General</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chưa có cổng đẩy nào. Khi có file mới đặt vào thư mục theo dõi, Teleport tự gửi sang máy đã chọn.</source>
+        <translation>No watch portals configured. New files added to a watched folder are sent automatically to the selected device.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chưa có quy tắc nào. File nhận về có thể được tự động đưa vào thư mục riêng theo tên file hoặc máy gửi.</source>
+        <translation>No routing rules configured. Received files can be moved automatically into custom folders by filename or sender.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1821,13 +1907,33 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Chỉ gửi các khối dữ liệu mới hoặc đã sửa khi máy nhận đã có tệp giống hoặc tương tự.</source>
+        <translation>Send only new or modified data blocks when the receiver already has a matching or similar file.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Chỉ kiểm tra khi bạn bấm nút. Ứng dụng không tự kết nối mạng.</source>
         <translation>Checks only when you click. The app never connects automatically.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Chọn thư mục theo dõi</source>
+        <translation>Choose folder to watch</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chọn thư mục đích</source>
+        <translation>Choose destination folder</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Chọn tệp biên lai</source>
         <translation>Select receipt file</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chọn…</source>
+        <translation>Browse…</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1863,6 +1969,11 @@
         <location filename="../settings.py"/>
         <source>Cập nhật</source>
         <translation>Updates</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Cổng đẩy thư mục tự động</source>
+        <translation>Auto-push watch folders</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -1903,6 +2014,11 @@
         <location filename="../settings.py"/>
         <source>Gói các file log của Teleport thành một file zip để gửi kèm khi báo lỗi. Log không chứa nội dung file hay clipboard, nhưng có thể có đường dẫn thư mục (kèm tên người dùng của máy), địa chỉ IP và 8 ký tự đầu của mã thiết bị.</source>
         <translation>Packs Teleport's log files into one zip file to attach to a bug report. Logs don't contain file contents or the clipboard, but may include folder paths (with this computer's user name), IP addresses and the first 8 characters of device IDs.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Hãy ghép đôi với ít nhất một máy trước khi tạo cổng đẩy tự động.</source>
+        <translation>Pair with at least one device before adding a watch portal.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2051,6 +2167,11 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Máy nhận</source>
+        <translation>Target device</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Máy này đang ẩn nên chỉ máy đã ghép đôi thấy tên này.</source>
         <translation>This device is hidden, so only paired devices see this name.</translation>
     </message>
@@ -2058,6 +2179,26 @@
         <location filename="../settings.py"/>
         <source>Máy đã ghép đôi tự kết nối được khi ít nhất một trong hai máy đang hiện, hoặc khi hai máy đã từng kết nối và địa chỉ không đổi.</source>
         <translation>Paired devices connect automatically when at least one of them is visible, or when they have connected before and the address hasn't changed.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Mẫu tên file</source>
+        <translation>Filename patterns</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Mọi file</source>
+        <translation>All files</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Mọi máy</source>
+        <translation>Any device</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Mọi máy đã ghép đôi</source>
+        <translation>Any paired device</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2136,8 +2277,43 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Theo dõi cả thư mục con bên trong</source>
+        <translation>Include subfolders</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Thiết bị tin cậy</source>
         <translation>Trusted devices</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Thêm</source>
+        <translation>Add</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Thêm cổng đẩy thư mục tự động</source>
+        <translation>Add auto-push watch folder</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Thêm cổng đẩy tự động</source>
+        <translation>Add watch portal</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Thêm cổng đẩy…</source>
+        <translation>Add portal…</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Thêm quy tắc phân loại thư mục nhận</source>
+        <translation>Add receive routing rule</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Thêm quy tắc…</source>
+        <translation>Add rule…</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2151,6 +2327,16 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Thư mục theo dõi</source>
+        <translation>Watched folder</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Thư mục đích</source>
+        <translation>Destination folder</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Thử lại</source>
         <translation>Try again</translation>
     </message>
@@ -2158,6 +2344,16 @@
         <location filename="../settings.py"/>
         <source>Truyền file</source>
         <translation>File transfer</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Truyền thông minh phần thay đổi (Delta)</source>
+        <translation>Smart delta transfer</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Tên gợi nhớ</source>
+        <translation>Rule name</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2206,8 +2402,33 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Tự phân loại thư mục nhận</source>
+        <translation>Smart receive routing</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Tự động gom tệp vào thư mục riêng theo tên máy gửi và thời gian nhận.</source>
         <translation>Automatically group files into a separate folder named after the sender and time.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Vui lòng chọn máy nhận.</source>
+        <translation>Please select a target device.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Vui lòng chọn một thư mục đang tồn tại.</source>
+        <translation>Please choose an existing folder.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Vui lòng nhập tên gợi nhớ.</source>
+        <translation>Please enter a rule name.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Ví dụ: Ảnh chụp, Tài liệu công việc</source>
+        <translation>Example: Screenshots, Work documents</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2231,6 +2452,16 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Xóa</source>
+        <translation>Remove</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Xóa cổng đẩy {name}</source>
+        <translation>Remove watch portal {name}</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Xóa lịch sử</source>
         <translation>Clear history</translation>
     </message>
@@ -2238,6 +2469,11 @@
         <location filename="../settings.py"/>
         <source>Xóa lịch sử truyền file với mọi máy, kể cả máy đã hủy ghép đôi? File đã nhận vẫn còn nguyên trong thư mục nhận.</source>
         <translation>Clear the transfer history with every device, including unpaired ones? Received files stay in the receive folder.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Xóa quy tắc {name}</source>
+        <translation>Remove routing rule {name}</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2251,6 +2487,16 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>chỉ cấp ngoài</source>
+        <translation>top folder only</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>gồm thư mục con</source>
+        <translation>with subfolders</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>không thấy trong mạng</source>
         <translation>not on the network</translation>
     </message>
@@ -2258,6 +2504,11 @@
         <location filename="../settings.py"/>
         <source>{option}: {name}</source>
         <translation>{option}: {name}</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Áp dụng cho máy gửi</source>
+        <translation>Apply to sender</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2348,6 +2599,11 @@
         <location filename="../settings.py"/>
         <source>Để sau</source>
         <translation>Later</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Để trống = mọi file; ví dụ: *.jpg, *.png</source>
+        <translation>Leave blank for all files; e.g. *.jpg, *.png</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
