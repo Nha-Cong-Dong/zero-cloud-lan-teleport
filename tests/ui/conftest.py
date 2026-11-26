@@ -473,7 +473,7 @@ def theme_state_reset(qapp):
     hints = qapp.styleHints()
     if hasattr(hints, "unsetColorScheme"):
         hints.unsetColorScheme()
-    qapp.processEvents()
+    _flush_deferred_deletes(qapp)
     if qapp.styleSheet() != old_css:
         qapp.setStyleSheet(old_css)
     if qapp.palette() != old_palette:

@@ -117,7 +117,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPaintEvent, QPalette, QPen
+from PySide6.QtGui import QCloseEvent, QFont, QFontMetrics, QPainter, QPaintEvent, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
     QCheckBox,
@@ -850,6 +850,15 @@ class PairingDialog(QDialog):
             accepted = result in (QDialog.DialogCode.Accepted, QDialog.DialogCode.Accepted.value)
             self.decided.emit(self.session_id, accepted)
         super().done(result)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._countdown_timer.stop()
+        super().closeEvent(event)
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.DeferredDelete:
+            self._countdown_timer.stop()
+        return super().event(event)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)

@@ -988,7 +988,13 @@ def _framed(qtbot, dialog) -> QWidget:
     from PySide6.QtWidgets import QGridLayout
 
     frame = QWidget()
-    qtbot.addWidget(frame)
+    frame.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+    def _close_frame(_frame: QWidget) -> None:
+        if hasattr(dialog, "dismiss"):
+            dialog.dismiss()
+
+    qtbot.addWidget(frame, before_close_func=_close_frame)
     frame.setObjectName("snapshotDialogFrame")
     frame.setAutoFillBackground(True)  # nền Window của bảng màu theme (`surface`)
     dialog.setWindowFlags(Qt.WindowType.Widget)

@@ -502,7 +502,7 @@ def _pairing_dialog(role: str, *, warn: bool = False):
 
         recent = core_pairing.WARN_RECENT_CODES if warn else (1 if role == "responder" else 0)
         dialog = PairingDialog(_prompt(role, recent_codes=recent), clock=lambda: 70.0)
-        qtbot.addWidget(dialog)
+        qtbot.addWidget(dialog, before_close_func=lambda w: w.dismiss())
         return dialog
 
     return build

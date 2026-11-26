@@ -781,8 +781,12 @@ class ClipboardSync:
         if not self._enabled(device_id):
             return ClipPushResult.NOT_ENABLED
         while self._op is not None and not self._closed:
+            op = self._op
+            if op.done():
+                await asyncio.sleep(0)
+                continue
             with contextlib.suppress(BaseException):
-                await asyncio.shield(self._op)
+                await asyncio.shield(op)
         if self._closed or device_id not in self._links:
             return ClipPushResult.NOT_CONNECTED
         if not self._enabled(device_id):

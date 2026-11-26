@@ -104,6 +104,38 @@ async def test_push_now_result_codes_without_network() -> None:
         await sync.drain(2)
 
 
+async def test_push_now_does_not_spin_when_active_op_already_done() -> None:
+    backend = _PushBackend()
+    sync = app_clip.ClipboardSync(
+        backend=backend,
+        enabled=lambda _dev: True,
+        paused=lambda: False,
+        on_event=lambda _ev: None,
+    )
+    sync.start()
+    try:
+        dev = "c" * 32
+        sent_msgs = []
+        fake_conn = SimpleNamespace(
+            closed=False,
+            send=lambda m: asyncio.sleep(0, result=sent_msgs.append(m)),
+        )
+        sync.link_up(dev, 1, fake_conn)
+        backend.set_text("after finished op")
+
+        done_op = asyncio.create_task(asyncio.sleep(0))
+        await done_op
+        sync._op = done_op
+        asyncio.get_running_loop().call_soon(sync._op_done, done_op)
+
+        res = await asyncio.wait_for(sync.push_now(dev), timeout=2.0)
+        assert res is ClipPushResult.SENT
+        await wait_until(lambda: len(sent_msgs) >= 1, 5, "clip thủ công đi xuống kết nối")
+    finally:
+        sync.close()
+        await sync.drain(2)
+
+
 @pytest.mark.integration
 async def test_push_now_end_to_end_repush_and_disabled_error(node_factory, trust_each_other, monkeypatch):
     monkeypatch.setattr(app_clip, "CLIP_DEBOUNCE", 0.02)
