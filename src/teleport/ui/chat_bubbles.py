@@ -655,7 +655,10 @@ class _SpeedSparkline(QWidget):
 
     def push(self, bytes_per_second: float) -> None:
         self._samples.append(max(0.0, float(bytes_per_second)))
-        self.update()
+        if len(self._samples) >= 2 and self.isHidden():
+            self.setVisible(True)
+        if self.isVisible():
+            self.update()
 
     def clear(self) -> None:
         self._samples.clear()
@@ -1360,7 +1363,6 @@ class TransferBubble(_Bubble):
         active_speed = speed if math.isfinite(speed) and speed > 0 else 0.0
         if info.status is TransferStatus.TRANSFERRING and not self._is_stalled():
             self.sparkline.push(active_speed)
-            self.sparkline.setVisible(len(self.sparkline.samples()) >= 2)
         motion = self.motion
         if motion is not None:
             motion.set_shimmer(
