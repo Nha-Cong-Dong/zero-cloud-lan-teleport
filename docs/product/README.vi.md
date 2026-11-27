@@ -241,7 +241,8 @@ Tiến độ chi tiết từng giai đoạn được cập nhật tại [docs/pr
 - **Mở rộng `v1.1.0` – `v1.2.0`:** Gửi cả cây thư mục con, gửi song song nhiều máy, ẩn tên thiết bị trên mạng công cộng và Chế độ khách qua Web QR cho điện thoại (Đã hoàn thành).
 - **Bản nâng cấp `v1.3.0`:** Kết nối thông suốt giữa dòng lệnh và giao diện đang chạy nền, tự gom thư mục con theo từng lượt nhận, tải gói nén `.zip` trực tiếp và kéo thả thư mục trên Web QR, khóa tạm thời chống dò mã, và tối ưu bộ nhớ kiểm tra toàn vẹn (Đã hoàn thành).
 - **Bản nâng cấp `v1.4.0`:** Chọn gửi cả thư mục và gửi đồng thời nhiều máy trực tiếp trên giao diện, chế độ ẩn danh hoàn toàn, quản lý/hủy lượt nhận dở và kiểm tra cập nhật thủ công từ Cài đặt (Đã hoàn thành).
-- **Lộ trình `v1.5.0` – `v1.7.0`:** Nối lại bền qua mất điện hai chiều, biên lai truyền nhận xác thực hai bên, truyền thông minh phần thay đổi, tự phân loại thư mục nhận, cổng đẩy tự động, Web QR 2.0 (trang riêng, xem trước ảnh trực tiếp, nhắn văn bản hai chiều) và tối ưu thao tác nhanh trên khay hệ thống, thẻ máy và thanh tác vụ (Đang phát triển trong bản chưa phát hành).
+- **Lộ trình `v1.5.0` – `v1.7.0`:** Nối lại bền qua mất điện hai chiều, biên lai truyền nhận xác thực hai bên, truyền thông minh phần thay đổi, tự phân loại thư mục nhận, cổng đẩy tự động, Web QR 2.0 (trang riêng, xem trước ảnh trực tiếp, nhắn văn bản hai chiều) và tối ưu thao tác nhanh trên khay hệ thống, thẻ máy và thanh tác vụ (Đã hoàn thành).
+- **Bản nâng cấp `v1.8.0`:** Làm mới giao diện có chuyển động mượt, đón người dùng mới trong phút đầu tiên, radar tìm máy sống động, cột thông tin thiết bị bên phải, hiệu ứng âm thanh tùy chọn và thông báo tự tắt (Đã hoàn thành).
 - **Hướng tiếp theo (`v2.0.0`):** Ứng dụng trên điện thoại Android.
 
 ---
