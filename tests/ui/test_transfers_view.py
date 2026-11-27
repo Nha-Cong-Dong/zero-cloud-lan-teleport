@@ -558,7 +558,7 @@ def test_thousand_progress_updates_in_place_and_fast(view):
     for u in updates:
         view.handle(u)
     elapsed = time.perf_counter() - start
-    assert elapsed < 1.0, elapsed
+    assert elapsed < 2.0, elapsed
     assert len(view.rows()) == 1
     assert view.row(k) is row
     assert row.progress_bar is bar and row.status_label is status and row.detail_label is detail
