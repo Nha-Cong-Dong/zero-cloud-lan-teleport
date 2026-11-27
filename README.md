@@ -70,24 +70,33 @@ Tiêu chí chi tiết cho từng tính năng: [docs/product/mvp.md](docs/product
 | **Ghép đôi một lần duy nhất** | Lần đầu kết nối, hai máy hiển thị cùng một mã 6 chữ số để xác nhận. Sau đó hai máy sẽ tự nhận ra nhau. | Hoàn thành |
 | **Gửi file dung lượng cực lớn** | Kéo thả một hoặc nhiều file để gửi. Bên nhận luôn được hỏi ý kiến trước khi nhận; hiển thị rõ tốc độ và tiến độ truyền. | Hoàn thành |
 | **Gửi cả thư mục & nhiều máy** | Hỗ trợ gửi toàn bộ cây thư mục con giữ nguyên cấu trúc; gửi cùng lúc tới nhiều thiết bị trong mạng nội bộ. | Hoàn thành |
-| **Chế độ khách qua Web QR** | Quét mã QR bằng điện thoại để gửi/nhận tệp và thư mục qua trình duyệt, hỗ trợ tải nhiều tệp dưới dạng gói nén `.zip` mà không cần cài ứng dụng trên điện thoại. | Hoàn thành |
+| **Chế độ khách qua Web QR** | Trang thao tác riêng không chặn cửa sổ chính; quét mã QR trên điện thoại để gửi/nhận tệp và thư mục qua trình duyệt, xem trước ảnh trực tiếp, nhắn văn bản hai chiều và tải gói nén `.zip` không cần cài ứng dụng. | Hoàn thành |
+| **Tự phân loại & cổng đẩy tự động** | Tự động sắp xếp tệp nhận vào thư mục đích theo loại tệp hoặc máy gửi; tự gửi tệp mới đặt vào thư mục theo dõi kèm nút sửa quy tắc, mẫu chọn nhanh và tạm dừng toàn bộ. | Hoàn thành |
 | **Tự động nhận tiếp** | Đang gửi mà mất kết nối, khi kết nối lại ứng dụng sẽ gửi tiếp từ vị trí tạm dừng, không gửi lại từ đầu. | Hoàn thành |
 | **Kiểm tra tính nguyên vẹn** | Từng phần nhỏ và toàn bộ file đều được kiểm tra khớp hoàn toàn với bản gốc trước khi hoàn tất. | Hoàn thành |
 | **Đồng bộ nội dung sao chép** | Sao chép văn bản hoặc ảnh ở máy này có thể dán ngay trên máy kia nếu bạn bật cho phép. Mặc định tắt để đảm bảo riêng tư. | Hoàn thành |
-| **Chạy ngầm tiện lợi** | Thu gọn xuống khay hệ thống, luôn sẵn sàng khi có người gửi dữ liệu tới; có thể bật tự khởi động cùng máy. | Hoàn thành |
-| **Tùy biến linh hoạt** | Đổi tên máy, đổi thư mục lưu file nhận, ẩn danh khỏi máy lạ, đổi giao diện sáng/tối. | Hoàn thành |
+| **Chạy ngầm tiện lợi** | Thu gọn xuống khay hệ thống với lối tắt Web QR và mở thư mục nhận; hiển thị tiến độ ngay trên biểu tượng thanh tác vụ; có thể bật tự khởi động cùng máy. | Hoàn thành |
+| **Tùy biến linh hoạt** | Đổi tên máy, đổi thư mục lưu file nhận, bật/tắt nhanh trạng thái ngay trên thẻ máy, ẩn danh khỏi máy lạ, đổi giao diện sáng/tối. | Hoàn thành |
 | **Hỗ trợ hai ngôn ngữ** | Tiếng Việt và Tiếng Anh. | Hoàn thành |
 | **Hỗ trợ dòng lệnh** | Cung cấp lệnh điều khiển cho người thích thao tác nhanh hoặc tự động hóa công việc. | Hoàn thành |
-| **Bộ cài đặt dễ dùng** | Bộ cài đặt tiêu chuẩn cho Windows cùng kịch bản đóng gói đa nền tảng. | Hoàn thành |
+| **Bộ cài đặt dễ dùng** | Bộ cài đặt tiêu chuẩn cho Windows (Tiếng Việt & Tiếng Anh) cùng kịch bản đóng gói đa nền tảng. | Hoàn thành |
 
 <table>
 <tr>
 <td width="50%"><img src="docs/assets/tim-may-moi.png" alt="Màn hình tìm máy: hiển thị các máy đang mở ứng dụng trong mạng nội bộ"></td>
-<td width="50%"><img src="docs/assets/hoi-nhan-file.png" alt="Màn hình xác nhận nhận file với hai lựa chọn Nhận hoặc Từ chối"></td>
+<td width="50%"><img src="docs/assets/hoi-nhan-file.png" alt="Màn hình trò chuyện truyền tệp: xem trước ảnh thu nhỏ, nút mở nhanh và hộp xác nhận nhận file"></td>
 </tr>
 <tr>
 <td align="center"><b>Tìm máy trong mạng</b></td>
-<td align="center"><b>Xác nhận trước khi nhận file</b></td>
+<td align="center"><b>Gửi file, xem trước ảnh &amp; xác nhận nhận</b></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/assets/web-qr-khach.png" alt="Trang Chế độ khách qua Web QR trên điện thoại với mã QR, chia sẻ tệp và nhắn văn bản hai chiều"></td>
+<td width="50%"><img src="docs/assets/tu-dong-hoa-cai-dat.png" alt="Trang Cài đặt truyền file hiển thị truyền thông minh phần thay đổi, quy tắc tự phân loại và cổng đẩy tự động"></td>
+</tr>
+<tr>
+<td align="center"><b>Chế độ khách qua Web QR trên điện thoại</b></td>
+<td align="center"><b>Tự phân loại tệp nhận &amp; cổng đẩy tự động</b></td>
 </tr>
 </table>
 
@@ -229,7 +238,8 @@ Tiến độ chi tiết từng giai đoạn được cập nhật tại [docs/pr
 - **Mở rộng `v1.1.0` – `v1.2.0`:** Gửi cả cây thư mục con, gửi song song nhiều máy, ẩn tên thiết bị trên mạng công cộng và Chế độ khách qua Web QR cho điện thoại (Đã hoàn thành).
 - **Bản nâng cấp `v1.3.0`:** Kết nối thông suốt giữa dòng lệnh và giao diện đang chạy nền, tự gom thư mục con theo từng lượt nhận, tải gói nén `.zip` trực tiếp và kéo thả thư mục trên Web QR, khóa tạm thời chống dò mã, và tối ưu bộ nhớ kiểm tra toàn vẹn (Đã hoàn thành).
 - **Bản nâng cấp `v1.4.0`:** Chọn gửi cả thư mục và gửi đồng thời nhiều máy trực tiếp trên giao diện, chế độ ẩn danh hoàn toàn, quản lý/hủy lượt nhận dở và kiểm tra cập nhật thủ công từ Cài đặt (Đã hoàn thành).
-- **Lộ trình kế tiếp (`v1.5.0` – `v2.0.0`):** Nối lại bền qua mất điện hai chiều, Web QR 2.0 (bảng ghi chú/liên kết hai chiều và gửi ảnh từ camera), biên lai truyền nhận ký số hai bên, truyền thông minh phần thay đổi theo thư mục/khối và ứng dụng Android.
+- **Lộ trình `v1.5.0` – `v1.7.0`:** Nối lại bền qua mất điện hai chiều, biên lai truyền nhận xác thực hai bên, truyền thông minh phần thay đổi, tự phân loại thư mục nhận, cổng đẩy tự động, Web QR 2.0 (trang riêng, xem trước ảnh trực tiếp, nhắn văn bản hai chiều) và tối ưu thao tác nhanh trên khay hệ thống, thẻ máy và thanh tác vụ (Đang phát triển trong bản chưa phát hành).
+- **Hướng tiếp theo (`v2.0.0`):** Ứng dụng trên điện thoại Android.
 
 ---
 
