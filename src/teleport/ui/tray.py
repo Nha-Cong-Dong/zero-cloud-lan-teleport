@@ -344,7 +344,7 @@ def make_icon(badge: TrayBadge = TrayBadge.NONE) -> QIcon:
 
 
 class Tray(QObject):
-    """Biểu tượng khay và menu bốn mục (xem docstring module). Chỉ hiện khi gọi `show()` và có khay."""
+    """Biểu tượng khay và menu sáu mục (xem docstring module). Chỉ hiện khi gọi `show()` và có khay."""
 
     open_requested = Signal()
     quit_requested = Signal()
@@ -352,11 +352,14 @@ class Tray(QObject):
     send_to_requested = Signal(str)  # device_id chọn ở menu con “Gửi file…”
     discover_requested = Signal()  # “Tìm máy mới…” của menu con (chưa ghép đôi máy nào)
     pause_toggled = Signal(bool)  # người dùng bấm “Tạm dừng nhận” (True: muốn tạm dừng)
+    web_guest_requested = Signal()
+    open_receive_dir_requested = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._message_folder: Path | Reveal | None = None
         self._state = TrayState()
+        self._has_receive_dir = False
         self._disposed = False  # sau `dispose()` mục menu đã bị xóa: bỏ mọi lần vẽ lại
         self._targets_provider: Callable[[], Sequence[SendTarget]] | None = None
         self._menu = QMenu()
@@ -367,13 +370,19 @@ class Tray(QObject):
         self._send = self._send_menu.menuAction()
         self._pause = QAction(self._menu)
         self._pause.setCheckable(True)
+        self._web_guest = QAction(self._menu)
+        self._open_dir = QAction(self._menu)
         self._quit = QAction(self._menu)
         self._open.triggered.connect(self.open_requested)
         self._pause.triggered.connect(self._on_pause_triggered)
+        self._web_guest.triggered.connect(self.web_guest_requested)
+        self._open_dir.triggered.connect(self.open_receive_dir_requested)
         self._quit.triggered.connect(self.quit_requested)
         self._menu.addAction(self._open)
         self._menu.addAction(self._send)
         self._menu.addAction(self._pause)
+        self._menu.addAction(self._web_guest)
+        self._menu.addAction(self._open_dir)
         self._menu.addSeparator()
         self._menu.addAction(self._quit)
         self._menu.setDefaultAction(self._open)
@@ -396,8 +405,8 @@ class Tray(QObject):
         return is_available()
 
     def actions(self) -> list[QAction]:
-        """Bốn mục của menu theo thứ tự (không kể dòng kẻ); “Gửi file…” là `menuAction()` của menu con."""
-        return [self._open, self._send, self._pause, self._quit]
+        """Các mục của menu theo thứ tự (không kể dòng kẻ); “Gửi file…” là `menuAction()` của menu con."""
+        return [self._open, self._send, self._pause, self._web_guest, self._open_dir, self._quit]
 
     @property
     def menu(self) -> QMenu:
@@ -469,6 +478,12 @@ class Tray(QObject):
         """Thư mục nhận hỏng, node không nhận file."""
         self._apply(replace(self._state, unavailable=bool(unavailable)))
 
+    def set_has_receive_dir(self, available: bool) -> None:
+        """Bật hoặc tắt lối tắt “Mở thư mục nhận” khi node đang chạy."""
+        self._has_receive_dir = bool(available)
+        if not self._disposed:
+            self._render()
+
     def set_send_targets_provider(self, provider: Callable[[], Sequence[SendTarget]] | None) -> None:
         """Hàm trả các máy cho menu con “Gửi file…”, gọi mỗi lần menu sắp hiện (None: không máy nào)."""
         self._targets_provider = provider
@@ -485,6 +500,8 @@ class Tray(QObject):
         running = self._state.running
         self._send.setEnabled(running)
         self._pause.setEnabled(running)
+        self._web_guest.setEnabled(running)
+        self._open_dir.setEnabled(running and self._has_receive_dir)
         badge = tray_badge(self._state)
         if badge is not self._icon_badge:
             self._icon_badge = badge
@@ -500,6 +517,8 @@ class Tray(QObject):
         self._send.setText(texts.menu_send())
         self._send_menu.setTitle(texts.menu_send())
         self._pause.setText(texts.menu_pause())
+        self._web_guest.setText(texts.menu_web_guest())
+        self._open_dir.setText(texts.menu_open_receive_dir())
         self._quit.setText(texts.menu_quit())
         self._menu.setAccessibleName(QCoreApplication.translate("Tray", "Menu của Teleport"))
         self._send_menu.setAccessibleName(texts.menu_send())

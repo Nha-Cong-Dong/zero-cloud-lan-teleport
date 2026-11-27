@@ -166,6 +166,8 @@ from teleport.trust.store import TrustedDevice, TrustStore, TrustStoreError
 LOCK_TIMEOUT = 2.0  # chờ node.lock (khóa của tiến trình vừa chết có thể chưa được nhả, nhất là Windows)
 UNPAIR_CLOSE_TIMEOUT = 1.0  # unpair chờ đóng kết nối của máy bị hủy
 NETWORK_CHECK_INTERVAL = 5.0  # giây giữa hai lần đọc địa chỉ + đồng hồ
+MDNS_RETRY_BASE = 5.0  # giây: lịch giãn nhịp khi mDNS lỗi liên tiếp lúc mạng không đổi
+MDNS_RETRY_MAX = 300.0  # giây: trần giữa hai lần thử lại mDNS khi bị mạng/tường lửa chặn
 SCAN_TIMEOUT = 3.0  # mặc định của scan_devices / teleport list
 MAX_SCAN_TIMEOUT = 60.0
 MDNS_CLOSE_ALLOWANCE = 2.0  # close(): chờ đóng mỗi instance mDNS (goodbye, socket) tối đa; còn lại chạy nền
@@ -1842,6 +1844,18 @@ class Node:
         """Dịch vụ Watch Portal đẩy tự động của node."""
         return self._need(self._watch_portals)
 
+    @property
+    def watch_portals_paused(self) -> bool:
+        """True nếu dịch vụ cổng đẩy đang tạm dừng trong phiên."""
+        return self._watch_portals is not None and self._watch_portals.paused
+
+    def set_watch_portals_paused(self, paused: bool) -> bool:
+        """Tạm dừng hoặc tiếp tục toàn bộ cổng đẩy tự động trong phiên."""
+        self._check_running()
+        if self._watch_portals is None:
+            return False
+        return self._watch_portals.set_paused(bool(paused))
+
     def _allows_anonymous(self, ip: str) -> bool:
         """`Listener`: gửi `hello` cho kết nối ẩn danh từ `ip` không (đồng bộ, protocol mục 2.3).
 
@@ -2990,6 +3004,8 @@ class Node:
             log.debug("không đọc được địa chỉ IPv4 (%s)", type(e).__name__)
             addresses = ()
         watch = NetworkWatch(addresses, _mono_clock(), _wall_clock())
+        mdns_retry_failures = 0
+        mdns_next_retry = 0.0
         while True:
             await asyncio.sleep(NETWORK_CHECK_INTERVAL)
             try:
@@ -2997,25 +3013,44 @@ class Node:
             except Exception as e:
                 log.debug("không đọc được địa chỉ IPv4 (%s), bỏ lượt", type(e).__name__)
                 continue
-            change = watch.sample(addresses, _mono_clock(), _wall_clock(), interval=NETWORK_CHECK_INTERVAL)
+            now_mono = _mono_clock()
+            change = watch.sample(addresses, now_mono, _wall_clock(), interval=NETWORK_CHECK_INTERVAL)
             if self._closing:
                 return
+            if change is not NetworkChange.NONE:
+                mdns_retry_failures = 0
+                mdns_next_retry = 0.0
+            attempted_mdns = False
             if self._mdns is None:
-                log.debug("mDNS đang tắt (%s), thử bật lại", change.value)
-                await self._restart_mdns()
+                if change is not NetworkChange.NONE or now_mono >= mdns_next_retry:
+                    log.debug("mDNS đang tắt (%s), thử bật lại", change.value)
+                    attempted_mdns = True
+                    await self._restart_mdns()
             elif change is NetworkChange.ADDRESSES:
                 if opts.advertise_addresses is None:
                     log.debug("địa chỉ của máy này đổi, khởi động lại mDNS")
+                    attempted_mdns = True
                     await self._restart_mdns()
                 else:
+                    attempted_mdns = True
                     await self._readvertise()
             elif change is NetworkChange.WOKE:
                 log.debug("đồng hồ nhảy (máy vừa thức dậy?), quảng bá lại mDNS")
+                attempted_mdns = True
                 await self._readvertise()
-            elif self._visible and self._discovery_error is not None:
-                # Lần quảng bá trước lỗi (mDNS vẫn chạy): thử lại mỗi nhịp, không kẹt ở trạng thái
-                # "hiện" mà không quảng bá. Lỗi lặp lại chỉ ghi DEBUG (`_log_mdns_error`).
+            elif self._visible and self._discovery_error is not None and now_mono >= mdns_next_retry:
+                # Lần quảng bá trước lỗi (mDNS vẫn chạy): giãn nhịp thử lại theo backoff để tránh
+                # tạo lại socket multicast liên tục khi mạng/tường lửa chặn.
+                attempted_mdns = True
                 await self._readvertise()
+            if attempted_mdns:
+                if self._mdns is not None and self._discovery_error is None:
+                    mdns_retry_failures = 0
+                    mdns_next_retry = 0.0
+                else:
+                    mdns_retry_failures += 1
+                    delay = min(MDNS_RETRY_BASE * (2 ** (mdns_retry_failures - 1)), MDNS_RETRY_MAX)
+                    mdns_next_retry = _mono_clock() + delay
             if change is not NetworkChange.NONE and self._auto_connect and self._links is not None:
                 self._apply(self._links.network_changed(self._now()))
 

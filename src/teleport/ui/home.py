@@ -81,6 +81,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QProgressBar,
     QScrollArea,
     QSizePolicy,
@@ -292,6 +293,8 @@ class MachineCard(QFrame):
     """Chân cột trái: máy này (tên, địa chỉ, nút chép, huy hiệu trạng thái)."""
 
     address_copied = Signal(str)
+    pause_toggled = Signal(bool)
+    hidden_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -305,6 +308,8 @@ class MachineCard(QFrame):
         self._receiving_paused = False
         self._hidden = False
         self._copy_value: str | None = None
+        self._status_menu_enabled = False
+        self._status_menu: QMenu | None = None
 
         self.avatar = DeviceAvatar(
             self,
@@ -333,6 +338,7 @@ class MachineCard(QFrame):
         self.copy_feedback.active_changed.connect(self._render_copy_button)
         self.badge = StatusBadge(self)
         self.badge.setObjectName("machineBadge")
+        self.badge.installEventFilter(self)
 
         text_column = QVBoxLayout()
         text_column.setContentsMargins(0, 0, 0, 0)
@@ -410,6 +416,15 @@ class MachineCard(QFrame):
         self._hidden = bool(hidden)
         self._update_badge()
 
+    def set_status_menu_enabled(self, enabled: bool) -> None:
+        """Cho phép bấm vào huy hiệu trạng thái để mở menu bật/tắt nhanh."""
+        self._status_menu_enabled = bool(enabled)
+        if self._status_menu_enabled:
+            self.badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.badge.unsetCursor()
+        self._update_badge()
+
     def set_copy_value(self, value: str | None) -> None:
         """Chuỗi mà “Chép địa chỉ” chép; None thì ẩn nút."""
         value = value or None
@@ -461,6 +476,11 @@ class MachineCard(QFrame):
         else:
             self.badge.set_status(BadgeTone.SUCCESS, t("Home", "Sẵn sàng nhận"))
         self.badge.setAccessibleDescription(description)
+        self.badge.setToolTip(
+            safe_tooltip(QCoreApplication.translate("Home", "Bấm để đổi nhanh trạng thái nhận và ẩn/hiện"))
+            if self._status_menu_enabled
+            else ""
+        )
         self._update_description()
 
     def _update_description(self) -> None:
@@ -490,6 +510,38 @@ class MachineCard(QFrame):
         with contextlib.suppress(Exception):
             QAccessible.updateAccessibility(QAccessibleEvent(button, QAccessible.Event.Alert))
         self.address_copied.emit(value)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            watched is self.badge
+            and self._status_menu_enabled
+            and event.type() == QEvent.Type.MouseButtonRelease
+            and getattr(event, "button", lambda: None)() == Qt.MouseButton.LeftButton
+        ):
+            self._open_status_menu()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _open_status_menu(self) -> None:
+        t = QCoreApplication.translate
+        menu = self._status_menu
+        if menu is None:
+            menu = QMenu(self)
+            menu.setObjectName("machineStatusMenu")
+            pause_act = menu.addAction("")
+            pause_act.setCheckable(True)
+            pause_act.triggered.connect(lambda checked: self.pause_toggled.emit(bool(checked)))
+            hidden_act = menu.addAction("")
+            hidden_act.setCheckable(True)
+            hidden_act.triggered.connect(lambda checked: self.hidden_toggled.emit(bool(checked)))
+            self._status_menu = menu
+            self._status_pause_act = pause_act
+            self._status_hidden_act = hidden_act
+        self._status_pause_act.setText(t("Home", "Tạm dừng nhận"))
+        self._status_pause_act.setChecked(self._receiving_paused)
+        self._status_hidden_act.setText(t("Home", "Ẩn với máy chưa ghép đôi"))
+        self._status_hidden_act.setChecked(self._hidden)
+        menu.popup(self.badge.mapToGlobal(QPoint(0, self.badge.height())))
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)

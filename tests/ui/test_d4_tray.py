@@ -27,7 +27,14 @@ import pytest
 pytest.importorskip("PySide6")
 
 APP_NAME = "ZCL Teleport"
-M5 = ("Mở Teleport", "Gửi file…", "Tạm dừng nhận", "Thoát")
+M5 = (
+    "Mở Teleport",
+    "Gửi file…",
+    "Tạm dừng nhận",
+    "Chuyển tệp với điện thoại (Web QR)…",
+    "Mở thư mục nhận",
+    "Thoát",
+)
 
 # Bảng tooltip (spec D4 mục 4.2; số nhiều EN theo 14.7).
 TIP_ACTIVE_VI = "Đang truyền {n} lượt"
@@ -443,13 +450,13 @@ def test_set_icon_only_when_badge_changes(qapp, monkeypatch, tray):
 def test_menu_has_four_actions_in_order_all_visible(tray):
     t = tray()
     actions = t.actions()
-    assert len(actions) == 4
+    assert len(actions) == 6
     assert [plain(a.text()) for a in actions] == list(M5)
-    assert all(a.isVisible() for a in actions), "D4: cả bốn mục đều hiện"
+    assert all(a.isVisible() for a in actions), "D4: đủ sáu mục đều hiện"
     menu_items = [a for a in t.menu.actions() if not a.isSeparator()]
     assert menu_items == actions, "thứ tự trên menu theo M5, có dòng kẻ trước Thoát"
     raw = t.menu.actions()
-    assert raw[-2].isSeparator() and raw[-1] is actions[3]
+    assert raw[-2].isSeparator() and raw[-1] is actions[-1]
     assert t.menu.defaultAction() is actions[0]
 
 
@@ -468,11 +475,13 @@ def test_pause_action_is_checkable_and_unchecked_at_start(tray):
 
 def test_send_and_pause_enabled_only_while_running(tray):
     t = tray()
-    assert [a.isEnabled() for a in t.actions()] == [True, False, False, True]
+    assert [a.isEnabled() for a in t.actions()] == [True, False, False, False, False, True]
     t.set_running(True)
-    assert [a.isEnabled() for a in t.actions()] == [True, True, True, True]
+    assert [a.isEnabled() for a in t.actions()] == [True, True, True, True, False, True]
+    t.set_has_receive_dir(True)
+    assert [a.isEnabled() for a in t.actions()] == [True, True, True, True, True, True]
     t.set_running(False)
-    assert [a.isEnabled() for a in t.actions()] == [True, False, False, True]
+    assert [a.isEnabled() for a in t.actions()] == [True, False, False, False, False, True]
     assert all(a.isVisible() for a in t.actions())
 
 
@@ -491,10 +500,16 @@ def test_open_and_quit_still_emit_signals(qtbot, tray):
     t = tray()
     got: list[str] = []
     t.open_requested.connect(lambda: got.append("open"))
+    t.web_guest_requested.connect(lambda: got.append("web_guest"))
+    t.open_receive_dir_requested.connect(lambda: got.append("open_dir"))
     t.quit_requested.connect(lambda: got.append("quit"))
+    t.set_running(True)
+    t.set_has_receive_dir(True)
     t.actions()[0].trigger()
     t.actions()[3].trigger()
-    assert got == ["open", "quit"]
+    t.actions()[4].trigger()
+    t.actions()[-1].trigger()
+    assert got == ["open", "web_guest", "open_dir", "quit"]
 
 
 # =================================================================================================
@@ -671,7 +686,14 @@ def test_language_change_retranslates_menu_tooltip_and_submenu(qapp, tray):
     assert t.tooltip() == expected_tooltip(True, 0, True, False)
     i18n.set_language("en")
     qapp.processEvents()
-    texts_en = [texts.menu_open(), texts.menu_send(), texts.menu_pause(), texts.menu_quit()]
+    texts_en = [
+        texts.menu_open(),
+        texts.menu_send(),
+        texts.menu_pause(),
+        texts.menu_web_guest(),
+        texts.menu_open_receive_dir(),
+        texts.menu_quit(),
+    ]
     assert texts_en != list(M5), "bản dịch EN của menu phải có"
     assert [a.text() for a in t.actions()] == texts_en
     assert t.tooltip() == expected_tooltip(True, 0, True, False, "en")
@@ -716,7 +738,7 @@ def test_without_system_tray_setters_do_not_fail_and_show_does_nothing(qapp, mon
         t.show()
         assert not t.visible
         t.show_message("Đã nhận a.txt.")
-        assert len(t.actions()) == 4
+        assert len(t.actions()) == 6
     finally:
         t.dispose()
 

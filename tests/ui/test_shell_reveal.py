@@ -560,3 +560,45 @@ def test_default_select_native_without_files_does_nothing(native, real_files):
     d, _ = real_files
     assert shell._default_select_native(d, []) is False
     assert native.calls == [] and native.created == []
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("photo.png", True),
+        ("doc.PDF", True),
+        ("archive.zip", True),
+        ("setup.exe", False),
+        ("Setup.EXE", False),
+        ("run.bat", False),
+        ("payload.ps1", False),
+        ("evil.exe. ", False),
+        ("shortcut.lnk", False),
+    ],
+)
+def test_is_safe_to_open_filters_executables(shell, name, expected):
+    assert shell.is_safe_to_open(Path("C:/Downloads") / name) is expected
+
+
+def test_open_file_in_os_checks_safety_root_and_existence(shell, tmp_path):
+    rdir = tmp_path / "Nhan"
+    rdir.mkdir()
+    safe = rdir / "notes.txt"
+    safe.write_text("ok", encoding="utf-8")
+    exe = rdir / "run.exe"
+    exe.write_bytes(b"mz")
+    outside = tmp_path / "other.txt"
+    outside.write_text("out", encoding="utf-8")
+
+    opened = OpenSpy()
+    assert shell.open_file_in_os(safe, rdir, open_url=opened) is True
+    assert opened.paths == [safe]
+
+    opened2 = OpenSpy()
+    assert shell.open_file_in_os(exe, rdir, open_url=opened2) is False
+    assert shell.open_file_in_os(outside, rdir, open_url=opened2) is False
+    assert shell.open_file_in_os(rdir / "missing.txt", rdir, open_url=opened2) is False
+    assert opened2.paths == []
+    # Root None cho phép file đã gửi từ bất kỳ thư mục nào nếu còn tồn tại và an toàn.
+    assert shell.open_file_in_os(outside, None, open_url=opened2) is True
+    assert opened2.paths == [outside]

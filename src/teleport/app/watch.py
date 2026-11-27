@@ -113,6 +113,20 @@ class WatchPortalService:
         self._wake = asyncio.Event()
         self._closed = False
         self._started = False
+        self._paused = False
+
+    @property
+    def paused(self) -> bool:
+        """True nếu người dùng đang tạm dừng toàn bộ cổng đẩy."""
+        return self._paused
+
+    def set_paused(self, paused: bool) -> bool:
+        """Tạm dừng hoặc tiếp tục mọi cổng đẩy (giữ nguyên hàng đợi chờ)."""
+        self._paused = bool(paused)
+        self._sync_task()
+        if not self._paused and not self._closed:
+            self._wake.set()
+        return self._paused
 
     def start(self) -> None:
         """Cho phép vòng quét hoạt động khi có quy tắc bật."""
@@ -133,14 +147,14 @@ class WatchPortalService:
 
     def on_peer_connected(self, device_id: str) -> None:
         """Đẩy ngay các tệp đã sẵn sàng đang chờ `device_id` khi kết nối điều khiển lên."""
-        if self._closed or not self._started:
+        if self._closed or not self._started or self._paused:
             return
         if any(dev == device_id and q for (_, dev), q in self._pending.items()):
             self._wake.set()
 
     async def scan_once(self) -> None:
         """Chạy một vòng quét đồng bộ mọi quy tắc đang bật và đẩy lô sẵn sàng (hữu ích cho test)."""
-        if self._closed:
+        if self._closed or self._paused:
             return
         stability = STABILITY_SECONDS if self._stability is None else self._stability
         for rule in list(self._rules):
@@ -180,7 +194,7 @@ class WatchPortalService:
         self._pending.clear()
 
     def _sync_task(self) -> None:
-        need = self._started and not self._closed and any(r.enabled for r in self._rules)
+        need = self._started and not self._closed and not self._paused and any(r.enabled for r in self._rules)
         if need and self._task is None:
             self._task = asyncio.create_task(self._run(), name="teleport.watch-portal")
         elif not need and self._task is not None:
@@ -189,9 +203,9 @@ class WatchPortalService:
 
     async def _run(self) -> None:
         try:
-            while not self._closed and any(r.enabled for r in self._rules):
+            while not self._closed and not self._paused and any(r.enabled for r in self._rules):
                 await self.scan_once()
-                if self._closed or not any(r.enabled for r in self._rules):
+                if self._closed or self._paused or not any(r.enabled for r in self._rules):
                     break
                 self._wake.clear()
                 with contextlib.suppress(TimeoutError):

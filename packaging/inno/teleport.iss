@@ -86,11 +86,7 @@ OutputBaseFilename=teleport-setup-{#AppVersion}-x64
 
 [Languages]
 Name: "vi"; MessagesFile: "languages\Vietnamese.isl"
-; TODO E1: app đã có English (src/teleport/ui/i18n/teleport_en.qm, mvp F11) nhưng bộ cài vẫn chỉ
-; tiếng Việt; dịch bộ cài để sau buổi demo (đóng băng, ke_hoach mục 5.5): bỏ comment dòng "en" dưới
-; đây và khối "en." ở [CustomMessages]. Giữ ShowLanguageDialog=no thì Inno tự chọn theo ngôn ngữ
-; giao diện Windows.
-; Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
 vi.AppRunning=Teleport đang chạy. Hãy thoát Teleport (chuột phải biểu tượng ở khay → Thoát) rồi bấm Thử lại.
@@ -102,16 +98,15 @@ vi.DeleteUserDataFailed=Không xóa hết được thư mục %1. Bạn có th�
 vi.UserDataInUse=Teleport vẫn đang chạy trên máy này (bản cài khác hoặc bản zip) nên chưa xóa thư mục %1. Hãy thoát Teleport rồi tự xóa thư mục này nếu muốn.
 vi.UserDataCheckFailed=Không kiểm được Teleport còn chạy hay không nên chưa xóa thư mục %1. Hãy thoát Teleport rồi tự xóa thư mục này nếu muốn.
 vi.SendToComment=Gửi file tới một máy đã ghép đôi bằng ZCL Teleport
-; TODO E1 (sau buổi demo): bản tiếng Anh của các message trên, bỏ comment khi bật ngôn ngữ "en".
-; en.AppRunning=Teleport is running. Quit Teleport (right-click the tray icon → Quit), then click Retry.
-; en.AppRunningAborted=Teleport is still running. Quit Teleport (right-click the tray icon → Quit), then run the installer again.
-; en.AppRunningOtherSession=Teleport may be running in another account on this computer.
-; en.FirewallCurrentUser=Windows will ask for firewall permission when Teleport first opens; choose Allow on Private networks.
-; en.DeleteUserData=Also delete Teleport's settings, device identity and paired devices (folder %1)?%n%nPaired devices will have to pair again if you reinstall Teleport. Received files are not deleted.
-; en.DeleteUserDataFailed=Could not delete all of %1. You can delete the rest yourself.
-; en.UserDataInUse=Teleport is still running on this computer (another installed copy or the zip version), so folder %1 was not deleted. Quit Teleport, then delete the folder yourself if you want.
-; en.UserDataCheckFailed=Could not check whether Teleport is still running, so folder %1 was not deleted. Quit Teleport, then delete the folder yourself if you want.
-; en.SendToComment=Send files to a paired device with ZCL Teleport
+en.AppRunning=Teleport is running. Quit Teleport (right-click the tray icon → Quit), then click Retry.
+en.AppRunningAborted=Teleport is still running. Quit Teleport (right-click the tray icon → Quit), then run the installer again.
+en.AppRunningOtherSession=Teleport may be running in another account on this computer.
+en.FirewallCurrentUser=Windows will ask for firewall permission when Teleport first opens; choose Allow on Private networks.
+en.DeleteUserData=Also delete Teleport's settings, device identity and paired devices (folder %1)?%n%nPaired devices will have to pair again if you reinstall Teleport. Received files are not deleted.
+en.DeleteUserDataFailed=Could not delete all of %1. You can delete the rest yourself.
+en.UserDataInUse=Teleport is still running on this computer (another installed copy or the zip version), so folder %1 was not deleted. Quit Teleport, then delete the folder yourself if you want.
+en.UserDataCheckFailed=Could not check whether Teleport is still running, so folder %1 was not deleted. Quit Teleport, then delete the folder yourself if you want.
+en.SendToComment=Send files to a paired device with ZCL Teleport
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

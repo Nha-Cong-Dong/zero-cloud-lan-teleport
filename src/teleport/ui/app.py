@@ -319,7 +319,7 @@ from teleport.app.clipboard import ClipboardBackend, ClipboardEvent, ClipOutcome
 from teleport.app.devices import DeviceView
 from teleport.app.firewall import FirewallIssue, check_firewall_status
 from teleport.app.node import NodeEvent
-from teleport.app.settings import Settings, WindowGeometry
+from teleport.app.settings import DeviceSettings, Settings, WindowGeometry
 from teleport.app.transfers import Direction, FileEntry, OfferReceived, TransferKey, TransferUpdate
 from teleport.atomic import write_atomic
 from teleport.lock import NodeLock, NodeLockedError
@@ -359,7 +359,7 @@ from teleport.ui.settings import Section, SettingsController, SettingsPage, auto
 from teleport.ui.transfers import TransfersController
 from teleport.ui.tray import ClipNotice, ClipNoticeKind, SendTarget, Tray, TrayBadge, make_icon
 from teleport.ui.wait_pairing import WaitPairingController
-from teleport.ui.web_guest_dialog import WebGuestDialog
+from teleport.ui.web_guest_dialog import WebGuestPage
 from teleport.ui.widgets import InfoLevel
 
 EXIT_OK = 0
@@ -389,6 +389,7 @@ LOG_FILE = "teleport.log"
 LOG_MAX_BYTES = 1024 * 1024  # một file log tối đa 1 MiB
 LOG_BACKUPS = 1  # giữ thêm một bản cũ: tối đa 2 file
 ADDRESS_REFRESH_MS = 10_000  # chu kỳ đọc lại địa chỉ máy này (đọc lúc hẹn, test chỉnh được)
+FIREWALL_RECHECK_INTERVAL = 60.0  # giây tối thiểu giữa hai lần kiểm tra tường lửa khi mạng không đổi
 # Sau `commitDataRequest` không hỏi lại khi Thoát trong từng này ms. Phiên kết thúc thật thì tiến trình
 # đã bị đóng trước đó; còn chạy tức là tắt máy bị hủy (app khác chặn), nên hỏi lại như thường.
 SESSION_END_GRACE_MS = 30_000
@@ -397,6 +398,7 @@ SESSION_END_GRACE_MS = 30_000
 open_url: Callable[[QUrl], object] = QDesktopServices.openUrl
 check_firewall_status_fn: Callable[[], FirewallIssue] = check_firewall_status
 open_firewall_guide_fn: Callable[[QWidget | None], object] = open_firewall_guide
+_monotonic: Callable[[], float] = time.monotonic
 
 _CONNECT_TIMEOUT_MS = 200
 _LISTEN_ATTEMPTS = 3  # số khóa mới thử khi tên server đã bị chiếm (docstring module)
@@ -777,11 +779,19 @@ class GuiApp(QObject):
         self._first_run: FirstRunChoice | None = None
         self._session_ending = False  # hệ điều hành đang tắt máy / đăng xuất (`commitDataRequest`)
         self._quit_box: QMessageBox | None = None
+        self._clear_history_box: QMessageBox | None = None
+        self._receipt_dialog: QFileDialog | None = None
+        self._temp_clip_files: list[Path] = []
         self._multi_menu: QMenu | None = None
         self._multi_dialog: QFileDialog | None = None
         self._address_job: SubmitJob | None = None
         self._receive_dir_notice: texts.Text | None = None  # câu cuối app hiện ở dải về thư mục nhận
         self._firewall_notice: texts.Text | None = None
+        self._firewall_issue: FirewallIssue | None = None
+        self._firewall_dismissed = False
+        self._firewall_checking = False
+        self._firewall_checked_at = 0.0
+        self._last_net_signature: tuple[tuple[str, ...], int | None] | None = None
         self._settings_dir_notice: str | None = None  # câu lỗi thư mục nhận đang ở trang Cài đặt
         self._view_chosen = False  # người dùng đã bấm đổi dạng hiển thị kể từ lần `started` gần nhất
         self.host: NodeHost | None = None
@@ -819,6 +829,9 @@ class GuiApp(QObject):
         self.window.change_receive_dir_requested.connect(self._choose_receive_dir)
         self.window.change_first_run_dir_requested.connect(self._choose_first_run_dir)
         self.window.web_guest_requested.connect(self._open_web_guest)
+        self.window.set_machine_status_menu_enabled(True)
+        self.window.machine_pause_toggled.connect(self._on_pause_toggled)
+        self.window.machine_hidden_toggled.connect(self._on_machine_hidden_toggled)
         self.receive_dir_controller.state_changed.connect(self._on_receive_dir_state)
         self.receive_dir_controller.failed.connect(self._on_receive_dir_failed)
         self.receive_dir_controller.initial_selected.connect(self._on_first_run_dir_selected)
@@ -829,10 +842,23 @@ class GuiApp(QObject):
         self.tray.send_to_requested.connect(self._on_tray_send)
         self.tray.discover_requested.connect(self._on_tray_discover)
         self.tray.pause_toggled.connect(self._on_pause_toggled)
+        self.tray.web_guest_requested.connect(self._open_web_guest)
+        self.tray.open_receive_dir_requested.connect(self._on_tray_open_receive_dir)
         self.transfers.view.change_receive_dir_requested.connect(self._choose_receive_dir)
         self.transfers.view.retry_clipboard_requested.connect(self._on_clipboard_retry)
         self.transfers.view.push_clipboard_requested.connect(self._on_push_clipboard)
         self.transfers.view.clipboard_settings_requested.connect(self._open_clipboard_settings)
+        self.transfers.view.notice_dismissed.connect(self._on_chat_notice_dismissed)
+        self.transfers.view.set_quick_actions_available(True)
+        self.transfers.view.set_receipt_export_available(True)
+        self.transfers.view.header_clipboard_toggled.connect(self._on_header_clipboard_toggled)
+        self.transfers.view.header_auto_accept_toggled.connect(self._on_header_auto_accept_toggled)
+        self.transfers.view.header_connect_ip_requested.connect(self._on_header_connect_ip)
+        self.transfers.view.header_retry_connect_requested.connect(self._on_header_retry_connect)
+        self.transfers.view.header_send_clipboard_image_requested.connect(self._on_send_clipboard_image)
+        self.transfers.view.header_device_settings_requested.connect(self._open_device_settings)
+        self.transfers.view.header_clear_history_requested.connect(self._on_header_clear_history)
+        self.transfers.view.export_receipt_requested.connect(self._on_export_receipt)
         app.commitDataRequest.connect(self._on_commit_data)
         self.window.conversations.unpair_requested.connect(self._on_unpair_requested)
         self.window.conversations.current_changed.connect(self._on_conversation_changed)
@@ -863,6 +889,7 @@ class GuiApp(QObject):
         self.settings.name_changed.connect(self._on_name_changed)
         self.settings.visibility_changed.connect(self._on_visibility_changed)
         self.settings.history_cleared.connect(self.transfers.view.invalidate_history)
+        self.settings.device_settings_changed.connect(self._on_device_settings_synced)
         self.pairing.history_cleared.connect(self.transfers.view.invalidate_history)
         discover = self.window.discover
         discover.pair_requested.connect(self.pairing.pair_device)
@@ -871,10 +898,14 @@ class GuiApp(QObject):
         discover.view_preference_changed.connect(self._on_view_preference)
         self.pairing.notice.connect(discover.show_notice)
         self._wire_wait_pairing()
+        self.web_guest_page = WebGuestPage(self.window.pages)
+        self.window.add_page(Page.WEB_GUEST, self.web_guest_page)
+        self.web_guest_page.header.back_requested.connect(self.window.go_back)
         self.send_picker = SendPickerController(self.window, self)
         self.send_picker.send_confirmed.connect(self._on_picker_send)
         self.send_picker.send_many_confirmed.connect(self._on_picker_send_many)
         self.send_picker.discover_requested.connect(self._on_tray_discover)
+        self.send_picker.web_guest_requested.connect(self._on_picker_web_guest)
         self.transfers.view.send_multi_requested.connect(self._open_multi_send_menu)
         self.window.conversations.send_multi_requested.connect(self._open_multi_send_menu)
         if instance is not None:
@@ -965,6 +996,7 @@ class GuiApp(QObject):
         self.pairing.set_host(host)
         self.settings.attach(host)
         self.wait_pairing.attach(host)
+        self.web_guest_page.attach_host(host)
         self.window.set_machine_hidden(False)
         self._reset_pause()
         self.window.show_starting()
@@ -1000,7 +1032,10 @@ class GuiApp(QObject):
         self.pairing.close_all()
         self.settings.close_all()
         self.send_picker.close_all()
+        self.web_guest_page.stop_session()
+        self.web_guest_page.close_dialogs()
         self._close_multi_send()
+        self._cleanup_ui_wave1()
         self.window.hide()
         self.tray.hide()
         self._quit_timer.start(int((app_node.close_time_limit() + QUIT_GRACE) * 1000))
@@ -1026,7 +1061,11 @@ class GuiApp(QObject):
         self.pairing.close_all()
         self.settings.shutdown()
         self.send_picker.close_all()
+        self.web_guest_page.stop_session()
+        self.web_guest_page.close_dialogs()
         self._close_multi_send()
+        self._cleanup_ui_wave1()
+        self.transfers.view.shutdown_thumbnails()
         if self._instance is not None:
             self._instance.stop_listening()
         deadline = time.monotonic() + JOIN_TIMEOUT
@@ -1109,6 +1148,9 @@ class GuiApp(QObject):
     def _stop_addresses(self) -> None:
         self.address_timer.stop()
         self._address_job = None
+        self._last_net_signature = None
+        self._firewall_checked_at = 0.0
+        self._firewall_checking = False
 
     def _refresh_addresses(self) -> None:
         """Đọc `(local_addresses(), port)` qua `submit`; lần trước chưa xong thì bỏ lần này."""
@@ -1131,12 +1173,32 @@ class GuiApp(QObject):
         addresses, port = result
         self.window.set_addresses(addresses, port)
         self.wait_pairing.set_addresses(addresses, port)
-        self._check_firewall()
+        signature = (addresses, port)
+        changed = signature != self._last_net_signature
+        if changed and self._last_net_signature is not None:
+            self._firewall_dismissed = False
+        self._last_net_signature = signature
+        self._check_firewall(force=changed)
 
-    def _check_firewall(self) -> None:
+    def _check_firewall(self, *, force: bool = True) -> None:
         """Kiểm tra tường lửa ngầm trên Windows (mvp mục 8), báo qua dải thông báo nếu bị chặn."""
         if sys.platform != "win32" and check_firewall_status_fn is check_firewall_status:
             return
+        if getattr(self, "_firewall_checking", False) is True:
+            return
+        now = _monotonic()
+        checked_at = getattr(self, "_firewall_checked_at", 0.0)
+        if (
+            not force
+            and isinstance(checked_at, (int, float))
+            and checked_at > 0.0
+            and (now - checked_at) < FIREWALL_RECHECK_INTERVAL
+        ):
+            return
+        if hasattr(self, "_firewall_checking"):
+            self._firewall_checking = True
+        if hasattr(self, "_firewall_checked_at"):
+            self._firewall_checked_at = now
 
         def worker() -> None:
             issue = check_firewall_status_fn()
@@ -1144,16 +1206,39 @@ class GuiApp(QObject):
 
         threading.Thread(target=worker, daemon=True, name="firewall-check").start()
 
+    def _on_chat_notice_dismissed(self, title: str) -> None:
+        if self._firewall_notice is not None and title == texts.resolve(self._firewall_notice):
+            self._firewall_dismissed = True
+        if self._receive_dir_notice is not None and title == texts.resolve(self._receive_dir_notice):
+            self._receive_dir_notice = None
+
     def _on_firewall_checked(self, issue: FirewallIssue) -> None:
+        if hasattr(self, "_firewall_checking"):
+            self._firewall_checking = False
         if self._quitting:
             return
         if issue in (FirewallIssue.PUBLIC_NETWORK, FirewallIssue.BLOCKED):
+            prev_issue = getattr(self, "_firewall_issue", None)
+            if not isinstance(prev_issue, FirewallIssue):
+                prev_issue = None
+            dismissed = getattr(self, "_firewall_dismissed", False) is True
+            self._firewall_issue = issue
+            if dismissed and prev_issue == issue:
+                return
+            if prev_issue != issue:
+                self._firewall_dismissed = False
             text = firewall_blocked_notice_text
+            already_showing = (
+                self._firewall_notice is not None
+                and self.transfers.view.notice_text() == texts.resolve(self._firewall_notice)
+            )
+            self._firewall_notice = text
+            if already_showing:
+                return
 
             def on_action() -> None:
                 open_firewall_guide_fn(self.window)
 
-            self._firewall_notice = text
             self.transfers.view.show_notice(
                 text,
                 firewall_guide_action_text,
@@ -1161,6 +1246,8 @@ class GuiApp(QObject):
                 level=InfoLevel.WARNING,
             )
         else:
+            self._firewall_issue = None
+            self._firewall_dismissed = False
             if self._firewall_notice is not None:
                 if self.transfers.view.notice_text() == texts.resolve(self._firewall_notice):
                     self.transfers.view.hide_notice()
@@ -1201,6 +1288,33 @@ class GuiApp(QObject):
         if open_url(QUrl.fromLocalFile(str(path))) is False:
             log.warning("không mở được thư mục nhận")
 
+    def _on_tray_open_receive_dir(self) -> None:
+        path = self.receive_dir_controller.receive_dir
+        if path is not None:
+            self._on_open_receive_dir(path)
+
+    def _on_machine_hidden_toggled(self, hidden: bool) -> None:
+        host = self.host
+        visible = not bool(hidden)
+        if host is None or self._quitting:
+            return
+
+        def run(node: app_node.Node) -> None:
+            node.set_visible(visible)
+            host.apply_pairing_policy(node)
+
+        def done(result: object) -> None:
+            if host is not self.host or self._quitting:
+                return
+            if isinstance(result, BaseException):
+                log.warning("không đổi được chế độ ẩn từ thẻ máy: %s", type(result).__name__)
+                host.call(lambda node: node.visible, functools.partial(self._on_visible_read, host))
+                return
+            self.window.set_machine_hidden(not visible)
+            self.settings.refresh()
+
+        host.call(run, done)
+
     # ---- Thư mục nhận --------------------------------------------------------------------------
 
     def _choose_receive_dir(self) -> None:
@@ -1232,6 +1346,7 @@ class GuiApp(QObject):
         self.transfers.set_receive_dir_pending(c.pending)
         # Cùng điều kiện huy hiệu “Không nhận file” của thẻ máy này (`MainWindow._apply_receive_dir`).
         self.tray.set_receiving_unavailable(c.receive_dir is None and c.unavailable is not None)
+        self.tray.set_has_receive_dir(c.receive_dir is not None)
         if c.unavailable is not None or c.receive_dir is None or c.changing:
             return
         self.transfers.show_receive_dir_error(None)  # đã ổn: gỡ lỗi đổi thư mục ở các hộp hỏi
@@ -1363,12 +1478,239 @@ class GuiApp(QObject):
         if self.window.open_page(Page.SETTINGS):
             self.settings.page.show_section(Section.DEVICES, device_id, focus="clipboard")
 
-    def _open_web_guest(self) -> None:
-        """Mở hộp thoại Chế độ khách qua Web QR để chuyển tệp với điện thoại."""
+    def _open_device_settings(self, device_id: str) -> None:
+        """Mở trang Cài đặt ngay tới hàng thiết bị tin cậy `device_id`."""
+        if self.window.open_page(Page.SETTINGS):
+            self.settings.page.show_section(Section.DEVICES, device_id)
+
+    def _on_device_settings_synced(self, devices: object) -> None:
+        if not isinstance(devices, dict):
+            return
+        for device_id, setting in devices.items():
+            if isinstance(device_id, str) and isinstance(setting, DeviceSettings):
+                self.transfers.view.set_device_quick_state(
+                    device_id,
+                    clipboard=setting.clipboard,
+                    auto_accept=not setting.ask_before_receive,
+                )
+
+    def _on_header_clipboard_toggled(self, device_id: str, enabled: bool) -> None:
+        host = self.host
+        if host is None or self._quitting:
+            self.settings.refresh()
+            return
+        host.call(
+            lambda node: node.set_clipboard(device_id, bool(enabled)),
+            functools.partial(self._on_header_setting_done, host),
+        )
+
+    def _on_header_auto_accept_toggled(self, device_id: str, enabled: bool) -> None:
+        host = self.host
+        if host is None or self._quitting:
+            self.settings.refresh()
+            return
+        host.call(
+            lambda node: node.set_ask_before_receive(device_id, not bool(enabled)),
+            functools.partial(self._on_header_setting_done, host),
+        )
+
+    def _on_header_setting_done(self, host: NodeHost, result: object) -> None:
+        if host is not self.host or self._quitting:
+            return
+        if isinstance(result, BaseException):
+            log.warning("không lưu được cài đặt nhanh của thiết bị: %s", type(result).__name__)
+            self.transfers.view.show_notice(
+                lambda: QCoreApplication.translate("GuiApp", "Không lưu được cài đặt cho thiết bị này."),
+                level=InfoLevel.WARNING,
+            )
+        self.settings.refresh()
+
+    def _on_header_connect_ip(self, _device_id: str) -> None:
+        self.transfers.diagnose.open_connect_dialog()
+
+    def _on_header_retry_connect(self, _device_id: str) -> None:
+        self.transfers.diagnose.retry_current()
+
+    def _on_header_clear_history(self, device_id: str) -> None:
+        if self._quitting or self.host is None:
+            return
+        old = self._clear_history_box
+        if old is not None:
+            old.raise_()
+            old.activateWindow()
+            return
+        t = QCoreApplication.translate
+        peer = self._peer_label(device_id)
+        box = QMessageBox(self.window)
+        box.setObjectName("clearDeviceHistoryBox")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(texts.fill(t("GuiApp", "Xóa lịch sử truyền với {name}?"), name=peer))
+        box.setInformativeText(
+            t("GuiApp", "Các file đã nhận hay đã gửi vẫn giữ nguyên; chỉ xóa danh sách lịch sử với máy này.")
+        )
+        accept = box.addButton(t("GuiApp", "Xóa lịch sử"), QMessageBox.ButtonRole.DestructiveRole)
+        decline = box.addButton(t("GuiApp", "Không"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(decline)
+        box.setEscapeButton(decline)
+        box.finished.connect(
+            lambda _r, b=box, a=accept, d=device_id: self._on_clear_history_confirmed(b, a, d)
+        )
+        self._clear_history_box = box
+        motion.fade_in_on_show(box)
+        box.open()
+
+    def _on_clear_history_confirmed(self, box: QMessageBox, accept: object, device_id: str) -> None:
+        if self._clear_history_box is box:
+            self._clear_history_box = None
+        clicked = box.clickedButton()
+        box.deleteLater()
+        host = self.host
+        if clicked is not accept or host is None or self._quitting:
+            return
+        host.call(
+            lambda node: node.transfers.clear_history(device_id),
+            functools.partial(self._on_clear_device_history_done, host, device_id),
+        )
+
+    def _on_clear_device_history_done(self, host: NodeHost, device_id: str, result: object) -> None:
+        if host is not self.host or self._quitting:
+            return
+        t = QCoreApplication.translate
+        if isinstance(result, BaseException):
+            log.warning("không xóa được lịch sử với thiết bị: %s", type(result).__name__)
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Không xóa được lịch sử lúc này."),
+                level=InfoLevel.ERROR,
+            )
+            return
+        self.transfers.view.invalidate_history(device_id)
+        self.transfers.view.show_notice(
+            lambda: texts.fill(
+                t("GuiApp", "Đã xóa lịch sử truyền với {name}."),
+                name=self._peer_label(device_id),
+            ),
+            level=InfoLevel.SUCCESS,
+        )
+
+    def _on_export_receipt(self, key: object) -> None:
+        host = self.host
+        if host is None or self._quitting or not host.running or not isinstance(key, TransferKey):
+            return
+        host.call(
+            lambda node: node.receipt_path(key.transfer_id, key.direction),
+            functools.partial(self._on_receipt_checked, host, key),
+        )
+
+    def _on_receipt_checked(self, host: NodeHost, key: TransferKey, result: object) -> None:
+        if host is not self.host or self._quitting:
+            return
+        t = QCoreApplication.translate
+        if isinstance(result, BaseException) or not isinstance(result, Path):
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Lượt này chưa có biên lai ký số để xuất."),
+                level=InfoLevel.INFO,
+            )
+            return
+        old, self._receipt_dialog = self._receipt_dialog, None
+        if old is not None:
+            old.close()
+            old.deleteLater()
+        dialog = ui_transfers.file_dialog_factory(self.window)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setDefaultSuffix("teleport-receipt.json")
+        dialog.selectFile(f"{key.transfer_id[:8]}.teleport-receipt.json")
+        dialog.setWindowTitle(t("GuiApp", "Xuất biên lai truyền file"))
+        dialog.setNameFilter(t("GuiApp", "Biên lai Teleport (*.teleport-receipt.json);;Tất cả (*.*)"))
+        dialog.fileSelected.connect(
+            lambda dest, k=key, h=host: self._export_receipt_to(h, k, Path(dest)) if dest else None
+        )
+        dialog.finished.connect(lambda _r, d=dialog: self._on_receipt_dialog_finished(d))
+        self._receipt_dialog = dialog
+        dialog.open()
+
+    def _export_receipt_to(self, host: NodeHost, key: TransferKey, dest: Path) -> None:
+        if host is not self.host or self._quitting:
+            return
+        host.call(
+            lambda node: node.export_receipt(key.transfer_id, key.direction, dest),
+            functools.partial(self._on_receipt_exported, host),
+        )
+
+    def _on_receipt_exported(self, host: NodeHost, result: object) -> None:
+        if host is not self.host or self._quitting:
+            return
+        t = QCoreApplication.translate
+        if isinstance(result, BaseException):
+            log.warning("xuất biên lai thất bại: %s", type(result).__name__)
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Không xuất được biên lai truyền file."),
+                level=InfoLevel.ERROR,
+            )
+            return
+        self.transfers.view.show_notice(
+            lambda: t("GuiApp", "Đã lưu biên lai truyền file."),
+            level=InfoLevel.SUCCESS,
+        )
+
+    def _on_receipt_dialog_finished(self, dialog: QFileDialog) -> None:
+        if self._receipt_dialog is dialog:
+            self._receipt_dialog = None
+        dialog.deleteLater()
+
+    def _on_send_clipboard_image(self, device_id: str) -> None:
+        if self._quitting:
+            return
+        t = QCoreApplication.translate
+        clipboard = QApplication.clipboard()
+        image = None if clipboard is None else clipboard.image()
+        if image is None or image.isNull():
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Clipboard hiện không có ảnh để gửi."),
+                level=InfoLevel.INFO,
+            )
+            return
+        tmp_dir = self._config_dir / "tmp_clips"
+        try:
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            png_path = tmp_dir / f"screenshot-{int(time.time() * 1000)}.png"
+            ok = image.save(os.fspath(png_path), b"PNG")
+        except OSError:
+            ok = False
+            png_path = tmp_dir / "screenshot.png"
+        if not ok or not png_path.is_file():
+            self.transfers.view.show_notice(
+                lambda: t("GuiApp", "Không lưu được ảnh từ clipboard để gửi."),
+                level=InfoLevel.WARNING,
+            )
+            return
+        self._temp_clip_files.append(png_path)
+        self.transfers.request_send(device_id, [png_path])
+
+    def _cleanup_ui_wave1(self) -> None:
+        box, self._clear_history_box = self._clear_history_box, None
+        if box is not None:
+            box.close()
+            box.deleteLater()
+        dialog, self._receipt_dialog = self._receipt_dialog, None
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
+        files, self._temp_clip_files = self._temp_clip_files, []
+        for path in files:
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            (self._config_dir / "tmp_clips").rmdir()
+
+    def _open_web_guest(self, initial_paths: Sequence[Path] = ()) -> None:
+        """Mở trang Chế độ khách qua Web QR không chặn để chuyển tệp với điện thoại."""
         if self._quitting or self.host is None or not self.host.running:
             return
-        dialog = WebGuestDialog(host=self.host, parent=self.window)
-        dialog.open()
+        self.window.bring_to_front()
+        self.window.open_page(Page.WEB_GUEST)
+        self.web_guest_page.ensure_started(initial_paths)
 
     def _on_first_run_marked(self, result: object) -> None:
         if self._quitting:
@@ -1403,6 +1745,7 @@ class GuiApp(QObject):
         self.tray.set_receiving_unavailable(
             controller.receive_dir is None and controller.unavailable is not None
         )
+        self.tray.set_has_receive_dir(controller.receive_dir is not None)
         self.tray.set_running(not self._quitting)
         host.call(lambda node: node.devices(), functools.partial(self._on_devices, host))
         self._view_chosen = False
@@ -1532,6 +1875,8 @@ class GuiApp(QObject):
             return
         self._stop_addresses()
         self._reset_pause()
+        self.web_guest_page.stop_session()
+        self.web_guest_page.close_dialogs()
         self.send_picker.discard_pending()  # yêu cầu gửi đang chờ node bị bỏ, không báo
         self.send_picker.set_ready(False)
         if code != StartError.LOCKED:
@@ -1619,6 +1964,11 @@ class GuiApp(QObject):
         path_list = list(paths)
         for device_id in valid_ids:
             self.transfers.request_send(device_id, path_list)
+
+    def _on_picker_web_guest(self, paths: object) -> None:
+        if self._quitting or not isinstance(paths, tuple):
+            return
+        self._open_web_guest(paths)
 
     def _open_multi_send_menu(self) -> None:
         """Mở menu chọn file hoặc thư mục để gửi đồng thời nhiều máy (không chặn)."""
@@ -1770,6 +2120,7 @@ class GuiApp(QObject):
             size=event.size,
             preview=event.preview,
             image_size=event.image_size,
+            copy_text=event.preview,
         )
 
     def _on_clipboard_retry(self, device_id: str) -> None:
@@ -1837,18 +2188,35 @@ class GuiApp(QObject):
                 level=InfoLevel.WARNING,
             )
         elif push is ClipPushResult.NOT_ENABLED:
-            self.transfers.view.show_notice(
-                lambda: texts.fill(
-                    t(
-                        "GuiApp",
-                        "Hãy bật “Đồng bộ clipboard” cho {name} để gửi nội dung trong khay nhớ tạm.",
+            clipboard = QApplication.clipboard()
+            has_image = clipboard is not None and not clipboard.image().isNull()
+            if has_image:
+                self.transfers.view.show_notice(
+                    lambda: texts.fill(
+                        t(
+                            "GuiApp",
+                            "Đồng bộ clipboard chưa bật cho {name}. Bạn vẫn có thể gửi ảnh đang có trong "
+                            "clipboard như file ảnh.",
+                        ),
+                        name=self._peer_label(device_id),
                     ),
-                    name=self._peer_label(device_id),
-                ),
-                lambda: t("GuiApp", "Mở Cài đặt"),
-                lambda: self._open_clipboard_settings(device_id),
-                level=InfoLevel.INFO,
-            )
+                    lambda: t("GuiApp", "Gửi ảnh ngay"),
+                    functools.partial(self._on_send_clipboard_image, device_id),
+                    level=InfoLevel.INFO,
+                )
+            else:
+                self.transfers.view.show_notice(
+                    lambda: texts.fill(
+                        t(
+                            "GuiApp",
+                            "Hãy bật “Đồng bộ clipboard” cho {name} để gửi nội dung trong khay nhớ tạm.",
+                        ),
+                        name=self._peer_label(device_id),
+                    ),
+                    lambda: t("GuiApp", "Mở Cài đặt"),
+                    lambda: self._open_clipboard_settings(device_id),
+                    level=InfoLevel.INFO,
+                )
         elif push is ClipPushResult.EMPTY:
             self.transfers.view.show_notice(
                 lambda: t("GuiApp", "Clipboard hiện đang trống."),
@@ -1936,6 +2304,7 @@ class GuiApp(QObject):
         self._pause_seq += 1  # bỏ kết quả của yêu cầu đang chờ
         self._paused_confirmed = False
         self._apply_paused(False)
+        self.tray.set_has_receive_dir(False)
         self.tray.set_running(False)
 
 
@@ -2278,7 +2647,7 @@ def _tray_ok(tray: Tray) -> bool:
             return False
     tray.set_send_targets_provider(lambda: [SendTarget("selftest", "Teleport", False)])
     tray.menu.aboutToShow.emit()
-    if len(tray.send_menu.actions()) != 1 or len(tray.actions()) != 4:
+    if len(tray.send_menu.actions()) != 1 or len(tray.actions()) != 6:
         log.error("selftest: menu khay sai")
         return False
     return True
@@ -2316,7 +2685,7 @@ def _selftest(app: QApplication) -> int:
         if not _tray_ok(tray):
             return EXIT_ERROR
         if (
-            len(tray.actions()) != 4
+            len(tray.actions()) != 6
             or transfers.offers.keys()
             or transfers.view.rows()
             or controller.choose(window)

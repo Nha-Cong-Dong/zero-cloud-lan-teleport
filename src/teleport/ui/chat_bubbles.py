@@ -128,7 +128,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 
-from PySide6.QtCore import QCoreApplication, QDate, QEvent, QRectF, QSignalBlocker, QSize, Qt, QTime, Signal
+from PySide6.QtCore import (
+    QCoreApplication,
+    QDate,
+    QEvent,
+    QRectF,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    QTime,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QFocusEvent,
@@ -137,6 +148,7 @@ from PySide6.QtGui import (
     QPainter,
     QPaintEvent,
     QPen,
+    QPixmap,
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
@@ -176,6 +188,7 @@ from teleport.ui.transfers_view import (
     STALL_TEXT_AFTER,
     Kind,
     bar_value,
+    delta_saved_text,
     done_text,
     percent_text,
     progress_text,
@@ -184,6 +197,7 @@ from teleport.ui.transfers_view import (
     result_message,
     result_status,
     resumed_text,
+    routed_to_text,
     saved_as_text,
     short_status,
     stalled_text,
@@ -200,6 +214,7 @@ BUBBLE_MIN_WIDTH = 260  # px
 _ICON = 20  # px, icon loại file
 _STATUS_ICON = 16  # px, icon trạng thái (pixmap 20 thu vào)
 _FOCUS_INSET = 3  # px, vòng tiêu điểm thụt vào trong bong bóng
+_MAX_EXPANDED_FILES = 20  # số dòng tên file tối đa khi mở rộng danh sách nhiều file
 NOTE_PREVIEW_CHARS = 200  # code point tối đa của dòng xem trước clipboard
 _PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
 
@@ -221,6 +236,27 @@ _CHANGE_DIR_RESULTS = frozenset(
 
 
 # ---- Hàm thuần --------------------------------------------------------------------------------
+
+
+def _routed_subfolder(path: Path | None, receive_dir: Path | None, first_name: str | None) -> str | None:
+    """Tên thư mục con được phân loại tự động (nếu file đơn lẻ lưu vào thư mục con trong `receive_dir`)."""
+    if path is None or receive_dir is None or first_name is None:
+        return None
+    if "/" in first_name or "\\" in first_name:
+        return None
+    parent = path.parent
+    if not shell.is_within(parent, receive_dir):
+        return None
+    return os.path.relpath(os.fspath(parent), os.fspath(receive_dir))
+
+
+def _format_file_list(names: Sequence[str], total_count: int) -> str:
+    """Danh sách tên file gọn tối đa `_MAX_EXPANDED_FILES` dòng, phần dư tóm thành câu “… và k file khác”."""
+    shown = [texts.file_label(n) for n in names[:_MAX_EXPANDED_FILES]]
+    rest = max(0, total_count - len(shown))
+    if rest > 0:
+        shown.append(QCoreApplication.translate("Chat", "… và %n file khác", None, rest))
+    return "\n".join(shown)
 
 
 def file_icon(names: Sequence[str], file_count: int) -> str:
@@ -572,6 +608,11 @@ class _Bubble(ChatBubble):
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setMinimumWidth(BUBBLE_MIN_WIDTH)
         self.icon_label = _IconLabel(_ICON)
+        self.thumb_label = QLabel(self)
+        self.thumb_label.setObjectName("bubbleThumb")
+        self.thumb_label.setVisible(False)
+        self.thumb_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label = _ElidedLabel()
         title_font = self.title_label.font()
         title_font.setWeight(QFont.Weight.DemiBold)
@@ -595,6 +636,7 @@ class _Bubble(ChatBubble):
         self.head.setContentsMargins(0, 0, 0, 0)
         self.head.setSpacing(theme.SPACING[1])
         self.head.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        self.head.addWidget(self.thumb_label, 0, Qt.AlignmentFlag.AlignTop)
         self.head.addLayout(names, 1)
         self.status_row = QHBoxLayout()
         self.status_row.setContentsMargins(0, 0, 0, 0)
@@ -603,6 +645,23 @@ class _Bubble(ChatBubble):
         self.status_row.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignTop)
         self.status_row.addStretch(1)
         self.body().addLayout(self.head)
+
+    def set_thumbnail(self, pixmap: QPixmap | None) -> None:
+        """Hiện ảnh thu nhỏ ở đầu bong bóng khi có pixmap hợp lệ, ngược lại giữ icon loại file."""
+        valid = pixmap is not None and not pixmap.isNull()
+        if valid and pixmap is not None:
+            self.thumb_label.setPixmap(pixmap)
+            self.thumb_label.setVisible(True)
+            self.icon_label.setVisible(False)
+        else:
+            self.thumb_label.clear()
+            self.thumb_label.setVisible(False)
+            self.icon_label.setVisible(True)
+
+    def searchable_text(self) -> str:
+        """Chuỗi chữ thường để lọc tìm nhanh trong luồng chat."""
+        parts = (self.title_label.full_text(), self.status_label.text(), self.detail_label.text())
+        return " ".join(p for p in parts if p).casefold()
 
     def focus_buttons(self) -> list[QWidget]:
         """Các nút của bong bóng đang hiện và bật, theo thứ tự Tab."""
@@ -853,6 +912,8 @@ class TransferBubble(_Bubble):
 
     cancel_clicked = Signal()
     open_clicked = Signal()
+    open_file_clicked = Signal()
+    export_receipt_clicked = Signal()
     resend_clicked = Signal()
     offer_answer = Signal(bool)  # Nhận / Từ chối trong panel lời mời
     offer_always = Signal(bool)  # ô “Luôn nhận” trong panel
@@ -890,6 +951,8 @@ class TransferBubble(_Bubble):
         self.renamed: dict[int, str] = {}
         self._resend_known = False
         self._resend_used = False
+        self._receipt_available = False
+        self._files_expanded = False
         self.finished_receive_dir: Path | None = None  # thư mục nhận lúc lượt kết thúc
         self._current_receive_dir: Path | None = None
         self._summary_key: tuple[object, ...] | None = None
@@ -903,6 +966,13 @@ class TransferBubble(_Bubble):
         self.head.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignTop)
         self.progress_bar = BubbleBar(self)
         self.progress_bar.display_fraction = _weak_call(self._bar_fraction)
+        self.files_list_label = _label(wrap=True, caption=True, tone="muted")
+        self.files_list_label.setObjectName("bubbleFilesList")
+        self.files_list_label.setVisible(False)
+        self.open_file_button = _button(self)
+        self.open_file_button.setObjectName("openFileBubbleButton")
+        self.open_file_button.clicked.connect(self.open_file_clicked)
+        self.open_file_button.setVisible(False)
         self.open_button = _button(self)
         self.open_button.clicked.connect(self.open_clicked)
         self.resend_button = _button(self)
@@ -910,12 +980,23 @@ class TransferBubble(_Bubble):
         self.change_dir_button = _button(self)
         self.change_dir_button.setObjectName("changeReceiveDirBubbleButton")
         self.change_dir_button.clicked.connect(self.change_dir_clicked)
+        self.files_toggle_button = _button(self)
+        self.files_toggle_button.setObjectName("toggleFilesBubbleButton")
+        self.files_toggle_button.clicked.connect(self._toggle_file_list)
+        self.files_toggle_button.setVisible(False)
+        self.receipt_button = _button(self)
+        self.receipt_button.setObjectName("exportReceiptBubbleButton")
+        self.receipt_button.clicked.connect(self.export_receipt_clicked)
+        self.receipt_button.setVisible(False)
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, theme.SPACING[0], 0, 0)
         buttons.setSpacing(theme.SPACING[1])
+        buttons.addWidget(self.open_file_button)
         buttons.addWidget(self.open_button)
         buttons.addWidget(self.resend_button)
         buttons.addWidget(self.change_dir_button)
+        buttons.addWidget(self.files_toggle_button)
+        buttons.addWidget(self.receipt_button)
         buttons.addStretch(1)
         self.extension_slot = QVBoxLayout()
         self.extension_slot.setContentsMargins(0, 0, 0, 0)
@@ -923,6 +1004,7 @@ class TransferBubble(_Bubble):
         body.addWidget(self.progress_bar)
         body.addLayout(self.status_row)
         body.addWidget(self.detail_label)
+        body.addWidget(self.files_list_label)
         body.addLayout(buttons)
         body.addLayout(self.extension_slot)
         self.icon_label.set_icon("document")
@@ -1002,9 +1084,12 @@ class TransferBubble(_Bubble):
     def focus_buttons(self) -> list[QWidget]:
         candidates: list[QWidget] = [
             self.cancel_button,
+            self.open_file_button,
             self.open_button,
             self.resend_button,
             self.change_dir_button,
+            self.files_toggle_button,
+            self.receipt_button,
         ]
         for i in range(self.extension_slot.count()):
             item = self.extension_slot.itemAt(i)
@@ -1051,6 +1136,7 @@ class TransferBubble(_Bubble):
                 changed = True
             self.cancel_button.setVisible(not self.finished)
         if changed:
+            self._update_file_list()
             self.render_status()
         if flash and self.motion is not None:
             self.motion.offer(self)  # sau `render_status`: viền ATTENTION đã có
@@ -1194,14 +1280,26 @@ class TransferBubble(_Bubble):
             result = self.result.result
             if result is TransferResult.DONE:
                 t = QCoreApplication.translate
+                parts: list[str] = []
                 if direction is Direction.RECEIVE:
-                    detail = (
+                    parts.append(
                         saved_as_text([self.renamed[i] for i in sorted(self.renamed)])
                         if self.renamed
                         else done_text()
                     )
-                    return Kind.DONE, t("Chat", "Đã lưu"), detail
-                return Kind.DONE, t("Chat", "Đã gửi"), done_text()
+                    routed = (
+                        _routed_subfolder(self.last_path, self.finished_receive_dir, self.first_name)
+                        if self.file_count == 1
+                        else None
+                    )
+                    if routed:
+                        parts.append(routed_to_text(routed))
+                else:
+                    parts.append(done_text())
+                if self.result.delta_reused_bytes > 0:
+                    parts.append(delta_saved_text(self.result.delta_reused_bytes))
+                label = t("Chat", "Đã lưu") if direction is Direction.RECEIVE else t("Chat", "Đã gửi")
+                return Kind.DONE, label, " · ".join(parts)
             return (
                 result_kind(result),
                 result_status(result),
@@ -1337,17 +1435,77 @@ class TransferBubble(_Bubble):
         self.cancel_button.set_label(t("Chat", "Hủy"))
         self.cancel_button.setAccessibleDescription(title)
         for button, text in (
+            (self.open_file_button, t("Chat", "Mở file")),
             (self.open_button, t("Chat", "Hiện trong thư mục")),
             (self.resend_button, t("Chat", "Gửi lại")),
             (self.change_dir_button, change_dir_text()),
+            (self.receipt_button, t("Chat", "Xuất biên lai…")),
         ):
             button.setText(text)
             button.setAccessibleName(text)
             button.setAccessibleDescription(title)
         self._summary_key = None
         self.render_status()
+        self._update_open_file()
         self._update_resend()
         self._update_change_dir()
+        self._update_file_list()
+        self._update_receipt()
+
+    def set_receipt_available(self, available: bool) -> None:
+        self._receipt_available = bool(available)
+        self._update_receipt()
+
+    def searchable_text(self) -> str:
+        names = self.info.names if self.info is not None else self.offer_names
+        return " ".join(
+            p for p in (self._title(), *names, self.status_label.text(), self.detail_label.text()) if p
+        ).casefold()
+
+    def _update_open_file(self) -> None:
+        can_open = (
+            self.finished
+            and self.result is not None
+            and self.result.result is TransferResult.DONE
+            and self.key.direction is Direction.RECEIVE
+            and self.file_count == 1
+            and self.last_path is not None
+            and shell.is_safe_to_open(self.last_path)
+        )
+        self.open_file_button.setVisible(can_open)
+
+    def _update_receipt(self) -> None:
+        can_export = (
+            self._receipt_available
+            and self.finished
+            and self.result is not None
+            and self.result.result is TransferResult.DONE
+        )
+        self.receipt_button.setVisible(can_export)
+
+    def _toggle_file_list(self) -> None:
+        self._files_expanded = not self._files_expanded
+        self._update_file_list()
+
+    def _update_file_list(self) -> None:
+        names = self.info.names if self.info is not None and self.info.names else self.offer_names
+        can_toggle = self.offer_panel is None and self.file_count > 1 and bool(names)
+        self.files_toggle_button.setVisible(can_toggle)
+        if not can_toggle:
+            self.files_list_label.setVisible(False)
+            return
+        t = QCoreApplication.translate
+        text = (
+            t("Chat", "Ẩn danh sách")
+            if self._files_expanded
+            else t("Chat", "Xem %n file", None, self.file_count)
+        )
+        self.files_toggle_button.setText(text)
+        self.files_toggle_button.setAccessibleName(text)
+        self.files_toggle_button.setAccessibleDescription(self._title())
+        if self._files_expanded:
+            self.files_list_label.setText(_format_file_list(names, self.file_count))
+        self.files_list_label.setVisible(self._files_expanded)
 
     def _update_resend(self) -> None:
         self.resend_button.setVisible(self.resendable())
@@ -1381,6 +1539,8 @@ class HistoryBubble(_Bubble):
     """Bong bóng của một mục lịch sử (xem docstring module); không có “Gửi lại”."""
 
     open_clicked = Signal()
+    open_file_clicked = Signal()
+    export_receipt_clicked = Signal()
 
     def __init__(
         self,
@@ -1402,14 +1562,37 @@ class HistoryBubble(_Bubble):
         result = _result_of(entry.result)
         self.kind = Kind.ERROR if result is None else result_kind(result)
         self._peer = peer
+        self._receive_dir = receive_dir
+        self._receipt_available = False
+        self._files_expanded = False
+        self.files_list_label = _label(wrap=True, caption=True, tone="muted")
+        self.files_list_label.setObjectName("bubbleFilesList")
+        self.files_list_label.setVisible(False)
+        self.open_file_button = _button(self)
+        self.open_file_button.setObjectName("openFileBubbleButton")
+        self.open_file_button.clicked.connect(self.open_file_clicked)
+        self.open_file_button.setVisible(False)
         self.open_button = _button(self)
         self.open_button.clicked.connect(self.open_clicked)
+        self.files_toggle_button = _button(self)
+        self.files_toggle_button.setObjectName("toggleFilesBubbleButton")
+        self.files_toggle_button.clicked.connect(self._toggle_file_list)
+        self.files_toggle_button.setVisible(False)
+        self.receipt_button = _button(self)
+        self.receipt_button.setObjectName("exportReceiptBubbleButton")
+        self.receipt_button.clicked.connect(self.export_receipt_clicked)
+        self.receipt_button.setVisible(False)
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, theme.SPACING[0], 0, 0)
+        buttons.setSpacing(theme.SPACING[1])
+        buttons.addWidget(self.open_file_button)
         buttons.addWidget(self.open_button)
+        buttons.addWidget(self.files_toggle_button)
+        buttons.addWidget(self.receipt_button)
         buttons.addStretch(1)
         self.body().addLayout(self.status_row)
         self.body().addWidget(self.detail_label)
+        self.body().addWidget(self.files_list_label)
         self.body().addLayout(buttons)
         self.set_emphasis(BubbleEmphasis.DANGER if self.kind is Kind.ERROR else BubbleEmphasis.NONE)
         self.set_receive_dir(receive_dir)
@@ -1422,14 +1605,65 @@ class HistoryBubble(_Bubble):
 
     def set_receive_dir(self, receive_dir: Path | None) -> None:
         """Thư mục nhận hiện tại: quyết định “Hiện trong thư mục” của đường dẫn UNC (`can_open_saved`)."""
-        self.open_button.setVisible(can_open_saved(self.entry.saved_path, receive_dir))
+        self._receive_dir = receive_dir
+        can_open = can_open_saved(self.entry.saved_path, receive_dir)
+        self.open_button.setVisible(can_open)
+        saved = self.entry.saved_path
+        can_open_file = (
+            can_open
+            and self.entry.file_count == 1
+            and saved is not None
+            and bool(saved)
+            and shell.is_safe_to_open(Path(saved))
+        )
+        self.open_file_button.setVisible(can_open_file)
+
+    def set_receipt_available(self, available: bool) -> None:
+        self._receipt_available = bool(available)
+        self._update_receipt()
+
+    def _update_receipt(self) -> None:
+        result = _result_of(self.entry.result)
+        self.receipt_button.setVisible(self._receipt_available and result is TransferResult.DONE)
+
+    def _toggle_file_list(self) -> None:
+        self._files_expanded = not self._files_expanded
+        self._update_file_list()
+
+    def _update_file_list(self) -> None:
+        can_toggle = self.entry.file_count > 1 and bool(self.entry.names)
+        self.files_toggle_button.setVisible(can_toggle)
+        if not can_toggle:
+            self.files_list_label.setVisible(False)
+            return
+        t = QCoreApplication.translate
+        text = (
+            t("Chat", "Ẩn danh sách")
+            if self._files_expanded
+            else t("Chat", "Xem %n file", None, self.entry.file_count)
+        )
+        self.files_toggle_button.setText(text)
+        self.files_toggle_button.setAccessibleName(text)
+        self.files_toggle_button.setAccessibleDescription(self.title_label.full_text())
+        if self._files_expanded:
+            self.files_list_label.setText(_format_file_list(self.entry.names, self.entry.file_count))
+        self.files_list_label.setVisible(self._files_expanded)
 
     def set_peer(self, peer: str | None) -> None:
         self._peer = peer
         self._render()
 
     def focus_buttons(self) -> list[QWidget]:
-        return [self.open_button] if not self.open_button.isHidden() else []
+        return [
+            b
+            for b in (self.open_file_button, self.open_button, self.files_toggle_button, self.receipt_button)
+            if not b.isHidden() and b.isEnabled()
+        ]
+
+    def searchable_text(self) -> str:
+        return " ".join(
+            p for p in (self.title_label.full_text(), *self.entry.names, self.status_label.text()) if p
+        ).casefold()
 
     def _render(self) -> None:
         if not hasattr(self, "entry"):
@@ -1460,10 +1694,16 @@ class HistoryBubble(_Bubble):
                 set_tone(self.status_label, "danger")
         self.status_label.setText(status)
         self.detail_label.setVisible(False)
-        open_text = t("Chat", "Hiện trong thư mục")
-        self.open_button.setText(open_text)
-        self.open_button.setAccessibleName(open_text)
-        self.open_button.setAccessibleDescription(title)
+        for button, text in (
+            (self.open_file_button, t("Chat", "Mở file")),
+            (self.open_button, t("Chat", "Hiện trong thư mục")),
+            (self.receipt_button, t("Chat", "Xuất biên lai…")),
+        ):
+            button.setText(text)
+            button.setAccessibleName(text)
+            button.setAccessibleDescription(title)
+        self._update_file_list()
+        self._update_receipt()
         peer = self._peer if self._peer is not None else texts.peer_label(entry.device_name, entry.device_id)
         if self.key.direction is Direction.SEND:
             who = texts.fill(t("Chat", "Gửi tới {name}"), name=peer)
@@ -1572,6 +1812,7 @@ class ClipboardNote(QFrame):
         size: int,
         preview: str | None = None,
         image_size: tuple[int, int] | None = None,
+        copy_text: str | None = None,
         peer: str = "",
         at: float = 0.0,
         parent: QWidget | None = None,
@@ -1587,6 +1828,12 @@ class ClipboardNote(QFrame):
         self.kind = kind
         self.byte_size = max(0, int(size))
         self._preview = preview[:NOTE_PREVIEW_CHARS] if isinstance(preview, str) else None
+        self._copy_text = copy_text if isinstance(copy_text, str) and copy_text else None
+        self._copied = False
+        self._copied_timer = QTimer(self)
+        self._copied_timer.setSingleShot(True)
+        self._copied_timer.setInterval(1500)
+        self._copied_timer.timeout.connect(self._clear_copied)
         self.image_size = image_size
         self._peer = peer
         self._unavailable = False
@@ -1601,6 +1848,9 @@ class ClipboardNote(QFrame):
         self.detail_label.setObjectName("clipboardNoteDetail")
         self.detail_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.detail_label.font()))
         self.detail_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.copy_button = _button(self)
+        self.copy_button.setObjectName("clipboardCopyButton")
+        self.copy_button.clicked.connect(self._on_copy)
         self.retry_button = _button(self)
         self.retry_button.setObjectName("clipboardRetryButton")
         self.retry_button.clicked.connect(self.retry_clicked)
@@ -1615,7 +1865,12 @@ class ClipboardNote(QFrame):
         layout.setSpacing(theme.SPACING[1])
         layout.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(lines, 1)
+        layout.addWidget(self.copy_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.retry_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        can_copy = (
+            self.ok and self.kind in (ClipKind.TEXT, ClipKind.TEXT.value) and self._copy_text is not None
+        )
+        self.copy_button.setVisible(can_copy)
         self.retry_button.setVisible(not self.ok)
         self.icon_label.set_icon("clipboard_paste", "text_muted")
         self._render()
@@ -1632,8 +1887,28 @@ class ClipboardNote(QFrame):
         return self.detail_label.full_text()
 
     def focus_buttons(self) -> list[QWidget]:
-        button = self.retry_button
-        return [button] if not button.isHidden() and button.isEnabled() else []
+        return [
+            button
+            for button in (self.copy_button, self.retry_button)
+            if not button.isHidden() and button.isEnabled()
+        ]
+
+    def searchable_text(self) -> str:
+        return f"{self.title()} {self.detail()}".casefold()
+
+    def _on_copy(self) -> None:
+        if not self._copy_text:
+            return
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(self._copy_text)
+        self._copied = True
+        self._copied_timer.start()
+        self._render()
+
+    def _clear_copied(self) -> None:
+        self._copied = False
+        self._render()
 
     def set_peer(self, peer: str) -> None:
         if peer != self._peer:
@@ -1661,8 +1936,12 @@ class ClipboardNote(QFrame):
         )
         self.title_label.setText(title)
         self.detail_label.set_full_text(detail)
-        self.retry_button.setText(texts.retry())
         t = QCoreApplication.translate
+        copy_label = t("Chat", "✓ Đã chép") if self._copied else t("Chat", "Chép lại")
+        self.copy_button.setText(copy_label)
+        self.copy_button.setAccessibleName(copy_label)
+        self.copy_button.setAccessibleDescription(detail)
+        self.retry_button.setText(texts.retry())
         self.retry_button.setAccessibleName(texts.retry())
         self.retry_button.setAccessibleDescription(title)
         summary = t("Chat", "Clipboard từ {name}: {title}. {detail}")

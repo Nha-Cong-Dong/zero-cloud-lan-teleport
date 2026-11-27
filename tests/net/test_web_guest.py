@@ -524,3 +524,57 @@ async def test_web_guest_two_way_text_sse_limits_and_rate(temp_dirs: tuple[Path,
             except OSError:
                 pass
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_web_guest_inline_image_preview_and_one_shot(temp_dirs: tuple[Path, Path]) -> None:
+    """`/api/info` báo `is_image`, `?inline=1` trả `inline` và không làm hết hạn phiên 1 lượt."""
+    upload_dir, shared_dir = temp_dirs
+    img = shared_dir / "photo.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\nPNG_DATA")
+    txt = shared_dir / "note.txt"
+    txt.write_bytes(b"NOTE_DATA")
+    sub = shared_dir / "album"
+    sub.mkdir()
+    (sub / "a.png").write_bytes(b"A")
+
+    server = WebGuestHttpServer(token="img_tok", upload_dir=upload_dir, one_shot=True)
+    img_id = server.add_shared_file(img)
+    txt_id = server.add_shared_file(txt)
+    dir_id = server.add_shared_file(sub)
+    port = await server.start(host="127.0.0.1", port=0)
+
+    try:
+        async with SimpleHttpClient(base_url=f"http://127.0.0.1:{port}") as client:
+            info = (await client.get("/api/info", params={"token": "img_tok"})).json()
+            by_id = {f["id"]: f for f in info["files"]}
+            assert by_id[img_id]["is_image"] is True
+            assert by_id[txt_id]["is_image"] is False
+            assert by_id[dir_id]["is_image"] is False
+
+            # Xem trước ảnh với ?inline=1 không làm tiêu thụ phiên 1 lượt
+            preview = await client.get(f"/api/download/{img_id}", params={"token": "img_tok", "inline": "1"})
+            assert preview.status_code == 200
+            assert preview.headers.get("Content-Disposition", "").startswith("inline")
+            assert "Cache-Control" in preview.headers
+            assert preview.content == b"\x89PNG\r\n\x1a\nPNG_DATA"
+
+            # Tải thường vẫn còn hoạt động (200), sau đó mới chuyển sang 410
+            dl = await client.get(f"/api/download/{img_id}", params={"token": "img_tok"})
+            assert dl.status_code == 200
+            assert dl.headers.get("Content-Disposition", "").startswith("attachment")
+            dl_after = await client.get(f"/api/download/{txt_id}", params={"token": "img_tok"})
+            assert dl_after.status_code == 410
+    finally:
+        await server.stop()
+
+
+def test_web_guest_v2_html_enhancements() -> None:
+    """HTML Đợt 2: vẫn < 50 KiB, bỏ `user-scalable=no`, có auto-lang, badge, cancel/retry & preview."""
+    assert len(WEB_GUEST_HTML.encode("utf-8")) < 50 * 1024
+    assert "user-scalable=no" not in WEB_GUEST_HTML
+    assert "navigator.language" in WEB_GUEST_HTML
+    assert "badgeDownload" in WEB_GUEST_HTML and "badgeText" in WEB_GUEST_HTML
+    assert "batchBox" in WEB_GUEST_HTML
+    assert "cancelUploadEntry" in WEB_GUEST_HTML and "retryUploadEntry" in WEB_GUEST_HTML
+    assert "file-thumb" in WEB_GUEST_HTML

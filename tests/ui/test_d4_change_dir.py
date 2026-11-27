@@ -419,7 +419,7 @@ def test_gui_change_dir_button_opens_one_dialog_and_hides_after_change(
             "đổi thư mục xong",
         )
         yield gui_wait(lambda: bubble.change_dir_button.isHidden(), 3, "nút ẩn sau khi đổi")
-        run.tray.actions()[3].trigger()
+        run.tray.actions()[-1].trigger()
 
     run = gui(["--config-dir", str(d)], script, keep_receive_dir=True)
     assert run.code == 0

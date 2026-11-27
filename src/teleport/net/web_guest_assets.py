@@ -12,7 +12,7 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
 <html lang="vi">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ZCL Teleport - Chuyển tệp nội bộ</title>
   <style>
     :root {
@@ -332,6 +332,57 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       text-align: center;
       font-size: 0.9rem;
     }
+    .tab-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 9px;
+      background: var(--danger);
+      color: #ffffff;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+    .tab-btn.active .tab-badge {
+      background: #ffffff;
+      color: var(--primary);
+    }
+    .batch-box {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .batch-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      gap: 8px;
+    }
+    .file-thumb {
+      width: 40px;
+      height: 40px;
+      border-radius: 6px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+      margin-right: 10px;
+      flex-shrink: 0;
+    }
+    .file-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .badge-muted { background: rgba(100, 116, 139, 0.16); color: var(--text-muted); }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -370,12 +421,14 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           <line x1="12" y1="15" x2="12" y2="3"></line>
         </svg>
         <span id="tabDownloadText">Nhận về điện thoại</span>
+        <span class="tab-badge hidden" id="badgeDownload">0</span>
       </button>
       <button class="tab-btn" id="tabTextBtn" onclick="switchTab('text')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
         <span id="tabTextLabel">Văn bản</span>
+        <span class="tab-badge hidden" id="badgeText">0</span>
       </button>
     </div>
 
@@ -398,6 +451,16 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           <button type="button" class="btn-select" id="btnSelectText" onclick="event.stopPropagation(); document.getElementById('filePicker').click()">Chọn tệp</button>
           <button type="button" class="btn-select-secondary" id="btnSelectFolderText" onclick="event.stopPropagation(); document.getElementById('folderPicker').click()">Chọn thư mục</button>
           <button type="button" class="btn-select-secondary" id="btnCameraText" onclick="event.stopPropagation(); document.getElementById('cameraInput').click()">Chụp ảnh gửi ngay</button>
+        </div>
+      </div>
+
+      <div class="batch-box hidden" id="batchBox">
+        <div class="batch-head">
+          <span id="batchLabel"></span>
+          <span id="batchEta"></span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="batchFill"></div>
         </div>
       </div>
 
@@ -443,13 +506,18 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
   <script>
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token') || '';
-    let currentLang = 'vi';
+    let currentLang = (navigator.language || '').toLowerCase().startsWith('vi') ? 'vi' : 'en';
     let lastFiles = [];
     let lastTexts = [];
+    let seenFileIds = null;
+    let seenTextIds = null;
+    let unreadFiles = 0;
+    let unreadTexts = 0;
     let currentScope = 'both';
     let currentOneShot = false;
     let sessionExpired = false;
     let activeTab = 'upload';
+    let peerDeviceName = '';
 
     const I18N = {
       vi: {
@@ -468,6 +536,11 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         folderTag: 'Thư mục',
         uploading: 'Đang gửi... {percent}% ({speed})',
         completed: 'Hoàn tất',
+        canceled: 'Đã hủy',
+        cancelBtn: 'Hủy',
+        retryBtn: 'Thử lại',
+        batchProgress: 'Tổng tiến độ: {percent}% ({done} / {total})',
+        etaLeft: 'Còn ~{eta}',
         failed: 'Thất bại: {err}',
         waiting: 'Đang chờ...',
         textPlaceholder: 'Nhập văn bản hoặc dán liên kết cần gửi sang máy tính...',
@@ -498,6 +571,11 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         folderTag: 'Folder',
         uploading: 'Sending... {percent}% ({speed})',
         completed: 'Finished',
+        canceled: 'Canceled',
+        cancelBtn: 'Cancel',
+        retryBtn: 'Retry',
+        batchProgress: 'Batch progress: {percent}% ({done} / {total})',
+        etaLeft: '~{eta} left',
         failed: 'Failed: {err}',
         waiting: 'Pending...',
         textPlaceholder: 'Type text or paste link to send to computer...',
@@ -516,12 +594,16 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
 
     function toggleLang() {
       currentLang = currentLang === 'vi' ? 'en' : 'vi';
-      document.getElementById('langBtn').innerText = currentLang === 'vi' ? 'EN' : 'VI';
       updateTexts();
     }
 
     function updateTexts() {
       const t = I18N[currentLang];
+      document.documentElement.lang = currentLang;
+      document.getElementById('langBtn').innerText = currentLang === 'vi' ? 'EN' : 'VI';
+      if (peerDeviceName) {
+        document.getElementById('peerInfo').innerText = t.peer.replace('{name}', peerDeviceName);
+      }
       document.getElementById('tabUploadText').innerText = t.tabUpload;
       document.getElementById('tabDownloadText').innerText = t.tabDownload;
       document.getElementById('tabTextLabel').innerText = t.tabText;
@@ -539,6 +621,64 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       }
       renderDownloadList(lastFiles);
       renderTextList(lastTexts);
+      refreshUploadTexts();
+    }
+
+    function updateUnreadBadges() {
+      const dlBadge = document.getElementById('badgeDownload');
+      const txtBadge = document.getElementById('badgeText');
+      if (unreadFiles > 0) {
+        dlBadge.innerText = unreadFiles > 99 ? '99+' : String(unreadFiles);
+        dlBadge.classList.remove('hidden');
+      } else {
+        dlBadge.classList.add('hidden');
+      }
+      if (unreadTexts > 0) {
+        txtBadge.innerText = unreadTexts > 99 ? '99+' : String(unreadTexts);
+        txtBadge.classList.remove('hidden');
+      } else {
+        txtBadge.classList.add('hidden');
+      }
+    }
+
+    function syncFilesAndUnread(files) {
+      const incoming = files || [];
+      if (seenFileIds === null) {
+        seenFileIds = new Set(incoming.map((f) => f.id));
+      } else {
+        let added = 0;
+        for (const f of incoming) {
+          if (!seenFileIds.has(f.id)) {
+            seenFileIds.add(f.id);
+            added += 1;
+          }
+        }
+        if (added > 0 && activeTab !== 'download') {
+          unreadFiles += added;
+          updateUnreadBadges();
+        }
+      }
+      renderDownloadList(incoming);
+    }
+
+    function syncTextsAndUnread(items, { countUnread = true } = {}) {
+      const incoming = items || [];
+      if (seenTextIds === null) {
+        seenTextIds = new Set(incoming.map((m) => m.id));
+      } else {
+        let added = 0;
+        for (const m of incoming) {
+          if (!seenTextIds.has(m.id)) {
+            seenTextIds.add(m.id);
+            if (countUnread && m.sender === 'host') added += 1;
+          }
+        }
+        if (added > 0 && activeTab !== 'text') {
+          unreadTexts += added;
+          updateUnreadBadges();
+        }
+      }
+      renderTextList(incoming);
     }
 
     function updateScopeBadge() {
@@ -586,6 +726,13 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       document.getElementById('tabUploadBtn').classList.toggle('active', tab === 'upload');
       document.getElementById('tabDownloadBtn').classList.toggle('active', tab === 'download');
       document.getElementById('tabTextBtn').classList.toggle('active', tab === 'text');
+      if (tab === 'download') {
+        unreadFiles = 0;
+        updateUnreadBadges();
+      } else if (tab === 'text') {
+        unreadTexts = 0;
+        updateUnreadBadges();
+      }
       if (tab !== 'upload') fetchInfo();
     }
 
@@ -607,15 +754,14 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         if (!resp.ok) return;
         const data = await resp.json();
         if (data.device_name) {
+          peerDeviceName = data.device_name;
           const t = I18N[currentLang];
           document.getElementById('peerInfo').innerText = t.peer.replace('{name}', data.device_name);
         }
         applyScope(data.scope, data.one_shot);
-        lastFiles = data.files || [];
-        renderDownloadList(lastFiles);
+        syncFilesAndUnread(data.files || []);
         if (Array.isArray(data.texts)) {
-          lastTexts = data.texts;
-          renderTextList(lastTexts);
+          syncTextsAndUnread(data.texts);
         }
       } catch (e) {
         console.error('Lỗi lấy thông tin phiên:', e);
@@ -746,6 +892,16 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
         const item = document.createElement('div');
         item.className = 'file-item';
 
+        if (f.is_image && !f.is_dir) {
+          const thumb = document.createElement('img');
+          thumb.className = 'file-thumb';
+          thumb.loading = 'lazy';
+          thumb.alt = '';
+          thumb.src = '/api/download/' + encodeURIComponent(f.id) + '?token=' + encodeURIComponent(token) + '&inline=1';
+          thumb.onerror = () => thumb.classList.add('hidden');
+          item.appendChild(thumb);
+        }
+
         const details = document.createElement('div');
         details.className = 'file-details';
 
@@ -778,11 +934,168 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
 
     const uploadQueue = [];
     let isUploading = false;
+    let batchStartTime = 0;
+
+    function formatEta(sec) {
+      const s = Math.max(1, Math.round(sec));
+      if (s < 60) return s + 's';
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return m + 'm ' + r + 's';
+    }
+
+    function updateBatchProgress() {
+      const box = document.getElementById('batchBox');
+      const active = uploadQueue.filter((e) => e.status !== 'canceled');
+      if (active.length <= 1 && !active.some((e) => e.status === 'uploading' || e.status === 'queued')) {
+        if (active.length === 0) box.classList.add('hidden');
+        return;
+      }
+      box.classList.remove('hidden');
+      let total = 0;
+      let done = 0;
+      for (const e of active) {
+        total += e.total;
+        done += e.status === 'done' ? e.total : e.loaded;
+      }
+      const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 100;
+      document.getElementById('batchFill').style.width = pct + '%';
+      const t = I18N[currentLang];
+      document.getElementById('batchLabel').innerText = t.batchProgress
+        .replace('{percent}', pct)
+        .replace('{done}', formatBytes(done))
+        .replace('{total}', formatBytes(total));
+      const etaEl = document.getElementById('batchEta');
+      const elapsed = batchStartTime > 0 ? (Date.now() - batchStartTime) / 1000 : 0;
+      const speed = elapsed > 0.2 ? done / elapsed : 0;
+      const remain = total - done;
+      if (remain > 0 && speed > 0) {
+        etaEl.innerText = t.etaLeft.replace('{eta}', formatEta(remain / speed));
+      } else {
+        etaEl.innerText = '';
+      }
+    }
+
+    function createUploadEntry(file) {
+      const relPath = file._relPath || file.webkitRelativePath || '';
+      const displayName = relPath || file.name;
+      const list = document.getElementById('uploadList');
+      const item = document.createElement('div');
+      item.className = 'file-item';
+
+      const details = document.createElement('div');
+      details.className = 'file-details';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'file-name';
+      nameEl.innerText = displayName;
+      const metaEl = document.createElement('div');
+      metaEl.className = 'file-meta';
+      const progressBg = document.createElement('div');
+      progressBg.className = 'progress-bar-bg';
+      const progressFill = document.createElement('div');
+      progressFill.className = 'progress-bar-fill';
+      progressBg.appendChild(progressFill);
+      details.appendChild(nameEl);
+      details.appendChild(metaEl);
+      details.appendChild(progressBg);
+
+      const statusEl = document.createElement('div');
+      statusEl.className = 'file-actions';
+      item.appendChild(details);
+      item.appendChild(statusEl);
+      list.prepend(item);
+
+      const entry = {
+        file,
+        relPath,
+        status: 'queued',
+        loaded: 0,
+        total: file.size || 0,
+        xhr: null,
+        itemEl: item,
+        metaEl,
+        fillEl: progressFill,
+        statusEl,
+        lastErr: '',
+      };
+      renderEntryState(entry);
+      return entry;
+    }
+
+    function renderEntryState(entry) {
+      const t = I18N[currentLang];
+      const sizeStr = formatBytes(entry.total);
+      entry.statusEl.innerHTML = '';
+      if (entry.status === 'queued') {
+        entry.fillEl.style.width = '0%';
+        entry.fillEl.style.background = 'var(--primary)';
+        entry.metaEl.innerText = sizeStr + ' · ' + t.waiting;
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn-mini';
+        cancelBtn.innerText = t.cancelBtn;
+        cancelBtn.onclick = () => cancelUploadEntry(entry);
+        entry.statusEl.appendChild(cancelBtn);
+      } else if (entry.status === 'uploading') {
+        entry.fillEl.style.background = 'var(--primary)';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn-mini';
+        cancelBtn.innerText = t.cancelBtn;
+        cancelBtn.onclick = () => cancelUploadEntry(entry);
+        entry.statusEl.appendChild(cancelBtn);
+      } else if (entry.status === 'done') {
+        entry.fillEl.style.width = '100%';
+        entry.fillEl.style.background = 'var(--success)';
+        entry.metaEl.innerText = sizeStr + ' · ' + t.completed;
+        entry.statusEl.innerHTML = '<span class="badge badge-success">✓</span>';
+      } else if (entry.status === 'canceled' || entry.status === 'error') {
+        entry.fillEl.style.background = entry.status === 'canceled' ? 'var(--text-muted)' : 'var(--danger)';
+        const note = entry.status === 'canceled' ? t.canceled : t.failed.replace('{err}', entry.lastErr || '?');
+        entry.metaEl.innerText = sizeStr + ' · ' + note;
+        const retryBtn = document.createElement('button');
+        retryBtn.type = 'button';
+        retryBtn.className = 'btn-mini';
+        retryBtn.innerText = t.retryBtn;
+        retryBtn.onclick = () => retryUploadEntry(entry);
+        entry.statusEl.appendChild(retryBtn);
+      }
+      updateBatchProgress();
+    }
+
+    function refreshUploadTexts() {
+      uploadQueue.forEach((entry) => {
+        if (entry.status !== 'uploading') renderEntryState(entry);
+      });
+      updateBatchProgress();
+    }
+
+    function cancelUploadEntry(entry) {
+      if (entry.status === 'uploading' && entry.xhr) {
+        entry.status = 'canceled';
+        entry.xhr.abort();
+      } else if (entry.status === 'queued') {
+        entry.status = 'canceled';
+        renderEntryState(entry);
+      }
+    }
+
+    function retryUploadEntry(entry) {
+      entry.status = 'queued';
+      entry.loaded = 0;
+      entry.lastErr = '';
+      renderEntryState(entry);
+      processUploadQueue();
+    }
 
     function handleFilesSelected(files) {
-      for (let i = 0; i < files.length; i++) {
-        uploadQueue.push(files[i]);
+      if (!isUploading && !uploadQueue.some((e) => e.status === 'queued' || e.status === 'uploading')) {
+        batchStartTime = Date.now();
       }
+      for (let i = 0; i < files.length; i++) {
+        uploadQueue.push(createUploadEntry(files[i]));
+      }
+      updateBatchProgress();
       processUploadQueue();
     }
 
@@ -846,81 +1159,73 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     });
 
     async function processUploadQueue() {
-      if (isUploading || uploadQueue.length === 0) return;
+      if (isUploading) return;
+      const next = uploadQueue.find((e) => e.status === 'queued');
+      if (!next) {
+        updateBatchProgress();
+        return;
+      }
       isUploading = true;
-      const file = uploadQueue.shift();
-      await uploadFile(file);
+      await uploadFile(next);
       isUploading = false;
       processUploadQueue();
     }
 
-    function uploadFile(file) {
+    function uploadFile(entry) {
       return new Promise((resolve) => {
-        const relPath = file._relPath || file.webkitRelativePath || '';
-        const displayName = relPath || file.name;
-        const list = document.getElementById('uploadList');
-        const item = document.createElement('div');
-        item.className = 'file-item';
-
-        const details = document.createElement('div');
-        details.className = 'file-details';
-
-        const nameEl = document.createElement('div');
-        nameEl.className = 'file-name';
-        nameEl.innerText = displayName;
-
-        const metaEl = document.createElement('div');
-        metaEl.className = 'file-meta';
-        metaEl.innerText = formatBytes(file.size) + ' · ' + I18N[currentLang].waiting;
-
-        const progressBg = document.createElement('div');
-        progressBg.className = 'progress-bar-bg';
-        const progressFill = document.createElement('div');
-        progressFill.className = 'progress-bar-fill';
-        progressBg.appendChild(progressFill);
-
-        details.appendChild(nameEl);
-        details.appendChild(metaEl);
-        details.appendChild(progressBg);
-
-        const statusEl = document.createElement('div');
-        item.appendChild(details);
-        item.appendChild(statusEl);
-        list.prepend(item);
-
+        if (entry.status === 'canceled') {
+          resolve();
+          return;
+        }
+        entry.status = 'uploading';
+        renderEntryState(entry);
+        const file = entry.file;
+        const relPath = entry.relPath;
         const xhr = new XMLHttpRequest();
-        let startTime = Date.now();
+        entry.xhr = xhr;
+        const startTime = Date.now();
 
         xhr.upload.onprogress = function(e) {
-          if (e.lengthComputable) {
-            const percent = Math.round((e.loaded / e.total) * 100);
-            progressFill.style.width = percent + '%';
+          if (e.lengthComputable && entry.status === 'uploading') {
+            entry.loaded = e.loaded;
+            const percent = e.total > 0 ? Math.round((e.loaded / e.total) * 100) : 100;
+            entry.fillEl.style.width = percent + '%';
             const elapsedSec = (Date.now() - startTime) / 1000;
             const speed = elapsedSec > 0 ? formatBytes(e.loaded / elapsedSec) + '/s' : '';
-            metaEl.innerText = formatBytes(file.size) + ' · ' + I18N[currentLang].uploading
+            entry.metaEl.innerText = formatBytes(entry.total) + ' · ' + I18N[currentLang].uploading
               .replace('{percent}', percent)
               .replace('{speed}', speed);
+            updateBatchProgress();
           }
         };
 
         xhr.onload = function() {
+          entry.xhr = null;
           if (xhr.status >= 200 && xhr.status < 300) {
-            progressFill.style.width = '100%';
-            progressFill.style.background = 'var(--success)';
-            metaEl.innerText = formatBytes(file.size) + ' · ' + I18N[currentLang].completed;
-            statusEl.innerHTML = '<span class="badge badge-success">✓</span>';
+            entry.loaded = entry.total;
+            entry.status = 'done';
           } else {
-            progressFill.style.background = 'var(--danger)';
-            metaEl.innerText = formatBytes(file.size) + ' · ' + I18N[currentLang].failed.replace('{err}', xhr.statusText || xhr.status);
-            statusEl.innerHTML = '<span class="badge badge-danger">✕</span>';
+            entry.status = 'error';
+            entry.lastErr = xhr.statusText || String(xhr.status);
           }
+          renderEntryState(entry);
           resolve();
         };
 
         xhr.onerror = function() {
-          progressFill.style.background = 'var(--danger)';
-          metaEl.innerText = formatBytes(file.size) + ' · ' + I18N[currentLang].failed.replace('{err}', 'Mất kết nối');
-          statusEl.innerHTML = '<span class="badge badge-danger">✕</span>';
+          entry.xhr = null;
+          if (entry.status !== 'canceled') {
+            entry.status = 'error';
+            entry.lastErr = 'Network';
+          }
+          renderEntryState(entry);
+          resolve();
+        };
+
+        xhr.onabort = function() {
+          entry.xhr = null;
+          entry.status = 'canceled';
+          renderEntryState(entry);
           resolve();
         };
 
@@ -943,22 +1248,21 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           if (payload.scope || typeof payload.one_shot === 'boolean') {
             applyScope(payload.scope, payload.one_shot);
           }
-          if (payload.files) renderDownloadList(payload.files);
-          if (Array.isArray(payload.texts)) renderTextList(payload.texts);
+          if (payload.files) syncFilesAndUnread(payload.files);
+          if (Array.isArray(payload.texts)) syncTextsAndUnread(payload.texts);
         } catch (_) {}
       };
       const onFiles = (ev) => {
         try {
           const payload = JSON.parse(ev.data);
-          if (payload.files) renderDownloadList(payload.files);
+          if (payload.files) syncFilesAndUnread(payload.files);
         } catch (_) {}
       };
       const onText = (ev) => {
         try {
           const payload = JSON.parse(ev.data);
           if (payload.item && !lastTexts.some((x) => x.id === payload.item.id)) {
-            lastTexts.push(payload.item);
-            renderTextList(lastTexts);
+            syncTextsAndUnread([...lastTexts, payload.item]);
           }
         } catch (_) {}
       };
@@ -968,6 +1272,7 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       es.addEventListener('session_expired', () => markExpired());
     }
 
+    updateTexts();
     fetchInfo();
     connectEvents();
   </script>

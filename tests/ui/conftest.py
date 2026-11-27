@@ -85,7 +85,14 @@ START = "Bắt đầu"
 M3_HEAD = "Máy này chưa được thiết lập Teleport."  # câu M3 cũ: không còn được hiện
 QUITTING = "Teleport đang tắt hoặc chưa phản hồi."  # `acquire` hết hạn (soat-code vòng 1, (c))
 M4 = "Teleport vẫn chạy ở khay hệ thống và vẫn nhận file. Chọn Thoát trong menu khay để tắt hẳn."
-M5 = ("Mở Teleport", "Gửi file…", "Tạm dừng nhận", "Thoát")
+M5 = (
+    "Mở Teleport",
+    "Gửi file…",
+    "Tạm dừng nhận",
+    "Chuyển tệp với điện thoại (Web QR)…",
+    "Mở thư mục nhận",
+    "Thoát",
+)
 M6_ACCEPT = "Nhận"
 M6_REJECT = "Từ chối"
 RETRY = "Thử lại"

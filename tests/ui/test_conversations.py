@@ -1486,3 +1486,31 @@ def test_k7_add_button_compact_is_icon_only(window, qtbot, tmp_path):
     assert btn.toolButtonStyle() is Qt.ToolButtonStyle.ToolButtonTextBesideIcon
     assert btn.width() > ICON_BUTTON_SIZE
     assert isinstance(btn, QToolButton)
+
+
+def test_filter_edit_threshold_compact_and_filtering(window, qtbot, tmp_path):
+    running(window, tmp_path)
+    four = [dview(f"May-{i}") for i in range(4)]
+    window.devices.reset(four)
+    show_window(window, qtbot, 980, 660)
+    conv = window.conversations
+    assert conv.filter_edit.isHidden()
+
+    five = [dview(f"May-{i}") for i in range(5)]
+    window.devices.reset(five)
+    settle()
+    assert not conv.filter_edit.isHidden()
+
+    conv.filter_edit.setText("May-3")
+    settle()
+    assert conv.model.rowCount() == 1
+    assert conv.model.index(0, 0).data(Qt.ItemDataRole.DisplayRole) == "May-3"
+
+    # Thu gọn (< 820 px) -> ẩn ô lọc và xóa bộ lọc để hiện lại đủ avatar.
+    resize_to(window, 720, 660)
+    assert conv.filter_edit.isHidden()
+    assert conv.model.rowCount() == 5
+
+    # Mở rộng lại -> ô lọc hiện lại vì vẫn có >= 5 thiết bị.
+    resize_to(window, 980, 660)
+    assert not conv.filter_edit.isHidden()
