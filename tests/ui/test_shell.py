@@ -58,7 +58,9 @@ def test_tray_has_four_items_in_order_with_enabled_state(gui, gui_wait, config_d
 
     run = gui(["--config-dir", str(d)], script)
     assert seen["texts"] == list(ui_helpers.M5)
-    assert seen["enabled"] == [True, False, False, True], "Mở/Thoát bật; Gửi file…/Tạm dừng nhận tắt"
+    assert seen["enabled"] == [True, False, False, False, False, True], (
+        "Mở/Thoát bật; các mục cần node chạy đều tắt"
+    )
     assert run.code == 0
 
 
@@ -74,7 +76,7 @@ def test_tray_actions_emit_open_and_quit_signals(gui, gui_wait, config_dir, ui_h
         actions = tray_actions(tray)
         actions[0].trigger()
         yield gui_wait(lambda: "open" in got, 2, "open_requested")
-        actions[3].trigger()
+        actions[-1].trigger()
 
     run = gui(["--config-dir", str(d)], script)
     assert got == ["open", "quit"]

@@ -968,23 +968,25 @@ def test_sigint_quits_without_asking_even_with_active_send(gui, gui_wait, config
 
 
 def test_tray_menu_shows_four_actions_send_and_pause_follow_running(qapp):
-    """Spec D4: cả bốn mục đều hiện; “Gửi file…” và “Tạm dừng nhận” chỉ bật khi node đang chạy."""
+    """Khay có đủ 6 mục; các mục cần node chạy chỉ bật khi `set_running(True)` (và thư mục nhận hợp lệ)."""
     from teleport.ui.tray import Tray
 
     tray = Tray()
     try:
         actions = tray.actions()
-        assert len(actions) == 4
+        assert len(actions) == 6
         texts = [plain(a.text()) for a in actions]
-        assert texts[0] == OPEN and texts[3] == QUIT_YES
-        assert [a.isVisible() for a in actions] == [True, True, True, True]
-        assert [a.isEnabled() for a in actions] == [True, False, False, True]
+        assert texts[0] == OPEN and texts[-1] == QUIT_YES
+        assert [a.isVisible() for a in actions] == [True] * 6
+        assert [a.isEnabled() for a in actions] == [True, False, False, False, False, True]
         assert actions[1] is tray.send_menu.menuAction()
         assert actions[2].isCheckable()
         tray.set_running(True)
-        assert [a.isEnabled() for a in actions] == [True, True, True, True]
+        assert [a.isEnabled() for a in actions] == [True, True, True, True, False, True]
+        tray.set_has_receive_dir(True)
+        assert [a.isEnabled() for a in actions] == [True] * 6
         tray.set_running(False)
-        assert [a.isEnabled() for a in actions] == [True, False, False, True]
+        assert [a.isEnabled() for a in actions] == [True, False, False, False, False, True]
     finally:
         tray.dispose()
 

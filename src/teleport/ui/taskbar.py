@@ -46,6 +46,14 @@ class TaskbarBackend(Protocol):
 class _WindowsTaskbarBackend:
     """Bọc `ITaskbarList3` qua vtable COM thuần trên Windows 64-bit/32-bit."""
 
+    _owns_com: bool
+    _ole32: Any
+    _ptr: Any
+    _release_fn: Any
+    _hr_init_fn: Any
+    _set_value_fn: Any
+    _set_state_fn: Any
+
     def __init__(self) -> None:
         if sys.platform != "win32":
             raise OSError("chỉ có trên Windows")

@@ -383,6 +383,8 @@ FAST = SimpleNamespace(
     EVENT_RETRY_GAP=0.2,
     REPLACE_AFTER=2.0,
     NETWORK_CHECK_INTERVAL=0.2,
+    MDNS_RETRY_BASE=0.1,
+    MDNS_RETRY_MAX=0.2,
     SLACK=2.5,  # biên trên nới cho CI: thời gian chờ + 2,5 s
     # P2-6b (kế hoạch mục 4, việc 6b-T0): teleport.core.transfer và teleport.net.connection
     RECONNECT_GRACE=4.0,
@@ -445,6 +447,8 @@ def fast(monkeypatch):
     if app_node is not None:
         monkeypatch.setattr(app_node, "LOCK_TIMEOUT", FAST.LOCK_TIMEOUT)
         monkeypatch.setattr(app_node, "NETWORK_CHECK_INTERVAL", FAST.NETWORK_CHECK_INTERVAL, raising=False)
+        monkeypatch.setattr(app_node, "MDNS_RETRY_BASE", FAST.MDNS_RETRY_BASE, raising=False)
+        monkeypatch.setattr(app_node, "MDNS_RETRY_MAX", FAST.MDNS_RETRY_MAX, raising=False)
     try:
         from teleport.core import links
     except ImportError:
