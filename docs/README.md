@@ -15,6 +15,7 @@ Thư mục này chứa toàn bộ tài liệu hướng dẫn, kế hoạch, đ�
 | [mvp.md](product/mvp.md) | Danh sách tính năng, tiêu chí hoàn thành, các giới hạn kỹ thuật | Khi bổ sung tính năng hoặc tiêu chuẩn chất lượng |
 | [ke_hoach.md](product/ke_hoach.md) | Lộ trình từng giai đoạn, tiến độ thực tế, kế hoạch kiểm thử thực tế | Khi hoàn thành giai đoạn hoặc cập nhật thiết kế |
 | [hieu_du_an.md](product/hieu_du_an.md) | Giải thích cách thức hoạt động qua ví dụ trực quan, dễ hiểu | Khi quy trình kết nối hoặc truyền file thay đổi |
+| [README.vi.md](product/README.vi.md) | Bản tiếng Việt của trang giới thiệu chính (`README.md` ở gốc kho là bản tiếng Anh, mặc định) | Khi `README.md` thay đổi nội dung |
 | [huong_dan_su_dung.md](product/huong_dan_su_dung.md) | Hướng dẫn sử dụng trực quan, cài đặt, ghép đôi và khắc phục sự cố | Khi phát hành bản mới hoặc cập nhật giao diện |
 
 ### Nhóm 2: Kỹ Thuật & Cấu Trúc (`docs/technical/`)
@@ -32,6 +33,7 @@ Thư mục này chứa toàn bộ tài liệu hướng dẫn, kế hoạch, đ�
 | [CONTRIBUTING.md](community/CONTRIBUTING.md) | Hướng dẫn cài đặt môi trường, quy tắc đóng góp, quy trình phát hành | Khi thay đổi quy trình phát triển |
 | [SECURITY.md](community/SECURITY.md) | Chính sách an toàn thông tin và cách báo cáo lỗi bảo mật | Khi cập nhật chính sách an toàn |
 | [CHANGELOG.md](community/CHANGELOG.md) | Nhật ký thay đổi qua từng phiên bản | Sau mỗi bản phát hành mới |
+| [SPONSORS.md](community/SPONSORS.md) | Cách ủng hộ dự án, mục đích sử dụng tiền, danh sách nhà tài trợ và báo cáo thu chi | Khi có nhà tài trợ mới hoặc đến kỳ báo cáo |
 
 ### Nhóm 4: Hình Ảnh & Tài Nguyên (`docs/assets/`)
 Chứa hình ảnh giao diện thực tế, biểu đồ quy trình và biểu tượng ứng dụng.
