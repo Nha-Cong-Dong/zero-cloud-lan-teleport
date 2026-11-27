@@ -161,6 +161,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -272,6 +273,27 @@ SECTION_ICONS = {
     Section.TRANSFER: "arrow_swap",
     Section.ADVANCED: "wrench",
 }
+
+FILE_TYPE_PRESETS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("images", ("*.jpg", "*.jpeg", "*.png", "*.webp", "*.gif", "*.heic")),
+    ("videos", ("*.mp4", "*.mov", "*.mkv", "*.avi", "*.webm")),
+    ("documents", ("*.pdf", "*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx", "*.txt")),
+    ("archives", ("*.zip", "*.7z", "*.rar", "*.tar", "*.gz")),
+    ("audio", ("*.mp3", "*.flac", "*.wav", "*.m4a", "*.ogg")),
+    ("all", ()),
+)
+
+
+def _preset_label(key: str) -> str:
+    t = QCoreApplication.translate
+    return {
+        "images": t("Settings", "Ảnh"),
+        "videos": t("Settings", "Video"),
+        "documents": t("Settings", "Tài liệu"),
+        "archives": t("Settings", "Nén"),
+        "audio": t("Settings", "Nhạc"),
+        "all": t("Settings", "Mọi file"),
+    }[key]
 
 
 # ---- Câu chữ -----------------------------------------------------------------------------------
@@ -936,6 +958,7 @@ class SettingsSnapshot:
     delta_sync: bool = True
     routing_rules: tuple[RoutingRule, ...] = ()
     watch_portals: tuple[WatchPortalRule, ...] = ()
+    watch_portals_paused: bool = False
     device_names: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -991,6 +1014,7 @@ def read_snapshot(node: Node) -> SettingsSnapshot:
         delta_sync=bool(getattr(settings, "delta_sync", True)),
         routing_rules=tuple(getattr(settings, "routing_rules", ())),
         watch_portals=tuple(getattr(settings, "watch_portals", ())),
+        watch_portals_paused=bool(getattr(node, "watch_portals_paused", False)),
         device_names=names,
     )
 
@@ -1188,6 +1212,7 @@ class SettingsPage(QWidget):
     delta_sync_toggled = Signal(bool)
     routing_rules_changed = Signal(object)  # tuple[RoutingRule, ...]
     watch_portals_changed = Signal(object)  # tuple[WatchPortalRule, ...]
+    watch_portals_paused_toggled = Signal(bool)
     cancel_pending_requested = Signal(str, str)  # device_id, transfer_id
     cancel_all_pending_requested = Signal()
     ask_toggled = Signal(str, bool)
@@ -1222,6 +1247,7 @@ class SettingsPage(QWidget):
         self._delta_sync = True
         self._routing_rules: tuple[RoutingRule, ...] = ()
         self._watch_portals: tuple[WatchPortalRule, ...] = ()
+        self._watch_portals_paused = False
         self._device_names: dict[str, str] = {}
         self._routing_rows: list[QFrame] = []
         self._routing_controls: list[QWidget] = []
@@ -1549,10 +1575,22 @@ class SettingsPage(QWidget):
         self._section_layouts[Section.TRANSFER].addWidget(self.routing_list)
 
         self.watch_row = self._row(Section.TRANSFER, "watchPortalsRow")
-        self.add_watch_button = QPushButton(self.watch_row)
+        watch_controls = QWidget(self.watch_row)
+        watch_box = QHBoxLayout(watch_controls)
+        watch_box.setContentsMargins(0, 0, 0, 0)
+        watch_box.setSpacing(theme.SPACING[1])
+        self.watch_pause_button = QPushButton(watch_controls)
+        self.watch_pause_button.setObjectName("pauseWatchPortalsButton")
+        self.watch_pause_button.setCheckable(True)
+        self.watch_pause_button.setVisible(False)
+        self.watch_pause_button.clicked.connect(self._on_watch_pause_clicked)
+        self.add_watch_button = QPushButton(watch_controls)
         self.add_watch_button.setObjectName("addWatchPortalButton")
         self.add_watch_button.clicked.connect(self._open_add_watch_dialog)
-        self.watch_row.set_control(self.add_watch_button)
+        watch_box.addWidget(self.watch_pause_button)
+        watch_box.addWidget(self.add_watch_button)
+        watch_controls.setProperty("keepAccessible", True)
+        self.watch_row.set_control(watch_controls)
         self.watch_list = QWidget(transfer_content)
         self.watch_list.setObjectName("watchPortalsList")
         self._watch_layout = QVBoxLayout(self.watch_list)
@@ -1667,6 +1705,7 @@ class SettingsPage(QWidget):
         self.set_delta_sync(s.delta_sync)
         self.set_routing_rules(s.routing_rules)
         self.set_watch_portals(s.watch_portals)
+        self.set_watch_portals_paused(s.watch_portals_paused)
         self.set_language(s.language, i18n.available_languages())
         self.appearance.set_theme(s.theme)
         self.appearance.set_accent(s.accent)
@@ -1729,6 +1768,14 @@ class SettingsPage(QWidget):
 
     def set_watch_portals(self, rules: Sequence[WatchPortalRule]) -> None:
         self._watch_portals = tuple(rules)
+        self._rebuild_watch_portals()
+        self._update_tab_order()
+
+    def set_watch_portals_paused(self, paused: bool) -> None:
+        """Đặt trạng thái tạm dừng mọi cổng đẩy (không phát signal)."""
+        self._watch_portals_paused = bool(paused)
+        with _blocked(self.watch_pause_button):
+            self.watch_pause_button.setChecked(self._watch_portals_paused)
         self._rebuild_watch_portals()
         self._update_tab_order()
 
@@ -2104,6 +2151,8 @@ class SettingsPage(QWidget):
         remove_label: str,
         on_toggle: Callable[[bool], None],
         on_remove: Callable[[], None],
+        edit_label: str | None = None,
+        on_edit: Callable[[], None] | None = None,
     ) -> None:
         t = QCoreApplication.translate
         row = QFrame(container)
@@ -2125,6 +2174,15 @@ class SettingsPage(QWidget):
         left.addWidget(head)
         left.addWidget(info)
 
+        edit_btn: QPushButton | None = None
+        if on_edit is not None:
+            edit_btn = QPushButton(row)
+            edit_btn.setObjectName(f"{row_name}Edit")
+            edit_btn.setText(t("Settings", "Sửa"))
+            if edit_label:
+                edit_btn.setAccessibleName(edit_label)
+            edit_btn.clicked.connect(on_edit)
+
         toggle = ToggleSwitch(row)
         toggle.setObjectName(f"{row_name}Toggle")
         toggle.setChecked(enabled)
@@ -2141,11 +2199,15 @@ class SettingsPage(QWidget):
         box.setContentsMargins(theme.SPACING[3], theme.SPACING[1], theme.SPACING[3], theme.SPACING[1])
         box.setSpacing(theme.SPACING[2])
         box.addLayout(left, 1)
+        if edit_btn is not None:
+            box.addWidget(edit_btn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         box.addWidget(toggle, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         box.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(row)
         rows.append(row)
+        if edit_btn is not None:
+            controls.append(edit_btn)
         controls.extend((toggle, remove_btn))
 
     def _rebuild_routing_rules(self) -> None:
@@ -2183,6 +2245,8 @@ class SettingsPage(QWidget):
                     remove_label=texts.fill(t("Settings", "Xóa quy tắc {name}"), name=rule.name),
                     on_toggle=functools.partial(self._toggle_routing_rule, idx),
                     on_remove=functools.partial(self._remove_routing_rule, idx),
+                    edit_label=texts.fill(t("Settings", "Sửa quy tắc {name}"), name=rule.name),
+                    on_edit=functools.partial(self._open_edit_routing_dialog, idx),
                 )
         self.routing_row.set_text(t("Settings", "Tự phân loại thư mục nhận"), hint)
 
@@ -2190,6 +2254,16 @@ class SettingsPage(QWidget):
         t = QCoreApplication.translate
         self._clear_rule_cards(self._watch_layout, self._watch_rows, self._watch_controls)
         count = len(self._watch_portals)
+        self.watch_pause_button.setVisible(count > 0)
+        pause_text = (
+            t("Settings", "Tiếp tục cổng đẩy")
+            if self._watch_portals_paused
+            else t("Settings", "Tạm dừng tất cả")
+        )
+        self.watch_pause_button.setText(pause_text)
+        self.watch_pause_button.setAccessibleName(pause_text)
+        with _blocked(self.watch_pause_button):
+            self.watch_pause_button.setChecked(self._watch_portals_paused)
         if count == 0:
             hint = t(
                 "Settings",
@@ -2198,7 +2272,12 @@ class SettingsPage(QWidget):
             )
             self.watch_list.setVisible(False)
         else:
-            hint = t("Settings", "%n cổng đẩy tự động đang cấu hình.", None, count)
+            base_hint = t("Settings", "%n cổng đẩy tự động đang cấu hình.", None, count)
+            hint = (
+                f"{base_hint} · {t('Settings', 'Đang tạm dừng mọi cổng đẩy tự động.')}"
+                if self._watch_portals_paused
+                else base_hint
+            )
             self.watch_list.setVisible(True)
             for idx, portal in enumerate(self._watch_portals):
                 peer = self._device_label(portal.device_id)
@@ -2220,6 +2299,8 @@ class SettingsPage(QWidget):
                     remove_label=texts.fill(t("Settings", "Xóa cổng đẩy {name}"), name=portal.name),
                     on_toggle=functools.partial(self._toggle_watch_portal, idx),
                     on_remove=functools.partial(self._remove_watch_portal, idx),
+                    edit_label=texts.fill(t("Settings", "Sửa cổng đẩy {name}"), name=portal.name),
+                    on_edit=functools.partial(self._open_edit_watch_dialog, idx),
                 )
         self.watch_row.set_text(t("Settings", "Cổng đẩy thư mục tự động"), hint)
 
@@ -2458,6 +2539,7 @@ class SettingsPage(QWidget):
             self.delta_switch,
             self.add_routing_button,
             *self._routing_controls,
+            self.watch_pause_button,
             self.add_watch_button,
             *self._watch_controls,
             self.export_button,
@@ -2563,8 +2645,16 @@ class SettingsPage(QWidget):
         self._dir_picker = picker
         picker.open()
 
+    def _on_watch_pause_clicked(self, checked: bool) -> None:
+        self.set_watch_portals_paused(bool(checked))
+        self.watch_portals_paused_toggled.emit(self._watch_portals_paused)
+
     def _open_add_routing_dialog(self) -> None:
         self._open_rule_dialog(is_watch=False)
+
+    def _open_edit_routing_dialog(self, index: int) -> None:
+        if 0 <= index < len(self._routing_rules):
+            self._open_rule_dialog(is_watch=False, edit_index=index)
 
     def _open_add_watch_dialog(self) -> None:
         t = QCoreApplication.translate
@@ -2576,17 +2666,40 @@ class SettingsPage(QWidget):
             return
         self._open_rule_dialog(is_watch=True)
 
-    def _open_rule_dialog(self, *, is_watch: bool) -> None:
+    def _open_edit_watch_dialog(self, index: int) -> None:
+        if 0 <= index < len(self._watch_portals):
+            self._open_rule_dialog(is_watch=True, edit_index=index)
+
+    def _open_rule_dialog(self, *, is_watch: bool, edit_index: int | None = None) -> None:
         t = QCoreApplication.translate
         self.close_dialogs()
+        existing_watch = (
+            self._watch_portals[edit_index]
+            if is_watch and edit_index is not None and 0 <= edit_index < len(self._watch_portals)
+            else None
+        )
+        existing_routing = (
+            self._routing_rules[edit_index]
+            if not is_watch and edit_index is not None and 0 <= edit_index < len(self._routing_rules)
+            else None
+        )
+        is_edit = existing_watch is not None or existing_routing is not None
+
         dlg = QDialog(self)
         dlg.setObjectName("addWatchPortalDialog" if is_watch else "addRoutingRuleDialog")
         dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        dlg.setWindowTitle(
-            t("Settings", "Thêm cổng đẩy tự động")
-            if is_watch
-            else t("Settings", "Thêm quy tắc phân loại thư mục nhận")
-        )
+        if is_edit:
+            dlg.setWindowTitle(
+                t("Settings", "Sửa cổng đẩy tự động")
+                if is_watch
+                else t("Settings", "Sửa quy tắc phân loại thư mục nhận")
+            )
+        else:
+            dlg.setWindowTitle(
+                t("Settings", "Thêm cổng đẩy tự động")
+                if is_watch
+                else t("Settings", "Thêm quy tắc phân loại thư mục nhận")
+            )
         form = QFormLayout(dlg)
         form.setContentsMargins(theme.SPACING[3], theme.SPACING[3], theme.SPACING[3], theme.SPACING[3])
         form.setSpacing(theme.SPACING[2])
@@ -2632,12 +2745,69 @@ class SettingsPage(QWidget):
         patterns_edit.setAccessibleName(t("Settings", "Mẫu tên file"))
         form.addRow(t("Settings", "Mẫu tên file"), patterns_edit)
 
+        presets_wrap = QWidget(dlg)
+        presets_wrap.setObjectName("rulePresetsRow")
+        presets_grid = QGridLayout(presets_wrap)
+        presets_grid.setContentsMargins(0, 0, 0, 0)
+        presets_grid.setSpacing(theme.SPACING[1])
+
+        def apply_preset(preset_patterns: tuple[str, ...]) -> None:
+            if not preset_patterns:
+                patterns_edit.clear()
+                return
+            try:
+                current = list(parse_patterns(patterns_edit.text()))
+            except ValueError:
+                current = [part.strip() for part in patterns_edit.text().split(",") if part.strip()]
+            lower_current = {p.casefold() for p in current}
+            if all(p.casefold() in lower_current for p in preset_patterns):
+                remove_set = {p.casefold() for p in preset_patterns}
+                updated = [p for p in current if p.casefold() not in remove_set]
+            else:
+                updated = list(current)
+                for p in preset_patterns:
+                    if p.casefold() not in lower_current:
+                        updated.append(p)
+                        lower_current.add(p.casefold())
+            patterns_edit.setText(", ".join(updated))
+
+        for pos, (key, preset_patterns) in enumerate(FILE_TYPE_PRESETS):
+            chip = QPushButton(_preset_label(key), presets_wrap)
+            chip.setObjectName(f"rulePreset_{key}")
+            chip.clicked.connect(functools.partial(apply_preset, preset_patterns))
+            presets_grid.addWidget(chip, pos // 3, pos % 3)
+        form.addRow(t("Settings", "Chọn nhanh loại file"), presets_wrap)
+
         recursive_cb: QCheckBox | None = None
         if is_watch:
             recursive_cb = QCheckBox(t("Settings", "Theo dõi cả thư mục con bên trong"), dlg)
             recursive_cb.setObjectName("ruleRecursiveCheckbox")
             recursive_cb.setAccessibleName(t("Settings", "Theo dõi cả thư mục con bên trong"))
             form.addRow("", recursive_cb)
+
+        if existing_watch is not None:
+            name_edit.setText(existing_watch.name)
+            dir_edit.setText(existing_watch.source_dir)
+            dev_idx = device_combo.findData(existing_watch.device_id)
+            if dev_idx < 0:
+                device_combo.addItem(self._device_label(existing_watch.device_id), existing_watch.device_id)
+                dev_idx = device_combo.count() - 1
+            device_combo.setCurrentIndex(dev_idx)
+            patterns_edit.setText(", ".join(existing_watch.patterns))
+            if recursive_cb is not None:
+                recursive_cb.setChecked(existing_watch.recursive)
+        elif existing_routing is not None:
+            name_edit.setText(existing_routing.name)
+            dir_edit.setText(existing_routing.destination)
+            dev_idx = device_combo.findData(existing_routing.device_id)
+            if dev_idx < 0 and existing_routing.device_id is not None:
+                device_combo.addItem(
+                    self._device_label(existing_routing.device_id), existing_routing.device_id
+                )
+                dev_idx = device_combo.count() - 1
+            if dev_idx >= 0:
+                device_combo.setCurrentIndex(dev_idx)
+            patterns_edit.setText(", ".join(existing_routing.patterns))
 
         error_label = _plain(dlg, object_name="ruleDialogError")
         error_label.setProperty(theme.TONE_PROPERTY, "danger")
@@ -2649,9 +2819,10 @@ class SettingsPage(QWidget):
         )
         ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
         cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        ok_text = t("Settings", "Lưu") if is_edit else t("Settings", "Thêm")
         if ok_btn is not None:
-            ok_btn.setText(t("Settings", "Thêm"))
-            ok_btn.setAccessibleName(t("Settings", "Thêm"))
+            ok_btn.setText(ok_text)
+            ok_btn.setAccessibleName(ok_text)
         if cancel_btn is not None:
             cancel_btn.setText(t("Settings", "Hủy"))
             cancel_btn.setAccessibleName(t("Settings", "Hủy"))
@@ -2677,25 +2848,37 @@ class SettingsPage(QWidget):
                         error_label.setVisible(True)
                         return
                     portal = WatchPortalRule(
-                        id=uuid4().hex,
+                        id=existing_watch.id if existing_watch is not None else uuid4().hex,
                         name=raw_name,
                         source_dir=raw_dir,
                         device_id=chosen_device,
                         patterns=patterns,
                         recursive=bool(recursive_cb is not None and recursive_cb.isChecked()),
+                        enabled=existing_watch.enabled if existing_watch is not None else True,
                     )
-                    updated_portals = (*self._watch_portals, portal)
+                    if existing_watch is not None and edit_index is not None:
+                        updated_list = list(self._watch_portals)
+                        updated_list[edit_index] = portal
+                        updated_portals = tuple(updated_list)
+                    else:
+                        updated_portals = (*self._watch_portals, portal)
                     self.set_watch_portals(updated_portals)
                     self.watch_portals_changed.emit(self._watch_portals)
                 else:
                     rule = RoutingRule(
-                        id=uuid4().hex,
+                        id=existing_routing.id if existing_routing is not None else uuid4().hex,
                         name=raw_name,
                         destination=raw_dir,
                         device_id=chosen_device if isinstance(chosen_device, str) else None,
                         patterns=patterns,
+                        enabled=existing_routing.enabled if existing_routing is not None else True,
                     )
-                    updated_rules = (*self._routing_rules, rule)
+                    if existing_routing is not None and edit_index is not None:
+                        updated_r_list = list(self._routing_rules)
+                        updated_r_list[edit_index] = rule
+                        updated_rules = tuple(updated_r_list)
+                    else:
+                        updated_rules = (*self._routing_rules, rule)
                     self.set_routing_rules(updated_rules)
                     self.routing_rules_changed.emit(self._routing_rules)
             except ValueError as err:
@@ -2896,6 +3079,7 @@ class SettingsController(QObject):
     name_changed = Signal(str)
     visibility_changed = Signal(bool)
     history_cleared = Signal(object)  # None = toàn bộ (spec D2 mục 9.9)
+    device_settings_changed = Signal(dict)  # dict[str, DeviceSettings]
 
     def __init__(
         self,
@@ -2957,6 +3141,7 @@ class SettingsController(QObject):
         page.delta_sync_toggled.connect(self._on_delta_sync)
         page.routing_rules_changed.connect(self._on_routing_rules)
         page.watch_portals_changed.connect(self._on_watch_portals)
+        page.watch_portals_paused_toggled.connect(self._on_watch_portals_paused)
         page.cancel_pending_requested.connect(self.request_cancel_pending)
         page.cancel_all_pending_requested.connect(self.request_cancel_all_pending)
         page.ask_toggled.connect(self._on_ask)
@@ -3101,11 +3286,13 @@ class SettingsController(QObject):
             delta_sync=result.delta_sync,
             routing_rules=result.routing_rules,
             watch_portals=result.watch_portals,
+            watch_portals_paused=result.watch_portals_paused,
         )
         self._devices = dict(result.devices)
         self._saved_autostart = result.autostart
         self.page.set_values(result)
         self.page.set_loaded(True)
+        self.device_settings_changed.emit(dict(self._devices))
         self._sync_theme(theme.mode_from_setting(result.theme), result.accent)
         if self.page.info_bar.title == snapshot_error_text():  # đọc lại được: câu lỗi cũ không còn đúng
             self.page.clear_notice()
@@ -3153,6 +3340,7 @@ class SettingsController(QObject):
         if isinstance(result, dict):
             self._devices = dict(result)
             self.page.set_device_settings(self._devices)
+            self.device_settings_changed.emit(dict(self._devices))
 
     # ---- Ý định của người dùng -----------------------------------------------------------------
 
@@ -3328,6 +3516,7 @@ class SettingsController(QObject):
         def ok(_result: object) -> None:
             current = self._devices.get(device_id, DeviceSettings())
             self._devices[device_id] = replace(current, ask_before_receive=ask)
+            self.device_settings_changed.emit(dict(self._devices))
 
         self._call(
             field,
@@ -3351,6 +3540,7 @@ class SettingsController(QObject):
         def ok(_result: object) -> None:
             current = self._devices.get(device_id, DeviceSettings())
             self._devices[device_id] = replace(current, clipboard=enabled)
+            self.device_settings_changed.emit(dict(self._devices))
 
         self._call(
             field,
@@ -3427,6 +3617,14 @@ class SettingsController(QObject):
             lambda old: self.page.set_watch_portals(old if isinstance(old, tuple) else ()),
             ok,
             value=next_rules,
+        )
+
+    def _on_watch_portals_paused(self, paused: bool) -> None:
+        self._call(
+            "watch_portals_paused",
+            lambda node: node.set_watch_portals_paused(bool(paused)),
+            lambda old: self.page.set_watch_portals_paused(False if old is None else bool(old)),
+            value=bool(paused),
         )
 
     # ---- Xóa toàn bộ lịch sử -------------------------------------------------------------------

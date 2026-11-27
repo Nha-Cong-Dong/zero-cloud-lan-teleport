@@ -266,6 +266,14 @@ def menu_pause() -> str:
     return QCoreApplication.translate("Texts", "Tạm dừng nhận")
 
 
+def menu_web_guest() -> str:
+    return QCoreApplication.translate("Texts", "Chuyển tệp với điện thoại (Web QR)…")
+
+
+def menu_open_receive_dir() -> str:
+    return QCoreApplication.translate("Texts", "Mở thư mục nhận")
+
+
 def menu_quit() -> str:
     return QCoreApplication.translate("Texts", "Thoát")
 

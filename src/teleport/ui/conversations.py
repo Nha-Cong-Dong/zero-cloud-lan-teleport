@@ -123,6 +123,7 @@ from PySide6.QtCore import (
     QPoint,
     QRect,
     QRectF,
+    QSignalBlocker,
     QSize,
     QSortFilterProxyModel,
     Qt,
@@ -153,6 +154,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
+    QLineEdit,
     QListView,
     QMenu,
     QSizePolicy,
@@ -213,6 +215,7 @@ MIN_ROW_HEIGHT = 64  # px, nền của một hàng (chưa tính khe giữa hai h
 ROW_GAP = 2  # px, khe giữa hai hàng, nằm trong sizeHint (nền chừa 1 px trên, 1 px dưới)
 AVATAR_SIZE = 42  # px
 COMPACT_CELL = 48  # px, ô bo quanh avatar ở dạng thu gọn
+FILTER_SHOW_THRESHOLD = 5  # chỉ hiện ô lọc khi có từ 5 máy đã ghép đôi trở lên
 _PADDING = 10  # px, lề trong của hàng
 _AVATAR_GAP = 12  # px, avatar → khối chữ
 _TIME_GAP = 8  # px, tên → giờ
@@ -422,6 +425,7 @@ class ConversationModel(QSortFilterProxyModel):
         else:
             super().__init__(source if parent is None else parent)
         self._activity: dict[str, DeviceActivity] = {}
+        self._filter_text = ""
         self.setDynamicSortFilter(True)
         if isinstance(source, DeviceListModel):
             self.setSourceModel(source)
@@ -489,6 +493,29 @@ class ConversationModel(QSortFilterProxyModel):
         if rows:
             self.dataChanged.emit(self.index(0, 0), self.index(rows - 1, 0))
 
+    def filter_text(self) -> str:
+        return self._filter_text
+
+    def set_filter_text(self, text: str) -> None:
+        """Lọc danh sách cuộc trò chuyện theo tên máy hoặc đầu mã định danh."""
+        cleaned = text.strip().casefold()
+        if cleaned == self._filter_text:
+            return
+        self._filter_text = cleaned
+        self.invalidate()
+
+    def unfiltered_count(self) -> int:
+        """Tổng số máy đã ghép đôi trong model nguồn (không tính bộ lọc chữ)."""
+        model = self.sourceModel()
+        if model is None:
+            return 0
+        count = 0
+        for row in range(model.rowCount()):
+            view = model.index(row, 0).data(DEVICE_ROLE)
+            if isinstance(view, DeviceView) and view.paired:
+                count += 1
+        return count
+
     # -- Qt -------------------------------------------------------------------------------------
 
     def filterAcceptsRow(self, source_row: int, source_parent: _Index) -> bool:
@@ -496,7 +523,12 @@ class ConversationModel(QSortFilterProxyModel):
         if model is None:
             return False
         view = model.index(source_row, 0, source_parent).data(DEVICE_ROLE)
-        return isinstance(view, DeviceView) and view.paired
+        if not (isinstance(view, DeviceView) and view.paired):
+            return False
+        if not self._filter_text:
+            return True
+        label = texts.peer_label(view.name, view.device_id).casefold()
+        return self._filter_text in label or self._filter_text in view.device_id.casefold()
 
     def lessThan(self, source_left: _Index, source_right: _Index) -> bool:
         left, right = source_left.data(DEVICE_ROLE), source_right.data(DEVICE_ROLE)
@@ -1383,6 +1415,12 @@ class ConversationList(QWidget):
         self._restore_selected = False
         self._selected_before_remove: str | None = None
 
+        self.filter_edit = QLineEdit(self)
+        self.filter_edit.setObjectName("conversationFilterEdit")
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.setVisible(False)
+        self.filter_edit.textChanged.connect(self._on_filter_changed)
+
         self.model = ConversationModel(devices, self)
         self.delegate = ConversationDelegate(self)
         self.list_view = _ConversationView(self)
@@ -1419,9 +1457,11 @@ class ConversationList(QWidget):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(_LIST_SPACING)
+        self._layout.addWidget(self.filter_edit)
         self._layout.addWidget(self.list_view)
         self._layout.addWidget(self.add_button)
         self._layout.addStretch(1)
+        QWidget.setTabOrder(self.filter_edit, self.list_view)
         QWidget.setTabOrder(self.list_view, self.add_button)
 
         self.model.modelAboutToBeReset.connect(self._remember_current)
@@ -1461,7 +1501,7 @@ class ConversationList(QWidget):
         return self._menu
 
     def first_focus_widget(self) -> QWidget:
-        return self.list_view
+        return self.filter_edit if not self.filter_edit.isHidden() else self.list_view
 
     def last_focus_widget(self) -> QWidget:
         return self.add_button
@@ -1579,10 +1619,14 @@ class ConversationList(QWidget):
         self.list_view.note_layout_changed()
         self.list_view.doItemsLayout()
         self.list_view.viewport().update()
+        self._update_filter_visibility()
         self.updateGeometry()
 
     def retranslate(self) -> None:
         t = QCoreApplication.translate
+        search_hint = t("Conversations", "Tìm thiết bị…")
+        self.filter_edit.setPlaceholderText(search_hint)
+        self.filter_edit.setAccessibleName(search_hint)
         self.list_view.setAccessibleName(t("Conversations", "Máy đã ghép đôi"))
         self.list_view.setAccessibleDescription(
             t(
@@ -1639,7 +1683,19 @@ class ConversationList(QWidget):
             self._current_id = device_id
             self.current_changed.emit(device_id)
 
+    def _on_filter_changed(self, text: str) -> None:
+        self.model.set_filter_text(text)
+
+    def _update_filter_visibility(self) -> None:
+        show = not self._compact and self.model.unfiltered_count() >= FILTER_SHOW_THRESHOLD
+        if not show and self.filter_edit.text():
+            with QSignalBlocker(self.filter_edit):
+                self.filter_edit.clear()
+            self.model.set_filter_text("")
+        self.filter_edit.setVisible(show)
+
     def _on_rows_changed(self) -> None:
+        self._update_filter_visibility()
         rows = self.model.rowCount()
         self.list_view.setVisible(rows > 0)
         self._update_height()

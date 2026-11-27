@@ -813,3 +813,169 @@ def test_bubble_bar_paints_track_and_accent_strong(qtbot, ui_theme, dark):
     right = image.pixelColor(image.width() * 3 // 4, y)
     assert close(left, tok.accent_strong), left.name()
     assert close(right, tok.track), right.name()
+
+
+# =================================================================================================
+# Đợt 1 v1.7.0: Delta savings, thư mục phân loại, Mở file an toàn, xem danh sách file, biên lai,
+# và nút Chép lại ở ClipboardNote
+# =================================================================================================
+
+
+def test_delta_savings_and_routed_subfolder_in_done_bubble(view, tmp_path):
+    from teleport.app.transfers import TransferFinished, TransferResult
+
+    receive_dir = tmp_path / "Nhan"
+    routed_dir = receive_dir / "HinhAnh"
+    routed_dir.mkdir(parents=True)
+    saved = routed_dir / "anh.png"
+    saved.write_bytes(b"png")
+
+    view.set_receive_dir(receive_dir)
+    k = key("receive")
+    inf = info(k, "transferring", files=(("anh.png", 50 * MiB),))
+    view.handle(status_changed(k, "transferring", files=(("anh.png", 50 * MiB),)))
+    view.handle(file_done(k, saved, 0, "anh.png"))
+    view.handle(
+        TransferFinished(
+            info=inf,
+            result=TransferResult.DONE,
+            by_peer=False,
+            reason=None,
+            file_index=0,
+            reject=None,
+            delta_reused_bytes=20 * MiB,
+        )
+    )
+    b = view.row(k)
+    text = bubble_text(b)
+    assert "HinhAnh" in text
+    assert "20" in text and ("MiB" in text or "MB" in text)
+
+
+@pytest.mark.parametrize(
+    ("filename", "expect_open_file"),
+    [("report.pdf", True), ("photo.PNG", True), ("installer.exe", False), ("script.ps1", False)],
+)
+def test_open_file_button_blocks_dangerous_extensions(view, tmp_path, filename, expect_open_file):
+    receive_dir = tmp_path / "Nhan"
+    receive_dir.mkdir()
+    saved = receive_dir / filename
+    saved.write_bytes(b"data")
+
+    view.set_receive_dir(receive_dir)
+    k = key("receive")
+    view.handle(status_changed(k, "transferring", files=((filename, 1024),)))
+    view.handle(file_done(k, saved, 0, filename))
+    view.handle(finished(k, "done", files=((filename, 1024),)))
+    b = view.row(k)
+    assert b.open_button.isVisibleTo(view)
+    assert b.open_file_button.isVisibleTo(view) is expect_open_file
+
+
+def test_multifile_expand_toggle_hidden_while_offer_panel_open(view):
+    from teleport.app.transfers import OfferReceived
+    from teleport.ui.offer import OfferBook
+
+    book = OfferBook()
+    view.set_offer_book(book)
+    k = key("receive")
+    files = (("a.txt", 10), ("b.txt", 20), ("c.txt", 30))
+    upd = OfferReceived(
+        key=k,
+        device_name=PEER,
+        files=tuple(entry(i, n, s) for i, (n, s) in enumerate(files)),
+        names=tuple(n for n, _ in files),
+        total_bytes=60,
+        auto_accepted=False,
+    )
+    book.add(upd)
+    view.handle(upd)
+    b = view.row(k)
+    assert b.offer_panel is not None
+    # Khi đang còn lời mời thì chỉ giữ nút của OfferPanel (không chen files_toggle_button).
+    assert not b.files_toggle_button.isVisibleTo(view)
+    view.handle(finished(k, "done", files=files))
+    assert b.offer_panel is None
+    assert b.files_toggle_button.isVisibleTo(view)
+    assert "3" in b.files_toggle_button.text()
+    assert not b.files_list_label.isVisibleTo(view)
+    b.files_toggle_button.click()
+    assert b.files_list_label.isVisibleTo(view)
+    assert "a.txt" in b.files_list_label.text() and "c.txt" in b.files_list_label.text()
+    b.files_toggle_button.click()
+    assert not b.files_list_label.isVisibleTo(view)
+
+
+def test_history_bubble_receipt_button_and_safe_open_file(qtbot, tmp_path):
+    import datetime
+
+    from teleport.core.history import HistoryEntry
+    from teleport.ui.chat_bubbles import HistoryBubble
+
+    rdir = tmp_path / "Nhan"
+    rdir.mkdir()
+    safe_file = rdir / "doc.pdf"
+    exe_file = rdir / "app.exe"
+    safe_file.write_bytes(b"pdf")
+    exe_file.write_bytes(b"mz")
+    now = datetime.datetime(2026, 11, 1, 9, 0, tzinfo=datetime.UTC)
+
+    done_entry = HistoryEntry(
+        device_id=PEER_ID,
+        device_name=PEER,
+        direction="receive",
+        transfer_id="a" * 32,
+        names=("doc.pdf",),
+        file_count=1,
+        total_bytes=100,
+        done_bytes=100,
+        result="done",
+        finished_at=now,
+        saved_path=str(safe_file),
+    )
+    b_done = HistoryBubble(done_entry, receive_dir=rdir)
+    qtbot.addWidget(b_done)
+    assert not b_done.open_file_button.isHidden()
+    assert b_done.receipt_button.isHidden()
+    b_done.set_receipt_available(True)
+    assert not b_done.receipt_button.isHidden()
+
+    exe_entry = HistoryEntry(
+        device_id=PEER_ID,
+        device_name=PEER,
+        direction="receive",
+        transfer_id="b" * 32,
+        names=("app.exe",),
+        file_count=1,
+        total_bytes=100,
+        done_bytes=0,
+        result="cancelled_user",
+        finished_at=now,
+        saved_path=str(exe_file),
+    )
+    b_exe = HistoryBubble(exe_entry, receive_dir=rdir)
+    qtbot.addWidget(b_exe)
+    b_exe.set_receipt_available(True)
+    assert b_exe.open_file_button.isHidden()
+    assert b_exe.receipt_button.isHidden()
+
+
+def test_clipboard_note_copy_button_copies_text(qtbot):
+    from teleport.core.messages import ClipKind
+    from teleport.ui.chat_bubbles import ClipboardNote
+
+    note = ClipboardNote(
+        PEER_ID,
+        ok=True,
+        kind=ClipKind.TEXT,
+        size=11,
+        preview="hello world",
+        copy_text="hello world",
+        peer=PEER,
+    )
+    qtbot.addWidget(note)
+    assert not note.copy_button.isHidden()
+    assert "Chép lại" in note.copy_button.text()
+    note.copy_button.click()
+    assert QApplication.clipboard().text() == "hello world"
+    assert "Đã chép" in note.copy_button.text()

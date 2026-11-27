@@ -53,6 +53,40 @@ log = logging.getLogger(__name__)
 
 REVEAL_MAX_ITEMS = 32  # số file tối đa được chọn sẵn (và được nhớ cho một bóng thoại / bong bóng)
 
+# Đuôi file có thể tự chạy mã / kịch bản khi mở trực tiếp bằng hệ điều hành: chỉ cho mở thư mục chứa.
+BLOCKED_OPEN_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".appimage",
+        ".bash",
+        ".bat",
+        ".cmd",
+        ".com",
+        ".command",
+        ".cpl",
+        ".deb",
+        ".exe",
+        ".hta",
+        ".jar",
+        ".js",
+        ".jse",
+        ".lnk",
+        ".msc",
+        ".msi",
+        ".pif",
+        ".ps1",
+        ".reg",
+        ".rpm",
+        ".scr",
+        ".sh",
+        ".url",
+        ".vbe",
+        ".vbs",
+        ".wsf",
+        ".wsh",
+        ".zsh",
+    }
+)
+
 _COINIT_APARTMENTTHREADED = 0x2
 _S_OK = 0
 _S_FALSE = 1
@@ -235,3 +269,33 @@ def _default_select_native(folder: Path, files: Sequence[Path]) -> bool:
 
 # Seam: chọn sẵn file trong Explorer (thư mục, các file); đọc lúc gọi. Test thay để không mở Explorer.
 _select_native: Callable[[Path, Sequence[Path]], bool] = _default_select_native
+
+
+def is_safe_to_open(path: Path) -> bool:
+    """True nếu `path` có tên hợp lệ và đuôi không nằm trong danh sách file thực thi nguy hiểm."""
+    name = path.name.rstrip(". ")
+    if not name:
+        return False
+    suffix = Path(name).suffix.lower()
+    return suffix not in BLOCKED_OPEN_EXTENSIONS
+
+
+def open_file_in_os(
+    path: Path,
+    root: Path | None,
+    *,
+    open_url: Callable[[QUrl], object],
+) -> bool:
+    """Mở trực tiếp một file bằng ứng dụng mặc định nếu an toàn, hợp lệ và vẫn tồn tại trên đĩa."""
+    if not isinstance(path, Path) or not path.is_absolute():
+        return False
+    if not is_safe_to_open(path):
+        return False
+    if root is not None and not is_within(path, root):
+        return False
+    try:
+        if not path.is_file():
+            return False
+    except OSError:
+        return False
+    return bool(open_url(QUrl.fromLocalFile(str(path))))

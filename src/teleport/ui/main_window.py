@@ -200,6 +200,7 @@ from teleport.ui.home import START_PANEL_MAX_WIDTH as START_PANEL_MAX_WIDTH  # h
 from teleport.ui.home import MachineCard, SaveBar, StartPanel
 from teleport.ui.radar import DeviceListModel
 from teleport.ui.shortcuts import Shortcut
+from teleport.ui.taskbar import TaskbarProgress
 from teleport.ui.tray import Tray, make_icon
 from teleport.ui.widgets import (
     AvatarKind,
@@ -239,6 +240,7 @@ class Page(StrEnum):
     DISCOVER = "discover"
     SETTINGS = "settings"
     WAIT_PAIRING = "wait_pairing"
+    WEB_GUEST = "web_guest"
 
 
 class PageStack(QStackedWidget):
@@ -442,6 +444,8 @@ class MainWindow(QMainWindow):
     open_receive_dir_requested = Signal(object)  # Path; nối thẳng từ `save_bar.open_requested`
     change_receive_dir_requested = Signal()  # nối thẳng từ `save_bar.change_requested`
     web_guest_requested = Signal()
+    machine_pause_toggled = Signal(bool)
+    machine_hidden_toggled = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -592,6 +596,8 @@ class MainWindow(QMainWindow):
         self.conversations.add_device_requested.connect(self._open_discover)
 
         self.machine_card = MachineCard(self.sidebar)
+        self.machine_card.pause_toggled.connect(self.machine_pause_toggled)
+        self.machine_card.hidden_toggled.connect(self.machine_hidden_toggled)
         self.name_label = self.machine_card.name_label
         self.address_label = self.machine_card.address_label
         self.copy_button = self.machine_card.copy_button
@@ -695,6 +701,7 @@ class MainWindow(QMainWindow):
         self._update_page_buttons()
         self.retranslate()
         self.backdrop = MicaBackdrop(self, self.sidebar)  # nền Mica cột trái (Windows 11, spec G7)
+        self._taskbar = TaskbarProgress()
 
     # ---- Trạng thái --------------------------------------------------------------------------
 
@@ -804,11 +811,16 @@ class MainWindow(QMainWindow):
         self._receiving_paused = bool(paused)
         self._apply_receive_dir()
         self.compact_machine.update_info()
+        self._sync_taskbar_progress()
 
     def set_machine_hidden(self, hidden: bool) -> None:
         """Máy này đang ẩn (Cài đặt): huy hiệu “Đang ẩn” ở thẻ máy này và ở avatar khi cột thu gọn."""
         self.machine_card.set_hidden(hidden)
         self.compact_machine.update_info()
+
+    def set_machine_status_menu_enabled(self, enabled: bool) -> None:
+        """Cho phép nhấp huy hiệu trạng thái trên thẻ máy này để bật/tắt nhanh."""
+        self.machine_card.set_status_menu_enabled(enabled)
 
     def set_transfer_summary(self, has_content: bool, active: int) -> None:
         """Danh sách lượt có gì không (thẻ hay dải thông báo) và số lượt chưa kết thúc (≥ 0).
@@ -829,6 +841,15 @@ class MainWindow(QMainWindow):
         """% tổng trên tiêu đề cửa sổ (`texts.window_title`; None: chỉ tên app). `ui.transfers` gọi."""
         self._progress = percent
         self.setWindowTitle(texts.window_title(percent))
+        self._sync_taskbar_progress()
+
+    def _sync_taskbar_progress(self) -> None:
+        if "_taskbar" not in self.__dict__:
+            return
+        if not self.testAttribute(Qt.WidgetAttribute.WA_WState_Created) or not self.isVisible():
+            return
+        hwnd = int(self.winId())
+        self._taskbar.update(hwnd, self._progress, paused=self._receiving_paused)
 
     # ---- Trang -------------------------------------------------------------------------------
 
@@ -1267,6 +1288,7 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         self._shown_once = True
         self._apply_compact()
+        self._sync_taskbar_progress()
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -1277,6 +1299,8 @@ class MainWindow(QMainWindow):
             self.start_view.refresh_icon()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if "_taskbar" in self.__dict__:
+            self._taskbar.dispose()
         event.ignore()
         if Tray.is_available():
             self.hide()

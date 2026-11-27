@@ -1880,3 +1880,25 @@ def test_segmented_control_stylesheet_rules_are_narrow():
         assert f'QRadioButton[segment="{position}"]:checked' in css
     assert t.accent.name() in css and t.accent_text.name() in css
     assert "QRadioButton {" not in css and "QRadioButton:" not in css
+
+
+def test_infobar_deduplicates_accessibility_alert_when_unchanged(qtbot, monkeypatch):
+    from PySide6.QtGui import QAccessible
+
+    from teleport.ui import widgets
+
+    events: list[QAccessible.Event] = []
+    monkeypatch.setattr(widgets.QAccessible, "updateAccessibility", lambda ev: events.append(ev.type()))
+    bar = widgets.InfoBar()
+    qtbot.addWidget(bar)
+    bar.show_message(widgets.InfoLevel.WARNING, "Bị chặn", "Chi tiết", action="Mở")
+    assert events == [QAccessible.Event.Alert]
+    # Gọi lại với cùng nội dung và mức khi đang mở -> không phát Alert lặp (tránh âm thanh liên tục).
+    bar.show_message(widgets.InfoLevel.WARNING, "Bị chặn", "Chi tiết", action="Mở")
+    assert events == [QAccessible.Event.Alert]
+    # Nội dung đổi hoặc vừa đóng rồi mở lại -> phát Alert mới.
+    bar.show_message(widgets.InfoLevel.WARNING, "Bị chặn", "Chi tiết mới", action="Mở")
+    assert len(events) == 2
+    bar.clear()
+    bar.show_message(widgets.InfoLevel.WARNING, "Bị chặn", "Chi tiết mới", action="Mở")
+    assert len(events) == 3

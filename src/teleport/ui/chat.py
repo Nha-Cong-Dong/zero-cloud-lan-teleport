@@ -156,6 +156,7 @@ from PySide6.QtCore import (
     QMimeData,
     QObject,
     QPoint,
+    QSignalBlocker,
     Qt,
     QTimer,
     Signal,
@@ -163,6 +164,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
+    QAction,
+    QCursor,
     QDesktopServices,
     QDragEnterEvent,
     QDragLeaveEvent,
@@ -171,21 +174,27 @@ from PySide6.QtGui import (
     QFocusEvent,
     QGuiApplication,
     QKeyEvent,
+    QKeySequence,
     QPainter,
     QPaintEvent,
+    QPixmap,
     QResizeEvent,
+    QShortcut,
     QShowEvent,
 )
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QMenu,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from teleport.app.devices import DeviceView
 from teleport.app.transfers import (
@@ -222,6 +231,7 @@ from teleport.ui.offer import OfferBook
 from teleport.ui.radar import DeviceListModel, can_receive_files, drop_hint_text
 from teleport.ui.send import printable
 from teleport.ui.shortcuts import Shortcut
+from teleport.ui.thumbnails import THUMB_DEFAULT_SIZE, ThumbnailLoader, is_thumbnailable
 from teleport.ui.widgets import (
     BubbleRow,
     ChatBubble,
@@ -396,6 +406,7 @@ class ChatThread(QWidget):
         self._current: Bubble | None = None
         self._pinned = True
         self._unseen = 0
+        self._search_query = ""
         self._counted: set[Bubble] = set()  # bong bóng đang nằm trong số đếm “lượt mới”
         self._last_session_at = float("-inf")
         self._exit_next = exit_next
@@ -488,10 +499,8 @@ class ChatThread(QWidget):
         self._layout.insertWidget(index + 1, item.wrapper)
         bubble.installEventFilter(self)
         self._attach_motion(bubble)
-        item.wrapper.show()
-        now = _wall_now()
-        for i in (index, index + 1):
-            self._fix_separator(i, now)
+        item.wrapper.setVisible(self._matches_search(bubble))
+        self.refresh_separators()
         last = index == len(self._items) - 1
         if new and last and not self._pinned:
             self._counted.add(bubble)
@@ -535,11 +544,12 @@ class ChatThread(QWidget):
                 bubble.installEventFilter(self)
                 self._attach_motion(bubble)
                 if not hide:
-                    item.wrapper.show()
+                    item.wrapper.setVisible(self._matches_search(bubble))
             self.refresh_separators()
         finally:
             if hide:
                 container.show()
+                self._apply_search_filter()
             container.setUpdatesEnabled(True)
         if anchor is not None:
             # Chạy ngay bố cục đang chờ (chỉ LayoutRequest, không DeferredDelete) để đọc vị trí mới của
@@ -594,14 +604,46 @@ class ChatThread(QWidget):
         self.history_note.setVisible(True)
 
     def refresh_separators(self) -> None:
-        """Tính lại chữ mọi dòng mốc (luồng hiện, đổi ngôn ngữ)."""
+        """Tính lại chữ mọi dòng mốc (luồng hiện, đổi ngôn ngữ, lọc tìm kiếm)."""
         now = _wall_now()
-        for index in range(len(self._items)):
-            self._fix_separator(index, now)
+        prev_at: float | None = None
+        for item in self._items:
+            if not self._matches_search(item.bubble):
+                item.separator.setVisible(False)
+                continue
+            shown = needs_separator(prev_at, item.at)
+            if shown:
+                item.separator.setText(separator_text(item.at, now))
+            item.separator.setVisible(shown)
+            prev_at = item.at
         if self.history_state is HistoryState.FAILED:
             self.history_note.setText(
                 QCoreApplication.translate("Chat", "Không đọc được lịch sử với máy này.")
             )
+
+    def set_search_filter(self, query: str) -> int:
+        """Lọc bong bóng theo `query`; trả số kết quả khớp (hoặc -1 nếu `query` rỗng)."""
+        cleaned = query.strip().casefold()
+        self._search_query = cleaned
+        matched = self._apply_search_filter()
+        self.refresh_separators()
+        return -1 if not cleaned else matched
+
+    def _matches_search(self, bubble: Bubble) -> bool:
+        if not self._search_query:
+            return True
+        fn = getattr(bubble, "searchable_text", None)
+        haystack = fn() if callable(fn) else ""
+        return self._search_query in haystack
+
+    def _apply_search_filter(self) -> int:
+        matched = 0
+        for item in self._items:
+            ok = self._matches_search(item.bubble)
+            item.wrapper.setVisible(ok)
+            if ok:
+                matched += 1
+        return matched
 
     def focus_current(self, reason: Qt.FocusReason = Qt.FocusReason.OtherFocusReason) -> bool:
         """Đặt tiêu điểm vào bong bóng hiện hành (mặc định mới nhất); không có bong bóng → False."""
@@ -758,12 +800,23 @@ class _ThreadStack(QStackedWidget):
 
 
 class ChatHeader(QWidget):
-    """Đầu luồng: avatar, tên máy, dòng trạng thái; đường kẻ dưới 1 px `border`."""
+    """Đầu luồng: avatar, tên máy, dòng trạng thái và các nút thao tác nhanh; đường kẻ dưới 1 px `border`."""
+
+    clipboard_toggled = Signal(bool)
+    auto_accept_toggled = Signal(bool)
+    search_toggled = Signal(bool)
+    connect_ip_requested = Signal()
+    retry_connect_requested = Signal()
+    send_clipboard_image_requested = Signal()
+    device_settings_requested = Signal()
+    clear_history_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("chatHeader")
         self._key: str | None = None
+        self._quick_available = False
+        self._menu: QMenu | None = None
         self.avatar = DeviceAvatar(self, diameter=_AVATAR, presence=Presence.OFFLINE, ring="surface")
         self.name_label = QLabel(self)
         self.name_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -782,12 +835,92 @@ class ChatHeader(QWidget):
         column.addWidget(self.status_label)
         self.action_row = QHBoxLayout()  # chỗ cho nút đầu luồng (B3c)
         self.action_row.setContentsMargins(0, 0, 0, 0)
+        self.action_row.setSpacing(theme.SPACING[0])
+
+        t = QCoreApplication.translate
+        self.clipboard_button = IconButton("clipboard_paste", t("Chat", "Đồng bộ clipboard"), self)
+        self.clipboard_button.setObjectName("chatHeaderClipboardButton")
+        self.clipboard_button.setCheckable(True)
+        self.clipboard_button.toggled.connect(self.clipboard_toggled)
+        self.auto_accept_button = IconButton("checkmark_circle", t("Chat", "Luôn tự động nhận file"), self)
+        self.auto_accept_button.setObjectName("chatHeaderAutoAcceptButton")
+        self.auto_accept_button.setCheckable(True)
+        self.auto_accept_button.toggled.connect(self.auto_accept_toggled)
+        self.search_button = IconButton("search", t("Chat", "Tìm trong luồng"), self)
+        self.search_button.setObjectName("chatHeaderSearchButton")
+        self.search_button.setCheckable(True)
+        self.search_button.toggled.connect(self.search_toggled)
+        self.more_button = IconButton("more_horizontal", t("Chat", "Thao tác khác"), self)
+        self.more_button.setObjectName("chatHeaderMoreButton")
+        self.more_button.clicked.connect(self._open_more_menu)
+        for btn in (self.clipboard_button, self.auto_accept_button, self.search_button, self.more_button):
+            btn.setVisible(False)
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 14, 20, 14)
         layout.setSpacing(theme.SPACING[2])
         layout.addWidget(self.avatar, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(column, 1)
         layout.addLayout(self.action_row)
+        self.retranslate()
+
+    def set_quick_actions_available(self, available: bool) -> None:
+        self._quick_available = bool(available)
+        for btn in (self.clipboard_button, self.auto_accept_button, self.search_button, self.more_button):
+            if self._quick_available:
+                if self.action_row.indexOf(btn) < 0:
+                    self.action_row.addWidget(btn)
+                btn.setVisible(True)
+            else:
+                btn.setVisible(False)
+                if self.action_row.indexOf(btn) >= 0:
+                    self.action_row.removeWidget(btn)
+
+    def set_quick_state(self, *, clipboard: bool, auto_accept: bool) -> None:
+        with QSignalBlocker(self.clipboard_button):
+            self.clipboard_button.setChecked(bool(clipboard))
+        with QSignalBlocker(self.auto_accept_button):
+            self.auto_accept_button.setChecked(bool(auto_accept))
+
+    def set_search_active(self, active: bool) -> None:
+        with QSignalBlocker(self.search_button):
+            self.search_button.setChecked(bool(active))
+
+    def retranslate(self) -> None:
+        t = QCoreApplication.translate
+        self.clipboard_button.set_label(t("Chat", "Đồng bộ clipboard"))
+        self.auto_accept_button.set_label(t("Chat", "Luôn tự động nhận file"))
+        self.search_button.set_label(t("Chat", "Tìm trong luồng"))
+        self.more_button.set_label(t("Chat", "Thao tác khác"))
+
+    def _open_more_menu(self) -> None:
+        old, self._menu = self._menu, None
+        if old is not None:
+            with contextlib.suppress(RuntimeError):
+                old.close()
+                old.deleteLater()
+        t = QCoreApplication.translate
+        menu = QMenu(self)
+        menu.setObjectName("chatHeaderMoreMenu")
+        menu.setAccessibleName(t("Chat", "Thao tác với thiết bị"))
+        items = (
+            (t("Chat", "Kết nối bằng IP…"), self.connect_ip_requested),
+            (t("Chat", "Thử kết nối lại"), self.retry_connect_requested),
+            (t("Chat", "Gửi ảnh từ clipboard"), self.send_clipboard_image_requested),
+            (t("Chat", "Cài đặt cho thiết bị này…"), self.device_settings_requested),
+            (t("Chat", "Xóa lịch sử với máy này…"), self.clear_history_requested),
+        )
+        for text, signal in items:
+            action = QAction(text, menu)
+            action.triggered.connect(lambda _=False, s=signal: s.emit())
+            menu.addAction(action)
+        self._menu = menu
+        pos = (
+            self.more_button.mapToGlobal(self.more_button.rect().bottomLeft())
+            if self.more_button.isVisible()
+            else QCursor.pos()
+        )
+        menu.popup(pos)
 
     def set_device(self, name: str, status: str, presence: Presence, *, key: str | None = None) -> None:
         """Đổi máy hiện ở đầu luồng; chấm chỉ chuyển màu dần khi `key` trùng lần trước (cùng máy)."""
@@ -810,6 +943,77 @@ class ChatHeader(QWidget):
         super().changeEvent(event)
         if event.type() in _PALETTE_EVENTS:
             self.update()
+        elif event.type() == QEvent.Type.LanguageChange:
+            self.retranslate()
+
+
+class ChatSearchBar(QWidget):
+    """Thanh tìm nhanh trong luồng chat hiện tại (`Ctrl+F` hoặc nút Kính lúp)."""
+
+    query_changed = Signal(str)
+    close_requested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("chatSearchBar")
+        t = QCoreApplication.translate
+        self.edit = QLineEdit(self)
+        self.edit.setObjectName("chatSearchEdit")
+        self.edit.setClearButtonEnabled(True)
+        self.edit.textChanged.connect(self.query_changed)
+        self.edit.installEventFilter(self)
+        self.count_label = QLabel(self)
+        self.count_label.setObjectName("chatSearchCount")
+        self.count_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.count_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.count_label.font()))
+        self.count_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.close_button = IconButton("dismiss", t("Chat", "Đóng tìm kiếm"), self)
+        self.close_button.setObjectName("chatSearchClose")
+        self.close_button.clicked.connect(self.close_requested)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(_MARGIN, theme.SPACING[1], _MARGIN, theme.SPACING[1])
+        layout.setSpacing(theme.SPACING[1])
+        layout.addWidget(self.edit, 1)
+        layout.addWidget(self.count_label)
+        layout.addWidget(self.close_button)
+        self.setVisible(False)
+        self.retranslate()
+
+    def set_count(self, matches: int) -> None:
+        if matches < 0:
+            self.count_label.setText("")
+            self.count_label.setVisible(False)
+        else:
+            self.count_label.setText(QCoreApplication.translate("Chat", "%n kết quả", None, matches))
+            self.count_label.setVisible(True)
+
+    def focus_edit(self) -> None:
+        self.edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.edit.selectAll()
+
+    def retranslate(self) -> None:
+        t = QCoreApplication.translate
+        hint = t("Chat", "Tìm file hoặc nội dung trong luồng…")
+        self.edit.setPlaceholderText(hint)
+        self.edit.setAccessibleName(hint)
+        self.close_button.set_label(t("Chat", "Đóng tìm kiếm"))
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            watched is self.edit
+            and event.type() == QEvent.Type.KeyPress
+            and isinstance(event, QKeyEvent)
+            and event.key() == Qt.Key.Key_Escape
+        ):
+            self.close_requested.emit()
+            return True
+        return super().eventFilter(watched, event)
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.LanguageChange:
+            self.retranslate()
 
 
 class ChatComposer(QWidget):
@@ -928,9 +1132,18 @@ class ChatView(QWidget):
     change_receive_dir_requested = Signal()  # nút “Đổi thư mục nhận” của bong bóng nhận (spec D4)
     retry_clipboard_requested = Signal(str)  # “Thử lại” của note clipboard: device_id (mvp F8)
     content_changed = Signal()
+    notice_dismissed = Signal(str)  # tiêu đề của dải thông báo vừa bị người dùng bấm đóng (`✕`)
     offer_answer_requested = Signal(object, bool)  # TransferKey, accept: Nhận / Từ chối ở panel
     offer_always_toggled = Signal(object, bool)  # TransferKey, on: ô “Luôn nhận” ở panel
     change_receive_dir_requested = Signal()  # “Đổi…” ở panel
+    header_clipboard_toggled = Signal(str, bool)
+    header_auto_accept_toggled = Signal(str, bool)
+    header_connect_ip_requested = Signal(str)
+    header_retry_connect_requested = Signal(str)
+    header_send_clipboard_image_requested = Signal(str)
+    header_device_settings_requested = Signal(str)
+    header_clear_history_requested = Signal(str)
+    export_receipt_requested = Signal(object)  # TransferKey
 
     def __init__(self, devices: DeviceListModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -957,6 +1170,11 @@ class ChatView(QWidget):
         self._change_depth = 0
         self._changed = False
         self._device_banner: QWidget | None = None  # thanh theo máy (`set_device_banner`)
+        self._quick_actions_available = False
+        self._receipt_export_available = False
+        self._device_clip_enabled: dict[str, bool] = {}
+        self._device_auto_accept: dict[str, bool] = {}
+        self._thumbs = ThumbnailLoader(self)
 
         # Dựng theo thứ tự Tab (spec B3 mục 9.10): info_bar → empty_state → threads → new_button → nút gửi.
         self.info_bar = InfoBar(self)
@@ -964,6 +1182,17 @@ class ChatView(QWidget):
         self.info_bar.action_triggered.connect(self._on_notice_action)
         self.info_bar.dismissed.connect(self._on_notice_dismissed)
         self.header = ChatHeader(self)
+        self.header.clipboard_toggled.connect(self._on_header_clipboard_toggled)
+        self.header.auto_accept_toggled.connect(self._on_header_auto_accept_toggled)
+        self.header.search_toggled.connect(self._on_header_search_toggled)
+        self.header.connect_ip_requested.connect(self._on_header_connect_ip)
+        self.header.retry_connect_requested.connect(self._on_header_retry_connect)
+        self.header.send_clipboard_image_requested.connect(self._on_header_send_clip_image)
+        self.header.device_settings_requested.connect(self._on_header_device_settings)
+        self.header.clear_history_requested.connect(self._on_header_clear_history)
+        self.search_bar = ChatSearchBar(self)
+        self.search_bar.query_changed.connect(self._on_search_query)
+        self.search_bar.close_requested.connect(self.close_search)
         self.threads = _ThreadStack(self)
         self.placeholder = QLabel(self.threads)
         self.placeholder.setObjectName("chatPlaceholder")
@@ -1004,6 +1233,7 @@ class ChatView(QWidget):
         layout.setSpacing(0)
         layout.addLayout(info_wrap)
         layout.addWidget(self.header)
+        layout.addWidget(self.search_bar)
         layout.addWidget(self.threads, 1)
         layout.addLayout(new_row)
         layout.addWidget(self.composer)
@@ -1028,6 +1258,14 @@ class ChatView(QWidget):
 
         self._pick_action = shortcuts.make_action(self, Shortcut.PICK_FILES, self._on_pick_shortcut)
         self._paste_action = shortcuts.make_action(self, Shortcut.PASTE_FILES, self._on_paste_shortcut)
+        self._find_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        self._find_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._find_shortcut.setAutoRepeat(False)
+        self._find_shortcut.activated.connect(self.open_search)
+        self._push_clip_shortcut = QShortcut(QKeySequence("Ctrl+Shift+V"), self)
+        self._push_clip_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._push_clip_shortcut.setAutoRepeat(False)
+        self._push_clip_shortcut.activated.connect(self._request_push_clipboard)
 
         self._history_timer = QTimer(self)
         self._history_timer.setSingleShot(True)
@@ -1063,14 +1301,68 @@ class ChatView(QWidget):
                         self._mark_changed()
             self._device_id = device_id
             self._mark_changed()
+            if not self.search_bar.isHidden():
+                self.close_search()
             if device_id is not None:
                 thread = self._thread(device_id)
                 thread.scroll_to_bottom()
+                self.header.set_quick_state(
+                    clipboard=self._device_clip_enabled.get(device_id, False),
+                    auto_accept=self._device_auto_accept.get(device_id, False),
+                )
                 self._schedule_history()
             else:
                 self._history_timer.stop()
             self._update_header()
             self._update_page()
+
+    def set_quick_actions_available(self, available: bool) -> None:
+        self._quick_actions_available = bool(available)
+        self.header.set_quick_actions_available(available)
+
+    def set_receipt_export_available(self, available: bool) -> None:
+        self._receipt_export_available = bool(available)
+        for bubble in self._bubbles.values():
+            bubble.set_receipt_available(self._receipt_export_available)
+        for thread in self._threads.values():
+            for history in thread.history_bubbles():
+                history.set_receipt_available(self._receipt_export_available)
+
+    def set_device_quick_state(self, device_id: str, *, clipboard: bool, auto_accept: bool) -> None:
+        self._device_clip_enabled[device_id] = bool(clipboard)
+        self._device_auto_accept[device_id] = bool(auto_accept)
+        if device_id == self._device_id:
+            self.header.set_quick_state(clipboard=bool(clipboard), auto_accept=bool(auto_accept))
+
+    def open_search(self) -> None:
+        if self._device_id is None:
+            return
+        self.search_bar.setVisible(True)
+        self.header.set_search_active(True)
+        self._on_search_query(self.search_bar.edit.text())
+        self.search_bar.focus_edit()
+
+    def close_search(self) -> None:
+        if self.search_bar.edit.text():
+            with QSignalBlocker(self.search_bar.edit):
+                self.search_bar.edit.clear()
+        self.search_bar.set_count(-1)
+        self.search_bar.setVisible(False)
+        self.header.set_search_active(False)
+        thread = self._current_thread()
+        if thread is not None:
+            thread.set_search_filter("")
+
+    def request_thumbnail_for(self, key: TransferKey, path: Path) -> None:
+        bubble = self._bubbles.get(key)
+        if bubble is not None and bubble.file_count == 1 and is_thumbnailable(path):
+            self._request_bubble_thumb(bubble, path)
+
+    def clear_thumbnail_cache(self) -> None:
+        self._thumbs.clear_cache()
+
+    def shutdown_thumbnails(self) -> None:
+        self._thumbs.shutdown()
 
     def set_device_banner(self, bar: QWidget, focus_chain: Sequence[QWidget]) -> None:
         """Đặt thanh theo máy giữa `header` và `threads` (một lần; gọi lần hai → RuntimeError) và nối
@@ -1247,6 +1539,7 @@ class ChatView(QWidget):
         with self._changes():
             self._mark_changed()
             self.hide_notice()
+            self.close_search()
             self._connected.clear()
             self._bubbles.clear()
             self._pending.clear()
@@ -1284,6 +1577,8 @@ class ChatView(QWidget):
             existing = self._bubbles.get(update.key)
             if existing is not None:
                 existing.apply_file_done(update)
+                if existing.file_count == 1 and update.path is not None and is_thumbnailable(update.path):
+                    self._request_bubble_thumb(existing, update.path)
         elif isinstance(update, TransferFinished):
             if update.result is TransferResult.SUSPENDED:
                 return  # chỉ khi host dừng: giữ bong bóng như cũ
@@ -1341,6 +1636,7 @@ class ChatView(QWidget):
         size: int,
         preview: str | None = None,
         image_size: tuple[int, int] | None = None,
+        copy_text: str | None = None,
     ) -> ClipboardNote:
         """Note clipboard mới nhất của `device_id` (`ok`: đã chép vào máy này); thay note cũ của luồng đó."""
         with self._changes():
@@ -1357,6 +1653,7 @@ class ChatView(QWidget):
                 size=size,
                 preview=preview,
                 image_size=image_size,
+                copy_text=copy_text,
                 peer=self._peer(device_id, None),
                 at=thread.session_at(),
             )
@@ -1427,7 +1724,16 @@ class ChatView(QWidget):
             batch: list[tuple[Bubble, int]] = []
             for entry in fresh[:room]:
                 bubble = HistoryBubble(entry, peer=peer, receive_dir=self._receive_dir)
+                bubble.set_receipt_available(self._receipt_export_available)
                 bubble.open_clicked.connect(lambda b=bubble: self._open_history(b))
+                bubble.open_file_clicked.connect(lambda b=bubble: self._open_history_file(b))
+                bubble.export_receipt_clicked.connect(
+                    lambda k=bubble.key: self.export_receipt_requested.emit(k)
+                )
+                if entry.file_count == 1 and entry.saved_path:
+                    saved = Path(entry.saved_path)
+                    if saved.is_absolute() and is_thumbnailable(saved):
+                        self._request_bubble_thumb(bubble, saved)
                 batch.append((bubble, self._next_seq()))
             if batch:
                 thread.add_many(batch)
@@ -1632,6 +1938,8 @@ class ChatView(QWidget):
         self.composer.push_clipboard_button.set_label(t("Chat", "Gửi clipboard"))
         shortcuts.retranslate_actions(self)
         self.threads.setAccessibleName(t("Chat", "Lượt gửi nhận"))
+        self.header.retranslate()
+        self.search_bar.retranslate()
         self._set_new_count(self._new_count(), force=True)
         self._update_header()
 
@@ -1711,10 +2019,13 @@ class ChatView(QWidget):
         if isinstance(old, HistoryBubble):
             thread.remove(old)  # bong bóng của phiên thay mục lịch sử cùng khóa
         bubble = TransferBubble(key, at=thread.session_at(), context=self._context)
+        bubble.set_receipt_available(self._receipt_export_available)
         seq = self._next_seq()
         bubble.setProperty("teleport_seq", seq)
         bubble.cancel_clicked.connect(lambda b=bubble: self._cancel_clicked(b))
         bubble.open_clicked.connect(lambda b=bubble: self._open_transfer(b))
+        bubble.open_file_clicked.connect(lambda b=bubble: self._open_transfer_file(b))
+        bubble.export_receipt_clicked.connect(lambda k=bubble.key: self.export_receipt_requested.emit(k))
         bubble.resend_clicked.connect(lambda b=bubble: self._resend_clicked(b))
         bubble.offer_answer.connect(lambda accept, b=bubble: self._offer_answer(b, accept))
         bubble.offer_always.connect(lambda on, b=bubble: self._offer_always(b, on))
@@ -1773,11 +2084,86 @@ class ChatView(QWidget):
         files = bubble.saved_paths or (bubble.last_path,)
         self._reveal(files, bubble.finished_receive_dir)
 
+    def _open_transfer_file(self, bubble: TransferBubble) -> None:
+        if bubble.last_path is None:
+            return
+        root = bubble.finished_receive_dir if bubble.key.direction is Direction.RECEIVE else None
+        self._open_single_file(bubble.last_path, root)
+
     def _open_history(self, bubble: HistoryBubble) -> None:
         """“Hiện trong thư mục” của mục lịch sử (nút chỉ hiện khi `can_open_saved`)."""
         saved = bubble.entry.saved_path
         if saved and bubble.folder() is not None and not bubble.open_button.isHidden():
             self._reveal((Path(saved),), self._receive_dir)
+
+    def _open_history_file(self, bubble: HistoryBubble) -> None:
+        saved = bubble.entry.saved_path
+        if not saved or bubble.open_file_button.isHidden():
+            return
+        root = self._receive_dir if bubble.key.direction is Direction.RECEIVE else None
+        self._open_single_file(Path(saved), root)
+
+    def _open_single_file(self, path: Path, root: Path | None) -> None:
+        if shell.open_file_in_os(path, root, open_url=lambda url: open_url(url)):
+            return
+        self._folder_warning(path.parent)
+
+    def _request_bubble_thumb(self, bubble: TransferBubble | HistoryBubble, path: Path) -> None:
+        dpr = float(self.devicePixelRatioF() or 1.0)
+
+        def on_ready(pix: QPixmap | None) -> None:
+            if isValid(bubble):
+                bubble.set_thumbnail(pix)
+
+        self._thumbs.request(
+            path,
+            on_ready,
+            size=THUMB_DEFAULT_SIZE,
+            dpr=dpr,
+        )
+
+    def _on_header_clipboard_toggled(self, on: bool) -> None:
+        if self._device_id is not None:
+            self._device_clip_enabled[self._device_id] = bool(on)
+            self.header_clipboard_toggled.emit(self._device_id, bool(on))
+
+    def _on_header_auto_accept_toggled(self, on: bool) -> None:
+        if self._device_id is not None:
+            self._device_auto_accept[self._device_id] = bool(on)
+            self.header_auto_accept_toggled.emit(self._device_id, bool(on))
+
+    def _on_header_search_toggled(self, on: bool) -> None:
+        if on:
+            self.open_search()
+        else:
+            self.close_search()
+
+    def _on_header_connect_ip(self) -> None:
+        if self._device_id is not None:
+            self.header_connect_ip_requested.emit(self._device_id)
+
+    def _on_header_retry_connect(self) -> None:
+        if self._device_id is not None:
+            self.header_retry_connect_requested.emit(self._device_id)
+
+    def _on_header_send_clip_image(self) -> None:
+        if self._device_id is not None:
+            self.header_send_clipboard_image_requested.emit(self._device_id)
+
+    def _on_header_device_settings(self) -> None:
+        if self._device_id is not None:
+            self.header_device_settings_requested.emit(self._device_id)
+
+    def _on_header_clear_history(self) -> None:
+        if self._device_id is not None:
+            self.header_clear_history_requested.emit(self._device_id)
+
+    def _on_search_query(self, query: str) -> None:
+        thread = self._current_thread()
+        if thread is None:
+            self.search_bar.set_count(-1)
+            return
+        self.search_bar.set_count(thread.set_search_filter(query))
 
     def _reveal(self, files: Sequence[Path], root: Path | None) -> None:
         """`shell.show_in_folder`; không mở được (kể cả dự phòng) → câu cảnh báo với thư mục cha."""
@@ -1806,9 +2192,12 @@ class ChatView(QWidget):
                 callback()
 
     def _on_notice_dismissed(self) -> None:
+        title = self.info_bar.title
         self._notice_callback = None
         self._notice_sources = ("", None)
         self._mark_changed()
+        if title:
+            self.notice_dismissed.emit(title)
 
     def _schedule_history(self) -> None:
         thread = self._current_thread()

@@ -767,6 +767,14 @@ class DiagnoseController(QObject):
         """Hộp “Kết nối bằng IP” đang mở, hay None."""
         return self._dialog
 
+    def open_connect_dialog(self) -> None:
+        """Mở hộp thoại “Kết nối bằng IP” cho thiết bị đang mở ở luồng chat."""
+        self._open_dialog()
+
+    def retry_current(self) -> None:
+        """Thử kết nối lại ngay với thiết bị đang mở ở luồng chat."""
+        self._retry_clicked()
+
     def attach(self, host: NodeHost | None) -> None:
         """Host mới (None: không có): hủy việc đang chạy, đóng hộp, xóa mọi trạng thái, ẩn thanh."""
         self._drop_all()

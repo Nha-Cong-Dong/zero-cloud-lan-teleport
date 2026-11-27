@@ -277,9 +277,9 @@ def file_dialogs(monkeypatch):
 
 def test_welcome_state_send_and_pause_shown_but_disabled(gapp):
     actions = gapp.tray.actions()
-    assert len(actions) == 4
+    assert len(actions) == 6
     assert all(a.isVisible() for a in actions)
-    assert [a.isEnabled() for a in actions] == [True, False, False, True]
+    assert [a.isEnabled() for a in actions] == [True, False, False, False, False, True]
     assert gapp.tray.state.running is False
 
 
@@ -430,7 +430,7 @@ def wait_running(run, gui_wait):
 
 
 def quit_now(run) -> None:
-    run.tray.actions()[3].trigger()
+    run.tray.actions()[-1].trigger()
 
 
 class CallTrap:
@@ -493,8 +493,8 @@ def test_running_enables_items_and_quit_resets_state(gui, gui_wait, config_dir):
     run = gui(["--config-dir", str(d)], script)
     assert run.code == 0
     assert seen["running"] is True
-    assert seen["len"] == 4
-    assert seen["enabled"] == [True, True, True, True]
+    assert seen["len"] == 6
+    assert seen["enabled"] == [True, True, True, True, True, True]
     assert seen["after_quit"] == (False, False, False), "Thoát: paused False, running False"
 
 
@@ -522,7 +522,7 @@ def test_start_failed_resets_paused_and_running(gui, gui_wait, config_dir):
     assert run.code == 0
     assert seen["state"] == (False, False)
     assert seen["check"] is False
-    assert seen["enabled"] == [True, False, False, True]
+    assert seen["enabled"] == [True, False, False, False, False, True]
 
 
 @integration
@@ -556,7 +556,7 @@ def test_new_host_after_locked_error_runs_unpaused(gui, gui_wait, config_dir, fa
         with contextlib.suppress(Exception):
             holder.release()
     assert run.code == 0
-    assert seen["error"] == (False, [True, False, False, True])
+    assert seen["error"] == (False, [True, False, False, False, False, True])
     assert seen["new"] == (True, False, False, False)
 
 

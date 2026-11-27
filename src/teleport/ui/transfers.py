@@ -185,6 +185,7 @@ from teleport.ui.main_window import MainWindow, Page, ViewState
 from teleport.ui.notify import ReceivedBatch, batch_reveal, received_batch_text
 from teleport.ui.offer import OfferBook, OfferPhase, OfferPrompts, always_save_error_text
 from teleport.ui.progress import ProgressBatch, ProgressItem, ProgressThrottle
+from teleport.ui.thumbnails import is_thumbnailable
 from teleport.ui.tray import Tray
 from teleport.ui.widgets import InfoLevel
 
@@ -410,6 +411,7 @@ class TransfersController(QObject):
         gộp, không hiện), % tổng về None, đóng hộp hỏi, bỏ việc chờ, đặt thư mục nhận."""
         self._host = host
         self.offer_book.clear()  # trước `view.clear()` và `offers.close_all()` (spec B4 mục 11.2)
+        self.view.clear_thumbnail_cache()
         self.view.clear()
         self.diagnose.attach(host)
         self.activity.clear()
@@ -923,6 +925,8 @@ class TransfersController(QObject):
             bubble = self.view.row(result)
             if result in self._dropped or bubble is None:
                 return
+            if len(paths) == 1 and is_thumbnailable(paths[0]):
+                self.view.request_thumbnail_for(result, paths[0])
             if bubble.result is not None and bubble.result.result in _NO_RESEND:
                 return
             self._remember_sources(result, paths)

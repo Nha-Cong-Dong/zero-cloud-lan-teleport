@@ -1129,6 +1129,9 @@ class InfoBar(QFrame):
         Thanh chưa có cha thì không tự mở thành cửa sổ riêng (`_set_shown`): đặt vào layout trước rồi
         mới gọi, hoặc tự `show()`.
         """
+        was_open = self._open
+        old_action = None if self.action_button.isHidden() else self.action_button.text()
+        old_key = (self._level, self._title, self._text, old_action)
         self._level = InfoLevel(level)
         self._sources = (title, text, action)
         self._language = i18n.current_language()
@@ -1138,6 +1141,8 @@ class InfoBar(QFrame):
         self._refresh_icon()
         self.retranslate()
         self._open = True
+        new_action = None if self.action_button.isHidden() else self.action_button.text()
+        new_key = (self._level, self._title, self._text, new_action)
         parent = self.parentWidget()
         if parent is None:
             _set_shown(self, True)
@@ -1149,8 +1154,10 @@ class InfoBar(QFrame):
                 self._height.set_expanded(True, token)
         self.update()
         # Cố gắng tốt nhất: có HĐH không chuyển Alert tới trình đọc màn hình; tên mức vẫn ở accessibleName.
-        with contextlib.suppress(Exception):
-            QAccessible.updateAccessibility(QAccessibleEvent(self, QAccessible.Event.Alert))
+        # Chỉ phát Alert khi thanh vừa mở hoặc nội dung/mức thay đổi thực sự để tránh phát âm lặp lại.
+        if not was_open or new_key != old_key:
+            with contextlib.suppress(Exception):
+                QAccessible.updateAccessibility(QAccessibleEvent(self, QAccessible.Event.Alert))
 
     def clear(self) -> None:
         """Đóng thanh (`is_open` False ngay), không phát `dismissed`."""

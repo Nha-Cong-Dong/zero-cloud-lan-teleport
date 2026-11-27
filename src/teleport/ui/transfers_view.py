@@ -240,6 +240,22 @@ def done_text() -> str:
     return QCoreApplication.translate("Transfers", "Đã kiểm tra toàn vẹn")
 
 
+def delta_saved_text(saved_bytes: int) -> str:
+    """Nhãn tiết kiệm dung lượng nhờ gửi phần thay đổi (Smart Delta)."""
+    return _fill(
+        QCoreApplication.translate("Transfers", "Tiết kiệm {size} nhờ bỏ qua phần trùng"),
+        size=texts.format_size(saved_bytes),
+    )
+
+
+def routed_to_text(folder_name: str) -> str:
+    """Cho biết file vừa nhận được tự động phân loại vào thư mục con nào."""
+    return _fill(
+        QCoreApplication.translate("Transfers", "Lưu vào thư mục {folder}"),
+        folder=texts.file_label(folder_name),
+    )
+
+
 def saved_as_text(saved_names: list[str]) -> str:
     """Dòng phụ của thẻ nhận đã xong khi có file được lưu khác tên gốc; rỗng → `done_text()`.
 

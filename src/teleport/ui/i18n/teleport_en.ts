@@ -69,6 +69,19 @@
             <numerusform>%n files</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <location filename="../chat.py"/>
+        <source>%n kết quả</source>
+        <translation>
+            <numerusform>%n match</numerusform>
+            <numerusform>%n matches</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Chép lại</source>
+        <translation>Copy</translation>
+    </message>
     <message>
         <location filename="../chat.py"/>
         <source>Chọn một máy ở cột trái để xem file đã gửi và nhận.</source>
@@ -93,6 +106,11 @@
         <location filename="../chat_bubbles.py"/>
         <source>Clipboard · đã chép vào máy này</source>
         <translation>Clipboard · copied to this device</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Cài đặt cho thiết bị này…</source>
+        <translation>Settings for this device…</translation>
     </message>
     <message>
         <location filename="../chat.py"/>
@@ -143,6 +161,11 @@
         <translation>To {name}</translation>
     </message>
     <message>
+        <location filename="../chat.py"/>
+        <source>Gửi ảnh từ clipboard</source>
+        <translation>Send image from clipboard</translation>
+    </message>
+    <message>
         <location filename="../chat_bubbles.py"/>
         <source>HH:mm</source>
         <translation>HH:mm</translation>
@@ -189,6 +212,16 @@
     </message>
     <message>
         <location filename="../chat.py"/>
+        <source>Kết nối bằng IP…</source>
+        <translation>Connect by IP…</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Luôn tự động nhận file</source>
+        <translation>Always auto-accept files</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
         <source>Lượt gửi nhận</source>
         <translation>Transfers</translation>
     </message>
@@ -208,6 +241,11 @@
         <translation>Open Settings</translation>
     </message>
     <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Mở file</source>
+        <translation>Open file</translation>
+    </message>
+    <message>
         <location filename="../chat.py"/>
         <source>Ngoại tuyến</source>
         <translation>Offline</translation>
@@ -216,6 +254,16 @@
         <location filename="../chat_bubbles.py"/>
         <source>Nhận từ {name}</source>
         <translation>From {name}</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Thao tác khác</source>
+        <translation>More actions</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Thao tác với thiết bị</source>
+        <translation>Device actions</translation>
     </message>
     <message>
         <location filename="../chat.py"/>
@@ -231,6 +279,11 @@
         </translation>
     </message>
     <message>
+        <location filename="../chat.py"/>
+        <source>Thử kết nối lại</source>
+        <translation>Retry connection</translation>
+    </message>
+    <message>
         <location filename="../chat_bubbles.py"/>
         <source>Tiến độ</source>
         <translation>Progress</translation>
@@ -241,9 +294,37 @@
         <translation>Online</translation>
     </message>
     <message>
+        <location filename="../chat.py"/>
+        <source>Tìm file hoặc nội dung trong luồng…</source>
+        <translation>Search files or messages in this thread…</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Tìm trong luồng</source>
+        <translation>Search in thread</translation>
+    </message>
+    <message>
         <location filename="../chat_bubbles.py"/>
         <source>Văn bản · {size}</source>
         <translation>Text · {size}</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../chat_bubbles.py"/>
+        <source>Xem %n file</source>
+        <translation>
+            <numerusform>Show %n file</numerusform>
+            <numerusform>Show %n files</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Xuất biên lai…</source>
+        <translation>Export receipt…</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Xóa lịch sử với máy này…</source>
+        <translation>Clear history with this device…</translation>
     </message>
     <message>
         <location filename="../chat_bubbles.py"/>
@@ -291,6 +372,16 @@
         <translation>Saved</translation>
     </message>
     <message>
+        <location filename="../chat.py"/>
+        <source>Đóng tìm kiếm</source>
+        <translation>Close search</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Đồng bộ clipboard</source>
+        <translation>Sync clipboard</translation>
+    </message>
+    <message>
         <location filename="../chat_bubbles.py"/>
         <source>Đổi thư mục nhận</source>
         <translation>Change receive folder</translation>
@@ -304,6 +395,24 @@
         <location filename="../chat_bubbles.py"/>
         <source>Ảnh · {size}</source>
         <translation>Image · {size}</translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>Ẩn danh sách</source>
+        <translation>Hide list</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../chat_bubbles.py"/>
+        <source>… và %n file khác</source>
+        <translation>
+            <numerusform>… and %n other file</numerusform>
+            <numerusform>… and %n other files</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../chat_bubbles.py"/>
+        <source>✓ Đã chép</source>
+        <translation>✓ Copied</translation>
     </message>
 </context>
 <context>
@@ -418,6 +527,11 @@
         <location filename="../conversations.py"/>
         <source>Trực tuyến</source>
         <translation>Online</translation>
+    </message>
+    <message>
+        <location filename="../conversations.py"/>
+        <source>Tìm thiết bị…</source>
+        <translation>Search devices…</translation>
     </message>
     <message>
         <location filename="../conversations.py"/>
@@ -900,6 +1014,11 @@
     <name>GuiApp</name>
     <message>
         <location filename="../app.py"/>
+        <source>Biên lai Teleport (*.teleport-receipt.json);;Tất cả (*.*)</source>
+        <translation>Teleport receipt (*.teleport-receipt.json);;All files (*.*)</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Bạn chọn quá nhiều file một lần. Hãy chọn ít file hơn rồi gửi lại.</source>
         <translation>You selected too many files at once. Select fewer files and send again.</translation>
     </message>
@@ -935,6 +1054,11 @@
     </message>
     <message>
         <location filename="../app.py"/>
+        <source>Clipboard hiện không có ảnh để gửi.</source>
+        <translation>The clipboard currently has no image to send.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Clipboard hiện đang trống.</source>
         <translation>The clipboard is currently empty.</translation>
     </message>
@@ -945,8 +1069,18 @@
     </message>
     <message>
         <location filename="../app.py"/>
+        <source>Các file đã nhận hay đã gửi vẫn giữ nguyên; chỉ xóa danh sách lịch sử với máy này.</source>
+        <translation>Files already sent or received are kept; only the history list with this device is removed.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Gửi tới nhiều máy</source>
         <translation>Send to multiple devices</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Gửi ảnh ngay</source>
+        <translation>Send image now</translation>
     </message>
     <message>
         <location filename="../app.py"/>
@@ -960,13 +1094,38 @@
     </message>
     <message>
         <location filename="../app.py"/>
+        <source>Không lưu được cài đặt cho thiết bị này.</source>
+        <translation>Could not save settings for this device.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Không lưu được ảnh từ clipboard để gửi.</source>
+        <translation>Could not save clipboard image to send.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Không mở được hộp gửi file.</source>
         <translation>Couldn't open the send dialog.</translation>
     </message>
     <message>
         <location filename="../app.py"/>
+        <source>Không xuất được biên lai truyền file.</source>
+        <translation>Could not export the transfer receipt.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Không xóa được lịch sử lúc này.</source>
+        <translation>Could not clear history right now.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
         <source>Không đọc hoặc gửi được clipboard lúc này.</source>
         <translation>Could not read or send the clipboard right now.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Lượt này chưa có biên lai ký số để xuất.</source>
+        <translation>This transfer does not have a signed receipt to export.</translation>
     </message>
     <message>
         <location filename="../app.py"/>
@@ -982,6 +1141,21 @@
         <location filename="../app.py"/>
         <source>Thoát Teleport?</source>
         <translation>Exit Teleport?</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Xuất biên lai truyền file</source>
+        <translation>Export transfer receipt</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Xóa lịch sử</source>
+        <translation>Clear history</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Xóa lịch sử truyền với {name}?</source>
+        <translation>Clear transfer history with {name}?</translation>
     </message>
     <message>
         <location filename="../app.py"/>
@@ -1006,9 +1180,29 @@
         <source>Đã gửi clipboard tới {name}.</source>
         <translation>Clipboard sent to {name}.</translation>
     </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Đã lưu biên lai truyền file.</source>
+        <translation>Transfer receipt saved.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Đã xóa lịch sử truyền với {name}.</source>
+        <translation>Cleared transfer history with {name}.</translation>
+    </message>
+    <message>
+        <location filename="../app.py"/>
+        <source>Đồng bộ clipboard chưa bật cho {name}. Bạn vẫn có thể gửi ảnh đang có trong clipboard như file ảnh.</source>
+        <translation>Clipboard sync is not enabled for {name}. You can still send the image on your clipboard as an image file.</translation>
+    </message>
 </context>
 <context>
     <name>Home</name>
+    <message>
+        <location filename="../home.py"/>
+        <source>Bấm để đổi nhanh trạng thái nhận và ẩn/hiện</source>
+        <translation>Click to quickly change receive and visibility status</translation>
+    </message>
     <message>
         <location filename="../home.py"/>
         <source>Chép địa chỉ</source>
@@ -1062,6 +1256,11 @@
     </message>
     <message>
         <location filename="../home.py"/>
+        <source>Tạm dừng nhận</source>
+        <translation>Pause receiving</translation>
+    </message>
+    <message>
+        <location filename="../home.py"/>
         <source>Đang khởi động</source>
         <translation>Starting</translation>
     </message>
@@ -1103,6 +1302,11 @@
         <location filename="../home.py"/>
         <source>Đổi…</source>
         <translation>Change…</translation>
+    </message>
+    <message>
+        <location filename="../home.py"/>
+        <source>Ẩn với máy chưa ghép đôi</source>
+        <translation>Hide from unpaired devices</translation>
     </message>
 </context>
 <context>
@@ -1743,6 +1947,11 @@
     </message>
     <message>
         <location filename="../send_picker.py"/>
+        <source>Gửi qua điện thoại (Web QR)…</source>
+        <translation>Send to Phone (Web QR)…</translation>
+    </message>
+    <message>
+        <location filename="../send_picker.py"/>
         <source>Gửi tới máy</source>
         <translation>Send to</translation>
     </message>
@@ -1914,6 +2123,11 @@
         <location filename="../settings.py"/>
         <source>Chỉ kiểm tra khi bạn bấm nút. Ứng dụng không tự kết nối mạng.</source>
         <translation>Checks only when you click. The app never connects automatically.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Chọn nhanh loại file</source>
+        <translation>Quick file type presets</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2152,6 +2366,11 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Lưu</source>
+        <translation>Save</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Lưu file log</source>
         <translation>Save log file</translation>
     </message>
@@ -2217,8 +2436,18 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Nhạc</source>
+        <translation>Audio</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Nâng cao</source>
         <translation>Advanced</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Nén</source>
+        <translation>Archives</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2249,6 +2478,31 @@
         <location filename="../settings.py"/>
         <source>Quyền riêng tư</source>
         <translation>Privacy</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Sửa</source>
+        <translation>Edit</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Sửa cổng đẩy tự động</source>
+        <translation>Edit watch portal</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Sửa cổng đẩy {name}</source>
+        <translation>Edit watch portal {name}</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Sửa quy tắc phân loại thư mục nhận</source>
+        <translation>Edit receive routing rule</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Sửa quy tắc {name}</source>
+        <translation>Edit rule {name}</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2342,6 +2596,11 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>Tiếp tục cổng đẩy</source>
+        <translation>Resume portals</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>Truyền file</source>
         <translation>File transfer</translation>
     </message>
@@ -2349,6 +2608,11 @@
         <location filename="../settings.py"/>
         <source>Truyền thông minh phần thay đổi (Delta)</source>
         <translation>Smart delta transfer</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Tài liệu</source>
+        <translation>Documents</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2369,6 +2633,11 @@
         <location filename="../settings.py"/>
         <source>Tìm máy mới</source>
         <translation>Find devices</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Tạm dừng tất cả</source>
+        <translation>Pause all</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2409,6 +2678,11 @@
         <location filename="../settings.py"/>
         <source>Tự động gom tệp vào thư mục riêng theo tên máy gửi và thời gian nhận.</source>
         <translation>Automatically group files into a separate folder named after the sender and time.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Video</source>
+        <translation>Videos</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2524,6 +2798,11 @@
         <location filename="../settings.py"/>
         <source>Đang kiểm tra…</source>
         <translation>Checking…</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Đang tạm dừng mọi cổng đẩy tự động.</source>
+        <translation>All automatic watch portals are paused.</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
@@ -2660,6 +2939,11 @@
         <source>đã kết nối</source>
         <translation>connected</translation>
     </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Ảnh</source>
+        <translation>Images</translation>
+    </message>
 </context>
 <context>
     <name>Shortcuts</name>
@@ -2773,6 +3057,11 @@
     </message>
     <message>
         <location filename="../texts.py"/>
+        <source>Chuyển tệp với điện thoại (Web QR)…</source>
+        <translation>Transfer with phone (Web QR)…</translation>
+    </message>
+    <message>
+        <location filename="../texts.py"/>
         <source>Có file đang chờ bạn nhận.</source>
         <translation>Files are waiting for you to accept them.</translation>
     </message>
@@ -2860,6 +3149,11 @@
         <location filename="../texts.py"/>
         <source>Mở Teleport</source>
         <translation>Open Teleport</translation>
+    </message>
+    <message>
+        <location filename="../texts.py"/>
+        <source>Mở thư mục nhận</source>
+        <translation>Open receive folder</translation>
     </message>
     <message>
         <location filename="../texts.py"/>
@@ -3025,6 +3319,11 @@
     </message>
     <message>
         <location filename="../transfers_view.py"/>
+        <source>Lưu vào thư mục {folder}</source>
+        <translation>Saved to folder {folder}</translation>
+    </message>
+    <message>
+        <location filename="../transfers_view.py"/>
         <source>Lượt gửi với {name} đã dừng vì máy đó gửi dữ liệu không hợp lệ. Hãy cập nhật Teleport trên cả hai máy rồi thử lại.</source>
         <translation>The transfer with {name} stopped because that device sent invalid data. Update Teleport on both devices, then try again.</translation>
     </message>
@@ -3043,6 +3342,11 @@
         <location filename="../transfers_view.py"/>
         <source>Mất kết nối với {name} quá lâu nên đã dừng nhận. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên.</source>
         <translation>The connection to {name} was lost for too long, so receiving stopped. Files that weren't fully received were deleted; files that were fully received are kept.</translation>
+    </message>
+    <message>
+        <location filename="../transfers_view.py"/>
+        <source>Tiết kiệm {size} nhờ bỏ qua phần trùng</source>
+        <translation>Saved {size} by reusing matching blocks</translation>
     </message>
     <message>
         <location filename="../transfers_view.py"/>
@@ -3461,8 +3765,33 @@
     <name>WebGuest</name>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>+ Thêm thư mục…</source>
+        <translation>+ Add folder…</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>+ Thêm tệp chia sẻ...</source>
         <translation>+ Add files to share...</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>+ Thêm tệp…</source>
+        <translation>+ Add files…</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Bắt đầu phiên mới</source>
+        <translation>Start new session</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Bỏ</source>
+        <translation>Remove</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Bỏ {name} khỏi danh sách chia sẻ</source>
+        <translation>Remove {name} from shared list</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
@@ -3476,8 +3805,18 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Chưa có tin nhắn văn bản nào trong phiên này.</source>
+        <translation>No text messages in this session yet.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Chưa có tệp nào chia sẻ sẵn cho điện thoại.</source>
         <translation>No files currently shared with phone.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Chưa nhận tệp nào trong phiên này.</source>
+        <translation>No files received in this session yet.</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
@@ -3496,8 +3835,18 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Chọn thư mục chia sẻ cho điện thoại</source>
+        <translation>Choose folder to share with phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Chọn tệp chia sẻ cho điện thoại</source>
         <translation>Select files to share with phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Dừng phiên</source>
+        <translation>Stop session</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
@@ -3511,13 +3860,33 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Hiện trong thư mục</source>
+        <translation>Show in folder</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Không thể khởi động phiên khách: </source>
         <translation>Failed to start guest session: </translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Kéo thả tệp hoặc thư mục vào đây để chia sẻ ngay cho điện thoại.</source>
+        <translation>Drag and drop files or folders here to share with your phone.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Máy tính</source>
+        <translation>Computer</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Mật khẩu Wi-Fi</source>
         <translation>Wi-Fi password</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Mở file</source>
+        <translation>Open file</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
@@ -3531,13 +3900,33 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Nhập ghi chú hoặc liên kết để gửi sang điện thoại…</source>
+        <translation>Enter a note or link to send to your phone…</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Phiên khách đã kết thúc hoặc hết hạn.</source>
         <translation>Guest session ended or expired.</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Phiên vẫn giữ chạy ngay cả khi bạn quay lại trang chính. Đưa điện thoại quét mã QR hoặc mở liên kết bên dưới.</source>
+        <translation>The session keeps running even if you go back home. Scan the QR code or open the link below on your phone.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Phiên đã dừng. Bấm Bắt đầu phiên mới để tạo mã QR mới.</source>
+        <translation>Session stopped. Click Start new session to generate a new QR code.</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>QR Wi-Fi...</source>
         <translation>Wi-Fi QR...</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>QR Wi-Fi…</source>
+        <translation>Wi-Fi QR…</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
@@ -3561,6 +3950,11 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Thư mục</source>
+        <translation>Folder</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Tên mạng Wi-Fi</source>
         <translation>Wi-Fi network name</translation>
     </message>
@@ -3581,6 +3975,16 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Tệp chia sẻ cho điện thoại</source>
+        <translation>Files shared to phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Tệp nhận từ điện thoại</source>
+        <translation>Files received from phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Từ điện thoại: {text}</source>
         <translation>From phone: {text}</translation>
     </message>
@@ -3588,6 +3992,11 @@
         <location filename="../web_guest_dialog.py"/>
         <source>Văn bản gửi sang điện thoại</source>
         <translation>Text to send to phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Văn bản và liên kết</source>
+        <translation>Text and links</translation>
     </message>
     <message numerus="yes">
         <location filename="../web_guest_dialog.py"/>
@@ -3606,6 +4015,21 @@
         <location filename="../web_guest_dialog.py"/>
         <source>Điện thoại</source>
         <translation>Phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Đã chép</source>
+        <translation>Copied</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Đã nhận xong: {filename} ({size_str})</source>
+        <translation>Received: {filename} ({size_str})</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
+        <source>Đã đổi quyền phiên — mã QR mới đã được tạo, mã cũ không còn hiệu lực.</source>
+        <translation>Session permissions changed — a new QR code has been created and the old one is no longer valid.</translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>

@@ -113,6 +113,7 @@ def test_page_enum_values():
         "DISCOVER": "discover",
         "SETTINGS": "settings",
         "WAIT_PAIRING": "wait_pairing",
+        "WEB_GUEST": "web_guest",
     }
 
 

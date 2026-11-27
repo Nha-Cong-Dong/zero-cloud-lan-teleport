@@ -94,11 +94,17 @@ ZCL Teleport hỗ trợ tính năng chia sẻ nội dung sao chép giữa các m
 
 Khi muốn gửi ảnh, video hoặc tài liệu giữa máy tính và điện thoại mà không cần cài thêm phần mềm lên điện thoại:
 
-1. Trên giao diện máy tính, bấm nút **Chuyển tệp với điện thoại** (hoặc chạy lệnh `teleport guest` trên cửa sổ dòng lệnh).
-2. Màn hình máy tính sẽ hiện một mã QR. Hãy mở máy ảnh trên điện thoại (đang dùng chung mạng Wi-Fi với máy tính) để quét mã đó và mở đường dẫn trên trình duyệt web.
-3. **Gửi từ điện thoại sang máy tính:** Tại mục **Gửi sang máy tính**, chọn một hoặc nhiều tệp, chọn cả thư mục, hoặc kéo thả trực tiếp vào khung trên trình duyệt để chuyển thẳng vào thư mục nhận của máy tính.
-4. **Tải từ máy tính về điện thoại:** Trên máy tính bấm **+ Thêm tệp chia sẻ...** để chọn tệp hoặc thư mục muốn gửi. Trên điện thoại chuyển sang mục **Nhận về điện thoại** để tải từng tệp hoặc bấm **Tải tất cả (.zip)** để gộp tất cả thành một tệp nén tải về ngay lập tức mà không tốn dung lượng tạm trên ổ đĩa máy tính.
-5. Khi xong việc, bấm **Đóng** hộp thoại trên máy tính để ngắt phiên kết nối. Đường dẫn chỉ có tác dụng trong mạng nội bộ và tự động tắt sau 10 phút nếu không có thao tác nào.
+1. Trên giao diện máy tính, bấm nút **Chuyển tệp với điện thoại** (hoặc chọn trong menu khay hệ thống, hay chạy lệnh `teleport guest` trên cửa sổ dòng lệnh). Bạn cũng có thể chọn tệp từ Windows Explorer qua **Gửi tới › ZCL Teleport** rồi bấm **Gửi qua điện thoại (Web QR)…**.
+2. Trang **Chuyển tệp với điện thoại** sẽ mở mã QR và giữ phiên hoạt động liên tục ngay cả khi bạn quay lại màn hình chính để làm việc khác. Hãy mở máy ảnh điện thoại (đang dùng chung mạng Wi-Fi với máy tính) để quét mã và mở đường dẫn trên trình duyệt web.
+3. **Gửi từ điện thoại sang máy tính:** Tại mục **Gửi sang máy tính**, chọn tệp, thư mục, chụp ảnh trực tiếp hoặc kéo thả; danh sách gửi hỗ trợ nút **Hủy** / **Thử lại** từng tệp cùng thanh tiến độ tổng và thời gian còn lại. Tệp nhận về hiện ngay trong trang với nút **Mở file** (chỉ bật cho định dạng an toàn) và **Hiện trong thư mục**.
+4. **Tải từ máy tính về điện thoại:** Trên máy tính bạn có thể kéo thả tệp/thư mục trực tiếp vào khung chia sẻ hoặc bấm **+ Thêm tệp…** / **+ Thêm thư mục…**, gỡ từng mục khi cần. Trên điện thoại có thể xem trước ảnh thu nhỏ trước khi tải về, hoặc bấm **Tải tất cả (.zip)** để tải trọn bộ không tốn dung lượng tạm.
+5. **Nhắn văn bản và đổi quyền phiên:** Gửi/nhận liên kết hoặc ghi chú hai chiều theo thời gian thực với dấu báo tin mới ở tab. Khi xong việc, bấm **Dừng phiên** trên trang (hoặc rời trang vẫn chạy tới khi hết 10 phút không thao tác). Lưu ý: nếu đổi quyền phiên hoặc chế độ dùng 1 lượt khi đang chạy, ứng dụng sẽ tạo mã QR mới và làm mã cũ hết hạn.
+
+### 6.1. Lối tắt thao tác nhanh hằng ngày
+
+- **Tìm nhanh và lọc máy:** Dùng ô lọc ở cột danh sách thiết bị khi có từ 5 máy trở lên, hoặc nhấn `Ctrl + F` trong khung trò chuyện để tìm nhanh theo tên tệp / văn bản; dùng `Ctrl + Shift + V` để gửi ngay ảnh đang sao chép trong clipboard.
+- **Bật/tắt nhanh ngay trên cửa sổ & khay:** Nhấp trực tiếp vào nhãn trạng thái (**Sẵn sàng nhận** / **Đã tạm dừng nhận** / **Đang ẩn**) ở thẻ máy dưới cột trái để tạm dừng nhận hoặc ẩn máy tức thì; dùng biểu tượng khay hệ thống để mở nhanh thư mục nhận hoặc trang Web QR.
+- **Tự phân loại & cổng đẩy thư mục dễ dùng:** Trong **Cài đặt → Truyền file**, bạn có thể bấm **Sửa** từng quy tắc, dùng các nút chọn nhanh loại file (**Ảnh**, **Video**, **Tài liệu**, **Nén**, **Nhạc**) thay vì gõ tay, và bấm **Tạm dừng tất cả** khi cần tạm ngưng mọi cổng đẩy.
 
 ---
 

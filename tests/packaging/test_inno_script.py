@@ -807,12 +807,22 @@ def test_vietnamese_language_file_pinned_with_source_header(iss: Iss) -> None:
     assert "is-6_7_3" in head and re.search(r"\b[0-9a-f]{40}\b", head), "header phải ghi nguồn tag + commit"
 
 
-def test_custom_messages_are_prefixed_vi_and_en_block_is_todo(iss: Iss) -> None:
+def test_custom_messages_have_matching_vi_and_en_blocks(iss: Iss) -> None:
+    langs = iss.entries("Languages")
+    assert any(e.get("name", "").lower() == "en" for e in langs), "phải bật ngôn ngữ tiếng Anh [Languages]"
     keys = [line.split("=", 1)[0].strip() for line in iss.lines("CustomMessages") if "=" in line]
     assert keys
+    vi_keys: set[str] = set()
+    en_keys: set[str] = set()
     for key in keys:
-        assert key.startswith("vi."), f"[CustomMessages] phải có tiền tố vi.: {key}"
-    assert "TODO E1" in iss.raw
+        if key.startswith("vi."):
+            vi_keys.add(key.removeprefix("vi."))
+        elif key.startswith("en."):
+            en_keys.add(key.removeprefix("en."))
+        else:
+            raise AssertionError(f"[CustomMessages] phải có tiền tố vi. hoặc en.: {key}")
+    assert vi_keys == en_keys, "bản dịch vi và en phải khớp nhau từng khóa"
+    assert "TODO E1" not in iss.raw
 
 
 def test_currentuser_finish_page_mentions_private_network_firewall_prompt(iss: Iss) -> None:

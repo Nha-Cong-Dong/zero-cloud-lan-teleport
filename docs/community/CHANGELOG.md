@@ -6,6 +6,21 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 ## [Unreleased]
 
 ### Added
+- **Cột mốc 4 (`v1.7.0`) — Tối ưu trải nghiệm người dùng (Đợt 1, 2, 3):**
+  - **Đợt 1 — Luồng trò chuyện, bong bóng tệp & dán nhanh (`ui/chat.py`, `ui/chat_bubbles.py`, `ui/conversations.py`, `ui/thumbnails.py`, `ui/shell.py`, `ui/diagnose.py`, `ui/app.py`):**
+    - Thanh điều khiển nhanh trên đầu luồng trò chuyện (bật/tắt clipboard, tự nhận và menu `⋯` cho Kết nối IP, Thử lại, Gửi ảnh từ clipboard, Cài đặt máy, Xóa lịch sử máy), nút **Mở file** an toàn (chặn đuôi thực thi/kịch bản), mở rộng danh sách tệp trong bong bóng, hiển thị dung lượng tiết kiệm Smart Delta và thư mục đích phân loại tự động, xuất biên lai trực tiếp từ bong bóng, ảnh thu nhỏ an toàn nền (`ThumbnailLoader`), gửi ảnh clipboard qua `Ctrl+Shift+V`, nút **Chép lại** trên `ClipboardNote`, tìm nhanh trong luồng (`Ctrl+F`) và lọc danh sách thiết bị khi có từ 5 máy trở lên.
+  - **Đợt 2 — Chế độ khách điện thoại Web QR 2.0 (`ui/web_guest_dialog.py`, `ui/main_window.py`, `net/web_guest.py`, `net/web_guest_assets.py`, `app/web_guest.py`):**
+    - Chuyển sang trang không chặn `Page.WEB_GUEST` (`WebGuestPage`, giữ phiên chạy khi quay về trang chính), hỗ trợ kéo thả tệp/thư mục và gỡ từng mục chia sẻ, danh sách tệp nhận kèm **Mở file** / **Hiện trong thư mục**, khung nhắn văn bản 2 chiều và cảnh báo làm hết hạn QR cũ khi đổi quyền phiên.
+    - Nâng cấp web khách: tự chọn ngôn ngữ theo trình duyệt, bỏ `user-scalable=no`, huy hiệu số mục mới theo SSE, nút **Hủy** / **Thử lại** từng tệp và thanh tiến độ tổng + ETA, xem trước ảnh thu nhỏ (`?inline=1` không tiêu thụ phiên `one_shot`).
+  - **Đợt 3 — Tự động hóa dễ dùng, lối tắt vận hành & bộ cài đa ngôn ngữ (`ui/settings.py`, `app/watch.py`, `app/node.py`, `ui/home.py`, `ui/tray.py`, `ui/taskbar.py`, `ui/send_picker.py`, `packaging/inno/teleport.iss`):**
+    - Cho phép bấm **Sửa** quy tắc phân loại / cổng đẩy tự động (giữ nguyên `id` và trạng thái bật), thêm bộ chọn nhanh loại tệp (`FILE_TYPE_PRESETS`) và nút **Tạm dừng tất cả** cho toàn bộ cổng đẩy (`WatchPortalService.set_paused`, `Node.set_watch_portals_paused`).
+    - Bấm huy hiệu trạng thái trên `MachineCard` để bật/tắt nhanh tạm dừng nhận hoặc ẩn máy; bổ sung lối tắt **Chuyển tệp với điện thoại (Web QR)…** và **Mở thư mục nhận** vào menu khay hệ thống; hiển thị thanh tiến độ trên nút thanh tác vụ Windows (`ITaskbarList3` trong `ui/taskbar.py`); thêm nút **Gửi qua điện thoại (Web QR)…** trong `SendPickerDialog`; và bật ngôn ngữ tiếng Anh trong bộ cài Windows `packaging/inno/teleport.iss`.
+
+### Fixed
+- **Khử lặp thông báo và âm thanh cảnh báo khi mạng bị chặn (`app/node.py`, `ui/app.py`, `ui/chat.py`, `ui/widgets.py`):**
+  - Áp dụng backoff tăng dần khi mDNS liên tục gặp lỗi quảng bá trong `_netwatch` (đặt lại ngay khi đổi mạng/phục hồi), giới hạn tần suất kiểm tra tường lửa khi chữ ký mạng không đổi (`FIREWALL_RECHECK_INTERVAL = 60.0`), tôn trọng thao tác đóng thông báo của người dùng cho tới khi mạng đổi, và khử trùng lặp phát sự kiện trợ năng `QAccessible.Event.Alert` khi `InfoBar` đang mở với cùng nội dung.
+
+### Added (v1.6.0)
 - **Cột mốc 3 (`v1.6.0`) — Truyền thông minh phần thay đổi (Smart Delta), Tự động phân loại & Đẩy thư mục, Gửi nhanh Clipboard:**
   - **Truyền thông minh phần thay đổi — Smart Delta (`core/delta.py`, `app/delta.py`, `core/messages.py`, `core/transfer.py`, `app/transfers.py`, `cli.py`, `ui/settings.py`):**
     - Tương thích ngược hoàn toàn `protocol = 1` thông qua cờ tùy chọn `offer.delta` cùng hai thông điệp điều khiển mới `delta_probe` và `delta_match` (`MAX_DELTA_PROBE = 256`).

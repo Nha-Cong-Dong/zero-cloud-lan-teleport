@@ -1454,3 +1454,83 @@ def test_f5_empty_list_selects_nothing(qtbot):
     c.devices.reset([])
     settle()
     assert c.selected() is None
+
+
+def test_header_quick_actions_and_menu_signals(qtbot):
+    h = Harness(qtbot)
+    h.show(qtbot)
+    v = h.view
+    v.set_device(PEER_ID)
+    # Mặc định ẩn trên ChatView đứng riêng để giữ thứ tự Tab cũ.
+    assert v.header.clipboard_button.isHidden()
+    assert v.header.search_button.isHidden()
+
+    v.set_quick_actions_available(True)
+    v.set_device_quick_state(PEER_ID, clipboard=True, auto_accept=False)
+    assert not v.header.clipboard_button.isHidden()
+    assert v.header.clipboard_button.isChecked()
+    assert not v.header.auto_accept_button.isChecked()
+
+    clip_events: list[tuple[str, bool]] = []
+    auto_events: list[tuple[str, bool]] = []
+    ip_events: list[str] = []
+    v.header_clipboard_toggled.connect(lambda d, on: clip_events.append((d, on)))
+    v.header_auto_accept_toggled.connect(lambda d, on: auto_events.append((d, on)))
+    v.header_connect_ip_requested.connect(ip_events.append)
+
+    v.header.clipboard_button.click()
+    v.header.auto_accept_button.click()
+    assert clip_events == [(PEER_ID, False)]
+    assert auto_events == [(PEER_ID, True)]
+
+    v.header.more_button.click()
+    menu = v.header._menu
+    assert menu is not None
+    menu.actions()[0].trigger()
+    assert ip_events == [PEER_ID]
+    menu.close()
+
+
+def test_search_bar_filters_bubbles_and_esc_closes(qtbot, clock):
+    h = Harness(qtbot)
+    h.show(qtbot, active=True)
+    v = h.view
+    v.set_device(PEER_ID)
+    k1 = key("send", tid(1))
+    k2 = key("send", tid(2))
+    v.handle(status_changed(k1, "transferring", files=(("alpha-report.pdf", 100),)))
+    clock.advance(5)
+    v.handle(status_changed(k2, "transferring", files=(("beta-video.mp4", 200),)))
+    settle()
+
+    v.open_search()
+    assert not v.search_bar.isHidden()
+    v.search_bar.edit.setText("alpha")
+    settle()
+    assert "1" in v.search_bar.count_label.text()
+    assert v.row(k1).isVisibleTo(v)
+    assert not v.row(k2).isVisibleTo(v)
+
+    QTest.keyClick(v.search_bar.edit, Qt.Key.Key_Escape)
+    settle()
+    assert v.search_bar.isHidden()
+    assert v.row(k1).isVisibleTo(v)
+    assert v.row(k2).isVisibleTo(v)
+
+
+def test_ctrl_shift_v_emits_push_clipboard(qtbot):
+    h = Harness(qtbot)
+    h.show(qtbot, active=True)
+    v = h.view
+    v.set_device(PEER_ID)
+    pushed: list[str] = []
+    v.push_clipboard_requested.connect(pushed.append)
+    v.composer.send_button.setFocus(Qt.FocusReason.OtherFocusReason)
+    settle()
+    QTest.keyClick(
+        v.composer.send_button,
+        Qt.Key.Key_V,
+        Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    settle()
+    assert pushed == [PEER_ID]

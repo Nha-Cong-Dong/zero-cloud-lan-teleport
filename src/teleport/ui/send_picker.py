@@ -197,6 +197,10 @@ def discover_text() -> str:
     return QCoreApplication.translate("SendPicker", "Tìm máy mới")
 
 
+def web_guest_text() -> str:
+    return QCoreApplication.translate("SendPicker", "Gửi qua điện thoại (Web QR)…")
+
+
 def busy_notice() -> str:
     return QCoreApplication.translate(
         "SendPicker",
@@ -314,6 +318,7 @@ class SendPickerDialog(QDialog):
     confirmed = Signal(str, object)  # device_id, tuple[Path, ...]; hộp đã đóng
     confirmed_many = Signal(object, object)  # tuple[str, ...], tuple[Path, ...]; hộp đã đóng
     discover_requested = Signal()  # hộp đã đóng
+    web_guest_requested = Signal(object)  # tuple[Path, ...]; hộp đã đóng
 
     def __init__(
         self,
@@ -377,6 +382,10 @@ class SendPickerDialog(QDialog):
         self.cancel_button.setObjectName("sendPickerCancel")
         # Nút đang có tiêu điểm nhận Enter (autoDefault): Enter trên “Hủy” là Hủy, không bao giờ là Gửi.
         self.cancel_button.setAutoDefault(True)
+        self.web_guest_button = QPushButton()
+        self.web_guest_button.setObjectName("sendPickerWebGuest")
+        self.web_guest_button.setAutoDefault(False)
+        self.web_guest_button.setDefault(False)
         self.send_button = QPushButton()
         self.send_button.setObjectName("sendPickerSend")
         self.send_button.setProperty(theme.PRIMARY_PROPERTY, True)
@@ -395,6 +404,7 @@ class SendPickerDialog(QDialog):
         empty_row.addWidget(self.discover_button, 0, Qt.AlignmentFlag.AlignLeft)
         empty_row.addStretch(1)
         buttons = QHBoxLayout()
+        buttons.addWidget(self.web_guest_button)
         buttons.addStretch(1)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.send_button)
@@ -418,10 +428,12 @@ class SendPickerDialog(QDialog):
         QWidget.setTabOrder(self.files_view, self.select_all_button)
         QWidget.setTabOrder(self.select_all_button, self.devices_view)
         QWidget.setTabOrder(self.devices_view, self.discover_button)
-        QWidget.setTabOrder(self.discover_button, self.cancel_button)
+        QWidget.setTabOrder(self.discover_button, self.web_guest_button)
+        QWidget.setTabOrder(self.web_guest_button, self.cancel_button)
         QWidget.setTabOrder(self.cancel_button, self.send_button)
 
         self.select_all_button.clicked.connect(self._toggle_select_all)
+        self.web_guest_button.clicked.connect(self._on_web_guest)
         self.cancel_button.clicked.connect(self.reject)
         self.send_button.clicked.connect(self._on_send)
         self.discover_button.clicked.connect(self._on_discover)
@@ -577,6 +589,8 @@ class SendPickerDialog(QDialog):
         self.discover_button.setText(discover_text())
         self.discover_button.setAccessibleName(discover_text())
         self.warning_label.setText(warning_text())
+        self.web_guest_button.setText(web_guest_text())
+        self.web_guest_button.setAccessibleName(web_guest_text())
         self.cancel_button.setText(cancel_text())
         self.cancel_button.setAccessibleName(cancel_text())
         self._fill_files()
@@ -755,6 +769,13 @@ class SendPickerDialog(QDialog):
         self.done(QDialog.DialogCode.Rejected.value)
         self.discover_requested.emit()
 
+    def _on_web_guest(self) -> None:
+        if self._resolved:
+            return
+        paths = self._paths
+        self.done(QDialog.DialogCode.Rejected.value)
+        self.web_guest_requested.emit(paths)
+
 
 # ---- Controller ------------------------------------------------------------------------------
 
@@ -765,6 +786,7 @@ class SendPickerController(QObject):
     send_confirmed = Signal(str, object)  # device_id, tuple[Path, ...]
     send_many_confirmed = Signal(object, object)  # tuple[str, ...], tuple[Path, ...]
     discover_requested = Signal()
+    web_guest_requested = Signal(object)  # tuple[Path, ...]
 
     def __init__(self, window: MainWindow, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -835,6 +857,7 @@ class SendPickerController(QObject):
         dialog.confirmed.connect(self.send_confirmed)
         dialog.confirmed_many.connect(self.send_many_confirmed)
         dialog.discover_requested.connect(self.discover_requested)
+        dialog.web_guest_requested.connect(self.web_guest_requested)
         dialog.finished.connect(functools.partial(self._on_finished, dialog))
         self._dialog = dialog
         dialog.open()

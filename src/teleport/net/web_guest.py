@@ -25,6 +25,7 @@ import json
 import logging
 import mimetypes
 import os
+import secrets
 import shutil
 import struct
 import time
@@ -186,7 +187,9 @@ class WebGuestHttpServer:
         else:
             raise FileNotFoundError(f"Tệp hoặc thư mục không tồn tại: {path}")
 
-        file_id = hashlib.sha256(f"{path.name}:{size}:{time.time()}".encode()).hexdigest()[:12]
+        file_id = hashlib.sha256(
+            f"{path.name}:{size}:{time.time()}:{secrets.token_hex(4)}".encode()
+        ).hexdigest()[:12]
         self.shared_files[file_id] = (path.name, path, size)
         if is_dir:
             self._shared_dirs.add(file_id)
@@ -208,7 +211,16 @@ class WebGuestHttpServer:
         if self.scope is GuestScope.RECEIVE_ONLY:
             return []
         return [
-            {"id": fid, "name": name, "size": size, "is_dir": fid in self._shared_dirs}
+            {
+                "id": fid,
+                "name": name,
+                "size": size,
+                "is_dir": fid in self._shared_dirs,
+                "is_image": bool(
+                    fid not in self._shared_dirs
+                    and (mimetypes.guess_type(name)[0] or "").startswith("image/")
+                ),
+            }
             for fid, (name, _, size) in self.shared_files.items()
         ]
 
@@ -561,8 +573,14 @@ class WebGuestHttpServer:
                 await self._send_response(writer, 404, "text/plain", b"File Missing\n")
                 return
 
-            await self._serve_file_download(file_path, filename, file_size, headers, writer)
-            self._consume_one_shot()
+            inline_req = query.get("inline", [""])[0] == "1"
+            mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            is_inline_image = inline_req and mime_type.startswith("image/")
+            await self._serve_file_download(
+                file_path, filename, file_size, headers, writer, inline=is_inline_image
+            )
+            if not is_inline_image:
+                self._consume_one_shot()
 
         elif path == "/api/events":
             # Server-Sent Events
@@ -602,6 +620,8 @@ class WebGuestHttpServer:
         size: int,
         headers: dict[str, str],
         writer: asyncio.StreamWriter,
+        *,
+        inline: bool = False,
     ) -> None:
         """Phục vụ tải tệp xuống kèm hỗ trợ HTTP Range ngắt quãng."""
         range_header = headers.get("range", "")
@@ -624,7 +644,8 @@ class WebGuestHttpServer:
         content_length = end - start + 1
         mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         ascii_filename = urllib.parse.quote(filename)
-        cd_val = f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{ascii_filename}"
+        disp = "inline" if inline else "attachment"
+        cd_val = f"{disp}; filename=\"{ascii_filename}\"; filename*=UTF-8''{ascii_filename}"
 
         status_line = "HTTP/1.1 206 Partial Content" if is_range else "HTTP/1.1 200 OK"
         resp_headers = [
@@ -634,6 +655,8 @@ class WebGuestHttpServer:
             f"Content-Disposition: {cd_val}",
             "Accept-Ranges: bytes",
         ]
+        if inline:
+            resp_headers.append("Cache-Control: private, max-age=300")
         if is_range:
             resp_headers.append(f"Content-Range: bytes {start}-{end}/{size}")
         resp_headers.append("\r\n")

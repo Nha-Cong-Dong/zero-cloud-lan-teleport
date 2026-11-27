@@ -179,6 +179,15 @@ class WebGuestManager:
             return
         self._server.remove_shared_file(file_id)
 
+    def shared_files_snapshot(self) -> list[tuple[str, str, Path, int, bool]]:
+        """Trả danh sách `(file_id, name, path, size, is_dir)` hiện đang chia sẻ."""
+        if not self._server:
+            return []
+        return [
+            (fid, name, path, size, fid in self._server._shared_dirs)
+            for fid, (name, path, size) in self._server.shared_files.items()
+        ]
+
     def send_text(self, text: str) -> dict[str, Any]:
         """Gửi một tin nhắn văn bản tới các trình duyệt khách đang mở."""
         if not self._server:

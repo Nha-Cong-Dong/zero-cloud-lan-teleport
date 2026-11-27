@@ -769,7 +769,14 @@ def test_initial_focus_is_device_list(env):
 
 def test_tab_order_files_devices_cancel_send(env):
     dlg = armed_with(env)
-    order = [files_view(dlg), dlg.select_all_button, devices_view(dlg), cancel_button(dlg), send_button(dlg)]
+    order = [
+        files_view(dlg),
+        dlg.select_all_button,
+        devices_view(dlg),
+        dlg.web_guest_button,
+        cancel_button(dlg),
+        send_button(dlg),
+    ]
     order[0].setFocus(Qt.FocusReason.TabFocusReason)
     env.qtbot.waitUntil(lambda: QApplication.focusWidget() is order[0], timeout=2_000)
     for nxt in order[1:]:
@@ -1097,7 +1104,7 @@ def test_send_flag_on_first_launch_opens_picker_after_node_runs(
         seen["sends"] = list(request_send_spy)
         QTest.mouseClick(cancel_button(dlg), Qt.MouseButton.LeftButton)
         yield gui_wait(lambda: find_picker(run) is None, 5, "hộp đóng")
-        run.tray.actions()[3].trigger()
+        run.tray.actions()[-1].trigger()
 
     argv = ["--config-dir", str(d), "--send", str(A), str(B)]
     if background:
@@ -1135,7 +1142,7 @@ def test_first_run_screen_holds_request_until_started(
         seen["state"] = run.window.view_state
         QTest.mouseClick(cancel_button(find_picker(run)), Qt.MouseButton.LeftButton)
         yield gui_wait(lambda: find_picker(run) is None, 5, "hộp đóng")
-        run.tray.actions()[3].trigger()
+        run.tray.actions()[-1].trigger()
 
     run = gui(["--config-dir", str(d), "--send", str(A)], script)
     assert run.code == 0
@@ -1172,7 +1179,7 @@ def test_start_failed_discards_pending_request(gui, gui_wait, config_dir, fast_l
         for _ in range(25):
             yield
         seen["after"] = find_picker(run)
-        run.tray.actions()[3].trigger()
+        run.tray.actions()[-1].trigger()
 
     try:
         run = gui(["--config-dir", str(d), "--send", str(A)], script)
@@ -1183,3 +1190,18 @@ def test_start_failed_discards_pending_request(gui, gui_wait, config_dir, fast_l
     assert seen["error_picker"] is None
     assert seen["pending"] is None, "start_failed bỏ yêu cầu chờ"
     assert seen["after"] is None
+
+
+def test_send_picker_web_guest_button(env):
+    """Nút gửi qua điện thoại (Web QR) hiện cả khi chưa ghép đôi và phát `web_guest_requested(paths)`."""
+    emitted: list[object] = []
+    env.ctl.web_guest_requested.connect(emitted.append)
+    dlg = open_picker(env, paths=(A, B), devices=[])
+    btn = child(dlg, QPushButton, "sendPickerWebGuest")
+    assert btn.isVisibleTo(dlg)
+    assert not send_button(dlg).isEnabled()
+    assert not btn.isDefault()
+    assert not btn.autoDefault()
+    btn.click()
+    env.qtbot.waitUntil(lambda: is_closed(env.ctl, dlg), timeout=2_000)
+    assert emitted == [(A, B)]

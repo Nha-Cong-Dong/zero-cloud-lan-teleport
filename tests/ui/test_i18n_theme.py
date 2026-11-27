@@ -79,7 +79,7 @@ def test_fake_translator_retranslates_window_and_tray(gui, gui_wait, config_dir,
     assert seen["direct"] == PREFIX + "Thử lại", "translator giả không có hiệu lực (lỗi của test)"
     assert any(PREFIX in t for t in seen["window"]), seen["window"]
     assert not untranslated(seen["window"]), f"chữ chưa dịch lại trên cửa sổ: {untranslated(seen['window'])}"
-    assert len(seen["tray"]) == 4 and all(PREFIX in t for t in seen["tray"]), seen["tray"]
+    assert len(seen["tray"]) == len(ui_helpers.M5) and all(PREFIX in t for t in seen["tray"]), seen["tray"]
     assert seen["back"] == list(ui_helpers.M5), "gỡ translator → về chuỗi nguồn"
 
 
