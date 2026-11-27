@@ -1578,10 +1578,14 @@ class DiscoverPage(QWidget):
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
         self._seen_ids = None
-        self.canvas.stop_waves()
+        if "canvas" not in self.__dict__:
+            return
+        if isValid(self.canvas):
+            self.canvas.stop_waves()
         if not event.spontaneous():  # đổi trang, xuống khay (thu nhỏ thì giữ)
             self._address_error = None
-            self.info_bar.clear()
+            if "info_bar" in self.__dict__ and isValid(self.info_bar):
+                self.info_bar.clear()
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
