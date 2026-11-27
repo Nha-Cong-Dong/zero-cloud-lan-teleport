@@ -54,16 +54,9 @@ SEND_FILE = "Gửi file"
 DROP_TO = "Thả để gửi {n} file tới {name}"
 ONLINE_HEADER = "Trực tuyến · Windows · {address}"
 OFFLINE_HEADER = "Ngoại tuyến · Windows"
-OFFLINE_HINT = (
-    "{name} đang ngoại tuyến. File gửi lúc này sẽ chờ và tự gửi khi máy đó mở Teleport trong cùng mạng, "
-    "nếu Teleport trên máy này vẫn chạy (kể cả khi chỉ còn ở khay)."
-)  # 9.9 (thắng câu ở mục 5)
-DRAG_HINT = "kéo file vào đây"  # “hoặc kéo file vào đây” (mục 5, 8.1)
 EMPTY_TITLE = "Kéo file vào đây để gửi cho {name}"  # 9b.21
 # Spec “phím tắt và dán file” mục 4 (S15): {key} là NativeText của phím Paste đầu (macOS: ⌘V).
-EMPTY_TEXT = "Hoặc bấm Gửi file ở dưới, hay nhấn {key} để dán file đã chép.".format(
-    key="⌘V" if sys.platform == "darwin" else "Ctrl+V"
-)
+EMPTY_TEXT = "Nhấn {key} để dán file".format(key="⌘V" if sys.platform == "darwin" else "Ctrl+V")
 NEW_NAME = "Có {n} lượt mới. Bấm để cuộn xuống cuối"
 LIST_DESCRIPTION = (
     "Mũi tên để chọn máy, Tab để đi qua từng máy, Enter để mở cuộc trò chuyện, phím Menu để mở thao tác."
@@ -1201,13 +1194,15 @@ def test_f3_offline_device_send_button_enabled_and_hint(qtbot, clock):
     v.set_connected(PEER_ID, False)
     v.set_device(PEER_ID)
     assert v.composer.send_button.isEnabled()
-    assert v.composer.hint_label.text() == OFFLINE_HINT.format(name=peer(PEER))
-    assert v.composer.hint_label.textFormat() == Qt.TextFormat.PlainText
+    assert v.composer.offline is True
+    assert v.composer.hint_label.isHidden()
+    assert "Ngoại tuyến" in v.composer.send_button.accessibleDescription()
     v.composer.send_button.click()
     assert harness.picks == [PEER_ID], "máy ngoại tuyến vẫn gửi được (mvp mục 8)"
     v.set_device(OTHER_ID)
-    assert DRAG_HINT in v.composer.hint_label.text()
-    assert "ngoại tuyến" not in v.composer.hint_label.text()
+    assert v.composer.offline is False
+    assert v.composer.hint_label.isHidden()
+    assert v.composer.send_button.accessibleDescription() == ""
 
 
 def test_f3_offline_hint_follows_model(qtbot, clock):
@@ -1215,19 +1210,12 @@ def test_f3_offline_hint_follows_model(qtbot, clock):
     harness.show(qtbot)
     v = harness.view
     v.set_device(PEER_ID)
-    assert DRAG_HINT in v.composer.hint_label.text()
+    assert v.composer.offline is False
     harness.devices.reset([dview(online=False, connected=False), dview(OTHER_ID, OTHER)])
     settle()
-    assert v.composer.hint_label.text() == OFFLINE_HINT.format(name=peer(PEER))
-
-
-def test_f3_offline_hint_in_mvp_doc():
-    """9.9: câu thanh dưới ghi vào mvp mục 8 dòng “đã ghép đôi nhưng chưa kết nối”."""
-    _mvp = Path(__file__).resolve().parents[2] / "docs" / "product" / "mvp.md"
-    _fb = Path(__file__).resolve().parents[2] / "docs" / "mvp.md"
-    doc = (_mvp if _mvp.exists() else _fb).read_text(encoding="utf-8")
-    sample = OFFLINE_HINT.format(name="*PC-Nha*")
-    assert sample in doc or OFFLINE_HINT.format(name="PC-Nha") in doc, "câu ngoại tuyến chưa có trong mvp.md"
+    assert v.composer.offline is True
+    assert v.composer.hint_label.isHidden()
+    assert "Ngoại tuyến" in v.composer.send_button.accessibleDescription()
 
 
 # ---- F4 / F5: cột trái (mục 6) -----------------------------------------------------------------
@@ -1462,14 +1450,20 @@ def test_header_quick_actions_and_menu_signals(qtbot):
     v = h.view
     v.set_device(PEER_ID)
     # Mặc định ẩn trên ChatView đứng riêng để giữ thứ tự Tab cũ.
+    assert v.header.info_button.isHidden()
     assert v.header.clipboard_button.isHidden()
     assert v.header.search_button.isHidden()
 
     v.set_quick_actions_available(True)
     v.set_device_quick_state(PEER_ID, clipboard=True, auto_accept=False)
-    assert not v.header.clipboard_button.isHidden()
-    assert v.header.clipboard_button.isChecked()
-    assert not v.header.auto_accept_button.isChecked()
+    # 4 nút thừa ở header luôn ẩn; chỉ giữ nút mở thông tin thiết bị (cột phải).
+    assert not v.header.info_button.isHidden()
+    assert v.header.clipboard_button.isHidden()
+    assert v.header.auto_accept_button.isHidden()
+    assert v.header.search_button.isHidden()
+    assert v.header.more_button.isHidden()
+    assert v.info_panel.clipboard_switch.isChecked()
+    assert not v.info_panel.auto_accept_switch.isChecked()
 
     clip_events: list[tuple[str, bool]] = []
     auto_events: list[tuple[str, bool]] = []
@@ -1478,17 +1472,13 @@ def test_header_quick_actions_and_menu_signals(qtbot):
     v.header_auto_accept_toggled.connect(lambda d, on: auto_events.append((d, on)))
     v.header_connect_ip_requested.connect(ip_events.append)
 
-    v.header.clipboard_button.click()
-    v.header.auto_accept_button.click()
+    v.info_panel.clipboard_switch.click()
+    v.info_panel.auto_accept_switch.click()
     assert clip_events == [(PEER_ID, False)]
     assert auto_events == [(PEER_ID, True)]
 
-    v.header.more_button.click()
-    menu = v.header._menu
-    assert menu is not None
-    menu.actions()[0].trigger()
+    v.info_panel.connect_ip_row.click()
     assert ip_events == [PEER_ID]
-    menu.close()
 
 
 def test_search_bar_filters_bubbles_and_esc_closes(qtbot, clock):

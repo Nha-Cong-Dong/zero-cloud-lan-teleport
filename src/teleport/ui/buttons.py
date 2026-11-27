@@ -95,7 +95,8 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from teleport.ui import motion, theme
+from teleport.ui import motion, sounds, theme
+from teleport.ui.sounds import SoundCue
 
 _SPIN_PERIOD_MS = 1000  # ms, một vòng spinner
 _SPINNER_MAX = 16  # px, cạnh lớn nhất của spinner
@@ -623,6 +624,9 @@ class CopiedFeedback(QObject):
 
     def trigger(self) -> None:
         """Bật “đã chép” (phát nếu đổi) và hẹn lại từ đầu `COPIED_FEEDBACK_MS`."""
+        btn = self._button_ref()
+        visible = bool(btn is not None and isValid(btn) and btn.isVisible())
+        sounds.play(SoundCue.TOGGLE_TICK, window_visible=visible)
         self._timer.start(max(0, int(COPIED_FEEDBACK_MS)))
         if not self._active:
             self._active = True

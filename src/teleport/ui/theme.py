@@ -182,6 +182,7 @@ _CONNECTED_PROPERTY = "teleport_theme_connected"  # đã nối `colorSchemeChang
 _STYLE_PROPERTY = "teleport_theme_fusion"  # đã đặt style Fusion
 _FONT_PROPERTY = "teleport_theme_font"  # đã áp cỡ font thân tối thiểu
 BACKDROP_PROPERTY = "backdrop"  # QFrame[surface="sidebar"][backdrop="mica"] (ui/backdrop.py)
+MENU_PROPERTY = "teleport_menu"  # QMenu[teleport_menu="true"] cho menu ngữ cảnh nội tuyến
 MICA_TINT_ALPHA = 178  # ≈ 0,70: alpha lớp màu `sidebar` phủ trên Mica
 MICA_RANGE: dict[bool, tuple[int, int]] = {False: (0xE0, 0xFF), True: (0x10, 0x40)}  # mức xám Mica giả định
 
@@ -646,6 +647,25 @@ def stylesheet(dark: bool, button_height: int | None = None, accent: str | None 
     lines += [
         f"QLabel:focus {{ border: 2px solid {ring}; border-radius: {RADIUS_CONTROL}px; }}",
         f"QAbstractItemView:focus {{ border: 2px solid {ring}; }}",
+        "QListView#conversationList:focus { border: none; }",
+        (
+            f'QMenu[{MENU_PROPERTY}="true"] {{ background-color: {t.surface_raised.name()};'
+            f" color: {t.text.name()}; border: 1px solid {t.border_strong.name()};"
+            f" border-radius: {RADIUS_CARD}px; padding: 4px; }}"
+        ),
+        (
+            f'QMenu[{MENU_PROPERTY}="true"]::item {{ background: transparent; color: {t.text.name()};'
+            f" border-radius: {RADIUS_CONTROL}px; padding: 6px 14px; margin: 1px 0px; }}"
+        ),
+        (
+            f'QMenu[{MENU_PROPERTY}="true"]::item:selected'
+            f" {{ background-color: {t.selected.name()}; color: {t.text.name()}; }}"
+        ),
+        f'QMenu[{MENU_PROPERTY}="true"]::item:disabled {{ color: {t.text_muted.name()}; }}',
+        (
+            f'QMenu[{MENU_PROPERTY}="true"]::separator'
+            f" {{ height: 1px; background-color: {border}; margin: 4px 10px; }}"
+        ),
     ]
     return "\n".join(lines)
 

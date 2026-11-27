@@ -337,10 +337,13 @@ from teleport.ui import (
     receive_dir,
     send,
     shell,
+    sounds,
     texts,
     theme,
+    widgets,
 )
 from teleport.ui import transfers as ui_transfers
+from teleport.ui import tray as ui_tray
 from teleport.ui.appearance import AppearanceSection
 from teleport.ui.bridge import NodeHost, NodeOptions, StartError, SubmitJob
 from teleport.ui.chat_bubbles import OfferPanel
@@ -356,6 +359,7 @@ from teleport.ui.radar import DeviceListModel
 from teleport.ui.receive_dir import ChangeError, ReceiveDirController
 from teleport.ui.send_picker import SendPickerController, SendPickerDialog
 from teleport.ui.settings import Section, SettingsController, SettingsPage, autostart_state_hint
+from teleport.ui.sounds import SoundCue
 from teleport.ui.transfers import TransfersController
 from teleport.ui.tray import ClipNotice, ClipNoticeKind, SendTarget, Tray, TrayBadge, make_icon
 from teleport.ui.wait_pairing import WaitPairingController
@@ -779,7 +783,6 @@ class GuiApp(QObject):
         self._first_run: FirstRunChoice | None = None
         self._session_ending = False  # hệ điều hành đang tắt máy / đăng xuất (`commitDataRequest`)
         self._quit_box: QMessageBox | None = None
-        self._clear_history_box: QMessageBox | None = None
         self._receipt_dialog: QFileDialog | None = None
         self._temp_clip_files: list[Path] = []
         self._multi_menu: QMenu | None = None
@@ -829,6 +832,10 @@ class GuiApp(QObject):
         self.window.change_receive_dir_requested.connect(self._choose_receive_dir)
         self.window.change_first_run_dir_requested.connect(self._choose_first_run_dir)
         self.window.web_guest_requested.connect(self._open_web_guest)
+        self.window.quick_pair_requested.connect(self._on_quick_pair_requested)
+        self.window.empty_drop_files_requested.connect(self._on_empty_drop_files)
+        self.window.onboarding_dismissed_requested.connect(self._on_onboarding_dismissed)
+        self.window.set_onboarding_dismissed(bool(getattr(saved, "onboarding_dismissed", False)))
         self.window.set_machine_status_menu_enabled(True)
         self.window.machine_pause_toggled.connect(self._on_pause_toggled)
         self.window.machine_hidden_toggled.connect(self._on_machine_hidden_toggled)
@@ -858,6 +865,7 @@ class GuiApp(QObject):
         self.transfers.view.header_send_clipboard_image_requested.connect(self._on_send_clipboard_image)
         self.transfers.view.header_device_settings_requested.connect(self._open_device_settings)
         self.transfers.view.header_clear_history_requested.connect(self._on_header_clear_history)
+        self.transfers.view.unpair_requested.connect(self._on_unpair_requested)
         self.transfers.view.export_receipt_requested.connect(self._on_export_receipt)
         app.commitDataRequest.connect(self._on_commit_data)
         self.window.conversations.unpair_requested.connect(self._on_unpair_requested)
@@ -895,6 +903,8 @@ class GuiApp(QObject):
         discover.pair_requested.connect(self.pairing.pair_device)
         discover.manual_address_entered.connect(self.pairing.pair_address)
         discover.open_device_requested.connect(self._on_open_device)
+        discover.send_files_requested.connect(self._on_discover_drop_files)
+        discover.rescan_requested.connect(self._on_discover_rescan)
         discover.view_preference_changed.connect(self._on_view_preference)
         self.pairing.notice.connect(discover.show_notice)
         self._wire_wait_pairing()
@@ -1398,7 +1408,7 @@ class GuiApp(QObject):
         self.transfers.view.show_notice(text, receive_dir.choose_action_text, self._choose_receive_dir)
         self._receive_dir_notice = text
         if not self.window.isVisible():
-            self.tray.show_message(receive_dir.unavailable_tray_text())
+            self.tray.show_message(receive_dir.unavailable_tray_text(), critical=True)
 
     # ---- Lần chạy đầu --------------------------------------------------------------------------
 
@@ -1534,39 +1544,20 @@ class GuiApp(QObject):
     def _on_header_clear_history(self, device_id: str) -> None:
         if self._quitting or self.host is None:
             return
-        old = self._clear_history_box
-        if old is not None:
-            old.raise_()
-            old.activateWindow()
-            return
         t = QCoreApplication.translate
-        peer = self._peer_label(device_id)
-        box = QMessageBox(self.window)
-        box.setObjectName("clearDeviceHistoryBox")
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(texts.fill(t("GuiApp", "Xóa lịch sử truyền với {name}?"), name=peer))
-        box.setInformativeText(
-            t("GuiApp", "Các file đã nhận hay đã gửi vẫn giữ nguyên; chỉ xóa danh sách lịch sử với máy này.")
+        self.transfers.view.show_notice(
+            lambda: texts.fill(
+                t("GuiApp", "Xóa lịch sử truyền với {name}? Các file đã lưu vẫn giữ nguyên."),
+                name=self._peer_label(device_id),
+            ),
+            lambda: t("GuiApp", "Xác nhận xóa"),
+            lambda: self._clear_device_history_now(device_id),
+            level=InfoLevel.WARNING,
         )
-        accept = box.addButton(t("GuiApp", "Xóa lịch sử"), QMessageBox.ButtonRole.DestructiveRole)
-        decline = box.addButton(t("GuiApp", "Không"), QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(decline)
-        box.setEscapeButton(decline)
-        box.finished.connect(
-            lambda _r, b=box, a=accept, d=device_id: self._on_clear_history_confirmed(b, a, d)
-        )
-        self._clear_history_box = box
-        motion.fade_in_on_show(box)
-        box.open()
 
-    def _on_clear_history_confirmed(self, box: QMessageBox, accept: object, device_id: str) -> None:
-        if self._clear_history_box is box:
-            self._clear_history_box = None
-        clicked = box.clickedButton()
-        box.deleteLater()
+    def _clear_device_history_now(self, device_id: str) -> None:
         host = self.host
-        if clicked is not accept or host is None or self._quitting:
+        if host is None or self._quitting:
             return
         host.call(
             lambda node: node.transfers.clear_history(device_id),
@@ -1689,10 +1680,6 @@ class GuiApp(QObject):
         self.transfers.request_send(device_id, [png_path])
 
     def _cleanup_ui_wave1(self) -> None:
-        box, self._clear_history_box = self._clear_history_box, None
-        if box is not None:
-            box.close()
-            box.deleteLater()
         dialog, self._receipt_dialog = self._receipt_dialog, None
         if dialog is not None:
             dialog.close()
@@ -1711,6 +1698,23 @@ class GuiApp(QObject):
         self.window.bring_to_front()
         self.window.open_page(Page.WEB_GUEST)
         self.web_guest_page.ensure_started(initial_paths)
+
+    def _on_quick_pair_requested(self, view: object) -> None:
+        if not self._quitting and isinstance(view, DeviceView):
+            self.pairing.pair_device(view)
+
+    def _on_empty_drop_files(self, paths: object) -> None:
+        if self._quitting or not isinstance(paths, list):
+            return
+        valid = [p for p in paths if isinstance(p, Path)]
+        if valid:
+            self._open_web_guest(valid)
+
+    def _on_onboarding_dismissed(self) -> None:
+        host = self.host
+        if host is None or not host.running or self._quitting:
+            return
+        host.call(lambda node: node.set_ui_preferences(onboarding_dismissed=True))
 
     def _on_first_run_marked(self, result: object) -> None:
         if self._quitting:
@@ -1825,6 +1829,19 @@ class GuiApp(QObject):
         """Bấm máy đã ghép đôi ở trang “Tìm máy mới”: về HOME, mở cuộc trò chuyện của máy đó."""
         self.window.open_conversation(device_id)
 
+    def _on_discover_drop_files(self, view: DeviceView, paths: list[Path]) -> None:
+        """Kéo thả file trực tiếp lên bong bóng máy trên radar."""
+        if not paths:
+            return
+        if view.paired:
+            self.window.open_conversation(view.device_id)
+        self.transfers.request_send(view.device_id, paths)
+
+    def _on_discover_rescan(self) -> None:
+        host = self.host
+        if host is not None:
+            host.call(lambda node: node.rescan_mdns())
+
     def _on_devices_changed(self, views: tuple[DeviceView, ...]) -> None:
         """Danh sách đọc lại sau ghép đôi / hủy ghép đôi (kho tin cậy đổi không phát NodeEvent)."""
         if not self._quitting:
@@ -1860,6 +1877,8 @@ class GuiApp(QObject):
 
     def _on_paired(self, device_id: str) -> None:
         self.transfers.on_pairing_finished(device_id, True)
+        if self.window.current_page in (Page.DISCOVER, Page.WAIT_PAIRING):
+            self.window.open_conversation(device_id)
 
     def _on_unpair_requested(self, device_id: str) -> None:
         view = self.window.devices.device(device_id)
@@ -1982,6 +2001,7 @@ class GuiApp(QObject):
         t = QCoreApplication.translate
         menu = QMenu(self.window)
         menu.setObjectName("multiSendMenu")
+        menu.setProperty(theme.MENU_PROPERTY, True)
         menu.setAccessibleName(t("GuiApp", "Gửi tới nhiều máy"))
         files_action = QAction(t("GuiApp", "Chọn file…"), menu)
         files_action.triggered.connect(lambda _=False: self._pick_multi_send(folders=False))
@@ -2110,6 +2130,11 @@ class GuiApp(QObject):
         if outcome not in (ClipOutcome.RECEIVED, ClipOutcome.WRITE_FAILED) or event.device_id is None:
             return
         ok = outcome is ClipOutcome.RECEIVED
+        if ok:
+            sounds.play(
+                SoundCue.CLIPBOARD_SYNC,
+                window_visible=self.window.isVisible() and not self.window.isMinimized(),
+            )
         device_id = event.device_id
         kind = ClipNoticeKind.RECEIVED if ok else ClipNoticeKind.WRITE_FAILED
         self.tray.flash_clipboard(ClipNotice(kind, self._peer_label(device_id)))
@@ -2172,6 +2197,11 @@ class GuiApp(QObject):
             return
         push = result if isinstance(result, ClipPushResult) else ClipPushResult.FAILED
         if push is ClipPushResult.SENT:
+            win = getattr(self, "window", None)
+            sounds.play(
+                SoundCue.CLIPBOARD_SYNC,
+                window_visible=bool(win is not None and win.isVisible() and not win.isMinimized()),
+            )
             self.transfers.view.show_notice(
                 lambda: texts.fill(
                     t("GuiApp", "Đã gửi clipboard tới {name}."),
@@ -2818,6 +2848,9 @@ def _run(
     i18n.install(app, saved.language)
     fonts.install()  # lỗi thì `theme.font_for` rơi về font hệ thống
     theme.set_preference(app, theme.mode_from_setting(saved.theme), saved.accent)
+    sounds.set_preference(saved.sound_mode, sounds.volume_from_setting(saved.sound_volume))
+    widgets.set_auto_dismiss_enabled(saved.auto_dismiss_notices)
+    ui_tray.set_notifications_enabled(saved.tray_notifications)
     message: bytes | None = None  # None: lệnh `show` mặc định của `acquire`
     try:
         if send_paths is None and getattr(args, "send", None):

@@ -70,17 +70,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import datetime
 import functools
 import glob
-import ipaddress
 import json
 import logging
 import math
-import ntpath
 import os
 import re
-import secrets
 import shutil
 import signal
 import sys
@@ -89,15 +85,13 @@ import time
 import unicodedata
 from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from dataclasses import dataclass, replace
-from decimal import ROUND_FLOOR, Decimal
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
-from teleport import __version__
+from teleport import __version__ as __version__
 from teleport.app import node as app_node  # close_time_limit đọc lúc dùng (test vá)
-from teleport.app import sources as app_sources  # MAX_FILE_SIZE đọc lúc dùng
-from teleport.app import transfers as app_transfers  # preview_sources, MIN_RATE_LIMIT đọc lúc dùng
+from teleport.app import transfers as app_transfers  # preview_sources đọc lúc dùng
 from teleport.app.devices import (
     AmbiguousDevice,
     DeviceNotFound,
@@ -105,41 +99,51 @@ from teleport.app.devices import (
     parse_manual_address,
     resolve_device,
 )
-from teleport.app.ipc import IpcClientError, IpcProtocolError, try_connect_ipc
+from teleport.app.ipc import (
+    IpcClientError as IpcClientError,
+)
+from teleport.app.ipc import (
+    IpcProtocolError as IpcProtocolError,
+)
+from teleport.app.ipc import (
+    try_connect_ipc as try_connect_ipc,
+)
 from teleport.app.node import (
-    MAX_SCAN_TIMEOUT,
     SCAN_TIMEOUT,
-    AmbiguousTransfer,
     ConfigDirError,
     ConnectFailed,
     DeviceConnected,
     DeviceDisconnected,
-    DeviceOffline,
-    DeviceOnline,
     DiscoveryUnavailable,
     MdnsOptions,
     Node,
     NodeEvent,
-    PendingTransfer,
     ReceiveDirChoice,
     ReceiveDirUnavailable,
-    TransferNotFound,
-    cancel_pending_offline,
     find_trusted,
-    list_pending_offline,
     scan_devices,
     unpair_offline,
 )
+from teleport.app.node import (
+    DeviceOffline as DeviceOffline,
+)
+from teleport.app.node import (
+    DeviceOnline as DeviceOnline,
+)
 from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt
 from teleport.app.settings import Settings
-from teleport.app.storage import PathTooLongError, UnsafeReceiveDirError
+from teleport.app.storage import (
+    PathTooLongError as PathTooLongError,
+)
+from teleport.app.storage import (
+    UnsafeReceiveDirError as UnsafeReceiveDirError,
+)
 from teleport.app.transfers import (
     DataUnreachable,
     Direction,
     FileDone,
     OfferReceived,
     SourceError,
-    SourceErrorKind,
     TransferFinished,
     TransferInfo,
     TransferKey,
@@ -150,30 +154,317 @@ from teleport.app.transfers import (
     TransferStatusChanged,
     TransferUpdate,
 )
-from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc lúc dùng
-from teleport.core.display import display_filename, display_name, format_duration, format_size, text_width
-from teleport.core.filenames import INVISIBLE_CHARS
+from teleport.cli.commands import (
+    _TRANSFER_QUERY_RE as _TRANSFER_QUERY_RE,
+)
+from teleport.cli.commands import (
+    _TRANSFER_STATE_LABELS as _TRANSFER_STATE_LABELS,
+)
+from teleport.cli.commands import (
+    _cli_syntax_error as _cli_syntax_error,
+)
+from teleport.cli.commands import (
+    _collect_cli_patterns as _collect_cli_patterns,
+)
+from teleport.cli.commands import (
+    _dirs_match as _dirs_match,
+)
+from teleport.cli.commands import (
+    _pending_to_dict as _pending_to_dict,
+)
+from teleport.cli.commands import (
+    _remove_by_prefix as _remove_by_prefix,
+)
+from teleport.cli.commands import (
+    _render_transfers_cancelled as _render_transfers_cancelled,
+)
+from teleport.cli.commands import (
+    _render_transfers_list as _render_transfers_list,
+)
+from teleport.cli.commands import (
+    _transfers_cancel_ipc as _transfers_cancel_ipc,
+)
+from teleport.cli.commands import (
+    _transfers_list_ipc as _transfers_list_ipc,
+)
+from teleport.cli.commands import (
+    cmd_guest as cmd_guest,
+)
+from teleport.cli.commands import (
+    cmd_receipt_list as cmd_receipt_list,
+)
+from teleport.cli.commands import (
+    cmd_receipt_verify as cmd_receipt_verify,
+)
+from teleport.cli.commands import (
+    cmd_routing_add as cmd_routing_add,
+)
+from teleport.cli.commands import (
+    cmd_routing_list as cmd_routing_list,
+)
+from teleport.cli.commands import (
+    cmd_routing_remove as cmd_routing_remove,
+)
+from teleport.cli.commands import (
+    cmd_transfers_cancel as cmd_transfers_cancel,
+)
+from teleport.cli.commands import (
+    cmd_transfers_list as cmd_transfers_list,
+)
+from teleport.cli.commands import (
+    cmd_watch_add as cmd_watch_add,
+)
+from teleport.cli.commands import (
+    cmd_watch_list as cmd_watch_list,
+)
+from teleport.cli.commands import (
+    cmd_watch_remove as cmd_watch_remove,
+)
+from teleport.cli.commands import (
+    run_guest as run_guest,
+)
+from teleport.cli.messages import (
+    _ANY_HOST as _ANY_HOST,
+)
+from teleport.cli.messages import (
+    _ASK_RECEIVE as _ASK_RECEIVE,
+)
+from teleport.cli.messages import (
+    _CANCELLED as _CANCELLED,
+)
+from teleport.cli.messages import (
+    _GLOB_CHARS as _GLOB_CHARS,
+)
+from teleport.cli.messages import (
+    _HOTSPOT_HINT as _HOTSPOT_HINT,
+)
+from teleport.cli.messages import (
+    _KEPT as _KEPT,
+)
+from teleport.cli.messages import (
+    _MAX_RATE as _MAX_RATE,
+)
+from teleport.cli.messages import (
+    _MAX_RATE_TEXT as _MAX_RATE_TEXT,
+)
+from teleport.cli.messages import (
+    _NODE_LOCKED_HINT as _NODE_LOCKED_HINT,
+)
+from teleport.cli.messages import (
+    _OS_LABELS as _OS_LABELS,
+)
+from teleport.cli.messages import (
+    _PAIR_STDIN_CLOSED as _PAIR_STDIN_CLOSED,
+)
+from teleport.cli.messages import (
+    _PAIRED as _PAIRED,
+)
+from teleport.cli.messages import (
+    _PROMPT_HEADER_LISTEN as _PROMPT_HEADER_LISTEN,
+)
+from teleport.cli.messages import (
+    _PROMPT_HEADER_PAIR as _PROMPT_HEADER_PAIR,
+)
+from teleport.cli.messages import (
+    _RATE_RE as _RATE_RE,
+)
+from teleport.cli.messages import (
+    _RATE_UNITS as _RATE_UNITS,
+)
+from teleport.cli.messages import (
+    _RECEIVE_REJECTED as _RECEIVE_REJECTED,
+)
+from teleport.cli.messages import (
+    _RECEIVE_SILENT as _RECEIVE_SILENT,
+)
+from teleport.cli.messages import (
+    _RECONNECTING as _RECONNECTING,
+)
+from teleport.cli.messages import (
+    _REJECTED as _REJECTED,
+)
+from teleport.cli.messages import (
+    _REPLACEMENT as _REPLACEMENT,
+)
+from teleport.cli.messages import (
+    _STDIN_CLOSED as _STDIN_CLOSED,
+)
+from teleport.cli.messages import (
+    _STOPPING as _STOPPING,
+)
+from teleport.cli.messages import (
+    _UNFINISHED as _UNFINISHED,
+)
+from teleport.cli.messages import (
+    _candidates as _candidates,
+)
+from teleport.cli.messages import (
+    _code_warning as _code_warning,
+)
+from teleport.cli.messages import (
+    _config as _config,
+)
+from teleport.cli.messages import (
+    _config_dir_error as _config_dir_error,
+)
+from teleport.cli.messages import (
+    _cut as _cut,
+)
+from teleport.cli.messages import (
+    _dir_label as _dir_label,
+)
+from teleport.cli.messages import (
+    _drive_label as _drive_label,
+)
+from teleport.cli.messages import (
+    _duplicate_error as _duplicate_error,
+)
+from teleport.cli.messages import (
+    _emit_result as _emit_result,
+)
+from teleport.cli.messages import (
+    _error_text as _error_text,
+)
+from teleport.cli.messages import (
+    _file_at as _file_at,
+)
+from teleport.cli.messages import (
+    _file_label as _file_label,
+)
+from teleport.cli.messages import (
+    _json_line as _json_line,
+)
+from teleport.cli.messages import (
+    _name_label as _name_label,
+)
+from teleport.cli.messages import (
+    _no_discovery_message as _no_discovery_message,
+)
+from teleport.cli.messages import (
+    _os_label as _os_label,
+)
+from teleport.cli.messages import (
+    _Output as _Output,
+)
+from teleport.cli.messages import (
+    _paired_label as _paired_label,
+)
+from teleport.cli.messages import (
+    _peer_label as _peer_label,
+)
+from teleport.cli.messages import (
+    _percent_tenths as _percent_tenths,
+)
+from teleport.cli.messages import (
+    _print_event as _print_event,
+)
+from teleport.cli.messages import (
+    _printable as _printable,
+)
+from teleport.cli.messages import (
+    _prompt_lines as _prompt_lines,
+)
+from teleport.cli.messages import (
+    _protocol_error as _protocol_error,
+)
+from teleport.cli.messages import (
+    _receive_result as _receive_result,
+)
+from teleport.cli.messages import (
+    _reconnect_unreachable_message as _reconnect_unreachable_message,
+)
+from teleport.cli.messages import (
+    _rejected_no_answer as _rejected_no_answer,
+)
+from teleport.cli.messages import (
+    _rejected_stopping as _rejected_stopping,
+)
+from teleport.cli.messages import (
+    _send_result as _send_result,
+)
+from teleport.cli.messages import (
+    _source_error as _source_error,
+)
+from teleport.cli.messages import (
+    _stream_isatty as _stream_isatty,
+)
+from teleport.cli.messages import (
+    _target as _target,
+)
+from teleport.cli.messages import (
+    _trusted_lookup_error as _trusted_lookup_error,
+)
+from teleport.cli.messages import (
+    _unreachable_data_message as _unreachable_data_message,
+)
+from teleport.cli.messages import (
+    _unreachable_seen as _unreachable_seen,
+)
+from teleport.cli.messages import (
+    _utc_now as _utc_now,
+)
+from teleport.cli.messages import (
+    _valid_host as _valid_host,
+)
+from teleport.cli.messages import (
+    _view_dict as _view_dict,
+)
+from teleport.cli.messages import (
+    connect_failed_message as connect_failed_message,
+)
+from teleport.cli.messages import (
+    outcome_message as outcome_message,
+)
+from teleport.cli.messages import (
+    parse_rate as parse_rate,
+)
+from teleport.cli.messages import (
+    receive_dir_error_message as receive_dir_error_message,
+)
+from teleport.cli.messages import (
+    source_error_message as source_error_message,
+)
+from teleport.cli.messages import (
+    transfer_result_message as transfer_result_message,
+)
+from teleport.cli.messages import (
+    transfer_resumed_message as transfer_resumed_message,
+)
+from teleport.cli.parser import (
+    _add_node_options as _add_node_options,
+)
+from teleport.cli.parser import (
+    _ipv4_type as _ipv4_type,
+)
+from teleport.cli.parser import (
+    _port_type as _port_type,
+)
+from teleport.cli.parser import (
+    _timeout_type as _timeout_type,
+)
+from teleport.cli.parser import (
+    build_parser as build_parser,
+)
+from teleport.core.display import (
+    display_filename as display_filename,
+)
+from teleport.core.display import (
+    format_duration,
+    format_size,
+    text_width,
+)
 from teleport.core.links import ConnectResult, is_saveable
 from teleport.core.messages import MAX_OFFER_FILES, MessageError, validate_device_name
-from teleport.core.pairing import Role
-from teleport.core.pairing_code import format_code
-from teleport.core.routing import (
-    MAX_ROUTING_RULES,
-    RoutingRule,
-    parse_patterns,
-    routing_rule_to_dict,
-)
-from teleport.core.watch import MAX_WATCH_PORTALS, WatchPortalRule, watch_portal_to_dict
-from teleport.lock import NodeLock, NodeLockedError
+from teleport.core.pairing_code import format_code as format_code
+from teleport.lock import NodeLockedError
 from teleport.net.connection import DEFAULT_PORT
-from teleport.paths import ENV_HOME, config_dir, default_receive_dir
+from teleport.paths import config_dir, default_receive_dir
 from teleport.trust.identity import IdentityError, format_fingerprint, load_or_create_identity
 from teleport.trust.store import TrustedDevice, TrustStoreError
 
 # (time.perf_counter() lúc đọc, dòng không kèm "\n"); dòng None = EOF
 Lines = asyncio.Queue[tuple[float, str | None]]
 
-_ANY_HOST = "0.0.0.0"
 _MAX_QUEUED_LINES = 100  # hàng đợi stdin đầy thì bỏ dòng mới (người dùng gõ dồn)
 _MAX_LINE_BYTES = 4096  # dòng dài hơn bị bỏ (không giữ trong RAM)
 # Console Windows: Ctrl+C làm lần đọc stdin đang chờ trả 0 byte, trông như EOF. Chờ một
@@ -183,20 +474,6 @@ _YES = frozenset({"c", "co", "y", "yes"})
 _NO = frozenset({"k", "khong", "n", "no"})
 
 log = logging.getLogger(__name__)
-
-_PAIRED = PairingOutcome.PAIRED
-_UNFINISHED = frozenset(
-    {
-        PairingOutcome.USER_REJECTED,
-        PairingOutcome.TIMEOUT,
-        PairingOutcome.PEER_REJECTED,
-        PairingOutcome.PEER_TIMEOUT,
-        PairingOutcome.PROTOCOL_ERROR,
-        PairingOutcome.PEER_INVALID,
-        PairingOutcome.PEER_ABORTED,
-        PairingOutcome.CONNECTION_LOST,
-    }
-)
 
 
 def cmd_identity(args: argparse.Namespace) -> int:
@@ -213,386 +490,6 @@ def cmd_identity(args: argparse.Namespace) -> int:
     print(f"Cổng:          {port}")
     print(f"Thư mục:       {directory}")
     return 0
-
-
-# ---- Đầu ra --------------------------------------------------------------------------------
-
-
-def _utc_now() -> str:
-    """Thời điểm hiện tại dạng `YYYY-MM-DDTHH:MM:SS.mmmZ` (UTC)."""
-    now = datetime.datetime.now(datetime.UTC)
-    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
-
-
-def _json_line(obj: object) -> str:
-    """Một dòng JSON (UTF-8, không thoát chữ thường); riêng U+2028 và U+2029 được viết thoát,
-    vì nhiều bên đọc (ví dụ `str.splitlines`) coi chúng là xuống dòng và làm vỡ JSON Lines."""
-    return json.dumps(obj, ensure_ascii=False).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
-
-
-def _stream_isatty(stream: object) -> bool:
-    try:
-        return bool(stream.isatty())  # type: ignore[attr-defined]
-    except (AttributeError, OSError, ValueError):
-        return False
-
-
-class _Output:
-    """In ra `out` / `err` theo chế độ text hoặc JSON; mọi dòng đều flush ngay.
-
-    `tty` (mặc định `out.isatty()`): dòng tiến độ được vẽ lại tại chỗ bằng CR, không dùng mã
-    ANSI; in dòng text khác thì xuống dòng trước.
-
-    Câu hỏi đang mở (`ask`, tới khi `answered` / `close_question`): dòng khác in chen vào thì câu
-    hỏi được in lại ngay sau, để người dùng luôn thấy mình đang được hỏi; dòng tiến độ không vẽ.
-    """
-
-    def __init__(self, out: TextIO, err: TextIO, json_mode: bool, *, tty: bool | None = None) -> None:
-        self.out = out
-        self.err = err
-        self.json = json_mode
-        self.tty = _stream_isatty(out) if tty is None else tty
-        self._line_open = False  # vừa in “[c/k]: ” và chưa xuống dòng
-        self._question: str | None = None  # câu hỏi đang mở (chưa trả lời, chưa đóng)
-        self._progress_width = 0  # TTY: số cột của dòng tiến độ đang vẽ (chưa xuống dòng); 0 = không có
-
-    def text(self, *lines: str) -> None:
-        """Dòng cho người đọc (chỉ ở chế độ text)."""
-        if self.json:
-            return
-        self._close_line()
-        for line in lines:
-            print(line, file=self.out, flush=True)
-        self._reask()
-
-    def ask(self, question: str) -> None:
-        """In câu hỏi, để con trỏ ở cuối dòng; câu hỏi mở tới khi `answered` / `close_question`."""
-        if self.json:
-            return
-        self._close_line()
-        self._question = question
-        self._reask()
-
-    def answered(self) -> None:
-        """Người dùng đã gõ Enter: terminal đã xuống dòng, câu hỏi đóng (hỏi lại thì `ask` lần nữa)."""
-        self._line_open = False
-        self._question = None
-
-    def close_question(self) -> None:
-        """Câu hỏi đóng mà không có câu trả lời (máy kia hủy, đầu vào đóng, đang dừng…)."""
-        self._question = None
-
-    def _reask(self) -> None:
-        if self._question is not None:
-            print(self._question, end="", file=self.out, flush=True)
-            self._line_open = True
-
-    def progress(self, line: str) -> None:
-        """Dòng tiến độ (chỉ ở chế độ text).
-
-        TTY: vẽ lại dòng hiện tại bằng CR, đệm khoảng trắng tới độ dài dòng trước; không vẽ khi
-        đang có lời hỏi mở. Không TTY: in như một dòng thường.
-        """
-        if self.json:
-            return
-        if not self.tty:
-            self.text(line)
-            return
-        if self._question is not None or self._line_open:
-            return  # đang hỏi: không vẽ đè lên lời hỏi
-        width = text_width(line)
-        pad = " " * max(0, self._progress_width - width)
-        print("\r" + line + pad, end="", file=self.out, flush=True)
-        self._progress_width = max(width, 1)
-
-    def event(self, kind: str, /, **fields: Any) -> None:
-        """Một dòng JSON (chỉ ở chế độ `--json`)."""
-        if not self.json:
-            return
-        obj = {"event": kind, "time": _utc_now(), **fields}
-        print(_json_line(obj), file=self.out, flush=True)
-
-    def error(self, code: str, message: str, *, extra: Sequence[str] = (), **fields: Any) -> None:
-        """Lỗi: text → “Lỗi: …” ra `err`; JSON → object `error` ra `out`."""
-        if self.json:
-            self.event("error", error=code, message=message, **fields)
-            return
-        self._close_line()
-        print(f"Lỗi: {message}", file=self.err, flush=True)
-        for line in extra:
-            print(line, file=self.err, flush=True)
-        self._reask()
-
-    def _close_line(self) -> None:
-        if self._line_open or self._progress_width:
-            print(file=self.out, flush=True)
-            self._line_open = False
-            self._progress_width = 0
-
-
-def _target(result: PairingFinished) -> str:
-    return result.address if result.port is None else f"{result.address}:{result.port}"
-
-
-def outcome_message(result: PairingFinished, *, seen_name: str | None = None) -> list[str]:
-    """Câu báo kết quả ghép đôi (docs/mvp.md mục 8); dòng đầu là câu chính.
-
-    `seen_name`: tên của đích thấy qua mDNS (`pair <tên>`); khi có, “không kết nối được”
-    đổi thành câu “Thấy X nhưng không kết nối được…”.
-
-    Đã ghép đôi: dùng tên vừa lưu (`device.name`, tên máy kia gửi trong `hello`, ở cả hai
-    vai, kể cả khi ghép đôi lại). Phiên chưa xong mà chưa hiện mã
-    (`code_shown` False) thì không nhắc so mã, câu theo vai. Danh tính khác ở vai trả lời:
-    `pair_request` chưa được xác minh nên không gợi ý hủy ghép đôi máy thật.
-    """
-    outcome = result.outcome
-    target = _target(result)
-    peer = result.peer_name or seen_name
-    x = _name_label(peer) if peer else target
-    responder = result.role is Role.RESPONDER
-    if outcome is PairingOutcome.UNREACHABLE and seen_name is not None:
-        return [_unreachable_seen(_name_label(seen_name)), _HOTSPOT_HINT]
-    if outcome is _PAIRED:
-        name = _name_label(result.device.name) if result.device is not None else x
-        return [f"Đã ghép đôi với {name}."]
-    if outcome in _UNFINISHED:
-        if result.code_shown:
-            return [
-                f"Ghép đôi với {x} chưa xong. Nếu mã trên hai máy khác nhau, có thể có người đang giả mạo."
-            ]
-        if responder:
-            return [f"Một máy tự xưng là {x} đã yêu cầu ghép đôi nhưng phiên dừng trước khi hiện mã."]
-        return [f"Ghép đôi với {x} chưa xong vì phiên dừng trước khi hiện mã. Hãy thử lại."]
-    if outcome is PairingOutcome.IDENTITY_CONFLICT:
-        known = _name_label(result.known_name) if result.known_name else x
-        if responder:
-            return [
-                f"Một máy chưa xác minh tự xưng là {known} nhưng dùng danh tính khác với lúc ghép đôi. "
-                "Có thể có người đang giả mạo máy đó. Yêu cầu ghép đôi đã bị chặn."
-            ]
-        short_id = (result.peer_device_id or "")[:8]
-        return [
-            f"{known} đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. "
-            "Kết nối đã bị chặn.",
-            "Nếu chắc chắn máy đó đã đổi danh tính, hãy hủy ghép đôi mục cũ trước: "
-            f"`teleport unpair {short_id}`",
-        ]
-    if outcome in (PairingOutcome.PEER_BUSY, PairingOutcome.REJECTED):
-        return [
-            f"{x} chưa sẵn sàng ghép đôi: máy đó đang ẩn, đang ghép đôi với máy khác, "
-            "chưa mở chế độ chờ ghép đôi, hoặc cần chờ một lát sau lần thử trước. Hãy thử lại sau.",
-            "Trên máy đó, hãy chạy: `teleport listen`",
-        ]
-    if outcome is PairingOutcome.UNREACHABLE:
-        return [
-            f"Không kết nối được tới {target}. Hãy kiểm tra Teleport đang chạy trên máy đó, "
-            "hai máy dùng chung một mạng, và tường lửa cho phép Teleport."
-        ]
-    if outcome is PairingOutcome.IDENTITY_MISMATCH:
-        return [
-            f"Thiết bị ở {target} gửi danh tính không hợp lệ nên kết nối đã bị chặn. "
-            "Có thể có người đang giả mạo."
-        ]
-    if outcome is PairingOutcome.VERSION_MISMATCH:
-        return [f"{target} đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản."]
-    if outcome is PairingOutcome.SELF:
-        return ["Đó là chính máy này. Hãy nhập địa chỉ của máy kia."]
-    if outcome is PairingOutcome.BUSY:
-        return ["Máy này đang có một phiên ghép đôi khác. Hãy thử lại sau."]
-    if outcome is PairingOutcome.SAVE_FAILED:
-        return [
-            f"Đã xác nhận ghép đôi với {x} nhưng không lưu được vào trusted.json. "
-            "Hãy kiểm tra quyền ghi thư mục cấu hình rồi ghép đôi lại."
-        ]
-    if outcome is PairingOutcome.PROMPT_FAILED:
-        return ["Không hiện được mã ghép đôi trên máy này nên đã hủy ghép đôi. Hãy thử lại."]
-    return ["Đã hủy ghép đôi."]  # CANCELLED
-
-
-def _unreachable_seen(name: str) -> str:
-    return (
-        f"Thấy {name} nhưng không kết nối được. Mạng Wi-Fi này có thể đang chặn các thiết bị nói chuyện "
-        "với nhau (hay gặp ở quán cà phê, khách sạn)."
-    )
-
-
-_HOTSPOT_HINT = (
-    "Hãy thử dùng điểm phát Wi-Fi từ điện thoại, và kiểm tra tường lửa trên máy kia đã cho phép Teleport."
-)
-_OS_LABELS = {"windows": "Windows", "macos": "macOS", "linux": "Linux"}
-
-
-def _os_label(os_name: str | None) -> str:
-    if os_name is None:
-        return "?"
-    return _OS_LABELS.get(os_name, os_name)
-
-
-def _paired_label(view: DeviceView) -> str:
-    return "đã ghép đôi" if view.paired else "chưa ghép đôi"
-
-
-def _view_dict(view: DeviceView) -> dict[str, Any]:
-    return {
-        "device_id": view.device_id,
-        "name": view.name,
-        "os": view.os,
-        "paired": view.paired,
-        "online": view.online,
-        "addresses": list(view.addresses),
-        "port": view.port,
-    }
-
-
-def connect_failed_message(
-    view: DeviceView,
-    result: ConnectResult,
-    *,
-    address: str | None = None,
-    port: int | None = None,
-    actual_device_id: str | None = None,
-    actual_name: str | None = None,
-) -> list[str]:
-    """Câu báo không kết nối được tới thiết bị đã ghép đôi (docs/mvp.md mục 8)."""
-    x = _name_label(view.name)
-    short_id = view.device_id[:8]
-    if result is ConnectResult.REJECTED:
-        return [
-            f"{x} từ chối kết nối từ máy này. Có thể máy đó đã hủy ghép đôi.",
-            f"Để ghép đôi lại: `teleport pair {short_id}`",
-        ]
-    if result is ConnectResult.IDENTITY_MISMATCH:
-        if actual_device_id is not None and actual_name is not None:
-            where = (
-                f"{address}:{port}"
-                if address is not None and port is not None
-                else (address or "địa chỉ này")
-            )
-            actual_label = f"{_name_label(actual_name)} ({actual_device_id[:8]})"
-            return [
-                f"Địa chỉ {where} đang thuộc về thiết bị tin cậy {actual_label}, không phải {x}.",
-                f"Hãy kiểm tra lại địa chỉ IP của {x} hoặc chọn gửi tới {actual_label}.",
-            ]
-        return [
-            f"{x} đang dùng một danh tính khác với lúc ghép đôi. Có thể có người đang giả mạo máy này. "
-            "Kết nối đã bị chặn.",
-            "Nếu chắc chắn máy đó đã đổi danh tính, hãy hủy ghép đôi mục cũ trước: "
-            f"`teleport unpair {short_id}`",
-        ]
-    if result is ConnectResult.VERSION_MISMATCH:
-        return [f"{x} đang dùng phiên bản Teleport khác. Hãy cập nhật cả hai máy lên cùng phiên bản."]
-    return [_unreachable_seen(x)]
-
-
-def _print_event(output: _Output, event: NodeEvent) -> None:
-    """In một `NodeEvent` của `teleport listen`."""
-    view = event.device
-    who = f"“{_name_label(view.name)}” ({view.device_id[:8]}"
-    if isinstance(event, DeviceOnline):
-        where = f"{view.addresses[0]}:{view.port}" if view.addresses else "?"
-        output.text(f"Thấy {who}, {_os_label(view.os)}, {_paired_label(view)}) tại {where}.")
-        output.event(
-            "device_online",
-            device_id=view.device_id,
-            name=view.name,
-            os=view.os,
-            paired=view.paired,
-            addresses=list(view.addresses),
-            port=view.port,
-        )
-    elif isinstance(event, DeviceOffline):
-        output.text(f"{who}) đã rời mạng.")
-        output.event("device_offline", device_id=view.device_id, name=view.name)
-    elif isinstance(event, DeviceConnected):
-        output.text(f"Đã kết nối với {who}).")
-        output.event("device_connected", device_id=view.device_id, name=view.name, outgoing=event.outgoing)
-    elif isinstance(event, DeviceDisconnected):
-        output.text(f"Mất kết nối với {who})." + (" Đang nối lại…" if view.online else ""))
-        output.event("device_disconnected", device_id=view.device_id, name=view.name)
-    elif isinstance(event, ConnectFailed):
-        lines = connect_failed_message(
-            view,
-            event.result,
-            address=event.address,
-            port=event.port,
-            actual_device_id=event.actual_device_id,
-            actual_name=event.actual_name,
-        )
-        output.text(*lines)
-        fields: dict[str, Any] = {
-            "device_id": view.device_id,
-            "name": view.name,
-            "result": event.result.value,
-            "message": " ".join(lines),
-        }
-        if event.address is not None:
-            fields["address"] = event.address
-        if event.actual_device_id is not None:
-            fields["actual_device_id"] = event.actual_device_id
-        if event.actual_name is not None:
-            fields["actual_name"] = event.actual_name
-        output.event("connect_failed", **fields)
-
-
-def _emit_result(output: _Output, result: PairingFinished, *, seen_name: str | None = None) -> None:
-    lines = outcome_message(result, seen_name=seen_name)
-    output.text(*lines)
-    output.event(
-        "pair_result",
-        session_id=result.session_id,
-        role=result.role.value,
-        outcome=result.outcome.value,
-        peer_name=result.peer_name,
-        peer_device_id=result.peer_device_id,
-        address=result.address,
-        message=" ".join(lines),
-    )
-
-
-# ---- Hỏi người dùng ------------------------------------------------------------------------
-
-
-def _code_warning(prompt: PairingPrompt) -> str | None:
-    """Cảnh báo khi máy này (vai trả lời) đã hiện nhiều mã trong 1 phút (docs/mvp.md mục 8)."""
-    if prompt.role is not Role.RESPONDER or prompt.recent_codes < core_pairing.WARN_RECENT_CODES:
-        return None
-    return (
-        f"Cảnh báo: máy này đã hiện {prompt.recent_codes} mã ghép đôi trong 1 phút qua. "
-        "Nếu bạn không tự ghép đôi nhiều lần như vậy, có thể có người đang thử giả mạo: "
-        "hãy từ chối (gõ k)."
-    )
-
-
-# Dòng đầu của lời hỏi xét theo lệnh (mvp mục 7.2); không chứa chữ số hay chữ do máy kia đặt.
-_PROMPT_HEADER_LISTEN = "Có yêu cầu ghép đôi. Hãy so mã dưới đây với mã trên màn hình máy kia."
-_PROMPT_HEADER_PAIR = "Hãy so mã dưới đây với mã trên màn hình máy kia."
-
-
-def _prompt_lines(prompt: PairingPrompt, *, listening: bool) -> list[str]:
-    """Các dòng của lời hỏi ghép đôi trước câu “Trùng khớp?” (mvp mục 7.2).
-
-    Thứ tự bắt buộc: tiêu đề cố định, dòng mã (chỉ nhãn và mã), cảnh báo số mã (nếu có),
-    tên máy kia tự xưng, tên đã lưu (nếu đã ghép đôi), tên mới (nếu ghép đôi lại sẽ đổi tên).
-    Tên chỉ hiện qua `display_name`, trong “…”, sau dòng mã: kẻ đứng giữa đặt tên trông
-    như mã cũng không chen được lên trước.
-    """
-    short_id = prompt.peer_device_id[:8]
-    lines = [
-        _PROMPT_HEADER_LISTEN if listening else _PROMPT_HEADER_PAIR,
-        f"Mã ghép đôi:   {format_code(prompt.code)}",
-    ]
-    warning = _code_warning(prompt)
-    if warning is not None:
-        lines.append(warning)
-    name = _name_label(prompt.peer_name)
-    lines.append(f"Máy kia tự xưng là “{name}” (mã máy {short_id}, {prompt.address}).")
-    if prompt.known_name is not None:
-        known = _name_label(prompt.known_name)
-        lines.append(f"Máy này đã ghép đôi với mã máy {short_id} trước đây, tên đã lưu: “{known}”.")
-        # Ghép đôi lại cập nhật tên theo hello ở cả hai vai (protocol mục 5.5).
-        if prompt.known_name != prompt.peer_name:
-            lines.append(f"Ghép đôi xong, tên sẽ đổi thành “{name}”.")
-    return lines
 
 
 @dataclass
@@ -695,22 +592,6 @@ async def _feed_lines(lines: Lines, prompter: _Prompter) -> None:
         prompter.feed(read_at, line)
 
 
-# ---- Khởi động node ------------------------------------------------------------------------
-
-
-def _config(args: argparse.Namespace) -> Path:
-    return getattr(args, "config_dir", None) or config_dir()
-
-
-def _valid_host(host: object) -> bool:
-    if not isinstance(host, str):
-        return False
-    try:
-        return str(ipaddress.IPv4Address(host)) == host
-    except ValueError:
-        return False
-
-
 def _mdns_options(args: argparse.Namespace, *, advertise: bool) -> MdnsOptions | None:
     """Luật bật mDNS: có `--mdns-interface`, hoặc nghe trên mọi địa chỉ (`--host` mặc định)."""
     interfaces = getattr(args, "mdns_interface", None)
@@ -782,13 +663,6 @@ async def _start(node: Node, output: _Output) -> int | None:
     return None
 
 
-def _config_dir_error(output: _Output, path: Path, error: OSError) -> None:
-    output.error("config_dir_error", f"Không dùng được thư mục cấu hình {path}: {error}")
-
-
-# ---- listen --------------------------------------------------------------------------------
-
-
 class _EventPrinter:
     """In `NodeEvent` của `listen`; giữ lại các sự kiện tới trước khi in xong phần đầu."""
 
@@ -806,10 +680,6 @@ class _EventPrinter:
         pending, self._pending = self._pending, None
         for event in pending or ():
             _print_event(self._output, event)
-
-
-def _error_text(error: BaseException) -> str:
-    return str(error) or type(error).__name__
 
 
 async def run_listen(args: argparse.Namespace, lines: Lines, out: TextIO, err: TextIO) -> int:
@@ -1388,303 +1258,14 @@ def cmd_pair(args: argparse.Namespace) -> int:
     return 1
 
 
-# ---- Truyền file: câu chữ --------------------------------------------------------------------
-
-# Seam cấp module, đọc lúc dùng (test vá bằng monkeypatch).
 _SEND_CONNECT_TIMEOUT = 20.0  # send qua mDNS: chờ kết nối tới máy nhận tối đa (giây)
 _PLAIN_PROGRESS_INTERVAL = 10.0  # không TTY: in dòng tiến độ tối đa một lần mỗi 10 s mỗi lượt
 _OFFER_LIST_MAX = 10  # lời hỏi nhận file: số file liệt kê tối đa, còn lại gộp một dòng
-
-_MAX_RATE = 1 << 40  # --limit-rate tối đa (byte/giây)
-_MAX_RATE_TEXT = 64  # chuỗi --limit-rate dài hơn thì sai luôn (không đổi số khổng lồ)
-_RATE_RE = re.compile(r"\s*(\d+(?:[.,]\d+)?)\s*([kKmMgG])?[bB]?(?:/s)?\s*", re.ASCII)
-_RATE_UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
-_GLOB_CHARS = frozenset("*?[")
-_REPLACEMENT = "�"  # U+FFFD: ký tự điều khiển trong tên file cục bộ (mvp mục 8)
-
-_STOPPING = "Đang dừng… (nhấn Ctrl+C lần nữa để thoát ngay)"
-_CANCELLED = "Đã hủy."
-_RECONNECTING = "Đang nối lại…"
-_NODE_LOCKED_HINT = (
-    "Hãy dừng `teleport receive` hoặc `teleport listen` đang chạy, "
-    "hoặc chọn Thoát trong menu khay của Teleport, rồi thử lại."
-)
-_ASK_RECEIVE = "Nhận? [c/k]: "
-_STDIN_CLOSED = "Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối. Hãy dùng `--yes` để tự nhận."
-_RECEIVE_REJECTED = "Đã từ chối."
-_PAIR_STDIN_CLOSED = "Không đọc được câu trả lời (đầu vào đã đóng) nên đã từ chối ghép đôi."
 
 
 def _terminal_width() -> int:
     """Số cột của terminal (seam cho test)."""
     return shutil.get_terminal_size().columns
-
-
-def _printable(text: str) -> str:
-    """Ký tự điều khiển (Cc), surrogate lẻ (Cs) và ký tự vô hình / điều khiển hướng chữ
-    (`core.filenames.INVISIBLE_CHARS`) → U+FFFD, trước khi in tên hay đường dẫn.
-
-    Tên file nhận đã được làm sạch ở `core.filenames`, tên file và đường dẫn trên máy này thì
-    chưa (mvp mục 8: ký tự điều khiển không in thẳng ra màn hình); thay cả ở đây để không phụ
-    thuộc một tầng làm sạch duy nhất.
-    """
-    return "".join(
-        _REPLACEMENT if ch in INVISIBLE_CHARS or unicodedata.category(ch) in ("Cc", "Cs") else ch
-        for ch in text
-    )
-
-
-def _file_label(name: str) -> str:
-    return display_filename(_printable(name))
-
-
-def _name_label(name: str) -> str:
-    """Tên máy để in (không ngoặc): `_printable` rồi `display_name`.
-
-    Tên máy đã qua `validate_device_name` (ở `trusted.json`, mDNS hay ghép đôi); vẫn qua `_printable`
-    (phòng thủ chiều sâu, không đổi tên hợp lệ), nên mọi chỗ in cùng một tên ra cùng một chuỗi.
-    """
-    return display_name(_printable(name))
-
-
-def _peer_label(name: str | None, device_id: str) -> str:
-    """Tên máy kia trong câu (không ngoặc): `_name_label`, không có tên thì 8 ký tự đầu của mã."""
-    return _name_label(name) if name else _printable(device_id[:8])
-
-
-def _file_at(info: TransferInfo, index: int | None) -> str:
-    """Tên file thứ `index` (None: `info.file_index`) của lượt, kẹp trong khoảng hợp lệ."""
-    if not info.names:
-        return "?"
-    i = info.file_index if index is None else index
-    return _file_label(info.names[min(max(i, 0), len(info.names) - 1)])
-
-
-def _drive_label(receive_dir: Path | None) -> str:
-    """Cách gọi ổ chứa thư mục nhận (mvp mục 8): “ổ D:”, “ổ mạng \\\\máy\\chia-sẻ”, “ổ chứa /home/…”."""
-    if receive_dir is None:
-        return "ổ lưu file"
-    text = str(receive_dir)
-    if sys.platform == "win32":
-        if text.startswith("\\\\?\\UNC\\"):
-            text = "\\\\" + text[len("\\\\?\\UNC\\") :]
-        elif text.startswith("\\\\?\\"):
-            text = text[len("\\\\?\\") :]
-        drive = ntpath.splitdrive(text)[0]
-        if drive.startswith(("\\\\", "//")):
-            return f"ổ mạng {_printable(drive)}"
-        if drive:
-            return f"ổ {_printable(drive.upper())}"
-    return f"ổ chứa {_printable(text)}"
-
-
-def _dir_label(receive_dir: Path | None) -> str:
-    return "thư mục nhận" if receive_dir is None else _printable(str(receive_dir))
-
-
-def transfer_result_message(
-    finished: TransferFinished, *, peer_name: str | None, receive_dir: Path | None
-) -> list[str]:
-    """Câu báo kết quả một lượt truyền (docs/mvp.md mục 8); `[]` khi chỉ báo qua JSON.
-
-    `peer_name`: tên máy kia (chưa qua `display_name`; None → 8 ký tự đầu của mã). `receive_dir`:
-    thư mục nhận (bên nhận: câu lỗi ghi đĩa, câu từ chối vì ổ). Tên file theo
-    `finished.file_index` (không có thì `info.file_index`), kẹp trong khoảng hợp lệ.
-    """
-    info = finished.info
-    p = _peer_label(peer_name, info.key.device_id)
-    if info.key.direction is Direction.SEND:
-        return [_send_result(finished, p)]
-    return _receive_result(finished, p, receive_dir)
-
-
-def _send_result(finished: TransferFinished, p: str) -> str:
-    info, result, reject = finished.info, finished.result, finished.reject
-    file = _file_at(info, finished.file_index)
-    if result is TransferResult.DONE:
-        if finished.delta_reused_bytes > 0:
-            return (
-                f"Đã gửi xong {len(info.files)} file ({format_size(info.total_bytes)}, "
-                f"tái sử dụng {format_size(finished.delta_reused_bytes)} phần không đổi) tới {p}."
-            )
-        return f"Đã gửi xong {len(info.files)} file ({format_size(info.total_bytes)}) tới {p}."
-    if (
-        result is TransferResult.REJECTED_NO_SPACE
-        and reject is not None
-        and reject.needed is not None
-        and reject.available is not None
-    ):
-        return (
-            f"{p} không đủ chỗ trống để nhận: cần {format_size(reject.needed)}, "
-            f"ổ lưu file trên máy đó còn {format_size(reject.available)}."
-        )
-    if result is TransferResult.REJECTED_FILE_TOO_LARGE and reject is not None:
-        index, max_size = reject.file_index, reject.max_size
-        if index is not None and max_size is not None and 0 <= index < len(info.files):
-            return (
-                f"{p} không nhận được {_file_at(info, index)} ({format_size(info.files[index].size)}): "
-                f"ổ lưu file trên máy đó chỉ chứa được file nhỏ hơn {format_size(max_size + 1, trim=True)}."
-            )
-    if result is TransferResult.REJECTED_NOT_RECEIVING:
-        return f"{p} chưa bật nhận file. Trên máy đó hãy chạy `teleport receive` rồi gửi lại."
-    if result in _REJECTED:
-        return f"{p} đã từ chối nhận file."
-    if result is TransferResult.CANCELLED_USER:
-        if finished.by_peer:
-            return f"{p} đã dừng nhận giữa chừng. Các file đã gửi xong vẫn nằm trên máy đó."
-        return f"Đã hủy lượt gửi tới {p}. Các file đã gửi xong vẫn nằm trên máy đó."
-    if result is TransferResult.SOURCE_CHANGED:
-        return f"{file} đã bị thay đổi trên máy gửi nên không thể gửi tiếp. Hãy gửi lại."
-    if result is TransferResult.EXPIRED:
-        return f"Mất kết nối với {p} quá lâu nên lượt gửi đã dừng. Hãy gửi lại."
-    if result is TransferResult.SOURCE_READ_FAILED:
-        return (
-            f"Không đọc được {file} trên máy này nữa (file có thể đang bị chương trình khác khóa, "
-            f"hoặc nằm trên ổ vừa bị rút ra). Đã dừng gửi tới {p}."
-        )
-    if result is TransferResult.PEER_ERROR:  # máy nhận gửi `cancel{error}`: lỗi đĩa, dữ liệu hỏng…
-        return f"{p} gặp lỗi khi nhận nên đã dừng lượt gửi. Hãy xem thông báo trên máy đó rồi gửi lại."
-    if result is TransferResult.PROTOCOL_ERROR:
-        return _protocol_error(p)
-    return f"{p} đã dừng lượt gửi."  # UNKNOWN_TRANSFER, CANCELLED_OTHER, UNPAIRED, CORRUPT…
-
-
-_REJECTED = frozenset(
-    {
-        TransferResult.REJECTED_USER,
-        TransferResult.REJECTED_NO_SPACE,
-        TransferResult.REJECTED_FILE_TOO_LARGE,
-        TransferResult.REJECTED_BUSY,
-        TransferResult.REJECTED_OTHER,
-    }
-)
-# Bên nhận: kết quả chỉ báo qua JSON (máy này tự trả lời, không phải lỗi người dùng cần biết).
-# `SUSPENDED` (Ctrl+C khi đang nhận: tạm dừng, không hủy) có câu riêng, không thuộc nhóm này.
-_RECEIVE_SILENT = frozenset(
-    {
-        TransferResult.REJECTED_BUSY,
-        TransferResult.REJECTED_OTHER,
-        TransferResult.REJECTED_NOT_RECEIVING,
-    }
-)
-_KEPT = "Các file đã nhận xong vẫn giữ nguyên; hãy nhờ gửi lại."
-
-
-def _rejected_no_answer(n: int, s: str) -> str:
-    """Máy nhận: lượt chưa hiện lời hỏi bị từ chối vì đầu vào đã đóng (mvp mục 8)."""
-    return f"Đã từ chối {n} file từ {s} vì không đọc được câu trả lời (đầu vào đã đóng)."
-
-
-def _rejected_stopping(n: int, s: str) -> str:
-    """Máy nhận: lượt chưa hiện lời hỏi bị từ chối vì Ctrl+C (mvp mục 8)."""
-    return f"Đã từ chối {n} file từ {s} vì đang dừng nhận."
-
-
-def _protocol_error(p: str) -> str:
-    return (
-        f"Lượt gửi với {p} đã dừng vì máy đó gửi dữ liệu không hợp lệ. "
-        "Hãy cập nhật Teleport trên cả hai máy rồi thử lại."
-    )
-
-
-def _receive_result(finished: TransferFinished, s: str, receive_dir: Path | None) -> list[str]:
-    info, result, reject = finished.info, finished.result, finished.reject
-    file = _file_at(info, finished.file_index)
-    n = len(info.files)
-    if result is TransferResult.DONE:
-        if finished.delta_reused_bytes > 0:
-            return [
-                f"Đã nhận xong {n} file ({format_size(info.total_bytes)}, "
-                f"tái sử dụng {format_size(finished.delta_reused_bytes)} phần không đổi) từ {s}."
-            ]
-        return [f"Đã nhận xong {n} file ({format_size(info.total_bytes)}) từ {s}."]
-    if result is TransferResult.REJECTED_USER and not finished.by_peer:
-        return [_RECEIVE_REJECTED]
-    if result in _RECEIVE_SILENT:
-        return []
-    if result is TransferResult.SUSPENDED:
-        # “24 giờ” là `RECONNECT_GRACE`, viết thẳng trong câu. Không in `--dir` thật.
-        what = f"{n} file" if n > 1 else file
-        return [
-            f"Đã tạm dừng nhận {what} từ {s}. Chạy lại `teleport receive` (cùng thư mục nhận) để nhận "
-            "tiếp phần còn thiếu, miễn là máy gửi vẫn đang chờ; quá 24 giờ kể từ lúc mất kết nối thì "
-            "lần chạy sau sẽ xóa phần nhận dở."
-        ]
-    if (
-        result is TransferResult.REJECTED_NO_SPACE
-        and reject is not None
-        and reject.needed is not None
-        and reject.available is not None
-    ):
-        return [
-            f"Đã từ chối {n} file từ {s}: không đủ chỗ trống, cần {format_size(reject.needed)}, "
-            f"{_drive_label(receive_dir)} còn {format_size(reject.available)}."
-        ]
-    if result is TransferResult.REJECTED_FILE_TOO_LARGE and reject is not None:
-        index, max_size = reject.file_index, reject.max_size
-        if index is not None and max_size is not None and 0 <= index < n:
-            return [
-                f"Đã từ chối {n} file từ {s}: {_drive_label(receive_dir)} chỉ chứa được file nhỏ hơn "
-                f"{format_size(max_size + 1, trim=True)}, mà {_file_at(info, index)} nặng "
-                f"{format_size(info.files[index].size)}."
-            ]
-    if result is TransferResult.CANCELLED_USER:
-        if not finished.by_peer:
-            return [f"Đã hủy nhận từ {s}. File đã nhận xong vẫn giữ nguyên."]
-        if info.status in (TransferStatus.WAITING, TransferStatus.QUEUED):
-            return [f"{s} đã hủy lượt gửi."]  # hủy khi máy này còn đang hỏi / xếp hàng
-        return [
-            f"{s} đã hủy lượt gửi. Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên."
-        ]
-    if result is TransferResult.SOURCE_CHANGED:
-        return [f"{file} đã bị thay đổi trên {s} nên không nhận tiếp được. {_KEPT}"]
-    if result is TransferResult.EXPIRED:
-        return [
-            f"Mất kết nối với {s} quá lâu nên đã dừng nhận. "
-            "Các file chưa nhận xong đã được xóa; file đã nhận xong vẫn giữ nguyên."
-        ]
-    if result is TransferResult.DISK_FAILED:
-        return [
-            f"Không lưu được {file} vào {_dir_label(receive_dir)} vì ổ đĩa báo lỗi khi ghi "
-            f"(ổ có thể đã đầy, bị rút ra hoặc bị hỏng). Đã dừng nhận từ {s}; "
-            "các file đã nhận xong vẫn giữ nguyên."
-        ]
-    if result is TransferResult.RECEIVE_DIR_MISSING:
-        return [
-            f"Không nhận được lượt gửi từ {s} vì thư mục nhận {_dir_label(receive_dir)} không còn "
-            "hoặc không dùng được, và Teleport không tạo lại được (có thể thư mục chứa nó đã bị xóa, "
-            "hoặc ổ đã bị rút ra). "
-            "Hãy kiểm tra lại rồi nhờ gửi lại."
-        ]
-    if result is TransferResult.TEMP_EXISTS:
-        return [
-            f"Không nhận được lượt gửi từ {s} vì thư mục tạm của lượt này đã có sẵn mà Teleport "
-            "không dùng tiếp được. Hãy nhờ gửi lại."
-        ]
-    if result is TransferResult.CORRUPT:
-        return [f"Dữ liệu nhận từ {s} bị hỏng nhiều lần liên tiếp nên đã dừng nhận {file}. {_KEPT}"]
-    if result is TransferResult.PEER_ERROR:
-        return [f"{s} đã dừng gửi {file} vì gặp lỗi trên máy đó. {_KEPT}"]
-    if result is TransferResult.UNKNOWN_TRANSFER:
-        return [f"{s} đã hủy lượt gửi {file}. Hãy nhờ gửi lại."]
-    if result is TransferResult.PROTOCOL_ERROR:
-        return [_protocol_error(s)]
-    return [f"{s} đã dừng lượt gửi."]  # CANCELLED_OTHER, UNPAIRED…
-
-
-def transfer_resumed_message(info: TransferInfo, *, peer_name: str | None) -> str:
-    """Câu báo lượt nhận dở được khôi phục khi khởi động (`TransferResumed`, docs/mvp.md mục 8).
-
-    `peer_name`: tên máy gửi (chưa qua `display_name`; None → 8 ký tự đầu của mã). Số file là
-    `len(info.files)`; dung lượng đã nhận / tổng qua `format_size`.
-    """
-    p = _peer_label(peer_name, info.key.device_id)
-    done = format_size(max(0, info.done_bytes))
-    total = format_size(max(0, info.total_bytes))
-    return (
-        f"Tiếp tục nhận {len(info.files)} file từ {p} (đã nhận {done} / {total}). "
-        "Đang chờ máy đó kết nối lại…"
-    )
 
 
 def offer_prompt_lines(offer: OfferReceived, *, peer_name: str | None, receive_dir: Path | None) -> list[str]:
@@ -1709,30 +1290,6 @@ def offer_prompt_lines(offer: OfferReceived, *, peer_name: str | None, receive_d
         lines.append(f"  … và {n - len(shown)} file khác")
     lines.append(f"Lưu vào: {_dir_label(receive_dir)}")
     return lines
-
-
-def _percent_tenths(done: int, total: int) -> int:
-    """Phần nghìn đã xong, làm tròn xuống (không hiện 100,0% trước khi xong); total 0 → 1000."""
-    if total <= 0:
-        return 1000
-    return min(1000, max(0, done) * 1000 // total)
-
-
-def _cut(text: str, limit: int) -> str:
-    """Cắt `text` ở cuối cho vừa `limit` cột (kèm `…`)."""
-    if text_width(text) <= limit:
-        return text
-    if limit <= 0:
-        return ""
-    used = 0
-    end = 0
-    for ch in text:
-        width = text_width(ch)
-        if used + width > limit - 1:
-            break
-        used += width
-        end += 1
-    return text[:end] + "…"
 
 
 def progress_line(update: TransferProgress, *, peer_name: str | None, width: int | None) -> str:
@@ -1765,105 +1322,6 @@ def progress_line(update: TransferProgress, *, peer_name: str | None, width: int
     prefix = "" if peer_name is None else f"{_peer_label(peer_name, info.key.device_id)}: "
     line = "  " + prefix + " · ".join(parts)
     return line if width is None else _cut(line, width - 1)
-
-
-def parse_rate(text: str) -> int:
-    """`--limit-rate` → byte/giây: “20M”, “512K”, “1,5M”, “64KB/s”, “65536” (hệ nhị phân, làm tròn xuống).
-
-    Chỉ chữ số ASCII; hậu tố K/M/G không phân biệt hoa thường, sau đó tùy chọn “B” và “/s”;
-    không hậu tố là byte/giây. Sai dạng, hoặc ngoài `transfers.MIN_RATE_LIMIT` … 2⁴⁰ → ValueError.
-    """
-    if not isinstance(text, str) or len(text) > _MAX_RATE_TEXT:
-        raise ValueError("tốc độ không hợp lệ")
-    match = _RATE_RE.fullmatch(text)
-    if match is None:
-        raise ValueError("tốc độ không hợp lệ")
-    number = Decimal(match.group(1).replace(",", "."))
-    unit = _RATE_UNITS[(match.group(2) or "").lower()]
-    value = int((number * unit).to_integral_value(rounding=ROUND_FLOOR))
-    if not app_transfers.MIN_RATE_LIMIT <= value <= _MAX_RATE:
-        raise ValueError("tốc độ ngoài khoảng cho phép")
-    return value
-
-
-def source_error_message(error: SourceError) -> tuple[int, str, list[str]]:
-    """File không gửi được → `(mã thoát, mã lỗi JSON, các dòng)`; thư mục là lỗi cách dùng (mã 2)."""
-    path = error.path
-    name = _file_label(path.name or str(path))
-    kind = error.kind
-    if kind is SourceErrorKind.NOT_A_FILE:
-        return (
-            2,
-            "not_a_file",
-            [f"{name} không phải là file hay thư mục hợp lệ để gửi."],
-        )
-    if kind is SourceErrorKind.NOT_FOUND:
-        return 1, "source_not_found", [f"Không tìm thấy file {_printable(str(path))}."]
-    if kind is SourceErrorKind.PERMISSION:
-        return 1, "source_permission", [f"Không mở được {name}: máy này không có quyền đọc file đó."]
-    if kind is SourceErrorKind.TOO_LARGE:
-        size = "?" if error.size is None else format_size(error.size)
-        limit = format_size(app_sources.MAX_FILE_SIZE, trim=True)
-        return (
-            1,
-            "source_too_large",
-            [
-                f"Không gửi được {name} ({size}): Teleport chỉ gửi được file tối đa {limit}. "
-                "Hãy chia file thành nhiều phần nhỏ hơn rồi gửi."
-            ],
-        )
-    if kind is SourceErrorKind.BAD_NAME:
-        return (
-            1,
-            "source_bad_name",
-            [f"Không gửi được {name}: tên file có ký tự không hiển thị được. Hãy đổi tên file rồi gửi lại."],
-        )
-    return 1, "source_os_error", [f"Không đọc được {name}: ổ đĩa báo lỗi."]
-
-
-def receive_dir_error_message(error: ReceiveDirUnavailable) -> list[str]:
-    """Câu báo không dùng được thư mục nhận, theo lỗi gốc (`__cause__`).
-
-    `NotADirectoryError` / `FileExistsError`: đường dẫn là file (POSIX: cả khi một thư mục
-    cha là file; Windows báo ca đó bằng `FileNotFoundError` nên ra câu ổ đĩa).
-    """
-    head = f"Không dùng được thư mục nhận {_printable(str(error.path))}:"
-    cause = error.__cause__
-    if isinstance(cause, UnsafeReceiveDirError):
-        tail = (
-            "thư mục ẩn `.teleport` bên trong là liên kết hoặc thuộc người dùng khác. "
-            "Hãy xóa nó hoặc chọn thư mục khác bằng `--dir`."
-        )
-    elif isinstance(cause, PathTooLongError):
-        tail = "đường dẫn quá dài. Hãy chọn thư mục có đường dẫn ngắn hơn bằng `--dir`."
-    elif isinstance(cause, NotADirectoryError | FileExistsError):
-        tail = "đó không phải là thư mục (có thể là một file trùng tên). Hãy chọn thư mục khác bằng `--dir`."
-    elif isinstance(cause, PermissionError):
-        tail = "máy này không có quyền ghi vào đó. Hãy chọn thư mục khác bằng `--dir`."
-    else:
-        tail = "ổ đĩa báo lỗi hoặc không phản hồi. Hãy chọn thư mục khác bằng `--dir`."
-    return [f"{head} {tail}"]
-
-
-def _reconnect_unreachable_message(p: str) -> str:
-    """`send` đang chờ nối lại mà `core.links` báo không tới được máy nhận (mvp mục 8).
-
-    “24 giờ” là `RECONNECT_GRACE`, viết thẳng trong câu.
-    """
-    return (
-        f"Chưa nối lại được với {p}. Teleport vẫn đang thử lại (tối đa 24 giờ). "
-        "Hãy kiểm tra máy đó vẫn đang chạy `teleport receive` và hai máy còn chung một mạng."
-    )
-
-
-def _unreachable_data_message(p: str) -> str:
-    return (
-        f"Không mở được kết nối truyền dữ liệu tới {p}; tường lửa trên máy đó có thể đang chặn Teleport. "
-        "Teleport vẫn đang thử lại."
-    )
-
-
-# ---- Truyền file: Ctrl+C và đóng node --------------------------------------------------------
 
 
 class Interrupts:
@@ -2333,42 +1791,6 @@ def _expand_sources(paths: Sequence[str]) -> tuple[list[str], str | None]:
     return result, None
 
 
-def _trusted_lookup_error(output: _Output, query: str, error: DeviceNotFound | AmbiguousDevice) -> None:
-    """`--to` / `unpair`: không có, hoặc khớp nhiều thiết bị tin cậy."""
-    if isinstance(error, AmbiguousDevice):
-        output.error(
-            "ambiguous",
-            f"“{query}” khớp nhiều thiết bị; hãy nhập mã thiết bị dài hơn:",
-            extra=[f"  {d.device_id}  {_name_label(d.name)}" for d in error.candidates],
-            candidates=_candidates(error.candidates),
-        )
-        return
-    if error.known:
-        extra = [
-            "Các thiết bị tin cậy:",
-            *(f"  {d.device_id[:8]}  {_name_label(d.name)}" for d in error.known),
-        ]
-    else:
-        extra = ["(chưa ghép đôi với thiết bị nào)"]
-    output.error(
-        "not_found",
-        f"Không có thiết bị tin cậy nào khớp “{query}”.",
-        extra=extra,
-        candidates=_candidates(error.known),
-    )
-
-
-def _source_error(output: _Output, error: SourceError) -> int:
-    code, kind, lines = source_error_message(error)
-    output.error(kind, lines[0], extra=lines[1:])
-    return code
-
-
-def _duplicate_error(output: _Output) -> int:
-    output.error("duplicate_file", "Có file được chọn hai lần. Hãy chọn mỗi file một lần.")
-    return 2
-
-
 async def run_send(
     args: argparse.Namespace, lines: Lines, out: TextIO, err: TextIO, *, interrupts: Interrupts | None = None
 ) -> int:
@@ -2685,12 +2107,6 @@ async def _send_main(args: argparse.Namespace, output: _Output, session: _SendSe
         if c != 0:
             return c
     return 0
-
-
-def _no_discovery_message(name: str, reason: str) -> str:
-    return (
-        f"Không tìm được {name} vì không bật được khám phá mDNS ({reason}). Hãy thêm `--address <ip[:cổng]>`."
-    )
 
 
 def _has_saved_address(device: TrustedDevice) -> bool:
@@ -3205,13 +2621,6 @@ def cmd_receive(args: argparse.Namespace) -> int:
     return _run_transfer_command(args, run_receive, stdin=not args.yes)
 
 
-# ---- unpair --------------------------------------------------------------------------------
-
-
-def _candidates(devices: Sequence[TrustedDevice | DeviceView]) -> list[dict[str, str]]:
-    return [{"device_id": d.device_id, "name": d.name} for d in devices]
-
-
 def cmd_unpair(args: argparse.Namespace) -> int:
     output = _Output(sys.stdout, sys.stderr, args.json)
     query = args.device
@@ -3236,1086 +2645,6 @@ def cmd_unpair(args: argparse.Namespace) -> int:
     else:
         print(f"Đã hủy ghép đôi với {_name_label(device.name)} ({device.device_id[:8]}).", flush=True)
     return 0
-
-
-# ---- Liệt kê & hủy lượt truyền dở ----------------------------------------------------------
-
-_TRANSFER_QUERY_RE = re.compile(r"^[0-9a-fA-F]{4,32}$")
-_TRANSFER_STATE_LABELS = {
-    "queued": "đang chờ",
-    "waiting": "chờ xác nhận",
-    "transferring": "đang truyền",
-    "verifying": "đang kiểm tra",
-    "reconnecting": "đang nối lại",
-    "pending": "đang tạm dừng",
-}
-
-
-def _cli_syntax_error(args: argparse.Namespace, message: str) -> int:
-    parser = getattr(args, "_parser", None)
-    if parser is not None:
-        parser.error(message)
-    print(f"Lỗi: {message}", file=sys.stderr, flush=True)
-    return 2
-
-
-def _dirs_match(first: Path, second: str) -> bool:
-    if not second:
-        return False
-    return os.path.normcase(os.path.abspath(first)) == os.path.normcase(os.path.abspath(second))
-
-
-def _pending_to_dict(item: PendingTransfer) -> dict[str, Any]:
-    return {
-        "direction": "receive",
-        "device_id": item.device_id,
-        "device_name": item.device_name,
-        "transfer_id": item.transfer_id,
-        "state": "pending",
-        "files_total": item.files_total,
-        "files_done": item.files_done,
-        "bytes_done": item.bytes_done,
-        "total_bytes": item.total_bytes,
-    }
-
-
-def _render_transfers_list(output: _Output, items: list[dict[str, Any]]) -> None:
-    if output.json:
-        print(json.dumps({"time": _utc_now(), "transfers": items}, ensure_ascii=False), flush=True)
-        return
-    if not items:
-        print("Không có lượt truyền nào đang dở.", flush=True)
-        return
-    for item in items:
-        direction = "Nhận từ" if item.get("direction") == "receive" else "Gửi tới"
-        name = _name_label(str(item.get("device_name") or item.get("device_id", "")[:8]))
-        tid = str(item.get("transfer_id", ""))[:8]
-        files_done = int(item.get("files_done", 0))
-        files_total = int(item.get("files_total", 0))
-        bytes_done = format_size(int(item.get("bytes_done", 0)))
-        total_bytes = format_size(int(item.get("total_bytes", 0)))
-        state = _TRANSFER_STATE_LABELS.get(str(item.get("state", "")), str(item.get("state", "")))
-        print(
-            f"- {tid} | {direction} {name} | {files_done}/{files_total} tệp "
-            f"({bytes_done} / {total_bytes}) | {state}",
-            flush=True,
-        )
-
-
-def _render_transfers_cancelled(output: _Output, cancelled: list[dict[str, Any]]) -> None:
-    if output.json:
-        print(json.dumps({"time": _utc_now(), "cancelled": cancelled}, ensure_ascii=False), flush=True)
-        return
-    if not cancelled:
-        print("Không có lượt truyền nào đang dở.", flush=True)
-        return
-    for item in cancelled:
-        direction = "nhận từ" if item.get("direction") == "receive" else "gửi tới"
-        name = _name_label(str(item.get("device_name") or item.get("device_id", "")[:8]))
-        tid = str(item.get("transfer_id", ""))[:8]
-        print(f"Đã hủy lượt {tid} ({direction} {name}).", flush=True)
-
-
-async def _transfers_list_ipc(
-    directory: Path, recv_dir: Path | None
-) -> tuple[bool, list[dict[str, Any]] | None, str]:
-    ipc_client = await try_connect_ipc(directory)
-    if ipc_client is None:
-        return False, None, ""
-    try:
-        res = await ipc_client.list_transfers()
-        if recv_dir is not None and not _dirs_match(recv_dir, str(res.get("receive_dir", ""))):
-            return True, None, "không thể dùng --dir khác với thư mục nhận của Teleport đang chạy"
-        return True, list(res.get("transfers", [])), ""
-    finally:
-        await ipc_client.close()
-
-
-async def _transfers_cancel_ipc(
-    directory: Path,
-    recv_dir: Path | None,
-    query: str | None,
-    cancel_all: bool,
-) -> tuple[bool, dict[str, Any] | None, str]:
-    ipc_client = await try_connect_ipc(directory)
-    if ipc_client is None:
-        return False, None, ""
-    try:
-        if recv_dir is not None:
-            info_res = await ipc_client.list_transfers()
-            if not _dirs_match(recv_dir, str(info_res.get("receive_dir", ""))):
-                return True, None, "không thể dùng --dir khác với thư mục nhận của Teleport đang chạy"
-        res = await ipc_client.cancel_transfer(query, cancel_all=cancel_all)
-        return True, res, ""
-    finally:
-        await ipc_client.close()
-
-
-def cmd_transfers_list(args: argparse.Namespace) -> int:
-    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
-    directory = _config(args)
-    raw_dir = getattr(args, "dir", None)
-    if raw_dir is not None and not raw_dir.strip():
-        return _cli_syntax_error(args, "--dir không được rỗng")
-    recv_dir = Path(raw_dir).expanduser() if raw_dir is not None else None
-
-    try:
-        with asyncio.Runner() as runner:
-            connected, ipc_items, syntax_err = runner.run(_transfers_list_ipc(directory, recv_dir))
-    except (TimeoutError, IpcProtocolError, IpcClientError, OSError, json.JSONDecodeError) as e:
-        output.error("ipc_error", f"Không thể giao tiếp với Teleport đang chạy: {e}")
-        return 1
-    if connected:
-        if syntax_err:
-            return _cli_syntax_error(args, syntax_err)
-        _render_transfers_list(output, ipc_items or [])
-        return 0
-
-    try:
-        pending = list_pending_offline(directory, receive_dir=recv_dir)
-    except ConfigDirError as e:
-        _config_dir_error(output, e.path, e.error)
-        return 1
-    except OSError as e:
-        _config_dir_error(output, directory, e)
-        return 1
-    except NodeLockedError:
-        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
-        return 1
-    except IdentityError as e:
-        output.error("identity_error", str(e))
-        return 1
-    except TrustStoreError as e:
-        output.error("trust_store_error", str(e))
-        return 1
-    except (UnsafeReceiveDirError, PathTooLongError) as e:
-        output.error("receive_dir_error", str(e))
-        return 1
-
-    _render_transfers_list(output, [_pending_to_dict(item) for item in pending])
-    return 0
-
-
-def cmd_transfers_cancel(args: argparse.Namespace) -> int:
-    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
-    raw_query = getattr(args, "transfer", None)
-    cancel_all = bool(getattr(args, "cancel_all", False))
-    if (raw_query is None and not cancel_all) or (raw_query is not None and cancel_all):
-        return _cli_syntax_error(args, "cần chỉ định <mã lượt> hoặc --all (không dùng cả hai)")
-    query: str | None = None
-    if raw_query is not None:
-        query = raw_query.strip()
-        if not _TRANSFER_QUERY_RE.fullmatch(query):
-            return _cli_syntax_error(args, "mã lượt phải gồm ít nhất 4 ký tự hex (0-9, a-f)")
-
-    directory = _config(args)
-    raw_dir = getattr(args, "dir", None)
-    if raw_dir is not None and not raw_dir.strip():
-        return _cli_syntax_error(args, "--dir không được rỗng")
-    recv_dir = Path(raw_dir).expanduser() if raw_dir is not None else None
-
-    try:
-        with asyncio.Runner() as runner:
-            connected, res, syntax_err = runner.run(
-                _transfers_cancel_ipc(directory, recv_dir, query, cancel_all)
-            )
-    except (TimeoutError, IpcProtocolError, IpcClientError, OSError, json.JSONDecodeError) as e:
-        output.error("ipc_error", f"Không thể giao tiếp với Teleport đang chạy: {e}")
-        return 1
-    if connected:
-        if syntax_err:
-            return _cli_syntax_error(args, syntax_err)
-        assert res is not None
-        if "error" in res:
-            err = str(res["error"])
-            if err == "transfer_not_found":
-                output.error("transfer_not_found", f"Không tìm thấy lượt truyền nào khớp {query!r}.")
-                return 1
-            if err == "ambiguous_transfer":
-                output.error(
-                    "ambiguous_transfer",
-                    f"Có nhiều lượt truyền khớp {query!r}; hãy nhập thêm ký tự.",
-                )
-                return 1
-            if err == "invalid_target":
-                return _cli_syntax_error(args, "mã lượt phải gồm ít nhất 4 ký tự hex (0-9, a-f)")
-            output.error(err, str(res.get("detail") or err))
-            return 1
-        _render_transfers_cancelled(output, list(res.get("cancelled", [])))
-        return 0
-
-    try:
-        cancelled_items = cancel_pending_offline(
-            directory, query, cancel_all=cancel_all, receive_dir=recv_dir
-        )
-    except ConfigDirError as e:
-        _config_dir_error(output, e.path, e.error)
-        return 1
-    except OSError as e:
-        _config_dir_error(output, directory, e)
-        return 1
-    except NodeLockedError:
-        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
-        return 1
-    except IdentityError as e:
-        output.error("identity_error", str(e))
-        return 1
-    except TrustStoreError as e:
-        output.error("trust_store_error", str(e))
-        return 1
-    except (UnsafeReceiveDirError, PathTooLongError) as e:
-        output.error("receive_dir_error", str(e))
-        return 1
-    except TransferNotFound:
-        output.error("transfer_not_found", f"Không tìm thấy lượt truyền nào khớp {query!r}.")
-        return 1
-    except AmbiguousTransfer:
-        output.error(
-            "ambiguous_transfer",
-            f"Có nhiều lượt truyền khớp {query!r}; hãy nhập thêm ký tự.",
-        )
-        return 1
-
-    cancelled = [
-        {
-            "direction": "receive",
-            "device_id": item.device_id,
-            "device_name": item.device_name,
-            "transfer_id": item.transfer_id,
-        }
-        for item in cancelled_items
-    ]
-    _render_transfers_cancelled(output, cancelled)
-    return 0
-
-
-# ---- Chế độ khách (Web Guest) --------------------------------------------------------------
-
-
-async def run_guest(args: argparse.Namespace, stdout: Any = sys.stdout, stderr: Any = sys.stderr) -> int:
-    from teleport.app.web_guest import WebGuestManager, make_wifi_qr
-    from teleport.core.display import format_size
-    from teleport.net.web_guest import GuestScope
-    from teleport.paths import default_receive_dir
-
-    recv_dir = Path(args.receive_dir).expanduser().resolve() if args.receive_dir else default_receive_dir()
-
-    shared_paths: list[Path] = []
-    if args.files:
-        for f in args.files:
-            p = Path(f).expanduser().resolve()
-            if not (p.is_file() or p.is_dir()):
-                print(f"Lỗi: Không tìm thấy tệp hoặc không phải tệp/thư mục hợp lệ: {f}", file=stderr)
-                return 2
-            shared_paths.append(p)
-
-    wifi_payload: str | None = None
-    wifi_ascii: str | None = None
-    wifi_ssid = getattr(args, "wifi_ssid", None)
-    if wifi_ssid:
-        try:
-            wifi_payload, _, wifi_ascii, _ = make_wifi_qr(
-                wifi_ssid,
-                getattr(args, "wifi_password", "") or "",
-                security=getattr(args, "wifi_security", "WPA"),
-            )
-        except ValueError as e:
-            print(f"Lỗi cấu hình Wi-Fi: {e}", file=stderr)
-            return 2
-
-    scope = GuestScope(getattr(args, "scope", "both"))
-    one_shot = bool(getattr(args, "one_shot", False))
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-
-    def on_upload_start(name: str, total: int) -> None:
-        if not args.json:
-            total_str = f" ({format_size(total)})" if total > 0 else ""
-            print(f"\n[Điện thoại tải lên] Bắt đầu nhận: {name}{total_str}...", file=stdout, flush=True)
-
-    def on_upload_complete(name: str, size: int, path: Path) -> None:
-        if args.json:
-            data = {"event": "uploaded", "filename": name, "size": size, "path": str(path)}
-            print(json.dumps(data, ensure_ascii=False), file=stdout, flush=True)
-        else:
-            print(
-                f"\n[Điện thoại tải lên] Hoàn tất nhận: {name} ({format_size(size)})\n-> Đã lưu tại: {path}",
-                file=stdout,
-                flush=True,
-            )
-
-    def on_text_received(text: str) -> None:
-        if args.json:
-            data = {"event": "guest_text", "text": text}
-            print(json.dumps(data, ensure_ascii=False), file=stdout, flush=True)
-        else:
-            print(f"\n[Điện thoại gửi chữ] {text}", file=stdout, flush=True)
-
-    def on_session_timeout() -> None:
-        if one_shot:
-            loop.call_later(0.25, stop_event.set)
-        else:
-            stop_event.set()
-
-    manager = WebGuestManager(
-        receive_dir=recv_dir,
-        inactivity_timeout=args.timeout,
-        on_upload_start=on_upload_start,
-        on_upload_complete=on_upload_complete,
-        on_session_timeout=on_session_timeout,
-        on_text_received=on_text_received,
-    )
-
-    try:
-        info = await manager.start_session(
-            shared_files=shared_paths,
-            preferred_ip=args.ip,
-            port=args.port,
-            scope=scope,
-            one_shot=one_shot,
-        )
-    except Exception as e:
-        print(f"Lỗi khởi động máy chủ Web khách: {e}", file=stderr)
-        return 1
-
-    if args.json:
-        data: dict[str, Any] = {
-            "event": "guest_started",
-            "url": info.url,
-            "token": info.token,
-            "ip": info.local_ip,
-            "port": info.port,
-            "files": [p.name for p in shared_paths],
-            "receive_dir": str(recv_dir),
-            "scope": info.scope.value,
-            "one_shot": info.one_shot,
-        }
-        if wifi_payload is not None:
-            data["wifi_qr"] = wifi_payload
-        print(json.dumps(data, ensure_ascii=False), file=stdout, flush=True)
-    else:
-        print("=" * 64, file=stdout)
-        print(f"ZCL Teleport - Chế độ khách qua Web QR (v{__version__})", file=stdout)
-        print("=" * 64, file=stdout)
-        if wifi_ascii is not None and wifi_ssid:
-            print(f"\n1. Quét mã QR sau để nối Wi-Fi ({wifi_ssid}):", file=stdout)
-            print(wifi_ascii, file=stdout)
-            print("2. Sau đó quét mã QR dưới để mở trang truyền tệp:", file=stdout)
-        print(info.qr_ascii, file=stdout)
-        print(f"\nLiên kết kết nối: {info.url}", file=stdout)
-        print(f"Thư mục lưu tệp nhận: {recv_dir}", file=stdout)
-        scope_text = {
-            GuestScope.BOTH: "Gửi và nhận hai chiều",
-            GuestScope.RECEIVE_ONLY: "Chỉ nhận tệp từ điện thoại",
-            GuestScope.SEND_ONLY: "Chỉ gửi tệp sang điện thoại",
-        }[info.scope]
-        mode_suffix = " · Chỉ dùng 1 lượt" if info.one_shot else ""
-        print(f"Quyền phiên: {scope_text}{mode_suffix}", file=stdout)
-        if shared_paths:
-            print(f"Các tệp chia sẻ sẵn ({len(shared_paths)}):", file=stdout)
-            for p in shared_paths:
-                size_val = p.stat().st_size if p.is_file() else 0
-                label = f"{p.name}/" if p.is_dir() else f"{p.name} ({format_size(size_val)})"
-                print(f"  - {label}", file=stdout)
-        print("\nDùng camera điện thoại quét mã QR hoặc truy cập liên kết trên.", file=stdout)
-        print("Không cần cài đặt thêm phần mềm trên điện thoại.", file=stdout)
-        print("(Nhấn Ctrl+C để kết thúc phiên)", file=stdout)
-        print("=" * 64, file=stdout, flush=True)
-
-    try:
-        await stop_event.wait()
-    except (asyncio.CancelledError, KeyboardInterrupt):
-        pass
-    finally:
-        await manager.stop_session()
-        if not args.json:
-            print("\nĐã đóng phiên kết nối chế độ khách.", file=stdout, flush=True)
-
-    return 0
-
-
-def cmd_guest(args: argparse.Namespace) -> int:
-    with asyncio.Runner() as runner:
-        try:
-            return runner.run(run_guest(args))
-        except KeyboardInterrupt:
-            return 0
-
-
-# ---- Biên lai truyền tệp (teleport receipt) ------------------------------------------------
-
-
-def cmd_receipt_verify(args: argparse.Namespace) -> int:
-    from teleport.app.receipts import known_trusted_fingerprints, verify_receipt
-    from teleport.core.display import format_size
-    from teleport.core.resume_state import format_time
-
-    receipt_path = Path(args.path).expanduser()
-    raw_dir = getattr(args, "dir", None)
-    if raw_dir is not None and not str(raw_dir).strip():
-        return _cli_syntax_error(args, "--dir không được rỗng")
-    files_dir = Path(raw_dir).expanduser() if raw_dir is not None else None
-    trusted_fps = known_trusted_fingerprints(_config(args))
-
-    result = verify_receipt(
-        receipt_path,
-        files_dir=files_dir,
-        trusted_fingerprints=trusted_fps,
-    )
-    receipt = result.receipt
-
-    if getattr(args, "json", False):
-        data: dict[str, Any] = {
-            "event": "receipt_verified",
-            "valid": result.valid,
-            "signature_ok": result.signature_ok,
-            "trusted_signer": result.trusted_signer,
-            "files_checked": result.files_checked,
-            "files_ok": result.files_ok,
-            "errors": list(result.errors),
-        }
-        if receipt is not None:
-            payload = receipt.payload
-            data.update(
-                {
-                    "schema": payload.schema,
-                    "transfer_id": payload.transfer_id,
-                    "direction": payload.direction.value,
-                    "completed_at": format_time(payload.completed_at),
-                    "signer_device_id": payload.signer_device_id,
-                    "signer_fingerprint": payload.signer_fingerprint,
-                    "peer_device_id": payload.peer_device_id,
-                    "peer_name": payload.peer_name,
-                    "total_bytes": payload.total_bytes,
-                    "file_count": len(payload.files),
-                }
-            )
-        print(json.dumps(data, ensure_ascii=False))
-        return 0 if result.valid else 1
-
-    status_tag = "HỢP LỆ" if result.valid else "KHÔNG HỢP LỆ"
-    print(f"[{status_tag}] {receipt_path}")
-    if receipt is not None:
-        p = receipt.payload
-        print(f"  Lượt truyền : {p.transfer_id} ({p.direction.value})")
-        print(f"  Hoàn tất lúc: {format_time(p.completed_at)}")
-        print(f"  Máy ký      : {p.signer_device_id[:8]} ({p.signer_fingerprint[:16]})")
-        print(f"  Máy đối tác : {p.peer_name} ({p.peer_device_id[:8]})")
-        print(f"  Dung lượng  : {format_size(p.total_bytes)} ({len(p.files)} tệp)")
-        if result.trusted_signer is True:
-            print("  Tin cậy     : máy ký thuộc danh sách tin cậy")
-        elif result.trusted_signer is False:
-            print("  Tin cậy     : máy ký chưa ghép đôi với máy này")
-        if files_dir is not None:
-            print(f"  Kiểm tra tệp: {result.files_ok}/{result.files_checked} tệp khớp")
-    for err in result.errors:
-        print(f"  Lỗi: {err}", file=sys.stderr)
-    return 0 if result.valid else 1
-
-
-def cmd_receipt_list(args: argparse.Namespace) -> int:
-    from teleport.app.receipts import list_receipts, load_receipt
-    from teleport.core.display import format_size
-    from teleport.core.receipts import ReceiptError
-    from teleport.core.resume_state import format_time
-
-    directory = _config(args)
-    paths = list_receipts(directory)
-    items: list[dict[str, Any]] = []
-    for p in paths:
-        item: dict[str, Any] = {"path": str(p), "filename": p.name}
-        try:
-            rec = load_receipt(p)
-        except (OSError, ReceiptError) as e:
-            item["error"] = type(e).__name__
-        else:
-            pl = rec.payload
-            item.update(
-                {
-                    "transfer_id": pl.transfer_id,
-                    "direction": pl.direction.value,
-                    "completed_at": format_time(pl.completed_at),
-                    "peer_device_id": pl.peer_device_id,
-                    "peer_name": pl.peer_name,
-                    "total_bytes": pl.total_bytes,
-                    "file_count": len(pl.files),
-                }
-            )
-        items.append(item)
-
-    if getattr(args, "json", False):
-        print(json.dumps({"receipts": items}, ensure_ascii=False))
-        return 0
-
-    if not items:
-        print("Chưa có biên lai truyền tệp nào được lưu.")
-        return 0
-    for item in items:
-        if "error" in item:
-            print(f"{item['filename']}  [lỗi đọc: {item['error']}]")
-        else:
-            print(
-                f"{item['transfer_id'][:8]}  {item['direction']:7s}  {item['completed_at']}  "
-                f"{item['peer_name']}  {format_size(item['total_bytes'])}  ({item['file_count']} tệp)  "
-                f"-> {item['path']}"
-            )
-    return 0
-
-
-# ---- Quy tắc phân loại thư mục nhận (`routing`) & Cổng đẩy tự động (`watch`) ---------------
-
-
-def _collect_cli_patterns(raw_patterns: Sequence[str] | None) -> tuple[str, ...]:
-    if not raw_patterns:
-        return ()
-    joined = ",".join(raw_patterns)
-    return parse_patterns(joined)
-
-
-def _remove_by_prefix[T: (RoutingRule, WatchPortalRule)](
-    items: tuple[T, ...], query: str
-) -> tuple[tuple[T, ...], T | None, list[T]]:
-    exact = [item for item in items if item.id == query]
-    if len(exact) == 1:
-        chosen = exact[0]
-        return tuple(item for item in items if item is not chosen), chosen, []
-    matches = [item for item in items if item.id.startswith(query)]
-    if len(matches) == 1:
-        chosen = matches[0]
-        return tuple(item for item in items if item is not chosen), chosen, []
-    return items, None, matches
-
-
-def cmd_routing_list(args: argparse.Namespace) -> int:
-    directory = _config(args)
-    settings = Settings.load(directory)
-    items = [routing_rule_to_dict(r) for r in settings.routing_rules]
-    if getattr(args, "json", False):
-        print(json.dumps({"routing_rules": items}, ensure_ascii=False))
-        return 0
-    if not settings.routing_rules:
-        print("Chưa có quy tắc phân loại thư mục nhận nào.")
-        return 0
-    for r in settings.routing_rules:
-        pats = ", ".join(r.patterns) if r.patterns else "*"
-        src = r.device_id[:8] if r.device_id else "mọi máy"
-        state = "bật" if r.enabled else "tắt"
-        print(f"{r.id}  {r.name}  [{pats}]  ({src}) -> {r.destination}  [{state}]")
-    return 0
-
-
-def cmd_routing_add(args: argparse.Namespace) -> int:
-    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
-    directory = _config(args)
-    from_query = getattr(args, "from_device", None)
-    device_id: str | None = None
-    if from_query is not None:
-        try:
-            dev = find_trusted(directory, from_query)
-        except ConfigDirError as e:
-            _config_dir_error(output, e.path, e.error)
-            return 1
-        except TrustStoreError as e:
-            output.error("trust_store_error", str(e))
-            return 1
-        except (DeviceNotFound, AmbiguousDevice) as e:
-            _trusted_lookup_error(output, from_query, e)
-            return 1
-        device_id = dev.device_id
-
-    try:
-        patterns = _collect_cli_patterns(getattr(args, "pattern", None))
-        dest = os.path.abspath(os.path.expanduser(args.dest))
-        rule = RoutingRule(
-            id=secrets.token_hex(4),
-            name=args.name,
-            destination=dest,
-            device_id=device_id,
-            patterns=patterns,
-        )
-    except (ValueError, TypeError) as e:
-        output.error("invalid_argument", str(e))
-        return 2
-
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        lock = NodeLock(directory)
-        lock.acquire(timeout=app_node.LOCK_TIMEOUT)
-    except OSError as e:
-        _config_dir_error(output, directory, e)
-        return 1
-    except NodeLockedError:
-        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
-        return 1
-    try:
-        settings = Settings.load(directory)
-        if len(settings.routing_rules) >= MAX_ROUTING_RULES:
-            output.error("limit_reached", f"Tối đa {MAX_ROUTING_RULES} quy tắc phân loại.")
-            return 1
-        updated = replace(settings, routing_rules=(*settings.routing_rules, rule))
-        updated.save(directory)
-    except OSError as e:
-        _config_dir_error(output, directory, e)
-        return 1
-    finally:
-        lock.release()
-
-    if output.json:
-        print(json.dumps({"added": routing_rule_to_dict(rule)}, ensure_ascii=False))
-    else:
-        print(f"Đã thêm quy tắc {rule.id}: “{rule.name}” -> {rule.destination}")
-    return 0
-
-
-def cmd_routing_remove(args: argparse.Namespace) -> int:
-    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
-    directory = _config(args)
-    if not directory.exists():
-        output.error("not_found", f"Không tìm thấy quy tắc “{args.rule_id}”.")
-        return 1
-    lock = NodeLock(directory)
-    try:
-        lock.acquire(timeout=app_node.LOCK_TIMEOUT)
-    except OSError as e:
-        _config_dir_error(output, directory, e)
-        return 1
-    except NodeLockedError:
-        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
-        return 1
-    try:
-        settings = Settings.load(directory)
-        remaining, removed, matches = _remove_by_prefix(settings.routing_rules, args.rule_id)
-        if removed is None:
-            if len(matches) > 1:
-                output.error("ambiguous", f"“{args.rule_id}” khớp nhiều quy tắc; hãy nhập mã đầy đủ.")
-            else:
-                output.error("not_found", f"Không tìm thấy quy tắc “{args.rule_id}”.")
-            return 1
-        replace(settings, routing_rules=remaining).save(directory)
-    finally:
-        lock.release()
-
-    if output.json:
-        print(json.dumps({"removed": routing_rule_to_dict(removed)}, ensure_ascii=False))
-    else:
-        print(f"Đã xóa quy tắc {removed.id}: “{removed.name}”.")
-    return 0
-
-
-def cmd_watch_list(args: argparse.Namespace) -> int:
-    directory = _config(args)
-    settings = Settings.load(directory)
-    items = [watch_portal_to_dict(w) for w in settings.watch_portals]
-    if getattr(args, "json", False):
-        print(json.dumps({"watch_portals": items}, ensure_ascii=False))
-        return 0
-    if not settings.watch_portals:
-        print("Chưa có cổng đẩy tự động nào.")
-        return 0
-    for w in settings.watch_portals:
-        pats = ", ".join(w.patterns) if w.patterns else "*"
-        rec_note = ", đệ quy" if w.recursive else ""
-        state = "bật" if w.enabled else "tắt"
-        print(f"{w.id}  {w.name}  {w.source_dir}  [{pats}{rec_note}] -> {w.device_id[:8]}  [{state}]")
-    return 0
-
-
-def cmd_watch_add(args: argparse.Namespace) -> int:
-    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
-    directory = _config(args)
-    try:
-        dev = find_trusted(directory, args.to)
-    except ConfigDirError as e:
-        _config_dir_error(output, e.path, e.error)
-        return 1
-    except TrustStoreError as e:
-        output.error("trust_store_error", str(e))
-        return 1
-    except (DeviceNotFound, AmbiguousDevice) as e:
-        _trusted_lookup_error(output, args.to, e)
-        return 1
-
-    try:
-        patterns = _collect_cli_patterns(getattr(args, "pattern", None))
-        source_dir = os.path.abspath(os.path.expanduser(args.dir))
-        rule = WatchPortalRule(
-            id=secrets.token_hex(4),
-            name=args.name,
-            source_dir=source_dir,
-            device_id=dev.device_id,
-            patterns=patterns,
-            recursive=bool(getattr(args, "recursive", False)),
-        )
-    except (ValueError, TypeError) as e:
-        output.error("invalid_argument", str(e))
-        return 2
-
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        lock = NodeLock(directory)
-        lock.acquire(timeout=app_node.LOCK_TIMEOUT)
-    except OSError as e:
-        _config_dir_error(output, directory, e)
-        return 1
-    except NodeLockedError:
-        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
-        return 1
-    try:
-        settings = Settings.load(directory)
-        if len(settings.watch_portals) >= MAX_WATCH_PORTALS:
-            output.error("limit_reached", f"Tối đa {MAX_WATCH_PORTALS} cổng đẩy tự động.")
-            return 1
-        updated = replace(settings, watch_portals=(*settings.watch_portals, rule))
-        updated.save(directory)
-    except OSError as e:
-        _config_dir_error(output, directory, e)
-        return 1
-    finally:
-        lock.release()
-
-    if output.json:
-        print(json.dumps({"added": watch_portal_to_dict(rule)}, ensure_ascii=False))
-    else:
-        print(f"Đã thêm cổng đẩy {rule.id}: {rule.source_dir} -> {_name_label(dev.name)}")
-    return 0
-
-
-def cmd_watch_remove(args: argparse.Namespace) -> int:
-    output = _Output(sys.stdout, sys.stderr, bool(getattr(args, "json", False)))
-    directory = _config(args)
-    if not directory.exists():
-        output.error("not_found", f"Không tìm thấy cổng đẩy “{args.portal_id}”.")
-        return 1
-    lock = NodeLock(directory)
-    try:
-        lock.acquire(timeout=app_node.LOCK_TIMEOUT)
-    except OSError as e:
-        _config_dir_error(output, directory, e)
-        return 1
-    except NodeLockedError:
-        output.error("node_locked", "Teleport đang chạy với thư mục cấu hình này.", extra=[_NODE_LOCKED_HINT])
-        return 1
-    try:
-        settings = Settings.load(directory)
-        remaining, removed, matches = _remove_by_prefix(settings.watch_portals, args.portal_id)
-        if removed is None:
-            if len(matches) > 1:
-                output.error("ambiguous", f"“{args.portal_id}” khớp nhiều cổng đẩy; hãy nhập mã đầy đủ.")
-            else:
-                output.error("not_found", f"Không tìm thấy cổng đẩy “{args.portal_id}”.")
-            return 1
-        replace(settings, watch_portals=remaining).save(directory)
-    finally:
-        lock.release()
-
-    if output.json:
-        print(json.dumps({"removed": watch_portal_to_dict(removed)}, ensure_ascii=False))
-    else:
-        print(f"Đã xóa cổng đẩy {removed.id}: “{removed.name}”.")
-    return 0
-
-
-# ---- Tham số -------------------------------------------------------------------------------
-
-
-def _port_type(text: str) -> int:
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"cổng phải là số nguyên 0–65535: {text!r}") from None
-    if not 0 <= value <= 65535:
-        raise argparse.ArgumentTypeError(f"cổng phải là số nguyên 0–65535: {text!r}")
-    return value
-
-
-def _add_node_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--json", action="store_true", help="in sự kiện dạng JSON Lines")
-    parser.add_argument(
-        "--name", help="tên thiết bị cho lần chạy này (mặc định: tên đã lưu, chưa có thì tên máy)"
-    )
-    parser.add_argument(
-        "--stealth",
-        action="store_true",
-        help="chế độ ẩn danh: không phát tên thật máy tính ra toàn mạng WiFi",
-    )
-    # Ẩn: chỉ để test bind 127.0.0.1 và cổng 0 (tránh hộp thoại tường lửa Windows).
-    parser.add_argument("--host", default=_ANY_HOST, help=argparse.SUPPRESS)
-    parser.add_argument("--port", type=_port_type, default=None, help=argparse.SUPPRESS)
-    # Ẩn: chỉ duyệt/quảng bá mDNS trên các card này (test dùng 127.0.0.1).
-    parser.add_argument("--mdns-interface", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
-
-
-def _ipv4_type(text: str) -> str:
-    if not _valid_host(text):
-        raise argparse.ArgumentTypeError(f"phải là địa chỉ IPv4 dạng chấm: {text!r}")
-    return text
-
-
-def _timeout_type(text: str) -> float:
-    try:
-        value = float(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"thời gian phải là số giây: {text!r}") from None
-    if not math.isfinite(value) or not 0 < value <= MAX_SCAN_TIMEOUT:
-        raise argparse.ArgumentTypeError(
-            f"thời gian phải trong khoảng (0, {MAX_SCAN_TIMEOUT:g}] giây: {text!r}"
-        )
-    return value
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="teleport",
-        description="Chuyển file và clipboard trong mạng LAN, không qua cloud.",
-    )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument(
-        "--config-dir",
-        type=Path,
-        help=f"thư mục cấu hình (mặc định theo hệ điều hành, hoặc biến môi trường {ENV_HOME})",
-    )
-    sub = parser.add_subparsers(dest="command", required=True, metavar="<lệnh>")
-    sub.add_parser("identity", help="hiện mã thiết bị và fingerprint của máy này").set_defaults(
-        handler=cmd_identity
-    )
-
-    list_ = sub.add_parser("list", help="liệt kê các máy Teleport trong mạng")
-    list_.add_argument(
-        "--timeout",
-        type=_timeout_type,
-        default=SCAN_TIMEOUT,
-        metavar="GIÂY",
-        help=f"thời gian tìm (mặc định {SCAN_TIMEOUT:g} giây)",
-    )
-    list_.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    list_.add_argument("--mdns-interface", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
-    list_.set_defaults(handler=cmd_list)
-
-    listen = sub.add_parser("listen", help="chờ ghép đôi và giữ kết nối với các máy đã ghép đôi")
-    _add_node_options(listen)
-    # Ẩn: địa chỉ quảng bá cố định (test), không theo dõi đổi địa chỉ.
-    listen.add_argument("--advertise-address", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
-    listen.set_defaults(handler=cmd_listen)
-
-    pair = sub.add_parser("pair", help="ghép đôi với máy khác theo tên, mã thiết bị hoặc địa chỉ IP")
-    pair.add_argument(
-        "address",
-        metavar="<tên | tiền tố mã | ip[:cổng]>",
-        help="máy kia như `teleport list` hiện, hoặc địa chỉ IP, ví dụ 192.168.1.5",
-    )
-    _add_node_options(pair)
-    pair.set_defaults(handler=cmd_pair)
-
-    send = sub.add_parser("send", help="gửi file hoặc thư mục tới một thiết bị đã ghép đôi")
-    send.add_argument(
-        "files",
-        nargs="+",
-        metavar="<đường dẫn>",
-        help=f"các file hoặc thư mục cần gửi (tối đa {MAX_OFFER_FILES})",
-    )
-    send.add_argument(
-        "--to",
-        action="append",
-        required=True,
-        metavar="<thiết bị>",
-        help="tên hoặc tiền tố mã thiết bị đã ghép đôi (có thể lặp lại hoặc cách nhau bằng dấu phẩy)",
-    )
-    send.add_argument(
-        "--address", metavar="<ip[:cổng]>", help="địa chỉ của máy nhận, khi mạng chặn mDNS (vẫn cần --to)"
-    )
-    send.add_argument(
-        "--limit-rate",
-        metavar="<tốc độ>",
-        help=(
-            "giới hạn tốc độ gửi (byte/giây, hệ nhị phân), ví dụ 20M hoặc 512K; tối thiểu 64K "
-            "(mặc định: theo cài đặt)"
-        ),
-    )
-    send.add_argument(
-        "--no-delta",
-        action="store_true",
-        help="tắt chế độ truyền thông minh phần thay đổi (gửi đầy đủ mọi khối)",
-    )
-    _add_node_options(send)
-    send.set_defaults(handler=cmd_send)
-
-    receive = sub.add_parser("receive", help="nhận file từ các thiết bị đã ghép đôi")
-    receive.add_argument(
-        "--dir",
-        metavar="<thư mục>",
-        help=(
-            "thư mục lưu file nhận (mặc định: thư mục đã lưu trong cài đặt, chưa có thì Teleport "
-            "trong thư mục Tải về)"
-        ),
-    )
-    receive.add_argument(
-        "--yes", action="store_true", help="tự nhận mọi file từ mọi thiết bị đã ghép đôi, không hỏi"
-    )
-    receive.add_argument(
-        "--no-delta",
-        action="store_true",
-        help="tắt chế độ dò và tái sử dụng phần không đổi từ tệp cũ",
-    )
-    _add_node_options(receive)
-    receive.add_argument("--advertise-address", action="append", type=_ipv4_type, help=argparse.SUPPRESS)
-    receive.set_defaults(handler=cmd_receive)
-
-    unpair = sub.add_parser("unpair", help="hủy ghép đôi với một thiết bị (khi Teleport không chạy)")
-    unpair.add_argument("device", metavar="<thiết bị>", help="tên hoặc tiền tố mã thiết bị (≥ 4 ký tự)")
-    unpair.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    unpair.set_defaults(handler=cmd_unpair)
-
-    transfers = sub.add_parser("transfers", help="xem và hủy các lượt truyền file đang dở")
-    transfers_sub = transfers.add_subparsers(dest="transfers_command", required=True, metavar="<thao tác>")
-
-    transfers_list = transfers_sub.add_parser("list", help="liệt kê các lượt truyền đang dở")
-    transfers_list.add_argument(
-        "--dir",
-        metavar="<thư mục>",
-        help="thư mục nhận cần kiểm tra (khi Teleport không chạy)",
-    )
-    transfers_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    transfers_list.set_defaults(handler=cmd_transfers_list, _parser=transfers_list)
-
-    transfers_cancel = transfers_sub.add_parser("cancel", help="hủy một hoặc toàn bộ lượt truyền đang dở")
-    transfers_cancel.add_argument(
-        "transfer",
-        nargs="?",
-        metavar="<mã lượt>",
-        help="tiền tố mã lượt truyền (tối thiểu 4 ký tự hex)",
-    )
-    transfers_cancel.add_argument(
-        "--all",
-        action="store_true",
-        dest="cancel_all",
-        help="hủy toàn bộ lượt truyền đang dở",
-    )
-    transfers_cancel.add_argument(
-        "--dir",
-        metavar="<thư mục>",
-        help="thư mục nhận cần xử lý (khi Teleport không chạy)",
-    )
-    transfers_cancel.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    transfers_cancel.set_defaults(handler=cmd_transfers_cancel, _parser=transfers_cancel)
-
-    guest = sub.add_parser("guest", help="mở chế độ khách chia sẻ tệp qua Web QR với điện thoại")
-    guest.add_argument(
-        "files",
-        nargs="*",
-        metavar="<file>",
-        help="các file trên máy tính muốn chia sẻ cho điện thoại",
-    )
-    guest.add_argument(
-        "--dir",
-        dest="receive_dir",
-        metavar="<thư mục>",
-        help="thư mục lưu tệp nhận từ điện thoại",
-    )
-    guest.add_argument("--ip", metavar="<ip>", help="chỉ định địa chỉ IP card mạng hiển thị trong mã QR")
-    guest.add_argument("--port", type=int, default=0, help="cổng TCP (mặc định ngẫu nhiên)")
-    guest.add_argument(
-        "--timeout",
-        type=float,
-        default=600.0,
-        help="thời gian tự đóng khi không hoạt động (giây, mặc định 600)",
-    )
-    guest.add_argument(
-        "--scope",
-        choices=("both", "receive_only", "send_only"),
-        default="both",
-        help="phạm vi quyền của phiên khách (both, receive_only, send_only)",
-    )
-    guest.add_argument(
-        "--one-shot",
-        action="store_true",
-        help="tự đóng phiên sau đúng một lượt tải lên hoặc tải về",
-    )
-    guest.add_argument("--wifi-ssid", metavar="<ssid>", help="tạo thêm mã QR Wi-Fi trước mã QR kết nối")
-    guest.add_argument(
-        "--wifi-password", default="", metavar="<mật khẩu>", help="mật khẩu Wi-Fi cho mã QR Wi-Fi"
-    )
-    guest.add_argument(
-        "--wifi-security",
-        choices=("WPA", "WEP", "nopass"),
-        default="WPA",
-        help="kiểu bảo mật Wi-Fi (WPA, WEP, nopass; mặc định WPA)",
-    )
-    guest.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    guest.set_defaults(handler=cmd_guest)
-
-    receipt = sub.add_parser("receipt", help="liệt kê và xác minh biên lai truyền tệp có chữ ký")
-    receipt_sub = receipt.add_subparsers(dest="receipt_command", required=True, metavar="<thao tác>")
-
-    receipt_verify = receipt_sub.add_parser("verify", help="xác minh chữ ký và tệp của một biên lai")
-    receipt_verify.add_argument("path", metavar="<file>", help="đường dẫn tới tệp .teleport-receipt.json")
-    receipt_verify.add_argument("--dir", metavar="<thư mục>", help="thư mục chứa tệp để đối chiếu nội dung")
-    receipt_verify.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    receipt_verify.set_defaults(handler=cmd_receipt_verify, _parser=receipt_verify)
-
-    receipt_list = receipt_sub.add_parser("list", help="liệt kê các biên lai đã lưu")
-    receipt_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    receipt_list.set_defaults(handler=cmd_receipt_list, _parser=receipt_list)
-
-    routing_p = sub.add_parser("routing", help="quản lý quy tắc phân loại thư mục nhận tự động")
-    routing_sub = routing_p.add_subparsers(dest="routing_command", required=True, metavar="<thao tác>")
-
-    routing_list = routing_sub.add_parser("list", help="liệt kê quy tắc phân loại thư mục nhận")
-    routing_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    routing_list.set_defaults(handler=cmd_routing_list)
-
-    routing_add = routing_sub.add_parser("add", help="thêm quy tắc phân loại thư mục nhận mới")
-    routing_add.add_argument("--name", required=True, metavar="<tên>", help="tên gợi nhớ cho quy tắc")
-    routing_add.add_argument(
-        "--dest", required=True, metavar="<thư mục>", help="thư mục đích khi khớp quy tắc"
-    )
-    routing_add.add_argument(
-        "--from",
-        dest="from_device",
-        default=None,
-        metavar="<thiết bị>",
-        help="chỉ áp dụng khi nhận từ thiết bị này",
-    )
-    routing_add.add_argument(
-        "--pattern",
-        action="append",
-        metavar="<mẫu>",
-        help="mẫu tên tệp (ví dụ *.mp4, *.pdf); lặp lại hoặc cách nhau bằng dấu phẩy",
-    )
-    routing_add.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    routing_add.set_defaults(handler=cmd_routing_add)
-
-    routing_remove = routing_sub.add_parser("remove", help="xóa một quy tắc phân loại theo mã")
-    routing_remove.add_argument("rule_id", metavar="<mã>", help="mã hoặc tiền tố mã quy tắc")
-    routing_remove.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    routing_remove.set_defaults(handler=cmd_routing_remove)
-
-    watch_p = sub.add_parser("watch", help="quản lý cổng thư mục đẩy tự động một chiều")
-    watch_sub = watch_p.add_subparsers(dest="watch_command", required=True, metavar="<thao tác>")
-
-    watch_list = watch_sub.add_parser("list", help="liệt kê các cổng đẩy tự động")
-    watch_list.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    watch_list.set_defaults(handler=cmd_watch_list)
-
-    watch_add = watch_sub.add_parser("add", help="thêm cổng thư mục đẩy tự động mới")
-    watch_add.add_argument("--name", required=True, metavar="<tên>", help="tên gợi nhớ cho cổng đẩy")
-    watch_add.add_argument("--dir", required=True, metavar="<thư mục>", help="thư mục nguồn cần theo dõi")
-    watch_add.add_argument("--to", required=True, metavar="<thiết bị>", help="thiết bị tin cậy đích")
-    watch_add.add_argument(
-        "--pattern",
-        action="append",
-        metavar="<mẫu>",
-        help="lọc theo mẫu tên tệp (ví dụ *.mp4, *.apk); bỏ trống để gửi mọi tệp mới",
-    )
-    watch_add.add_argument("--recursive", action="store_true", help="theo dõi cả thư mục con bên trong")
-    watch_add.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    watch_add.set_defaults(handler=cmd_watch_add)
-
-    watch_remove = watch_sub.add_parser("remove", help="xóa một cổng đẩy tự động theo mã")
-    watch_remove.add_argument("portal_id", metavar="<mã>", help="mã hoặc tiền tố mã cổng đẩy")
-    watch_remove.add_argument("--json", action="store_true", help="in kết quả dạng JSON")
-    watch_remove.set_defaults(handler=cmd_watch_remove)
-
-    return parser
 
 
 def main(argv: list[str] | None = None) -> int:

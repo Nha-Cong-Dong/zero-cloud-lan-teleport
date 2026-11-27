@@ -185,6 +185,7 @@ class BubbleAnim:
     flash_at: float | None = None
     bar: ProgressTween | None = None
     bar_px: int = -1  # bề ngang phần đã chạy lần vẽ trước (px); chỉ vẽ lại thanh khi đổi
+    shimmer: bool = False
 
     def active(self, now: float) -> bool:
         """Còn gì đang chuyển động lúc `now`."""
@@ -199,7 +200,8 @@ class BubbleAnim:
     def empty(self) -> bool:
         """Không còn mốc nào và không còn tween."""
         return (
-            self.reveal_at is None
+            not self.shimmer
+            and self.reveal_at is None
             and self.shake_at is None
             and self.done_at is None
             and self.flash_at is None
@@ -283,6 +285,7 @@ class ThreadMotion(QObject):
         self._states: dict[QWidget, BubbleAnim] = {}
         self._effects: dict[QWidget, tuple[QWidget, _MotionEffect]] = {}
         self._bars: dict[QWidget, QWidget] = {}
+        self._shimmer_t0: float | None = None
         self._driver = FrameDriver(thread, self.tick, self._settle_all)
 
     @property
@@ -348,13 +351,45 @@ class ThreadMotion(QObject):
         bar.update()
 
     def stop_progress(self, bubble: QWidget) -> None:
-        """Bỏ tween thanh của `bubble` (lượt kết thúc)."""
+        """Bỏ tween thanh và vệt sáng của `bubble` (lượt kết thúc)."""
         st = self._states.get(bubble)
         self._bars.pop(bubble, None)
-        if st is not None and st.bar is not None:
+        if st is not None:
             st.bar = None
             st.bar_px = -1
+            st.shimmer = False
             self._drop_if_empty(bubble)
+        if not any(s.active(_now()) for s in self._states.values()):
+            self._shimmer_t0 = None
+            self._driver.stop()
+
+    def set_shimmer(self, bubble: QWidget, bar: QWidget, active: bool) -> None:
+        """Bật/tắt vệt sáng chạy dọc thanh tiến độ khi tween tiến độ đang chạy."""
+        if active:
+            if not self._driver.running:
+                return
+            st = self._states.setdefault(bubble, BubbleAnim())
+            st.shimmer = True
+            self._bars[bubble] = bar
+            if self._shimmer_t0 is None:
+                self._shimmer_t0 = _now()
+            return
+        cur = self._states.get(bubble)
+        if cur is not None and cur.shimmer:
+            cur.shimmer = False
+            self._drop_if_empty(bubble)
+            if not any(s.active(_now()) for s in self._states.values()):
+                self._shimmer_t0 = None
+                self._driver.stop()
+            if isValid(bar):
+                bar.update()
+
+    def shimmer_phase(self, bubble: QWidget) -> float | None:
+        """Pha 0…1 của vệt sáng thanh tiến độ, hay None nếu không đang chảy."""
+        st = self._states.get(bubble)
+        if st is None or not st.shimmer or self._shimmer_t0 is None or not self._driver.running:
+            return None
+        return ((_now() - self._shimmer_t0) % 1500.0) / 1500.0
 
     def done(self, bubble: QWidget) -> bool:
         """Lượt xong: dấu tích quét lộ, nền phủ `success` rồi dịu về."""
@@ -461,16 +496,20 @@ class ThreadMotion(QObject):
                 st.flash_at = None
         if paint:
             widget.update()
-        if st.bar is not None:
+        if st.bar is not None or st.shimmer:
             bar = self._bars.get(widget)
             if bar is None or not isValid(bar) or bar.isHidden():
                 st.bar = None
                 st.bar_px = -1
+                st.shimmer = False
                 self._bars.pop(widget, None)
             else:
-                px = round(bar.width() * st.bar.value_at(now) / BAR_MAX)
-                if px != st.bar_px:
-                    st.bar_px = px
+                if st.bar is not None:
+                    px = round(bar.width() * st.bar.value_at(now) / BAR_MAX)
+                    if px != st.bar_px or st.shimmer:
+                        st.bar_px = px
+                        bar.update()
+                else:
                     bar.update()
 
     # -- Bên trong ------------------------------------------------------------------------------
@@ -531,6 +570,7 @@ class ThreadMotion(QObject):
         widgets = list(self._states)
         self._states.clear()
         self._bars.clear()
+        self._shimmer_t0 = None
         for widget in widgets:
             self._repaint(widget)
         for bar in bars:

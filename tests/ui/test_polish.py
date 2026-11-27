@@ -911,7 +911,7 @@ def test_text_labels_stay_mouse_selectable_and_tabbable(window, tmp_path):
     for lb in labels:
         flags = lb.textInteractionFlags()
         assert flags & Qt.TextInteractionFlag.TextSelectableByMouse, lb.objectName()
-        assert lb.focusPolicy() == Qt.FocusPolicy.StrongFocus, lb.objectName()
+        assert lb.focusPolicy() == Qt.FocusPolicy.TabFocus, lb.objectName()
         assert lb.accessibleName(), lb.objectName()
 
 

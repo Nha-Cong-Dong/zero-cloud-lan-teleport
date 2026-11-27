@@ -1294,7 +1294,7 @@ def test_l15_labels_are_plain_and_not_keyboard_selectable(window, tmp_path):
     assert bad == []
     for label in (window.name_label, window.address_label):
         assert label.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByMouse, label.objectName()
-        assert label.focusPolicy() == Qt.FocusPolicy.StrongFocus, label.objectName()
+        assert label.focusPolicy() == Qt.FocusPolicy.TabFocus, label.objectName()
 
 
 # =================================================================================================

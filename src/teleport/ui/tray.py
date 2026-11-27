@@ -147,6 +147,20 @@ class SendTarget:
     online: bool
 
 
+_notifications_enabled: bool = True
+
+
+def notifications_enabled() -> bool:
+    """Chế độ hiện bóng thoại thông báo ngoài khay hệ thống hiện tại."""
+    return _notifications_enabled
+
+
+def set_notifications_enabled(enabled: bool) -> None:
+    """Bật/tắt bóng thoại thông báo thường ở khay hệ thống."""
+    global _notifications_enabled
+    _notifications_enabled = bool(enabled)
+
+
 def tray_badge(state: TrayState) -> TrayBadge:
     """Dấu biểu tượng: UNAVAILABLE > PAUSED > CLIPBOARD > TRANSFERRING > NONE; node chưa chạy → NONE.
 
@@ -569,12 +583,15 @@ class Tray(QObject):
     def visible(self) -> bool:
         return self._icon.isVisible()
 
-    def show_message(self, text: str, folder: Path | Reveal | None = None) -> None:
+    def show_message(self, text: str, folder: Path | Reveal | None = None, *, critical: bool = False) -> None:
         """Bóng thoại từ biểu tượng khay (không làm gì nếu không có khay hay biểu tượng đang ẩn).
 
         `folder`: thư mục mở (`Path`) hay file cần hiện (`shell.Reveal`) khi người dùng bấm vào bóng
         thoại, phát lại nguyên qua `message_clicked`; chỉ nhớ khi bóng thoại thật sự hiện.
+        `critical`: luôn hiện kể cả khi đã tắt thông báo khay thường (dùng cho lỗi hỏng lưu trữ).
         """
+        if not critical and not _notifications_enabled:
+            return
         if Tray.is_available() and self._icon.isVisible():
             self._message_folder = folder
             self._icon.showMessage(texts.APP_NAME, text, make_icon())  # logo không dấu, không icon “i”

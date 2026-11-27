@@ -1007,3 +1007,36 @@ def test_gui_push_clipboard_result_notices(env):
     GuiApp._on_push_clipboard(app_stub, PEER_ID)
     assert len(submits) == 1
     assert env.view.info_bar.level is InfoLevel.WARNING
+
+
+def test_gui_header_clear_history_uses_inline_notice_not_popup(env):
+    from PySide6.QtWidgets import QMessageBox
+
+    from teleport.ui.app import GuiApp
+    from teleport.ui.widgets import InfoLevel
+
+    env.model.reset([dview()])
+    env.view.set_device(PEER_ID)
+    calls: list[tuple] = []
+    host = SimpleNamespace(call=lambda fn, on_done: calls.append((fn, on_done)))
+    app_stub = SimpleNamespace(
+        host=host,
+        _quitting=False,
+        transfers=SimpleNamespace(view=env.view),
+        _peer_label=lambda _dev: PEER,
+        _clear_device_history_now=None,
+        _on_clear_device_history_done=lambda *_a: None,
+    )
+    app_stub._clear_device_history_now = lambda dev: GuiApp._clear_device_history_now(app_stub, dev)
+
+    GuiApp._on_header_clear_history(app_stub, PEER_ID)
+    assert env.view.findChildren(QMessageBox) == []
+    assert env.view.info_bar.is_open
+    assert env.view.info_bar.level is InfoLevel.WARNING
+    assert PEER in env.view.info_bar.title
+    assert env.view.info_bar.action_button.isVisible()
+    assert calls == []
+
+    env.view.info_bar.action_button.click()
+    assert not env.view.info_bar.is_open
+    assert len(calls) == 1

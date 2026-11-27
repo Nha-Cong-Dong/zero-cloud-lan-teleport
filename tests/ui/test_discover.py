@@ -834,7 +834,7 @@ def test_texts_and_accessible_names(ui):
     assert hint.text() == HINT
     assert hint.property(theme.TONE_PROPERTY) == "muted"
     assert hint.textFormat() == Qt.TextFormat.PlainText
-    assert hint.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    assert hint.focusPolicy() == Qt.FocusPolicy.TabFocus
     assert hint.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByMouse
     assert page.wait_button.text().replace("&", "") == WAIT
     assert page.empty_label.text() == no_devices_text()
@@ -878,15 +878,15 @@ def test_empty_label_only_when_no_device_is_shown(ui):
 
 def test_empty_label_is_reachable_by_tab(ui):
     """Mục 2.8: `empty_label` nằm trong chuỗi Tab khi hiện (QLabel chọn được bằng chuột mặc định chỉ
-    ClickFocus: phải đặt StrongFocus **sau** `setTextInteractionFlags`)."""
-    assert ui.page.empty_label.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    ClickFocus: phải đặt TabFocus **sau** `setTextInteractionFlags`)."""
+    assert ui.page.empty_label.focusPolicy() == Qt.FocusPolicy.TabFocus
 
 
-def test_page_does_not_accept_drops(ui):
+def test_list_does_not_accept_drops_while_bubbles_do(ui):
     ui.load([view("May-1")])
     assert not ui.page.list_view.dragEnabled()
     assert not ui.page.list_view.acceptDrops()
-    assert not bubble_of(ui.page, view("May-1").device_id).acceptDrops()
+    assert bubble_of(ui.page, view("May-1").device_id).acceptDrops()
 
 
 # =================================================================================================
@@ -2105,3 +2105,102 @@ def test_language_change_retranslates_page_and_bubbles(ui):
         QCoreApplication.removeTranslator(translator)
     ui.qtbot.waitUntil(lambda: page.header.title_label.text() == TITLE, timeout=3000)
     assert PREFIX not in page.canvas.bubbles()[0].accessibleName()
+
+
+# =================================================================================================
+# Wave 3: Kéo thả vào bong bóng, quét lại, pop-in, đường nối, âm thanh
+# =================================================================================================
+
+
+def test_bubble_drop_to_send_emits_and_plays_drop_lock(ui, tmp_path, monkeypatch):
+    from PySide6.QtCore import QMimeData, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+
+    from teleport.ui import sounds
+    from teleport.ui.sounds import SoundCue
+
+    played: list[SoundCue] = []
+    monkeypatch.setattr(sounds, "play", lambda cue: played.append(cue) or True)
+
+    peer = view("May-Nhan", paired=False, online=True)
+    ui.load([peer])
+    activate(ui.qtbot, ui.page)
+    bubble = bubble_of(ui.page, peer.device_id)
+
+    sample = tmp_path / "send.bin"
+    sample.write_bytes(b"abc")
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(sample))])
+
+    reqs: list[tuple[object, object]] = []
+    ui.page.send_files_requested.connect(lambda v, paths: reqs.append((v, paths)))
+
+    pos = QPointF(bubble.rect().center())
+    enter = QDragEnterEvent(
+        pos, Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    )
+    QApplication.sendEvent(bubble, enter)
+    assert enter.isAccepted()
+    assert bubble.is_drop_hovered
+
+    drop = QDropEvent(
+        pos, Qt.DropAction.CopyAction, mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier
+    )
+    QApplication.sendEvent(bubble, drop)
+    assert drop.isAccepted()
+    assert not bubble.is_drop_hovered
+    assert reqs == [(peer, [sample])]
+    assert SoundCue.DROP_LOCK in played
+
+
+def test_rescan_button_and_center_click_emit_and_ping(ui, waves, monkeypatch):
+    from teleport.ui import sounds
+    from teleport.ui.sounds import SoundCue
+
+    played: list[SoundCue] = []
+    monkeypatch.setattr(sounds, "play", lambda cue: played.append(cue) or True)
+
+    page = ui.page
+    activate(ui.qtbot, page)
+    played.clear()
+
+    rescans: list[bool] = []
+    page.rescan_requested.connect(lambda: rescans.append(True))
+
+    page.rescan_button.click()
+    assert rescans == [True]
+    assert played == [SoundCue.RADAR_PING]
+
+    page.canvas.stop_waves()
+    played.clear()
+    QTest.mouseClick(page.canvas.center_avatar, Qt.MouseButton.LeftButton)
+    assert rescans == [True, True]
+    assert played == [SoundCue.RADAR_PING]
+    assert page.canvas.wave_running
+
+
+def test_new_device_when_visible_plays_device_found_and_tether(ui, monkeypatch):
+    from teleport.ui import motion, sounds
+    from teleport.ui.sounds import SoundCue
+
+    played: list[SoundCue] = []
+    monkeypatch.setattr(sounds, "play", lambda cue: played.append(cue) or True)
+
+    ui.page.hide()
+    ui.load([view("May-1")])
+    ui.page.show()
+    settle(ui.qtbot)
+    assert SoundCue.RADAR_PING in played
+    played.clear()
+
+    ui.model.apply(online(view("May-2")))
+    settle(ui.qtbot)
+    assert SoundCue.DEVICE_FOUND in played
+
+    bubble = bubble_of(ui.page, view("May-2").device_id)
+    bubble.play_reveal()
+    motion.finish_all()
+    assert bubble._reveal == 1.0
+
+    bubble.setFocus(Qt.FocusReason.TabFocusReason)
+    ui.page.canvas.repaint()

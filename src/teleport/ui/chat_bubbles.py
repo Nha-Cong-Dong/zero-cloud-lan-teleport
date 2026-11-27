@@ -121,9 +121,11 @@ mục 8 lấy từ `ui.transfers_view` (ngữ cảnh `"Transfers"`, không chép
 from __future__ import annotations
 
 import datetime
+import math
 import ntpath
 import os
 import weakref
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePath
@@ -132,6 +134,7 @@ from PySide6.QtCore import (
     QCoreApplication,
     QDate,
     QEvent,
+    QPointF,
     QRectF,
     QSignalBlocker,
     QSize,
@@ -145,7 +148,10 @@ from PySide6.QtGui import (
     QFocusEvent,
     QFont,
     QFontMetrics,
+    QLinearGradient,
+    QMouseEvent,
     QPainter,
+    QPainterPath,
     QPaintEvent,
     QPen,
     QPixmap,
@@ -178,6 +184,7 @@ from teleport.app.transfers import (
 from teleport.core.history import HistoryEntry
 from teleport.core.messages import ClipKind
 from teleport.ui import chat_motion, icons, offer, shell, texts, theme
+from teleport.ui.buttons import AnimatedButton
 from teleport.ui.chat_motion import ThreadMotion, check_fraction, flash_extra, tint_alpha
 from teleport.ui.offer import OfferEntry, OfferPhase
 from teleport.ui.send import printable
@@ -538,6 +545,7 @@ class BubbleBar(QProgressBar):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.display_fraction: Callable[[], float | None] | None = None
+        self.shimmer_phase: Callable[[], float | None] | None = None
         self.setRange(0, BAR_MAX)
         self.setValue(0)
         self.setTextVisible(False)
@@ -548,7 +556,8 @@ class BubbleBar(QProgressBar):
         span = max(1, self.maximum() - self.minimum())
         real = max(0, self.value() - self.minimum()) / span
         shown = self.display_fraction() if self.display_fraction is not None else None
-        paint_thin_bar(self, real if shown is None else min(real, shown))
+        shimmer = self.shimmer_phase() if self.shimmer_phase is not None else None
+        paint_thin_bar(self, real if shown is None else min(real, shown), shimmer=shimmer)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -556,14 +565,20 @@ class BubbleBar(QProgressBar):
             self.update()
 
 
-def paint_thin_bar(widget: QWidget, fraction: float) -> None:
-    """Vẽ thanh mảnh bo tròn trên cả `widget`: rãnh `track`, phần `fraction` (0…1) màu `accent_strong`.
+def paint_thin_bar(
+    widget: QWidget,
+    fraction: float,
+    color: QColor | None = None,
+    shimmer: float | None = None,
+) -> None:
+    """Vẽ thanh mảnh bo tròn trên cả `widget`: rãnh `track`, phần `fraction` (0…1) màu nhấn.
 
     Dùng chung cho `BubbleBar` và thanh đếm ngược của hộp ghép đôi (`ui.pairing`)."""
     t = theme.tokens_for(widget)
     rect = QRectF(widget.rect())
     radius = rect.height() / 2
     done = rect.width() * min(1.0, max(0.0, fraction))
+    fill = color if color is not None else t.accent_strong
     painter = QPainter(widget)
     try:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -571,12 +586,120 @@ def paint_thin_bar(widget: QWidget, fraction: float) -> None:
         painter.setBrush(t.track)
         painter.drawRoundedRect(rect, radius, radius)
         if done > 0:
-            painter.setBrush(t.accent_strong)
-            painter.drawRoundedRect(
-                QRectF(rect.left(), rect.top(), max(done, rect.height()), rect.height()), radius, radius
-            )
+            filled = QRectF(rect.left(), rect.top(), max(done, rect.height()), rect.height())
+            painter.setBrush(fill)
+            painter.drawRoundedRect(filled, radius, radius)
+            if shimmer is not None and filled.width() > rect.height() * 2:
+                clip = QPainterPath()
+                clip.addRoundedRect(filled, radius, radius)
+                painter.save()
+                painter.setClipPath(clip)
+                band = max(24.0, rect.width() * 0.25)
+                cx = filled.left() - band + (filled.width() + 2 * band) * (shimmer % 1.0)
+                grad = QLinearGradient(cx - band / 2, 0.0, cx + band / 2, 0.0)
+                edge = QColor(t.surface_raised)
+                edge.setAlpha(0)
+                mid = QColor(t.surface_raised)
+                mid.setAlpha(72)
+                grad.setColorAt(0.0, edge)
+                grad.setColorAt(0.5, mid)
+                grad.setColorAt(1.0, edge)
+                painter.setBrush(grad)
+                painter.drawRect(filled)
+                painter.restore()
     finally:
         painter.end()
+
+
+class _ThumbLabel(QLabel):
+    """Nhãn ảnh thu nhỏ trong bong bóng: nháy tay trỏ và phát `clicked` khi bấm chuột trái."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self.cursor().shape() == Qt.CursorShape.PointingHandCursor
+        ):
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self.cursor().shape() == Qt.CursorShape.PointingHandCursor
+            and self.rect().contains(event.position().toPoint())
+        ):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class _SpeedSparkline(QWidget):
+    """Đồ thị tốc độ nhỏ gọn (24 mẫu gần nhất) trong bong bóng đang truyền."""
+
+    HEIGHT = 24
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("transferSpeedSparkline")
+        self.setFixedHeight(self.HEIGHT)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._samples: deque[float] = deque(maxlen=24)
+        self.setVisible(False)
+
+    def samples(self) -> tuple[float, ...]:
+        return tuple(self._samples)
+
+    def push(self, bytes_per_second: float) -> None:
+        self._samples.append(max(0.0, float(bytes_per_second)))
+        self.update()
+
+    def clear(self) -> None:
+        self._samples.clear()
+        self.setVisible(False)
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        if len(self._samples) < 2 or self.width() <= 4 or self.height() <= 4:
+            return
+        t = theme.tokens_for(self)
+        peak = max(self._samples)
+        top = 3.0
+        bottom = float(self.height() - 2)
+        span_y = max(1.0, bottom - top)
+        w = float(self.width() - 2)
+        n = len(self._samples)
+        pts = [
+            QPointF(
+                1.0 + w * idx / max(1, n - 1),
+                bottom - (s / peak) * span_y if peak > 0 else bottom,
+            )
+            for idx, s in enumerate(self._samples)
+        ]
+        line = QPainterPath(pts[0])
+        for pt in pts[1:]:
+            line.lineTo(pt)
+        area = QPainterPath(line)
+        area.lineTo(QPointF(pts[-1].x(), bottom))
+        area.lineTo(QPointF(pts[0].x(), bottom))
+        area.closeSubpath()
+
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            fill = QColor(t.accent_strong)
+            fill.setAlphaF(0.14)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawPath(area)
+            painter.setPen(QPen(t.accent_strong, 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(line)
+        finally:
+            painter.end()
 
 
 class TimeSeparator(QLabel):
@@ -600,19 +723,22 @@ class _Bubble(ChatBubble):
     vẽ chuyển động (`motion`: `ThreadMotion` của luồng, `ui.chat` gán)."""
 
     focus_entered = Signal()
+    thumbnail_clicked = Signal(Path)
     motion: ThreadMotion | None = None
 
     def __init__(self, side: Side, parent: QWidget | None, *, at: float) -> None:
         super().__init__(side, parent)
         self.at = at
+        self._thumb_path: Path | None = None
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setMinimumWidth(BUBBLE_MIN_WIDTH)
         self.icon_label = _IconLabel(_ICON)
-        self.thumb_label = QLabel(self)
+        self.thumb_label = _ThumbLabel(self)
         self.thumb_label.setObjectName("bubbleThumb")
         self.thumb_label.setVisible(False)
         self.thumb_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.thumb_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.thumb_label.clicked.connect(self._on_thumb_clicked)
         self.title_label = _ElidedLabel()
         title_font = self.title_label.font()
         title_font.setWeight(QFont.Weight.DemiBold)
@@ -646,17 +772,27 @@ class _Bubble(ChatBubble):
         self.status_row.addStretch(1)
         self.body().addLayout(self.head)
 
-    def set_thumbnail(self, pixmap: QPixmap | None) -> None:
+    def set_thumbnail(self, pixmap: QPixmap | None, path: Path | None = None) -> None:
         """Hiện ảnh thu nhỏ ở đầu bong bóng khi có pixmap hợp lệ, ngược lại giữ icon loại file."""
         valid = pixmap is not None and not pixmap.isNull()
         if valid and pixmap is not None:
+            self._thumb_path = path
             self.thumb_label.setPixmap(pixmap)
+            self.thumb_label.setCursor(
+                Qt.CursorShape.PointingHandCursor if path is not None else Qt.CursorShape.ArrowCursor
+            )
             self.thumb_label.setVisible(True)
             self.icon_label.setVisible(False)
         else:
+            self._thumb_path = None
             self.thumb_label.clear()
+            self.thumb_label.setCursor(Qt.CursorShape.ArrowCursor)
             self.thumb_label.setVisible(False)
             self.icon_label.setVisible(True)
+
+    def _on_thumb_clicked(self) -> None:
+        if self._thumb_path is not None:
+            self.thumbnail_clicked.emit(self._thumb_path)
 
     def searchable_text(self) -> str:
         """Chuỗi chữ thường để lọc tìm nhanh trong luồng chat."""
@@ -763,9 +899,9 @@ class OfferPanel(QWidget):
         self.dir_note.setObjectName("offerPanelDirNote")
         self.always_check = QCheckBox(self)
         self.always_check.setObjectName("offerAlways")
-        self.reject_button = QPushButton(self)
+        self.reject_button = AnimatedButton("", self)
         self.reject_button.setObjectName("offerReject")
-        self.accept_button = QPushButton(self)
+        self.accept_button = AnimatedButton("", self, primary=True)
         self.accept_button.setObjectName("offerAccept")
         self.accept_button.setProperty(theme.PRIMARY_PROPERTY, True)
         for button in (self.change_button, self.reject_button, self.accept_button):
@@ -966,6 +1102,8 @@ class TransferBubble(_Bubble):
         self.head.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignTop)
         self.progress_bar = BubbleBar(self)
         self.progress_bar.display_fraction = _weak_call(self._bar_fraction)
+        self.progress_bar.shimmer_phase = _weak_call(self._bar_shimmer)
+        self.sparkline = _SpeedSparkline(self)
         self.files_list_label = _label(wrap=True, caption=True, tone="muted")
         self.files_list_label.setObjectName("bubbleFilesList")
         self.files_list_label.setVisible(False)
@@ -1004,6 +1142,7 @@ class TransferBubble(_Bubble):
         body.addWidget(self.progress_bar)
         body.addLayout(self.status_row)
         body.addWidget(self.detail_label)
+        body.addWidget(self.sparkline)
         body.addWidget(self.files_list_label)
         body.addLayout(buttons)
         body.addLayout(self.extension_slot)
@@ -1048,6 +1187,10 @@ class TransferBubble(_Bubble):
         if st is None or st.bar is None:
             return None
         return st.bar.value_at(chat_motion._now()) / BAR_MAX
+
+    def _bar_shimmer(self) -> float | None:
+        motion = self.motion
+        return None if motion is None else motion.shimmer_phase(self)
 
     def set_resendable(self, on: bool) -> None:
         """Bên điều phối đã nhớ (True) hay bỏ (False) đường dẫn nguồn của lượt này cho “Gửi lại”."""
@@ -1213,6 +1356,18 @@ class TransferBubble(_Bubble):
         self.progress = update
         old_shown = self.shown_bytes
         self.raise_shown(update.shown_bytes, info.total_bytes)
+        speed = float(update.bytes_per_second)
+        active_speed = speed if math.isfinite(speed) and speed > 0 else 0.0
+        if info.status is TransferStatus.TRANSFERRING and not self._is_stalled():
+            self.sparkline.push(active_speed)
+            self.sparkline.setVisible(len(self.sparkline.samples()) >= 2)
+        motion = self.motion
+        if motion is not None:
+            motion.set_shimmer(
+                self,
+                self.progress_bar,
+                info.status is TransferStatus.TRANSFERRING and active_speed > 0,
+            )
         # App phát tiến độ mỗi nhịp cả khi RECONNECTING đứng yên: chỉ khi dữ liệu thật sự chảy mới bỏ
         # câu tường lửa / câu lượt khôi phục.
         flowing = self.shown_bytes > old_shown or info.status is TransferStatus.TRANSFERRING
@@ -1247,6 +1402,7 @@ class TransferBubble(_Bubble):
         if update.result is TransferResult.DONE:
             self.progress_bar.setValue(BAR_MAX)
         self.progress_bar.setVisible(False)
+        self.sparkline.setVisible(False)
         self.cancel_button.setEnabled(False)
         self.cancel_button.setVisible(False)
         self.open_button.setVisible(

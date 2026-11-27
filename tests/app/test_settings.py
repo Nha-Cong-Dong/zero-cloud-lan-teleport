@@ -1074,3 +1074,42 @@ def test_theme_and_accent_not_left_in_extra(cfg):
     s = Settings.load(cfg)
     assert (s.theme, s.accent) == ("dark", "rose")
     assert set(s.extra) <= {"version"}
+
+
+def test_auto_dismiss_notices_defaults_true_and_persists_false(cfg, caplog):
+    caplog.set_level(logging.DEBUG)
+    s = Settings()
+    assert s.auto_dismiss_notices is True
+    s.save(cfg)
+    assert "auto_dismiss_notices" not in on_disk(cfg)
+
+    dataclasses.replace(s, auto_dismiss_notices=False).save(cfg)
+    assert on_disk(cfg)["auto_dismiss_notices"] is False
+    loaded = Settings.load(cfg)
+    assert loaded.auto_dismiss_notices is False
+    assert warnings_of(caplog) == []
+
+    # Null trong JSON cho trường bool phải bị từ chối như các bool khác
+    write(cfg, '{"version": 1, "auto_dismiss_notices": null}')
+    fallback = Settings.load(cfg)
+    assert fallback.auto_dismiss_notices is True
+    assert any("auto_dismiss_notices" in r.getMessage() for r in warnings_of(caplog))
+
+
+def test_tray_notifications_defaults_true_and_persists_false(cfg, caplog):
+    caplog.set_level(logging.DEBUG)
+    s = Settings()
+    assert s.tray_notifications is True
+    s.save(cfg)
+    assert "tray_notifications" not in on_disk(cfg)
+
+    dataclasses.replace(s, tray_notifications=False).save(cfg)
+    assert on_disk(cfg)["tray_notifications"] is False
+    loaded = Settings.load(cfg)
+    assert loaded.tray_notifications is False
+    assert warnings_of(caplog) == []
+
+    write(cfg, '{"version": 1, "tray_notifications": null}')
+    fallback = Settings.load(cfg)
+    assert fallback.tray_notifications is True
+    assert any("tray_notifications" in r.getMessage() for r in warnings_of(caplog))

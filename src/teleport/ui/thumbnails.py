@@ -15,9 +15,13 @@ from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, Signal
-from PySide6.QtGui import QImage, QImageReader, QPixmap
+from PySide6.QtCore import QCoreApplication, QObject, QRunnable, QSize, Qt, QThreadPool, Signal
+from PySide6.QtGui import QImage, QImageReader, QKeyEvent, QPixmap, QResizeEvent
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from shiboken6 import isValid
+
+from teleport.ui import texts, theme
+from teleport.ui.buttons import AnimatedButton
 
 THUMB_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".ico"})
 THUMB_MAX_FILE_BYTES = 25 * 1024 * 1024  # 25 MiB: tránh tốn RAM với ảnh RAW/PNG khổng lồ
@@ -183,3 +187,100 @@ class ThumbnailLoader(QObject):
         self._pool.waitForDone(500)
         self._pending.clear()
         self._cache.clear()
+
+
+class QuickPreviewDialog(QDialog):
+    """Cửa sổ xem trước ảnh nhanh không chặn (bấm ảnh thu nhỏ trong bong bóng chat)."""
+
+    def __init__(
+        self,
+        path: Path,
+        parent: QWidget | None = None,
+        *,
+        on_open: Callable[[Path], None] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("quickPreviewDialog")
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._path = path
+        self._on_open = on_open
+        self._source = self._load_source(path)
+
+        t = QCoreApplication.translate
+        self.setWindowTitle(texts.file_label(path.name))
+        self.setMinimumSize(420, 320)
+        self.resize(640, 480)
+
+        self.image_label = QLabel(self)
+        self.image_label.setObjectName("quickPreviewImage")
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setProperty(theme.SURFACE_PROPERTY, "raised")
+        self.image_label.setMinimumSize(200, 180)
+        if self._source.isNull():
+            self.image_label.setText(t("Chat", "Không xem trước được ảnh."))
+            self.image_label.setProperty(theme.TONE_PROPERTY, "muted")
+
+        self.name_label = QLabel(texts.file_label(path.name), self)
+        self.name_label.setObjectName("quickPreviewName")
+        self.name_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.name_label.setProperty(theme.TONE_PROPERTY, "muted")
+
+        self.open_button = AnimatedButton(t("Chat", "Mở file"), self)
+        self.open_button.setObjectName("quickPreviewOpenBtn")
+        self.open_button.setVisible(on_open is not None)
+        self.open_button.clicked.connect(self._handle_open)
+
+        self.close_button = AnimatedButton(t("Chat", "Đóng"), self, primary=True)
+        self.close_button.setObjectName("quickPreviewCloseBtn")
+        self.close_button.clicked.connect(self.close)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(theme.SPACING[2])
+        footer.addWidget(self.name_label, 1)
+        footer.addWidget(self.open_button)
+        footer.addWidget(self.close_button)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(theme.SPACING[3], theme.SPACING[3], theme.SPACING[3], theme.SPACING[3])
+        root.setSpacing(theme.SPACING[2])
+        root.addWidget(self.image_label, 1)
+        root.addLayout(footer)
+        self._update_pixmap()
+
+    @staticmethod
+    def _load_source(path: Path) -> QPixmap:
+        reader = QImageReader(os.fspath(path))
+        reader.setAutoTransform(True)
+        img = reader.read()
+        if img.isNull():
+            return QPixmap()
+        return QPixmap.fromImage(img)
+
+    def _handle_open(self) -> None:
+        if self._on_open is not None:
+            self._on_open(self._path)
+
+    def _update_pixmap(self) -> None:
+        if self._source.isNull():
+            return
+        size = self.image_label.contentsRect().size()
+        if size.width() <= 0 or size.height() <= 0:
+            size = QSize(580, 360)
+        scaled = self._source.scaled(
+            size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.image_label.setPixmap(scaled)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_pixmap()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)

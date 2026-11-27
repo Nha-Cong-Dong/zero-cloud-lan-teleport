@@ -117,7 +117,16 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from PySide6.QtCore import QCoreApplication, QEvent, QObject, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QFont, QFontMetrics, QPainter, QPaintEvent, QPalette, QPen
+from PySide6.QtGui import (
+    QCloseEvent,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPaintEvent,
+    QPalette,
+    QPen,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QAbstractButton,
     QCheckBox,
@@ -139,9 +148,10 @@ from teleport.app.pairing import PairingFinished, PairingOutcome, PairingPrompt
 from teleport.core import pairing as core_pairing  # WARN_RECENT_CODES đọc lúc dùng
 from teleport.core.pairing import Role
 from teleport.core.pairing_code import format_code
-from teleport.ui import motion, texts, theme
+from teleport.ui import motion, sounds, texts, theme
 from teleport.ui.buttons import AnimatedButton
 from teleport.ui.chat_bubbles import paint_thin_bar, set_tone
+from teleport.ui.sounds import SoundCue
 
 log = logging.getLogger(__name__)
 
@@ -574,7 +584,12 @@ class CountdownBar(QWidget):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         span = max(1, self._maximum - self._minimum)
-        paint_thin_bar(self, (self._value - self._minimum) / span)
+        frac = (self._value - self._minimum) / span
+        t = theme.tokens_for(self)
+        color = t.accent_strong
+        if frac <= 0.3:
+            color = theme.blend(t.accent_strong, t.warning, min(1.0, (0.3 - frac) / 0.3))
+        paint_thin_bar(self, frac, color=color)
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -587,8 +602,38 @@ class CodeLabel(QLabel):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._reveal = 1.0
+        self._revealed_digits = ""
         self.setTextFormat(Qt.TextFormat.PlainText)
         self.setWordWrap(False)
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        d = self.digits()
+        if d is not None and d != self._revealed_digits:
+            if self.isVisible() and motion.should_animate():
+                self._revealed_digits = d
+                self._start_reveal()
+            else:
+                self._reveal = 1.0
+        elif d is None:
+            self._revealed_digits = ""
+            self._reveal = 1.0
+
+    def _start_reveal(self) -> None:
+        self._reveal = 0.0
+        motion.animate_value(self, 0.0, 1.0, motion.NORMAL, self._set_reveal, key="code_reveal")
+
+    def _set_reveal(self, value: object) -> None:
+        self._reveal = max(0.0, min(1.0, float(value) if isinstance(value, (int, float)) else 1.0))
+        self.update()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        d = self.digits()
+        if d is not None and d != self._revealed_digits and motion.should_animate():
+            self._revealed_digits = d
+            self._start_reveal()
 
     def digits(self) -> str | None:
         """6 chữ số ASCII của mã, hay None khi chữ không đúng dạng (vẽ như `QLabel` thường)."""
@@ -639,11 +684,20 @@ class CodeLabel(QLabel):
                 if index == 3:
                     x += gap  # khoảng giữa hai nhóm gấp đôi
                 rect = QRectF(x + 0.5, top + 0.5, box_w - 1, box_h - 1)
+                if self._reveal < 1.0:
+                    local = max(0.0, min(1.0, (self._reveal - index * 0.08) / 0.52))
+                else:
+                    local = 1.0
+                painter.save()
+                if local < 1.0:
+                    painter.setOpacity(painter.opacity() * local)
+                    painter.translate(0.0, (1.0 - local) * motion.MAX_SHIFT_PX)
                 painter.setPen(QPen(t.border_strong, 1))
                 painter.setBrush(t.surface_raised)
                 painter.drawRoundedRect(rect, theme.RADIUS_CARD, theme.RADIUS_CARD)
                 painter.setPen(t.text)
                 painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), digit)
+                painter.restore()
                 x += box_w + gap
         finally:
             painter.end()
@@ -1332,6 +1386,7 @@ class PairingController(QObject):
             except Exception:
                 log.exception("không hiện được bóng thoại ghép đôi")
         _show(dialog)
+        sounds.play(SoundCue.OFFER_INCOMING)
         self.prompt_opened.emit(sid)
 
     def _decide(self, generation: int, host: Any, session_id: int, accepted: bool) -> None:
@@ -1364,11 +1419,17 @@ class PairingController(QObject):
         self.finished.emit(result)
         target = pairing.target if (pairing is not None and matched) else None
         if outcome_text(result, target=target) is not None:
+            if result.outcome is PairingOutcome.PAIRED:
+                sounds.play(SoundCue.PAIR_SUCCESS)
+            else:
+                sounds.play(SoundCue.ERROR_SOFT)
             self._show_result(
                 _outcome_fn(result, target),
                 ok=result.outcome is PairingOutcome.PAIRED,
                 retry=self._retry_for(result, pairing if matched else None),
             )
+        elif result.outcome is PairingOutcome.PAIRED:
+            sounds.play(SoundCue.PAIR_SUCCESS)
         if result.outcome is PairingOutcome.PAIRED:
             device_id = result.device.device_id if result.device is not None else result.peer_device_id
             if device_id is not None:

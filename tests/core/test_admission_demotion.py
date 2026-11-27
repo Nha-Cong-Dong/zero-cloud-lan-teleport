@@ -1274,7 +1274,14 @@ def test_demoted_table_cap_drops_entry_expiring_first(cap, ops):
     """Bảng hạ ≤ `MAX_DEMOTED_IPS`; đầy thì bỏ mục hết hạn sớm nhất, mục hết hạn thì bỏ: tập IP bị hạ
     luôn là các IP có hạn muộn nhất (chưa hết hạn), tối đa `cap` IP."""
     with pytest.MonkeyPatch.context() as mp:
-        limits = {**RELAXED_RATES, "MAX_DEMOTED_IPS": cap, "PRIORITY_TTL": CAP_TTL, "PRIORITY_STRIKES": 0}
+        limits = {
+            **RELAXED_RATES,
+            "MAX_DEMOTED_IPS": cap,
+            "PRIORITY_TTL": CAP_TTL,
+            "PRIORITY_STRIKES": 0,
+            "DEVICE_PRIORITY_STRIKES": 10**9,
+            "MAX_PRIORITY_IPS_PER_DEVICE": 10**9,
+        }
         for name, value in limits.items():
             mp.setattr(admission, name, value)
         gate = AdmissionGate()

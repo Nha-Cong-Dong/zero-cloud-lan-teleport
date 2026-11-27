@@ -78,6 +78,7 @@ class Scene(StrEnum):
     NO_DEVICES = "no_devices"
     NO_TRANSFERS = "no_transfers"
     WELCOME = "welcome"
+    WEB_GUEST = "web_guest"
 
 
 _ICON_SCENES = {
@@ -92,6 +93,7 @@ _BASE: dict[Scene, tuple[float, float]] = {
     Scene.NO_DEVICES: (160.0, 96.0),
     Scene.NO_TRANSFERS: (160.0, 96.0),
     Scene.WELCOME: (224.0, 96.0),
+    Scene.WEB_GUEST: (160.0, 96.0),
 }
 
 
@@ -452,11 +454,40 @@ def _paint_welcome(painter: QPainter, t: theme.Tokens, p: float) -> None:
             _check_badge(painter, t, QPointF(right_x + laptop_w / 2 - 1.0, top - 1.0), 8.5)
 
 
+def _paint_web_guest(painter: QPainter, t: theme.Tokens, p: float) -> None:
+    with _Layer(painter, _phase(p, 0.0, 0.28), 0.0, 0.0):
+        _blob(painter, t, QRectF(14, 12, 132, 72), 36.0)
+    with _Layer(painter, _phase(p, 0.06, 0.32), -1.0, 0.0):
+        _laptop(painter, t, 44.0, 38.0, 34.0, 22.0)
+    # Điện thoại và khung QR tối giản bên phải.
+    phone = QRectF(104.0, 24.0, 26.0, 44.0)
+    with _Layer(painter, _phase(p, 0.16, 0.34), 1.0, 0.0):
+        painter.setPen(_pen(t.text_muted, 1.5))
+        painter.setBrush(t.surface_raised)
+        painter.drawRoundedRect(phone, 4.0, 4.0)
+        qr_box = QRectF(phone.left() + 6.0, phone.top() + 10.0, 14.0, 14.0)
+        painter.setPen(_pen(t.accent_strong, 1.5))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(qr_box)
+        painter.drawRect(QRectF(qr_box.left() + 3.0, qr_box.top() + 3.0, 3.0, 3.0))
+        painter.drawRect(QRectF(qr_box.right() - 6.0, qr_box.top() + 3.0, 3.0, 3.0))
+        painter.drawRect(QRectF(qr_box.left() + 3.0, qr_box.bottom() - 6.0, 3.0, 3.0))
+    # Đường nối nét đứt từ máy tính sang điện thoại.
+    reach = _phase(p, 0.48, 0.4, _in_out_cubic)
+    if reach > 0:
+        painter.save()
+        painter.setClipRect(QRectF(65.0, 34.0, 35.0 * reach, 24.0))
+        painter.setPen(_pen(t.accent_strong, 2.0, dash=(3.0, 3.5)))
+        painter.drawLine(QPointF(66.0, 46.0), QPointF(98.0, 46.0))
+        painter.restore()
+
+
 _PAINTERS: dict[Scene, Callable[[QPainter, theme.Tokens, float], None]] = {
     Scene.NOT_PAIRED: _paint_not_paired,
     Scene.NO_DEVICES: _paint_no_devices,
     Scene.NO_TRANSFERS: _paint_no_transfers,
     Scene.WELCOME: _paint_welcome,
+    Scene.WEB_GUEST: _paint_web_guest,
 }
 
 

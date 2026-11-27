@@ -400,7 +400,10 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           <div class="peer-info" id="peerInfo">Kết nối nội bộ trực tiếp</div>
         </div>
       </div>
-      <button class="lang-btn" id="langBtn" onclick="toggleLang()">EN</button>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <button type="button" class="lang-btn" id="soundBtn" onclick="toggleSound()" aria-label="Âm thanh" style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;padding:0;"></button>
+        <button class="lang-btn" id="langBtn" onclick="toggleLang()">EN</button>
+      </div>
     </header>
 
     <div class="card banner-expired hidden" id="expiredBanner"></div>
@@ -518,6 +521,69 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
     let sessionExpired = false;
     let activeTab = 'upload';
     let peerDeviceName = '';
+    let soundEnabled = true;
+    try { soundEnabled = localStorage.getItem('zcl_sound') !== '0'; } catch (_) {}
+    let audioCtx = null;
+
+    function unlockSfx() {
+      if (!soundEnabled) return null;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      if (!audioCtx) {
+        try { audioCtx = new AC(); } catch (_) { return null; }
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      return audioCtx;
+    }
+
+    function playSfx(kind) {
+      if (!soundEnabled) return;
+      const ctx = unlockSfx();
+      if (!ctx || ctx.state !== 'running') return;
+      const notes = kind === 'done' ? [[523, 0.08], [659, 0.12]]
+        : kind === 'err' ? [[311, 0.14]]
+        : [[587, 0.07]];
+      let at = ctx.currentTime;
+      for (const [freq, dur] of notes) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, at);
+        gain.gain.setValueAtTime(0.001, at);
+        gain.gain.linearRampToValueAtTime(0.08, at + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, at + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(at);
+        osc.stop(at + dur + 0.01);
+        at += dur * 0.72;
+      }
+    }
+
+    function updateSoundBtn() {
+      const btn = document.getElementById('soundBtn');
+      if (!btn) return;
+      btn.title = currentLang === 'vi'
+        ? (soundEnabled ? 'Tắt âm thông báo' : 'Bật âm thông báo')
+        : (soundEnabled ? 'Mute sound' : 'Unmute sound');
+      btn.setAttribute('aria-label', btn.title);
+      btn.style.opacity = soundEnabled ? '1' : '0.55';
+      btn.innerHTML = soundEnabled
+        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>'
+        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>';
+    }
+
+    function toggleSound() {
+      soundEnabled = !soundEnabled;
+      try { localStorage.setItem('zcl_sound', soundEnabled ? '1' : '0'); } catch (_) {}
+      if (soundEnabled) unlockSfx();
+      updateSoundBtn();
+    }
+
+    document.addEventListener('pointerdown', unlockSfx, { once: true });
+    document.addEventListener('keydown', unlockSfx, { once: true });
 
     const I18N = {
       vi: {
@@ -622,6 +688,7 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
       renderDownloadList(lastFiles);
       renderTextList(lastTexts);
       refreshUploadTexts();
+      updateSoundBtn();
     }
 
     function updateUnreadBadges() {
@@ -653,9 +720,12 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
             added += 1;
           }
         }
-        if (added > 0 && activeTab !== 'download') {
-          unreadFiles += added;
-          updateUnreadBadges();
+        if (added > 0) {
+          playSfx('msg');
+          if (activeTab !== 'download') {
+            unreadFiles += added;
+            updateUnreadBadges();
+          }
         }
       }
       renderDownloadList(incoming);
@@ -673,9 +743,12 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
             if (countUnread && m.sender === 'host') added += 1;
           }
         }
-        if (added > 0 && activeTab !== 'text') {
-          unreadTexts += added;
-          updateUnreadBadges();
+        if (added > 0) {
+          playSfx('msg');
+          if (activeTab !== 'text') {
+            unreadTexts += added;
+            updateUnreadBadges();
+          }
         }
       }
       renderTextList(incoming);
@@ -1204,9 +1277,11 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           if (xhr.status >= 200 && xhr.status < 300) {
             entry.loaded = entry.total;
             entry.status = 'done';
+            playSfx('done');
           } else {
             entry.status = 'error';
             entry.lastErr = xhr.statusText || String(xhr.status);
+            playSfx('err');
           }
           renderEntryState(entry);
           resolve();
@@ -1217,6 +1292,7 @@ WEB_GUEST_HTML = """<!DOCTYPE html>
           if (entry.status !== 'canceled') {
             entry.status = 'error';
             entry.lastErr = 'Network';
+            playSfx('err');
           }
           renderEntryState(entry);
           resolve();

@@ -215,3 +215,83 @@ def test_web_guest_page_non_blocking_workflow(qtbot: pytest.FixtureRequest, tmp_
     page.stop_session()
     assert not page.session_active
     page.close_dialogs()
+
+
+def test_web_guest_page_clients_status_sounds_and_drop(
+    qtbot: pytest.FixtureRequest, tmp_path, monkeypatch
+) -> None:
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+
+    from teleport.ui import sounds
+    from teleport.ui.sounds import SoundCue
+    from teleport.ui.web_guest_dialog import WebGuestPage
+
+    played: list[SoundCue] = []
+    monkeypatch.setattr(sounds, "play", lambda cue: played.append(cue) or True)
+
+    mock_host = MagicMock()
+    mock_host.running = True
+    page = WebGuestPage()
+    qtbot.addWidget(page)
+    page.attach_host(mock_host)
+    page.show()
+
+    # Chưa khởi động phiên: hiện minh họa thay cho QR
+    assert page.idle_illustration.isVisibleTo(page)
+    assert not page.qr_label.isVisibleTo(page)
+
+    page.ensure_started()
+    url = "http://192.168.1.20:51234/?token=tok3"
+    matrix = encode_qr(url)
+    info = GuestSessionInfo(
+        token="tok3",
+        port=51234,
+        local_ip="192.168.1.20",
+        url=url,
+        qr_matrix=matrix,
+        qr_ascii=render_ascii(matrix),
+        qr_svg=render_svg(matrix),
+    )
+    page.session_started.emit(info, [])
+    assert page.qr_label.isVisibleTo(page)
+    assert not page.idle_illustration.isVisibleTo(page)
+    assert page.status_badge.isVisibleTo(page)
+
+    # Khách kết nối 0 -> 1 phát GUEST_CONNECTED
+    page.clients_changed.emit(1)
+    assert SoundCue.GUEST_CONNECTED in played
+
+    # Kéo thả file phát DROP_LOCK và tắt DropOverlay
+    f_txt = tmp_path / "drop.txt"
+    f_txt.write_text("ok", encoding="utf-8")
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(f_txt))])
+    pos = QPointF(page.rect().center())
+    enter = QDragEnterEvent(
+        pos,
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    page.dragEnterEvent(enter)
+    assert enter.isAccepted()
+    assert page._drop_overlay.shown
+    drop = QDropEvent(
+        pos,
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    page.dropEvent(drop)
+    assert not page._drop_overlay.shown
+    assert SoundCue.DROP_LOCK in played
+
+    # Tải lên xong phát TRANSFER_DONE
+    page.upload_completed.emit("drop.txt", 2, str(f_txt))
+    assert SoundCue.TRANSFER_DONE in played
+
+    page.stop_session()
+    page.close_dialogs()

@@ -1340,6 +1340,98 @@ def test_info_bar_alert_failure_does_not_break_show_message(qtbot, monkeypatch):
     assert bar.title == "Lỗi"
 
 
+def test_info_bar_auto_dismiss_rules_and_timeout(qtbot):
+    from teleport.ui.widgets import InfoBar, InfoLevel, auto_dismiss_enabled, set_auto_dismiss_enabled
+
+    assert auto_dismiss_enabled() is True
+    host = QWidget()
+    lay = QVBoxLayout(host)
+    bar = InfoBar(host)
+    after = QPushButton("Sau", host)
+    lay.addWidget(bar)
+    lay.addWidget(after)
+    host.move(100, 100)
+    _show(qtbot, host, 520, 200)
+    after.setFocus()
+
+    # Mọi mức có nút đóng (kể cả WARNING, ERROR, có nút action) đều tự đếm để ẩn khi bật chế độ
+    for lv in (InfoLevel.SUCCESS, InfoLevel.INFO, InfoLevel.WARNING, InfoLevel.ERROR):
+        bar.show_message(lv, "Thông báo")
+        assert bar.auto_dismiss_active()
+
+    bar.show_message(InfoLevel.INFO, "Có nút", action="Mở")
+    assert bar.auto_dismiss_active()
+
+    # closable=False hoặc auto_dismiss_ms=0 không chạy bộ đếm tự tắt
+    bar.show_message(InfoLevel.SUCCESS, "Không nút đóng", closable=False)
+    assert not bar.auto_dismiss_active()
+
+    bar.show_message(InfoLevel.SUCCESS, "Tắt riêng", auto_dismiss_ms=0)
+    assert not bar.auto_dismiss_active()
+
+    # Tắt chế độ toàn cục -> SUCCESS/INFO cũng không tự tắt
+    set_auto_dismiss_enabled(False)
+    try:
+        bar.show_message(InfoLevel.SUCCESS, "Đã ghép đôi")
+        assert not bar.auto_dismiss_active()
+    finally:
+        set_auto_dismiss_enabled(True)
+
+    # Bật lại: SUCCESS tự đóng sau ngưỡng và phát dismissed
+    dismissed: list[bool] = []
+    bar.dismissed.connect(lambda: dismissed.append(True))
+    bar.show_message(InfoLevel.SUCCESS, "Đã ghép đôi với Tùng", auto_dismiss_ms=50)
+    assert bar.auto_dismiss_active()
+    assert bar.is_open is True
+    qtbot.waitUntil(lambda: not bar.is_open, timeout=1500)
+    assert dismissed == [True]
+
+
+def test_info_bar_auto_dismiss_pauses_on_hover_and_focus(qtbot):
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QHoverEvent
+
+    from teleport.ui.widgets import InfoBar, InfoLevel
+
+    host = QWidget()
+    lay = QVBoxLayout(host)
+    bar = InfoBar(host)
+    after = QPushButton("Sau", host)
+    lay.addWidget(bar)
+    lay.addWidget(after)
+    host.move(100, 100)
+    _show(qtbot, host, 520, 200)
+    after.setFocus()
+
+    bar.show_message(InfoLevel.INFO, "Thông báo", auto_dismiss_ms=80)
+    assert bar.auto_dismiss_active()
+
+    # Rê chuột vào -> tạm dừng; rời chuột -> đếm tiếp
+    QApplication.sendEvent(
+        bar, QHoverEvent(QEvent.Type.HoverEnter, QPointF(10, 10), QPointF(10, 10), QPointF(-1, -1))
+    )
+    assert not bar.auto_dismiss_active()
+    qtbot.wait(120)
+    assert bar.is_open is True
+
+    QApplication.sendEvent(
+        bar, QHoverEvent(QEvent.Type.HoverLeave, QPointF(-1, -1), QPointF(-1, -1), QPointF(10, 10))
+    )
+    assert bar.auto_dismiss_active()
+
+    # Đưa tiêu điểm vào nút đóng -> tạm dừng; chuyển tiêu điểm ra ngoài -> chạy lại và đóng
+    bar.close_button.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+    assert not bar.auto_dismiss_active()
+    qtbot.wait(120)
+    assert bar.is_open is True
+
+    after.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+    qtbot.waitUntil(lambda: bar.auto_dismiss_active(), timeout=500)
+    qtbot.waitUntil(lambda: not bar.is_open, timeout=1500)
+
+
 # =================================================================================================
 # W7 EmptyState
 # =================================================================================================
@@ -1360,7 +1452,7 @@ def test_empty_state_sets_plain_texts(qtbot):
     assert es.action_button.text().replace("&", "") == "Ghép đôi máy đầu tiên"
     for label in (es.title_label, es.text_label):
         assert label.textFormat() == Qt.TextFormat.PlainText
-        assert label.focusPolicy() == Qt.FocusPolicy.StrongFocus
+        assert label.focusPolicy() == Qt.FocusPolicy.TabFocus
         assert label.textInteractionFlags() & Qt.TextInteractionFlag.TextSelectableByMouse
     assert es.text_label.property("tone") == "muted"
     assert es.text_label.wordWrap()

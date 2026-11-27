@@ -103,11 +103,13 @@ import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
+from pathlib import Path
 
 from PySide6.QtCore import (
     QCoreApplication,
     QEvent,
     QItemSelectionModel,
+    QMimeData,
     QModelIndex,
     QObject,
     QPersistentModelIndex,
@@ -122,6 +124,10 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QColor,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
     QFont,
     QFontMetrics,
     QHideEvent,
@@ -150,8 +156,8 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from teleport.app.devices import DeviceView, parse_manual_address
-from teleport.ui import motion, texts, theme
-from teleport.ui.buttons import AnimatedButton
+from teleport.ui import motion, send, sounds, texts, theme
+from teleport.ui.buttons import AnimatedButton, ButtonLevels
 from teleport.ui.illustrations import Illustration, Scene, can_run
 from teleport.ui.radar import (
     DEVICE_ID_ROLE,
@@ -160,6 +166,7 @@ from teleport.ui.radar import (
     invalid_address_text,
     no_devices_text,
 )
+from teleport.ui.sounds import SoundCue
 from teleport.ui.widgets import (
     AvatarKind,
     DeviceAvatar,
@@ -404,15 +411,20 @@ def bubble_size(base: QFont) -> QSize:
 
 
 class RadarBubble(QAbstractButton):
-    """Một máy trên radar; bấm (chuột, Enter, Space) phát `clicked` (xem docstring module)."""
+    """Một máy trên radar; bấm (chuột, Enter, Space) phát `clicked` hoặc thả file để gửi."""
+
+    files_dropped = Signal(str, object)  # (device_id, list[Path])
 
     def __init__(self, view: DeviceView, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._view = view
+        self._levels = ButtonLevels(self)
+        self._reveal = 1.0
+        self._drop_count = 0
         self.setObjectName("radarBubble")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setAcceptDrops(False)
+        self.setAcceptDrops(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)  # vẽ lại khi chuột vào/ra (nền `selected`)
-        self._view = view
         self.setFixedSize(bubble_size(self.font()))
         self.set_view(view)
 
@@ -423,6 +435,24 @@ class RadarBubble(QAbstractButton):
     @property
     def view(self) -> DeviceView:
         return self._view
+
+    @property
+    def is_drop_hovered(self) -> bool:
+        return self._drop_count > 0
+
+    def play_reveal(self) -> None:
+        """Hiệu ứng nảy hiện nhẹ khi bong bóng mới xuất hiện trên radar."""
+        self._reveal = 0.0
+        motion.animate_value(self, 0.0, 1.0, motion.NORMAL, self._set_reveal, key="reveal")
+
+    def _set_reveal(self, value: object) -> None:
+        self._reveal = max(0.0, min(1.0, float(value) if isinstance(value, (int, float)) else 1.0))
+        self.update()
+
+    def _notify_canvas(self) -> None:
+        canvas = self._canvas()
+        if canvas is not None:
+            canvas.update()
 
     def set_view(self, view: DeviceView) -> None:
         """Cập nhật theo view mới nhất: chữ, tooltip, tên trợ năng, property `paired`, vẽ lại."""
@@ -446,27 +476,53 @@ class RadarBubble(QAbstractButton):
         parent = self.parentWidget()
         return parent if isinstance(parent, RadarCanvas) else None
 
+    def _drop_paths(self, mime: QMimeData | None) -> list[Path]:
+        if mime is None or not mime.hasUrls() or not (self._view.online or self._view.connected):
+            return []
+        return send.local_paths(mime.urls())
+
     # -- Vẽ ----------------------------------------------------------------------------------
 
     def paintEvent(self, event: QPaintEvent) -> None:
         t = theme.tokens_for(self)
         dark = theme.is_dark_palette(QApplication.palette())
         paired = self._view.paired
-        background: QColor | None = t.surface_raised
-        if self.underMouse():
-            background = t.selected
+        hover = self._levels.hover
+        press = self._levels.press
+        drop_hover = self._drop_count > 0
+
+        if drop_hover:
+            background: QColor | None = t.accent_subtle
+        elif hover > 0.01 or self.underMouse():
+            if paired:
+                base = QColor(t.selected.red(), t.selected.green(), t.selected.blue(), 0)
+            else:
+                base = t.surface_raised
+            amount = 1.0 if self.underMouse() and hover == 0.0 else hover
+            background = theme.blend(base, t.selected, amount)
         elif paired:
             background = None
-        if self.isDown():
+        else:
+            background = t.surface_raised
+
+        if drop_hover:
+            pen = QPen(t.accent_strong, 2, Qt.PenStyle.DashLine)
+        elif self.isDown() or press > 0.5:
             pen = QPen(t.accent_strong, 2)
         elif self.hasFocus():
             pen = QPen(theme.focus_ring_color(dark), 2)
+        elif hover > 0.01 and not paired:
+            pen = QPen(theme.blend(t.border_strong, t.accent_strong, 0.5 * hover), 1)
         else:
             pen = QPen(t.border if paired else t.border_strong, 1)
+
         width = self.width()
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            if self._reveal < 1.0:
+                painter.setOpacity(self._reveal)
+                painter.translate(0.0, (1.0 - self._reveal) * motion.MAX_SHIFT_PX)
             inset = pen.widthF() / 2
             painter.setPen(pen)
             painter.setBrush(background if background is not None else Qt.BrushStyle.NoBrush)
@@ -478,8 +534,9 @@ class RadarBubble(QAbstractButton):
 
             avatar = QRectF((width - BUBBLE_AVATAR) / 2, BUBBLE_PADDING, BUBBLE_AVATAR, BUBBLE_AVATAR)
             painter.save()
-            if paired:
-                painter.setOpacity(_PAIRED_AVATAR_OPACITY)  # chỉ avatar mờ, chữ không bao giờ mờ
+            if paired and not drop_hover:
+                # Chỉ avatar mờ, chữ không bao giờ mờ.
+                painter.setOpacity(_PAIRED_AVATAR_OPACITY * self._reveal)
             paint_avatar(
                 painter,
                 avatar,
@@ -497,7 +554,7 @@ class RadarBubble(QAbstractButton):
             name_font = _name_font(self.font())
             name_metrics = QFontMetrics(name_font)
             painter.setFont(name_font)
-            painter.setPen(t.text_muted if paired else t.text)
+            painter.setPen(t.text_muted if paired and not drop_hover else t.text)
             painter.drawText(
                 QRectF(_BUBBLE_TEXT_MARGIN, y, text_width, name_metrics.lineSpacing()),
                 int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
@@ -507,16 +564,76 @@ class RadarBubble(QAbstractButton):
             caption_font = theme.font_for(theme.TextStyle.CAPTION, self.font())
             caption_metrics = QFontMetrics(caption_font)
             painter.setFont(caption_font)
-            painter.setPen(t.text_muted if paired else t.accent_text)
+            if drop_hover:
+                caption = QCoreApplication.translate("Discover", "Thả để gửi %n file", None, self._drop_count)
+                painter.setPen(t.accent_text)
+            else:
+                caption = _paired_caption(paired)
+                painter.setPen(t.text_muted if paired else t.accent_text)
             painter.drawText(
                 QRectF(_BUBBLE_TEXT_MARGIN, y, text_width, caption_metrics.lineSpacing()),
                 int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
-                caption_metrics.elidedText(_paired_caption(paired), Qt.TextElideMode.ElideRight, text_width),
+                caption_metrics.elidedText(caption, Qt.TextElideMode.ElideRight, text_width),
             )
         finally:
             painter.end()
 
     # -- Sự kiện -----------------------------------------------------------------------------
+
+    def event(self, event: QEvent) -> bool:
+        levels = self.__dict__.get("_levels")
+        if levels is not None:
+            levels.on_event(event)
+        kind = event.type()
+        if kind in (
+            QEvent.Type.HoverEnter,
+            QEvent.Type.HoverLeave,
+            QEvent.Type.FocusIn,
+            QEvent.Type.FocusOut,
+        ):
+            self._notify_canvas()
+        return super().event(event)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        paths = self._drop_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        self._drop_count = len(paths)
+        event.acceptProposedAction()
+        self.update()
+        self._notify_canvas()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        paths = self._drop_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        self._drop_count = len(paths)
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._drop_count = 0
+        self.update()
+        self._notify_canvas()
+        event.accept()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        paths = self._drop_paths(event.mimeData())
+        self._drop_count = 0
+        self.update()
+        self._notify_canvas()
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        sounds.play(SoundCue.DROP_LOCK)
+        self.files_dropped.emit(self.device_id, paths)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        super().hideEvent(event)
+        self._drop_count = 0
+        self._levels.reset()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
@@ -565,18 +682,25 @@ class RadarCanvas(QWidget):
     """Tâm “Bạn”, hai elip tĩnh, vòng sóng và các `RadarBubble` con (đặt bằng `setGeometry`)."""
 
     bubble_activated = Signal(str)  # device_id của bong bóng được bấm
+    bubble_files_dropped = Signal(str, object)  # (device_id, list[Path])
+    rescan_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._core_pressed = False
         self.setObjectName("radarCanvas")
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.center_avatar = DeviceAvatar(self, diameter=_CORE_AVATAR, emphasis=True, ring="surface")
+        self.center_avatar.setCursor(Qt.CursorShape.PointingHandCursor)
         self.center_label = QLabel(self)
         self.center_label.setObjectName("radarCenterLabel")
         self.center_label.setTextFormat(Qt.TextFormat.PlainText)
         self.center_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.center_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.center_label.setFont(theme.font_for(theme.TextStyle.SECTION, self.center_label.font()))
+        self.center_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.center_avatar.installEventFilter(self)
+        self.center_label.installEventFilter(self)
         self.fallback_focus: QWidget | None = None  # tiêu điểm khi bỏ bong bóng cuối cùng
         self._bubbles: list[RadarBubble] = []
         self._slots: dict[str, Slot] = {}  # chỗ cũ, giữ cả khi đang ở dạng danh sách
@@ -631,6 +755,9 @@ class RadarCanvas(QWidget):
             if bubble is None:
                 bubble = RadarBubble(view, self)
                 bubble.clicked.connect(lambda _=False, i=view.device_id: self.bubble_activated.emit(i))
+                bubble.files_dropped.connect(self.bubble_files_dropped)
+                if can_run(self):
+                    bubble.play_reveal()
             else:
                 bubble.set_view(view)
             new.append(bubble)
@@ -712,6 +839,7 @@ class RadarCanvas(QWidget):
     def retranslate(self) -> None:
         t = QCoreApplication.translate
         self.center_label.setText(t("Discover", "Bạn"))
+        self.center_avatar.setToolTip(safe_tooltip(t("Discover", "Bấm để quét lại máy trong mạng")))
         self.setAccessibleName(t("Discover", "Máy trong mạng"))
         self.setAccessibleDescription(
             t("Discover", "%n máy. Tab hoặc phím mũi tên để chọn, Enter để ghép đôi.", None, self._count)
@@ -797,8 +925,62 @@ class RadarCanvas(QWidget):
                     color.setAlphaF(_WAVE_ALPHA * (1.0 - phase))
                     painter.setPen(QPen(color, 2))
                     painter.drawEllipse(center, scale * rx, scale * ry)
+            active = next(
+                (
+                    b
+                    for b in self._bubbles
+                    if b.isVisible() and (b.underMouse() or b.hasFocus() or b.is_drop_hovered)
+                ),
+                None,
+            )
+            if active is not None:
+                tether = QColor(t.accent_strong)
+                tether.setAlphaF(0.45)
+                painter.setPen(QPen(tether, 1.5, Qt.PenStyle.DashLine))
+                painter.drawLine(self.core_rect().center(), QRectF(active.geometry()).center())
         finally:
             painter.end()
+
+    def _trigger_core_rescan(self) -> None:
+        self.start_waves()
+        self.rescan_requested.emit()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched in (self.center_avatar, self.center_label):
+            if (
+                event.type() == QEvent.Type.MouseButtonPress
+                and isinstance(event, QMouseEvent)
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                self._core_pressed = True
+                return True
+            if (
+                event.type() == QEvent.Type.MouseButtonRelease
+                and isinstance(event, QMouseEvent)
+                and self._core_pressed
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                self._core_pressed = False
+                if isinstance(watched, QWidget) and watched.rect().contains(event.position().toPoint()):
+                    self._trigger_core_rescan()
+                return True
+        return super().eventFilter(watched, event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.core_rect().contains(event.position()):
+            self._core_pressed = True
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._core_pressed and event.button() == Qt.MouseButton.LeftButton:
+            self._core_pressed = False
+            if self.core_rect().contains(event.position()):
+                self._trigger_core_rescan()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -918,8 +1100,10 @@ class DiscoverPage(QWidget):
     pair_requested = Signal(object)  # DeviceView mới nhất: chưa ghép đôi và đang trong mạng
     manual_address_entered = Signal(str, int)  # ip, cổng (qua `app.devices.parse_manual_address`)
     open_device_requested = Signal(str)  # device_id của máy đã ghép đôi được bấm
+    send_files_requested = Signal(object, object)  # DeviceView, list[Path] khi thả lên bong bóng
     view_preference_changed = Signal(str)  # "radar" | "list", chỉ khi người dùng bấm `view_button`
     wait_pairing_requested = Signal()  # nút “Chờ ghép đôi” (`ui.wait_pairing` nối)
+    rescan_requested = Signal()  # bấm “Quét lại” hoặc bấm tâm “Bạn” trên radar
 
     def __init__(self, model: DeviceListModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -934,11 +1118,13 @@ class DiscoverPage(QWidget):
         self._last: tuple[str, float] | None = None  # (device_id, _now()) của lần kích hoạt gần nhất
         self._address_error: str | None = None  # chữ đã nhập khi thanh thông báo đang hiện lỗi địa chỉ
         self._watched_window: QWidget | None = None
+        self._seen_ids: set[str] | None = None
 
         self.header = PageHeader(page_title(), self)
         self.address_edit = _AddressField(self.header)
         self.address_edit.setObjectName("discoverAddress")
-        self.address_edit.setFixedWidth(_ADDRESS_WIDTH)
+        self.address_edit.setMinimumWidth(140)
+        self.address_edit.setMaximumWidth(_ADDRESS_WIDTH)
         self.address_submit = AnimatedButton("", self.header, primary=True)
         self.address_submit.setObjectName("discoverAddressSubmit")
         self.address_submit.setProperty(theme.PRIMARY_PROPERTY, True)
@@ -952,7 +1138,7 @@ class DiscoverPage(QWidget):
         self.hint_label.setProperty(theme.TONE_PROPERTY, "muted")
         # Cờ trước, chính sách tiêu điểm sau: `setTextInteractionFlags` tự đặt lại chính sách tiêu điểm.
         self.hint_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.hint_label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.hint_label.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.mode_reason_label = _plain_label("discoverModeReason", self)
         self.mode_reason_label.setProperty(theme.TONE_PROPERTY, "muted")
         self.mode_reason_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -962,6 +1148,8 @@ class DiscoverPage(QWidget):
         self.wait_button = QPushButton(self)
         self.wait_button.setObjectName("waitPairingButton")
         self.wait_button.setVisible(False)
+        self.rescan_button = AnimatedButton("", self)
+        self.rescan_button.setObjectName("discoverRescanButton")
 
         self.stack = QStackedWidget(self)
         self.stack.setObjectName("discoverStack")
@@ -995,7 +1183,7 @@ class DiscoverPage(QWidget):
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         # Cờ trước, chính sách tiêu điểm sau: `setTextInteractionFlags` tự đặt lại chính sách tiêu điểm.
         self.empty_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.empty_label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.empty_label.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.empty_label.setVisible(False)
 
         margin = theme.SPACING[3]
@@ -1013,6 +1201,7 @@ class DiscoverPage(QWidget):
         row.addWidget(self.mode_reason_label, 1)
         row.addWidget(self.view_button, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(self.wait_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addWidget(self.rescan_button, 0, Qt.AlignmentFlag.AlignVCenter)
         body.addLayout(row)
         body.addWidget(self.stack, 1)
         body.addWidget(self.empty_label)
@@ -1023,7 +1212,10 @@ class DiscoverPage(QWidget):
         self.address_submit.clicked.connect(self.submit_address)
         self.view_button.clicked.connect(self._on_view_button)
         self.wait_button.clicked.connect(self.wait_pairing_requested)
+        self.rescan_button.clicked.connect(self._on_rescan)
         self.canvas.bubble_activated.connect(self._activate)
+        self.canvas.bubble_files_dropped.connect(self._on_bubble_files_dropped)
+        self.canvas.rescan_requested.connect(self._on_rescan)
         self.list_view.clicked.connect(self._on_list_index)
         self.list_view.row_entered.connect(self._on_list_index)
         for signal in (
@@ -1117,6 +1309,9 @@ class DiscoverPage(QWidget):
         wait = t("Discover", "Chờ ghép đôi")
         self.wait_button.setText(wait)
         self.wait_button.setAccessibleName(wait)
+        rescan = t("Discover", "Quét lại")
+        self.rescan_button.setText(rescan)
+        self.rescan_button.setAccessibleName(t("Discover", "Quét lại máy trong mạng"))
         self.list_view.setAccessibleName(t("Discover", "Máy trong mạng"))
         self.list_view.setAccessibleDescription(
             t("Discover", "Phím mũi tên để chọn, Enter để ghép đôi hoặc mở máy đã ghép đôi.")
@@ -1184,6 +1379,12 @@ class DiscoverPage(QWidget):
         elif old_mode is not ViewMode.RADAR or was_empty != (count == 0):
             self._restart_waves()
 
+        current_ids = {v.device_id for v in views}
+        if self.isVisible():
+            if self._seen_ids is not None and (current_ids - self._seen_ids):
+                sounds.play(SoundCue.DEVICE_FOUND)
+            self._seen_ids = current_ids
+
     def _update_mode_widgets(self) -> None:
         t = QCoreApplication.translate
         forced = self._reason in (ListReason.TOO_MANY, ListReason.NO_ROOM)
@@ -1219,6 +1420,7 @@ class DiscoverPage(QWidget):
             *self.canvas.bubbles(),
             self.list_view,
             self.empty_label,
+            self.rescan_button,
         ]
         for first, second in itertools.pairwise(chain):
             QWidget.setTabOrder(first, second)
@@ -1268,6 +1470,16 @@ class DiscoverPage(QWidget):
         else:
             return
         self._last = (device_id, _now())
+
+    def _on_rescan(self) -> None:
+        self.canvas.start_waves()
+        sounds.play(SoundCue.RADAR_PING)
+        self.rescan_requested.emit()
+
+    def _on_bubble_files_dropped(self, device_id: str, paths: object) -> None:
+        view = self.model.device(device_id)
+        if view is not None and isinstance(paths, list) and paths:
+            self.send_files_requested.emit(view, paths)
 
     def _on_list_index(self, index: QModelIndex) -> None:
         device_id = index.data(DEVICE_ID_ROLE) if index.isValid() else None
@@ -1357,11 +1569,15 @@ class DiscoverPage(QWidget):
         if not event.spontaneous():  # câu báo tới lúc trang đang ẩn (vd. ghép đôi từ HOME) là câu cũ
             self._address_error = None
             self.info_bar.clear()
+        self._seen_ids = {v.device_id for v in discover_devices(self.model.devices())}
         self._watch_window()
         self._restart_waves()
+        if not event.spontaneous():
+            sounds.play(SoundCue.RADAR_PING)
 
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
+        self._seen_ids = None
         self.canvas.stop_waves()
         if not event.spontaneous():  # đổi trang, xuống khay (thu nhỏ thì giữ)
             self._address_error = None

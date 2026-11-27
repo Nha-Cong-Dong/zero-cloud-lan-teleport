@@ -1897,6 +1897,11 @@ class Node:
         radar_view: str | _Unset | None = _UNSET,
         theme: str | _Unset | None = _UNSET,
         accent: str | _Unset | None = _UNSET,
+        sound_mode: str | _Unset | None = _UNSET,
+        sound_volume: int | _Unset | None = _UNSET,
+        auto_dismiss_notices: bool | _Unset = _UNSET,
+        tray_notifications: bool | _Unset = _UNSET,
+        onboarding_dismissed: bool | _Unset = _UNSET,
         window: WindowGeometry | _Unset | None = _UNSET,
         last_conversation: str | _Unset | None = _UNSET,
         tray_hint_shown: bool | _Unset = _UNSET,
@@ -1920,6 +1925,11 @@ class Node:
                 ("radar_view", radar_view),
                 ("theme", theme),
                 ("accent", accent),
+                ("sound_mode", sound_mode),
+                ("sound_volume", sound_volume),
+                ("auto_dismiss_notices", auto_dismiss_notices),
+                ("tray_notifications", tray_notifications),
+                ("onboarding_dismissed", onboarding_dismissed),
                 ("window", window),
                 ("last_conversation", last_conversation),
                 ("tray_hint_shown", tray_hint_shown),
@@ -1934,6 +1944,15 @@ class Node:
         if create_subfolder is not _UNSET and self._transfers is not None:
             self._transfers.create_subfolder = bool(create_subfolder)
         return True
+
+    def rescan_mdns(self) -> None:
+        """Thăm dò lại các máy đang thấy trên mDNS ngay lập tức (khi bấm Quét lại)."""
+        if self._closing or self._mdns is None:
+            return
+        try:
+            self._mdns.probe_now()
+        except Exception:
+            log.debug("không thăm dò lại mDNS được", exc_info=True)
 
     def _asks_before_receive(self, device_id: str) -> bool:
         """`TransferManager`: hỏi trước khi nhận từ `device_id` không (đọc lúc có `offer`).

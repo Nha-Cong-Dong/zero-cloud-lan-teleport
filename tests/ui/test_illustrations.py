@@ -34,7 +34,7 @@ from PySide6.QtGui import QColor, QImage, QPainter, QRegion
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton, QVBoxLayout, QWidget
 
-SCENE_NAMES = ("NOT_PAIRED", "NO_DEVICES", "NO_TRANSFERS", "WELCOME")
+SCENE_NAMES = ("NOT_PAIRED", "NO_DEVICES", "NO_TRANSFERS", "WELCOME", "WEB_GUEST")
 MODES = pytest.mark.parametrize("dark", [False, True], ids=["sang", "toi"])
 ACCENT_IDS = ("mint", "ocean", "violet", "rose", "amber", "graphite")  # theme.ACCENTS (kiểm khớp ở dưới)
 SHORT_PLAY_MS = 1500

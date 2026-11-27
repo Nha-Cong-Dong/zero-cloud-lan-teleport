@@ -739,7 +739,9 @@ class ConversationDelegate(QStyledItemDelegate):
                 painter.setPen(pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), theme.RADIUS_BLOCK, theme.RADIUS_BLOCK)
-            elif focused:
+            elif focused and (
+                widget is None or widget.window().testAttribute(Qt.WidgetAttribute.WA_KeyboardFocusChange)
+            ):
                 painter.setPen(QPen(theme.focus_ring_color(dark), 2))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRoundedRect(cell.adjusted(1, 1, -1, -1), theme.RADIUS_BLOCK, theme.RADIUS_BLOCK)
@@ -1546,6 +1548,7 @@ class ConversationList(QWidget):
             return None
         t = QCoreApplication.translate
         menu = QMenu(self)
+        menu.setProperty(theme.MENU_PROPERTY, True)
         menu.setAccessibleName(
             texts.fill(
                 t("Conversations", "Thao tác với {name}"), name=texts.peer_label(view.name, view.device_id)
