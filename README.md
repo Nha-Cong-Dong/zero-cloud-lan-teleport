@@ -1,251 +1,272 @@
 <div align="center">
 
-<img src="docs/assets/logo.png" alt="Logo ZCL Teleport" width="160">
+<p><b>English</b> · <a href="docs/product/README.vi.md">Tiếng Việt</a></p>
+
+<img src="docs/assets/logo.png" alt="ZCL Teleport logo" width="160">
 
 # ZCL Teleport
 
-**Chuyển file dung lượng lớn và đồng bộ văn bản giữa các máy tính trong cùng mạng nội bộ.**  
-**Không trung gian · Không tài khoản · Tự động tiếp tục khi có mạng lại.**
+**Send large files and sync clipboard text between computers on the same local network.**  
+**No middleman · No accounts · Resumes automatically when the connection returns.**
 
 [![CI](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml/badge.svg)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml)
-[![Bản phát hành](https://img.shields.io/github/v/release/Nha-Cong-Dong/zero-cloud-lan-teleport?include_prereleases&label=b%E1%BA%A3n%20ph%C3%A1t%20h%C3%A0nh)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)
-[![Giấy phép](https://img.shields.io/badge/gi%E1%BA%A5y%20ph%C3%A9p-GPL--3.0-blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Nha-Cong-Dong/zero-cloud-lan-teleport?include_prereleases)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
+[![Sponsor](https://img.shields.io/badge/sponsor-tungkernel-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/tungkernel)
 
-**[Trang web chính thức (ZCL Hub)](https://tungkernel.github.io/zcl-hub/)** · **[Tải bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Tài liệu chi tiết](docs/README.md)**
+**[Website (ZCL Hub)](https://tungkernel.github.io/zcl-hub/)** · **[Download](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)** · **[Documentation](docs/README.md)** · **[Sponsor](https://github.com/sponsors/tungkernel)**
 
 </div>
 
-> **Giới thiệu:** ZCL Teleport giúp bạn chuyển các file dung lượng rất lớn và đồng bộ nội dung sao chép giữa các máy tính trong cùng một mạng nội bộ nhanh chóng, bảo mật trực tiếp giữa hai máy mà không đi qua máy chủ bên ngoài hay thu thập thông tin người dùng. Khi đường truyền bị ngắt giữa chừng, ứng dụng tự động gửi tiếp phần còn lại ngay khi kết nối trở lại.
+> **About:** ZCL Teleport moves very large files and shared clipboard content between computers on the same local network. Data goes straight from one machine to the other, encrypted, without passing through any outside server and without collecting any user information. If the connection drops halfway, the app picks up where it stopped as soon as the link is back.
 
 > [!NOTE]
-> **Phiên bản `v1.8.0` đã sẵn sàng.** Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
+> **Version `v1.8.0` is ready.** See what changed in [CHANGELOG.md](docs/community/CHANGELOG.md). Roadmap and progress: [ke_hoach.md](docs/product/ke_hoach.md). Measured speeds: [benchmark.md](docs/technical/benchmark.md). Most project documents are written in Vietnamese.
 
 ---
 
-## Mục Lục
+## Table of Contents
 
-- [Mục Đích Sử Dụng](#mục-đích-sử-dụng)
-- [Tính Năng Nổi Bật](#tính-năng-nổi-bật)
-- [Bắt Đầu Nhanh](#bắt-đầu-nhanh)
-- [Hướng Dẫn Sử Dụng Giao Diện](#hướng-dẫn-sử-dụng-giao-diện)
-- [Sử Dụng Dòng Lệnh](#sử-dụng-dòng-lệnh)
-- [Cách Thức Hoạt Động](#cách-thức-hoạt-động)
-- [An Toàn & Quyền Riêng Tư](#an-toàn--quyền-riêng-tư)
-- [Câu Hỏi Thường Gặp](#câu-hỏi-thường-gặp)
-- [Lộ Trình Phát Triển](#lộ-trình-phát-triển)
-- [Dành Cho Lập Trình Viên](#dành-cho-lập-trình-viên)
-- [Đóng Góp · Bảo Mật · Giấy Phép](#đóng-góp--bảo-mật--giấy-phép)
+- [Why Teleport](#why-teleport)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Using the App](#using-the-app)
+- [Command Line](#command-line)
+- [How It Works](#how-it-works)
+- [Safety and Privacy](#safety-and-privacy)
+- [FAQ](#faq)
+- [Roadmap](#roadmap)
+- [Support the Project](#support-the-project)
+- [For Developers](#for-developers)
+- [Contributing, Security, License](#contributing-security-license)
 
 ---
 
-## Mục Đích Sử Dụng
+## Why Teleport
 
-Khi hai máy tính ở gần nhau và dùng chung một mạng nội bộ, việc chuyển các tệp tin nặng hàng chục GB thường gặp nhiều phiền phức:
+When two computers sit next to each other on the same network, moving a file of tens of gigabytes is surprisingly annoying:
 
-| Cách thông thường | Hạn chế |
+| Usual approach | Drawback |
 |---|---|
-| **Ứng dụng nhắn tin** | File bị nén giảm chất lượng, giới hạn kích thước, phải đăng nhập tài khoản |
-| **Lưu trữ mạng ngoài** | Tốn hai lần thời gian (tải lên rồi tải về), phụ thuộc tốc độ đường truyền ra ngoài |
-| **Ổ nhớ rời (USB)** | Cần thiết bị cắm ngoài, cắm qua cắm lại giữa các máy |
-| **Chia sẻ thư mục mặc định** | Cài đặt phức tạp; khi mất mạng đột ngột phải sao chép lại từ đầu |
+| **Messaging apps** | Size limits, recompressed files, a login is required |
+| **Cloud storage** | Doubles the time (upload, then download) and depends on your internet speed |
+| **USB drives** | You need a drive and have to plug it back and forth |
+| **Built-in folder sharing** | Tricky to set up, and a dropped connection means copying again from the start |
 
-**Teleport chuyển file trực tiếp từ máy này sang máy kia** qua kết nối nội bộ:
-- **Không phức tạp:** Không cần tạo tài khoản, không cần cấu hình địa chỉ rắc rối.
-- **Trực tiếp & riêng tư:** Dữ liệu chỉ chạy trong mạng nội bộ của bạn, có mã hóa an toàn.
-- **Tiết kiệm bộ nhớ:** File lớn cỡ nào cũng đọc ghi tuần tự theo từng phần, không làm chậm máy.
-- **Không sợ rớt mạng:** Mất mạng giữa chừng thì khi có lại sẽ tự động gửi tiếp đúng phần còn thiếu.
+**Teleport sends files directly from one machine to the other** over your local network:
+- **Simple:** no account to create, no addresses to configure.
+- **Direct and private:** data stays inside your network and is encrypted.
+- **Light on memory:** files of any size are read and written piece by piece.
+- **Safe against dropouts:** if the network goes away, only the missing part is sent once it returns.
 
-Chi tiết nguyên tắc thiết kế: [docs/product/y_tuong.md](docs/product/y_tuong.md).
+Design principles: [y_tuong.md](docs/product/y_tuong.md).
 
 ---
 
-## Tính Năng Nổi Bật
+## Features
 
-Tiêu chí chi tiết cho từng tính năng: [docs/product/mvp.md](docs/product/mvp.md).
+Acceptance criteria for every feature: [mvp.md](docs/product/mvp.md).
 
-| Tính năng | Mô tả chi tiết | Trạng thái |
+| Feature | Details | Status |
 |---|---|:---:|
-| **Tự tìm máy trong mạng** | Mở ứng dụng là nhìn thấy ngay các máy khác đang mở Teleport gần bạn. Nếu mạng chặn tìm tự động, có thể nhập địa chỉ máy để kết nối. | Hoàn thành |
-| **Ghép đôi một lần duy nhất** | Lần đầu kết nối, hai máy hiển thị cùng một mã 6 chữ số để xác nhận. Sau đó hai máy sẽ tự nhận ra nhau. | Hoàn thành |
-| **Gửi file dung lượng cực lớn** | Kéo thả một hoặc nhiều file để gửi. Bên nhận luôn được hỏi ý kiến trước khi nhận; hiển thị rõ tốc độ và tiến độ truyền. | Hoàn thành |
-| **Gửi cả thư mục & nhiều máy** | Hỗ trợ gửi toàn bộ cây thư mục con giữ nguyên cấu trúc; gửi cùng lúc tới nhiều thiết bị trong mạng nội bộ. | Hoàn thành |
-| **Chế độ khách qua Web QR** | Trang thao tác riêng không chặn cửa sổ chính; quét mã QR trên điện thoại để gửi/nhận tệp và thư mục qua trình duyệt, xem trước ảnh trực tiếp, nhắn văn bản hai chiều và tải gói nén `.zip` không cần cài ứng dụng. | Hoàn thành |
-| **Tự phân loại & cổng đẩy tự động** | Tự động sắp xếp tệp nhận vào thư mục đích theo loại tệp hoặc máy gửi; tự gửi tệp mới đặt vào thư mục theo dõi kèm nút sửa quy tắc, mẫu chọn nhanh và tạm dừng toàn bộ. | Hoàn thành |
-| **Tự động nhận tiếp** | Đang gửi mà mất kết nối, khi kết nối lại ứng dụng sẽ gửi tiếp từ vị trí tạm dừng, không gửi lại từ đầu. | Hoàn thành |
-| **Kiểm tra tính nguyên vẹn** | Từng phần nhỏ và toàn bộ file đều được kiểm tra khớp hoàn toàn với bản gốc trước khi hoàn tất. | Hoàn thành |
-| **Đồng bộ nội dung sao chép** | Sao chép văn bản hoặc ảnh ở máy này có thể dán ngay trên máy kia nếu bạn bật cho phép. Mặc định tắt để đảm bảo riêng tư. | Hoàn thành |
-| **Chạy ngầm tiện lợi** | Thu gọn xuống khay hệ thống với lối tắt Web QR và mở thư mục nhận; hiển thị tiến độ ngay trên biểu tượng thanh tác vụ; có thể bật tự khởi động cùng máy. | Hoàn thành |
-| **Tùy biến linh hoạt** | Đổi tên máy, đổi thư mục lưu file nhận, bật/tắt nhanh trạng thái ngay trên thẻ máy, ẩn danh khỏi máy lạ, đổi giao diện sáng/tối. | Hoàn thành |
-| **Hỗ trợ hai ngôn ngữ** | Tiếng Việt và Tiếng Anh. | Hoàn thành |
-| **Hỗ trợ dòng lệnh** | Cung cấp lệnh điều khiển cho người thích thao tác nhanh hoặc tự động hóa công việc. | Hoàn thành |
-| **Bộ cài đặt dễ dùng** | Bộ cài đặt tiêu chuẩn cho Windows (Tiếng Việt & Tiếng Anh) cùng kịch bản đóng gói đa nền tảng. | Hoàn thành |
+| **Automatic device discovery** | Open the app and see other machines running Teleport nearby. If the network blocks discovery, enter the machine's address by hand. | Done |
+| **One-time pairing** | On first contact both machines show the same 6-digit code to confirm. After that they recognize each other. | Done |
+| **Very large files** | Drag and drop one or many files. The receiver is always asked first, and speed and progress are shown. | Done |
+| **Folders and multiple devices** | Send whole folder trees with their structure intact, to several devices at once. | Done |
+| **Guest mode via QR code** | A separate page that does not block the main window. Scan a QR code with a phone to send or receive files and folders in the browser, preview photos live, chat text both ways and download `.zip` bundles. Nothing to install on the phone. | Done |
+| **Auto-sorting and automatic push** | Received files are sorted into folders by file type or by sender. New files dropped into a watched folder are sent automatically, with an editable rule list, quick-pick templates and a pause-all switch. | Done |
+| **Automatic resume** | If the connection drops, sending continues from where it paused instead of starting over. | Done |
+| **Integrity checks** | Every small piece and the whole file are verified against the original before a transfer completes. | Done |
+| **Clipboard sync** | Copy text or an image on one machine and paste it on another, if you turn it on. Off by default for privacy. | Done |
+| **Runs in the background** | Minimizes to the system tray with shortcuts for guest mode and the receive folder, shows progress on the taskbar icon, and can start with the computer. | Done |
+| **Customization** | Rename the device, choose the save folder, toggle options right on a device card, hide from unknown devices, light or dark theme. | Done |
+| **Two languages** | Vietnamese and English. | Done |
+| **Command line** | Commands for quick use and automation. | Done |
+| **Easy installer** | Standard Windows installer (Vietnamese and English) plus packaging scripts for other platforms. | Done |
 
 <table>
 <tr>
-<td width="50%"><img src="docs/assets/tim-may-moi.png" alt="Màn hình tìm máy: hiển thị các máy đang mở ứng dụng trong mạng nội bộ"></td>
-<td width="50%"><img src="docs/assets/hoi-nhan-file.png" alt="Màn hình trò chuyện truyền tệp: xem trước ảnh thu nhỏ, nút mở nhanh và hộp xác nhận nhận file"></td>
+<td width="50%"><img src="docs/assets/tim-may-moi.png" alt="Device discovery screen listing machines running the app on the local network"></td>
+<td width="50%"><img src="docs/assets/hoi-nhan-file.png" alt="Transfer chat screen with image previews, quick-open buttons and the incoming file prompt"></td>
 </tr>
 <tr>
-<td align="center"><b>Tìm máy trong mạng</b></td>
-<td align="center"><b>Gửi file, xem trước ảnh &amp; xác nhận nhận</b></td>
+<td align="center"><b>Finding devices on the network</b></td>
+<td align="center"><b>Sending files, image previews and accepting incoming files</b></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/assets/web-qr-khach.png" alt="Trang Chế độ khách qua Web QR trên điện thoại với mã QR, chia sẻ tệp và nhắn văn bản hai chiều"></td>
-<td width="50%"><img src="docs/assets/tu-dong-hoa-cai-dat.png" alt="Trang Cài đặt truyền file hiển thị truyền thông minh phần thay đổi, quy tắc tự phân loại và cổng đẩy tự động"></td>
+<td width="50%"><img src="docs/assets/web-qr-khach.png" alt="Phone guest page with a QR code, file sharing and two-way text chat"></td>
+<td width="50%"><img src="docs/assets/tu-dong-hoa-cai-dat.png" alt="Transfer settings page showing smart delta transfer, auto-sort rules and automatic push"></td>
 </tr>
 <tr>
-<td align="center"><b>Chế độ khách qua Web QR trên điện thoại</b></td>
-<td align="center"><b>Tự phân loại tệp nhận &amp; cổng đẩy tự động</b></td>
+<td align="center"><b>Guest mode via QR code on a phone</b></td>
+<td align="center"><b>Auto-sorting of received files and automatic push</b></td>
 </tr>
 </table>
 
 ---
 
-## Bắt Đầu Nhanh
+## Quick Start
 
-Cần **hai máy tính Windows 10/11 trong cùng một mạng nội bộ**, mỗi máy mở ứng dụng Teleport.
+You need **two Windows 10/11 computers on the same local network**, each running Teleport.
 
-**1. Tải về** từ trang [Bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases):
-- `teleport-setup-x64.exe`: Bản cài đặt tự động (khuyên dùng).
-- `teleport-gui-windows-x64.zip`: Bản chạy ngay không cần cài đặt.
-- `teleport-cli-windows-x64.zip`: Bản dòng lệnh dành cho người dùng kỹ thuật.
+**1. Download** from the [Releases](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases) page:
+- `teleport-setup-x64.exe`: installer (recommended).
+- `teleport-gui-windows-x64.zip`: portable build, no installation.
+- `teleport-cli-windows-x64.zip`: command-line build for technical users.
 
-**2. Mở ứng dụng:** Khi mở lần đầu, tường lửa có thể hỏi xác nhận, hãy chọn cho phép trên mạng riêng tư (Private).
+**2. Open the app.** On first launch the firewall may ask for permission. Allow access on private networks.
 
-**3. Ghép đôi và gửi:** Xem hướng dẫn chi tiết ngay bên dưới.
-
----
-
-## Hướng Dẫn Sử Dụng Giao Diện
-
-1. **Lần đầu khởi động:** Ứng dụng hiển thị tên đại diện của máy bạn. Nhấn **Bắt đầu**.
-2. **Tìm máy:** Bấm vào biểu tượng tìm kiếm hoặc nút **Ghép đôi máy mới**. Các máy đang mở ứng dụng sẽ tự động hiện lên trên màn hình.
-3. **Ghép đôi (chỉ làm lần đầu):** Bấm vào máy bạn muốn kết nối. Cả hai máy sẽ hiện cùng một mã 6 chữ số: nếu trùng khớp, bấm **Trùng khớp** ở cả hai máy.
-4. **Gửi file:** Kéo thả file vào tên máy ở danh sách bên trái hoặc bấm **Gửi file** (phím tắt `Ctrl + O`).
-5. **Nhận file:** Bên nhận sẽ nhận được thông báo gồm tên người gửi, tên file và dung lượng. Bấm **Nhận** để đồng ý hoặc **Từ chối**. Mặc định file được lưu vào thư mục `Teleport` trong mục Tải về.
-6. **Theo dõi tiến độ:** Tốc độ truyền tải và thời gian dự kiến hiển thị trực quan. Nếu mạng bị gián đoạn, ứng dụng chuyển sang trạng thái chờ và tự động gửi tiếp khi có mạng.
-7. **Đóng ứng dụng:** Đóng cửa sổ ứng dụng sẽ thu nhỏ xuống thanh tác vụ để tiếp tục nhận file khi cần. Để tắt hẳn, nhấn chuột phải vào biểu tượng dưới thanh tác vụ và chọn **Thoát**.
+**3. Pair and send.** See the steps below.
 
 ---
 
-## Sử Dụng Dòng Lệnh
+## Using the App
 
-Lệnh `teleport` dành cho những ai quen thao tác trên cửa sổ lệnh:
+1. **First launch:** the app shows the name of your computer. Click **Get started** (button labels follow the app's language setting).
+2. **Find devices:** click the search icon or the pair-new-device button. Machines running the app appear automatically.
+3. **Pair (first time only):** click the device. Both screens show the same 6-digit code. If they match, confirm on both machines.
+4. **Send:** drag files onto a device name in the left list, or use the send button (`Ctrl + O`).
+5. **Receive:** the receiver sees the sender's name, the file name and its size, then accepts or declines. Files are saved to a `Teleport` folder inside Downloads by default.
+6. **Track progress:** speed and estimated time are shown. If the network breaks, the transfer waits and resumes on its own.
+7. **Closing:** closing the window minimizes the app to the tray so it can keep receiving. To quit completely, right-click the tray icon and choose **Quit**.
+
+---
+
+## Command Line
+
+The `teleport` command is for people who prefer a terminal:
 
 ```powershell
-# Máy B: Mở chế độ chờ ghép đôi
+# Machine B: wait for pairing
 teleport listen
 
-# Máy A: Xem danh sách máy trong mạng và tiến hành ghép đôi
+# Machine A: list devices and pair
 teleport list
-teleport pair May-Van-Phong
+teleport pair Office-PC
 
-# Máy B: Sẵn sàng nhận file gửi tới
+# Machine B: ready to receive
 teleport receive
 
-# Máy A: Gửi tệp sang máy B
-teleport send tailieu.zip --to May-Van-Phong
+# Machine A: send a file to machine B
+teleport send report.zip --to Office-PC
 ```
 
-Xem đầy đủ trợ giúp với lệnh: `teleport --help`. Đặc tả hành vi dòng lệnh: [docs/product/mvp.md](docs/product/mvp.md).
+Full help: `teleport --help`. Command behavior is specified in [mvp.md](docs/product/mvp.md).
 
 ---
 
-## Cách Thức Hoạt Động
+## How It Works
 
 ```
-   Máy A                                                  Máy B
-┌──────────┐  1. Tự động nhận diện nhau trong mạng nội bộ  ┌──────────┐
+   Machine A                                              Machine B
+┌──────────┐  1. Discover each other on the local network ┌──────────┐
 │ Teleport │ ◄─────────────────────────────────────────► │ Teleport │
-│          │  2. Ghép đôi xác nhận mã 6 số một lần duy nhất │          │
-│          │  3. Kết nối trực tiếp, mã hóa bảo mật         │          │
-│  Tệp tin ┼──► 4. Dữ liệu chia nhỏ truyền thẳng vào ổ đĩa ┼──► Ổ đĩa  │
-│          │  5. Ngắt quãng tự động truyền tiếp phần thiếu │          │
-└──────────┘                                             └──────────┘
-                  Truyền trực tiếp giữa hai máy tính
+│          │  2. Pair once by confirming a 6-digit code   │          │
+│          │  3. Direct, encrypted connection             │          │
+│   File   ┼──► 4. Data split into pieces, written to disk┼──► Disk  │
+│          │  5. After a drop, missing pieces are resent  │          │
+└──────────┘                                              └──────────┘
+                    Direct between the two computers
 ```
 
-1. **Nhận diện tự động:** Các máy tính tự thông báo sự có mặt trong cùng mạng nội bộ.
-2. **Ghép đôi an toàn:** Hai bên đối chiếu mã 6 số để tạo lòng tin và lưu nhớ thông tin nhận diện.
-3. **Kết nối mã hóa:** Mọi luồng thông tin truyền qua lại đều được mã hóa trực tiếp giữa hai máy.
-4. **Chia nhỏ tệp tin:** Tệp tin lớn được chia thành các phần nhỏ 1 MiB để truyền tuần tự, bảo đảm không gây tràn bộ nhớ máy tính.
-5. **Đảm bảo nguyên vẹn:** Máy nhận kiểm tra từng phần nhận được, ghi trực tiếp xuống ổ đĩa. Khi xong toàn bộ mới đổi sang tên tệp chính thức.
+1. **Discovery:** computers announce themselves on the local network.
+2. **Pairing:** both sides compare a 6-digit code to establish trust and remember each other's identity.
+3. **Encrypted link:** everything sent between the two machines is encrypted end to end.
+4. **Chunking:** large files are split into 1 MiB pieces and sent in order, so memory use stays low.
+5. **Integrity:** the receiver verifies each piece and writes it straight to disk. Only when everything is complete does the file get its final name.
 
-Chi tiết giải thích trực quan: [docs/product/hieu_du_an.md](docs/product/hieu_du_an.md). Đặc tả kỹ thuật chi tiết: [docs/technical/protocol.md](docs/technical/protocol.md).
+Plain-language walkthrough: [hieu_du_an.md](docs/product/hieu_du_an.md). Technical specification: [protocol.md](docs/technical/protocol.md).
 
 ---
 
-## An Toàn & Quyền Riêng Tư
+## Safety and Privacy
 
-| Tình huống | Cách Teleport bảo vệ bạn |
+| Situation | How Teleport protects you |
 |---|---|
-| **Người khác cùng mạng theo dõi dữ liệu** | Toàn bộ dữ liệu được mã hóa trực tiếp giữa hai máy, người ngoài không thể đọc được. |
-| **Máy lạ giả mạo để kết nối** | Bắt buộc phải xác nhận mã 6 số hiển thị trên hai màn hình trước khi gửi dữ liệu. |
-| **Nhận file không mong muốn** | Luôn hiển thị câu hỏi xin phép trước khi bắt đầu tải file về máy. |
-| **Nguy cơ ghi đè file hệ thống** | Ứng dụng lọc sạch tên tệp, chỉ lưu vào thư mục được chỉ định và không bao giờ ghi đè file có sẵn. |
-| **Bảo vệ mật khẩu khi sao chép** | Tính năng đồng bộ nội dung sao chép mặc định tắt; tự động bỏ qua nếu phát hiện nội dung nhạy cảm từ các ứng dụng quản lý mật khẩu. |
-| **Không thu thập dữ liệu cá nhân** | Không lưu trữ qua máy chủ trung gian, không gửi bất kỳ thông tin nào ra ngoài mạng nội bộ của bạn. |
+| **Someone on the network watches traffic** | Data is encrypted directly between the two machines and cannot be read by others. |
+| **A stranger's device pretends to be a trusted one** | The 6-digit code shown on both screens must match before any data is sent. |
+| **Unwanted incoming files** | You are always asked before a download starts. |
+| **Risk of overwriting system files** | File names are sanitized, files are saved only to the chosen folder, and existing files are never overwritten. |
+| **Passwords in the clipboard** | Clipboard sync is off by default and skips content flagged as sensitive by password managers. |
+| **Personal data collection** | No relay server, no telemetry. Nothing leaves your local network. |
 
-Chi tiết chính sách an toàn: [docs/community/SECURITY.md](docs/community/SECURITY.md).
-
----
-
-## Câu Hỏi Thường Gặp
-
-<details>
-<summary><b>Ứng dụng có cần kết nối Internet để hoạt động không?</b></summary>
-
-Không cần. Ứng dụng chỉ cần các máy tính cùng kết nối vào một mạng nội bộ (cùng cắm dây mạng hoặc cùng bắt chung điểm phát sóng). Dù rút dây mạng Internet ra thì việc chuyển file vẫn diễn ra bình thường với tốc độ tối đa của mạng nội bộ.
-</details>
-
-<details>
-<summary><b>Hai máy tính cùng mạng nhưng không tìm thấy nhau?</b></summary>
-
-Một số điểm phát sóng nơi công cộng có tính năng chặn các máy tính nói chuyện với nhau. Bạn có thể kiểm tra xem tường lửa trên máy đã cho phép ứng dụng hoạt động trên mạng riêng tư chưa, hoặc nhập trực tiếp địa chỉ máy cần kết nối vào ô tìm kiếm.
-</details>
-
-<details>
-<summary><b>File lớn bao nhiêu thì có thể gửi được?</b></summary>
-
-Ứng dụng có thể gửi các file rất lớn (hàng chục đến hàng trăm GB) một cách ổn định vì dữ liệu được đọc và ghi tuần tự từng phần nhỏ, không gây tốn bộ nhớ máy tính.
-</details>
-
-<details>
-<summary><b>Nếu đang chuyển mà bị mất mạng hoặc tắt máy thì sao?</b></summary>
-
-Các phần dữ liệu đã nhận được lưu trữ an toàn. Khi máy nhận mở ứng dụng lại và có kết nối, quá trình chuyển sẽ tự động tiếp tục phần còn lại mà không cần phải gửi lại từ đầu.
-</details>
-
-<details>
-<summary><b>Cần mở ứng dụng trên cả hai máy không?</b></summary>
-
-Có. Cả máy gửi và máy nhận đều cần mở ứng dụng để nhận diện và bắt tay kết nối với nhau.
-</details>
+Security policy: [SECURITY.md](docs/community/SECURITY.md).
 
 ---
 
-## Lộ Trình Phát Triển
+## FAQ
 
-Tiến độ chi tiết từng giai đoạn được cập nhật tại [docs/product/ke_hoach.md](docs/product/ke_hoach.md).
+<details>
+<summary><b>Does it need an internet connection?</b></summary>
 
-- **Giai đoạn 1:** Nền tảng kết nối trực tiếp, tìm kiếm máy trong mạng và cơ chế ghép đôi an toàn (Đã hoàn thành).
-- **Giai đoạn 2 (`v0.1.0-alpha`):** Chuyển file dung lượng lớn trực tiếp giữa hai máy đã ghép đôi trên Windows (Đã phát hành).
-- **Giai đoạn 3:** Hoàn thiện cơ chế tự động gửi tiếp dữ liệu khi ngắt kết nối kéo dài (Đã hoàn thành).
-- **Giai đoạn 4:** Hoàn thiện giao diện đồ họa, tối ưu khay hệ thống, ngôn ngữ Tiếng Việt và Tiếng Anh (Đã hoàn thành).
-- **Giai đoạn 5:** Hoàn thiện tính năng đồng bộ nội dung sao chép an toàn (Đã hoàn thành).
-- **Bản chính thức (`v1.0.0`):** Đóng gói bộ cài đặt tiêu chuẩn, tài liệu người dùng và kịch bản đa nền tảng (Đã hoàn thành).
-- **Mở rộng `v1.1.0` – `v1.2.0`:** Gửi cả cây thư mục con, gửi song song nhiều máy, ẩn tên thiết bị trên mạng công cộng và Chế độ khách qua Web QR cho điện thoại (Đã hoàn thành).
-- **Bản nâng cấp `v1.3.0`:** Kết nối thông suốt giữa dòng lệnh và giao diện đang chạy nền, tự gom thư mục con theo từng lượt nhận, tải gói nén `.zip` trực tiếp và kéo thả thư mục trên Web QR, khóa tạm thời chống dò mã, và tối ưu bộ nhớ kiểm tra toàn vẹn (Đã hoàn thành).
-- **Bản nâng cấp `v1.4.0`:** Chọn gửi cả thư mục và gửi đồng thời nhiều máy trực tiếp trên giao diện, chế độ ẩn danh hoàn toàn, quản lý/hủy lượt nhận dở và kiểm tra cập nhật thủ công từ Cài đặt (Đã hoàn thành).
-- **Lộ trình `v1.5.0` – `v1.7.0`:** Nối lại bền qua mất điện hai chiều, biên lai truyền nhận xác thực hai bên, truyền thông minh phần thay đổi, tự phân loại thư mục nhận, cổng đẩy tự động, Web QR 2.0 (trang riêng, xem trước ảnh trực tiếp, nhắn văn bản hai chiều) và tối ưu thao tác nhanh trên khay hệ thống, thẻ máy và thanh tác vụ (Đang phát triển trong bản chưa phát hành).
-- **Hướng tiếp theo (`v2.0.0`):** Ứng dụng trên điện thoại Android.
+No. The computers only need to be on the same local network (same cable network or same Wi-Fi hotspot). Transfers run at local network speed even if the internet cable is unplugged.
+</details>
+
+<details>
+<summary><b>The two computers are on the same network but cannot see each other.</b></summary>
+
+Some public Wi-Fi networks stop devices from talking to each other. Check that the firewall allows the app on private networks, or type the other machine's address directly into the search box.
+</details>
+
+<details>
+<summary><b>How large can a file be?</b></summary>
+
+Tens to hundreds of gigabytes work reliably, because data is read and written piece by piece and never held in memory all at once.
+</details>
+
+<details>
+<summary><b>What if the network drops or a computer shuts down mid-transfer?</b></summary>
+
+Pieces already received are stored safely. When the receiving machine opens the app again and the link is back, the transfer continues with the missing part only.
+</details>
+
+<details>
+<summary><b>Do both computers need the app open?</b></summary>
+
+Yes. Sender and receiver both need to be running Teleport to find each other and connect.
+</details>
+
+<details>
+<summary><b>Do I have to sponsor to get all features?</b></summary>
+
+No. Every feature is free for everyone, and the app never shows donation prompts. See [Support the Project](#support-the-project).
+</details>
 
 ---
 
-## Dành Cho Lập Trình Viên
+## Roadmap
 
-Yêu cầu môi trường: **Python 3.12+**.
+Detailed progress per phase lives in [ke_hoach.md](docs/product/ke_hoach.md).
+
+- **Phase 1:** direct connection foundation, device discovery and secure pairing (done).
+- **Phase 2 (`v0.1.0-alpha`):** large file transfer between paired Windows machines (released).
+- **Phase 3:** automatic resume after long disconnections (done).
+- **Phase 4:** graphical interface, tray behavior, Vietnamese and English (done).
+- **Phase 5:** safe clipboard sync (done).
+- **Stable release (`v1.0.0`):** standard installer, user documentation and cross-platform packaging scripts (done).
+- **Expansion `v1.1.0` – `v1.2.0`:** folder trees, sending to several devices at once, hiding the device name on public networks, and phone guest mode via QR code (done).
+- **Upgrade `v1.3.0`:** seamless link between the command line and the background app, per-transfer subfolder grouping, direct `.zip` download and folder drag-and-drop in the QR guest page, temporary lockout against code guessing, and lower memory use for integrity checks (done).
+- **Upgrade `v1.4.0`:** pick folders and send to several devices right from the interface, fully hidden mode, managing and cancelling unfinished receives, and a manual update check in Settings (done).
+- **`v1.5.0` – `v1.7.0`:** two-way resume that survives power loss, signed receipts verified by both sides, smart transfer of only the changed parts, auto-sorting of received files, automatic push from watched folders, Web QR 2.0 (separate page, live photo preview, two-way text chat), and quick actions on the tray, device cards and taskbar (done).
+- **Upgrade `v1.8.0`:** interface refresh with motion, a first-minute welcome for new users, a live radar for discovery, a device info side panel, optional sound effects and auto-dismissing notices (done).
+- **Next (`v2.0.0`):** Android app for phones.
+
+---
+
+## Support the Project
+
+ZCL Teleport is free and open source, built and maintained by one person. If it saves you time, you can sponsor its development through [GitHub Sponsors](https://github.com/sponsors/tungkernel).
+
+Sponsorship is optional. Nothing is locked behind it, and the app never asks for money. Details on what funds are used for and how they are reported: [SPONSORS.md](docs/community/SPONSORS.md).
+
+Not able to sponsor? A star on the repository, a bug report or a mention to a friend helps just as much.
+
+---
+
+## For Developers
+
+Requires **Python 3.12+**.
 
 ```powershell
 git clone https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport.git
@@ -253,26 +274,27 @@ cd zero-cloud-lan-teleport
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev,gui]"
-pytest                                # Chạy kiểm thử tự động
-teleport-gui                          # Khởi chạy giao diện đồ họa
-teleport --help                       # Khởi chạy dòng lệnh
+pytest                                # run the automated tests
+teleport-gui                          # start the graphical app
+teleport --help                       # command line help
 ```
 
-Mã nguồn được phân tầng rõ ràng theo quy tắc `core <- trust <- net <- app <- ui / cli`. Các tầng bên dưới độc lập hoàn toàn với tầng bên trên, giúp việc kiểm thử tự động đạt độ tin cậy cao mà không cần môi trường mạng thực tế.
+The code is layered as `core <- trust <- net <- app <- ui / cli`. Lower layers never depend on higher ones, so they can be tested thoroughly without a real network.
 
-| Tài liệu tham khảo | Nội dung chi tiết |
+| Reference | Contents |
 |---|---|
-| [docs/README.md](docs/README.md) | Bản đồ định hướng toàn bộ tài liệu |
-| [docs/community/CONTRIBUTING.md](docs/community/CONTRIBUTING.md) | Quy định đóng góp mã nguồn, kiểm tra chất lượng và phát hành |
-| [docs/technical/architecture.md](docs/technical/architecture.md) | Kiến trúc phân tầng mã nguồn, mô hình tiến trình và cấu trúc dữ liệu |
-| [docs/technical/protocol.md](docs/technical/protocol.md) | Đặc tả định dạng truyền dữ liệu trực tiếp |
+| [docs/README.md](docs/README.md) | Map of all documentation |
+| [CONTRIBUTING.md](docs/community/CONTRIBUTING.md) | Contribution rules, quality checks and releasing |
+| [architecture.md](docs/technical/architecture.md) | Layered architecture, process model and data on disk |
+| [protocol.md](docs/technical/protocol.md) | Wire format specification |
 
 ---
 
-## Đóng Góp · Bảo Mật · Giấy Phép
+## Contributing, Security, License
 
-- **Đóng góp:** Xem hướng dẫn tại [docs/community/CONTRIBUTING.md](docs/community/CONTRIBUTING.md).
-- **Bảo mật & Toàn vẹn phát hành:** Báo cáo vấn đề an toàn, quy trình build công khai và quyền riêng tư tại [docs/community/SECURITY.md](docs/community/SECURITY.md).
-- **Xác minh bản tải về:** Việc ký mã Windows được tạm hoãn; mọi bản phát hành đều đính kèm `SHA256SUMS.txt` sinh từ GitHub Actions để kiểm tra toàn vẹn.
-- **Giấy phép:** Phần mềm được phát hành theo giấy phép tự do nguồn mở [GPL-3.0-or-later](LICENSE).
-- **Tác giả:** Bản quyền (C) 2026 Nguyễn Hoàng Tùng (@tungkernel).
+- **Contributing:** see [CONTRIBUTING.md](docs/community/CONTRIBUTING.md).
+- **Security and release integrity:** report security issues and read the public build process and privacy policy in [SECURITY.md](docs/community/SECURITY.md).
+- **Verifying downloads:** Windows code signing is postponed. Every release ships a `SHA256SUMS.txt` generated by GitHub Actions so you can check file integrity.
+- **Sponsoring:** [SPONSORS.md](docs/community/SPONSORS.md).
+- **License:** free and open source under [GPL-3.0-or-later](LICENSE).
+- **Author:** Copyright (C) 2026 Nguyễn Hoàng Tùng ([@tungkernel](https://github.com/tungkernel)).

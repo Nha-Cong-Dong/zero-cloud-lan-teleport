@@ -53,6 +53,8 @@ teleport = "teleport.cli:main"
 teleport-gui = "teleport.ui.app:main"
 
 [project.urls]
+Homepage = "https://tungkernel.github.io/zcl-hub/"
+Funding = "https://github.com/sponsors/tungkernel"
 Repository = "https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport"
 
 [tool.setuptools.dynamic]
