@@ -132,4 +132,15 @@ Khi muốn gửi ảnh, video hoặc tài liệu giữa máy tính và điện t
 
 ---
 
-*Tài liệu được cập nhật ngày: 2026-11-18 · Tác giả: Nguyễn Hoàng Tùng (@tungkernel)*
+## 8. Ủng Hộ Dự Án (Tự Nguyện)
+
+ZCL Teleport hoàn toàn miễn phí, không quảng cáo, không cần tài khoản và không thu thập bất kỳ dữ liệu sử dụng nào. Toàn bộ tính năng đều mở đầy đủ cho mọi người dùng trên Windows, macOS và Linux.
+
+Nếu ứng dụng giúp bạn tiết kiệm thời gian mỗi ngày, bạn có thể ủng hộ tự nguyện để duy trì việc phát triển, đóng gói đa nền tảng và ký mã số cho các bản phát hành:
+
+- **Trang chủ ZCL Hub (VietQR nội địa & GitHub Sponsors):** https://tungkernel.github.io/zcl-hub/
+- **Ủng hộ quốc tế qua GitHub Sponsors:** https://github.com/sponsors/tungkernel
+
+---
+
+*Tài liệu được cập nhật ngày: 2026-11-27 · Tác giả: Nguyễn Hoàng Tùng (@tungkernel)*

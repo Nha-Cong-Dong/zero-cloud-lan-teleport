@@ -62,6 +62,9 @@ FIXED_NOTES = "\n".join(
         "- Giấy phép: Teleport theo GPL-3.0-or-later; giấy phép các thành phần đi kèm ở"
         " `THIRD-PARTY-NOTICES.txt`, nơi lấy mã nguồn ở `SOURCE.txt` (cả hai nằm cạnh file exe, trong"
         " bản zip lẫn thư mục cài). Mã nguồn thư viện LGPL đóng kèm: {sources}.",
+        "- Ủng hộ dự án: ZCL Teleport miễn phí, mã nguồn mở và không thu thập dữ liệu. Nếu ứng dụng"
+        " hữu ích, bạn có thể ủng hộ tự nguyện tại https://github.com/sponsors/tungkernel hoặc"
+        " https://tungkernel.github.io/zcl-hub/.",
         "",
     )
 )
@@ -83,6 +86,9 @@ SIGNED_FIXED_NOTES = "\n".join(
         "- Giấy phép: Teleport theo GPL-3.0-or-later; giấy phép các thành phần đi kèm ở"
         " `THIRD-PARTY-NOTICES.txt`, nơi lấy mã nguồn ở `SOURCE.txt` (cả hai nằm cạnh file exe, trong"
         " bản zip lẫn thư mục cài). Mã nguồn thư viện LGPL đóng kèm: {sources}.",
+        "- Ủng hộ dự án: ZCL Teleport miễn phí, mã nguồn mở và không thu thập dữ liệu. Nếu ứng dụng"
+        " hữu ích, bạn có thể ủng hộ tự nguyện tại https://github.com/sponsors/tungkernel hoặc"
+        " https://tungkernel.github.io/zcl-hub/.",
         "",
     )
 )

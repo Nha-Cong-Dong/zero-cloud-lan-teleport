@@ -1572,3 +1572,11 @@ def test_delta_routing_watch_load_toggle_remove_and_add_dialogs(env, tmp_path: P
     remove_btns[0].click()
     env.host.run_calls()
     assert [r.name for r in env.node.routing_rules] == ["Docs"]
+
+
+def test_support_button_opens_sponsors_url(env):
+    from teleport.ui.settings_controller import SUPPORT_URL
+
+    env.page.support_button.click()
+    assert len(env.urls) == 1
+    assert env.urls[0].toString() == SUPPORT_URL

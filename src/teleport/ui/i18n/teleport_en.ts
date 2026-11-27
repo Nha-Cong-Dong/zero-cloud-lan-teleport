@@ -2651,6 +2651,11 @@
         <translation>Open receive folder</translation>
     </message>
     <message>
+        <location filename="../settings.py"/>
+        <source>Mở trang ủng hộ</source>
+        <translation>Open support page</translation>
+    </message>
+    <message>
         <location filename="../settings_widgets.py"/>
         <source>Nhạc</source>
         <translation>Audio</translation>
@@ -2977,6 +2982,11 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <source>ZCL Teleport miễn phí, mã nguồn mở và không quảng cáo. Nếu ứng dụng hữu ích, bạn có thể ủng hộ tự nguyện để duy trì dự án.</source>
+        <translation>ZCL Teleport is free, open-source, and ad-free. If you find it useful, you can voluntarily support ongoing development.</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
         <source>chỉ cấp ngoài</source>
         <translation>top folder only</translation>
     </message>
@@ -3159,6 +3169,11 @@
         <location filename="../settings_widgets.py"/>
         <source>Ảnh</source>
         <translation>Images</translation>
+    </message>
+    <message>
+        <location filename="../settings.py"/>
+        <source>Ủng hộ dự án</source>
+        <translation>Support the project</translation>
     </message>
 </context>
 <context>

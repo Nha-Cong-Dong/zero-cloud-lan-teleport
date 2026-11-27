@@ -283,6 +283,7 @@ class Spy:
         "change_receive_dir_requested",
         "discover_requested",
         "open_notices_requested",
+        "open_support_requested",
         "notice_action",
     )
 
@@ -1266,6 +1267,14 @@ def test_advanced_shows_version_protocol_and_license(ui):
     assert VERSION in text
     assert f"Teleport {teleport.__version__} · giao thức {PROTOCOL_VERSION}" in text
     assert LICENSE in text
+    assert "Ủng hộ dự án" in text
+
+
+def test_support_button_emits_open_support_requested(ui):
+    open_section(ui.page, "ADVANCED")
+    assert ui.page.support_button.isVisibleTo(ui.page)
+    ui.page.support_button.click()
+    assert ui.spy.of("open_support_requested") == [()]
 
 
 @pytest.mark.parametrize("exists", [False, True])
