@@ -7,10 +7,11 @@
 # ZCL Teleport
 
 **Chuyển file dung lượng lớn và đồng bộ văn bản giữa các máy tính trong cùng mạng nội bộ.**  
-**Không trung gian · Không tài khoản · Tự động tiếp tục khi có mạng lại.**
+**Windows · macOS · Linux · Không trung gian · Không tài khoản · Tự động tiếp tục.**
 
 [![CI](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml/badge.svg)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml)
 [![Bản phát hành](https://img.shields.io/github/v/release/Nha-Cong-Dong/zero-cloud-lan-teleport?include_prereleases&label=b%E1%BA%A3n%20ph%C3%A1t%20h%C3%A0nh)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)
+![Nền tảng](https://img.shields.io/badge/n%E1%BB%81n%20t%E1%BA%A3ng-Windows%20%7C%20macOS%20%7C%20Linux-555)
 [![Giấy phép](https://img.shields.io/badge/gi%E1%BA%A5y%20ph%C3%A9p-GPL--3.0-blue)](../../LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 [![Tài trợ](https://img.shields.io/badge/t%C3%A0i%20tr%E1%BB%A3-tungkernel-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/tungkernel)
@@ -59,6 +60,15 @@ Khi hai máy tính ở gần nhau và dùng chung một mạng nội bộ, việ
 - **Tiết kiệm bộ nhớ:** File lớn cỡ nào cũng đọc ghi tuần tự theo từng phần, không làm chậm máy.
 - **Không sợ rớt mạng:** Mất mạng giữa chừng thì khi có lại sẽ tự động gửi tiếp đúng phần còn thiếu.
 
+### Gom trọn các tính năng truyền nặng trong cùng một ứng dụng
+
+| Khả năng | Hoạt động thực tế |
+|---|---|
+| **Nối lại xuyên mất điện hai chiều** | Cả máy gửi và máy nhận đều lưu trạng thái truyền trên đĩa; dù một bên mất điện hoặc khởi động lại, khi mở lại ứng dụng chỉ gửi tiếp phần còn thiếu. |
+| **Truyền thông minh phần thay đổi** | Khi máy nhận đã có bản cũ hoặc gần giống của tệp lớn, chỉ các phần dữ liệu thay đổi được truyền đi thay vì gửi lại toàn bộ tệp. |
+| **Tự phân loại & cổng đẩy tự động** | Tự sắp xếp tệp nhận vào thư mục đích theo loại tệp hoặc máy gửi, và tự gửi ngay tệp mới thả vào thư mục theo dõi. |
+| **Dòng lệnh tích hợp sẵn** | Lệnh `teleport` nói chuyện thẳng với ứng dụng đang chạy nền, thuận tiện cho thao tác nhanh và tự động hóa. |
+
 Chi tiết nguyên tắc thiết kế: [docs/product/y_tuong.md](y_tuong.md).
 
 ---
@@ -82,7 +92,7 @@ Tiêu chí chi tiết cho từng tính năng: [docs/product/mvp.md](mvp.md).
 | **Tùy biến linh hoạt** | Đổi tên máy, đổi thư mục lưu file nhận, bật/tắt nhanh trạng thái ngay trên thẻ máy, ẩn danh khỏi máy lạ, đổi giao diện sáng/tối. | Hoàn thành |
 | **Hỗ trợ hai ngôn ngữ** | Tiếng Việt và Tiếng Anh. | Hoàn thành |
 | **Hỗ trợ dòng lệnh** | Cung cấp lệnh điều khiển cho người thích thao tác nhanh hoặc tự động hóa công việc. | Hoàn thành |
-| **Bộ cài đặt dễ dùng** | Bộ cài đặt tiêu chuẩn cho Windows (Tiếng Việt & Tiếng Anh) cùng kịch bản đóng gói đa nền tảng. | Hoàn thành |
+| **Gói cài đặt đa nền tảng** | Bộ cài đặt và gói chạy độc lập cho Windows (`.exe`, `.zip` chạy ngay), macOS (`.dmg`) và Linux (`AppImage`). | Hoàn thành |
 
 <table>
 <tr>
@@ -107,16 +117,32 @@ Tiêu chí chi tiết cho từng tính năng: [docs/product/mvp.md](mvp.md).
 
 ## Bắt Đầu Nhanh
 
-Cần **hai máy tính Windows 10/11 trong cùng một mạng nội bộ**, mỗi máy mở ứng dụng Teleport.
+Cần **hai máy tính bất kỳ trong cùng một mạng nội bộ (Windows, macOS hoặc Linux — ghép chéo thoải mái)**, mỗi máy mở ứng dụng Teleport. Tải gói tương ứng tại trang [Bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases).
 
-**1. Tải về** từ trang [Bản phát hành](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases):
-- `teleport-setup-x64.exe`: Bản cài đặt tự động (khuyên dùng).
-- `teleport-gui-windows-x64.zip`: Bản chạy ngay không cần cài đặt.
-- `teleport-cli-windows-x64.zip`: Bản dòng lệnh dành cho người dùng kỹ thuật.
+> [!NOTE]
+> **Mức độ kiểm thử theo nền tảng:** Windows 10/11 là nền tảng chính đã được thử trên máy thật. Gói macOS (`.dmg`) và Linux (`AppImage`) được build và kiểm thử tự động trên CI, chưa thử trên máy Mac hoặc Linux vật lý — rất hoan nghênh phản hồi lỗi từ người dùng hai hệ điều hành này.
 
-**2. Mở ứng dụng:** Khi mở lần đầu, tường lửa có thể hỏi xác nhận, hãy chọn cho phép trên mạng riêng tư (Private).
+### Windows (10 / 11, x64)
+- `teleport-setup-<phiên-bản>-x64.exe`: Bản cài đặt tiêu chuẩn (khuyên dùng).
+- `teleport-gui-<phiên-bản>-windows-x64.zip`: Bản chạy ngay không cần cài đặt.
+- `teleport-cli-<phiên-bản>-windows-x64.zip`: Bản dòng lệnh.
 
-**3. Ghép đôi và gửi:** Xem hướng dẫn chi tiết ngay bên dưới.
+Lần đầu mở, Windows SmartScreen có thể cảnh báo vì bản chưa ký mã (chọn **More info → Run anyway**), và tường lửa có thể hỏi xác nhận — hãy chọn cho phép trên mạng riêng tư (**Private**).
+
+### macOS (12+)
+- `Teleport-<phiên-bản>-macOS.dmg`: Đóng gói trên GitHub Actions (`macos-latest`).
+
+Mở tệp `.dmg` và kéo `Teleport.app` vào **Applications**. Do ứng dụng chưa ký mã, Gatekeeper có thể chặn lần mở đầu: vào **System Settings → Privacy & Security → Open Anyway**, và cấp quyền **Local Network** khi macOS hỏi để tìm thấy máy trong mạng.
+
+### Linux (Ubuntu 22.04+ / x86_64)
+- `Teleport-<phiên-bản>-x86_64.AppImage`: Gói AppImage chạy trực tiếp.
+
+```bash
+chmod +x Teleport-*-x86_64.AppImage
+./Teleport-*-x86_64.AppImage
+```
+
+AppImage cần FUSE (`libfuse2`, hoặc `libfuse2t64` trên Ubuntu 24.04). Nếu máy không có FUSE, chạy kèm `--appimage-extract-and-run`. Nếu tường lửa (`ufw`, `firewalld`) chặn kết nối nội bộ, hãy cho phép lưu lượng mạng nội bộ và mDNS (UDP 5353).
 
 ---
 
@@ -125,7 +151,7 @@ Cần **hai máy tính Windows 10/11 trong cùng một mạng nội bộ**, mỗ
 1. **Lần đầu khởi động:** Ứng dụng hiển thị tên đại diện của máy bạn. Nhấn **Bắt đầu**.
 2. **Tìm máy:** Bấm vào biểu tượng tìm kiếm hoặc nút **Ghép đôi máy mới**. Các máy đang mở ứng dụng sẽ tự động hiện lên trên màn hình.
 3. **Ghép đôi (chỉ làm lần đầu):** Bấm vào máy bạn muốn kết nối. Cả hai máy sẽ hiện cùng một mã 6 chữ số: nếu trùng khớp, bấm **Trùng khớp** ở cả hai máy.
-4. **Gửi file:** Kéo thả file vào tên máy ở danh sách bên trái hoặc bấm **Gửi file** (phím tắt `Ctrl + O`).
+4. **Gửi file:** Kéo thả file vào tên máy ở danh sách bên trái hoặc bấm **Gửi file** (phím tắt `Ctrl + O`, hoặc `Cmd + O` trên macOS).
 5. **Nhận file:** Bên nhận sẽ nhận được thông báo gồm tên người gửi, tên file và dung lượng. Bấm **Nhận** để đồng ý hoặc **Từ chối**. Mặc định file được lưu vào thư mục `Teleport` trong mục Tải về.
 6. **Theo dõi tiến độ:** Tốc độ truyền tải và thời gian dự kiến hiển thị trực quan. Nếu mạng bị gián đoạn, ứng dụng chuyển sang trạng thái chờ và tự động gửi tiếp khi có mạng.
 7. **Đóng ứng dụng:** Đóng cửa sổ ứng dụng sẽ thu nhỏ xuống thanh tác vụ để tiếp tục nhận file khi cần. Để tắt hẳn, nhấn chuột phải vào biểu tượng dưới thanh tác vụ và chọn **Thoát**.
@@ -134,9 +160,9 @@ Cần **hai máy tính Windows 10/11 trong cùng một mạng nội bộ**, mỗ
 
 ## Sử Dụng Dòng Lệnh
 
-Lệnh `teleport` dành cho những ai quen thao tác trên cửa sổ lệnh:
+Lệnh `teleport` chạy được trên cả Windows, macOS và Linux. Trên Windows có gói riêng `teleport-cli-*-windows-x64.zip`; trên macOS và Linux, cài từ mã nguồn bằng Python 3.12+ (xem mục [Dành Cho Lập Trình Viên](#dành-cho-lập-trình-viên)) rồi chạy `teleport` (hoặc `python -m teleport`):
 
-```powershell
+```bash
 # Máy B: Mở chế độ chờ ghép đôi
 teleport listen
 
@@ -251,11 +277,16 @@ Tiến độ chi tiết từng giai đoạn được cập nhật tại [docs/pr
 
 Yêu cầu môi trường: **Python 3.12+**.
 
-```powershell
+```bash
 git clone https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport.git
 cd zero-cloud-lan-teleport
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python3 -m venv .venv
+
+# macOS / Linux:
+source .venv/bin/activate
+# Windows (PowerShell):
+# .\.venv\Scripts\Activate.ps1
+
 pip install -e ".[dev,gui]"
 pytest                                # Chạy kiểm thử tự động
 teleport-gui                          # Khởi chạy giao diện đồ họa

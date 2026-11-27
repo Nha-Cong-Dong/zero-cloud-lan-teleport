@@ -9,7 +9,7 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 - **Tài trợ dự án:** thêm [SPONSORS.md](SPONSORS.md) (cách ủng hộ qua GitHub Sponsors, mục đích sử dụng tiền, cam kết không khóa tính năng), nút Sponsor trong `FUNDING.yml` và `pyproject.toml` (`Funding`, `Homepage`).
 
 ### Changed
-- **README:** `README.md` ở gốc kho chuyển sang tiếng Anh (mặc định); bản tiếng Việt nằm ở `docs/product/README.vi.md`.
+- **README:** `README.md` ở gốc kho chuyển sang tiếng Anh (mặc định) với bộ ảnh giao diện tiếng Anh (`docs/assets/en-*.png`), bổ sung hướng dẫn cài đặt đa nền tảng (Windows / macOS / Linux) và điểm mạnh cốt lõi; bản tiếng Việt đồng bộ tại `docs/product/README.vi.md`.
 
 ## [1.8.0] - 2026-11-27
 

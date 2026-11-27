@@ -7,10 +7,11 @@
 # ZCL Teleport
 
 **Send large files and sync clipboard text between computers on the same local network.**  
-**No middleman · No accounts · Resumes automatically when the connection returns.**
+**Windows · macOS · Linux · No middleman · No accounts · Resumes automatically.**
 
 [![CI](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml/badge.svg)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Nha-Cong-Dong/zero-cloud-lan-teleport?include_prereleases)](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-555)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 [![Sponsor](https://img.shields.io/badge/sponsor-tungkernel-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/tungkernel)
@@ -22,7 +23,7 @@
 > **About:** ZCL Teleport moves very large files and shared clipboard content between computers on the same local network. Data goes straight from one machine to the other, encrypted, without passing through any outside server and without collecting any user information. If the connection drops halfway, the app picks up where it stopped as soon as the link is back.
 
 > [!NOTE]
-> **Version `v1.8.0` is ready.** See what changed in [CHANGELOG.md](docs/community/CHANGELOG.md). Roadmap and progress: [ke_hoach.md](docs/product/ke_hoach.md). Measured speeds: [benchmark.md](docs/technical/benchmark.md). Most project documents are written in Vietnamese.
+> **Version `v1.8.0` is available** with packages for Windows, macOS and Linux. See what changed in [CHANGELOG.md](docs/community/CHANGELOG.md). Roadmap and progress: [ke_hoach.md](docs/product/ke_hoach.md). Measured speeds: [benchmark.md](docs/technical/benchmark.md). Most internal project documents are written in Vietnamese.
 
 ---
 
@@ -60,6 +61,17 @@ When two computers sit next to each other on the same network, moving a file of 
 - **Light on memory:** files of any size are read and written piece by piece.
 - **Safe against dropouts:** if the network goes away, only the missing part is sent once it returns.
 
+### Built for heavy transfers, all in one place
+
+Beyond basic file sending, Teleport combines four capabilities in the same app:
+
+| Capability | What it does |
+|---|---|
+| **Two-way power-loss resume** | Both sender and receiver keep transfer state on disk. Even if either machine loses power or reboots mid-transfer, sending continues with only the missing blocks once both are back. |
+| **Smart delta transfer** | When the receiver already has an older or similar copy of a large file, Teleport only transmits the changed blocks instead of resending the entire file. |
+| **Auto-push watch folders & receive routing** | Drop files into a watched folder to send them automatically to a chosen device, and sort incoming files into target folders by file type or sender. |
+| **Built-in CLI** | Scriptable `teleport` commands that talk directly to the running background app instead of fighting over ports or locks. |
+
 Design principles: [y_tuong.md](docs/product/y_tuong.md).
 
 ---
@@ -83,24 +95,24 @@ Acceptance criteria for every feature: [mvp.md](docs/product/mvp.md).
 | **Customization** | Rename the device, choose the save folder, toggle options right on a device card, hide from unknown devices, light or dark theme. | Done |
 | **Two languages** | Vietnamese and English. | Done |
 | **Command line** | Commands for quick use and automation. | Done |
-| **Easy installer** | Standard Windows installer (Vietnamese and English) plus packaging scripts for other platforms. | Done |
+| **Cross-platform packages** | Installers and standalone packages for Windows (`.exe`, portable `.zip`), macOS (`.dmg`) and Linux (`AppImage`). | Done |
 
 <table>
 <tr>
-<td width="50%"><img src="docs/assets/tim-may-moi.png" alt="Device discovery screen listing machines running the app on the local network"></td>
-<td width="50%"><img src="docs/assets/hoi-nhan-file.png" alt="Transfer chat screen with image previews, quick-open buttons and the incoming file prompt"></td>
+<td width="50%"><img src="docs/assets/en-device-discovery.png" alt="Device discovery screen listing machines running the app on the local network"></td>
+<td width="50%"><img src="docs/assets/en-receive-prompt.png" alt="Transfer chat screen with progress indicator and the incoming file confirmation prompt"></td>
 </tr>
 <tr>
 <td align="center"><b>Finding devices on the network</b></td>
-<td align="center"><b>Sending files, image previews and accepting incoming files</b></td>
+<td align="center"><b>Sending files and confirming incoming transfers</b></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/assets/web-qr-khach.png" alt="Phone guest page with a QR code, file sharing and two-way text chat"></td>
-<td width="50%"><img src="docs/assets/tu-dong-hoa-cai-dat.png" alt="Transfer settings page showing smart delta transfer, auto-sort rules and automatic push"></td>
+<td width="50%"><img src="docs/assets/en-web-guest.png" alt="Guest mode screen with a QR code, link sharing and file picker for phones"></td>
+<td width="50%"><img src="docs/assets/en-transfer-settings.png" alt="Transfer settings screen showing smart delta transfer, smart receive routing and auto-push watch folders"></td>
 </tr>
 <tr>
-<td align="center"><b>Guest mode via QR code on a phone</b></td>
-<td align="center"><b>Auto-sorting of received files and automatic push</b></td>
+<td align="center"><b>Guest mode via QR code for phones</b></td>
+<td align="center"><b>Smart delta, auto-sorting and watch folders</b></td>
 </tr>
 </table>
 
@@ -108,26 +120,42 @@ Acceptance criteria for every feature: [mvp.md](docs/product/mvp.md).
 
 ## Quick Start
 
-You need **two Windows 10/11 computers on the same local network**, each running Teleport.
+You need **two computers on the same local network (Windows, macOS or Linux — mix freely)**, each running Teleport. Download the package for your system from the [Releases](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases) page.
 
-**1. Download** from the [Releases](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases) page:
-- `teleport-setup-x64.exe`: installer (recommended).
-- `teleport-gui-windows-x64.zip`: portable build, no installation.
-- `teleport-cli-windows-x64.zip`: command-line build for technical users.
+> [!NOTE]
+> **Platform testing status:** Windows 10/11 is the primary platform tested on real hardware. The macOS (`.dmg`) and Linux (`AppImage`) packages are built and tested automatically in CI, not yet verified on physical Macs or Linux desktops — bug reports from macOS and Linux users are very welcome.
 
-**2. Open the app.** On first launch the firewall may ask for permission. Allow access on private networks.
+### Windows (10 / 11, x64)
+- `teleport-setup-<version>-x64.exe`: standard installer (recommended).
+- `teleport-gui-<version>-windows-x64.zip`: portable build, no installation.
+- `teleport-cli-<version>-windows-x64.zip`: command-line build.
 
-**3. Pair and send.** See the steps below.
+On first launch, Windows SmartScreen may warn that the app is unsigned (choose **More info → Run anyway**), and Windows Firewall may ask for permission — allow access on **Private networks**.
+
+### macOS (12+)
+- `Teleport-<version>-macOS.dmg`: built on GitHub Actions (`macos-latest`).
+
+Open the `.dmg` and drag `Teleport.app` into **Applications**. Because the app is not notarized yet, macOS Gatekeeper may block the first launch: open **System Settings → Privacy & Security → Open Anyway**. When prompted, allow **Local Network** access so Teleport can find nearby devices.
+
+### Linux (Ubuntu 22.04+ / x86_64)
+- `Teleport-<version>-x86_64.AppImage`: standalone AppImage.
+
+```bash
+chmod +x Teleport-*-x86_64.AppImage
+./Teleport-*-x86_64.AppImage
+```
+
+AppImages require FUSE (`libfuse2`, or `libfuse2t64` on Ubuntu 24.04). If FUSE is not installed, run `./Teleport-*-x86_64.AppImage --appimage-extract-and-run`. If your firewall (`ufw`, `firewalld`) blocks local traffic, allow local network connections and mDNS (UDP 5353).
 
 ---
 
 ## Using the App
 
-1. **First launch:** the app shows the name of your computer. Click **Get started** (button labels follow the app's language setting).
-2. **Find devices:** click the search icon or the pair-new-device button. Machines running the app appear automatically.
+1. **First launch:** the app shows the name of your computer. Click **Get started**.
+2. **Find devices:** click the search icon or **Pair a new device**. Machines running the app appear automatically.
 3. **Pair (first time only):** click the device. Both screens show the same 6-digit code. If they match, confirm on both machines.
-4. **Send:** drag files onto a device name in the left list, or use the send button (`Ctrl + O`).
-5. **Receive:** the receiver sees the sender's name, the file name and its size, then accepts or declines. Files are saved to a `Teleport` folder inside Downloads by default.
+4. **Send:** drag files onto a device name in the left list, or use the send button (`Ctrl + O`, or `Cmd + O` on macOS).
+5. **Receive:** the receiver sees the sender's name, the file name and its size, then accepts or declines. Files are saved to a `Teleport` folder inside your Downloads folder by default.
 6. **Track progress:** speed and estimated time are shown. If the network breaks, the transfer waits and resumes on its own.
 7. **Closing:** closing the window minimizes the app to the tray so it can keep receiving. To quit completely, right-click the tray icon and choose **Quit**.
 
@@ -135,9 +163,9 @@ You need **two Windows 10/11 computers on the same local network**, each running
 
 ## Command Line
 
-The `teleport` command is for people who prefer a terminal:
+The `teleport` command works on Windows, macOS and Linux. On Windows you can download the standalone `teleport-cli-*-windows-x64.zip` from [Releases](https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport/releases); on macOS and Linux, install from source with Python 3.12+ (see [For Developers](#for-developers)) and run `teleport` (or `python -m teleport`).
 
-```powershell
+```bash
 # Machine B: wait for pairing
 teleport listen
 
@@ -206,7 +234,7 @@ No. The computers only need to be on the same local network (same cable network 
 <details>
 <summary><b>The two computers are on the same network but cannot see each other.</b></summary>
 
-Some public Wi-Fi networks stop devices from talking to each other. Check that the firewall allows the app on private networks, or type the other machine's address directly into the search box.
+Some public Wi-Fi networks stop devices from talking to each other. Check that the firewall allows the app on private networks (or allow Local Network access on macOS), or type the other machine's address directly into the search box.
 </details>
 
 <details>
@@ -218,13 +246,13 @@ Tens to hundreds of gigabytes work reliably, because data is read and written pi
 <details>
 <summary><b>What if the network drops or a computer shuts down mid-transfer?</b></summary>
 
-Pieces already received are stored safely. When the receiving machine opens the app again and the link is back, the transfer continues with the missing part only.
+Pieces already received are stored safely. When both machines open the app again and the link is back, the transfer continues with the missing part only.
 </details>
 
 <details>
 <summary><b>Do both computers need the app open?</b></summary>
 
-Yes. Sender and receiver both need to be running Teleport to find each other and connect.
+Yes. Sender and receiver both need to be running Teleport to find each other and connect. For phones, use Guest mode via QR code — no phone app is needed.
 </details>
 
 <details>
@@ -268,11 +296,16 @@ Not able to sponsor? A star on the repository, a bug report or a mention to a fr
 
 Requires **Python 3.12+**.
 
-```powershell
+```bash
 git clone https://github.com/Nha-Cong-Dong/zero-cloud-lan-teleport.git
 cd zero-cloud-lan-teleport
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+python3 -m venv .venv
+
+# macOS / Linux:
+source .venv/bin/activate
+# Windows (PowerShell):
+# .\.venv\Scripts\Activate.ps1
+
 pip install -e ".[dev,gui]"
 pytest                                # run the automated tests
 teleport-gui                          # start the graphical app
