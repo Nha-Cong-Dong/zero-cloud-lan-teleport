@@ -61,6 +61,9 @@ MIN_DPR = 0.25  # tỉ lệ điểm ảnh (`devicePixelRatio`) hợp lệ của 
 MAX_DPR = 16.0
 RADAR_VIEWS = ("radar", "list")
 THEMES = ("light", "dark")  # chế độ màu ép; None = theo hệ điều hành
+SOUND_MODES = ("off", "notify", "full")  # chế độ âm thanh; None = mặc định (full)
+MIN_SOUND_VOLUME = 0
+MAX_SOUND_VOLUME = 100
 # Mã màu nhấn: chỉ kiểm dạng (`app` không biết bảng màu của `ui`); mã lạ đúng dạng được giữ nguyên.
 ACCENT_RE = re.compile(r"[a-z][a-z0-9_]{0,31}", re.ASCII)
 
@@ -85,6 +88,11 @@ _FIELDS = (
     "radar_view",
     "theme",
     "accent",
+    "sound_mode",
+    "sound_volume",
+    "auto_dismiss_notices",
+    "tray_notifications",
+    "onboarding_dismissed",
     "window",
     "last_conversation",
     "tray_hint_shown",
@@ -202,6 +210,26 @@ def _check_accent(value: object) -> str | None:
     return value
 
 
+def _check_sound_mode(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("sound_mode phải là None hoặc chuỗi")
+    if value not in SOUND_MODES:
+        raise ValueError(f"sound_mode phải là None hoặc một trong {SOUND_MODES}")
+    return value
+
+
+def _check_sound_volume(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise TypeError("sound_volume phải là None hoặc số nguyên")
+    if not MIN_SOUND_VOLUME <= value <= MAX_SOUND_VOLUME:
+        raise ValueError(f"sound_volume phải trong {MIN_SOUND_VOLUME}–{MAX_SOUND_VOLUME}")
+    return value
+
+
 def _check_last_conversation(value: object) -> str | None:
     # MessageError là ValueError.
     return None if value is None else validate_device_id(value)
@@ -222,6 +250,11 @@ _CHECKS: dict[str, Any] = {
     "radar_view": _check_radar_view,
     "theme": _check_theme,
     "accent": _check_accent,
+    "sound_mode": _check_sound_mode,
+    "sound_volume": _check_sound_volume,
+    "auto_dismiss_notices": lambda v: _check_bool("auto_dismiss_notices", v),
+    "tray_notifications": lambda v: _check_bool("tray_notifications", v),
+    "onboarding_dismissed": lambda v: _check_bool("onboarding_dismissed", v),
     "last_conversation": _check_last_conversation,
     "tray_hint_shown": lambda v: _check_bool("tray_hint_shown", v),
 }
@@ -232,6 +265,9 @@ _BOOL_FIELDS = frozenset(
         "stealth",
         "autostart",
         "first_run_done",
+        "auto_dismiss_notices",
+        "tray_notifications",
+        "onboarding_dismissed",
         "tray_hint_shown",
         "create_subfolder",
         "delta_sync",
@@ -392,6 +428,11 @@ class Settings:
     radar_view: str | None = None  # None = giao diện tự chọn
     theme: str | None = None  # None = theo hệ điều hành; ngoài ra một trong THEMES
     accent: str | None = None  # None = màu nhấn mặc định; mã lạ đúng dạng: `ui` hiện mặc định
+    sound_mode: str | None = None  # None = mặc định (full); ngoài ra một trong SOUND_MODES
+    sound_volume: int | None = None  # None = mặc định (70); ngoài ra 0..100
+    auto_dismiss_notices: bool = True  # True = tự ẩn thanh thông báo thành công / thông tin sau vài giây
+    tray_notifications: bool = True  # True = hiện bóng thoại ở khay hệ thống khi nền
+    onboarding_dismissed: bool = False  # True = đã đóng thẻ hướng dẫn khởi đầu
     window: WindowGeometry | None = None  # None = giao diện dùng cỡ mặc định
     last_conversation: str | None = None  # `device_id` của cuộc trò chuyện mở gần nhất
     tray_hint_shown: bool = False  # True = đã báo “vẫn chạy ở khay” (chỉ báo một lần)
@@ -501,6 +542,8 @@ class Settings:
             "radar_view",
             "theme",
             "accent",
+            "sound_mode",
+            "sound_volume",
             "last_conversation",
         ):
             value = getattr(self, name)
@@ -508,6 +551,10 @@ class Settings:
                 data[name] = value
         if not self.visible:
             data["visible"] = False
+        if not self.auto_dismiss_notices:
+            data["auto_dismiss_notices"] = False
+        if not self.tray_notifications:
+            data["tray_notifications"] = False
         if not self.create_subfolder:
             data["create_subfolder"] = False
         if not self.delta_sync:
@@ -522,6 +569,8 @@ class Settings:
             data["autostart"] = True
         if self.first_run_done:
             data["first_run_done"] = True
+        if self.onboarding_dismissed:
+            data["onboarding_dismissed"] = True
         if self.window is not None:
             data["window"] = self.window.to_dict()
         if self.tray_hint_shown:

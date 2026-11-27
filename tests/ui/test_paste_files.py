@@ -41,7 +41,7 @@ HINT = (
 )
 OPEN_SETTINGS = "Mở Cài đặt"
 NO_DEVICE = "Ghép đôi một máy trước ({discover_key}), rồi nhấn {key} để gửi file đã chép."
-EMPTY_TEXT = "Hoặc bấm Gửi file ở dưới, hay nhấn {key} để dán file đã chép."
+EMPTY_TEXT = "Nhấn {key} để dán file"
 
 
 # =================================================================================================

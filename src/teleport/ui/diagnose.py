@@ -472,9 +472,17 @@ class DiagnoseBar(InfoBar):
         action: texts.Text | None = None,
         secondary: texts.Text | None = None,
         closable: bool = True,
+        auto_dismiss_ms: int | None = None,
     ) -> None:
         """Như `InfoBar.show_message`, thêm `secondary` là chữ nút thứ hai (None: không có nút)."""
-        super().show_message(level, title, text, action=action, closable=closable)
+        super().show_message(
+            level,
+            title,
+            text,
+            action=action,
+            closable=closable,
+            auto_dismiss_ms=auto_dismiss_ms,
+        )
         self._secondary = secondary
         self.secondary_button.setVisible(secondary is not None)
         self._apply_buttons()
@@ -712,11 +720,14 @@ class DiagnoseController(QObject):
         devices: DeviceListModel,
         window: QWidget,
         parent: QObject | None = None,
+        *,
+        show_passive_offline: bool = True,
     ) -> None:
         super().__init__(parent)
         self._view = view
         self._devices = devices
         self._window = window
+        self._show_passive_offline = bool(show_passive_offline)
         self._host: NodeHost | None = None
         self._started = False
         self._closing = False
@@ -1167,6 +1178,13 @@ class DiagnoseController(QObject):
             return
         view, diagnosis, overlay, key = state
         device_id = view.device_id
+        if (
+            not self._show_passive_offline
+            and overlay is Overlay.NONE
+            and diagnosis.cause in (Cause.RECONNECTING, Cause.NOT_SEEN)
+        ):
+            self._hide()
+            return
         if not diagnosis.urgent and overlay is Overlay.NONE:
             since = self._offline_since.get(device_id)
             elapsed_ms = 0.0 if since is None else (_monotonic() - since) * 1000
@@ -1214,7 +1232,14 @@ class DiagnoseController(QObject):
         busy = overlay is Overlay.BUSY
         action = connect_by_ip if diagnosis.can_connect_ip and not busy else None
         retry = diagnosis.can_retry and overlay not in (Overlay.BUSY, Overlay.NO_TARGET)
-        self.bar.show_message(level, title, body, action=action, secondary=texts.retry if retry else None)
+        self.bar.show_message(
+            level,
+            title,
+            body,
+            action=action,
+            secondary=texts.retry if retry else None,
+            auto_dismiss_ms=0 if busy else None,
+        )
 
     def _on_dismissed(self) -> None:
         device_id = self._device_id

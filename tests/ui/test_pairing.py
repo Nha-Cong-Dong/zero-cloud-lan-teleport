@@ -2095,3 +2095,25 @@ def test_k_countdown_bar_description_updates_only_at_30_10_5(qtbot, ctl):
         else:
             assert bar.accessibleDescription() == COUNTDOWN.format(n=expected), left
         assert bar.accessibleName() == name
+
+
+def test_code_label_reveal_and_countdown_warning_blend(qtbot) -> None:
+    from teleport.ui import motion
+    from teleport.ui.pairing import CodeLabel, CountdownBar
+
+    code = CodeLabel()
+    qtbot.addWidget(code)
+    code.show()
+    code.setText("382 104")
+    motion.finish_all()
+    assert code._reveal == 1.0
+    code.repaint()
+
+    bar = CountdownBar()
+    qtbot.addWidget(bar)
+    bar.setRange(0, 100)
+    bar.show()
+    bar.setValue(80)
+    bar.repaint()
+    bar.setValue(10)
+    bar.repaint()

@@ -1434,3 +1434,43 @@ def test_t21_forget_unknown_widget_is_harmless(h, animate):
     h.thread.motion.finish()
     assert_idle(h.thread)
     stray.deleteLater()
+
+
+def test_wave5_shimmer_and_speed_sparkline(h, animate):
+    from teleport.app.transfers import TransferProgress
+    from teleport.ui.chat_bubbles import BubbleBar, _SpeedSparkline
+
+    b = h.new_send(99)
+    b.show()
+    b.progress_bar.setVisible(True)
+    clock = animate()
+
+    k = b.key
+    for idx, spd in enumerate((1_000_000.0, 2_500_000.0, 4_000_000.0), start=1):
+        b.apply_progress(
+            TransferProgress(
+                info=info(k, "transferring", done=idx * MiB, total=100 * MiB),
+                bytes_per_second=spd,
+                eta=10.0,
+                shown_bytes=idx * MiB,
+                idle_seconds=0.0,
+            )
+        )
+    assert isinstance(b.sparkline, _SpeedSparkline)
+    assert b.sparkline.samples() == (1_000_000.0, 2_500_000.0, 4_000_000.0)
+    assert b.sparkline.isVisibleTo(b)
+    b.sparkline.repaint()
+
+    assert isinstance(b.progress_bar, BubbleBar)
+    assert h.thread.motion.shimmer_phase(b) is not None
+    clock.t = T0 + 375.0
+    phase = h.thread.motion.shimmer_phase(b)
+    assert phase is not None and 0.2 <= phase <= 0.3
+    b.progress_bar.repaint()
+
+    h.view.handle(finished(k, "done"))
+    assert not b.sparkline.isVisibleTo(b)
+    assert h.thread.motion.shimmer_phase(b) is None
+    clock.t = T0 + 5000.0
+    h.thread.motion.tick(clock.t)
+    assert_idle(h.thread)

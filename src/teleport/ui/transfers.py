@@ -175,7 +175,7 @@ from teleport.app.transfers import (
 )
 from teleport.core import pairing
 from teleport.core.links import ConnectResult
-from teleport.ui import send, shell, texts
+from teleport.ui import send, shell, sounds, texts
 from teleport.ui.activity import ActivityTracker, FinishedTransfer, latest_by_device
 from teleport.ui.bridge import NodeHost
 from teleport.ui.chat import ChatView
@@ -185,6 +185,7 @@ from teleport.ui.main_window import MainWindow, Page, ViewState
 from teleport.ui.notify import ReceivedBatch, batch_reveal, received_batch_text
 from teleport.ui.offer import OfferBook, OfferPhase, OfferPrompts, always_save_error_text
 from teleport.ui.progress import ProgressBatch, ProgressItem, ProgressThrottle
+from teleport.ui.sounds import SoundCue
 from teleport.ui.thumbnails import is_thumbnailable
 from teleport.ui.tray import Tray
 from teleport.ui.widgets import InfoLevel
@@ -364,7 +365,9 @@ class TransfersController(QObject):
         self.offers = OfferPrompts(self.offer_book, parent=self)
         self.view.set_offer_book(self.offer_book)
         # Thanh chẩn đoán kết nối ở đầu luồng (spec F3b): tự đặt vào `view` bằng `set_device_banner`.
-        self.diagnose = DiagnoseController(self.view, window.devices, window, self)
+        self.diagnose = DiagnoseController(
+            self.view, window.devices, window, self, show_passive_offline=False
+        )
 
         conversations = window.conversations
         conversations.send_files_requested.connect(self.request_send)
@@ -565,8 +568,11 @@ class TransfersController(QObject):
         if asking and isinstance(update, OfferReceived):
             device = self._window.devices.device(update.key.device_id)
             connected = True if device is None else device.connected
-            if self.offer_book.add(update, connected=connected) and not in_view:
-                self.offers.show_prompt(update.key)
+            added = self.offer_book.add(update, connected=connected)
+            if added:
+                sounds.play(SoundCue.OFFER_INCOMING)
+                if not in_view:
+                    self.offers.show_prompt(update.key)
         self._track(update)
         if isinstance(update, OfferReceived):
             self._offer_names[update.key] = update.device_name
@@ -585,8 +591,20 @@ class TransfersController(QObject):
                 self._sources.pop(key, None)
             offer_name = self._offer_names.pop(key, None)
             saved_paths = self._saved_paths.pop(key, [])
-            if received and not thread_seen:
-                self._add_received(update.info, offer_name, saved_paths)
+            if received:
+                if thread_seen:
+                    sounds.play(SoundCue.TRANSFER_DONE)
+                else:
+                    self._add_received(update.info, offer_name, saved_paths)
+            elif update.result is TransferResult.DONE:
+                sounds.play(SoundCue.TRANSFER_DONE)
+            elif update.result not in (
+                TransferResult.CANCELLED_USER,
+                TransferResult.CANCELLED_OTHER,
+                TransferResult.REJECTED_USER,
+                TransferResult.SUSPENDED,
+            ):
+                sounds.play(SoundCue.ERROR_SOFT)
         self._update_progress()
 
     # ---- Gửi ---------------------------------------------------------------------------------
@@ -789,6 +807,7 @@ class TransfersController(QObject):
         summary = self._notify.take()
         if summary is None:
             return
+        sounds.play(SoundCue.TRANSFER_DONE)
         self._tray.show_message(received_batch_text(summary), folder=batch_reveal(summary))
 
     def _add_received(self, info: TransferInfo, offer_name: str | None, saved_paths: list[Path]) -> None:

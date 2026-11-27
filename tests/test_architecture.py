@@ -47,7 +47,7 @@ def allowed_layers(layer: str) -> set[str]:
 
 def source_files(layer: str) -> list[Path]:
     if layer == "cli":
-        return [PACKAGE / "cli.py", PACKAGE / "__main__.py"]
+        return [*sorted((PACKAGE / "cli").rglob("*.py")), PACKAGE / "__main__.py"]
     return sorted((PACKAGE / layer).rglob("*.py"))
 
 

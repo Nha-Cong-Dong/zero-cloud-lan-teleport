@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import zipfile
@@ -578,3 +579,36 @@ def test_web_guest_v2_html_enhancements() -> None:
     assert "batchBox" in WEB_GUEST_HTML
     assert "cancelUploadEntry" in WEB_GUEST_HTML and "retryUploadEntry" in WEB_GUEST_HTML
     assert "file-thumb" in WEB_GUEST_HTML
+    assert "soundBtn" in WEB_GUEST_HTML and "playSfx" in WEB_GUEST_HTML
+
+
+@pytest.mark.asyncio
+async def test_web_guest_active_clients_sse_tracking(temp_dirs: tuple[Path, Path]) -> None:
+    """SSE `/api/events` cập nhật `active_clients` và gọi `on_clients_changed` khi nối / ngắt."""
+    upload_dir, _ = temp_dirs
+    counts: list[int] = []
+    server = WebGuestHttpServer(
+        token="sse_tok",
+        upload_dir=upload_dir,
+        on_clients_changed=counts.append,
+    )
+    port = await server.start(host="127.0.0.1", port=0)
+    writer = None
+    try:
+        assert server.active_clients == 0
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        req = f"GET /api/events?token=sse_tok HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n".encode("ascii")
+        writer.write(req)
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.readuntil(b"event: init"), timeout=2.0)
+        assert b"200 OK" in raw
+        assert server.active_clients == 1
+        assert counts == [1]
+    finally:
+        if writer is not None:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+        await server.stop()
+    assert server.active_clients == 0
+    assert counts[-1] == 0

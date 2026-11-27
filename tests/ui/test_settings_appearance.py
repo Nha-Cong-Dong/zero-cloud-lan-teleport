@@ -645,3 +645,39 @@ def test_retranslate_page_keeps_theme_and_accent(ui):
         QCoreApplication.removeTranslator(translator)
     ui.qtbot.waitUntil(lambda: page.nav.item(1).text() == NAV[1], timeout=3000)
     assert ui.spy.log == []
+
+
+def test_auto_dismiss_notices_toggle_saves_and_updates_widgets(env):
+    from teleport.ui import widgets
+
+    env.start()
+    env.trace.clear()
+    sec = appearance(env.page)
+    assert sec.auto_dismiss_toggle.isChecked() is True
+    assert widgets.auto_dismiss_enabled() is True
+
+    sec.auto_dismiss_toggle.click()
+    settle(env.qtbot)
+    assert sec.auto_dismiss_toggle.isChecked() is False
+    env.host.run_calls()
+    settle(env.qtbot)
+    assert node_writes(env.trace) == [{"auto_dismiss_notices": False}]
+    assert widgets.auto_dismiss_enabled() is False
+
+
+def test_tray_notifications_toggle_saves_and_updates_tray(env):
+    from teleport.ui import tray
+
+    env.start()
+    env.trace.clear()
+    sec = appearance(env.page)
+    assert sec.tray_notifications_toggle.isChecked() is True
+    assert tray.notifications_enabled() is True
+
+    sec.tray_notifications_toggle.click()
+    settle(env.qtbot)
+    assert sec.tray_notifications_toggle.isChecked() is False
+    env.host.run_calls()
+    settle(env.qtbot)
+    assert node_writes(env.trace) == [{"tray_notifications": False}]
+    assert tray.notifications_enabled() is False

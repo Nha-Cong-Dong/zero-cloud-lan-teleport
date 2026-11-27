@@ -81,3 +81,53 @@ def test_thumbnail_loader_respects_max_file_bytes(qapp, qtbot, tmp_path, monkeyp
         assert loader.cached(p) is None
     finally:
         loader.shutdown()
+
+
+def test_quick_preview_dialog_and_bubble_thumbnail_click(qapp, qtbot, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtTest import QTest
+
+    from teleport.core.transfer import Direction, TransferKey
+    from teleport.ui.chat_bubbles import TransferBubble
+    from teleport.ui.thumbnails import QuickPreviewDialog
+
+    img_path = tmp_path / "pic.png"
+    _make_png(img_path, 300, 200)
+
+    opened: list[object] = []
+    dlg = QuickPreviewDialog(img_path, on_open=opened.append)
+    qtbot.addWidget(dlg)
+    assert dlg.windowModality() == Qt.WindowModality.NonModal
+    dlg.show()
+    dlg.resize(520, 380)
+    pix = dlg.image_label.pixmap()
+    assert pix is not None and not pix.isNull()
+    assert "pic.png" in dlg.name_label.text()
+
+    dlg.open_button.click()
+    assert opened == [img_path]
+
+    esc = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    dlg.keyPressEvent(esc)
+    assert esc.isAccepted()
+    assert not dlg.isVisible()
+
+    # File thiếu/lỗi hiện câu thông báo
+    bad = QuickPreviewDialog(tmp_path / "missing.png")
+    qtbot.addWidget(bad)
+    assert bad.image_label.text() != ""
+    assert not bad.open_button.isVisible()
+
+    # Bấm thumb trên TransferBubble phát thumbnail_clicked
+    k = TransferKey("d1" * 16, Direction.RECEIVE, "a" * 32)
+    bubble = TransferBubble(k)
+    qtbot.addWidget(bubble)
+    thumb = QPixmap(48, 48)
+    thumb.fill(QColor(10, 20, 30))
+    bubble.set_thumbnail(thumb, img_path)
+    bubble.show()
+    clicks: list[object] = []
+    bubble.thumbnail_clicked.connect(clicks.append)
+    QTest.mouseClick(bubble.thumb_label, Qt.MouseButton.LeftButton)
+    assert clicks == [img_path]

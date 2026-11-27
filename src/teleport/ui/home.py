@@ -123,7 +123,7 @@ def _label(object_name: str, *, size_delta: int = 0, bold: bool = False) -> QLab
     label.setTextFormat(Qt.TextFormat.PlainText)
     label.setWordWrap(True)
     label.setTextInteractionFlags(_TEXT_FLAGS)
-    label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    label.setFocusPolicy(Qt.FocusPolicy.TabFocus)
     if size_delta or bold:
         font = QFont(label.font())
         if size_delta:
@@ -528,6 +528,7 @@ class MachineCard(QFrame):
         if menu is None:
             menu = QMenu(self)
             menu.setObjectName("machineStatusMenu")
+            menu.setProperty(theme.MENU_PROPERTY, True)
             pause_act = menu.addAction("")
             pause_act.setCheckable(True)
             pause_act.triggered.connect(lambda checked: self.pause_toggled.emit(bool(checked)))

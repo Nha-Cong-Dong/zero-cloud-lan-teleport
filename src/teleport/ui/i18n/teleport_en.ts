@@ -10,6 +10,11 @@
     </message>
     <message>
         <location filename="../appearance.py"/>
+        <source>Chỉ thông báo</source>
+        <translation>Notifications only</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
         <source>Chọn “Theo hệ điều hành” để Teleport đổi sáng/tối cùng hệ điều hành.</source>
         <translation>Choose “Use system setting” to switch between light and dark with your system.</translation>
     </message>
@@ -25,13 +30,33 @@
     </message>
     <message>
         <location filename="../appearance.py"/>
+        <source>Hiện bóng thoại thông báo ngoài màn hình khi nhận file xong hoặc có lời mời mới. Tắt để giảm pop-up.</source>
+        <translation>Show desktop pop-up notifications when files finish receiving or a new offer arrives. Turn off to reduce pop-ups.</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
         <source>Màu nhấn</source>
         <translation>Accent color</translation>
     </message>
     <message>
         <location filename="../appearance.py"/>
+        <source>Nghe thử</source>
+        <translation>Preview</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
+        <source>Nghe thử âm thanh hiệu ứng</source>
+        <translation>Preview sound effects</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
         <source>Ngôn ngữ</source>
         <translation>Language</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
+        <source>Phát âm báo nhẹ khi nhận lời mời, truyền xong hoặc tương tác trong ứng dụng.</source>
+        <translation>Play soft chimes on incoming requests, completed transfers, or interactions.</translation>
     </message>
     <message>
         <location filename="../appearance.py"/>
@@ -45,13 +70,53 @@
     </message>
     <message>
         <location filename="../appearance.py"/>
+        <source>Thông báo khay hệ thống</source>
+        <translation>System tray notifications</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
+        <source>Tắt</source>
+        <translation>Off</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
         <source>Tối</source>
         <translation>Dark</translation>
     </message>
     <message>
         <location filename="../appearance.py"/>
+        <source>Tự động im lặng khi máy bật chế độ Không làm phiền.</source>
+        <translation>Automatically mutes when Do Not Disturb is active.</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
+        <source>Tự động tắt thông báo</source>
+        <translation>Auto-dismiss notifications</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
+        <source>Tự ẩn các thanh thông báo sau vài giây (tạm dừng khi rê chuột vào). Tắt để giữ thông báo cho tới khi đóng tay.</source>
+        <translation>Automatically hide notification banners after a few seconds (pauses on hover). Turn off to keep banners open until closed manually.</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
+        <source>Âm lượng hiệu ứng</source>
+        <translation>Effect volume</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
+        <source>Âm thanh hiệu ứng</source>
+        <translation>Sound effects</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
         <source>Đang dùng: {name}</source>
         <translation>Current: {name}</translation>
+    </message>
+    <message>
+        <location filename="../appearance.py"/>
+        <source>Đầy đủ (mặc định)</source>
+        <translation>Full (default)</translation>
     </message>
     <message>
         <location filename="../appearance.py"/>
@@ -161,11 +226,6 @@
         <translation>To {name}</translation>
     </message>
     <message>
-        <location filename="../chat.py"/>
-        <source>Gửi ảnh từ clipboard</source>
-        <translation>Send image from clipboard</translation>
-    </message>
-    <message>
         <location filename="../chat_bubbles.py"/>
         <source>HH:mm</source>
         <translation>HH:mm</translation>
@@ -174,11 +234,6 @@
         <location filename="../chat_bubbles.py"/>
         <source>Hiện trong thư mục</source>
         <translation>Show in folder</translation>
-    </message>
-    <message>
-        <location filename="../chat.py"/>
-        <source>Hoặc bấm Gửi file ở dưới, hay nhấn {key} để dán file đã chép.</source>
-        <translation>Or click Send files below, or press {key} to paste copied files.</translation>
     </message>
     <message>
         <location filename="../chat_bubbles.py"/>
@@ -199,6 +254,11 @@
         <location filename="../chat.py"/>
         <source>Không mở được thư mục {path}. Thư mục có thể đã bị xóa, đổi tên hay nằm trên ổ đã rút ra.</source>
         <translation>Couldn't open the folder {path}. It may have been deleted, renamed, or be on a drive that was removed.</translation>
+    </message>
+    <message>
+        <location filename="../thumbnails.py"/>
+        <source>Không xem trước được ảnh.</source>
+        <translation>Unable to preview image.</translation>
     </message>
     <message>
         <location filename="../chat.py"/>
@@ -242,6 +302,7 @@
     </message>
     <message>
         <location filename="../chat_bubbles.py"/>
+        <location filename="../thumbnails.py"/>
         <source>Mở file</source>
         <translation>Open file</translation>
     </message>
@@ -249,6 +310,16 @@
         <location filename="../chat.py"/>
         <source>Ngoại tuyến</source>
         <translation>Offline</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Ngoại tuyến — file sẽ tự gửi khi máy kia mở lại</source>
+        <translation>Offline — files will send when this device reconnects</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Nhấn {key} để dán file</source>
+        <translation>Press {key} to paste files</translation>
     </message>
     <message>
         <location filename="../chat_bubbles.py"/>
@@ -269,6 +340,11 @@
         <location filename="../chat.py"/>
         <source>Thông báo</source>
         <translation>Notification</translation>
+    </message>
+    <message>
+        <location filename="../chat.py"/>
+        <source>Thông tin thiết bị</source>
+        <translation>Device info</translation>
     </message>
     <message numerus="yes">
         <location filename="../chat.py"/>
@@ -337,11 +413,6 @@
         <translation>d MMM yyyy</translation>
     </message>
     <message>
-        <location filename="../chat.py"/>
-        <source>hoặc kéo file vào đây</source>
-        <translation>or drag files here</translation>
-    </message>
-    <message>
         <location filename="../chat_bubbles.py"/>
         <source>{date} {time}</source>
         <translation>{date} {time}</translation>
@@ -350,11 +421,6 @@
         <location filename="../chat.py"/>
         <source>{key} ở đây chỉ gửi file đã chép trong {file_manager}. Chữ và ảnh đi qua “Đồng bộ clipboard” với {name} (Cài đặt ▸ Thiết bị tin cậy, cần bật ở cả hai máy): chép ở máy này rồi dán thẳng ở máy kia.</source>
         <translation>{key} here only sends files copied in {file_manager}. Text and images go through “Sync clipboard” with {name} (Settings ▸ Trusted devices, turned on for both devices): copy on this device, then paste directly on the other.</translation>
-    </message>
-    <message>
-        <location filename="../chat.py"/>
-        <source>{name} đang ngoại tuyến. File gửi lúc này sẽ chờ và tự gửi khi máy đó mở Teleport trong cùng mạng, nếu Teleport trên máy này vẫn chạy (kể cả khi chỉ còn ở khay).</source>
-        <translation>{name} is offline. Files you send now will wait and go out automatically when that device opens Teleport on the same network, as long as Teleport keeps running here (even in the tray).</translation>
     </message>
     <message>
         <location filename="../chat_bubbles.py"/>
@@ -370,6 +436,11 @@
         <location filename="../chat_bubbles.py"/>
         <source>Đã lưu</source>
         <translation>Saved</translation>
+    </message>
+    <message>
+        <location filename="../thumbnails.py"/>
+        <source>Đóng</source>
+        <translation>Close</translation>
     </message>
     <message>
         <location filename="../chat.py"/>
@@ -623,6 +694,84 @@
     </message>
 </context>
 <context>
+    <name>DevicePanel</name>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Cài đặt</source>
+        <translation>Settings</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Cài đặt cho thiết bị này</source>
+        <translation>Settings for this device</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Hủy ghép đôi…</source>
+        <translation>Unpair…</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Kết nối bằng IP…</source>
+        <translation>Connect by IP…</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Kết nối lại</source>
+        <translation>Reconnect</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Kết nối mã hóa an toàn</source>
+        <translation>Encrypted connection</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Kết nối và bảo mật</source>
+        <translation>Connection &amp; security</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Mã máy: {id8}</source>
+        <translation>Device ID: {id8}</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Thử kết nối lại với máy này</source>
+        <translation>Try reconnecting to this device</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Tìm kiếm</source>
+        <translation>Search</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Tìm trong cuộc trò chuyện</source>
+        <translation>Search in conversation</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Tùy chỉnh cho máy này</source>
+        <translation>Device preferences</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Tự động nhận file</source>
+        <translation>Auto-accept files</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Xóa lịch sử với máy này…</source>
+        <translation>Clear history…</translation>
+    </message>
+    <message>
+        <location filename="../device_panel.py"/>
+        <source>Đồng bộ clipboard</source>
+        <translation>Clipboard sync</translation>
+    </message>
+</context>
+<context>
     <name>Diagnose</name>
     <message>
         <location filename="../diagnose.py"/>
@@ -757,6 +906,11 @@
     </message>
     <message>
         <location filename="../discover.py"/>
+        <source>Bấm để quét lại máy trong mạng</source>
+        <translation>Click to scan for nearby devices</translation>
+    </message>
+    <message>
+        <location filename="../discover.py"/>
         <source>Chưa ghép đôi</source>
         <translation>Not paired</translation>
     </message>
@@ -827,6 +981,24 @@
         <location filename="../discover.py"/>
         <source>Phím mũi tên để chọn, Enter để ghép đôi hoặc mở máy đã ghép đôi.</source>
         <translation>Arrow keys to choose, Enter to pair or open a paired device.</translation>
+    </message>
+    <message>
+        <location filename="../discover.py"/>
+        <source>Quét lại</source>
+        <translation>Scan again</translation>
+    </message>
+    <message>
+        <location filename="../discover.py"/>
+        <source>Quét lại máy trong mạng</source>
+        <translation>Scan network again</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../discover.py"/>
+        <source>Thả để gửi %n file</source>
+        <translation>
+            <numerusform>Drop to send %n file</numerusform>
+            <numerusform>Drop to send %n files</numerusform>
+        </translation>
     </message>
     <message>
         <location filename="../discover.py"/>
@@ -1069,11 +1241,6 @@
     </message>
     <message>
         <location filename="../app.py"/>
-        <source>Các file đã nhận hay đã gửi vẫn giữ nguyên; chỉ xóa danh sách lịch sử với máy này.</source>
-        <translation>Files already sent or received are kept; only the history list with this device is removed.</translation>
-    </message>
-    <message>
-        <location filename="../app.py"/>
         <source>Gửi tới nhiều máy</source>
         <translation>Send to multiple devices</translation>
     </message>
@@ -1149,13 +1316,13 @@
     </message>
     <message>
         <location filename="../app.py"/>
-        <source>Xóa lịch sử</source>
-        <translation>Clear history</translation>
+        <source>Xác nhận xóa</source>
+        <translation>Confirm clear</translation>
     </message>
     <message>
         <location filename="../app.py"/>
-        <source>Xóa lịch sử truyền với {name}?</source>
-        <translation>Clear transfer history with {name}?</translation>
+        <source>Xóa lịch sử truyền với {name}? Các file đã lưu vẫn giữ nguyên.</source>
+        <translation>Clear transfer history with {name}? Saved files are kept.</translation>
     </message>
     <message>
         <location filename="../app.py"/>
@@ -1313,6 +1480,11 @@
     <name>MainWindow</name>
     <message>
         <location filename="../main_window.py"/>
+        <source>1. Sẵn sàng trong mạng ✓  ·  2. Ghép đôi hoặc Web QR  ·  3. Gửi file đầu tiên</source>
+        <translation>1. Ready on network ✓  ·  2. Pair or Web QR  ·  3. Send first file</translation>
+    </message>
+    <message>
+        <location filename="../main_window.py"/>
         <source>Bấm để chép địa chỉ.</source>
         <translation>Click to copy the address.</translation>
     </message>
@@ -1348,6 +1520,16 @@
     </message>
     <message>
         <location filename="../main_window.py"/>
+        <source>Ghép đôi ngay</source>
+        <translation>Pair now</translation>
+    </message>
+    <message>
+        <location filename="../main_window.py"/>
+        <source>Ghép đôi ngay với {name}</source>
+        <translation>Pair now with {name}</translation>
+    </message>
+    <message>
+        <location filename="../main_window.py"/>
         <source>Gợi ý</source>
         <translation>Tips</translation>
     </message>
@@ -1378,8 +1560,21 @@
     </message>
     <message>
         <location filename="../main_window.py"/>
+        <source>Mở Web QR điện thoại</source>
+        <translation>Open Phone Web QR</translation>
+    </message>
+    <message>
+        <location filename="../main_window.py"/>
         <source>Thiết bị</source>
         <translation>Devices</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../main_window.py"/>
+        <source>Thả để gửi %n file qua điện thoại (Web QR)</source>
+        <translation>
+            <numerusform>Drop to send %n file to phone (Web QR)</numerusform>
+            <numerusform>Drop to send %n files to phone (Web QR)</numerusform>
+        </translation>
     </message>
     <message>
         <location filename="../main_window.py"/>
@@ -1400,6 +1595,24 @@
         <location filename="../main_window.py"/>
         <source>Đang khởi động…</source>
         <translation>Starting…</translation>
+    </message>
+    <message>
+        <location filename="../main_window.py"/>
+        <source>Đã thấy {name} trong mạng</source>
+        <translation>Found {name} on the network</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../main_window.py"/>
+        <source>Đã thấy {name} và %n máy khác trong mạng</source>
+        <translation>
+            <numerusform>Found {name} and %n other device on the network</numerusform>
+            <numerusform>Found {name} and %n other devices on the network</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../main_window.py"/>
+        <source>Đóng hướng dẫn</source>
+        <translation>Dismiss guide</translation>
     </message>
     <message>
         <location filename="../main_window.py"/>
@@ -2030,12 +2243,12 @@
         </translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Biên lai hợp lệ: {peer} ({size}).</source>
         <translation>Valid receipt: {peer} ({size}).</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Biên lai không hợp lệ hoặc đã bị sửa đổi.</source>
         <translation>Receipt is invalid or has been modified.</translation>
     </message>
@@ -2065,7 +2278,7 @@
         <translation>Let unpaired devices see this device</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Chung</source>
         <translation>General</translation>
     </message>
@@ -2085,27 +2298,27 @@
         <translation>Not paired with any device yet</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Chưa hủy được lượt nhận. Hãy thử lại.</source>
         <translation>Could not cancel the receive. Please try again.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Chưa lưu được cài đặt vì không ghi được vào thư mục cấu hình của Teleport. Hãy kiểm tra quyền ghi rồi thử lại.</source>
         <translation>Settings weren't saved because Teleport's configuration folder can't be written to. Check the write permission, then try again.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Chưa lưu được cài đặt vì một lỗi không mong đợi. Hãy thử lại.</source>
         <translation>Settings weren't saved because of an unexpected error. Please try again.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Chưa xóa được lịch sử truyền file. Hãy thử lại.</source>
         <translation>The transfer history wasn't cleared. Please try again.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Chưa đổi được việc khởi động cùng Windows vì Windows không cho ghi cài đặt khởi động. Hãy thử lại.</source>
         <translation>Starting with Windows wasn't changed because Windows didn't allow writing the startup setting. Please try again.</translation>
     </message>
@@ -2140,7 +2353,7 @@
         <translation>Choose destination folder</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Chọn tệp biên lai</source>
         <translation>Select receipt file</translation>
     </message>
@@ -2150,22 +2363,22 @@
         <translation>Browse…</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Chữ ký biên lai hợp lệ nhưng máy ký chưa ghép đôi ({peer}, {size}).</source>
         <translation>Receipt signature is valid, but signer is unpaired ({peer}, {size}).</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Cài đặt</source>
         <translation>Settings</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Cài đặt bản cập nhật</source>
         <translation>Install update</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Cài đặt ngay</source>
         <translation>Install now</translation>
     </message>
@@ -2200,7 +2413,7 @@
         <translation>Clean up partially received files after</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>File zip (*.zip)</source>
         <translation>Zip files (*.zip)</translation>
     </message>
@@ -2235,12 +2448,12 @@
         <translation>Pair with at least one device before adding a watch portal.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Hãy nhập tên thiết bị.</source>
         <translation>Enter a device name.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Hỏi trước khi nhận</source>
         <translation>Ask before receiving</translation>
     </message>
@@ -2250,17 +2463,17 @@
         <translation>Cancel</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Hủy ghép đôi…</source>
         <translation>Unpair…</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Hủy lượt nhận</source>
         <translation>Cancel receive</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Hủy lượt nhận này và xóa phần đã tải dở khỏi máy?</source>
         <translation>Cancel this receive and delete partial files from this device?</translation>
     </message>
@@ -2270,27 +2483,29 @@
         <translation>Cancel receive from {name}</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Hủy lượt nhận đang chờ</source>
         <translation>Cancel pending receive</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Hủy toàn bộ lượt nhận đang chờ hoặc dở dang và xóa các phần đã tải dở khỏi máy?</source>
         <translation>Cancel all pending or incomplete receives and delete partial files from this device?</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Hủy tất cả</source>
         <translation>Cancel all</translation>
     </message>
     <message>
         <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Hủy tất cả lượt nhận dở</source>
         <translation>Cancel all incomplete receives</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Không</source>
         <translation>No</translation>
     </message>
@@ -2300,7 +2515,7 @@
         <translation>No pending or incomplete receives.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Không lưu được file log vào {path}. Hãy chọn thư mục khác mà bạn có quyền ghi.</source>
         <translation>Couldn't save the log file to {path}. Choose another folder you can write to.</translation>
     </message>
@@ -2315,22 +2530,22 @@
         <translation>Could not check for or download updates. Please try again later.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Không thể mở bộ cài cập nhật. Hãy thử tải lại từ trang phát hành.</source>
         <translation>Could not start the update installer. Please download it from the releases page.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Không xuất được log vì một lỗi không mong đợi. Hãy thử lại.</source>
         <translation>Couldn't export logs because of an unexpected error. Please try again.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Không đọc được cài đặt hiện tại.</source>
         <translation>Couldn't read the current settings.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Không đọc được cài đặt khởi động của Windows.</source>
         <translation>Couldn't read the Windows startup setting.</translation>
     </message>
@@ -2370,7 +2585,7 @@
         <translation>Save</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Lưu file log</source>
         <translation>Save log file</translation>
     </message>
@@ -2390,7 +2605,7 @@
         <translation>Target device</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Máy này đang ẩn nên chỉ máy đã ghép đôi thấy tên này.</source>
         <translation>This device is hidden, so only paired devices see this name.</translation>
     </message>
@@ -2406,6 +2621,7 @@
     </message>
     <message>
         <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Mọi file</source>
         <translation>All files</translation>
     </message>
@@ -2425,7 +2641,7 @@
         <translation>Open</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Mở thư mục</source>
         <translation>Open folder</translation>
     </message>
@@ -2435,17 +2651,17 @@
         <translation>Open receive folder</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Nhạc</source>
         <translation>Audio</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Nâng cao</source>
         <translation>Advanced</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Nén</source>
         <translation>Archives</translation>
     </message>
@@ -2475,7 +2691,7 @@
         <translation>Partially received files that no transfer is waiting to resume are deleted from the receive folder after this many days.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Quyền riêng tư</source>
         <translation>Privacy</translation>
     </message>
@@ -2520,7 +2736,7 @@
         <translation>Teleport {version} · protocol {protocol}</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Teleport đang được đặt khởi động cùng Windows từ một thư mục cài hoặc thư mục cấu hình khác. Bật công tắc để dùng bản này.</source>
         <translation>Teleport is set to start with Windows from another install folder or configuration folder. Turn on the switch to use this copy.</translation>
     </message>
@@ -2535,7 +2751,7 @@
         <translation>Include subfolders</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Thiết bị tin cậy</source>
         <translation>Trusted devices</translation>
     </message>
@@ -2600,7 +2816,7 @@
         <translation>Resume portals</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Truyền file</source>
         <translation>File transfer</translation>
     </message>
@@ -2610,7 +2826,7 @@
         <translation>Smart delta transfer</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Tài liệu</source>
         <translation>Documents</translation>
     </message>
@@ -2625,7 +2841,7 @@
         <translation>Device name</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Tên thiết bị cần từ 1 đến 64 ký tự và không có ký tự điều khiển.</source>
         <translation>A device name needs 1 to 64 characters and no control characters.</translation>
     </message>
@@ -2660,7 +2876,7 @@
         <translation>Stop broadcasting on the local network. Paired devices can still connect using a known address.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Tệp biên lai (*.teleport-receipt.json *.json)</source>
         <translation>Receipt files (*.teleport-receipt.json *.json)</translation>
     </message>
@@ -2680,7 +2896,7 @@
         <translation>Automatically group files into a separate folder named after the sender and time.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Video</source>
         <translation>Videos</translation>
     </message>
@@ -2705,7 +2921,7 @@
         <translation>Example: Screenshots, Work documents</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Windows đang tắt Teleport trong danh sách ứng dụng khởi động. Bật công tắc này để cho phép lại.</source>
         <translation>Windows has turned off Teleport in its list of startup apps. Turn on this switch to allow it again.</translation>
     </message>
@@ -2735,12 +2951,12 @@
         <translation>Remove watch portal {name}</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Xóa lịch sử</source>
         <translation>Clear history</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Xóa lịch sử truyền file với mọi máy, kể cả máy đã hủy ghép đôi? File đã nhận vẫn còn nguyên trong thư mục nhận.</source>
         <translation>Clear the transfer history with every device, including unpaired ones? Received files stay in the receive folder.</translation>
     </message>
@@ -2750,7 +2966,7 @@
         <translation>Remove routing rule {name}</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Xóa toàn bộ lịch sử</source>
         <translation>Clear all history</translation>
     </message>
@@ -2770,12 +2986,12 @@
         <translation>with subfolders</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>không thấy trong mạng</source>
         <translation>not on the network</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>{option}: {name}</source>
         <translation>{option}: {name}</translation>
     </message>
@@ -2830,7 +3046,7 @@
         <translation>Changing to {path}…</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Đang ẩn: máy chưa ghép đôi không thấy máy này và không gửi được yêu cầu ghép đôi tới. Muốn ghép đôi với máy mới, hãy mở Tìm máy mới trên máy này rồi bấm vào máy kia.</source>
         <translation>Hidden: unpaired devices can't see this device or send it pairing requests. To pair with a new device, open Find devices on this device, then click the other device.</translation>
     </message>
@@ -2845,22 +3061,22 @@
         <translation>Version {version} is available.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Đã hủy lượt nhận và dọn phần tải dở.</source>
         <translation>Receive cancelled and partial files removed.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Đã hủy toàn bộ lượt nhận đang chờ.</source>
         <translation>All pending receives cancelled.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Đã lưu log vào {path}.</source>
         <translation>Saved logs to {path}.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Đã tải xong bản {version}. Đóng Teleport và chạy trình cài đặt ngay bây giờ?</source>
         <translation>Version {version} downloaded. Close Teleport and run the installer now?</translation>
     </message>
@@ -2870,12 +3086,12 @@
         <translation>Update installer downloaded.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Đã xóa toàn bộ lịch sử truyền file.</source>
         <translation>Cleared all transfer history.</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_controller.py"/>
         <source>Để sau</source>
         <translation>Later</translation>
     </message>
@@ -2885,7 +3101,7 @@
         <translation>Leave blank for all files; e.g. *.jpg, *.png</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Đồng bộ clipboard</source>
         <translation>Sync clipboard</translation>
     </message>
@@ -2900,47 +3116,47 @@
         <translation>Change…</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>đang chờ</source>
         <translation>waiting</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>đang chờ xác nhận</source>
         <translation>waiting for confirmation</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>đang kiểm tra</source>
         <translation>verifying</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>đang nhận</source>
         <translation>receiving</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>đang nối lại</source>
         <translation>reconnecting</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>đang trong mạng</source>
         <translation>on the network</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>đang xếp hàng</source>
         <translation>queued</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>đã kết nối</source>
         <translation>connected</translation>
     </message>
     <message>
-        <location filename="../settings.py"/>
+        <location filename="../settings_widgets.py"/>
         <source>Ảnh</source>
         <translation>Images</translation>
     </message>
@@ -3955,6 +4171,11 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Thả tệp hoặc thư mục để chia sẻ cho điện thoại</source>
+        <translation>Drop files or folders to share with your phone</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Tên mạng Wi-Fi</source>
         <translation>Wi-Fi network name</translation>
     </message>
@@ -4008,6 +4229,11 @@
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>
+        <source>Đang chờ điện thoại quét mã</source>
+        <translation>Waiting for phone to scan QR</translation>
+    </message>
+    <message>
+        <location filename="../web_guest_dialog.py"/>
         <source>Đang nhận {filename}: {percent}% {size_info}</source>
         <translation>Receiving {filename}: {percent}% {size_info}</translation>
     </message>
@@ -4020,6 +4246,14 @@
         <location filename="../web_guest_dialog.py"/>
         <source>Đã chép</source>
         <translation>Copied</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../web_guest_dialog.py"/>
+        <source>Đã kết nối %n điện thoại</source>
+        <translation>
+            <numerusform>%n phone connected</numerusform>
+            <numerusform>%n phones connected</numerusform>
+        </translation>
     </message>
     <message>
         <location filename="../web_guest_dialog.py"/>

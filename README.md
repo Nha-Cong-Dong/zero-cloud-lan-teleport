@@ -19,7 +19,7 @@
 > **Giới thiệu:** ZCL Teleport giúp bạn chuyển các file dung lượng rất lớn và đồng bộ nội dung sao chép giữa các máy tính trong cùng một mạng nội bộ nhanh chóng, bảo mật trực tiếp giữa hai máy mà không đi qua máy chủ bên ngoài hay thu thập thông tin người dùng. Khi đường truyền bị ngắt giữa chừng, ứng dụng tự động gửi tiếp phần còn lại ngay khi kết nối trở lại.
 
 > [!NOTE]
-> **Phiên bản `v1.3.0` đã sẵn sàng.** Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
+> **Phiên bản `v1.8.0` đã sẵn sàng.** Nội dung chi tiết các thay đổi: [docs/community/CHANGELOG.md](docs/community/CHANGELOG.md). Lộ trình và tiến độ: [docs/product/ke_hoach.md](docs/product/ke_hoach.md). Kết quả kiểm tra tốc độ thực tế: [docs/technical/benchmark.md](docs/technical/benchmark.md).
 
 ---
 

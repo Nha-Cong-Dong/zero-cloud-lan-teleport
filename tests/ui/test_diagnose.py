@@ -642,7 +642,7 @@ def test_bar_sits_between_header_and_threads(env):
     assert env.bar is not None, "ChatView phải có DiagnoseBar objectName chatDiagnoseBar"
     assert isinstance(env.bar, InfoBar)
     assert env.bar is not env.view.info_bar
-    layout = env.view.layout()
+    layout = env.view.header.parentWidget().layout()
     header = _layout_index_of(layout, env.view.header)
     bar = _layout_index_of(layout, env.bar)
     threads = _layout_index_of(layout, env.view.threads)
@@ -1892,3 +1892,50 @@ def test_pr21_dialog_identity_mismatch_with_actual_device_shows_actual_peer(env)
     assert OTHER in err
     assert "giả mạo" not in err.lower()
     assert parts.edit.isEnabled()
+
+
+def test_passive_offline_suppressed_when_disabled_while_errors_and_retry_still_show(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    from teleport.app.node import ConnectFailed
+    from teleport.core.links import ConnectResult
+    from teleport.ui import diagnose as mod
+    from teleport.ui.chat import ChatView
+    from teleport.ui.radar import DeviceListModel
+
+    now = [100.0]
+    monkeypatch.setattr(mod, "_monotonic", lambda: now[0])
+    model = DeviceListModel()
+    view = ChatView(model)
+    host = FakeHost()
+    ctl = mod.DiagnoseController(view, model, view, show_passive_offline=False)
+    qtbot.addWidget(view)
+    view.resize(640, 480)
+    view.show()
+    model.reset([dview(last=LAST)])
+    view.set_device(PEER_ID)
+    ctl.set_device(PEER_ID)
+    ctl.attach(host)
+    ctl.on_started(host)
+    host.answer_calls(True)
+    QApplication.processEvents()
+
+    # Ngoại tuyến thụ động (RECONNECTING / NOT_SEEN) sau SHOW_DELAY_MS: không hiện thanh chẩn đoán.
+    now[0] += mod.SHOW_DELAY_MS / 1000.0 + 1.0
+    ctl._render()
+    QApplication.processEvents()
+    assert ctl.bar.isHidden()
+
+    # Nhưng bấm thử lại thủ công vẫn hiện trạng thái đang kết nối / lỗi thật
+    ctl.retry_current()
+    assert not ctl.bar.isHidden()
+    assert mod.connecting_title(PEER) == ctl.bar.title
+    host.finish(ConnectResult.UNREACHABLE)
+    QApplication.processEvents()
+    assert not ctl.bar.isHidden()
+
+    # Lỗi chặn (BLOCKED) vẫn hiện ngay
+    ctl.on_node_event(ConnectFailed(device=dview(last=None), result=ConnectResult.REJECTED, from_hint=False))
+    QApplication.processEvents()
+    assert not ctl.bar.isHidden()
+    ctl.close_all()

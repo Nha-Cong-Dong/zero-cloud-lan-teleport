@@ -75,6 +75,7 @@ class WebGuestManager:
         on_upload_complete: Callable[[str, int, Path], None] | None = None,
         on_session_timeout: Callable[[], None] | None = None,
         on_text_received: Callable[[str], None] | None = None,
+        on_clients_changed: Callable[[int], None] | None = None,
     ) -> None:
         self.receive_dir = receive_dir
         self.device_name = device_name
@@ -85,6 +86,7 @@ class WebGuestManager:
         self.on_upload_complete = on_upload_complete
         self.on_session_timeout = on_session_timeout
         self.on_text_received = on_text_received
+        self.on_clients_changed = on_clients_changed
 
         self._server: WebGuestHttpServer | None = None
         self._session_info: GuestSessionInfo | None = None
@@ -126,6 +128,7 @@ class WebGuestManager:
             scope=scope,
             one_shot=one_shot,
             on_text_received=self.on_text_received,
+            on_clients_changed=self.on_clients_changed,
         )
 
         if shared_files:

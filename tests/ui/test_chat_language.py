@@ -210,7 +210,6 @@ def texts_of(view, bubbles: dict) -> dict[str, str]:
     out["scroll"] = thread.scroll_area.accessibleName()
     out["header.status"] = view.header.status_label.text()
     out["send_button"] = view.composer.send_button.accessibleName()
-    out["hint"] = view.composer.hint_label.text()
     out["new_button"] = view.new_button.accessibleName()
     return out
 

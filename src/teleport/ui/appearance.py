@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from PySide6.QtCore import QCoreApplication, QEvent, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QPainter, QPaintEvent, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -46,12 +46,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
-from teleport.ui import i18n, icons, texts, theme
-from teleport.ui.widgets import RovingGroup, SegmentedControl, SettingsRow, safe_tooltip
+from teleport.ui import i18n, icons, sounds, texts, theme
+from teleport.ui.buttons import AnimatedButton
+from teleport.ui.sounds import SoundCue, SoundMode
+from teleport.ui.widgets import RovingGroup, SegmentedControl, SettingsRow, ToggleSwitch, safe_tooltip
 
 SWATCH_SIZE = 36  # px, vùng bấm của một ô màu (≥ 24, WCAG 2.5.8)
 SWATCH_DIAMETER = 28  # px, vòng tròn màu
@@ -224,6 +227,7 @@ class AccentPicker(QWidget):
             return
         self._accent = accent
         self._stale = False
+        sounds.play(SoundCue.TOGGLE_TICK, window_visible=self.isVisible())
         self.accent_chosen.emit(accent)
 
 
@@ -245,12 +249,25 @@ class AppearanceSection(QWidget):
     theme_selected = Signal(object)  # None | "light" | "dark"
     accent_selected = Signal(object)  # None (= mặc định) | mã màu
     language_selected = Signal(object)  # mã ngôn ngữ | None (theo hệ điều hành)
+    sound_mode_selected = Signal(object)  # None (= full) | "notify" | "off"
+    sound_volume_selected = Signal(object)  # None (= 70) | int 0..100
+    auto_dismiss_notices_toggled = Signal(bool)
+    tray_notifications_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("appearanceSection")
         self._language: str | None = None
         self._languages: tuple[str, ...] = (i18n.SOURCE_LANGUAGE,)
+        self._loaded = False
+        self._sound_mode = sounds.DEFAULT_MODE
+        self._sound_volume = sounds.DEFAULT_VOLUME
+        self._auto_dismiss_notices = True
+        self._tray_notifications = True
+        self._volume_timer = QTimer(self)
+        self._volume_timer.setSingleShot(True)
+        self._volume_timer.setInterval(180)
+        self._volume_timer.timeout.connect(self._commit_sound_volume)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -281,6 +298,59 @@ class AppearanceSection(QWidget):
         self.language_row.set_control(self.language_combo)
         layout.addWidget(self.language_row)
 
+        self.sound_mode_row = SettingsRow(self, object_name="soundModeRow")
+        self.sound_mode_combo = QComboBox(self.sound_mode_row)
+        self.sound_mode_combo.setObjectName("soundModeCombo")
+        self.sound_mode_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.sound_mode_combo.activated.connect(self._on_sound_mode_activated)
+        self.sound_mode_row.set_control(self.sound_mode_combo)
+        layout.addWidget(self.sound_mode_row)
+
+        self.sound_volume_row = SettingsRow(self, object_name="soundVolumeRow")
+        volume_controls = QWidget(self.sound_volume_row)
+        volume_controls.setProperty("keepAccessible", True)
+        volume_layout = QHBoxLayout(volume_controls)
+        volume_layout.setContentsMargins(0, 0, 0, 0)
+        volume_layout.setSpacing(theme.SPACING[1])
+        self.sound_volume_slider = QSlider(Qt.Orientation.Horizontal, volume_controls)
+        self.sound_volume_slider.setObjectName("soundVolumeSlider")
+        self.sound_volume_slider.setRange(sounds.MIN_VOLUME, sounds.MAX_VOLUME)
+        self.sound_volume_slider.setSingleStep(5)
+        self.sound_volume_slider.setPageStep(10)
+        self.sound_volume_slider.setFixedWidth(130)
+        self.sound_volume_slider.setValue(self._sound_volume)
+        self.sound_volume_slider.valueChanged.connect(self._on_sound_volume_changed)
+        self.sound_volume_slider.sliderReleased.connect(self._commit_sound_volume)
+        self.sound_volume_label = _plain(volume_controls, "soundVolumeLabel")
+        self.sound_volume_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.sound_volume_label.setMinimumWidth(38)
+        self.sound_volume_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.sound_preview_button = AnimatedButton("", volume_controls)
+        self.sound_preview_button.setObjectName("soundPreviewButton")
+        self.sound_preview_button.clicked.connect(self._preview_sound)
+        volume_layout.addWidget(self.sound_volume_slider)
+        volume_layout.addWidget(self.sound_volume_label)
+        volume_layout.addWidget(self.sound_preview_button)
+        self.sound_volume_row.set_control(volume_controls)
+        layout.addWidget(self.sound_volume_row)
+
+        self.auto_dismiss_row = SettingsRow(self, object_name="autoDismissNoticesRow")
+        self.auto_dismiss_toggle = ToggleSwitch(self.auto_dismiss_row)
+        self.auto_dismiss_toggle.setObjectName("autoDismissNoticesToggle")
+        self.auto_dismiss_toggle.setChecked(self._auto_dismiss_notices)
+        self.auto_dismiss_toggle.clicked.connect(self._on_auto_dismiss_toggled)
+        self.auto_dismiss_row.set_control(self.auto_dismiss_toggle)
+        layout.addWidget(self.auto_dismiss_row)
+
+        self.tray_notifications_row = SettingsRow(self, object_name="trayNotificationsRow")
+        self.tray_notifications_toggle = ToggleSwitch(self.tray_notifications_row)
+        self.tray_notifications_toggle.setObjectName("trayNotificationsToggle")
+        self.tray_notifications_toggle.setChecked(self._tray_notifications)
+        self.tray_notifications_toggle.clicked.connect(self._on_tray_notifications_toggled)
+        self.tray_notifications_row.set_control(self.tray_notifications_toggle)
+        layout.addWidget(self.tray_notifications_row)
+
+        self._update_volume_label()
         self.retranslate()
 
     # ---- API -----------------------------------------------------------------------------------
@@ -308,14 +378,67 @@ class AppearanceSection(QWidget):
         self._languages = tuple(available)
         self._fill_languages()
 
+    def set_sound_mode(self, value: str | None) -> None:
+        """Đặt chế độ âm thanh từ giá trị đã lưu (None → mặc định FULL), không phát signal."""
+        self._sound_mode = sounds.mode_from_setting(value)
+        self._fill_sound_modes()
+        self._sync_sound_enabled()
+
+    def set_sound_volume(self, value: int | None) -> None:
+        """Đặt âm lượng từ giá trị đã lưu (None → 70), không phát signal."""
+        self._volume_timer.stop()
+        self._sound_volume = sounds.volume_from_setting(value)
+        old = self.sound_volume_slider.blockSignals(True)
+        try:
+            self.sound_volume_slider.setValue(self._sound_volume)
+        finally:
+            self.sound_volume_slider.blockSignals(old)
+        self._update_volume_label()
+
+    def set_auto_dismiss_notices(self, enabled: bool) -> None:
+        """Đặt trạng thái tự động tắt thông báo từ giá trị đã lưu, không phát signal."""
+        self._auto_dismiss_notices = bool(enabled)
+        old = self.auto_dismiss_toggle.blockSignals(True)
+        try:
+            self.auto_dismiss_toggle.setChecked(self._auto_dismiss_notices)
+        finally:
+            self.auto_dismiss_toggle.blockSignals(old)
+
+    def set_tray_notifications(self, enabled: bool) -> None:
+        """Đặt trạng thái bóng thoại khay hệ thống từ giá trị đã lưu, không phát signal."""
+        self._tray_notifications = bool(enabled)
+        old = self.tray_notifications_toggle.blockSignals(True)
+        try:
+            self.tray_notifications_toggle.setChecked(self._tray_notifications)
+        finally:
+            self.tray_notifications_toggle.blockSignals(old)
+
     def set_loaded(self, loaded: bool) -> None:
-        """Đã có ảnh chụp cài đặt: bật cả ba hàng."""
-        for row in (self.theme_row, self.accent_row, self.language_row):
-            row.setEnabled(bool(loaded))
+        """Đã có ảnh chụp cài đặt: bật các hàng."""
+        self._loaded = bool(loaded)
+        for row in (
+            self.theme_row,
+            self.accent_row,
+            self.language_row,
+            self.sound_mode_row,
+            self.auto_dismiss_row,
+            self.tray_notifications_row,
+        ):
+            row.setEnabled(self._loaded)
+        self._sync_sound_enabled()
 
     def focus_widgets(self) -> list[QWidget]:
-        """Mọi control theo thứ tự Tab (nút chế độ, ô màu, ô ngôn ngữ); Tab chỉ dừng ở nút đang chọn."""
-        return [*self.theme_control.buttons(), *self.accent_picker.swatches(), self.language_combo]
+        """Mọi control theo thứ tự Tab (chế độ, màu, ngôn ngữ, âm thanh, thông báo); Tab dừng ở nút chọn."""
+        return [
+            *self.theme_control.buttons(),
+            *self.accent_picker.swatches(),
+            self.language_combo,
+            self.sound_mode_combo,
+            self.sound_volume_slider,
+            self.sound_preview_button,
+            self.auto_dismiss_toggle,
+            self.tray_notifications_toggle,
+        ]
 
     def retranslate(self) -> None:
         t = QCoreApplication.translate
@@ -337,6 +460,99 @@ class AppearanceSection(QWidget):
             t("Appearance", "Ngôn ngữ"), t("Appearance", "Đổi ngay, không cần mở lại Teleport.")
         )
         self._fill_languages()
+        sound_label = t("Appearance", "Âm thanh hiệu ứng")
+        self.sound_mode_row.set_text(
+            sound_label,
+            t("Appearance", "Phát âm báo nhẹ khi nhận lời mời, truyền xong hoặc tương tác trong ứng dụng."),
+        )
+        self._fill_sound_modes()
+        vol_label = t("Appearance", "Âm lượng hiệu ứng")
+        self.sound_volume_row.set_text(
+            vol_label,
+            t("Appearance", "Tự động im lặng khi máy bật chế độ Không làm phiền."),
+        )
+        self.sound_volume_slider.setAccessibleName(vol_label)
+        self.sound_preview_button.setText(t("Appearance", "Nghe thử"))
+        self.sound_preview_button.setAccessibleName(t("Appearance", "Nghe thử âm thanh hiệu ứng"))
+        self.auto_dismiss_row.set_text(
+            t("Appearance", "Tự động tắt thông báo"),
+            t(
+                "Appearance",
+                "Tự ẩn các thanh thông báo sau vài giây (tạm dừng khi rê chuột vào). "
+                "Tắt để giữ thông báo cho tới khi đóng tay.",
+            ),
+        )
+        self.tray_notifications_row.set_text(
+            t("Appearance", "Thông báo khay hệ thống"),
+            t(
+                "Appearance",
+                "Hiện bóng thoại thông báo ngoài màn hình khi nhận file xong hoặc có lời mời mới. "
+                "Tắt để giảm pop-up.",
+            ),
+        )
+
+    # ---- Bên trong -----------------------------------------------------------------------------
+
+    def _sync_sound_enabled(self) -> None:
+        self.sound_volume_row.setEnabled(self._loaded and self._sound_mode is not SoundMode.OFF)
+
+    def _update_volume_label(self) -> None:
+        self.sound_volume_label.setText(f"{self.sound_volume_slider.value()}%")
+
+    def _fill_sound_modes(self) -> None:
+        t = QCoreApplication.translate
+        combo = self.sound_mode_combo
+        old = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem(t("Appearance", "Đầy đủ (mặc định)"), SoundMode.FULL.value)
+            combo.addItem(t("Appearance", "Chỉ thông báo"), SoundMode.NOTIFY.value)
+            combo.addItem(t("Appearance", "Tắt"), SoundMode.OFF.value)
+            index = combo.findData(self._sound_mode.value)
+            combo.setCurrentIndex(max(0, index))
+        finally:
+            combo.blockSignals(old)
+
+    def _on_sound_mode_activated(self, index: int) -> None:
+        raw = self.sound_mode_combo.itemData(index)
+        mode = sounds.mode_from_setting(raw if isinstance(raw, str) else None)
+        if mode is self._sound_mode:
+            return
+        self._sound_mode = mode
+        self._sync_sound_enabled()
+        saved = None if mode is sounds.DEFAULT_MODE else mode.value
+        self.sound_mode_selected.emit(saved)
+
+    def _on_sound_volume_changed(self, _value: int) -> None:
+        self._update_volume_label()
+        if not self.sound_volume_slider.isSliderDown():
+            self._volume_timer.start()
+
+    def _commit_sound_volume(self) -> None:
+        self._volume_timer.stop()
+        value = int(self.sound_volume_slider.value())
+        if value == self._sound_volume:
+            return
+        self._sound_volume = value
+        saved = None if value == sounds.DEFAULT_VOLUME else value
+        self.sound_volume_selected.emit(saved)
+
+    def _preview_sound(self) -> None:
+        vol = int(self.sound_volume_slider.value())
+        prev_mode, prev_vol = sounds.current_mode(), sounds.current_volume()
+        sounds.set_preference(self._sound_mode, vol)
+        try:
+            sounds.play(SoundCue.TRANSFER_DONE, force_preview=True)
+        finally:
+            sounds.set_preference(prev_mode, prev_vol)
+
+    def _on_auto_dismiss_toggled(self, checked: bool) -> None:
+        self._auto_dismiss_notices = bool(checked)
+        self.auto_dismiss_notices_toggled.emit(self._auto_dismiss_notices)
+
+    def _on_tray_notifications_toggled(self, checked: bool) -> None:
+        self._tray_notifications = bool(checked)
+        self.tray_notifications_toggled.emit(self._tray_notifications)
 
     # ---- Bên trong -----------------------------------------------------------------------------
 

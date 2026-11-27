@@ -226,12 +226,18 @@ from teleport.ui.chat_bubbles import (
 )
 from teleport.ui.chat_motion import ThreadMotion
 from teleport.ui.conversations import failure_text
+from teleport.ui.device_panel import DeviceInfoPanel
 from teleport.ui.drop_overlay import DropOverlay
 from teleport.ui.offer import OfferBook
 from teleport.ui.radar import DeviceListModel, can_receive_files, drop_hint_text
 from teleport.ui.send import printable
 from teleport.ui.shortcuts import Shortcut
-from teleport.ui.thumbnails import THUMB_DEFAULT_SIZE, ThumbnailLoader, is_thumbnailable
+from teleport.ui.thumbnails import (
+    THUMB_DEFAULT_SIZE,
+    QuickPreviewDialog,
+    ThumbnailLoader,
+    is_thumbnailable,
+)
 from teleport.ui.widgets import (
     BubbleRow,
     ChatBubble,
@@ -805,6 +811,7 @@ class ChatHeader(QWidget):
     clipboard_toggled = Signal(bool)
     auto_accept_toggled = Signal(bool)
     search_toggled = Signal(bool)
+    info_toggled = Signal(bool)
     connect_ip_requested = Signal()
     retry_connect_requested = Signal()
     send_clipboard_image_requested = Signal()
@@ -816,6 +823,7 @@ class ChatHeader(QWidget):
         self.setObjectName("chatHeader")
         self._key: str | None = None
         self._quick_available = False
+        self._panel_open = False
         self._menu: QMenu | None = None
         self.avatar = DeviceAvatar(self, diameter=_AVATAR, presence=Presence.OFFLINE, ring="surface")
         self.name_label = QLabel(self)
@@ -850,10 +858,20 @@ class ChatHeader(QWidget):
         self.search_button.setObjectName("chatHeaderSearchButton")
         self.search_button.setCheckable(True)
         self.search_button.toggled.connect(self.search_toggled)
+        self.info_button = IconButton("info", t("Chat", "Thông tin thiết bị"), self)
+        self.info_button.setObjectName("chatHeaderInfoButton")
+        self.info_button.setCheckable(True)
+        self.info_button.toggled.connect(self.info_toggled)
         self.more_button = IconButton("more_horizontal", t("Chat", "Thao tác khác"), self)
         self.more_button.setObjectName("chatHeaderMoreButton")
         self.more_button.clicked.connect(self._open_more_menu)
-        for btn in (self.clipboard_button, self.auto_accept_button, self.search_button, self.more_button):
+        for btn in (
+            self.clipboard_button,
+            self.auto_accept_button,
+            self.search_button,
+            self.info_button,
+            self.more_button,
+        ):
             btn.setVisible(False)
 
         layout = QHBoxLayout(self)
@@ -864,10 +882,15 @@ class ChatHeader(QWidget):
         layout.addLayout(self.action_row)
         self.retranslate()
 
-    def set_quick_actions_available(self, available: bool) -> None:
-        self._quick_available = bool(available)
-        for btn in (self.clipboard_button, self.auto_accept_button, self.search_button, self.more_button):
-            if self._quick_available:
+    def _sync_action_visibility(self) -> None:
+        for btn, shown in (
+            (self.clipboard_button, False),
+            (self.auto_accept_button, False),
+            (self.search_button, False),
+            (self.info_button, self._quick_available),
+            (self.more_button, False),
+        ):
+            if shown:
                 if self.action_row.indexOf(btn) < 0:
                     self.action_row.addWidget(btn)
                 btn.setVisible(True)
@@ -875,6 +898,10 @@ class ChatHeader(QWidget):
                 btn.setVisible(False)
                 if self.action_row.indexOf(btn) >= 0:
                     self.action_row.removeWidget(btn)
+
+    def set_quick_actions_available(self, available: bool) -> None:
+        self._quick_available = bool(available)
+        self._sync_action_visibility()
 
     def set_quick_state(self, *, clipboard: bool, auto_accept: bool) -> None:
         with QSignalBlocker(self.clipboard_button):
@@ -886,11 +913,18 @@ class ChatHeader(QWidget):
         with QSignalBlocker(self.search_button):
             self.search_button.setChecked(bool(active))
 
+    def set_info_active(self, active: bool) -> None:
+        self._panel_open = bool(active)
+        with QSignalBlocker(self.info_button):
+            self.info_button.setChecked(self._panel_open)
+        self._sync_action_visibility()
+
     def retranslate(self) -> None:
         t = QCoreApplication.translate
         self.clipboard_button.set_label(t("Chat", "Đồng bộ clipboard"))
         self.auto_accept_button.set_label(t("Chat", "Luôn tự động nhận file"))
         self.search_button.set_label(t("Chat", "Tìm trong luồng"))
+        self.info_button.set_label(t("Chat", "Thông tin thiết bị"))
         self.more_button.set_label(t("Chat", "Thao tác khác"))
 
     def _open_more_menu(self) -> None:
@@ -902,11 +936,11 @@ class ChatHeader(QWidget):
         t = QCoreApplication.translate
         menu = QMenu(self)
         menu.setObjectName("chatHeaderMoreMenu")
+        menu.setProperty(theme.MENU_PROPERTY, True)
         menu.setAccessibleName(t("Chat", "Thao tác với thiết bị"))
         items = (
             (t("Chat", "Kết nối bằng IP…"), self.connect_ip_requested),
             (t("Chat", "Thử kết nối lại"), self.retry_connect_requested),
-            (t("Chat", "Gửi ảnh từ clipboard"), self.send_clipboard_image_requested),
             (t("Chat", "Cài đặt cho thiết bị này…"), self.device_settings_requested),
             (t("Chat", "Xóa lịch sử với máy này…"), self.clear_history_requested),
         )
@@ -1074,6 +1108,7 @@ class ChatComposer(QWidget):
         layout.addWidget(self.push_clipboard_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.hint_icon, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.hint_label, 1)
+        layout.addStretch(1)
 
     @property
     def offline(self) -> bool:
@@ -1081,14 +1116,20 @@ class ChatComposer(QWidget):
 
     def set_hint(self, text: str, *, offline: bool) -> None:
         self._offline = offline
+        has_text = bool(text)
         self.hint_label.setText(text)
         self.hint_label.setAccessibleName(text)
+        self.hint_label.setVisible(has_text)
         align = Qt.AlignmentFlag.AlignLeft if offline else Qt.AlignmentFlag.AlignRight
         self.hint_label.setAlignment(align | Qt.AlignmentFlag.AlignVCenter)
-        self.hint_icon.setVisible(offline)
+        self.hint_icon.setVisible(offline and has_text)
         self._refresh_icon()
         # Trình đọc màn hình: các nút gửi nói luôn máy kia đang ngoại tuyến.
-        desc = text if offline else ""
+        desc = text or (
+            QCoreApplication.translate("Chat", "Ngoại tuyến — file sẽ tự gửi khi máy kia mở lại")
+            if offline
+            else ""
+        )
         self.send_button.setAccessibleDescription(desc)
         self.send_folder_button.setAccessibleDescription(desc)
         self.send_multi_button.setAccessibleDescription(desc)
@@ -1143,7 +1184,11 @@ class ChatView(QWidget):
     header_send_clipboard_image_requested = Signal(str)
     header_device_settings_requested = Signal(str)
     header_clear_history_requested = Signal(str)
+    unpair_requested = Signal(str)
     export_receipt_requested = Signal(object)  # TransferKey
+
+    _AUTO_PANEL_MIN_WIDTH = 780
+    _MANUAL_PANEL_MIN_WIDTH = 660
 
     def __init__(self, devices: DeviceListModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1171,29 +1216,36 @@ class ChatView(QWidget):
         self._changed = False
         self._device_banner: QWidget | None = None  # thanh theo máy (`set_device_banner`)
         self._quick_actions_available = False
+        self._info_user_pref: bool | None = None
         self._receipt_export_available = False
         self._device_clip_enabled: dict[str, bool] = {}
         self._device_auto_accept: dict[str, bool] = {}
         self._thumbs = ThumbnailLoader(self)
+        self._preview_dialog: QuickPreviewDialog | None = None
+
+        self._main_pane = QWidget(self)
+        self._main_pane.setObjectName("chatMainPane")
+        self._main_pane.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         # Dựng theo thứ tự Tab (spec B3 mục 9.10): info_bar → empty_state → threads → new_button → nút gửi.
-        self.info_bar = InfoBar(self)
+        self.info_bar = InfoBar(self._main_pane)
         self.info_bar.setObjectName("chatInfoBar")
         self.info_bar.action_triggered.connect(self._on_notice_action)
         self.info_bar.dismissed.connect(self._on_notice_dismissed)
-        self.header = ChatHeader(self)
+        self.header = ChatHeader(self._main_pane)
         self.header.clipboard_toggled.connect(self._on_header_clipboard_toggled)
         self.header.auto_accept_toggled.connect(self._on_header_auto_accept_toggled)
         self.header.search_toggled.connect(self._on_header_search_toggled)
+        self.header.info_toggled.connect(self._on_header_info_toggled)
         self.header.connect_ip_requested.connect(self._on_header_connect_ip)
         self.header.retry_connect_requested.connect(self._on_header_retry_connect)
         self.header.send_clipboard_image_requested.connect(self._on_header_send_clip_image)
         self.header.device_settings_requested.connect(self._on_header_device_settings)
         self.header.clear_history_requested.connect(self._on_header_clear_history)
-        self.search_bar = ChatSearchBar(self)
+        self.search_bar = ChatSearchBar(self._main_pane)
         self.search_bar.query_changed.connect(self._on_search_query)
         self.search_bar.close_requested.connect(self.close_search)
-        self.threads = _ThreadStack(self)
+        self.threads = _ThreadStack(self._main_pane)
         self.placeholder = QLabel(self.threads)
         self.placeholder.setObjectName("chatPlaceholder")
         self.placeholder.setTextFormat(Qt.TextFormat.PlainText)
@@ -1207,17 +1259,28 @@ class ChatView(QWidget):
         self.threads.addWidget(self.placeholder)
         self.threads.addWidget(self.empty_state)
         self.new_button = IconButton(
-            "arrow_down", QCoreApplication.translate("Chat", "Mới"), self, show_text=True
+            "arrow_down", QCoreApplication.translate("Chat", "Mới"), self._main_pane, show_text=True
         )
         self.new_button.setObjectName("chatNewButton")
         self.new_button.setVisible(False)
         self.new_button.clicked.connect(self._on_new_clicked)
-        self.composer = ChatComposer(self)
+        self.composer = ChatComposer(self._main_pane)
         self.composer.send_button.clicked.connect(self._request_pick)
         self.composer.send_folder_button.clicked.connect(self._request_pick_folder)
         self.composer.send_multi_button.clicked.connect(self.send_multi_requested)
         self.composer.push_clipboard_button.clicked.connect(self._request_push_clipboard)
-        self._drop_overlay = DropOverlay(self)
+        self._drop_overlay = DropOverlay(self._main_pane)
+
+        self.info_panel = DeviceInfoPanel(self)
+        self.info_panel.setVisible(False)
+        self.info_panel.search_requested.connect(self.open_search)
+        self.info_panel.connect_ip_requested.connect(self._on_header_connect_ip)
+        self.info_panel.retry_connect_requested.connect(self._on_header_retry_connect)
+        self.info_panel.device_settings_requested.connect(self._on_header_device_settings)
+        self.info_panel.clear_history_requested.connect(self._on_header_clear_history)
+        self.info_panel.unpair_requested.connect(self._on_panel_unpair)
+        self.info_panel.clipboard_toggled.connect(self._on_header_clipboard_toggled)
+        self.info_panel.auto_accept_toggled.connect(self._on_header_auto_accept_toggled)
 
         info_wrap = QVBoxLayout()
         info_wrap.setContentsMargins(_MARGIN, theme.SPACING[2], _MARGIN, 0)
@@ -1227,16 +1290,22 @@ class ChatView(QWidget):
         new_row.addStretch(1)
         new_row.addWidget(self.new_button)
         new_row.addStretch(1)
-        layout = QVBoxLayout(self)
-        self._layout = layout
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addLayout(info_wrap)
-        layout.addWidget(self.header)
-        layout.addWidget(self.search_bar)
-        layout.addWidget(self.threads, 1)
-        layout.addLayout(new_row)
-        layout.addWidget(self.composer)
+        pane_layout = QVBoxLayout(self._main_pane)
+        self._layout = pane_layout
+        pane_layout.setContentsMargins(0, 0, 0, 0)
+        pane_layout.setSpacing(0)
+        pane_layout.addLayout(info_wrap)
+        pane_layout.addWidget(self.header)
+        pane_layout.addWidget(self.search_bar)
+        pane_layout.addWidget(self.threads, 1)
+        pane_layout.addLayout(new_row)
+        pane_layout.addWidget(self.composer)
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._main_pane, 1)
+        outer.addWidget(self.info_panel)
 
         info = self.info_bar
         chain: list[QWidget] = [
@@ -1306,19 +1375,21 @@ class ChatView(QWidget):
             if device_id is not None:
                 thread = self._thread(device_id)
                 thread.scroll_to_bottom()
-                self.header.set_quick_state(
-                    clipboard=self._device_clip_enabled.get(device_id, False),
-                    auto_accept=self._device_auto_accept.get(device_id, False),
-                )
+                clip = self._device_clip_enabled.get(device_id, False)
+                auto = self._device_auto_accept.get(device_id, False)
+                self.header.set_quick_state(clipboard=clip, auto_accept=auto)
+                self.info_panel.set_quick_state(clipboard=clip, auto_accept=auto)
                 self._schedule_history()
             else:
                 self._history_timer.stop()
             self._update_header()
             self._update_page()
+            self._sync_info_panel()
 
     def set_quick_actions_available(self, available: bool) -> None:
         self._quick_actions_available = bool(available)
         self.header.set_quick_actions_available(available)
+        self._sync_info_panel()
 
     def set_receipt_export_available(self, available: bool) -> None:
         self._receipt_export_available = bool(available)
@@ -1333,6 +1404,7 @@ class ChatView(QWidget):
         self._device_auto_accept[device_id] = bool(auto_accept)
         if device_id == self._device_id:
             self.header.set_quick_state(clipboard=bool(clipboard), auto_accept=bool(auto_accept))
+            self.info_panel.set_quick_state(clipboard=bool(clipboard), auto_accept=bool(auto_accept))
 
     def open_search(self) -> None:
         if self._device_id is None:
@@ -1730,6 +1802,7 @@ class ChatView(QWidget):
                 bubble.export_receipt_clicked.connect(
                     lambda k=bubble.key: self.export_receipt_requested.emit(k)
                 )
+                bubble.thumbnail_clicked.connect(self._open_thumb_preview)
                 if entry.file_count == 1 and entry.saved_path:
                     saved = Path(entry.saved_path)
                     if saved.is_absolute() and is_thumbnailable(saved):
@@ -1960,6 +2033,7 @@ class ChatView(QWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        self._sync_info_panel()
         if not self._drop_overlay.isHidden():
             self._drop_overlay.setGeometry(self.threads.geometry())
 
@@ -2031,6 +2105,7 @@ class ChatView(QWidget):
         bubble.offer_always.connect(lambda on, b=bubble: self._offer_always(b, on))
         bubble.offer_change.connect(self.change_receive_dir_requested)
         bubble.change_dir_clicked.connect(self.change_receive_dir_requested)
+        bubble.thumbnail_clicked.connect(self._open_thumb_preview)
         self._bubbles[key] = bubble
         reveal = arrive and key.direction is Direction.RECEIVE
         if reveal:
@@ -2113,7 +2188,7 @@ class ChatView(QWidget):
 
         def on_ready(pix: QPixmap | None) -> None:
             if isValid(bubble):
-                bubble.set_thumbnail(pix)
+                bubble.set_thumbnail(pix, path)
 
         self._thumbs.request(
             path,
@@ -2122,14 +2197,39 @@ class ChatView(QWidget):
             dpr=dpr,
         )
 
+    def _open_thumb_preview(self, path: Path) -> None:
+        old = self._preview_dialog
+        if old is not None and isValid(old):
+            old.close()
+        dlg = QuickPreviewDialog(
+            path,
+            self,
+            on_open=lambda p: self._open_single_file(p, None),
+        )
+        self._preview_dialog = dlg
+        dlg.destroyed.connect(lambda _obj=None, target=dlg: self._clear_preview(target))
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _clear_preview(self, dlg: QuickPreviewDialog) -> None:
+        if self._preview_dialog is dlg:
+            self._preview_dialog = None
+
     def _on_header_clipboard_toggled(self, on: bool) -> None:
         if self._device_id is not None:
             self._device_clip_enabled[self._device_id] = bool(on)
+            auto = self._device_auto_accept.get(self._device_id, False)
+            self.header.set_quick_state(clipboard=bool(on), auto_accept=auto)
+            self.info_panel.set_quick_state(clipboard=bool(on), auto_accept=auto)
             self.header_clipboard_toggled.emit(self._device_id, bool(on))
 
     def _on_header_auto_accept_toggled(self, on: bool) -> None:
         if self._device_id is not None:
             self._device_auto_accept[self._device_id] = bool(on)
+            clip = self._device_clip_enabled.get(self._device_id, False)
+            self.header.set_quick_state(clipboard=clip, auto_accept=bool(on))
+            self.info_panel.set_quick_state(clipboard=clip, auto_accept=bool(on))
             self.header_auto_accept_toggled.emit(self._device_id, bool(on))
 
     def _on_header_search_toggled(self, on: bool) -> None:
@@ -2137,6 +2237,25 @@ class ChatView(QWidget):
             self.open_search()
         else:
             self.close_search()
+
+    def _on_header_info_toggled(self, on: bool) -> None:
+        self._info_user_pref = bool(on)
+        self._sync_info_panel()
+
+    def _on_panel_unpair(self) -> None:
+        if self._device_id is not None:
+            self.unpair_requested.emit(self._device_id)
+
+    def _sync_info_panel(self) -> None:
+        if not (self._quick_actions_available and self._device_id is not None):
+            shown = False
+        elif self._info_user_pref is not None:
+            shown = self._info_user_pref and self.width() >= self._MANUAL_PANEL_MIN_WIDTH
+        else:
+            shown = self.width() >= self._AUTO_PANEL_MIN_WIDTH
+        if self.info_panel.isHidden() == shown:
+            self.info_panel.setVisible(shown)
+        self.header.set_info_active(shown)
 
     def _on_header_connect_ip(self) -> None:
         if self._device_id is not None:
@@ -2264,30 +2383,26 @@ class ChatView(QWidget):
         device_id = self._device_id
         self.header.setVisible(device_id is not None)
         if device_id is None:
-            self.composer.set_hint(t("Chat", "hoặc kéo file vào đây"), offline=False)
+            self.composer.set_hint("", offline=False)
             return
         view = self._devices.device(device_id)
         name = self._peer(device_id, None)
         status, presence = self._header_status(view)
         self.header.set_device(name, status, presence, key=device_id)
+        self.info_panel.set_device(
+            name,
+            status,
+            presence,
+            key=device_id,
+            os_name=None if view is None else view.os,
+        )
         offline = view is not None and not view.online and not view.connected
-        if offline:
-            hint = texts.fill(
-                t(
-                    "Chat",
-                    "{name} đang ngoại tuyến. File gửi lúc này sẽ chờ và tự gửi khi máy đó mở Teleport trong "
-                    "cùng mạng, nếu Teleport trên máy này vẫn chạy (kể cả khi chỉ còn ở khay).",
-                ),
-                name=name,
-            )
-        else:
-            hint = t("Chat", "hoặc kéo file vào đây")
-        self.composer.set_hint(hint, offline=offline)
+        self.composer.set_hint("", offline=offline)
         self.empty_state.set_content(
             "attach",
             texts.fill(t("Chat", "Kéo file vào đây để gửi cho {name}"), name=name),
             texts.fill(
-                t("Chat", "Hoặc bấm Gửi file ở dưới, hay nhấn {key} để dán file đã chép."),
+                t("Chat", "Nhấn {key} để dán file"),
                 key=shortcuts.key_text(Shortcut.PASTE_FILES),
             ),
         )

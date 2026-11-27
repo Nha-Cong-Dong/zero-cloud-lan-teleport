@@ -138,6 +138,7 @@ class WebGuestHttpServer:
         scope: GuestScope = GuestScope.BOTH,
         one_shot: bool = False,
         on_text_received: Callable[[str], None] | None = None,
+        on_clients_changed: Callable[[int], None] | None = None,
     ) -> None:
         self.token = token
         self.upload_dir = upload_dir
@@ -155,6 +156,7 @@ class WebGuestHttpServer:
         self.on_upload_complete = on_upload_complete
         self.on_session_timeout = on_session_timeout
         self.on_text_received = on_text_received
+        self.on_clients_changed = on_clients_changed
 
         self.shared_files: dict[str, tuple[str, Path, int]] = {}
         self._shared_dirs: set[str] = set()
@@ -170,11 +172,25 @@ class WebGuestHttpServer:
         self._one_shot_task: asyncio.Task[None] | None = None
         self._active_connections: set[asyncio.StreamWriter] = set()
         self._sse_writers: set[asyncio.StreamWriter] = set()
+        self._last_notified_clients: int = 0
         self._closed = False
 
     @property
     def port(self) -> int:
         return self._port
+
+    @property
+    def active_clients(self) -> int:
+        return len(self._sse_writers)
+
+    def _notify_clients_changed(self) -> None:
+        count = len(self._sse_writers)
+        if count == self._last_notified_clients:
+            return
+        self._last_notified_clients = count
+        if self.on_clients_changed:
+            with contextlib.suppress(Exception):
+                self.on_clients_changed(count)
 
     def add_shared_file(self, path: Path) -> str:
         """Đưa một tệp hoặc thư mục trên máy tính vào danh sách chia sẻ để điện thoại tải về."""
@@ -309,6 +325,7 @@ class WebGuestHttpServer:
                 await asyncio.wait_for(writer.wait_closed(), timeout=0.5)
         self._active_connections.clear()
         self._sse_writers.clear()
+        self._notify_clients_changed()
 
         if self._server:
             with contextlib.suppress(Exception):
@@ -343,6 +360,8 @@ class WebGuestHttpServer:
                 dead.append(writer)
         for w in dead:
             self._sse_writers.discard(w)
+        if dead:
+            self._notify_clients_changed()
 
     async def _close_writer(self, writer: asyncio.StreamWriter, timeout: float = 0.5) -> None:
         """Đóng StreamWriter có giới hạn thời gian; quá hạn thì abort transport."""
@@ -585,6 +604,7 @@ class WebGuestHttpServer:
         elif path == "/api/events":
             # Server-Sent Events
             self._sse_writers.add(writer)
+            self._notify_clients_changed()
             header_lines = [
                 "HTTP/1.1 200 OK",
                 "Content-Type: text/event-stream",

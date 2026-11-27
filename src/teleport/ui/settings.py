@@ -107,138 +107,367 @@ Câu chữ ở ngữ cảnh `"Settings"`, gọi `QCoreApplication.translate` lú
 
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
-import contextlib
 import functools
 import itertools
 import logging
 import sys
-import time
-import unicodedata
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
-from enum import StrEnum
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 from uuid import uuid4
 
 from PySide6.QtCore import (
     QCoreApplication,
     QEvent,
     QLocale,
-    QObject,
-    QRect,
-    QRectF,
     QSize,
-    QStandardPaths,
     Qt,
-    QTimer,
-    QUrl,
     Signal,
 )
-from PySide6.QtGui import (
-    QDesktopServices,
-    QFontMetrics,
-    QHideEvent,
-    QKeyEvent,
-    QPainter,
-    QPaintEvent,
-    QResizeEvent,
-    QShowEvent,
-    QValidator,
-    QWheelEvent,
+from PySide6.QtCore import (
+    QStandardPaths as QStandardPaths,
 )
+from PySide6.QtGui import QHideEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QBoxLayout,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
-    QStyle,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 from shiboken6 import isValid
 
 import teleport
-from teleport.app import autostart, logexport, receipts, storage, updater
+from teleport.app import autostart, logexport, updater
 from teleport.app import settings as app_settings
-from teleport.app import transfers as app_transfers
-from teleport.app.devices import DeviceView
-from teleport.app.node import Node
-from teleport.app.settings import DeviceSettings, SettingsSaveError
+from teleport.app.settings import DeviceSettings
 from teleport.app.updater import UpdateInfo
 from teleport.core.messages import PROTOCOL_VERSION, MessageError, validate_device_name
 from teleport.core.routing import RoutingRule, parse_patterns
-from teleport.core.transfer import Direction, TransferKey, TransferStatus
 from teleport.core.watch import WatchPortalRule
-from teleport.ui import i18n, icons, motion, shortcuts, texts, theme
+from teleport.ui import i18n, icons, shortcuts, texts, theme
 from teleport.ui.appearance import AppearanceSection
-from teleport.ui.appearance import section_title as appearance_title
 from teleport.ui.radar import DeviceListModel
 from teleport.ui.send import printable
+from teleport.ui.settings_controller import (
+    SettingsController as SettingsController,
+)
+from teleport.ui.settings_controller import (
+    _apply_theme as _apply_theme,
+)
+from teleport.ui.settings_controller import (
+    _deliver_check as _deliver_check,
+)
+from teleport.ui.settings_controller import (
+    _deliver_download as _deliver_download,
+)
+from teleport.ui.settings_controller import (
+    _deliver_export as _deliver_export,
+)
+from teleport.ui.settings_controller import (
+    _download_worker as _download_worker,
+)
+from teleport.ui.settings_controller import (
+    _ExportRelay as _ExportRelay,
+)
+from teleport.ui.settings_controller import (
+    _retry_text as _retry_text,
+)
+from teleport.ui.settings_controller import (
+    _translate_cancel_pending_box as _translate_cancel_pending_box,
+)
+from teleport.ui.settings_controller import (
+    _translate_clear_history_box as _translate_clear_history_box,
+)
+from teleport.ui.settings_controller import (
+    _translate_install_update_box as _translate_install_update_box,
+)
+from teleport.ui.settings_controller import (
+    _UpdateRelay as _UpdateRelay,
+)
+from teleport.ui.settings_controller import (
+    _warn as _warn,
+)
+from teleport.ui.settings_widgets import (
+    _ACTIONS_INDENT as _ACTIONS_INDENT,
+)
+from teleport.ui.settings_widgets import (
+    _AVATAR as _AVATAR,
+)
+from teleport.ui.settings_widgets import (
+    _FIT_PASSES as _FIT_PASSES,
+)
+from teleport.ui.settings_widgets import (
+    _NAV_ICON as _NAV_ICON,
+)
+from teleport.ui.settings_widgets import (
+    _NAV_PILL_HEIGHT as _NAV_PILL_HEIGHT,
+)
+from teleport.ui.settings_widgets import (
+    _NAV_PILL_INSET as _NAV_PILL_INSET,
+)
+from teleport.ui.settings_widgets import (
+    _NAV_PILL_RADIUS as _NAV_PILL_RADIUS,
+)
+from teleport.ui.settings_widgets import (
+    _NAV_PILL_WIDTH as _NAV_PILL_WIDTH,
+)
+from teleport.ui.settings_widgets import (
+    _NAV_ROW_HEIGHT as _NAV_ROW_HEIGHT,
+)
+from teleport.ui.settings_widgets import (
+    _PALETTE_EVENTS as _PALETTE_EVENTS,
+)
+from teleport.ui.settings_widgets import (
+    _TABLE_CELL_PADDING as _TABLE_CELL_PADDING,
+)
+from teleport.ui.settings_widgets import (
+    _TABLE_ROW_PADDING as _TABLE_ROW_PADDING,
+)
+from teleport.ui.settings_widgets import (
+    CONTENT_MAX_WIDTH as CONTENT_MAX_WIDTH,
+)
+from teleport.ui.settings_widgets import (
+    EXPORT_THREAD as EXPORT_THREAD,
+)
+from teleport.ui.settings_widgets import (
+    FILE_TYPE_PRESETS as FILE_TYPE_PRESETS,
+)
+from teleport.ui.settings_widgets import (
+    MB as MB,
+)
+from teleport.ui.settings_widgets import (
+    NAME_MAX_INPUT as NAME_MAX_INPUT,
+)
+from teleport.ui.settings_widgets import (
+    NAV_WIDTH as NAV_WIDTH,
+)
+from teleport.ui.settings_widgets import (
+    NOTICES_FILE as NOTICES_FILE,
+)
+from teleport.ui.settings_widgets import (
+    RATE_DEFAULT_MB as RATE_DEFAULT_MB,
+)
+from teleport.ui.settings_widgets import (
+    RATE_MAX_MB as RATE_MAX_MB,
+)
+from teleport.ui.settings_widgets import (
+    RATE_MIN_MB as RATE_MIN_MB,
+)
+from teleport.ui.settings_widgets import (
+    ROW_SPACING as ROW_SPACING,
+)
+from teleport.ui.settings_widgets import (
+    SECTION_ICONS as SECTION_ICONS,
+)
+from teleport.ui.settings_widgets import (
+    SECTION_MARGIN as SECTION_MARGIN,
+)
+from teleport.ui.settings_widgets import (
+    SPIN_COMMIT_MS as SPIN_COMMIT_MS,
+)
+from teleport.ui.settings_widgets import (
+    UPDATE_THREAD as UPDATE_THREAD,
+)
+from teleport.ui.settings_widgets import (
+    PendingReceiveItem as PendingReceiveItem,
+)
+from teleport.ui.settings_widgets import (
+    Section as Section,
+)
+from teleport.ui.settings_widgets import (
+    SettingsSnapshot as SettingsSnapshot,
+)
+from teleport.ui.settings_widgets import (
+    TrustedDeviceRow as TrustedDeviceRow,
+)
+from teleport.ui.settings_widgets import (
+    UpdateUiState as UpdateUiState,
+)
+from teleport.ui.settings_widgets import (
+    _blocked as _blocked,
+)
+from teleport.ui.settings_widgets import (
+    _CommitSpin as _CommitSpin,
+)
+from teleport.ui.settings_widgets import (
+    _DecimalSpin as _DecimalSpin,
+)
+from teleport.ui.settings_widgets import (
+    _ElidedLabel as _ElidedLabel,
+)
+from teleport.ui.settings_widgets import (
+    _NameField as _NameField,
+)
+from teleport.ui.settings_widgets import (
+    _NavList as _NavList,
+)
+from teleport.ui.settings_widgets import (
+    _nfc_key as _nfc_key,
+)
+from teleport.ui.settings_widgets import (
+    _plain as _plain,
+)
+from teleport.ui.settings_widgets import (
+    _preset_label as _preset_label,
+)
+from teleport.ui.settings_widgets import (
+    _read_device_names as _read_device_names,
+)
+from teleport.ui.settings_widgets import (
+    _read_device_settings as _read_device_settings,
+)
+from teleport.ui.settings_widgets import (
+    _repolish as _repolish,
+)
+from teleport.ui.settings_widgets import (
+    _RowShape as _RowShape,
+)
+from teleport.ui.settings_widgets import (
+    _ShortcutTable as _ShortcutTable,
+)
+from teleport.ui.settings_widgets import (
+    autostart_state_hint as autostart_state_hint,
+)
+from teleport.ui.settings_widgets import (
+    autostart_write_error_text as autostart_write_error_text,
+)
+from teleport.ui.settings_widgets import (
+    bytes_to_rate as bytes_to_rate,
+)
+from teleport.ui.settings_widgets import (
+    cancel_all_pending_question as cancel_all_pending_question,
+)
+from teleport.ui.settings_widgets import (
+    cancel_all_pending_title as cancel_all_pending_title,
+)
+from teleport.ui.settings_widgets import (
+    cancel_pending_question as cancel_pending_question,
+)
+from teleport.ui.settings_widgets import (
+    cancel_pending_title as cancel_pending_title,
+)
+from teleport.ui.settings_widgets import (
+    clear_history_question as clear_history_question,
+)
+from teleport.ui.settings_widgets import (
+    clear_history_title as clear_history_title,
+)
+from teleport.ui.settings_widgets import (
+    default_export_dir as default_export_dir,
+)
+from teleport.ui.settings_widgets import (
+    default_export_name as default_export_name,
+)
+from teleport.ui.settings_widgets import (
+    default_retention_days as default_retention_days,
+)
+from teleport.ui.settings_widgets import (
+    device_status_text as device_status_text,
+)
+from teleport.ui.settings_widgets import (
+    export_other_error_text as export_other_error_text,
+)
+from teleport.ui.settings_widgets import (
+    export_saved_text as export_saved_text,
+)
+from teleport.ui.settings_widgets import (
+    export_write_error_text as export_write_error_text,
+)
+from teleport.ui.settings_widgets import (
+    hidden_text as hidden_text,
+)
+from teleport.ui.settings_widgets import (
+    history_clear_failed_text as history_clear_failed_text,
+)
+from teleport.ui.settings_widgets import (
+    history_cleared_text as history_cleared_text,
+)
+from teleport.ui.settings_widgets import (
+    install_update_question as install_update_question,
+)
+from teleport.ui.settings_widgets import (
+    install_update_title as install_update_title,
+)
+from teleport.ui.settings_widgets import (
+    name_empty_text as name_empty_text,
+)
+from teleport.ui.settings_widgets import (
+    name_hint as name_hint,
+)
+from teleport.ui.settings_widgets import (
+    name_invalid_text as name_invalid_text,
+)
+from teleport.ui.settings_widgets import (
+    notices_path as notices_path,
+)
+from teleport.ui.settings_widgets import (
+    other_error_text as other_error_text,
+)
+from teleport.ui.settings_widgets import (
+    page_title as page_title,
+)
+from teleport.ui.settings_widgets import (
+    pending_all_cancelled_text as pending_all_cancelled_text,
+)
+from teleport.ui.settings_widgets import (
+    pending_cancel_failed_text as pending_cancel_failed_text,
+)
+from teleport.ui.settings_widgets import (
+    pending_cancelled_text as pending_cancelled_text,
+)
+from teleport.ui.settings_widgets import (
+    pending_status_text as pending_status_text,
+)
+from teleport.ui.settings_widgets import (
+    rate_to_bytes as rate_to_bytes,
+)
+from teleport.ui.settings_widgets import (
+    read_snapshot as read_snapshot,
+)
+from teleport.ui.settings_widgets import (
+    section_title as section_title,
+)
+from teleport.ui.settings_widgets import (
+    settings_error_text as settings_error_text,
+)
+from teleport.ui.settings_widgets import (
+    snapshot_error_text as snapshot_error_text,
+)
+from teleport.ui.settings_widgets import (
+    trusted_devices as trusted_devices,
+)
+from teleport.ui.settings_widgets import (
+    update_launch_failed_text as update_launch_failed_text,
+)
 from teleport.ui.widgets import (
-    LABEL_MIN_WIDTH,
-    DeviceAvatar,
     EmptyState,
     InfoBar,
     InfoLevel,
     PageHeader,
-    Presence,
     SettingsRow,
     ToggleSwitch,
     safe_tooltip,
 )
 
 log = logging.getLogger(__name__)
-
-NAV_WIDTH = 224  # px, cột chọn mục
-CONTENT_MAX_WIDTH = 860  # px, độ rộng tối đa khối nội dung (tránh dàn trải ở màn hình rộng)
-SECTION_MARGIN = theme.SPACING[4]  # 24 px, lề nội dung của mỗi mục
-ROW_SPACING = theme.SPACING[2]  # 12 px, khoảng giữa hai hàng
-SPIN_COMMIT_MS = 600  # ms không đổi sau khi bấm mũi tên thì chốt giá trị ô số
-MB = 1024 * 1024  # byte của “MB” trong ô tốc độ
-RATE_MIN_MB = 0.1
-RATE_MAX_MB = 100_000.0
-RATE_DEFAULT_MB = 10.0  # số hiện sẵn khi chưa giới hạn
-NAME_MAX_INPUT = 256  # ký tự tối đa gõ được vào ô tên (luật thật: `validate_device_name`)
-NOTICES_FILE = "THIRD-PARTY-NOTICES.txt"
-EXPORT_THREAD = "teleport-logexport"
-UPDATE_THREAD = "teleport-update"
-_NAV_ICON = 20  # px (`shield_checkmark` có cỡ 20)
-_NAV_ROW_HEIGHT = 44  # px
-_NAV_PILL_WIDTH = 3  # px, vạch nhấn của mục được chọn
-_NAV_PILL_HEIGHT = 20  # px
-_NAV_PILL_RADIUS = 1.5  # px
-_NAV_PILL_INSET = 4  # px, từ mép item (nằm trên viền trong suốt 2 px)
-_AVATAR = 36  # px
-_ACTIONS_INDENT = _AVATAR + theme.SPACING[2]  # px, lề trái của ô và nút dưới tên (thẳng cột chữ)
-_PALETTE_EVENTS = (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange)
-_FIT_PASSES = 4  # số lượt tối đa tính lại chiều cao bảng Phím tắt tới khi đứng yên
-_TABLE_ROW_PADDING = 6  # px, trên và dưới chữ mỗi hàng của bảng Phím tắt
-_TABLE_CELL_PADDING = 8  # px, hai bên chữ mỗi ô của bảng Phím tắt
 
 
 def _default_auto_install_supported() -> bool:
@@ -254,948 +483,6 @@ apply_update_fn: Callable[..., bool] = updater.apply_update_installer
 auto_install_supported: Callable[[], bool] = _default_auto_install_supported
 
 
-class Section(StrEnum):
-    """Các mục của trang, đúng thứ tự trong `nav`."""
-
-    GENERAL = "general"
-    APPEARANCE = "appearance"
-    PRIVACY = "privacy"
-    DEVICES = "devices"
-    TRANSFER = "transfer"
-    ADVANCED = "advanced"
-
-
-SECTION_ICONS = {
-    Section.GENERAL: "settings",
-    Section.APPEARANCE: "color",
-    Section.PRIVACY: "eye_off",
-    Section.DEVICES: "shield_checkmark",
-    Section.TRANSFER: "arrow_swap",
-    Section.ADVANCED: "wrench",
-}
-
-FILE_TYPE_PRESETS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("images", ("*.jpg", "*.jpeg", "*.png", "*.webp", "*.gif", "*.heic")),
-    ("videos", ("*.mp4", "*.mov", "*.mkv", "*.avi", "*.webm")),
-    ("documents", ("*.pdf", "*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx", "*.txt")),
-    ("archives", ("*.zip", "*.7z", "*.rar", "*.tar", "*.gz")),
-    ("audio", ("*.mp3", "*.flac", "*.wav", "*.m4a", "*.ogg")),
-    ("all", ()),
-)
-
-
-def _preset_label(key: str) -> str:
-    t = QCoreApplication.translate
-    return {
-        "images": t("Settings", "Ảnh"),
-        "videos": t("Settings", "Video"),
-        "documents": t("Settings", "Tài liệu"),
-        "archives": t("Settings", "Nén"),
-        "audio": t("Settings", "Nhạc"),
-        "all": t("Settings", "Mọi file"),
-    }[key]
-
-
-# ---- Câu chữ -----------------------------------------------------------------------------------
-
-
-def page_title() -> str:
-    return QCoreApplication.translate("Settings", "Cài đặt")
-
-
-def section_title(section: Section) -> str:
-    t = QCoreApplication.translate
-    return {
-        Section.GENERAL: t("Settings", "Chung"),
-        Section.APPEARANCE: appearance_title(),
-        Section.PRIVACY: t("Settings", "Quyền riêng tư"),
-        Section.DEVICES: t("Settings", "Thiết bị tin cậy"),
-        Section.TRANSFER: t("Settings", "Truyền file"),
-        Section.ADVANCED: t("Settings", "Nâng cao"),
-    }[Section(section)]
-
-
-def name_hint(visible: bool) -> str:
-    """Gợi ý dưới ô tên: máy đang hiện → nguyên câu mvp F1; đang ẩn → chỉ máy đã ghép đôi thấy."""
-    if visible:
-        return texts.device_name_notice()
-    return QCoreApplication.translate("Settings", "Máy này đang ẩn nên chỉ máy đã ghép đôi thấy tên này.")
-
-
-def name_empty_text() -> str:
-    return QCoreApplication.translate("Settings", "Hãy nhập tên thiết bị.")
-
-
-def name_invalid_text() -> str:
-    return QCoreApplication.translate(
-        "Settings", "Tên thiết bị cần từ 1 đến 64 ký tự và không có ký tự điều khiển."
-    )
-
-
-def autostart_state_hint(state: autostart.AutostartState | None) -> str:
-    """Câu thêm của hàng khởi động theo trạng thái registry; None = đọc lỗi."""
-    t = QCoreApplication.translate
-    if state is None:
-        return t("Settings", "Không đọc được cài đặt khởi động của Windows.")
-    if state is autostart.AutostartState.BLOCKED:
-        return t(
-            "Settings",
-            "Windows đang tắt Teleport trong danh sách ứng dụng khởi động. Bật công tắc này để cho phép lại.",
-        )
-    if state is autostart.AutostartState.OTHER:
-        return t(
-            "Settings",
-            "Teleport đang được đặt khởi động cùng Windows từ một thư mục cài hoặc thư mục cấu hình "
-            "khác. Bật công tắc để dùng bản này.",
-        )
-    return ""
-
-
-def autostart_write_error_text() -> str:
-    return QCoreApplication.translate(
-        "Settings",
-        "Chưa đổi được việc khởi động cùng Windows vì Windows không cho ghi cài đặt khởi động. Hãy thử lại.",
-    )
-
-
-def hidden_text() -> str:
-    return QCoreApplication.translate(
-        "Settings",
-        "Đang ẩn: máy chưa ghép đôi không thấy máy này và không gửi được yêu cầu ghép đôi tới. "
-        "Muốn ghép đôi với máy mới, hãy mở Tìm máy mới trên máy này rồi bấm vào máy kia.",
-    )
-
-
-def settings_error_text() -> str:
-    """Lưu cài đặt lỗi (`SettingsSaveError`)."""
-    return QCoreApplication.translate(
-        "Settings",
-        "Chưa lưu được cài đặt vì không ghi được vào thư mục cấu hình của Teleport. "
-        "Hãy kiểm tra quyền ghi rồi thử lại.",
-    )
-
-
-def other_error_text() -> str:
-    return QCoreApplication.translate(
-        "Settings", "Chưa lưu được cài đặt vì một lỗi không mong đợi. Hãy thử lại."
-    )
-
-
-def snapshot_error_text() -> str:
-    return QCoreApplication.translate("Settings", "Không đọc được cài đặt hiện tại.")
-
-
-def history_cleared_text() -> str:
-    return QCoreApplication.translate("Settings", "Đã xóa toàn bộ lịch sử truyền file.")
-
-
-def history_clear_failed_text() -> str:
-    return QCoreApplication.translate("Settings", "Chưa xóa được lịch sử truyền file. Hãy thử lại.")
-
-
-def clear_history_title() -> str:
-    return QCoreApplication.translate("Settings", "Xóa toàn bộ lịch sử")
-
-
-def clear_history_question() -> str:
-    return QCoreApplication.translate(
-        "Settings",
-        "Xóa lịch sử truyền file với mọi máy, kể cả máy đã hủy ghép đôi? "
-        "File đã nhận vẫn còn nguyên trong thư mục nhận.",
-    )
-
-
-def export_saved_text(path: Path) -> str:
-    return texts.fill(
-        QCoreApplication.translate("Settings", "Đã lưu log vào {path}."), path=printable(str(path))
-    )
-
-
-def export_write_error_text(path: Path) -> str:
-    return texts.fill(
-        QCoreApplication.translate(
-            "Settings",
-            "Không lưu được file log vào {path}. Hãy chọn thư mục khác mà bạn có quyền ghi.",
-        ),
-        path=printable(str(path)),
-    )
-
-
-def export_other_error_text() -> str:
-    return QCoreApplication.translate(
-        "Settings", "Không xuất được log vì một lỗi không mong đợi. Hãy thử lại."
-    )
-
-
-def device_status_text(view: DeviceView) -> str:
-    t = QCoreApplication.translate
-    if view.connected:
-        return t("Settings", "đã kết nối")
-    if view.online:
-        return t("Settings", "đang trong mạng")
-    return t("Settings", "không thấy trong mạng")
-
-
-def pending_status_text(status: str) -> str:
-    t = QCoreApplication.translate
-    if status == TransferStatus.QUEUED:
-        return t("Settings", "đang xếp hàng")
-    if status == TransferStatus.WAITING:
-        return t("Settings", "đang chờ xác nhận")
-    if status == TransferStatus.TRANSFERRING:
-        return t("Settings", "đang nhận")
-    if status == TransferStatus.VERIFYING:
-        return t("Settings", "đang kiểm tra")
-    if status == TransferStatus.RECONNECTING:
-        return t("Settings", "đang nối lại")
-    return t("Settings", "đang chờ")
-
-
-def cancel_pending_title() -> str:
-    return QCoreApplication.translate("Settings", "Hủy lượt nhận đang chờ")
-
-
-def cancel_pending_question() -> str:
-    return QCoreApplication.translate(
-        "Settings",
-        "Hủy lượt nhận này và xóa phần đã tải dở khỏi máy?",
-    )
-
-
-def cancel_all_pending_title() -> str:
-    return QCoreApplication.translate("Settings", "Hủy tất cả lượt nhận dở")
-
-
-def cancel_all_pending_question() -> str:
-    return QCoreApplication.translate(
-        "Settings",
-        "Hủy toàn bộ lượt nhận đang chờ hoặc dở dang và xóa các phần đã tải dở khỏi máy?",
-    )
-
-
-def pending_cancelled_text() -> str:
-    return QCoreApplication.translate("Settings", "Đã hủy lượt nhận và dọn phần tải dở.")
-
-
-def pending_all_cancelled_text() -> str:
-    return QCoreApplication.translate("Settings", "Đã hủy toàn bộ lượt nhận đang chờ.")
-
-
-def pending_cancel_failed_text() -> str:
-    return QCoreApplication.translate("Settings", "Chưa hủy được lượt nhận. Hãy thử lại.")
-
-
-def install_update_title() -> str:
-    return QCoreApplication.translate("Settings", "Cài đặt bản cập nhật")
-
-
-def install_update_question(version: str) -> str:
-    return texts.fill(
-        QCoreApplication.translate(
-            "Settings",
-            "Đã tải xong bản {version}. Đóng Teleport và chạy trình cài đặt ngay bây giờ?",
-        ),
-        version=version,
-    )
-
-
-def update_launch_failed_text() -> str:
-    return QCoreApplication.translate(
-        "Settings", "Không thể mở bộ cài cập nhật. Hãy thử tải lại từ trang phát hành."
-    )
-
-
-def default_export_dir() -> str:
-    """Thư mục mở sẵn của hộp “Xuất log…”: Documents nếu có thật, không thì thư mục nhà.
-
-    Qt vẫn trả đường dẫn Documents khi thư mục đó chưa được tạo (máy Linux mới), và
-    `QFileDialog.setDirectory` bỏ qua thư mục không tồn tại.
-    """
-    docs = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
-    if docs and Path(docs).is_dir():
-        return docs
-    return str(Path.home())
-
-
-def default_export_name(now: float | None = None) -> str:
-    """`teleport-log-YYYYMMDD-HHMMSS.zip` theo giờ máy."""
-    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time() if now is None else now))
-    return f"teleport-log-{stamp}.zip"
-
-
-def notices_path() -> Path | None:
-    """`THIRD-PARTY-NOTICES.txt` cạnh `sys.executable` nếu có (bản đóng gói), không thì None."""
-    try:
-        path = Path(sys.executable).resolve().parent / NOTICES_FILE
-        return path if path.is_file() else None
-    except (OSError, ValueError):
-        return None
-
-
-# ---- Số ----------------------------------------------------------------------------------------
-
-
-def default_retention_days() -> int:
-    """Ngưỡng dọn tạm mặc định (ngày), đọc `storage.TEMP_RETENTION` lúc gọi."""
-    return max(1, round(storage.TEMP_RETENTION / 86400))
-
-
-def rate_to_bytes(mb_per_s: float) -> int:
-    """MB/s của ô → byte/giây gửi cho node, kẹp trong khoảng node nhận."""
-    value = round(mb_per_s * MB)
-    return max(app_transfers.MIN_RATE_LIMIT, min(app_settings.MAX_RATE_LIMIT, value))
-
-
-def bytes_to_rate(value: int) -> float:
-    """byte/giây → MB/s hiện trên ô (một số lẻ, kẹp trong khoảng của ô)."""
-    return max(RATE_MIN_MB, min(RATE_MAX_MB, round(value / MB, 1)))
-
-
-def _nfc_key(view: DeviceView) -> tuple[str, str]:
-    return (unicodedata.normalize("NFC", view.name or "").casefold(), view.device_id)
-
-
-def trusted_devices(views: Sequence[DeviceView]) -> list[DeviceView]:
-    """Máy đã ghép đôi (kể cả ngoại tuyến), sắp NFC(tên).casefold() rồi `device_id`."""
-    return sorted((v for v in views if isinstance(v, DeviceView) and v.paired), key=_nfc_key)
-
-
-# ---- Thành phần --------------------------------------------------------------------------------
-
-
-def _plain(parent: QWidget | None = None, *, object_name: str = "", wrap: bool = True) -> QLabel:
-    label = QLabel(parent)
-    if object_name:
-        label.setObjectName(object_name)
-    label.setTextFormat(Qt.TextFormat.PlainText)
-    label.setWordWrap(wrap)
-    label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    return label
-
-
-def _repolish(widget: QWidget) -> None:
-    style = widget.style()
-    style.unpolish(widget)
-    style.polish(widget)
-
-
-class _ElidedLabel(QLabel):
-    """Nhãn một dòng tự cắt chữ theo bề ngang (giữa hay cuối); chữ đầy đủ ở `full_text`."""
-
-    def __init__(self, mode: Qt.TextElideMode, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._mode = mode
-        self._full = ""
-        self.setTextFormat(Qt.TextFormat.PlainText)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-
-    @property
-    def full_text(self) -> str:
-        return self._full
-
-    def set_full_text(self, text: str) -> None:
-        self._full = text
-        self._elide()
-
-    def minimumSizeHint(self) -> QSize:
-        return QSize(0, super().minimumSizeHint().height())
-
-    def _elide(self) -> None:
-        width = self.contentsRect().width()
-        text = self._full
-        if text and width > 0:
-            text = QFontMetrics(self.font()).elidedText(text, self._mode, width)
-        if self.text() != text:
-            self.setText(text)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._elide()
-
-    def changeEvent(self, event: QEvent) -> None:
-        super().changeEvent(event)
-        if event.type() == QEvent.Type.FontChange:
-            self._elide()
-
-
-class _NameField(QLineEdit):
-    """Ô tên thiết bị: Esc trả tên đã lưu khi chữ khác tên đó; trùng thì để Esc cho cửa sổ."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.saved = ""
-        self.setMaxLength(NAME_MAX_INPUT)
-
-    @staticmethod
-    def _is_plain_escape(event: QEvent) -> bool:
-        return (
-            isinstance(event, QKeyEvent)
-            and event.key() == Qt.Key.Key_Escape
-            and event.modifiers() == Qt.KeyboardModifier.NoModifier
-        )
-
-    def event(self, event: QEvent) -> bool:
-        if (
-            event.type() == QEvent.Type.ShortcutOverride
-            and self._is_plain_escape(event)
-            and self.text() != self.saved
-        ):
-            event.accept()
-            return True
-        return super().event(event)
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if self._is_plain_escape(event) and self.text() != self.saved:
-            self.setText(self.saved)
-            self.reverted.emit()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    reverted = Signal()
-
-
-class _CommitSpin:
-    """Chốt giá trị của ô số (spec D2 mục 9.4): `editingFinished`, hay `SPIN_COMMIT_MS` sau mũi tên."""
-
-    def __init__(self, spin: QSpinBox | QDoubleSpinBox, commit: Callable[[], None]) -> None:
-        spin.setKeyboardTracking(False)  # gõ phím không phát `valueChanged` tới khi chốt
-        self._timer = QTimer(spin)
-        self._timer.setSingleShot(True)
-        self._timer.timeout.connect(commit)
-        spin.valueChanged.connect(lambda _v: self._timer.start(SPIN_COMMIT_MS))
-        self._commit = commit
-        spin.editingFinished.connect(self._finished)
-
-    def _finished(self) -> None:
-        self._timer.stop()
-        self._commit()
-
-    def stop(self) -> None:
-        self._timer.stop()
-
-
-class _DecimalSpin(QDoubleSpinBox):
-    """Ô số lẻ nhận cả “,” lẫn “.” làm dấu thập phân, không có dấu nhóm hàng nghìn.
-
-    `QDoubleSpinBox` theo locale lặng lẽ bỏ dấu nhóm: giao diện English gõ “2,5” thành 25. Ở đây cả
-    hai dấu đổi thành dấu thập phân của locale trước khi kiểm, nên “2,5” và “2.5” đều là 2,5, còn
-    “1,000” (quá số chữ số lẻ) bị từ chối.
-    """
-
-    def _normalized(self, text: str) -> str:
-        point = self.locale().decimalPoint()
-        return text.replace(",", point).replace(".", point)
-
-    def validate(self, text: str, pos: int) -> tuple[QValidator.State, str, int]:
-        return super().validate(self._normalized(text), pos)
-
-    def valueFromText(self, text: str) -> float:
-        return super().valueFromText(self._normalized(text))
-
-
-class _RowShape(StrEnum):
-    """Kiểu bố cục của `TrustedDeviceRow`, từ rộng tới hẹp (docstring module, **Danh sách thiết bị**)."""
-
-    ONE_LINE = "one_line"  # [đầu hàng | ô, ô, nút] một dòng
-    BELOW = "below"  # ô, ô, nút một dòng dưới tên
-    STACKED = "stacked"  # ô, ô, nút mỗi cái một dòng dưới tên
-
-
-class TrustedDeviceRow(QFrame):
-    """Một máy đã ghép đôi: avatar, tên, “HĐH · trạng thái”, “Hỏi trước khi nhận”, “Đồng bộ
-    clipboard”, “Hủy ghép đôi…”.
-
-    Bố cục tự chọn kiểu đầu tiên vừa bề ngang thật (`_RowShape`): một dòng khi cột tên còn ít nhất
-    `widgets.LABEL_MIN_WIDTH`; không thì ô và nút xuống một dòng dưới tên (thụt `_ACTIONS_INDENT`) khi
-    tổng `sizeHint` của chúng cộng khoảng cách và lề thụt vừa; không thì xếp dọc, mỗi control một dòng,
-    căn trái, không giãn ngang. Tính lại khi đổi cỡ, sau `retranslate` (gồm `LanguageChange`),
-    `FontChange`, `StyleChange` và `LayoutRequest` (con polish lại đổi `sizeHint`); chỉ đổi hướng
-    của `_box` và `_actions`, không dựng lại widget nên tiêu điểm và thứ tự Tab (Hỏi → Đồng bộ →
-    Hủy ghép đôi) giữ nguyên. Bề ngang dành cho nội dung trừ cả viền QFrame lẫn lề `_box`
-    (`_chrome_width`). `minimumSizeHint` là bề ngang của kiểu xếp dọc: hàng đang ở kiểu rộng không ép
-    vùng cuộn rộng theo, nên co cửa sổ luôn tới `resizeEvent` để đổi kiểu (không kẹt ở cuộn ngang)."""
-
-    ask_toggled = Signal(str, bool)
-    clipboard_toggled = Signal(str, bool)
-    unpair_requested = Signal(str)
-
-    def __init__(self, view: DeviceView, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("trustedDeviceRow")
-        self.setProperty(theme.SURFACE_PROPERTY, "raised")
-        # Không cao hơn cần: QBoxLayout chia chỗ thừa cho hàng có nhãn xuống dòng (heightForWidth).
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        self._view = view
-        self._shape: _RowShape | None = None
-        self.avatar = DeviceAvatar(self, diameter=_AVATAR, ring="surface_raised")
-        self.name_label = _ElidedLabel(Qt.TextElideMode.ElideRight, self)
-        self.name_label.setObjectName("trustedDeviceName")
-        font = self.name_label.font()
-        font.setWeight(font.Weight.DemiBold)
-        self.name_label.setFont(font)
-        self.detail_label = _plain(self, object_name="")  # ngắn; xuống dòng thay vì cắt
-        self.detail_label.setObjectName("trustedDeviceDetail")
-        self.detail_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.detail_label.font()))
-        self.detail_label.setProperty(theme.TONE_PROPERTY, "muted")
-        self.ask_checkbox = QCheckBox(self)
-        self.ask_checkbox.setObjectName("askBeforeReceive")
-        self.ask_checkbox.setChecked(True)
-        self.clipboard_checkbox = QCheckBox(self)
-        self.clipboard_checkbox.setObjectName("syncClipboard")
-        self.clipboard_checkbox.setChecked(False)
-        self.unpair_button = QPushButton(self)
-        self.unpair_button.setObjectName("unpairButton")
-        self.ask_checkbox.clicked.connect(
-            lambda checked: self.ask_toggled.emit(self.device_id, bool(checked))
-        )
-        self.clipboard_checkbox.clicked.connect(
-            lambda checked: self.clipboard_toggled.emit(self.device_id, bool(checked))
-        )
-        self.unpair_button.clicked.connect(lambda: self.unpair_requested.emit(self.device_id))
-
-        text = QVBoxLayout()
-        text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(0)
-        text.addWidget(self.name_label)
-        text.addWidget(self.detail_label)
-        self._head = QHBoxLayout()
-        self._head.setContentsMargins(0, 0, 0, 0)
-        self._head.setSpacing(theme.SPACING[2])
-        self._head.addWidget(self.avatar, 0, Qt.AlignmentFlag.AlignVCenter)
-        self._head.addLayout(text, 1)
-        self._actions = QBoxLayout(QBoxLayout.Direction.LeftToRight)
-        self._actions.setContentsMargins(0, 0, 0, 0)
-        self._actions.setSpacing(theme.SPACING[2])
-        self._actions.addWidget(self.ask_checkbox)
-        self._actions.addWidget(self.clipboard_checkbox)
-        self._actions.addWidget(self.unpair_button)
-        self._actions.addStretch(0)
-        # Kiểu bố cục (`_RowShape`) chỉ đổi hướng của `_box` và `_actions` (`_place_actions`).
-        self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
-        self._box.setContentsMargins(theme.SPACING[3], theme.SPACING[2], theme.SPACING[3], theme.SPACING[2])
-        self._box.setSpacing(theme.SPACING[3])
-        self._box.addLayout(self._head, 1)
-        self._box.addLayout(self._actions, 0)
-        self.set_view(view)  # `retranslate` đặt chữ rồi chọn kiểu bố cục
-
-    @property
-    def device_id(self) -> str:
-        return self._view.device_id
-
-    @property
-    def view(self) -> DeviceView:
-        return self._view
-
-    def focus_widgets(self) -> list[QWidget]:
-        return [self.ask_checkbox, self.clipboard_checkbox, self.unpair_button]
-
-    def set_view(self, view: DeviceView) -> None:
-        self._view = view
-        self.retranslate()
-
-    def set_ask(self, ask: bool) -> None:
-        """Đặt ô “Hỏi trước khi nhận” (không phát `ask_toggled`)."""
-        self.ask_checkbox.setChecked(bool(ask))
-
-    def set_clipboard(self, enabled: bool) -> None:
-        """Đặt ô “Đồng bộ clipboard” (không phát `clipboard_toggled`)."""
-        self.clipboard_checkbox.setChecked(bool(enabled))
-
-    def retranslate(self) -> None:
-        view = self._view
-        name = texts.peer_label(view.name, view.device_id)
-        os_name = texts.os_label(view.os)
-        status = device_status_text(view)
-        detail = f"{os_name} · {status}" if os_name else status
-        self.name_label.set_full_text(name)
-        self.detail_label.setText(detail)
-        summary = ", ".join(part for part in (name, os_name, status) if part)
-        self.setAccessibleName(summary)
-        self.setToolTip(safe_tooltip(f"{name}\n{detail}"))
-        self.avatar.set_presence(Presence.ONLINE if (view.connected or view.online) else Presence.OFFLINE)
-        ask = QCoreApplication.translate("Settings", "Hỏi trước khi nhận")
-        self.ask_checkbox.setText(ask)
-        self.ask_checkbox.setAccessibleName(
-            texts.fill(QCoreApplication.translate("Settings", "{option}: {name}"), option=ask, name=name)
-        )
-        clipboard = QCoreApplication.translate("Settings", "Đồng bộ clipboard")
-        self.clipboard_checkbox.setText(clipboard)
-        option = QCoreApplication.translate("Settings", "{option}: {name}")
-        self.clipboard_checkbox.setAccessibleName(texts.fill(option, option=clipboard, name=name))
-        unpair = QCoreApplication.translate("Settings", "Hủy ghép đôi…")
-        self.unpair_button.setText(unpair)
-        self.unpair_button.setAccessibleName(
-            texts.fill(QCoreApplication.translate("Settings", "{option}: {name}"), option=unpair, name=name)
-        )
-        self.ask_checkbox.setAccessibleDescription(summary)
-        self.clipboard_checkbox.setAccessibleDescription(summary)
-        self.unpair_button.setAccessibleDescription(summary)
-        self._place_actions()  # chữ mới đổi `sizeHint` của ô và nút
-
-    def _action_hints(self) -> list[int]:
-        return [w.sizeHint().width() for w in self.focus_widgets() if not w.isHidden()]
-
-    def _shape_for_width(self, width: int) -> _RowShape:
-        """Kiểu đầu tiên vừa bề ngang `width` của hàng (chỉ phụ thuộc `width` và `sizeHint` control).
-
-        Trừ cả viền QFrame (`frameWidth`, 1 px với `surface="raised"` của theme) lẫn lề `_box`: đó là
-        chỗ thật `_box` được cấp."""
-        inner = width - self._chrome_width()
-        hints = self._action_hints()
-        actions = sum(hints) + theme.SPACING[2] * max(len(hints) - 1, 0)
-        name_column = inner - _AVATAR - self._head.spacing() - theme.SPACING[3] - actions
-        if name_column >= LABEL_MIN_WIDTH:
-            return _RowShape.ONE_LINE
-        if _ACTIONS_INDENT + actions <= inner:
-            return _RowShape.BELOW
-        return _RowShape.STACKED
-
-    def _place_actions(self) -> None:
-        shape = self._shape_for_width(self.width())
-        if shape is self._shape:
-            return
-        self._shape = shape
-        if shape is _RowShape.ONE_LINE:
-            self._box.setDirection(QBoxLayout.Direction.LeftToRight)
-            self._box.setSpacing(theme.SPACING[3])
-            self._actions.setContentsMargins(0, 0, 0, 0)
-        else:
-            self._box.setDirection(QBoxLayout.Direction.TopToBottom)
-            self._box.setSpacing(theme.SPACING[1])
-            self._actions.setContentsMargins(_ACTIONS_INDENT, 0, 0, 0)
-        stacked = shape is _RowShape.STACKED
-        self._actions.setDirection(
-            QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
-        )
-        self._actions.setSpacing(theme.SPACING[1] if stacked else theme.SPACING[2])
-        # Xếp dọc: căn trái để ô và nút không giãn ngang hết hàng.
-        align = Qt.AlignmentFlag.AlignLeft if stacked else Qt.AlignmentFlag(0)
-        for widget in self.focus_widgets():
-            self._actions.setAlignment(widget, align)
-        self.updateGeometry()
-
-    def _chrome_width(self) -> int:
-        """Bề ngang hàng không dành cho nội dung `_box`: viền QFrame hai bên cộng lề trái/phải."""
-        margins = self._box.contentsMargins()
-        return 2 * self.frameWidth() + margins.left() + margins.right()
-
-    def minimumSizeHint(self) -> QSize:
-        hint = super().minimumSizeHint()
-        widest = max(self._action_hints(), default=0)
-        head = _AVATAR + self._head.spacing() + self.name_label.minimumSizeHint().width()
-        width = self._chrome_width() + max(head, _ACTIONS_INDENT + widest)
-        return QSize(width, hint.height())
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._place_actions()
-
-    def changeEvent(self, event: QEvent) -> None:
-        super().changeEvent(event)
-        kind = event.type()
-        if kind == QEvent.Type.LanguageChange:
-            self.retranslate()
-        elif kind in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
-            self._place_actions()
-
-    def event(self, event: QEvent) -> bool:
-        handled = super().event(event)
-        # Con polish lại (sau StyleChange/FontChange) gọi `updateGeometry`, gửi `LayoutRequest` tới
-        # hàng: `sizeHint` mới có thể đổi kiểu. Không lặp: `_place_actions` chỉ `updateGeometry` khi
-        # kiểu đổi, và `updateGeometry` của hàng gửi `LayoutRequest` tới cha, không tới chính nó.
-        if event.type() == QEvent.Type.LayoutRequest:
-            self._place_actions()
-        return handled
-
-
-# ---- Ảnh chụp cài đặt --------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class PendingReceiveItem:
-    """Một lượt nhận đang chờ hoặc dở dang để hiện ở mục Truyền file."""
-
-    transfer_id: str
-    device_id: str
-    device_name: str
-    files_total: int
-    done_bytes: int
-    total_bytes: int
-    status: str
-
-
-class UpdateUiState(StrEnum):
-    """Trạng thái giao diện kiểm tra và tải bản cập nhật thủ công."""
-
-    IDLE = "idle"
-    CHECKING = "checking"
-    UP_TO_DATE = "up_to_date"
-    AVAILABLE = "available"
-    DOWNLOADING = "downloading"
-    READY = "ready"
-    ERROR = "error"
-
-
-@dataclass(frozen=True)
-class SettingsSnapshot:
-    """Cài đặt hiện tại đọc trên thread node (`read_snapshot`)."""
-
-    name: str
-    visible: bool
-    rate_limit: int | None
-    temp_retention_days: int | None
-    language: str | None
-    autostart: bool
-    devices: Mapping[str, DeviceSettings]
-    create_subfolder: bool = True
-    theme: str | None = None  # trường `theme` của settings.json (None = theo hệ điều hành)
-    accent: str | None = None  # trường `accent` (None = mặc định; mã lạ giữ nguyên)
-    stealth: bool = False
-    pending_receives: tuple[PendingReceiveItem, ...] = ()
-    promised_bytes: int = 0
-    delta_sync: bool = True
-    routing_rules: tuple[RoutingRule, ...] = ()
-    watch_portals: tuple[WatchPortalRule, ...] = ()
-    watch_portals_paused: bool = False
-    device_names: Mapping[str, str] = field(default_factory=dict)
-
-
-def _read_device_settings(node: Node) -> dict[str, DeviceSettings]:
-    return {v.device_id: node.device_settings(v.device_id) for v in node.devices() if v.paired}
-
-
-def _read_device_names(node: Node) -> dict[str, str]:
-    devices_fn = getattr(node, "devices", None)
-    if not callable(devices_fn):
-        return {}
-    return {v.device_id: v.name for v in devices_fn() if hasattr(v, "device_id")}
-
-
-def read_snapshot(node: Node) -> SettingsSnapshot:
-    """Thread node: ảnh chụp cài đặt cho trang (tên đang dùng, ẩn/hiện, cài đặt theo thiết bị)."""
-    settings = node.settings
-    names = _read_device_names(node)
-    stealth = bool(getattr(node, "stealth", False))
-    transfers_mgr = getattr(node, "transfers", None)
-    pending: list[PendingReceiveItem] = []
-    transfers_fn = getattr(transfers_mgr, "transfers", None)
-    if callable(transfers_fn):
-        for info in transfers_fn():
-            if info.key.direction is Direction.RECEIVE:
-                pending.append(
-                    PendingReceiveItem(
-                        transfer_id=info.key.transfer_id,
-                        device_id=info.key.device_id,
-                        device_name=names.get(info.key.device_id) or "",
-                        files_total=len(info.files),
-                        done_bytes=info.done_bytes,
-                        total_bytes=info.total_bytes,
-                        status=str(info.status),
-                    )
-                )
-    promised_fn = getattr(transfers_mgr, "promised_bytes", None)
-    promised_bytes = max(0, int(promised_fn())) if callable(promised_fn) else 0
-    return SettingsSnapshot(
-        name=node.name,
-        visible=node.visible,
-        rate_limit=settings.rate_limit,
-        temp_retention_days=settings.temp_retention_days,
-        language=settings.language,
-        autostart=settings.autostart,
-        devices=_read_device_settings(node),
-        create_subfolder=settings.create_subfolder,
-        theme=settings.theme,
-        accent=settings.accent,
-        stealth=stealth,
-        pending_receives=tuple(pending),
-        promised_bytes=promised_bytes,
-        delta_sync=bool(getattr(settings, "delta_sync", True)),
-        routing_rules=tuple(getattr(settings, "routing_rules", ())),
-        watch_portals=tuple(getattr(settings, "watch_portals", ())),
-        watch_portals_paused=bool(getattr(node, "watch_portals_paused", False)),
-        device_names=names,
-    )
-
-
-# ---- Trang -------------------------------------------------------------------------------------
-
-
-class _ShortcutTable(QTableWidget):
-    """Bảng phím tắt chỉ để xem (xem docstring module, “Bảng Phím tắt”)."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(0, 2, parent)
-        self.setObjectName("shortcutsTable")
-        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Tab và bấm chuột
-        self.setTabKeyNavigation(False)
-        self.setAlternatingRowColors(False)
-        self.setWordWrap(True)
-        self.setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.setShowGrid(False)
-        self.setCornerButtonEnabled(False)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        vertical = self.verticalHeader()
-        vertical.setVisible(False)
-        vertical.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        header = self.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        header.setHighlightSections(False)
-        header.setSectionsClickable(False)
-        self._fitting = False
-        self._refit = False
-        # Cột giãn đổi bề ngang sau khi bảng đổi cỡ (header tự hẹn lại bố cục): tính lại ở vòng lặp sau.
-        self._fit_timer = QTimer(self)
-        self._fit_timer.setSingleShot(True)
-        self._fit_timer.setInterval(0)
-        self._fit_timer.timeout.connect(self.fit_height)
-        header.sectionResized.connect(lambda *_args: self._fit_timer.start())
-        # Lề ngang của ô (chữ không dính mép khung); cột 1 vừa nội dung nên tính cả lề này.
-        self.setStyleSheet(
-            f"QTableWidget::item {{ padding: 0px {_TABLE_CELL_PADDING}px; }}"
-            f"QHeaderView::section {{ padding: 4px {_TABLE_CELL_PADDING + 1}px; }}"
-        )
-
-    def set_rows(self, rows: Sequence[tuple[str, str]], headers: tuple[str, str]) -> None:
-        """Đặt chữ các hàng (mô tả, phím) và tiêu đề cột; giữ hàng đang chọn."""
-        current = self.currentRow()
-        self.setHorizontalHeaderLabels(list(headers))
-        self.setRowCount(len(rows))
-        for row, (description, key) in enumerate(rows):
-            for column, text in enumerate((description, key)):
-                item = self.item(row, column)
-                if item is None:
-                    item = QTableWidgetItem()
-                    item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-                    self.setItem(row, column, item)
-                item.setText(text)
-                spoken = texts.fill("{description}: {key}", description=description, key=key)
-                item.setData(Qt.ItemDataRole.AccessibleTextRole, spoken if column == 0 else key)
-                item.setToolTip("")
-        if 0 <= current < len(rows) and self.currentRow() != current:
-            self.setCurrentCell(current, 0)
-        self.fit_height()
-        self._fit_timer.start()
-
-    def fit_height(self) -> None:
-        """Cao vừa đúng tiêu đề và mọi hàng (không thanh cuộn).
-
-        Đổi chiều cao kéo theo đổi bề ngang cột (và chiều cao hàng xuống dòng): lời gọi tới trong lúc
-        đang tính thì tính lại sau, tới khi đứng yên."""
-        if self._fitting:
-            self._refit = True
-            return
-        self._fitting = True
-        try:
-            for _ in range(_FIT_PASSES):
-                self._refit = False
-                self._fit_rows()
-                header = self.horizontalHeader()
-                height = max(header.height(), header.sizeHint().height()) if not header.isHidden() else 0
-                height += sum(self.rowHeight(row) for row in range(self.rowCount()))
-                height += 2 * self.frameWidth()
-                if self.height() != height or self.minimumHeight() != height:
-                    self.setFixedHeight(height)
-                if not self._refit:
-                    break
-        finally:
-            self._fitting = False
-
-    def _fit_rows(self) -> None:
-        """Chiều cao mỗi hàng theo chữ xuống dòng ở bề ngang cột hiện tại (không dùng
-        `resizeRowsToContents`: tiêu đề dọc đã ẩn vẫn góp cỡ của nó vào hàng)."""
-        metrics = QFontMetrics(self.font())
-        style = self.style()
-        frame = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin, None, self) + 1
-        margin = 2 * (frame + _TABLE_CELL_PADDING)
-        flags = int(Qt.TextFlag.TextWordWrap)
-        header = self.horizontalHeader()
-        for row in range(self.rowCount()):
-            height = metrics.height()
-            for column in range(self.columnCount()):
-                item = self.item(row, column)
-                if item is None:
-                    continue
-                width = max(1, header.sectionSize(column) - margin)
-                rect = metrics.boundingRect(QRect(0, 0, width, 0), flags, item.text())
-                height = max(height, rect.height())
-            target = height + 2 * _TABLE_ROW_PADDING
-            if self.rowHeight(row) != target:
-                self.setRowHeight(row, target)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self.fit_height()
-        self._fit_timer.start()
-
-    def showEvent(self, event: QShowEvent) -> None:
-        super().showEvent(event)
-        self._fit_timer.start()
-
-    def changeEvent(self, event: QEvent) -> None:
-        super().changeEvent(event)
-        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
-            self.fit_height()
-            self._fit_timer.start()
-
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        # Không có gì để cuộn trong bảng: để bánh xe tới vùng cuộn của mục chứa bảng.
-        event.ignore()
-
-
-class _NavList(QListWidget):
-    """Cột chọn mục: vẽ vạch nhấn của mục được chọn, trượt khi đổi mục (`selection_indicator`)."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.selection_indicator = motion.SlidingRect(self.viewport(), motion.NORMAL)
-        self._slide_pending = False
-        self.currentRowChanged.connect(self._on_current_row)
-
-    def _on_current_row(self, _row: int) -> None:
-        self._slide_pending = self.isVisible()
-        self.viewport().update()
-
-    def _pill_rect(self) -> QRectF | None:
-        item = self.currentItem()
-        if item is None:
-            return None
-        rect = self.visualItemRect(item)
-        if not rect.isValid():
-            return None
-        if self.isRightToLeft():
-            left = rect.right() + 1 - _NAV_PILL_INSET - _NAV_PILL_WIDTH
-        else:
-            left = rect.left() + _NAV_PILL_INSET
-        top = rect.top() + (rect.height() - _NAV_PILL_HEIGHT) / 2
-        return QRectF(left, top, _NAV_PILL_WIDTH, _NAV_PILL_HEIGHT)
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-        super().paintEvent(event)
-        indicator = self.selection_indicator
-        indicator.move_to(self._pill_rect(), animate=self._slide_pending)
-        self._slide_pending = False
-        rect = indicator.rect
-        if rect is None:
-            return
-        painter = QPainter(self.viewport())
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(theme.tokens_for(self).accent_strong)
-            painter.drawRoundedRect(rect, _NAV_PILL_RADIUS, _NAV_PILL_RADIUS)
-        finally:
-            painter.end()
-
-
 class SettingsPage(QWidget):
     """Trang “Cài đặt” (xem docstring module). Không gọi node; `set_*` không phát signal."""
 
@@ -1205,6 +492,10 @@ class SettingsPage(QWidget):
     language_selected = Signal(object)  # mã ngôn ngữ hay None (theo hệ điều hành)
     theme_selected = Signal(object)  # None (theo hệ điều hành) | "light" | "dark"
     accent_selected = Signal(object)  # None (mặc định) | mã màu nhấn
+    sound_mode_selected = Signal(object)  # None (mặc định full) | "notify" | "off"
+    sound_volume_selected = Signal(object)  # None (mặc định 70) | int 0..100
+    auto_dismiss_notices_toggled = Signal(bool)
+    tray_notifications_toggled = Signal(bool)
     autostart_toggled = Signal(bool)
     create_subfolder_toggled = Signal(bool)
     rate_limit_changed = Signal(object)  # byte/giây hay None
@@ -1451,6 +742,10 @@ class SettingsPage(QWidget):
         self.appearance.theme_selected.connect(self.theme_selected)
         self.appearance.accent_selected.connect(self.accent_selected)
         self.appearance.language_selected.connect(self.language_selected)
+        self.appearance.sound_mode_selected.connect(self.sound_mode_selected)
+        self.appearance.sound_volume_selected.connect(self.sound_volume_selected)
+        self.appearance.auto_dismiss_notices_toggled.connect(self.auto_dismiss_notices_toggled)
+        self.appearance.tray_notifications_toggled.connect(self.tray_notifications_toggled)
         layout.addWidget(self.appearance)
         layout.addStretch(1)
 
@@ -1709,6 +1004,10 @@ class SettingsPage(QWidget):
         self.set_language(s.language, i18n.available_languages())
         self.appearance.set_theme(s.theme)
         self.appearance.set_accent(s.accent)
+        self.appearance.set_sound_mode(s.sound_mode)
+        self.appearance.set_sound_volume(s.sound_volume)
+        self.appearance.set_auto_dismiss_notices(s.auto_dismiss_notices)
+        self.appearance.set_tray_notifications(s.tray_notifications)
         with _blocked(self.create_subfolder_switch):
             self.create_subfolder_switch.setChecked(bool(s.create_subfolder))
         with _blocked(self.autostart_switch):
@@ -1813,6 +1112,18 @@ class SettingsPage(QWidget):
 
     def set_accent(self, value: str | None) -> None:
         self.appearance.set_accent(value)
+
+    def set_sound_mode(self, value: str | None) -> None:
+        self.appearance.set_sound_mode(value)
+
+    def set_sound_volume(self, value: int | None) -> None:
+        self.appearance.set_sound_volume(value)
+
+    def set_auto_dismiss_notices(self, enabled: bool) -> None:
+        self.appearance.set_auto_dismiss_notices(enabled)
+
+    def set_tray_notifications(self, enabled: bool) -> None:
+        self.appearance.set_tray_notifications(enabled)
 
     def set_autostart(self, state: autostart.AutostartState | None) -> None:
         """Trạng thái registry (None: đọc lỗi); UNSUPPORTED hay `autostart.supported()` False → ẩn hàng."""
@@ -2979,1197 +2290,3 @@ class SettingsPage(QWidget):
             self.retranslate()
         elif event.type() in _PALETTE_EVENTS and "nav" in self.__dict__:
             self._restyle()
-
-
-class _blocked(contextlib.AbstractContextManager[None]):
-    """`with _blocked(w):` chặn signal của `w` trong khối (giá trị đặt từ ngoài không phát signal)."""
-
-    def __init__(self, widget: QObject) -> None:
-        self._widget = widget
-        self._old = False
-
-    def __enter__(self) -> None:
-        self._old = self._widget.blockSignals(True)
-
-    def __exit__(self, *exc: object) -> None:
-        self._widget.blockSignals(self._old)
-
-
-# ---- Controller --------------------------------------------------------------------------------
-
-
-class _ExportRelay(QObject):
-    """Mang kết quả xuất log từ thread xuất về thread Qt (signal `QueuedConnection`)."""
-
-    finished = Signal(object)  # (generation, dest: Path, result: Path | BaseException)
-
-
-def _deliver_export(
-    relay: _ExportRelay, generation: int, dest: Path, future: concurrent.futures.Future[Path]
-) -> None:
-    """Thread xuất (hay Qt nếu đã xong): đọc kết quả rồi phát về thread Qt; app đang tắt thì bỏ."""
-    try:
-        result: Path | BaseException = future.result()
-    except BaseException as e:  # CancelledError khi `shutdown(cancel_futures=True)`
-        result = e
-    with contextlib.suppress(RuntimeError):  # QObject đã bị xóa
-        relay.finished.emit((generation, dest, result))
-
-
-class _UpdateRelay(QObject):
-    """Mang kết quả kiểm tra và tải bản cập nhật từ thread nền về thread Qt (`QueuedConnection`)."""
-
-    check_finished = Signal(object)  # (generation, result: UpdateInfo | None | BaseException)
-    download_progress = Signal(object)  # (generation, done: int, total: int)
-    download_finished = Signal(object)  # (generation, info: UpdateInfo, result: Path | BaseException)
-
-
-def _deliver_check(
-    relay: _UpdateRelay, generation: int, future: concurrent.futures.Future[UpdateInfo | None]
-) -> None:
-    try:
-        result: UpdateInfo | BaseException | None = future.result()
-    except BaseException as e:
-        result = e
-    with contextlib.suppress(RuntimeError):
-        relay.check_finished.emit((generation, result))
-
-
-def _download_worker(
-    relay: _UpdateRelay,
-    generation: int,
-    info: UpdateInfo,
-    dl_fn: Callable[..., Path],
-) -> Path:
-    last_emit = 0.0
-
-    def progress(done: int, total: int) -> None:
-        nonlocal last_emit
-        now = time.monotonic()
-        if total <= 0 or done >= total or (now - last_emit) >= 0.08:
-            last_emit = now
-            with contextlib.suppress(RuntimeError):
-                relay.download_progress.emit((generation, int(done), int(total)))
-
-    path = dl_fn(info, progress_cb=progress)
-    if info.expected_sha256 and not updater.verify_file_sha256(path, info.expected_sha256):
-        with contextlib.suppress(OSError):
-            path.unlink()
-        raise ValueError("checksum mismatch")
-    return path
-
-
-def _deliver_download(
-    relay: _UpdateRelay,
-    generation: int,
-    info: UpdateInfo,
-    future: concurrent.futures.Future[Path],
-) -> None:
-    try:
-        result: Path | BaseException = future.result()
-    except BaseException as e:
-        result = e
-    with contextlib.suppress(RuntimeError):
-        relay.download_finished.emit((generation, info, result))
-
-
-class SettingsController(QObject):
-    """Nối `SettingsPage` với node, registry tự khởi động, hộp thoại và việc xuất log."""
-
-    name_changed = Signal(str)
-    visibility_changed = Signal(bool)
-    history_cleared = Signal(object)  # None = toàn bộ (spec D2 mục 9.9)
-    device_settings_changed = Signal(dict)  # dict[str, DeviceSettings]
-
-    def __init__(
-        self,
-        page: SettingsPage,
-        config_dir: Path,
-        parent: QObject | None = None,
-        *,
-        message_parent: Callable[[], QWidget | None] = lambda: None,
-        open_url: Callable[[QUrl], object] = QDesktopServices.openUrl,
-        log_files: Callable[[], Sequence[Path]] = lambda: (),
-    ) -> None:
-        super().__init__(parent)
-        self.page = page
-        self._config_dir = Path(config_dir)
-        self._message_parent = message_parent
-        self._open_url = open_url
-        self._log_files = log_files
-        self._host: Any = None
-        self._generation = 0
-        self._seq: dict[str, int] = {}
-        self._writes = 0  # số lời ghi đã gửi tới node (bỏ ảnh chụp xin trước một lời ghi)
-        self._confirmed: dict[str, Any] = {}
-        self._devices: dict[str, DeviceSettings] = {}
-        self._saved_autostart: bool | None = None
-        self._notice_action: Callable[[], None] | None = None
-        self._confirm_box: QMessageBox | None = None
-        self._cancel_pending_box: QMessageBox | None = None
-        self._cancel_pending_target: tuple[str, str] | Literal["all"] | None = None
-        self._install_update_box: QMessageBox | None = None
-        self._install_version = ""
-        self._dialog: QFileDialog | None = None
-        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
-        self._update_executor: concurrent.futures.ThreadPoolExecutor | None = None
-        self._export_running = False
-        self._update_busy = False
-        self._update_info: UpdateInfo | None = None
-        self._downloaded_installer: tuple[Path, str | None] | None = None
-        self._relay = _ExportRelay(self)
-        self._relay.finished.connect(self._on_export_finished, Qt.ConnectionType.QueuedConnection)
-        self._update_relay = _UpdateRelay(self)
-        self._update_relay.check_finished.connect(self._on_check_finished, Qt.ConnectionType.QueuedConnection)
-        self._update_relay.download_progress.connect(
-            self._on_download_progress, Qt.ConnectionType.QueuedConnection
-        )
-        self._update_relay.download_finished.connect(
-            self._on_download_finished, Qt.ConnectionType.QueuedConnection
-        )
-
-        page.name_submitted.connect(self._on_name)
-        page.visible_toggled.connect(self._on_visible)
-        page.stealth_toggled.connect(self._on_stealth)
-        page.language_selected.connect(self._on_language)
-        page.theme_selected.connect(self._on_theme)
-        page.accent_selected.connect(self._on_accent)
-        page.autostart_toggled.connect(self._on_autostart)
-        page.create_subfolder_toggled.connect(self._on_create_subfolder)
-        page.rate_limit_changed.connect(self._on_rate)
-        page.retention_changed.connect(self._on_retention)
-        page.delta_sync_toggled.connect(self._on_delta_sync)
-        page.routing_rules_changed.connect(self._on_routing_rules)
-        page.watch_portals_changed.connect(self._on_watch_portals)
-        page.watch_portals_paused_toggled.connect(self._on_watch_portals_paused)
-        page.cancel_pending_requested.connect(self.request_cancel_pending)
-        page.cancel_all_pending_requested.connect(self.request_cancel_all_pending)
-        page.ask_toggled.connect(self._on_ask)
-        page.clipboard_toggled.connect(self._on_clipboard)
-        page.clear_history_requested.connect(self.request_clear_history)
-        page.export_logs_requested.connect(self.request_export)
-        page.verify_receipt_requested.connect(self.request_verify_receipt)
-        page.check_update_requested.connect(self.request_check_update)
-        page.download_update_requested.connect(self.request_download_update)
-        page.open_notices_requested.connect(self._on_open_notices)
-        page.notice_action.connect(self._on_notice_action)
-        model = page.model
-        for signal in (model.modelReset, model.rowsInserted, model.dataChanged):
-            signal.connect(self._on_model_changed)
-        page.installEventFilter(self)
-
-    # ---- Thuộc tính ----------------------------------------------------------------------------
-
-    @property
-    def host(self) -> Any:
-        return self._host
-
-    @property
-    def confirm_box(self) -> QMessageBox | None:
-        """Hộp xác nhận “Xóa toàn bộ lịch sử” đang mở."""
-        return self._confirm_box
-
-    @property
-    def cancel_pending_box(self) -> QMessageBox | None:
-        """Hộp xác nhận hủy lượt nhận đang chờ đang mở."""
-        return self._cancel_pending_box
-
-    @property
-    def install_update_box(self) -> QMessageBox | None:
-        """Hộp xác nhận chạy bộ cài cập nhật đang mở."""
-        return self._install_update_box
-
-    @property
-    def dialog(self) -> QFileDialog | None:
-        """Hộp lưu file log đang mở."""
-        return self._dialog
-
-    @property
-    def export_running(self) -> bool:
-        return self._export_running
-
-    # ---- Vòng đời ------------------------------------------------------------------------------
-
-    def attach(self, host: Any) -> None:
-        """Host mới (lần đầu, “Thử lại”): trang chờ ảnh chụp mới, đóng mọi hộp."""
-        self.close_all()
-        self._host = host
-        self._seq.clear()
-        self._confirmed.clear()
-        self._devices = {}
-        self._saved_autostart = None
-        self.page.set_loaded(False)
-
-    def on_started(self, host: Any) -> None:
-        if host is not self._host or host is None:
-            return
-        self._read_snapshot()
-
-    def refresh(self) -> None:
-        """Đọc lại ảnh chụp (trang vừa hiện)."""
-        if self._host is not None:
-            self._read_snapshot()
-
-    def close_all(self) -> None:
-        """Đóng hộp xác nhận và hộp lưu file; kết quả xuất log / cập nhật đang chạy về sau bị bỏ."""
-        self._generation += 1
-        box, self._confirm_box = self._confirm_box, None
-        if box is not None:
-            box.close()
-            box.deleteLater()
-        pending_box, self._cancel_pending_box = self._cancel_pending_box, None
-        self._cancel_pending_target = None
-        if pending_box is not None:
-            pending_box.close()
-            pending_box.deleteLater()
-        install_box, self._install_update_box = self._install_update_box, None
-        self._downloaded_installer = None
-        if install_box is not None:
-            install_box.close()
-            install_box.deleteLater()
-        dialog, self._dialog = self._dialog, None
-        if dialog is not None:
-            dialog.close()
-            dialog.deleteLater()
-        self.page.close_dialogs()
-        if self._export_running:
-            self._export_running = False
-            self.page.set_export_running(False)
-        if self._update_busy:
-            self._update_busy = False
-            self.page.set_update_state(UpdateUiState.IDLE)
-
-    def shutdown(self) -> None:
-        """Thoát: bỏ việc xuất log và kiểm tra cập nhật chưa chạy, không chờ việc đang chạy."""
-        self.close_all()
-        executor, self._executor = self._executor, None
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-        update_executor, self._update_executor = self._update_executor, None
-        if update_executor is not None:
-            update_executor.shutdown(wait=False, cancel_futures=True)
-
-    # ---- Ảnh chụp ------------------------------------------------------------------------------
-
-    def _read_snapshot(self) -> None:
-        host = self._host
-        generation = self._generation
-        writes = self._writes
-        host.call(read_snapshot, functools.partial(self._on_snapshot, generation, host, writes))
-
-    def _on_snapshot(self, generation: int, host: Any, writes: int, result: object) -> None:
-        if generation != self._generation or host is not self._host:
-            return
-        if writes != self._writes and not isinstance(result, BaseException):
-            # Người dùng đã gửi lời ghi sau khi xin ảnh chụp này: ảnh chụp cũ hơn lời ghi đó, đặt vào
-            # trang sẽ đè giá trị vừa chọn. Đọc lại (chạy sau lời ghi trên loop của node).
-            self._read_snapshot()
-            return
-        if isinstance(result, BaseException):
-            if isinstance(result, (RuntimeError, asyncio.CancelledError)):
-                log.debug("không đọc được cài đặt: node không chạy")
-                return
-            log.error("không đọc được cài đặt: %s", type(result).__name__)
-            self._show_notice(InfoLevel.ERROR, snapshot_error_text, action=(_retry_text, self.refresh))
-            return
-        if not isinstance(result, SettingsSnapshot):
-            return
-        self._confirmed.update(
-            name=result.name,
-            visible=result.visible,
-            stealth=result.stealth,
-            language=result.language,
-            rate=result.rate_limit,
-            retention=result.temp_retention_days,
-            theme=result.theme,
-            accent=result.accent,
-            delta_sync=result.delta_sync,
-            routing_rules=result.routing_rules,
-            watch_portals=result.watch_portals,
-            watch_portals_paused=result.watch_portals_paused,
-        )
-        self._devices = dict(result.devices)
-        self._saved_autostart = result.autostart
-        self.page.set_values(result)
-        self.page.set_loaded(True)
-        self.device_settings_changed.emit(dict(self._devices))
-        self._sync_theme(theme.mode_from_setting(result.theme), result.accent)
-        if self.page.info_bar.title == snapshot_error_text():  # đọc lại được: câu lỗi cũ không còn đúng
-            self.page.clear_notice()
-        self._reconcile_autostart()
-
-    def _reconcile_autostart(self) -> None:
-        """Registry thắng: khác `settings.autostart` thì chỉ ghi cài đặt, không bao giờ ghi registry."""
-        state = self._read_autostart()
-        self.page.set_autostart(state)
-        saved = self._saved_autostart
-        if state is None or state is autostart.AutostartState.UNSUPPORTED or saved is None:
-            return
-        on = state is autostart.AutostartState.ON
-        if saved == on or self._host is None:
-            return
-        self._saved_autostart = on
-        self._host.call(lambda node: node.set_ui_preferences(autostart=on), _warn("lưu cài đặt khởi động"))
-
-    def _read_autostart(self) -> autostart.AutostartState | None:
-        try:
-            return autostart.state(self._config_dir)
-        except autostart.AutostartError as e:
-            log.warning("không đọc được cài đặt khởi động: %s", type(e).__name__)
-            return None
-        except Exception as e:
-            log.error("đọc cài đặt khởi động lỗi: %s", type(e).__name__)
-            return None
-
-    def _on_model_changed(self, *_args: object) -> None:
-        """Máy mới được ghép đôi khi trang đang mở: đọc cài đặt theo thiết bị của nó."""
-        host = self._host
-        if host is None or not self.page.loaded:
-            return
-        if all(device_id in self._devices for device_id in self.page.device_ids()):
-            return
-        generation = self._generation
-        host.call(_read_device_settings, functools.partial(self._on_device_settings, generation, host))
-
-    def _on_device_settings(self, generation: int, host: Any, result: object) -> None:
-        if generation != self._generation or host is not self._host:
-            return
-        if isinstance(result, BaseException):
-            log.debug("không đọc được cài đặt theo thiết bị: %s", type(result).__name__)
-            return
-        if isinstance(result, dict):
-            self._devices = dict(result)
-            self.page.set_device_settings(self._devices)
-            self.device_settings_changed.emit(dict(self._devices))
-
-    # ---- Ý định của người dùng -----------------------------------------------------------------
-
-    def _call(
-        self,
-        field: str,
-        fn: Callable[[Node], object],
-        revert: Callable[[Any], None],
-        on_ok: Callable[[object], None] | None = None,
-        *,
-        value: object = None,
-        on_message_error: Callable[[], None] | None = None,
-        on_key_error: Callable[[], None] | None = None,
-    ) -> None:
-        host = self._host
-        if host is None:
-            revert(self._confirmed.get(field))
-            return
-        seq = self._seq.get(field, 0) + 1
-        self._seq[field] = seq
-        self._writes += 1
-        generation = self._generation
-
-        def done(result: object) -> None:
-            if generation != self._generation or host is not self._host:
-                return
-            latest = self._seq.get(field) == seq
-            if not isinstance(result, BaseException):
-                self._confirmed[field] = value
-                if on_ok is not None:
-                    on_ok(result)
-                return
-            if isinstance(result, (RuntimeError, asyncio.CancelledError)):
-                log.debug("không lưu được cài đặt %s: node không chạy", field)
-                if latest:
-                    revert(self._confirmed.get(field))
-                return
-            if isinstance(result, KeyError) and on_key_error is not None:
-                on_key_error()
-                return
-            if isinstance(result, MessageError) and on_message_error is not None:
-                on_message_error()
-                return
-            if latest:
-                revert(self._confirmed.get(field))
-            if isinstance(result, SettingsSaveError):
-                log.warning("không lưu được cài đặt %s: %s", field, type(result).__name__)
-                self._show_notice(InfoLevel.ERROR, settings_error_text())
-            else:
-                log.error("lưu cài đặt %s lỗi: %s", field, type(result).__name__)
-                self._show_notice(InfoLevel.ERROR, other_error_text())
-
-        host.call(fn, done)
-
-    def _on_name(self, name: str) -> None:
-        def ok(result: object) -> None:
-            final = result if isinstance(result, str) else name
-            self._confirmed["name"] = final
-            self.page.set_name(final)
-            self.name_changed.emit(final)
-
-        self._call(
-            "name",
-            lambda node: node.set_name(name),
-            lambda old: self.page.set_name(old if isinstance(old, str) else ""),
-            ok,
-            value=name,
-            on_message_error=lambda: self.page.reject_name(
-                str(self._confirmed.get("name") or ""), name_invalid_text()
-            ),
-        )
-
-    def _on_visible(self, visible: bool) -> None:
-        host = self._host
-
-        def run(node: Node) -> None:
-            node.set_visible(visible)
-            host.apply_pairing_policy(node)  # cùng một khối đồng bộ với `set_visible` (docstring `ui.bridge`)
-
-        self._call(
-            "visible",
-            run,
-            lambda old: self.page.set_visible(True if old is None else bool(old)),
-            lambda _r: self.visibility_changed.emit(visible),
-            value=visible,
-        )
-
-    def _on_stealth(self, stealth: bool) -> None:
-        self._call(
-            "stealth",
-            lambda node: node.set_stealth(stealth),
-            lambda old: self.page.set_stealth(False if old is None else bool(old)),
-            value=stealth,
-        )
-
-    def _on_language(self, code: object) -> None:
-        language = code if isinstance(code, str) else None
-
-        def ok(_result: object) -> None:
-            i18n.apply_preference(language)
-
-        self._call(
-            "language",
-            lambda node: node.set_ui_preferences(language=language),
-            lambda old: self.page.set_language(
-                old if isinstance(old, str) else None, i18n.available_languages()
-            ),
-            ok,
-            value=language,
-        )
-
-    def _on_theme(self, value: object) -> None:
-        saved = theme.mode_from_setting(value if isinstance(value, str) else None).setting_value
-
-        def ok(_result: object) -> None:
-            _apply_theme(theme.mode_from_setting(saved), theme.current_accent())
-
-        self._call(
-            "theme",
-            lambda node: node.set_ui_preferences(theme=saved),
-            lambda old: self.page.set_theme(old if isinstance(old, str) else None),
-            ok,
-            value=saved,
-        )
-
-    def _on_accent(self, value: object) -> None:
-        accent = value if isinstance(value, str) else None
-
-        def ok(_result: object) -> None:
-            _apply_theme(theme.current_mode(), accent)
-
-        self._call(
-            "accent",
-            lambda node: node.set_ui_preferences(accent=accent),
-            lambda old: self.page.set_accent(old if isinstance(old, str) else None),
-            ok,
-            value=accent,
-        )
-
-    @staticmethod
-    def _sync_theme(mode: theme.Mode, accent: str | None) -> None:
-        """Ảnh chụp khác lựa chọn đang áp (mỗi ảnh chụp; chỉ áp khi khác): áp theo ảnh chụp."""
-        if mode is not theme.current_mode() or theme.accent_from_setting(accent) != theme.current_accent():
-            _apply_theme(mode, accent)
-
-    def _on_rate(self, value: object) -> None:
-        rate = value if isinstance(value, int) else None
-        self._call(
-            "rate",
-            lambda node: node.set_rate_limit(rate),
-            lambda old: self.page.set_rate_limit(old if isinstance(old, int) else None),
-            value=rate,
-        )
-
-    def _on_retention(self, value: object) -> None:
-        days = value if isinstance(value, int) else None
-        self._call(
-            "retention",
-            lambda node: node.set_temp_retention_days(days),
-            lambda old: self.page.set_retention(old if isinstance(old, int) else None),
-            value=days,
-        )
-
-    def _on_ask(self, device_id: str, ask: bool) -> None:
-        field = f"ask:{device_id}"
-        self._confirmed.setdefault(field, self._devices.get(device_id, DeviceSettings()).ask_before_receive)
-
-        def revert(old: object) -> None:
-            row = self.page.device_row(device_id)
-            if row is not None:
-                row.set_ask(True if old is None else bool(old))
-
-        def ok(_result: object) -> None:
-            current = self._devices.get(device_id, DeviceSettings())
-            self._devices[device_id] = replace(current, ask_before_receive=ask)
-            self.device_settings_changed.emit(dict(self._devices))
-
-        self._call(
-            field,
-            lambda node: node.set_ask_before_receive(device_id, ask),
-            revert,
-            ok,
-            value=ask,
-            on_key_error=self.refresh,
-        )
-
-    def _on_clipboard(self, device_id: str, enabled: bool) -> None:
-        """“Đồng bộ clipboard” của một máy: như `_on_ask`, với `Node.set_clipboard`."""
-        field = f"clipboard:{device_id}"
-        self._confirmed.setdefault(field, self._devices.get(device_id, DeviceSettings()).clipboard)
-
-        def revert(old: object) -> None:
-            row = self.page.device_row(device_id)
-            if row is not None:
-                row.set_clipboard(False if old is None else bool(old))
-
-        def ok(_result: object) -> None:
-            current = self._devices.get(device_id, DeviceSettings())
-            self._devices[device_id] = replace(current, clipboard=enabled)
-            self.device_settings_changed.emit(dict(self._devices))
-
-        self._call(
-            field,
-            lambda node: node.set_clipboard(device_id, enabled),
-            revert,
-            ok,
-            value=enabled,
-            on_key_error=self.refresh,
-        )
-
-    def _on_autostart(self, enabled: bool) -> None:
-        """Ghi registry trước (thread Qt); lỗi → trả công tắc, báo, không lưu cài đặt."""
-        try:
-            if enabled:
-                autostart.enable(self._config_dir)
-            else:
-                autostart.disable(self._config_dir)
-        except autostart.AutostartError as e:
-            log.warning("không ghi được cài đặt khởi động: %s", type(e).__name__)
-            self.page.set_autostart(self._read_autostart())  # lỗi có thể tới sau khi đã ghi một phần
-            self._show_notice(InfoLevel.ERROR, autostart_write_error_text())
-            return
-        except Exception as e:
-            log.error("ghi cài đặt khởi động lỗi: %s", type(e).__name__)
-            self.page.set_autostart(self._read_autostart())  # lỗi có thể tới sau khi đã ghi một phần
-            self._show_notice(InfoLevel.ERROR, other_error_text())
-            return
-        self._saved_autostart = enabled
-        host = self._host
-        if host is not None:
-            host.call(lambda node: node.set_ui_preferences(autostart=enabled), _warn("lưu cài đặt khởi động"))
-        self.page.set_autostart(self._read_autostart())
-
-    def _on_create_subfolder(self, enabled: bool) -> None:
-        host = self._host
-        if host is not None:
-            host.call(lambda node: node.set_create_subfolder(enabled), _warn("lưu cài đặt tạo thư mục con"))
-
-    def _on_delta_sync(self, enabled: bool) -> None:
-        self._call(
-            "delta_sync",
-            lambda node: node.set_delta_sync(enabled),
-            lambda old: self.page.set_delta_sync(True if old is None else bool(old)),
-            value=bool(enabled),
-        )
-
-    def _on_routing_rules(self, rules: object) -> None:
-        next_rules = tuple(rules) if isinstance(rules, (tuple, list)) else ()
-
-        def ok(result: object) -> None:
-            if isinstance(result, tuple):
-                self._confirmed["routing_rules"] = result
-                self.page.set_routing_rules(result)
-
-        self._call(
-            "routing_rules",
-            lambda node: node.set_routing_rules(next_rules),
-            lambda old: self.page.set_routing_rules(old if isinstance(old, tuple) else ()),
-            ok,
-            value=next_rules,
-        )
-
-    def _on_watch_portals(self, rules: object) -> None:
-        next_rules = tuple(rules) if isinstance(rules, (tuple, list)) else ()
-
-        def ok(result: object) -> None:
-            if isinstance(result, tuple):
-                self._confirmed["watch_portals"] = result
-                self.page.set_watch_portals(result)
-
-        self._call(
-            "watch_portals",
-            lambda node: node.set_watch_portals(next_rules),
-            lambda old: self.page.set_watch_portals(old if isinstance(old, tuple) else ()),
-            ok,
-            value=next_rules,
-        )
-
-    def _on_watch_portals_paused(self, paused: bool) -> None:
-        self._call(
-            "watch_portals_paused",
-            lambda node: node.set_watch_portals_paused(bool(paused)),
-            lambda old: self.page.set_watch_portals_paused(False if old is None else bool(old)),
-            value=bool(paused),
-        )
-
-    # ---- Xóa toàn bộ lịch sử -------------------------------------------------------------------
-
-    def request_clear_history(self) -> None:
-        """Hộp xác nhận không chặn (`open()`); “Không” là nút mặc định và Esc."""
-        box = self._confirm_box
-        if box is not None:
-            box.raise_()
-            box.activateWindow()
-            return
-        box = QMessageBox(self._message_parent())
-        box.setObjectName("clearHistoryBox")
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setTextFormat(Qt.TextFormat.PlainText)
-        accept = box.addButton("", QMessageBox.ButtonRole.DestructiveRole)
-        decline = box.addButton("", QMessageBox.ButtonRole.RejectRole)
-        _translate_clear_history_box(box)
-        box.installEventFilter(self)  # đổi ngôn ngữ lúc hộp đang mở
-        box.setDefaultButton(decline)
-        box.setEscapeButton(decline)
-        generation = self._generation
-        box.finished.connect(lambda _r: self._on_confirm_finished(box, accept, generation))
-        self._confirm_box = box
-        motion.fade_in_on_show(box)
-        box.open()
-
-    def _on_confirm_finished(self, box: QMessageBox, accept: object, generation: int) -> None:
-        if self._confirm_box is box:
-            self._confirm_box = None
-        clicked = box.clickedButton()
-        box.deleteLater()
-        if clicked is not accept or generation != self._generation:
-            return
-        host = self._host
-        if host is None:
-            return
-
-        def done(result: object) -> None:
-            if generation != self._generation or host is not self._host:
-                return
-            if isinstance(result, BaseException):
-                if isinstance(result, (RuntimeError, asyncio.CancelledError)):
-                    log.debug("không xóa được lịch sử: node không chạy")
-                    return
-                log.error("xóa lịch sử lỗi: %s", type(result).__name__)
-                self._show_notice(InfoLevel.ERROR, history_clear_failed_text())
-                return
-            self._show_notice(InfoLevel.SUCCESS, history_cleared_text())
-            self.history_cleared.emit(None)
-
-        host.call(lambda node: node.transfers.clear_history(), done)
-
-    # ---- Hủy lượt nhận đang chờ ----------------------------------------------------------------
-
-    def request_cancel_pending(self, device_id: str, transfer_id: str) -> None:
-        """Mở hộp xác nhận không chặn để hủy một lượt nhận đang chờ / dở dang."""
-        self._open_cancel_pending_box((device_id, transfer_id))
-
-    def request_cancel_all_pending(self) -> None:
-        """Mở hộp xác nhận không chặn để hủy mọi lượt nhận đang chờ / dở dang."""
-        self._open_cancel_pending_box("all")
-
-    def _open_cancel_pending_box(self, target: tuple[str, str] | Literal["all"]) -> None:
-        box = self._cancel_pending_box
-        if box is not None:
-            if self._cancel_pending_target == target:
-                box.raise_()
-                box.activateWindow()
-                return
-            self._cancel_pending_box = None
-            box.close()
-            box.deleteLater()
-        box = QMessageBox(self._message_parent())
-        box.setObjectName("cancelPendingBox")
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setTextFormat(Qt.TextFormat.PlainText)
-        accept = box.addButton("", QMessageBox.ButtonRole.DestructiveRole)
-        decline = box.addButton("", QMessageBox.ButtonRole.RejectRole)
-        self._cancel_pending_target = target
-        _translate_cancel_pending_box(box, target == "all")
-        box.installEventFilter(self)
-        box.setDefaultButton(decline)
-        box.setEscapeButton(decline)
-        generation = self._generation
-        box.finished.connect(lambda _r: self._on_cancel_pending_finished(box, accept, target, generation))
-        self._cancel_pending_box = box
-        motion.fade_in_on_show(box)
-        box.open()
-
-    def _on_cancel_pending_finished(
-        self,
-        box: QMessageBox,
-        accept: object,
-        target: tuple[str, str] | Literal["all"],
-        generation: int,
-    ) -> None:
-        if self._cancel_pending_box is box:
-            self._cancel_pending_box = None
-            self._cancel_pending_target = None
-        clicked = box.clickedButton()
-        box.deleteLater()
-        if clicked is not accept or generation != self._generation:
-            return
-        host = self._host
-        if host is None:
-            return
-
-        def done(result: object) -> None:
-            if generation != self._generation or host is not self._host:
-                return
-            if isinstance(result, BaseException):
-                if isinstance(result, (RuntimeError, asyncio.CancelledError)):
-                    log.debug("không hủy được lượt nhận: node không chạy")
-                    return
-                log.error("hủy lượt nhận lỗi: %s", type(result).__name__)
-                self._show_notice(InfoLevel.ERROR, pending_cancel_failed_text())
-                return
-            if target == "all":
-                self._show_notice(InfoLevel.SUCCESS, pending_all_cancelled_text())
-            elif result:
-                self._show_notice(InfoLevel.SUCCESS, pending_cancelled_text())
-            self.refresh()
-
-        if target == "all":
-
-            async def cancel_all(node: Node) -> int:
-                keys = [
-                    info.key for info in node.transfers.transfers() if info.key.direction is Direction.RECEIVE
-                ]
-                cancelled = 0
-                for key in keys:
-                    if await node.transfers.cancel_transfer(key, wait_disk=True):
-                        cancelled += 1
-                return cancelled
-
-            host.submit(cancel_all, done)
-        else:
-            device_id, transfer_id = target
-            key = TransferKey(device_id, Direction.RECEIVE, transfer_id)
-            host.submit(lambda node: node.transfers.cancel_transfer(key, wait_disk=True), done)
-
-    # ---- Kiểm tra & tải bản cập nhật thủ công --------------------------------------------------
-
-    def request_check_update(self) -> None:
-        """Kiểm tra bản cập nhật khi người dùng bấm nút (mvp N9: chạy trên thread nền)."""
-        if self._update_busy:
-            return
-        if self._update_executor is None:
-            self._update_executor = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix=UPDATE_THREAD)
-        fn = check_update_fn
-        generation = self._generation
-        try:
-            future = self._update_executor.submit(fn)
-        except RuntimeError as e:
-            log.debug("không kiểm tra được cập nhật: %s", type(e).__name__)
-            return
-        self._update_busy = True
-        self._update_info = None
-        self.page.set_update_state(UpdateUiState.CHECKING)
-        future.add_done_callback(functools.partial(_deliver_check, self._update_relay, generation))
-
-    def _on_check_finished(self, payload: object) -> None:
-        if not isinstance(payload, tuple) or len(payload) != 2:
-            return
-        generation, result = payload
-        if generation != self._generation:
-            return
-        self._update_busy = False
-        if isinstance(result, concurrent.futures.CancelledError):
-            return
-        if result is None or isinstance(result, BaseException):
-            if isinstance(result, BaseException):
-                log.warning("kiểm tra cập nhật lỗi: %s", type(result).__name__)
-            self.page.set_update_state(UpdateUiState.ERROR)
-            return
-        if isinstance(result, UpdateInfo):
-            if result.is_newer:
-                self._update_info = result
-                self.page.set_update_state(UpdateUiState.AVAILABLE, info=result)
-            else:
-                self._update_info = None
-                self.page.set_update_state(UpdateUiState.UP_TO_DATE, info=result)
-            return
-        self.page.set_update_state(UpdateUiState.ERROR)
-
-    def request_download_update(self) -> None:
-        """Tải bộ cài cập nhật hoặc mở trang phát hành khi người dùng bấm Tải về."""
-        info = self._update_info
-        if info is None or self._update_busy:
-            return
-        if auto_install_supported() and info.download_url:
-            if self._update_executor is None:
-                self._update_executor = concurrent.futures.ThreadPoolExecutor(
-                    1, thread_name_prefix=UPDATE_THREAD
-                )
-            dl_fn = download_update_fn
-            generation = self._generation
-            try:
-                future = self._update_executor.submit(
-                    _download_worker, self._update_relay, generation, info, dl_fn
-                )
-            except RuntimeError as e:
-                log.debug("không tải được cập nhật: %s", type(e).__name__)
-                return
-            self._update_busy = True
-            self.page.set_update_state(UpdateUiState.DOWNLOADING, info=info)
-            future.add_done_callback(
-                functools.partial(_deliver_download, self._update_relay, generation, info)
-            )
-            return
-        url = info.release_url.strip()
-        if not url.startswith("https://") or self._open_url(QUrl(url)) is False:
-            log.warning("không mở được trang phát hành cập nhật")
-            self._show_notice(InfoLevel.ERROR, update_launch_failed_text())
-
-    def _on_download_progress(self, payload: object) -> None:
-        if not isinstance(payload, tuple) or len(payload) != 3:
-            return
-        generation, done, total = payload
-        if generation != self._generation or not self._update_busy:
-            return
-        self.page.set_update_state(UpdateUiState.DOWNLOADING, info=self._update_info, progress=(done, total))
-
-    def _on_download_finished(self, payload: object) -> None:
-        if not isinstance(payload, tuple) or len(payload) != 3:
-            return
-        generation, info, result = payload
-        if generation != self._generation:
-            return
-        self._update_busy = False
-        if isinstance(result, Path):
-            self._downloaded_installer = (result, info.expected_sha256)
-            self.page.set_update_state(UpdateUiState.READY, info=info)
-            self._open_install_update_box(info)
-        elif isinstance(result, concurrent.futures.CancelledError):
-            log.debug("tải cập nhật bị hủy")
-        else:
-            log.warning("tải cập nhật lỗi: %s", type(result).__name__)
-            self.page.set_update_state(UpdateUiState.ERROR, info=info)
-            self._show_notice(InfoLevel.ERROR, update_launch_failed_text())
-
-    def _open_install_update_box(self, info: UpdateInfo) -> None:
-        box = self._install_update_box
-        if box is not None:
-            box.raise_()
-            box.activateWindow()
-            return
-        box = QMessageBox(self._message_parent())
-        box.setObjectName("installUpdateBox")
-        box.setIcon(QMessageBox.Icon.Information)
-        box.setTextFormat(Qt.TextFormat.PlainText)
-        accept = box.addButton("", QMessageBox.ButtonRole.AcceptRole)
-        decline = box.addButton("", QMessageBox.ButtonRole.RejectRole)
-        self._install_version = info.version
-        _translate_install_update_box(box, info.version)
-        box.installEventFilter(self)
-        box.setDefaultButton(decline)
-        box.setEscapeButton(decline)
-        generation = self._generation
-        box.finished.connect(lambda _r: self._on_install_update_finished(box, accept, generation))
-        self._install_update_box = box
-        motion.fade_in_on_show(box)
-        box.open()
-
-    def _on_install_update_finished(self, box: QMessageBox, accept: object, generation: int) -> None:
-        if self._install_update_box is box:
-            self._install_update_box = None
-        clicked = box.clickedButton()
-        box.deleteLater()
-        pair, self._downloaded_installer = self._downloaded_installer, None
-        if clicked is not accept or generation != self._generation or pair is None:
-            return
-        installer_path, expected_sha256 = pair
-        fn = apply_update_fn
-        try:
-            ok = bool(fn(installer_path, expected_sha256=expected_sha256))
-        except Exception as e:
-            log.warning("chưa chạy được bộ cài cập nhật: %s", type(e).__name__)
-            ok = False
-        if not ok:
-            self._show_notice(InfoLevel.ERROR, update_launch_failed_text())
-
-    # ---- Xuất log ------------------------------------------------------------------------------
-
-    def request_export(self) -> None:
-        """Hộp lưu file (không chặn); chọn xong thì xuất ngoài thread Qt."""
-        if self._export_running:
-            return
-        dialog = self._dialog
-        if dialog is not None:
-            dialog.raise_()
-            dialog.activateWindow()
-            return
-        dialog = dialog_factory(self._message_parent())
-        dialog.setObjectName("exportLogsDialog")
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
-        dialog.setWindowTitle(QCoreApplication.translate("Settings", "Lưu file log"))
-        dialog.setNameFilter(QCoreApplication.translate("Settings", "File zip (*.zip)"))
-        dialog.setDefaultSuffix("zip")
-        dialog.setDirectory(default_export_dir())
-        dialog.selectFile(default_export_name())
-        generation = self._generation
-        dialog.fileSelected.connect(lambda path: self._on_export_path(generation, path))
-        dialog.finished.connect(lambda _r, d=dialog: self._dialog_finished(d))
-        self._dialog = dialog
-        dialog.open()
-
-    def _dialog_finished(self, dialog: QFileDialog) -> None:
-        if self._dialog is dialog:
-            self._dialog = None
-        dialog.deleteLater()
-
-    def _on_export_path(self, generation: int, path: str) -> None:
-        if generation != self._generation or not path or self._export_running:
-            return
-        dest = Path(path)
-        files = [Path(p) for p in self._log_files()]
-        if self._executor is None:
-            self._executor = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix=EXPORT_THREAD)
-        fn = export_fn  # seam: đọc lúc gọi
-        try:
-            future = self._executor.submit(fn, files, dest)
-        except RuntimeError as e:  # executor đã đóng (đang thoát)
-            log.debug("không xuất được log: %s", type(e).__name__)
-            return
-        self._export_running = True
-        self.page.set_export_running(True)
-        future.add_done_callback(functools.partial(_deliver_export, self._relay, self._generation, dest))
-
-    def _on_export_finished(self, payload: object) -> None:
-        if not isinstance(payload, tuple) or len(payload) != 3:
-            return
-        generation, dest, result = payload
-        if generation != self._generation:
-            return
-        self._export_running = False
-        self.page.set_export_running(False)
-        if isinstance(result, Path):
-            folder = result.parent
-            self._show_notice(
-                InfoLevel.SUCCESS,
-                export_saved_text(result),
-                action=(
-                    QCoreApplication.translate("Settings", "Mở thư mục"),
-                    lambda: self._open_folder(folder),
-                ),
-            )
-        elif isinstance(result, concurrent.futures.CancelledError):
-            log.debug("xuất log bị hủy")
-        elif isinstance(result, OSError):
-            log.warning("không lưu được file log: %s", type(result).__name__)
-            self._show_notice(InfoLevel.ERROR, export_write_error_text(dest))
-        else:
-            log.error("xuất log lỗi: %s", type(result).__name__)
-            self._show_notice(InfoLevel.ERROR, export_other_error_text())
-
-    def _open_folder(self, folder: Path) -> None:
-        if self._open_url(QUrl.fromLocalFile(str(folder))) is False:
-            log.warning("không mở được thư mục chứa file log")
-
-    def _on_open_notices(self, path: object) -> None:
-        if isinstance(path, Path) and self._open_url(QUrl.fromLocalFile(str(path))) is False:
-            log.warning("không mở được file thông báo bên thứ ba")
-
-    # ---- Biên lai truyền tệp -------------------------------------------------------------------
-
-    def request_verify_receipt(self) -> None:
-        """Hộp chọn tệp biên lai (không chặn) rồi xác minh chữ ký số và hiển thị kết quả."""
-        dialog = self._dialog
-        if dialog is not None:
-            dialog.raise_()
-            dialog.activateWindow()
-            return
-        dialog = dialog_factory(self._message_parent())
-        dialog.setObjectName("verifyReceiptDialog")
-        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
-        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
-        dialog.setWindowTitle(QCoreApplication.translate("Settings", "Chọn tệp biên lai"))
-        dialog.setNameFilter(
-            QCoreApplication.translate("Settings", "Tệp biên lai (*.teleport-receipt.json *.json)")
-        )
-        r_dir = receipts.receipts_dir(self._config_dir)
-        dialog.setDirectory(str(r_dir) if r_dir.is_dir() else default_export_dir())
-        generation = self._generation
-        dialog.fileSelected.connect(lambda path: self._on_verify_receipt_path(generation, path))
-        dialog.finished.connect(lambda _r, d=dialog: self._dialog_finished(d))
-        self._dialog = dialog
-        dialog.open()
-
-    def _on_verify_receipt_path(self, generation: int, path: str) -> None:
-        if generation != self._generation or not path:
-            return
-        receipt_file = Path(path)
-        trusted_fps = receipts.known_trusted_fingerprints(self._config_dir)
-        result = receipts.verify_receipt(receipt_file, trusted_fingerprints=trusted_fps)
-        if result.valid and result.receipt is not None:
-            payload = result.receipt.payload
-            peer = texts.peer_label(payload.peer_name, payload.peer_device_id)
-            size_text = texts.format_size(payload.total_bytes)
-            if result.trusted_signer is False:
-                self._show_notice(
-                    InfoLevel.WARNING,
-                    texts.fill(
-                        QCoreApplication.translate(
-                            "Settings",
-                            "Chữ ký biên lai hợp lệ nhưng máy ký chưa ghép đôi ({peer}, {size}).",
-                        ),
-                        peer=peer,
-                        size=size_text,
-                    ),
-                )
-            else:
-                self._show_notice(
-                    InfoLevel.SUCCESS,
-                    texts.fill(
-                        QCoreApplication.translate("Settings", "Biên lai hợp lệ: {peer} ({size})."),
-                        peer=peer,
-                        size=size_text,
-                    ),
-                )
-            return
-        self._show_notice(
-            InfoLevel.ERROR,
-            QCoreApplication.translate("Settings", "Biên lai không hợp lệ hoặc đã bị sửa đổi."),
-        )
-
-    # ---- Thông báo -----------------------------------------------------------------------------
-
-    def notice_text(self) -> str | None:
-        """Câu đang hiện ở thanh thông báo của trang, hay None khi thanh ẩn."""
-        bar = self.page.info_bar
-        return bar.title if bar.is_open else None
-
-    def show_notice(
-        self,
-        level: InfoLevel,
-        text: texts.Text,
-        *,
-        action: tuple[texts.Text, Callable[[], None]] | None = None,
-    ) -> None:
-        """Hiện câu ở thanh thông báo của trang; `action` = (chữ nút, hàm) chỉ gắn với câu này
-        (thông báo kế tiếp thay hay xóa nó). `ui.app` dùng cho lỗi đổi thư mục nhận."""
-        self._show_notice(level, text, action=action)
-
-    def _show_notice(
-        self,
-        level: InfoLevel,
-        text: texts.Text,
-        *,
-        action: tuple[texts.Text, Callable[[], None]] | None = None,
-    ) -> None:
-        self._notice_action = action[1] if action is not None else None
-        self.page.show_notice(level, text, action=action[0] if action is not None else None)
-
-    def _on_notice_action(self) -> None:
-        action, self._notice_action = self._notice_action, None
-        self.page.clear_notice()
-        if action is not None:
-            action()
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.LanguageChange and isinstance(watched, QMessageBox):
-            if watched is self._confirm_box:
-                _translate_clear_history_box(watched)
-                return False
-            if watched is self._cancel_pending_box and self._cancel_pending_target is not None:
-                _translate_cancel_pending_box(watched, self._cancel_pending_target == "all")
-                return False
-            if watched is self._install_update_box:
-                _translate_install_update_box(watched, self._install_version)
-                return False
-        if (
-            watched is self.page
-            and event.type() == QEvent.Type.Show
-            and not event.spontaneous()
-            and isValid(self)
-        ):
-            self.refresh()
-        return False
-
-
-def _translate_clear_history_box(box: QMessageBox) -> None:
-    """Chữ của hộp xác nhận “Xóa toàn bộ lịch sử” theo ngôn ngữ hiện tại (dựng và `LanguageChange`)."""
-    title = clear_history_title()
-    box.setWindowTitle(title)
-    box.setAccessibleName(title)
-    box.setText(clear_history_question())
-    for button in box.buttons():
-        role = box.buttonRole(button)
-        if role == QMessageBox.ButtonRole.DestructiveRole:
-            button.setText(QCoreApplication.translate("Settings", "Xóa lịch sử"))
-        elif role == QMessageBox.ButtonRole.RejectRole:
-            button.setText(QCoreApplication.translate("Settings", "Không"))
-
-
-def _translate_cancel_pending_box(box: QMessageBox, cancel_all: bool) -> None:
-    """Chữ hộp xác nhận hủy lượt nhận đang chờ theo ngôn ngữ hiện tại."""
-    title = cancel_all_pending_title() if cancel_all else cancel_pending_title()
-    box.setWindowTitle(title)
-    box.setAccessibleName(title)
-    box.setText(cancel_all_pending_question() if cancel_all else cancel_pending_question())
-    for button in box.buttons():
-        role = box.buttonRole(button)
-        if role == QMessageBox.ButtonRole.DestructiveRole:
-            button.setText(
-                QCoreApplication.translate("Settings", "Hủy tất cả")
-                if cancel_all
-                else QCoreApplication.translate("Settings", "Hủy lượt nhận")
-            )
-        elif role == QMessageBox.ButtonRole.RejectRole:
-            button.setText(QCoreApplication.translate("Settings", "Không"))
-
-
-def _translate_install_update_box(box: QMessageBox, version: str) -> None:
-    """Chữ hộp xác nhận chạy trình cài đặt bản cập nhật theo ngôn ngữ hiện tại."""
-    title = install_update_title()
-    box.setWindowTitle(title)
-    box.setAccessibleName(title)
-    box.setText(install_update_question(version))
-    for button in box.buttons():
-        role = box.buttonRole(button)
-        if role == QMessageBox.ButtonRole.AcceptRole:
-            button.setText(QCoreApplication.translate("Settings", "Cài đặt ngay"))
-        elif role == QMessageBox.ButtonRole.RejectRole:
-            button.setText(QCoreApplication.translate("Settings", "Để sau"))
-
-
-def _apply_theme(mode: theme.Mode, accent: str | None) -> None:
-    """Thread Qt: áp chế độ màu và màu nhấn cho ứng dụng (`theme.set_preference`)."""
-    app = QApplication.instance()
-    if isinstance(app, QApplication):
-        theme.set_preference(app, mode, accent)
-
-
-def _retry_text() -> str:
-    return texts.retry()
-
-
-def _warn(what: str) -> Callable[[object], None]:
-    def done(result: object) -> None:
-        if isinstance(result, BaseException) and not isinstance(
-            result, (RuntimeError, asyncio.CancelledError)
-        ):
-            log.warning("không %s được: %s", what, type(result).__name__)
-
-    return done

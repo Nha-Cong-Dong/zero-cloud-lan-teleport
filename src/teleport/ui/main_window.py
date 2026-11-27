@@ -153,6 +153,7 @@ from PySide6.QtCore import (
     QCoreApplication,
     QEvent,
     QModelIndex,
+    QObject,
     QPoint,
     QRect,
     QRectF,
@@ -166,6 +167,9 @@ from PySide6.QtGui import (
     QAccessibleEvent,
     QAction,
     QCloseEvent,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
     QGuiApplication,
     QPainter,
     QPaintEvent,
@@ -182,6 +186,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QToolTip,
     QVBoxLayout,
@@ -190,16 +195,20 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from teleport import paths
+from teleport.app.devices import DeviceView
 from teleport.net.connection import DEFAULT_PORT
-from teleport.ui import first_run, motion, shortcuts, texts, theme
+from teleport.ui import first_run, motion, send, shortcuts, sounds, texts, theme
 from teleport.ui.backdrop import MicaBackdrop
+from teleport.ui.buttons import AnimatedButton
 from teleport.ui.conversations import ConversationList
 from teleport.ui.discover import DiscoverPage
+from teleport.ui.drop_overlay import DropOverlay
 from teleport.ui.first_run import FirstRunChoice, TextSource
 from teleport.ui.home import START_PANEL_MAX_WIDTH as START_PANEL_MAX_WIDTH  # hằng của bảng spec B1 mục 2.3
 from teleport.ui.home import MachineCard, SaveBar, StartPanel
 from teleport.ui.radar import DeviceListModel
 from teleport.ui.shortcuts import Shortcut
+from teleport.ui.sounds import SoundCue
 from teleport.ui.taskbar import TaskbarProgress
 from teleport.ui.tray import Tray, make_icon
 from teleport.ui.widgets import (
@@ -444,6 +453,9 @@ class MainWindow(QMainWindow):
     open_receive_dir_requested = Signal(object)  # Path; nối thẳng từ `save_bar.open_requested`
     change_receive_dir_requested = Signal()  # nối thẳng từ `save_bar.change_requested`
     web_guest_requested = Signal()
+    quick_pair_requested = Signal(object)  # DeviceView từ thẻ phát hiện máy sống trên màn rỗng
+    empty_drop_files_requested = Signal(object)  # list[Path] khi thả tệp vào màn rỗng
+    onboarding_dismissed_requested = Signal()
     machine_pause_toggled = Signal(bool)
     machine_hidden_toggled = Signal(bool)
 
@@ -469,6 +481,9 @@ class MainWindow(QMainWindow):
         self._progress: int | None = None  # % tổng trên tiêu đề cửa sổ (`set_progress`)
         self._has_paired = False  # danh sách cuộc trò chuyện có máy (đã ghép đôi)
         self._devices_loaded = False  # đã nhận ảnh chụp danh sách máy đầu tiên (`stream_pane` mờ chéo)
+        self._onboarding_dismissed = False
+        self._nearby_device: DeviceView | None = None
+        self._nearby_had = False
         self._scroll_target: QWidget | None = None  # widget chờ được cuộn tới (`_on_focus_changed`)
         self._compact_applied: bool | None = None  # dạng cột trái đã áp (`_apply_compact`)
         self._shown_once = False  # cửa sổ đã từng hiện (`ui.placement.capture`)
@@ -485,6 +500,7 @@ class MainWindow(QMainWindow):
         home_layout.setSpacing(0)
         self.home_stack = QStackedWidget(self.home_page)
         self.home_stack.setObjectName("homeStack")
+        self._home_fader = motion.Fader(self.home_stack)
         home_layout.addWidget(self.home_stack)
 
         self.start_view = StartPanel(self.home_stack)
@@ -623,6 +639,60 @@ class MainWindow(QMainWindow):
         self.empty_state = EmptyState(self.stream_pane)
         self.empty_state.setObjectName("streamEmpty")
         self.empty_state.action_triggered.connect(self._open_discover)
+        self.empty_state.secondary_action_triggered.connect(self.web_guest_requested)
+        self.empty_state.setAcceptDrops(True)
+        self.empty_state.installEventFilter(self)
+        self._empty_drop_overlay = DropOverlay(self.empty_state)
+        self._empty_drop_overlay.setObjectName("emptyDropOverlay")
+
+        self.nearby_card = QFrame(self.empty_state.content)
+        self.nearby_card.setObjectName("nearbyCard")
+        self.nearby_card.setProperty(theme.SURFACE_PROPERTY, "card")
+        self.nearby_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        nearby_row = QHBoxLayout(self.nearby_card)
+        nearby_row.setContentsMargins(theme.SPACING[2], theme.SPACING[1], theme.SPACING[2], theme.SPACING[1])
+        nearby_row.setSpacing(theme.SPACING[1])
+        self.nearby_label = QLabel(self.nearby_card)
+        self.nearby_label.setObjectName("nearbyLabel")
+        self.nearby_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.nearby_label.setWordWrap(True)
+        self.nearby_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.nearby_pair_button = AnimatedButton("", self.nearby_card)
+        self.nearby_pair_button.setObjectName("nearbyPairButton")
+        self.nearby_pair_button.clicked.connect(self._on_quick_pair_clicked)
+        nearby_row.addWidget(self.nearby_label, 1)
+        nearby_row.addWidget(self.nearby_pair_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.empty_state.add_extra_widget(self.nearby_card)
+        self._nearby_animator = motion.HeightAnimator(self.nearby_card)
+        self._nearby_animator.collapse(motion.INSTANT)
+
+        self.onboarding_card = QFrame(self.empty_state.content)
+        self.onboarding_card.setObjectName("onboardingCard")
+        self.onboarding_card.setProperty(theme.SURFACE_PROPERTY, "raised")
+        self.onboarding_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        onboard_row = QHBoxLayout(self.onboarding_card)
+        onboard_row.setContentsMargins(theme.SPACING[2], 6, theme.SPACING[1], 6)
+        onboard_row.setSpacing(theme.SPACING[1])
+        self.onboarding_label = QLabel(self.onboarding_card)
+        self.onboarding_label.setObjectName("onboardingLabel")
+        self.onboarding_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.onboarding_label.setWordWrap(True)
+        self.onboarding_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.onboarding_label.setFont(theme.font_for(theme.TextStyle.CAPTION, self.onboarding_label.font()))
+        self.onboarding_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.onboarding_close_button = IconButton(
+            "dismiss",
+            QCoreApplication.translate("MainWindow", "Đóng hướng dẫn"),
+            self.onboarding_card,
+        )
+        self.onboarding_close_button.setObjectName("onboardingCloseButton")
+        self.onboarding_close_button.clicked.connect(self._on_dismiss_onboarding)
+        onboard_row.addWidget(self.onboarding_label, 1)
+        onboard_row.addWidget(self.onboarding_close_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.empty_state.add_extra_widget(self.onboarding_card)
+        self._onboarding_animator = motion.HeightAnimator(self.onboarding_card)
+        self._onboarding_animator.collapse(motion.INSTANT)
+
         self.transfers_area = QWidget(self.stream_pane)
         self.transfers_area.setObjectName("transfersArea")
         area_layout = QVBoxLayout(self.transfers_area)
@@ -677,6 +747,9 @@ class MainWindow(QMainWindow):
             empty.title_label,
             empty.text_label,
             empty.action_button,
+            empty.secondary_button,
+            self.nearby_pair_button,
+            self.onboarding_close_button,
             self.save_bar.open_button,  # nội dung của `transfers_area` tạo sau: `_keep_footer_last`
             self.save_bar.change_button,
         ]
@@ -686,6 +759,13 @@ class MainWindow(QMainWindow):
         model = self.conversations.model
         for signal in (model.modelReset, model.rowsInserted, model.rowsRemoved, model.layoutChanged):
             signal.connect(self._update_paired)
+        for signal in (
+            self.devices.modelReset,
+            self.devices.rowsInserted,
+            self.devices.rowsRemoved,
+            self.devices.dataChanged,
+        ):
+            signal.connect(self._refresh_nearby_card)
         # Nối sau proxy: ảnh chụp đầu tiên vẫn đổi khung phải tức thì, các lần đổi sau mới mờ chéo.
         self.devices.modelReset.connect(self._on_devices_loaded)
         selection = self.conversations.list_view.selectionModel()
@@ -821,6 +901,11 @@ class MainWindow(QMainWindow):
     def set_machine_status_menu_enabled(self, enabled: bool) -> None:
         """Cho phép nhấp huy hiệu trạng thái trên thẻ máy này để bật/tắt nhanh."""
         self.machine_card.set_status_menu_enabled(enabled)
+
+    def set_onboarding_dismissed(self, dismissed: bool) -> None:
+        """Đặt trạng thái đã ẩn thẻ hướng dẫn khởi đầu (từ `settings.json`)."""
+        self._onboarding_dismissed = bool(dismissed)
+        self._update_onboarding_card(animate=False)
 
     def set_transfer_summary(self, has_content: bool, active: int) -> None:
         """Danh sách lượt có gì không (thẻ hay dải thông báo) và số lượt chưa kết thúc (≥ 0).
@@ -1029,7 +1114,10 @@ class MainWindow(QMainWindow):
         )
         self._update_address()
         running = self._state is ViewState.RUNNING
-        self.home_stack.setCurrentWidget(self.shell if running else self.start_view)
+        target_home = self.shell if running else self.start_view
+        if self.home_stack.currentWidget() is not target_home:
+            token = motion.SLOW if (self.isVisible() and self._shown_once) else motion.INSTANT
+            self._home_fader.crossfade(lambda: self.home_stack.setCurrentWidget(target_home), token)
         self.start_view.set_error_icon(self._state is ViewState.ERROR)
         self.starting_bar.setVisible(self._state is ViewState.STARTING)
         self.retry_button.setVisible(self._state is ViewState.ERROR)
@@ -1039,6 +1127,8 @@ class MainWindow(QMainWindow):
         self.compact_machine.update_info()
         self._apply_receive_dir()
         self._update_empty_content()
+        self._refresh_nearby_card()
+        self._update_onboarding_card(animate=False)
         self._update_stream()
         self._update_shortcuts()
 
@@ -1106,14 +1196,90 @@ class MainWindow(QMainWindow):
             action = None
         empty = self.empty_state
         empty.set_content("arrow_swap", title, text, action=action)
+        secondary = (
+            QCoreApplication.translate("MainWindow", "Mở Web QR điện thoại")
+            if self.pages.has_page(Page.WEB_GUEST)
+            else None
+        )
+        empty.set_secondary_action(secondary)
         empty.title_label.setAccessibleName(title)
         empty.text_label.setAccessibleName(text)
         if action is not None:
             empty.action_button.setAccessibleName(action)
+        self.nearby_pair_button.setText(QCoreApplication.translate("MainWindow", "Ghép đôi ngay"))
+        self.onboarding_label.setText(
+            QCoreApplication.translate(
+                "MainWindow", "1. Sẵn sàng trong mạng ✓  ·  2. Ghép đôi hoặc Web QR  ·  3. Gửi file đầu tiên"
+            )
+        )
+        self.onboarding_close_button.set_label(QCoreApplication.translate("MainWindow", "Đóng hướng dẫn"))
 
     def _update_paired(self) -> None:
         self._has_paired = self.conversations.model.rowCount() > 0
+        self._refresh_nearby_card()
+        self._update_onboarding_card(animate=True)
         self._update_stream(animate=True)
+
+    def _refresh_nearby_card(self, *_args: object) -> None:
+        """Cập nhật thẻ gợi ý khi mDNS thấy máy chưa ghép đôi ở màn rỗng."""
+        if "_nearby_animator" not in self.__dict__:
+            return
+        nearby = [v for v in self.devices.devices() if not v.paired and v.online]
+        show = self._state is ViewState.RUNNING and not self._has_paired and bool(nearby)
+        if not show:
+            self._nearby_device = None
+            self._nearby_had = False
+            self._nearby_animator.collapse(motion.NORMAL if self.isVisible() else motion.INSTANT)
+            return
+        first = nearby[0]
+        self._nearby_device = first
+        name = texts.peer_label(first.name, first.device_id)
+        if len(nearby) == 1:
+            msg = texts.fill(QCoreApplication.translate("MainWindow", "Đã thấy {name} trong mạng"), name=name)
+        else:
+            msg = texts.fill(
+                QCoreApplication.translate(
+                    "MainWindow", "Đã thấy {name} và %n máy khác trong mạng", None, len(nearby) - 1
+                ),
+                name=name,
+            )
+        self.nearby_label.setText(msg)
+        self.nearby_pair_button.setAccessibleName(
+            texts.fill(QCoreApplication.translate("MainWindow", "Ghép đôi ngay với {name}"), name=name)
+        )
+        self._nearby_animator.expand(motion.NORMAL if self.isVisible() else motion.INSTANT)
+        if (
+            not self._nearby_had
+            and self.pages.current_page is Page.HOME
+            and self.isVisible()
+            and not self.isMinimized()
+        ):
+            sounds.play(SoundCue.DEVICE_FOUND, window_visible=True)
+        self._nearby_had = True
+
+    def _on_quick_pair_clicked(self) -> None:
+        if self._nearby_device is not None:
+            self.quick_pair_requested.emit(self._nearby_device)
+
+    def _update_onboarding_card(self, *, animate: bool = True) -> None:
+        if "_onboarding_animator" not in self.__dict__:
+            return
+        show = (
+            self._state is ViewState.RUNNING
+            and not self._has_paired
+            and not self._onboarding_dismissed
+            and self.pages.has_page(Page.WEB_GUEST)
+        )
+        token = motion.NORMAL if (animate and self.isVisible()) else motion.INSTANT
+        if show:
+            self._onboarding_animator.expand(token)
+        else:
+            self._onboarding_animator.collapse(token)
+
+    def _on_dismiss_onboarding(self) -> None:
+        self._onboarding_dismissed = True
+        self._update_onboarding_card(animate=True)
+        self.onboarding_dismissed_requested.emit()
 
     def _on_devices_loaded(self) -> None:
         """Đã có ảnh chụp danh sách máy: từ đây khung phải mờ chéo khi đổi. `devices.clear()` (host mới,
@@ -1283,6 +1449,55 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._apply_compact()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.empty_state:
+            kind = event.type()
+            if kind == QEvent.Type.Resize:
+                self._empty_drop_overlay.setGeometry(self.empty_state.rect())
+            elif kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+                drag_ev = event if isinstance(event, (QDragEnterEvent, QDragMoveEvent)) else None
+                if (
+                    drag_ev is not None
+                    and self._state is ViewState.RUNNING
+                    and self.pages.has_page(Page.WEB_GUEST)
+                ):
+                    mime = drag_ev.mimeData()
+                    paths = send.local_paths(mime.urls()) if mime is not None and mime.hasUrls() else []
+                    if paths:
+                        drag_ev.acceptProposedAction()
+                        self._empty_drop_overlay.setGeometry(self.empty_state.rect())
+                        self._empty_drop_overlay.show_text(
+                            QCoreApplication.translate(
+                                "MainWindow",
+                                "Thả để gửi %n file qua điện thoại (Web QR)",
+                                None,
+                                len(paths),
+                            )
+                        )
+                        return True
+            elif kind == QEvent.Type.DragLeave:
+                self._empty_drop_overlay.dismiss()
+                return True
+            elif kind == QEvent.Type.Drop:
+                self._empty_drop_overlay.dismiss()
+                drop_ev = event if isinstance(event, QDropEvent) else None
+                if (
+                    drop_ev is not None
+                    and self._state is ViewState.RUNNING
+                    and self.pages.has_page(Page.WEB_GUEST)
+                ):
+                    mime = drop_ev.mimeData()
+                    paths = send.local_paths(mime.urls()) if mime is not None and mime.hasUrls() else []
+                    if paths:
+                        drop_ev.acceptProposedAction()
+                        sounds.play(
+                            SoundCue.DROP_LOCK,
+                            window_visible=self.isVisible() and not self.isMinimized(),
+                        )
+                        self.empty_drop_files_requested.emit(paths)
+                        return True
+        return super().eventFilter(watched, event)
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)

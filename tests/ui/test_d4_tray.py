@@ -774,3 +774,20 @@ def test_balloon_message_click_folder_still_works(qapp, has_tray, tray, tmp_path
     t.show_message("Đã nhận a.txt từ PC-Nha.", folder=tmp_path)
     tray_icon_of(t).messageClicked.emit()
     assert got == [tmp_path]
+
+
+def test_balloon_respects_notifications_enabled_flag_except_critical(qapp, has_tray, tray):
+    from teleport.ui.tray import notifications_enabled, set_notifications_enabled
+
+    assert notifications_enabled() is True
+    t = tray()
+    t.show()
+    set_notifications_enabled(False)
+    try:
+        t.show_message("Thông báo thường")
+        assert has_tray.messages == []
+        t.show_message("Thư mục nhận lỗi", critical=True)
+        assert len(has_tray.messages) == 1
+        assert has_tray.messages[0][1] == "Thư mục nhận lỗi"
+    finally:
+        set_notifications_enabled(True)

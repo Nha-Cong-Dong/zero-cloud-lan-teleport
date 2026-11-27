@@ -5,7 +5,33 @@ Mọi thay đổi đáng chú ý của dự án được ghi ở đây.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-27
+
 ### Added
+- **Nâng cấp giao diện tương tác, chuyển động, đón người dùng mới & hiệu ứng âm thanh (`v1.8.0`):**
+  - **Hệ thống âm thanh tổng hợp nhẹ (`ui/sounds.py`, `app/settings.py`, `ui/appearance.py`, `net/web_guest_assets.py`):**
+    - Sinh sẵn 10 âm hiệu ứng mềm (44.1 kHz 16-bit mono WAV tổng hợp trong RAM, không phụ thuộc thư viện ngoài), phát bất đồng bộ qua `winsound` / `afplay` / `pw-play` / `paplay` / `aplay`, tự tôn trọng chế độ Không làm phiền / toàn màn hình Windows (`SHQueryUserNotificationState`).
+    - Thêm tùy chọn **Chế độ âm thanh** (`Tắt` / `Chỉ thông báo` / `Đầy đủ`), thanh trượt **Âm lượng hiệu ứng** và nút **Thử** trong **Cài đặt → Giao diện**.
+    - Bổ sung Web Audio API tổng hợp âm báo nhẹ kèm nút tắt/bật tiếng trên giao diện Web QR của điện thoại (vẫn gọn nhẹ dưới 50 KB).
+  - **Tự động tắt thông báo & giảm thanh chẩn đoán thụ động (`ui/widgets.py`, `ui/diagnose.py`, `ui/transfers.py`, `app/settings.py`, `ui/appearance.py`):**
+    - Mọi thanh thông báo có thể đóng (`SUCCESS` `4 giây`, `INFO` `4,5 giây`, `WARNING` `6 giây`, `ERROR` / có nút bấm `7 giây`) tự động thu gọn mượt sau khi hiện, tự tạm dừng đếm ngược khi người dùng rê chuột hoặc đưa tiêu điểm vào trong thanh; riêng trạng thái đang kết nối giữ mở tới khi xong.
+    - Ẩn thanh thông báo ngoại tuyến thụ động `"Không thấy … trong mạng"` ở đầu luồng trò chuyện (`show_passive_offline=False` trong `TransfersController`), vẫn giữ cảnh báo lỗi thật và nút **Kết nối bằng IP…** / **Thử kết nối lại** ở thanh đầu và cột phải.
+    - Thêm công tắc **Tự động tắt thông báo** trong **Cài đặt → Giao diện** (lưu vào `settings.json`).
+  - **Giảm pop-up không cần thiết (`ui/app.py`, `ui/tray.py`, `app/settings.py`, `ui/appearance.py`):**
+    - Thay hộp thoại xác nhận **Xóa lịch sử truyền với thiết bị** bằng thanh thông báo cảnh báo nội tuyến (`InfoBar` kèm nút **Xác nhận xóa**) ngay trên luồng trao đổi.
+    - Thêm công tắc **Thông báo khay hệ thống** trong **Cài đặt → Giao diện** (`tray_notifications` trong `settings.json`) để tắt các bóng thoại pop-up ngoài màn hình khi nhận file hay có lời mời mới (giữ lại cảnh báo nghiêm trọng khi hỏng thư mục nhận).
+  - **Đón người dùng mới trong 60 giây đầu & kéo thả không điểm cụt (`ui/main_window.py`, `ui/widgets.py`, `ui/app.py`):**
+    - Thêm thẻ hướng dẫn 3 bước có thể đóng (`onboardingCard`), thẻ mời ghép đôi ngay khi phát hiện máy mới trong mạng (`nearbyCard`), nút mở nhanh Web QR trên trang trống khi chưa ghép đôi, lớp phủ `DropOverlay` nhận thả file trực tiếp lên vùng trống để chia sẻ qua Web QR và chuyển mượt `Fader` khi đổi ngôn ngữ.
+  - **Radar sống động & kéo thả gửi trực tiếp (`ui/discover.py`, `net/discovery.py`, `app/node.py`):**
+    - Bong bóng máy trên radar có hiệu ứng hiện dần, phản hồi hover/nhấn mượt (`ButtonLevels`), đường nét đứt nối tâm tới bong bóng đang chọn/trỏ, nhận kéo thả file trực tiếp lên bong bóng để gửi hoặc ghép rồi gửi, nút **Quét lại** cùng khả năng bấm vào tâm **"Bạn"** để kích hoạt thăm dò mDNS ngay (`Node.rescan_mdns`).
+  - **Cột thông tin & thao tác nhanh bên phải luồng trò chuyện (`ui/device_panel.py`, `ui/chat.py`, `ui/theme.py`, `ui/app.py`):**
+    - Thêm cột bên phải (`DeviceInfoPanel`) tự hiện khi cửa sổ đủ rộng và bật/tắt nhanh qua nút thông tin trên `ChatHeader`: hiển thị hồ sơ thiết bị, huy hiệu **Kết nối mã hóa an toàn**, hàng 3 nút tròn thao tác nhanh (**Tìm kiếm**, **Kết nối lại**, **Cài đặt**) và 2 nhóm đóng/mở mượt (**Tùy chỉnh cho máy này** với công tắc đồng bộ 2 chiều, **Kết nối và bảo mật** gồm mã máy, hệ điều hành, kết nối IP, xóa lịch sử, hủy ghép đôi). Các nút không bị lặp giữa cột phải, đầu luồng (`ChatHeader`), thanh gửi (`ChatComposer`) hay thanh thư mục nhận ở đáy cửa sổ: 4 nút chức năng trùng lặp trên `ChatHeader` được ẩn cố định, chỉ giữ duy nhất nút thông tin (`i`) để đóng/mở cột phải.
+    - Tinh chỉnh giao diện menu ngữ cảnh (`QMenu`) theo bảng màu sáng/tối với viền bo tròn và khoảng đệm thoáng.
+  - **Web QR 2.0, cao trào ghép đôi & luồng truyền tệp sinh động (`ui/web_guest_dialog.py`, `ui/illustrations.py`, `net/web_guest.py`, `app/web_guest.py`, `ui/pairing.py`, `ui/chat_motion.py`, `ui/chat_bubbles.py`, `ui/thumbnails.py`, `ui/chat.py`):**
+    - Đếm số điện thoại kết nối SSE thời gian thực (`active_clients`) trên `StatusBadge` kèm minh họa `Scene.WEB_GUEST`, công tắc mượt `ToggleSwitch`, bảng QR Wi-Fi mở/đóng bằng `HeightAnimator` và `DropOverlay`.
+    - Lộ từng ô số mã ghép đôi trên `CodeLabel`, thanh đếm ngược `CountdownBar` chuyển sắc dần về màu cảnh báo, nút `OfferPanel` dùng `AnimatedButton`.
+    - Thanh tiến độ có vệt sáng chuyển động khi dữ liệu đang chảy, đồ thị tốc độ 24 mẫu gần nhất (`_SpeedSparkline`) trong bong bóng truyền tệp và hộp xem ảnh nhanh không chặn `QuickPreviewDialog` khi bấm vào ảnh thu nhỏ.
+
 - **Cột mốc 4 (`v1.7.0`) — Tối ưu trải nghiệm người dùng (Đợt 1, 2, 3):**
   - **Đợt 1 — Luồng trò chuyện, bong bóng tệp & dán nhanh (`ui/chat.py`, `ui/chat_bubbles.py`, `ui/conversations.py`, `ui/thumbnails.py`, `ui/shell.py`, `ui/diagnose.py`, `ui/app.py`):**
     - Thanh điều khiển nhanh trên đầu luồng trò chuyện (bật/tắt clipboard, tự nhận và menu `⋯` cho Kết nối IP, Thử lại, Gửi ảnh từ clipboard, Cài đặt máy, Xóa lịch sử máy), nút **Mở file** an toàn (chặn đuôi thực thi/kịch bản), mở rộng danh sách tệp trong bong bóng, hiển thị dung lượng tiết kiệm Smart Delta và thư mục đích phân loại tự động, xuất biên lai trực tiếp từ bong bóng, ảnh thu nhỏ an toàn nền (`ThumbnailLoader`), gửi ảnh clipboard qua `Ctrl+Shift+V`, nút **Chép lại** trên `ClipboardNote`, tìm nhanh trong luồng (`Ctrl+F`) và lọc danh sách thiết bị khi có từ 5 máy trở lên.

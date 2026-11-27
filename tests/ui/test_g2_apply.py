@@ -380,14 +380,15 @@ def test_pairing_result_box_buttons_translated(qtbot, ctl):
     assert is_animated(close)
 
 
-def test_chat_offer_panel_accept_is_not_converted(qtbot):
+def test_chat_offer_panel_accept_is_animated(qtbot):
     from teleport.ui import theme
     from teleport.ui.chat_bubbles import OfferPanel
 
     panel = OfferPanel()
     qtbot.addWidget(panel)
     assert isinstance(panel.accept_button, QPushButton)
-    assert not is_animated(panel.accept_button), "G4 mới chuyển nút trong chat_bubbles"
+    assert is_animated(panel.accept_button)
+    assert is_animated(panel.reject_button)
     assert bool(panel.accept_button.property(theme.PRIMARY_PROPERTY))
 
 

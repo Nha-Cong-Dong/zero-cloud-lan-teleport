@@ -412,6 +412,28 @@ def motion_instant(qapp):
 
 
 @pytest.fixture(autouse=True)
+def sound_silent():
+    """Mọi test ui: tắt phát âm thanh thật của `ui/sounds.py` và đặt lại cờ InfoBar / Tray."""
+    try:
+        from teleport.ui import sounds, tray, widgets
+
+        force = sounds._force_silent
+        reset = sounds._reset_for_tests
+        reset_dismiss = widgets.set_auto_dismiss_enabled
+        reset_tray = tray.set_notifications_enabled
+    except Exception:
+        yield
+        return
+    force(True)
+    reset_dismiss(True)
+    reset_tray(True)
+    yield
+    reset()
+    reset_dismiss(True)
+    reset_tray(True)
+
+
+@pytest.fixture(autouse=True)
 def backdrop_reset(qapp, monkeypatch):
     """Mọi test ui: không gọi DWM thật và bộ theo dõi cài đặt của `ui/backdrop.py` không rò sang test
     sau (spec G7 mục 9 ý 10).

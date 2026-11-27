@@ -124,7 +124,18 @@ from collections.abc import Callable, Sequence
 from enum import StrEnum
 from typing import Any
 
-from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import (
+    QCoreApplication,
+    QEvent,
+    QObject,
+    QPoint,
+    QPointF,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QAccessible,
     QAccessibleEvent,
@@ -160,9 +171,10 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from teleport.ui import i18n, icons, motion, shortcuts, texts, theme
+from teleport.ui import i18n, icons, motion, shortcuts, sounds, texts, theme
 from teleport.ui.buttons import AnimatedButton, ButtonLevels, strip_interaction_state
 from teleport.ui.illustrations import Illustration, scene_for_icon
+from teleport.ui.sounds import SoundCue
 from teleport.ui.texts import Text
 from teleport.ui.theme import Tokens
 
@@ -1023,6 +1035,45 @@ _INFO_ICONS = {
     InfoLevel.ERROR: "error_circle",
 }
 
+AUTO_DISMISS_SUCCESS_MS = 4000
+AUTO_DISMISS_INFO_MS = 4500
+AUTO_DISMISS_WARNING_MS = 6000
+AUTO_DISMISS_ERROR_MS = 7000
+AUTO_DISMISS_ACTION_MIN_MS = 7000
+_AUTO_DISMISS_RESUME_MS = 2000
+_auto_dismiss_enabled: bool = True
+
+
+def auto_dismiss_enabled() -> bool:
+    """Chế độ tự động tắt thanh thông báo hiện tại."""
+    return _auto_dismiss_enabled
+
+
+def set_auto_dismiss_enabled(enabled: bool) -> None:
+    """Bật/tắt chế độ tự động tắt thanh thông báo trong ứng dụng."""
+    global _auto_dismiss_enabled
+    _auto_dismiss_enabled = bool(enabled)
+
+
+def _resolve_auto_dismiss_ms(
+    level: InfoLevel,
+    *,
+    action: Text | None,
+    closable: bool,
+    override_ms: int | None,
+) -> int:
+    if override_ms == 0 or not _auto_dismiss_enabled or not closable:
+        return 0
+    if override_ms is not None and override_ms > 0:
+        return int(override_ms)
+    base = {
+        InfoLevel.SUCCESS: AUTO_DISMISS_SUCCESS_MS,
+        InfoLevel.INFO: AUTO_DISMISS_INFO_MS,
+        InfoLevel.WARNING: AUTO_DISMISS_WARNING_MS,
+        InfoLevel.ERROR: AUTO_DISMISS_ERROR_MS,
+    }[level]
+    return max(base, AUTO_DISMISS_ACTION_MIN_MS) if action is not None else base
+
 
 def _info_colors(t: Tokens, level: InfoLevel) -> tuple[QColor, QColor]:
     """(nền, viền và icon) của mức `level`."""
@@ -1068,7 +1119,7 @@ class InfoBar(QFrame):
         for label in (self.title_label, self.text_label):
             label.setWordWrap(True)
             label.setTextInteractionFlags(_TEXT_FLAGS)
-            label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            label.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.action_button = QPushButton(self)
         self.action_button.clicked.connect(self.action_triggered)
         self.close_button = IconButton(
@@ -1094,6 +1145,14 @@ class InfoBar(QFrame):
         self.action_button.setVisible(False)
         self.setVisible(False)
         self._open = False  # trạng thái logic (`is_open`), đổi ngay
+        self._auto_ms = 0
+        self._hovered = False
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setSingleShot(True)
+        self._auto_timer.timeout.connect(self._on_auto_dismiss)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        for child in (self.title_label, self.text_label, self.action_button, self.close_button):
+            child.installEventFilter(self)
         self._height = motion.HeightAnimator(self)
         self._refresh_icon()
         self.retranslate()
@@ -1102,6 +1161,10 @@ class InfoBar(QFrame):
     def is_open(self) -> bool:
         """Thanh đang mở (đổi ngay khi gọi `show_message` / `clear`, không chờ hoạt ảnh)."""
         return self._open
+
+    def auto_dismiss_active(self) -> bool:
+        """Đồng hồ đếm ngược tự động tắt thanh thông báo đang chạy hay không."""
+        return self._auto_timer.isActive()
 
     @property
     def level(self) -> InfoLevel:
@@ -1123,6 +1186,7 @@ class InfoBar(QFrame):
         *,
         action: Text | None = None,
         closable: bool = True,
+        auto_dismiss_ms: int | None = None,
     ) -> None:
         """Hiện thông báo; `action` là chữ của nút ở hàng dưới (None: không có nút).
 
@@ -1152,6 +1216,12 @@ class InfoBar(QFrame):
                 self._height.expand(token)
             else:  # đang mở và đứng yên: chỉ đổi nội dung
                 self._height.set_expanded(True, token)
+        self._auto_timer.stop()
+        self._auto_ms = _resolve_auto_dismiss_ms(
+            self._level, action=action, closable=closable, override_ms=auto_dismiss_ms
+        )
+        if self._auto_ms > 0 and not self._is_paused():
+            self._auto_timer.start(self._auto_ms)
         self.update()
         # Cố gắng tốt nhất: có HĐH không chuyển Alert tới trình đọc màn hình; tên mức vẫn ở accessibleName.
         # Chỉ phát Alert khi thanh vừa mở hoặc nội dung/mức thay đổi thực sự để tránh phát âm lặp lại.
@@ -1193,6 +1263,8 @@ class InfoBar(QFrame):
         self.dismissed.emit()
 
     def _close(self) -> None:
+        self._auto_timer.stop()
+        self._auto_ms = 0
         self._open = False
         self._move_focus_out()
         if self.parentWidget() is None:  # mở bằng `_set_shown`, không qua animator: đóng tức thì
@@ -1200,6 +1272,56 @@ class InfoBar(QFrame):
             return
         token = motion.INSTANT if self.isWindow() or not self.isVisible() else motion.NORMAL
         self._height.set_expanded(False, token)  # đang thu dở thì không chạy lại
+
+    def _has_focus_inside(self) -> bool:
+        focus = QApplication.focusWidget()
+        return focus is not None and (focus is self or self.isAncestorOf(focus))
+
+    def _is_paused(self) -> bool:
+        return self._hovered or self._has_focus_inside()
+
+    def _maybe_resume_auto_dismiss(self) -> None:
+        if "_auto_timer" not in self.__dict__:
+            return
+        if (
+            self._open
+            and self._auto_ms > 0
+            and _auto_dismiss_enabled
+            and not self._is_paused()
+            and self.isVisible()
+        ):
+            self._auto_timer.start(min(self._auto_ms, _AUTO_DISMISS_RESUME_MS))
+
+    def _on_auto_dismiss(self) -> None:
+        if not self._open or self._is_paused():
+            return
+        self._on_close()
+
+    def event(self, event: QEvent) -> bool:
+        if "_auto_timer" in self.__dict__:
+            etype = event.type()
+            if etype in (QEvent.Type.HoverEnter, QEvent.Type.Enter):
+                self._hovered = True
+                self._auto_timer.stop()
+            elif etype in (QEvent.Type.HoverLeave, QEvent.Type.Leave):
+                self._hovered = False
+                self._maybe_resume_auto_dismiss()
+        return super().event(event)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if "_auto_timer" in self.__dict__:
+            etype = event.type()
+            if etype == QEvent.Type.FocusIn:
+                self._auto_timer.stop()
+            elif etype == QEvent.Type.FocusOut:
+                QTimer.singleShot(0, self, self._maybe_resume_auto_dismiss)
+        return super().eventFilter(watched, event)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        super().hideEvent(event)
+        if "_auto_timer" in self.__dict__:
+            self._auto_timer.stop()
+            self._hovered = False
 
     def _move_focus_out(self) -> None:
         """Tiêu điểm đang trong thanh → widget kế tiếp ngoài thanh trong chuỗi Tab của cùng cửa sổ (hiện,
@@ -1297,9 +1419,10 @@ class _IconBadge(QWidget):
 
 
 class EmptyState(QWidget):
-    """Màn rỗng căn giữa: icon, tiêu đề, mô tả, nút chính (xem docstring module)."""
+    """Màn rỗng căn giữa: icon, tiêu đề, mô tả, nút chính, nút phụ tùy chọn và khe nội dung mở rộng."""
 
     action_triggered = Signal()
+    secondary_action_triggered = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1322,11 +1445,22 @@ class EmptyState(QWidget):
             label.setWordWrap(True)
             label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
             label.setTextInteractionFlags(_TEXT_FLAGS)
-            label.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            label.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.action_button = AnimatedButton("", self.content, primary=True)
         self.action_button.setObjectName("emptyActionButton")
         self.action_button.setProperty(theme.PRIMARY_PROPERTY, True)
         self.action_button.clicked.connect(self.action_triggered)
+        self.secondary_button = AnimatedButton("", self.content)
+        self.secondary_button.setObjectName("emptySecondaryButton")
+        self.secondary_button.clicked.connect(self.secondary_action_triggered)
+        self.secondary_button.setVisible(False)
+
+        self._extra_host = QWidget(self.content)
+        self._extra_host.setObjectName("emptyExtraHost")
+        self.extra_layout = QVBoxLayout(self._extra_host)
+        self.extra_layout.setContentsMargins(0, theme.SPACING[2], 0, 0)
+        self.extra_layout.setSpacing(theme.SPACING[1])
+        self._extra_host.setVisible(False)
 
         column = QVBoxLayout(self.content)
         column.setContentsMargins(0, 0, 0, 0)
@@ -1339,7 +1473,15 @@ class EmptyState(QWidget):
         column.addWidget(self.text_label)
         self._button_gap = theme.SPACING[3]
         column.addSpacing(self._button_gap)
-        column.addWidget(self.action_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        buttons_row = QHBoxLayout()
+        buttons_row.setContentsMargins(0, 0, 0, 0)
+        buttons_row.setSpacing(theme.SPACING[1])
+        buttons_row.addStretch(1)
+        buttons_row.addWidget(self.action_button)
+        buttons_row.addWidget(self.secondary_button)
+        buttons_row.addStretch(1)
+        column.addLayout(buttons_row)
+        column.addWidget(self._extra_host)
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -1375,6 +1517,18 @@ class EmptyState(QWidget):
         self.action_button.setVisible(action is not None)
         self.setAccessibleName(title)
         self.setFocusProxy(self.focus_target())
+
+    def set_secondary_action(self, text: str | None) -> None:
+        """Đặt chữ nút phụ cạnh nút chính (None: ẩn nút phụ)."""
+        self.secondary_button.setText(text or "")
+        self.secondary_button.setVisible(bool(text))
+        if text:
+            self.secondary_button.setAccessibleName(text)
+
+    def add_extra_widget(self, widget: QWidget) -> None:
+        """Gắn widget phụ dưới hàng nút (thẻ phát hiện máy sống, thẻ khởi đầu)."""
+        self.extra_layout.addWidget(widget)
+        self._extra_host.setVisible(True)
 
     def focus_target(self) -> QWidget:
         """Nút chính nếu đang có, không thì tiêu đề."""
@@ -1474,6 +1628,9 @@ class ToggleSwitch(QAbstractButton):
         self._knob = 1.0 if self.isChecked() else 0.0
         self._knob_target = self._knob
         self.toggled.connect(self._sync_knob)
+        self.clicked.connect(
+            lambda _checked=False: sounds.play(SoundCue.TOGGLE_TICK, window_visible=self.isVisible())
+        )
         self.retranslate()
 
     def knob_position(self) -> float:

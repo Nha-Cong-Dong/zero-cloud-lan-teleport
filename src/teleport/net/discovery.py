@@ -456,6 +456,12 @@ class MdnsDiscovery:
             self._resolve_queue.extend(n for n in queued if not self._is_priority_name(n))
             self._apply(output)
 
+    def probe_now(self) -> None:
+        """Kích hoạt thăm dò lại các máy đang thấy trên mDNS ngay lập tức."""
+        if self._closed or self._tracker is None:
+            return
+        self._apply(self._tracker.due_probes(time.monotonic()))
+
     def _on_change(
         self, zeroconf: Zeroconf, service_type: str, name: str, state_change: ServiceStateChange
     ) -> None:

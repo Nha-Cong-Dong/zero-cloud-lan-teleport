@@ -17,6 +17,7 @@ from PySide6.QtGui import (
     QBrush,
     QDesktopServices,
     QDragEnterEvent,
+    QDragLeaveEvent,
     QDropEvent,
     QGuiApplication,
     QImage,
@@ -46,10 +47,22 @@ from teleport.core.display import format_size
 from teleport.core.qr import encode_wifi_qr
 from teleport.net.web_guest import GuestScope
 from teleport.paths import default_receive_dir
-from teleport.ui import shell, texts, theme
-from teleport.ui.buttons import CopiedFeedback
+from teleport.ui import motion, shell, sounds, texts, theme
+from teleport.ui.buttons import AnimatedButton, CopiedFeedback
+from teleport.ui.chat_bubbles import BubbleBar
+from teleport.ui.drop_overlay import DropOverlay
+from teleport.ui.illustrations import Illustration, Scene
+from teleport.ui.sounds import SoundCue
 from teleport.ui.theme import tokens
-from teleport.ui.widgets import InfoBar, InfoLevel, PageHeader, safe_tooltip
+from teleport.ui.widgets import (
+    BadgeTone,
+    InfoBar,
+    InfoLevel,
+    PageHeader,
+    StatusBadge,
+    ToggleSwitch,
+    safe_tooltip,
+)
 
 if TYPE_CHECKING:
     from teleport.app.node import Node
@@ -581,6 +594,7 @@ class WebGuestPage(QWidget):
     session_failed = Signal(str)  # error text
     session_ended = Signal()
     text_received = Signal(str)
+    clients_changed = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -591,6 +605,7 @@ class WebGuestPage(QWidget):
         self._session_info: GuestSessionInfo | None = None
         self._session_seq = 0
         self._session_active = False
+        self._connected_clients = 0
         self._shared_paths: list[Path] = []
         self._shared_ids: dict[Path, str] = {}
         self._received_entries: list[tuple[str, int, Path]] = []
@@ -598,6 +613,7 @@ class WebGuestPage(QWidget):
         self._dialogs: list[QFileDialog] = []
         self._progress_state: tuple[str, int, int] | None = None
         self._progress_done: tuple[str, int] | None = None
+        self._progress_display = 0.0
 
         self.header = PageHeader("", self)
         self.info_bar = InfoBar(self)
@@ -637,6 +653,9 @@ class WebGuestPage(QWidget):
 
         self.subtitle = _plain_label("", self.session_card, object_name="webGuestSubtitle")
         self.subtitle.setProperty(theme.TONE_PROPERTY, "muted")
+        self.status_badge = StatusBadge(self.session_card)
+        self.status_badge.setObjectName("webGuestStatusBadge")
+        sess_layout.addWidget(self.status_badge)
         sess_layout.addWidget(self.subtitle)
 
         opts_row = QHBoxLayout()
@@ -653,9 +672,12 @@ class WebGuestPage(QWidget):
         self.scope_combo.currentIndexChanged.connect(self._on_options_changed)
         opts_row.addWidget(self.scope_combo, 1)
 
-        self.one_shot_check = QCheckBox("", self.session_card)
+        self.one_shot_label = _plain_label("", self.session_card)
+        self.one_shot_label.setProperty(theme.TONE_PROPERTY, "muted")
+        self.one_shot_check = ToggleSwitch(self.session_card)
         self.one_shot_check.setObjectName("webGuestOneShotCheck")
         self.one_shot_check.toggled.connect(self._on_options_changed)
+        opts_row.addWidget(self.one_shot_label)
         opts_row.addWidget(self.one_shot_check)
         sess_layout.addLayout(opts_row)
 
@@ -671,7 +693,10 @@ class WebGuestPage(QWidget):
         self.qr_label.setObjectName("webGuestQrLabel")
         self.qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr_label.setFixedSize(180, 180)
-        qr_frame_box.addWidget(self.qr_label)
+        self.idle_illustration = Illustration(Scene.WEB_GUEST, self.qr_frame)
+        self.idle_illustration.setObjectName("webGuestIdleIllustration")
+        qr_frame_box.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignCenter)
+        qr_frame_box.addWidget(self.idle_illustration, 0, Qt.AlignmentFlag.AlignCenter)
         qr_row.addWidget(self.qr_frame, 0, Qt.AlignmentFlag.AlignTop)
 
         qr_right = QVBoxLayout()
@@ -685,20 +710,20 @@ class WebGuestPage(QWidget):
 
         action_btns = QHBoxLayout()
         action_btns.setSpacing(theme.SPACING[1])
-        self.copy_btn = QPushButton("", self.session_card)
+        self.copy_btn = AnimatedButton("", self.session_card)
         self.copy_btn.setObjectName("webGuestCopyUrlBtn")
         self.copy_btn.clicked.connect(self._copy_url)
         self.copy_feedback = CopiedFeedback(self.copy_btn)
         self.copy_feedback.active_changed.connect(self._render_copy_button)
         action_btns.addWidget(self.copy_btn)
 
-        self.wifi_qr_btn = QPushButton("", self.session_card)
+        self.wifi_qr_btn = AnimatedButton("", self.session_card)
         self.wifi_qr_btn.setObjectName("webGuestWifiBtn")
         self.wifi_qr_btn.setCheckable(True)
         self.wifi_qr_btn.toggled.connect(self._toggle_wifi_panel)
         action_btns.addWidget(self.wifi_qr_btn)
 
-        self.session_toggle_btn = QPushButton("", self.session_card)
+        self.session_toggle_btn = AnimatedButton("", self.session_card)
         self.session_toggle_btn.setObjectName("webGuestSessionToggleBtn")
         self.session_toggle_btn.clicked.connect(self._toggle_session)
         action_btns.addWidget(self.session_toggle_btn)
@@ -720,7 +745,7 @@ class WebGuestPage(QWidget):
         self.wifi_password_input = QLineEdit(self.wifi_panel)
         self.wifi_password_input.setObjectName("webGuestWifiPassword")
         self.wifi_password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.wifi_generate_btn = QPushButton("", self.wifi_panel)
+        self.wifi_generate_btn = AnimatedButton("", self.wifi_panel)
         self.wifi_generate_btn.setObjectName("webGuestWifiGenerate")
         self.wifi_generate_btn.clicked.connect(self._generate_wifi_qr)
         wifi_row.addWidget(self.wifi_ssid_input, 1)
@@ -731,6 +756,7 @@ class WebGuestPage(QWidget):
         self.wifi_qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         wifi_layout.addWidget(self.wifi_qr_label)
         self.wifi_panel.setVisible(False)
+        self._wifi_anim = motion.HeightAnimator(self.wifi_panel)
         sess_layout.addWidget(self.wifi_panel)
         col.addWidget(self.session_card)
 
@@ -751,10 +777,10 @@ class WebGuestPage(QWidget):
         self.shared_title_label.setFont(shared_font)
         shared_head.addWidget(self.shared_title_label, 1)
 
-        self.add_file_btn = QPushButton("", self.shared_card)
+        self.add_file_btn = AnimatedButton("", self.shared_card, primary=True)
         self.add_file_btn.setObjectName("webGuestAddFileBtn")
         self.add_file_btn.clicked.connect(self._choose_files)
-        self.add_folder_btn = QPushButton("", self.shared_card)
+        self.add_folder_btn = AnimatedButton("", self.shared_card)
         self.add_folder_btn.setObjectName("webGuestAddFolderBtn")
         self.add_folder_btn.clicked.connect(self._choose_folder)
         shared_head.addWidget(self.add_file_btn)
@@ -790,11 +816,10 @@ class WebGuestPage(QWidget):
         prog_box.setSpacing(4)
         self.progress_label = _plain_label("", self.progress_container)
         self.progress_label.setProperty(theme.TONE_PROPERTY, "muted")
-        self.progress_bar = QProgressBar(self.progress_container)
+        self.progress_bar = BubbleBar(self.progress_container)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedHeight(6)
+        self.progress_bar.display_fraction = lambda: self._progress_display
         prog_box.addWidget(self.progress_label)
         prog_box.addWidget(self.progress_bar)
         self.progress_container.setVisible(False)
@@ -827,7 +852,7 @@ class WebGuestPage(QWidget):
         self.text_input = QLineEdit(self.text_card)
         self.text_input.setObjectName("webGuestTextInput")
         self.text_input.returnPressed.connect(self._send_text)
-        self.send_text_btn = QPushButton("", self.text_card)
+        self.send_text_btn = AnimatedButton("", self.text_card, primary=True)
         self.send_text_btn.setObjectName("webGuestSendTextBtn")
         self.send_text_btn.clicked.connect(self._send_text)
         txt_row.addWidget(self.text_input, 1)
@@ -853,6 +878,8 @@ class WebGuestPage(QWidget):
         root.addWidget(self.info_bar)
         root.addWidget(self.scroll_area, 1)
 
+        self._drop_overlay = DropOverlay(self)
+
         self.setFocusProxy(self.header.back_button)
         self.upload_progress.connect(self._on_upload_progress)
         self.upload_completed.connect(self._on_upload_completed)
@@ -860,6 +887,7 @@ class WebGuestPage(QWidget):
         self.session_failed.connect(self._on_session_failed)
         self.session_ended.connect(self._on_session_ended)
         self.text_received.connect(self._on_text_received)
+        self.clients_changed.connect(self._on_clients_changed)
 
         self.retranslate()
 
@@ -893,6 +921,7 @@ class WebGuestPage(QWidget):
         self._host = host
         self._session_active = False
         self._session_info = None
+        self._connected_clients = 0
         self._shared_ids.clear()
         self.qr_label.setPixmap(QPixmap())
         self.url_label.setText("")
@@ -960,6 +989,7 @@ class WebGuestPage(QWidget):
         was_active = self._session_active
         self._session_active = False
         self._session_info = None
+        self._connected_clients = 0
         self._shared_ids.clear()
         self.qr_label.setPixmap(QPixmap())
         self.url_label.setText("")
@@ -986,16 +1016,25 @@ class WebGuestPage(QWidget):
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         mime = event.mimeData()
         if mime is not None and mime.hasUrls() and any(u.isLocalFile() for u in mime.urls()):
+            self._drop_overlay.show_text(
+                QCoreApplication.translate("WebGuest", "Thả tệp hoặc thư mục để chia sẻ cho điện thoại")
+            )
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._drop_overlay.dismiss()
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event: QDropEvent) -> None:
+        self._drop_overlay.dismiss()
         mime = event.mimeData()
         if mime is not None and mime.hasUrls():
             local_paths = [Path(u.toLocalFile()) for u in mime.urls() if u.isLocalFile() and u.toLocalFile()]
             if local_paths:
-                self.add_shared_paths(local_paths)
+                if self.add_shared_paths(local_paths) > 0:
+                    sounds.play(SoundCue.DROP_LOCK)
                 event.acceptProposedAction()
                 return
         super().dropEvent(event)
@@ -1054,6 +1093,10 @@ class WebGuestPage(QWidget):
             if isValid(self):
                 self.session_ended.emit()
 
+        def on_clients(count: int) -> None:
+            if isValid(self):
+                self.clients_changed.emit(count)
+
         async def _async_start(node: Node) -> tuple[GuestSessionInfo, list[tuple[str, Path, bool]]]:
             await node.stop_guest_session()
             recv_dir = node.transfers.receive_dir or default_receive_dir()
@@ -1071,6 +1114,7 @@ class WebGuestPage(QWidget):
                 on_upload_complete=on_comp,
                 on_session_timeout=on_timeout,
                 on_text_received=on_text,
+                on_clients_changed=on_clients,
             )
             info = await node._guest_manager.start_session(
                 shared_files=shared_snapshot,
@@ -1092,9 +1136,17 @@ class WebGuestPage(QWidget):
             info, mapped = result
             self.session_started.emit(info, mapped)
 
+        self._connected_clients = 0
         self._session_active = True
         self._sync_session_controls()
         host.submit(_async_start, _on_done)
+
+    def _on_clients_changed(self, count: int) -> None:
+        previous = self._connected_clients
+        self._connected_clients = max(0, int(count))
+        if previous == 0 and self._connected_clients >= 1:
+            sounds.play(SoundCue.GUEST_CONNECTED)
+        self._sync_session_controls()
 
     def _on_remote_file_added(self, host: NodeHost, seq: int, path: Path, result: object) -> None:
         if not isValid(self) or seq != self._session_seq or host is not self._host:
@@ -1122,6 +1174,7 @@ class WebGuestPage(QWidget):
     def _on_session_failed(self, err: str) -> None:
         self._session_active = False
         self._session_info = None
+        self._connected_clients = 0
         self._sync_session_controls()
         self.info_bar.show_message(
             InfoLevel.ERROR,
@@ -1131,6 +1184,7 @@ class WebGuestPage(QWidget):
     def _on_session_ended(self) -> None:
         self._session_active = False
         self._session_info = None
+        self._connected_clients = 0
         self.qr_label.setPixmap(QPixmap())
         self.url_label.setText("")
         self._sync_session_controls()
@@ -1150,7 +1204,10 @@ class WebGuestPage(QWidget):
         self.copy_btn.setAccessibleName(label)
 
     def _toggle_wifi_panel(self, checked: bool) -> None:
-        self.wifi_panel.setVisible(bool(checked))
+        if checked:
+            self._wifi_anim.expand()
+        else:
+            self._wifi_anim.collapse()
 
     def _generate_wifi_qr(self) -> None:
         ssid = self.wifi_ssid_input.text().strip()
@@ -1204,6 +1261,14 @@ class WebGuestPage(QWidget):
         if isValid(dialog):
             dialog.deleteLater()
 
+    def _set_progress_display(self, value: object) -> None:
+        try:
+            frac = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            frac = self.progress_bar.value() / 100.0
+        self._progress_display = max(0.0, min(1.0, frac))
+        self.progress_bar.update()
+
     def _on_upload_progress(self, filename: str, current: int, total: int) -> None:
         self._progress_state = (filename, current, total)
         self._progress_done = None
@@ -1213,6 +1278,7 @@ class WebGuestPage(QWidget):
         self._progress_state = None
         self._progress_done = (filename, size)
         self._render_progress()
+        sounds.play(SoundCue.TRANSFER_DONE)
         self._received_entries.insert(0, (filename, size, Path(path_str)))
         self._rebuild_received_list()
 
@@ -1222,6 +1288,14 @@ class WebGuestPage(QWidget):
             filename, current, total = self._progress_state
             percent = int((current / total) * 100) if total > 0 else 0
             self.progress_bar.setValue(percent)
+            motion.animate_value(
+                self.progress_bar,
+                self._progress_display,
+                percent / 100.0,
+                motion.FAST,
+                self._set_progress_display,
+                key="web_guest_bar",
+            )
             size_info = f"({format_size(current)}/{format_size(total)})"
             self.progress_label.setText(
                 texts.fill(
@@ -1235,6 +1309,14 @@ class WebGuestPage(QWidget):
         elif self._progress_done is not None:
             filename, size = self._progress_done
             self.progress_bar.setValue(100)
+            motion.animate_value(
+                self.progress_bar,
+                self._progress_display,
+                1.0,
+                motion.FAST,
+                self._set_progress_display,
+                key="web_guest_bar",
+            )
             self.progress_label.setText(
                 texts.fill(
                     t("WebGuest", "Đã nhận xong: {filename} ({size_str})"),
@@ -1244,6 +1326,7 @@ class WebGuestPage(QWidget):
             )
             self.progress_container.setVisible(True)
         else:
+            self._progress_display = 0.0
             self.progress_container.setVisible(False)
 
     def _send_text(self) -> None:
@@ -1394,6 +1477,9 @@ class WebGuestPage(QWidget):
 
     def _sync_session_controls(self) -> None:
         t = QCoreApplication.translate
+        has_qr = self._session_info is not None
+        self.qr_label.setVisible(has_qr)
+        self.idle_illustration.setVisible(not has_qr)
         if self._session_active:
             self.session_toggle_btn.setText(t("WebGuest", "Dừng phiên"))
             self.subtitle.setText(
@@ -1403,10 +1489,21 @@ class WebGuestPage(QWidget):
                     "QR hoặc mở liên kết bên dưới.",
                 )
             )
+            if self._connected_clients > 0:
+                self.status_badge.set_status(
+                    BadgeTone.SUCCESS,
+                    t("WebGuest", "Đã kết nối %n điện thoại", None, self._connected_clients),
+                )
+            else:
+                self.status_badge.set_status(
+                    BadgeTone.MUTED,
+                    t("WebGuest", "Đang chờ điện thoại quét mã"),
+                )
         else:
             self.session_toggle_btn.setText(t("WebGuest", "Bắt đầu phiên mới"))
             self.subtitle.setText(t("WebGuest", "Phiên đã dừng. Bấm Bắt đầu phiên mới để tạo mã QR mới."))
-        self.copy_btn.setEnabled(self._session_info is not None)
+            self.status_badge.set_status(BadgeTone.MUTED, "")
+        self.copy_btn.setEnabled(has_qr)
         self.send_text_btn.setEnabled(self._session_active)
 
     def retranslate(self) -> None:
@@ -1423,7 +1520,10 @@ class WebGuestPage(QWidget):
                 self.scope_combo.setItemText(2, t("WebGuest", "Chỉ gửi sang điện thoại"))
             finally:
                 self.scope_combo.blockSignals(False)
-        self.one_shot_check.setText(t("WebGuest", "Chỉ dùng 1 lượt"))
+        one_shot_text = t("WebGuest", "Chỉ dùng 1 lượt")
+        self.one_shot_label.setText(one_shot_text)
+        self.one_shot_check.setAccessibleName(one_shot_text)
+        self.one_shot_check.retranslate()
         self._render_copy_button()
         self.wifi_qr_btn.setText(t("WebGuest", "QR Wi-Fi…"))
         self.wifi_ssid_input.setAccessibleName(t("WebGuest", "Tên mạng Wi-Fi"))
