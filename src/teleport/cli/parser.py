@@ -64,6 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="teleport",
         description="Chuyển file và clipboard trong mạng LAN, không qua cloud.",
+        epilog=(
+            "Trang chủ: https://tungkernel.github.io/zcl-hub/  ·  "
+            "Ủng hộ dự án: https://github.com/sponsors/tungkernel"
+        ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(

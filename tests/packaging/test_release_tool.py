@@ -635,3 +635,11 @@ def test_main_fetch_sources_network_error_exits_1_without_file(
     assert rel.main(["fetch-sources", "--out", str(out)]) == 1
     assert not out.exists() or list(out.iterdir()) == []
     assert capsys.readouterr().err.strip()
+
+
+@pytest.mark.parametrize("signed", [False, True])
+def test_release_notes_include_voluntary_support_links(fake_changelog, signed: bool) -> None:
+    fake_changelog("## [1.8.0] - 2026-11-27\n\n- Thêm tính năng mới.\n")
+    body = rel.release_notes("v1.8.0", "1.8.0", signed=signed)
+    assert "https://github.com/sponsors/tungkernel" in body
+    assert "https://tungkernel.github.io/zcl-hub/" in body

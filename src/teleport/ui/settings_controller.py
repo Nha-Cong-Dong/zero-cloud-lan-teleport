@@ -64,6 +64,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+SUPPORT_URL = "https://github.com/sponsors/tungkernel"
+
 
 class _ExportRelay(QObject):
     """Mang kết quả xuất log từ thread xuất về thread Qt (signal `QueuedConnection`)."""
@@ -223,6 +225,7 @@ class SettingsController(QObject):
         page.check_update_requested.connect(self.request_check_update)
         page.download_update_requested.connect(self.request_download_update)
         page.open_notices_requested.connect(self._on_open_notices)
+        page.open_support_requested.connect(self._on_open_support)
         page.notice_action.connect(self._on_notice_action)
         model = page.model
         for signal in (model.modelReset, model.rowsInserted, model.dataChanged):
@@ -1139,6 +1142,10 @@ class SettingsController(QObject):
     def _on_open_notices(self, path: object) -> None:
         if isinstance(path, Path) and self._open_url(QUrl.fromLocalFile(str(path))) is False:
             log.warning("không mở được file thông báo bên thứ ba")
+
+    def _on_open_support(self) -> None:
+        if self._open_url(QUrl(SUPPORT_URL)) is False:
+            log.warning("không mở được trang ủng hộ dự án")
 
     # ---- Biên lai truyền tệp -------------------------------------------------------------------
 

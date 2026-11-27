@@ -518,6 +518,7 @@ class SettingsPage(QWidget):
     change_receive_dir_requested = Signal()
     discover_requested = Signal()
     open_notices_requested = Signal(object)  # Path
+    open_support_requested = Signal()
     notice_action = Signal()
 
     def __init__(self, model: DeviceListModel, parent: QWidget | None = None) -> None:
@@ -940,6 +941,12 @@ class SettingsPage(QWidget):
         else:
             self.notices_button.setVisible(False)
 
+        self.support_row = self._row(Section.ADVANCED, "supportRow")
+        self.support_button = QPushButton(self.support_row)
+        self.support_button.setObjectName("supportButton")
+        self.support_button.clicked.connect(self.open_support_requested)
+        self.support_row.set_control(self.support_button)
+
         self.verify_receipt_row = self._row(Section.ADVANCED, "verifyReceiptRow")
         self.verify_receipt_button = QPushButton(self.verify_receipt_row)
         self.verify_receipt_button.setObjectName("verifyReceiptButton")
@@ -1325,6 +1332,16 @@ class SettingsPage(QWidget):
         )
         self.notices_button.setText(t("Settings", "Thông báo bên thứ ba"))
         self.notices_button.setAccessibleName(t("Settings", "Thông báo bên thứ ba"))
+        self.support_row.set_text(
+            t("Settings", "Ủng hộ dự án"),
+            t(
+                "Settings",
+                "ZCL Teleport miễn phí, mã nguồn mở và không quảng cáo. Nếu ứng dụng hữu ích, "
+                "bạn có thể ủng hộ tự nguyện để duy trì dự án.",
+            ),
+        )
+        self.support_button.setText(t("Settings", "Mở trang ủng hộ"))
+        self.support_button.setAccessibleName(t("Settings", "Mở trang ủng hộ"))
         self.verify_receipt_row.set_text(
             t("Settings", "Biên lai truyền tệp"),
             t("Settings", "Xác minh chữ ký số và tính toàn vẹn của tệp biên lai đã lưu."),
@@ -1858,6 +1875,7 @@ class SettingsPage(QWidget):
             self.check_update_button,
             self.download_update_button,
             self.notices_button,
+            self.support_button,
             self.verify_receipt_button,
         ]
         for first, second in itertools.pairwise(chain):
