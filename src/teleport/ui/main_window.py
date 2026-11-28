@@ -330,67 +330,64 @@ def _is_windows_native_window(window: QWidget) -> bool:
 
 def _win32_get_normal_rect(hwnd: int) -> tuple[int, int, int, int] | None:
     """Lấy `rcNormalPosition` hiện tại của cửa sổ Windows trước khi vào toàn màn hình."""
-    if sys.platform != "win32":
-        return None
-    try:
-        wp = _WinWINDOWPLACEMENT()
-        wp.length = ctypes.sizeof(_WinWINDOWPLACEMENT)
-        if not _win32_user32().GetWindowPlacement(hwnd, ctypes.byref(wp)):
+    if sys.platform == "win32":
+        try:
+            wp = _WinWINDOWPLACEMENT()
+            wp.length = ctypes.sizeof(_WinWINDOWPLACEMENT)
+            if not _win32_user32().GetWindowPlacement(hwnd, ctypes.byref(wp)):
+                return None
+            r = wp.rcNormalPosition
+            return (int(r.left), int(r.top), int(r.right), int(r.bottom))
+        except Exception:
+            log.debug("Không đọc được WindowPlacement trước toàn màn hình", exc_info=True)
             return None
-        r = wp.rcNormalPosition
-        return (int(r.left), int(r.top), int(r.right), int(r.bottom))
-    except Exception:
-        log.debug("Không đọc được WindowPlacement trước toàn màn hình", exc_info=True)
-        return None
+    return None
 
 
 def _win32_restore_normal_rect_maximized(hwnd: int, rect: tuple[int, int, int, int]) -> None:
     """Khôi phục `rcNormalPosition` gốc khi cửa sổ đang phóng to để bấm nút Khôi phục vẫn đúng cỡ cũ."""
-    if sys.platform != "win32":
-        return
-    try:
-        from ctypes import wintypes
+    if sys.platform == "win32":
+        try:
+            from ctypes import wintypes
 
-        user32 = _win32_user32()
-        wp = _WinWINDOWPLACEMENT()
-        wp.length = ctypes.sizeof(_WinWINDOWPLACEMENT)
-        if not user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
-            return
-        wp.rcNormalPosition = wintypes.RECT(*rect)
-        wp.showCmd = _SW_SHOWMAXIMIZED
-        user32.SetWindowPlacement(hwnd, ctypes.byref(wp))
-    except Exception:
-        log.debug("Không khôi phục được rcNormalPosition sau toàn màn hình", exc_info=True)
+            user32 = _win32_user32()
+            wp = _WinWINDOWPLACEMENT()
+            wp.length = ctypes.sizeof(_WinWINDOWPLACEMENT)
+            if not user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+                return
+            wp.rcNormalPosition = wintypes.RECT(*rect)
+            wp.showCmd = _SW_SHOWMAXIMIZED
+            user32.SetWindowPlacement(hwnd, ctypes.byref(wp))
+        except Exception:
+            log.debug("Không khôi phục được rcNormalPosition sau toàn màn hình", exc_info=True)
 
 
 def _win32_set_dwm_transitions_disabled(hwnd: int, disabled: bool) -> None:
     """Bật/tắt hiệu ứng chuyển cảnh DWM khi thoát toàn màn hình về phóng to để tránh giật khung."""
-    if sys.platform != "win32":
-        return
-    try:
-        val = ctypes.c_int(1 if disabled else 0)
-        _win32_dwmapi().DwmSetWindowAttribute(
-            hwnd,
-            _DWMWA_TRANSITIONS_FORCEDISABLED,
-            ctypes.byref(val),
-            ctypes.sizeof(val),
-        )
-    except Exception:
-        log.debug("Không đặt được DWMWA_TRANSITIONS_FORCEDISABLED", exc_info=True)
+    if sys.platform == "win32":
+        try:
+            val = ctypes.c_int(1 if disabled else 0)
+            _win32_dwmapi().DwmSetWindowAttribute(
+                hwnd,
+                _DWMWA_TRANSITIONS_FORCEDISABLED,
+                ctypes.byref(val),
+                ctypes.sizeof(val),
+            )
+        except Exception:
+            log.debug("Không đặt được DWMWA_TRANSITIONS_FORCEDISABLED", exc_info=True)
 
 
 def _win32_suppress_unmaximize_pos_change(message: int) -> None:
     """Chặn bước `SetWindowPos` thu nhỏ tạm khi Qt chuyển từ toàn màn hình về phóng to."""
-    if sys.platform != "win32":
-        return
-    try:
-        msg = _WinMSG.from_address(int(message))
-        if msg.message != _WM_WINDOWPOSCHANGING or _win32_user32().IsZoomed(msg.hwnd):
-            return
-        wp = _WinWINDOWPOS.from_address(msg.lParam)
-        wp.flags = (wp.flags | _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOREDRAW) & ~_SWP_FRAMECHANGED
-    except Exception:
-        log.debug("Không thể chặn WM_WINDOWPOSCHANGING trung gian", exc_info=True)
+    if sys.platform == "win32":
+        try:
+            msg = _WinMSG.from_address(int(message))
+            if msg.message != _WM_WINDOWPOSCHANGING or _win32_user32().IsZoomed(msg.hwnd):
+                return
+            wp = _WinWINDOWPOS.from_address(msg.lParam)
+            wp.flags = (wp.flags | _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOREDRAW) & ~_SWP_FRAMECHANGED
+        except Exception:
+            log.debug("Không thể chặn WM_WINDOWPOSCHANGING trung gian", exc_info=True)
 
 
 def default_size(available: QSize) -> QSize:
