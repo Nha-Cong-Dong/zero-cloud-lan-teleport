@@ -20,7 +20,7 @@ from PySide6.QtGui import QImage, QImageReader, QKeyEvent, QPixmap, QResizeEvent
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from shiboken6 import isValid
 
-from teleport.ui import texts, theme
+from teleport.ui import motion, texts, theme
 from teleport.ui.buttons import AnimatedButton
 
 THUMB_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".ico"})
@@ -200,6 +200,7 @@ class QuickPreviewDialog(QDialog):
         on_open: Callable[[Path], None] | None = None,
     ) -> None:
         super().__init__(parent)
+        motion.dim_parent_on_show(self)
         self.setObjectName("quickPreviewDialog")
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)

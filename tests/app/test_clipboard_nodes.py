@@ -160,13 +160,20 @@ async def clip_net(node_factory, trust_each_other, monkeypatch):
 
 
 async def link(p, q) -> None:
-    p.node.connect_hint(q.id, [LOCAL], q.node.port)
-    # 15 s: runner Windows của CI chạy -n auto có lúc mất quá 5 s mới xong bắt tay TLS hai chiều.
-    await wait_until(
-        lambda: q.id in p.node.connected_devices() and p.id in q.node.connected_devices(),
-        15,
-        f"{p.label} chưa nối được với {q.label}",
-    )
+    # Runner Windows của CI chạy -n auto có lúc làm quá hạn lần bắt tay TLS đầu;
+    # `connect_hint` không tự nối lại theo lịch khi không có mDNS/lượt dở, nên thử lại tối đa 3 lần.
+    for attempt in range(3):
+        p.node.connect_hint(q.id, [LOCAL], q.node.port)
+        try:
+            await wait_until(
+                lambda: q.id in p.node.connected_devices() and p.id in q.node.connected_devices(),
+                10,
+                f"{p.label} chưa nối được với {q.label}",
+            )
+            return
+        except AssertionError:
+            if attempt == 2:
+                raise
 
 
 def received(p) -> list:

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from teleport.ui import theme
+from teleport.ui import motion, theme
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +101,7 @@ class FirewallGuideDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        motion.dim_parent_on_show(self)
         self.setObjectName("firewallGuideDialog")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)

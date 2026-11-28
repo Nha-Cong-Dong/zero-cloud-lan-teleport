@@ -115,6 +115,7 @@ class WebGuestDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        motion.dim_parent_on_show(self)
         self.node = node
         self.host = host
         self.initial_files = list(initial_files or [])

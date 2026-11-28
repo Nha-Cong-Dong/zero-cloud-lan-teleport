@@ -362,7 +362,7 @@ class TransfersController(QObject):
         if area_layout is not None:
             area_layout.setContentsMargins(0, 0, 0, 0)  # luồng chat tự lo lề
             area_layout.addWidget(self.view)
-        self.offers = OfferPrompts(self.offer_book, parent=self)
+        self.offers = OfferPrompts(self.offer_book, parent=self, scrim_host=window)
         self.view.set_offer_book(self.offer_book)
         # Thanh chẩn đoán kết nối ở đầu luồng (spec F3b): tự đặt vào `view` bằng `set_device_banner`.
         self.diagnose = DiagnoseController(
@@ -382,6 +382,7 @@ class TransfersController(QObject):
         self.view.pick_files_requested.connect(self.pick_and_send)
         self.view.pick_folder_requested.connect(self.pick_folder_and_send)
         self.view.send_files_requested.connect(self.request_send)
+        window.drop_files_requested.connect(self.request_send)
         self.view.drop_hint_requested.connect(self.view.show_notice)
         self.view.history_needed.connect(self._on_history_needed)
         current = conversations.current_device()

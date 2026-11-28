@@ -1502,3 +1502,63 @@ def test_frame_driver_leaves_registry_when_widget_destroyed(real_motion, qtbot, 
     qtbot.waitUntil(lambda: not is_valid(child), timeout=WAIT_MS)
     assert real_motion.running_count() == 0
     real_motion.finish_all()  # không ném
+
+
+def test_dialog_scrim_instant_tracks_stacked_dialogs_and_resize(motion, qtbot, shown):
+    from PySide6.QtWidgets import QDialog
+
+    host = shown(size=(400, 300))
+    d1 = QDialog(host)
+    d2 = QDialog(host)
+    motion.dim_parent_on_show(d1)
+    motion.dim_parent_on_show(d1)  # gọi lặp không gắn thêm watcher
+    motion.dim_parent_on_show(d2)
+
+    scrims = host.findChildren(motion.DialogScrim, "dialogScrim")
+    assert len(scrims) == 1
+    scrim = scrims[0]
+    assert scrim.isHidden()
+
+    d1.show()
+    qtbot.waitUntil(lambda: not scrim.isHidden(), timeout=WAIT_MS)
+    assert scrim.opacity() == 1.0
+    assert scrim.geometry() == host.rect()
+    assert scrim.active_dialog_count() == 1
+
+    host.resize(520, 360)
+    QApplication.processEvents()
+    assert scrim.geometry() == host.rect()
+
+    d2.show()
+    QApplication.processEvents()
+    assert scrim.active_dialog_count() == 2
+
+    d1.close()
+    QApplication.processEvents()
+    assert not scrim.isHidden(), "còn d2 mở nên nền mờ vẫn giữ"
+    assert scrim.active_dialog_count() == 1
+
+    d2.close()
+    qtbot.waitUntil(scrim.isHidden, timeout=WAIT_MS)
+    assert scrim.opacity() == 0.0
+    assert scrim.active_dialog_count() == 0
+    assert motion.running_count() == 0
+
+
+def test_dialog_scrim_real_motion_fades_and_clears_on_destroy(real_motion, qtbot, shown):
+    from PySide6.QtWidgets import QDialog
+
+    host = shown(size=(360, 260))
+    dlg = QDialog(host)
+    real_motion.dim_parent_on_show(dlg)
+    scrim = host.findChild(real_motion.DialogScrim, "dialogScrim")
+    assert scrim is not None
+
+    dlg.show()
+    qtbot.waitUntil(lambda: scrim.opacity() == 1.0 and real_motion.running_count() == 0, timeout=WAIT_MS)
+    assert not scrim.isHidden()
+
+    dlg.deleteLater()
+    qtbot.waitUntil(lambda: not is_valid(dlg) and scrim.isHidden(), timeout=WAIT_MS)
+    qtbot.waitUntil(lambda: real_motion.running_count() == 0, timeout=WAIT_MS)
+    assert scrim.opacity() == 0.0

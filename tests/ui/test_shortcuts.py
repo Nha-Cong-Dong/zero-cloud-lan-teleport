@@ -57,6 +57,7 @@ IDS = (
     "close_window",
     "quit",
     "retry",
+    "toggle_fullscreen",
 )
 
 # Phím đầu của mỗi id (PortableText), bảng mục 2.1. PASTE_FILES theo nền (H11), không viết cứng.
@@ -72,6 +73,7 @@ FIRST_KEY = {
     "close_window": "Ctrl+W",
     "quit": "Ctrl+Q",
     "retry": "F5",
+    "toggle_fullscreen": "F11",
 }
 
 # Mô tả tiếng Việt (mục 4; H8 cho PASTE_FILES; H14 cho CLOSE_WINDOW).
@@ -88,6 +90,7 @@ DESCRIBE_VI = {
     "close_window": "Đóng cửa sổ",
     "quit": "Thoát Teleport",
     "retry": "Thử lại khi Teleport không khởi động được",
+    "toggle_fullscreen": "Bật hoặc tắt toàn màn hình",
 }
 
 SETTINGS_LABEL = "Phím tắt"
@@ -454,7 +457,7 @@ def test_s3_table_rows_twelve_in_order():
 
     rows = shortcuts.table_rows()
     expected = _describe_vi()
-    assert len(rows) == 12
+    assert len(rows) == 13
     assert rows == [(expected[s.value], shortcuts.key_text(s)) for s in Shortcut]
 
 
@@ -610,6 +613,7 @@ def test_main_window_action_names(window):
         "_open_dir_action",
         "_previous_action",
         "_next_action",
+        "_fullscreen_action",
     ):
         assert isinstance(getattr(window, name), QAction), name
     actions = window._conversation_actions
@@ -675,6 +679,7 @@ def test_window_action_texts_are_descriptions(full):
         w._close_action: Shortcut.CLOSE_WINDOW,
         w._quit_action: Shortcut.QUIT,
         w._retry_action: Shortcut.RETRY,
+        w._fullscreen_action: Shortcut.TOGGLE_FULLSCREEN,
         view._pick_action: Shortcut.PICK_FILES,
         view._paste_action: Shortcut.PASTE_FILES,
     }
@@ -1139,7 +1144,7 @@ def test_s17_shortcuts_row_and_table_structure(advanced):
     assert isinstance(table, QTableWidget)
     assert table.objectName() == "shortcutsTable"
     assert page.shortcuts_row.isAncestorOf(table)
-    assert table.rowCount() == 12
+    assert table.rowCount() == 13
     assert table.columnCount() == 2
     assert table.isVisibleTo(page)
     assert [table.horizontalHeaderItem(c).text() for c in range(2)] == list(COLUMNS)
@@ -1261,14 +1266,14 @@ def test_s19_language_change_rebuilds_table_keeps_row(advanced, qapp):
     settle()
     assert i18n.current_language() == "en"
     table = advanced.shortcuts_table
-    assert table.rowCount() == 12
-    en_rows = [(table.item(r, 0).text(), table.item(r, 1).text()) for r in range(12)]
+    assert table.rowCount() == 13
+    en_rows = [(table.item(r, 0).text(), table.item(r, 1).text()) for r in range(13)]
     assert en_rows == shortcuts.table_rows()
     assert [d for d, _ in en_rows] != vi_rows
     assert table.currentRow() == 5, "giữ hàng hiện hành"
     assert [table.horizontalHeaderItem(c).text() for c in range(2)] != list(COLUMNS)
     assert table.accessibleName() != SETTINGS_LABEL
-    for r in range(12):
+    for r in range(13):
         d, k = en_rows[r]
         assert table.item(r, 0).data(Qt.ItemDataRole.AccessibleTextRole) == f"{d}: {k}"
     for bar in (table.verticalScrollBar(), table.horizontalScrollBar()):
@@ -1287,3 +1292,39 @@ def test_h7_table_fits_narrow_english_window(qtbot, qapp):
     for bar in (table.verticalScrollBar(), table.horizontalScrollBar()):
         assert bar.maximum() == 0
     assert table.horizontalHeader().length() <= table.viewport().width()
+
+
+def test_f11_toggles_fullscreen_and_restores_previous_state(window, qtbot, tmp_path):
+    """F11 bật/tắt toàn màn hình, khôi phục đúng Normal/Maximized; Esc và sidebar không bị đổi."""
+    window.show_running("May-A", tmp_path / "nhan")
+    activate(qtbot, window)
+    sidebar_before = window.sidebar.isVisibleTo(window)
+    assert not window.isFullScreen()
+
+    press(None, "F11")
+    settle()
+    assert window.isFullScreen()
+    assert window.sidebar.isVisibleTo(window) is sidebar_before
+
+    # Esc không thoát toàn màn hình khi đang ở HOME.
+    press(None, "Esc")
+    settle()
+    assert window.isFullScreen()
+
+    press(None, "F11")
+    settle()
+    assert not window.isFullScreen()
+    assert not window.isMaximized()
+    assert window.sidebar.isVisibleTo(window) is sidebar_before
+
+    # Vào từ Maximized -> thoát ra về lại Maximized.
+    window.showMaximized()
+    settle()
+    assert window.isMaximized()
+    press(None, "F11")
+    settle()
+    assert window.isFullScreen()
+    press(None, "F11")
+    settle()
+    assert not window.isFullScreen()
+    assert window.isMaximized()

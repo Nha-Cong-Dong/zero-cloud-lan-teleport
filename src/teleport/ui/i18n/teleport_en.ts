@@ -348,6 +348,7 @@
     </message>
     <message numerus="yes">
         <location filename="../chat.py"/>
+        <location filename="../main_window.py"/>
         <source>Thả để gửi %n file tới {name}</source>
         <translation>
             <numerusform>Drop to send %n file to {name}</numerusform>
@@ -3178,6 +3179,11 @@
 </context>
 <context>
     <name>Shortcuts</name>
+    <message>
+        <location filename="../shortcuts.py"/>
+        <source>Bật hoặc tắt toàn màn hình</source>
+        <translation>Toggle fullscreen</translation>
+    </message>
     <message>
         <location filename="../shortcuts.py"/>
         <source>Chuyển lên cuộc trò chuyện phía trên</source>

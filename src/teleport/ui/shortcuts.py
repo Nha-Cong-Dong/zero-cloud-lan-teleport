@@ -49,6 +49,7 @@ class Shortcut(StrEnum):
     CLOSE_WINDOW = "close_window"
     QUIT = "quit"
     RETRY = "retry"
+    TOGGLE_FULLSCREEN = "toggle_fullscreen"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +110,11 @@ SHORTCUTS: tuple[ShortcutInfo, ...] = (
         Shortcut.RETRY,
         ("F5",),
         lambda: QCoreApplication.translate("Shortcuts", "Thử lại khi Teleport không khởi động được"),
+    ),
+    ShortcutInfo(
+        Shortcut.TOGGLE_FULLSCREEN,
+        ("F11",),
+        lambda: QCoreApplication.translate("Shortcuts", "Bật hoặc tắt toàn màn hình"),
     ),
 )
 

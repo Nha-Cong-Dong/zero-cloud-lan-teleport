@@ -168,6 +168,7 @@ from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QDragEnterEvent,
+    QDragLeaveEvent,
     QDragMoveEvent,
     QDropEvent,
     QGuiApplication,
@@ -206,7 +207,7 @@ from teleport.ui.drop_overlay import DropOverlay
 from teleport.ui.first_run import FirstRunChoice, TextSource
 from teleport.ui.home import START_PANEL_MAX_WIDTH as START_PANEL_MAX_WIDTH  # hằng của bảng spec B1 mục 2.3
 from teleport.ui.home import MachineCard, SaveBar, StartPanel
-from teleport.ui.radar import DeviceListModel
+from teleport.ui.radar import DeviceListModel, can_receive_files
 from teleport.ui.shortcuts import Shortcut
 from teleport.ui.sounds import SoundCue
 from teleport.ui.taskbar import TaskbarProgress
@@ -455,6 +456,7 @@ class MainWindow(QMainWindow):
     web_guest_requested = Signal()
     quick_pair_requested = Signal(object)  # DeviceView từ thẻ phát hiện máy sống trên màn rỗng
     empty_drop_files_requested = Signal(object)  # list[Path] khi thả tệp vào màn rỗng
+    drop_files_requested = Signal(str, object)  # device_id, list[Path] khi thả lên viền cửa sổ
     onboarding_dismissed_requested = Signal()
     machine_pause_toggled = Signal(bool)
     machine_hidden_toggled = Signal(bool)
@@ -463,6 +465,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setObjectName("mainWindow")
         self.setMinimumSize(MIN_SIZE)
+        self.setAcceptDrops(True)
+        self._pre_fullscreen_maximized = False
         screen = QGuiApplication.primaryScreen()
         self.resize(DEFAULT_SIZE if screen is None else default_size(screen.availableGeometry().size()))
         self._state = ViewState.STARTING
@@ -782,6 +786,8 @@ class MainWindow(QMainWindow):
         self.retranslate()
         self.backdrop = MicaBackdrop(self, self.sidebar)  # nền Mica cột trái (Windows 11, spec G7)
         self._taskbar = TaskbarProgress()
+        self._window_drop_overlay = DropOverlay(self)
+        self._window_drop_overlay.setObjectName("windowDropOverlay")
 
     # ---- Trạng thái --------------------------------------------------------------------------
 
@@ -1014,6 +1020,8 @@ class MainWindow(QMainWindow):
             self.open_page(Page.SETTINGS)
 
     def _on_page_changed(self, _page: str) -> None:
+        if "_window_drop_overlay" in self.__dict__:
+            self._window_drop_overlay.dismiss()
         self._update_shortcuts()
 
     def _update_page_buttons(self) -> None:
@@ -1444,11 +1452,81 @@ class MainWindow(QMainWindow):
                 return True
         return False
 
+    def toggle_fullscreen(self) -> bool:
+        """Bật/tắt chế độ toàn màn hình (phím F11); trả True nếu đang ở toàn màn hình."""
+        if self.isFullScreen():
+            if self._pre_fullscreen_maximized:
+                self.showMaximized()
+            else:
+                self.showNormal()
+            return False
+        self._pre_fullscreen_maximized = self.isMaximized()
+        self.showFullScreen()
+        return True
+
     # ---- Sự kiện -----------------------------------------------------------------------------
+
+    def _window_drop_target(self) -> tuple[str, str] | None:
+        if self._state is not ViewState.RUNNING or self.pages.current_page is not Page.HOME:
+            return None
+        view = self.conversations.current_device()
+        if view is None or not can_receive_files(view):
+            return None
+        return view.device_id, texts.peer_label(view.name, view.device_id)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        target = self._window_drop_target()
+        mime = event.mimeData()
+        paths = send.local_paths(mime.urls()) if mime is not None and mime.hasUrls() else []
+        if target is None or not paths:
+            event.ignore()
+            return
+        _device_id, name = target
+        event.acceptProposedAction()
+        self._window_drop_overlay.setGeometry(self.rect())
+        self._window_drop_overlay.raise_()
+        self._window_drop_overlay.show_text(
+            texts.fill(
+                QCoreApplication.translate("Chat", "Thả để gửi %n file tới {name}", None, len(paths)),
+                name=name,
+            ),
+            target=name,
+        )
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        target = self._window_drop_target()
+        mime = event.mimeData()
+        paths = send.local_paths(mime.urls()) if mime is not None and mime.hasUrls() else []
+        if target is not None and paths:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._window_drop_overlay.dismiss()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        self._window_drop_overlay.dismiss()
+        target = self._window_drop_target()
+        mime = event.mimeData()
+        paths = send.local_paths(mime.urls()) if mime is not None and mime.hasUrls() else []
+        if target is None or not paths:
+            event.ignore()
+            return
+        device_id, _name = target
+        event.acceptProposedAction()
+        sounds.play(
+            SoundCue.DROP_LOCK,
+            window_visible=self.isVisible() and not self.isMinimized(),
+        )
+        self.drop_files_requested.emit(device_id, list(paths))
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._apply_compact()
+        if "_window_drop_overlay" in self.__dict__ and not self._window_drop_overlay.isHidden():
+            self._window_drop_overlay.setGeometry(self.rect())
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.empty_state:
@@ -1563,6 +1641,7 @@ class MainWindow(QMainWindow):
         self._next_action = make(
             self, Shortcut.NEXT_CONVERSATION, lambda: self._step_conversation(1), auto_repeat=True
         )
+        self._fullscreen_action = make(self, Shortcut.TOGGLE_FULLSCREEN, self.toggle_fullscreen)
         self._shortcuts_ready = True
 
     def _update_shortcuts(self) -> None:

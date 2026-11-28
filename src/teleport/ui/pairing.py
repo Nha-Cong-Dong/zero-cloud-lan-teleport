@@ -716,6 +716,7 @@ class PairingDialog(QDialog):
     def __init__(self, prompt: PairingPrompt, *, clock: Callable[[], float] = time.monotonic) -> None:
         super().__init__(None)
         motion.fade_in_on_show(self)  # mờ dần khi hiện (spec G3); đóng tức thì
+        motion.dim_parent_on_show(self)
         self._prompt = prompt
         self._clock = clock
         self._resolved = False  # đã quyết định hoặc đã đóng không quyết định
@@ -929,6 +930,7 @@ class PairingProgressDialog(QDialog):
     def __init__(self, name: str) -> None:
         super().__init__(None)
         motion.fade_in_on_show(self)
+        motion.dim_parent_on_show(self)
         self._name = name
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -1336,6 +1338,7 @@ class PairingController(QObject):
     def _open_progress(self, label: str) -> None:
         self._close_progress()
         box = PairingProgressDialog(label)
+        motion.dim_parent_on_show(box, self._message_parent())
         box.finished.connect(lambda _result: self._progress_finished(box))
         self._progress_box = box
         _show(box)
@@ -1369,6 +1372,7 @@ class PairingController(QObject):
             # Lõi tự kết thúc phiên khi hết hạn; không có gì để quyết định ở đây.
             log.exception("không mở được hộp ghép đôi của phiên %d", prompt.session_id)
             return
+        motion.dim_parent_on_show(dialog, self._message_parent())
         host = self._host
         sid = prompt.session_id
         self._dialogs[sid] = dialog
