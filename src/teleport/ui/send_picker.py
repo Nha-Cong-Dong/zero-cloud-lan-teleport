@@ -92,7 +92,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from teleport.ui import send, texts, theme
+from teleport.ui import motion, send, texts, theme
 from teleport.ui.conversations import ConversationModel, is_online
 from teleport.ui.main_window import MainWindow
 from teleport.ui.widgets import InfoBar, InfoLevel, safe_tooltip
@@ -329,6 +329,7 @@ class SendPickerDialog(QDialog):
         multi: bool = False,
     ) -> None:
         super().__init__(parent)
+        motion.dim_parent_on_show(self)
         self._paths = tuple(Path(p) for p in paths)
         self._model = model
         self._multi = bool(multi)

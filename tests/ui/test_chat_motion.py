@@ -585,7 +585,9 @@ def test_bubbles_get_thread_motion_and_lose_it_on_remove(h, tmp_path):
     pending = h.view.pending_bubbles()[-1]
     assert pending.motion is thread.motion
     note = h.view.show_clipboard(PEER_ID, ok=True, kind="text", size=3, preview="abc")
-    assert getattr(note, "motion", None) is None, "chỉ `_Bubble` được gán motion (11.8)"
+    assert note.motion is thread.motion
+    h.view.show_clipboard(PEER_ID, ok=True, kind="text", size=3, preview="def")
+    assert note.motion is None
     h.view.remove_pending(token)
     assert pending.motion is None
     h.view.remove(key("send", 900))
@@ -849,22 +851,28 @@ def test_t12_pending_bubble_does_not_fade(h, animate, tmp_path):
     assert motion.running_count() == 0
 
 
-def test_t12_clipboard_note_fades_in(h, animate):
+def test_t12_clipboard_note_fades_in(h, animate, cm):
     from teleport.ui import motion
 
     clock = animate()
     note = h.view.show_clipboard(PEER_ID, ok=True, kind="text", size=3, preview="abc")
     thread = h.thread
     assert field(thread, note, "reveal_at") == T0
+    assert field(thread, note, "clip_glow_at") == T0
     wrapper = wrapper_of(note)
     assert wrapper.graphicsEffect() is not None
     clock.t = T0 + motion.NORMAL.ms + 1
+    thread.motion.tick(clock.t)
+    assert field(thread, note, "reveal_at") is None
+    assert wrapper.graphicsEffect() is None
+    assert field(thread, note, "clip_glow_at") == T0
+    clock.t = T0 + cm.CLIPBOARD_GLOW_MS + 1
     thread.motion.tick(clock.t)
     assert_still(thread, note)
     assert_idle(thread)
 
 
-def test_t12_replacing_clipboard_note_mid_fade_does_not_raise(h, animate):
+def test_t12_replacing_clipboard_note_mid_fade_does_not_raise(h, animate, cm):
     clock = animate()
     first = h.view.show_clipboard(PEER_ID, ok=True, kind="text", size=3, preview="abc")
     clock.t = T0 + 50
@@ -872,7 +880,7 @@ def test_t12_replacing_clipboard_note_mid_fade_does_not_raise(h, animate):
     second = h.view.show_clipboard(PEER_ID, ok=True, kind="text", size=3, preview="xyz")
     assert h.thread.motion.state(first) is None
     assert field(h.thread, second, "reveal_at") == T0 + 50
-    clock.t = T0 + 1000
+    clock.t = T0 + 50 + cm.CLIPBOARD_GLOW_MS + 1
     h.thread.motion.tick(clock.t)
     settle()
     assert_idle(h.thread)
@@ -1472,5 +1480,33 @@ def test_wave5_shimmer_and_speed_sparkline(h, animate):
     assert not b.sparkline.isVisibleTo(b)
     assert h.thread.motion.shimmer_phase(b) is None
     clock.t = T0 + 5000.0
+    h.thread.motion.tick(clock.t)
+    assert_idle(h.thread)
+
+
+def test_clipboard_glow_alpha_and_note_animation(h, animate, cm):
+    from teleport.app.clipboard import ClipKind
+
+    assert cm.clipboard_glow_alpha(-1.0) == 0.0
+    assert cm.clipboard_glow_alpha(0.0) == 0.0
+    assert 0.9 <= cm.clipboard_glow_alpha(120.0) <= 1.0
+    assert 0.0 < cm.clipboard_glow_alpha(500.0) < 1.0
+    assert cm.clipboard_glow_alpha(float(cm.CLIPBOARD_GLOW_MS)) == 0.0
+
+    clock = animate()
+    ok_note = h.view.show_clipboard(PEER_ID, ok=True, kind=ClipKind.TEXT, size=12, preview="xin chào")
+    st_ok = h.thread.motion.state(ok_note)
+    assert st_ok is not None and st_ok.clip_glow_at == T0
+    ok_note.repaint()
+
+    clock.t = T0 + cm.CLIPBOARD_GLOW_MS + 10
+    h.thread.motion.tick(clock.t)
+    assert_still(h.thread, ok_note)
+    assert_idle(h.thread)
+
+    fail_note = h.view.show_clipboard(PEER_ID, ok=False, kind=ClipKind.TEXT, size=12, preview="lỗi")
+    st_fail = h.thread.motion.state(fail_note)
+    assert st_fail is None or st_fail.clip_glow_at is None
+    clock.t += 5000.0
     h.thread.motion.tick(clock.t)
     assert_idle(h.thread)

@@ -591,3 +591,48 @@ def test_chat_real_motion_leave_clears_text_now_and_hides_later(chat, tmp_path, 
     assert ov.text() == ""
     qtbot.waitUntil(ov.isHidden, timeout=WAIT_MS)
     qtbot.waitUntil(lambda: real_motion.running_count() == 0, timeout=WAIT_MS)
+
+
+def test_drop_overlay_target_pill_sets_and_clears(qtbot):
+    _host, ov = make_overlay(qtbot)
+    ov.show_text(TEXT, target=f"  {PEER}  ")
+    assert ov.target() == PEER
+    ov.repaint()
+    ov.show_text(TEXT, target="PC-Khac")
+    assert ov.target() == "PC-Khac"
+    ov.repaint()
+    ov.dismiss()
+    assert ov.target() == ""
+
+
+def test_chat_sets_drop_target_and_main_window_accepts_outer_drop(qtbot, tmp_path):
+    from teleport.ui.main_window import MainWindow
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.devices.reset([dview()])
+    win.show_running("May-Chinh", tmp_path / "nhan")
+    win.open_conversation(PEER_ID)
+    win.show()
+    qtbot.waitExposed(win)
+    settle()
+
+    dropped: list[tuple[str, list[Path]]] = []
+    win.drop_files_requested.connect(lambda did, paths: dropped.append((did, paths)))
+
+    f = tmp_path / "clip.txt"
+    f.write_text("ok", encoding="utf-8")
+    data = mime(f)
+    assert drag_enter(win, data)
+    ov = win._window_drop_overlay
+    assert ov.shown is True
+    assert ov.target() == PEER
+    assert ov.geometry() == win.rect()
+
+    drag_leave(win)
+    assert ov.shown is False
+    assert ov.target() == ""
+
+    drop(win, data)
+    assert ov.shown is False
+    assert dropped == [(PEER_ID, [f])]

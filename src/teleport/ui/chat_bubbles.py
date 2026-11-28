@@ -185,7 +185,13 @@ from teleport.core.history import HistoryEntry
 from teleport.core.messages import ClipKind
 from teleport.ui import chat_motion, icons, offer, shell, texts, theme
 from teleport.ui.buttons import AnimatedButton
-from teleport.ui.chat_motion import ThreadMotion, check_fraction, flash_extra, tint_alpha
+from teleport.ui.chat_motion import (
+    ThreadMotion,
+    check_fraction,
+    clipboard_glow_alpha,
+    flash_extra,
+    tint_alpha,
+)
 from teleport.ui.offer import OfferEntry, OfferPhase
 from teleport.ui.send import printable
 from teleport.ui.transfers_view import (
@@ -1981,6 +1987,7 @@ class ClipboardNote(QFrame):
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)  # Tab do `ui.chat` (roving tabindex)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.device_id = device_id
+        self.motion: ThreadMotion | None = None
         self.at = at
         self.ok = bool(ok)
         self.kind = kind
@@ -2121,15 +2128,30 @@ class ClipboardNote(QFrame):
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
-        if not self.hasFocus():
+        st = None if self.motion is None else self.motion.state(self)
+        glow = 0.0
+        if st is not None and st.clip_glow_at is not None:
+            glow = clipboard_glow_alpha(chat_motion._now() - st.clip_glow_at)
+        if glow <= 0.0 and not self.hasFocus():
             return
-        dark = theme.is_dark_palette(QApplication.palette())
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(theme.focus_ring_color(dark), 2))
             radius = theme.RADIUS_CONTROL
-            painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), radius, radius)
+            rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+            if glow > 0.0:
+                t = theme.tokens_for(self)
+                fill = QColor(t.accent)
+                fill.setAlphaF(min(1.0, 0.08 * glow))
+                border = QColor(t.accent_strong)
+                border.setAlphaF(min(1.0, 0.85 * glow))
+                painter.setBrush(fill)
+                painter.setPen(QPen(border, 1.5))
+                painter.drawRoundedRect(rect, radius, radius)
+            if self.hasFocus():
+                dark = theme.is_dark_palette(QApplication.palette())
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(theme.focus_ring_color(dark), 2))
+                painter.drawRoundedRect(rect, radius, radius)
         finally:
             painter.end()

@@ -57,6 +57,7 @@ SHAKE_MS = SLOW.ms
 TINT_MAX = 0.16
 FLASH_EXTRA_PX = 2
 FLASH_MS = EMPHASIS.ms
+CLIPBOARD_GLOW_MS = 1000
 PROGRESS_MIN_MS = NORMAL.ms
 PROGRESS_MAX_MS = 1000
 DONE_TOTAL_MS = EMPHASIS.ms + SLOW.ms
@@ -133,6 +134,19 @@ def flash_extra(elapsed: float) -> float:
     return FLASH_EXTRA_PX * math.sin(math.pi * _progress(elapsed, FLASH_MS))
 
 
+def clipboard_glow_alpha(elapsed: float) -> float:
+    """Cường độ sáng viền nhẹ (0…1) của note clipboard mới nhận trong `CLIPBOARD_GLOW_MS`."""
+    if elapsed < 0 or elapsed >= CLIPBOARD_GLOW_MS:
+        return 0.0
+    if elapsed < FAST.ms:
+        return elapsed / FAST.ms if FAST.ms > 0 else 1.0
+    tail = CLIPBOARD_GLOW_MS - FAST.ms
+    if tail <= 0:
+        return 0.0
+    p = (elapsed - FAST.ms) / tail
+    return _clamp(1.0 - QEasingCurve(QEasingCurve.Type.OutCubic).valueForProgress(p), 0.0, 1.0)
+
+
 # ---- Trạng thái -------------------------------------------------------------------------------
 
 
@@ -183,6 +197,7 @@ class BubbleAnim:
     shake_at: float | None = None
     done_at: float | None = None
     flash_at: float | None = None
+    clip_glow_at: float | None = None
     bar: ProgressTween | None = None
     bar_px: int = -1  # bề ngang phần đã chạy lần vẽ trước (px); chỉ vẽ lại thanh khi đổi
     shimmer: bool = False
@@ -194,6 +209,7 @@ class BubbleAnim:
             or (self.shake_at is not None and now - self.shake_at < SHAKE_MS)
             or (self.done_at is not None and now - self.done_at < DONE_TOTAL_MS)
             or (self.flash_at is not None and now - self.flash_at < FLASH_MS)
+            or (self.clip_glow_at is not None and now - self.clip_glow_at < CLIPBOARD_GLOW_MS)
             or (self.bar is not None and self.bar.active(now))
         )
 
@@ -205,6 +221,7 @@ class BubbleAnim:
             and self.shake_at is None
             and self.done_at is None
             and self.flash_at is None
+            and self.clip_glow_at is None
             and self.bar is None
         )
 
@@ -433,6 +450,16 @@ class ThreadMotion(QObject):
         bubble.update()
         return True
 
+    def clipboard_glow(self, note: QWidget) -> bool:
+        """Note clipboard vừa nhận: sáng viền nhấn nhẹ rồi dịu xuống trong 1 giây."""
+        if not self._driver.wake():
+            note.update()
+            return False
+        st = self._states.setdefault(note, BubbleAnim())
+        st.clip_glow_at = _now()
+        note.update()
+        return True
+
     def forget(self, widget: QWidget) -> None:
         """Bỏ mọi trạng thái và hiệu ứng của `widget` (bong bóng bị gỡ khỏi luồng)."""
         self._remove_effect(widget)
@@ -494,6 +521,10 @@ class ThreadMotion(QObject):
             paint = paint or now >= st.flash_at
             if now - st.flash_at >= FLASH_MS:
                 st.flash_at = None
+        if st.clip_glow_at is not None:
+            paint = True
+            if now - st.clip_glow_at >= CLIPBOARD_GLOW_MS:
+                st.clip_glow_at = None
         if paint:
             widget.update()
         if st.bar is not None or st.shimmer:

@@ -551,11 +551,17 @@ class OfferPrompts(QObject):
     opened = Signal(object)  # TransferKey: vừa mở một hộp
 
     def __init__(
-        self, book: OfferBook, receive_dir: Path | None = None, parent: QObject | None = None
+        self,
+        book: OfferBook,
+        receive_dir: Path | None = None,
+        parent: QObject | None = None,
+        *,
+        scrim_host: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._book = book
         self._receive_dir = receive_dir
+        self._scrim_host = scrim_host
         self._pending: Path | None = None
         self._prompts: dict[TransferKey, _Prompt] = {}
         self._queue: list[TransferKey] = []
@@ -647,6 +653,7 @@ class OfferPrompts(QObject):
 
     def _open(self, entry: OfferEntry) -> None:
         prompt = _Prompt(entry, self)
+        motion.dim_parent_on_show(prompt.box, self._scrim_host)
         key = entry.key
         self._prompts[key] = prompt
         prompt.accept_button.clicked.connect(lambda: self._clicked(prompt, True))

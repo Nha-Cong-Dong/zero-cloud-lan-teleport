@@ -571,7 +571,7 @@ class ChatThread(QWidget):
         item = self._items.pop(index)
         bubble.removeEventFilter(self)
         self.motion.forget(bubble)
-        if isinstance(bubble, TransferBubble | HistoryBubble | PendingBubble):
+        if isinstance(bubble, TransferBubble | HistoryBubble | PendingBubble | ClipboardNote):
             bubble.motion = None
         if self._current is bubble:
             self._current = None
@@ -665,7 +665,7 @@ class ChatThread(QWidget):
     # -- Bên trong ------------------------------------------------------------------------------
 
     def _attach_motion(self, bubble: Bubble) -> None:
-        if isinstance(bubble, TransferBubble | HistoryBubble | PendingBubble):
+        if isinstance(bubble, TransferBubble | HistoryBubble | PendingBubble | ClipboardNote):
             bubble.motion = self.motion
 
     def _motion_host(self, widget: QWidget) -> tuple[QWidget, int] | None:
@@ -1733,6 +1733,8 @@ class ChatView(QWidget):
             self._clip_notes[device_id] = note
             self._show_thread_page(thread)
             thread.add(note, self._next_seq(), new=True, reveal=True)
+            if ok:
+                thread.motion.clipboard_glow(note)
             self._mark_changed()
             self._update_page()
             if had_focus:  # tiêu điểm đang ở note cũ: sang note mới, không rơi khỏi luồng
@@ -1923,7 +1925,8 @@ class ChatView(QWidget):
             texts.fill(
                 QCoreApplication.translate("Chat", "Thả để gửi %n file tới {name}", None, max(0, count)),
                 name=name,
-            )
+            ),
+            target=name,
         )
 
     @property

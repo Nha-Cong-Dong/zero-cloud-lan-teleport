@@ -97,7 +97,16 @@ from PySide6.QtCore import (
     QTimer,
     QVariantAnimation,
 )
-from PySide6.QtGui import QGuiApplication, QPainter, QPaintEvent, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QGuiApplication,
+    QHideEvent,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPalette,
+    QPixmap,
+)
 from PySide6.QtWidgets import QWidget
 from shiboken6 import delete, isValid
 
@@ -1114,3 +1123,189 @@ def fade_in_on_show(window: QWidget, token: Token | None = None) -> None:
         if isinstance(child, _ShowFade) and isValid(child):
             return
     _ShowFade(window, SLOW if token is None else token)
+
+
+# --- Lớp phủ tối mờ dịu phía sau hộp thoại ---------------------------------------------------------
+
+_SCRIM_DARK_ALPHA = 0.48
+_SCRIM_LIGHT_ALPHA = 0.28
+
+
+class DialogScrim(QWidget):
+    """Lớp phủ tối mờ dịu phủ lên cửa sổ cha khi có hộp thoại đang mở (không chạm `windowOpacity`)."""
+
+    def __init__(self, host: QWidget) -> None:
+        super().__init__(host)
+        self.setObjectName("dialogScrim")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._host_ref = weakref.ref(host)
+        self._dialogs: list[weakref.ref[QWidget]] = []
+        self._opacity = 0.0
+        self.setVisible(False)
+        host.installEventFilter(self)
+
+    def opacity(self) -> float:
+        return self._opacity
+
+    def _prune(self) -> None:
+        alive: list[weakref.ref[QWidget]] = []
+        for ref in self._dialogs:
+            dlg = ref()
+            if dlg is not None and isValid(dlg):
+                alive.append(ref)
+        self._dialogs = alive
+
+    def active_dialog_count(self) -> int:
+        self._prune()
+        return len(self._dialogs)
+
+    def add_dialog(self, dialog: QWidget) -> None:
+        self._prune()
+        self._dialogs = [ref for ref in self._dialogs if ref() is not dialog]
+        self._dialogs.append(weakref.ref(dialog))
+        host = self._host_ref()
+        if host is not None and isValid(host):
+            self.setGeometry(host.rect())
+        self.show()
+        self.raise_()
+        animate_value(self, self._opacity, 1.0, FAST, self._set_opacity, key="scrim_opacity")
+
+    def remove_dialog(self, dialog: QWidget) -> None:
+        self._prune()
+        self._dialogs = [ref for ref in self._dialogs if ref() is not dialog]
+        if self._dialogs or self.isHidden():
+            return
+        animate_value(
+            self,
+            self._opacity,
+            0.0,
+            FAST,
+            self._set_opacity,
+            key="scrim_opacity",
+            on_finished=self._after_fade,
+        )
+
+    def _set_opacity(self, value: Any) -> None:
+        if "_opacity" not in self.__dict__ or not isValid(self):
+            return
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            num = 0.0
+        self._opacity = max(0.0, min(1.0, num))
+        self.update()
+
+    def _after_fade(self) -> None:
+        if "_dialogs" not in self.__dict__ or not isValid(self):
+            return
+        self._prune()
+        if not self._dialogs:
+            self.hide()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        if self._opacity <= 0.0:
+            return
+        palette = QGuiApplication.palette()
+        dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
+        color = QColor(palette.color(QPalette.ColorRole.Shadow))
+        color.setAlphaF(min(1.0, (_SCRIM_DARK_ALPHA if dark else _SCRIM_LIGHT_ALPHA) * self._opacity))
+        painter = QPainter(self)
+        try:
+            painter.fillRect(self.rect(), color)
+        finally:
+            painter.end()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        self._prune()
+        for ref in reversed(self._dialogs):
+            dlg = ref()
+            if dlg is not None and isValid(dlg) and dlg.isVisible():
+                dlg.raise_()
+                dlg.activateWindow()
+                break
+        super().mousePressEvent(event)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        super().hideEvent(event)
+        if "_dialogs" not in self.__dict__ or not isValid(self):
+            return
+        if not event.spontaneous():
+            _cancel(_key("value", self, "scrim_opacity"))
+            self._opacity = 0.0
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if "_host_ref" not in self.__dict__ or not isValid(self):
+            return False
+        host = self.__dict__["_host_ref"]()
+        if (
+            isinstance(host, QWidget)
+            and watched is host
+            and isValid(host)
+            and event.type() == QEvent.Type.Resize
+            and not self.isHidden()
+        ):
+            self.setGeometry(host.rect())
+        return False
+
+
+class _DialogScrimWatcher(QObject):
+    """Theo dõi Show/Hide/Close/destroyed trên một hộp thoại để bật/tắt `DialogScrim` của cửa sổ cha."""
+
+    def __init__(self, dialog: QWidget, scrim: DialogScrim) -> None:
+        super().__init__(dialog)
+        self.setObjectName("motionDialogScrimWatcher")
+        self._dialog_ref = weakref.ref(dialog)
+        self._scrim_ref = weakref.ref(scrim)
+        dialog.installEventFilter(self)
+        dialog.destroyed.connect(self._on_destroyed)
+
+    def _on_destroyed(self, *_args: Any) -> None:
+        if "_scrim_ref" not in self.__dict__:
+            return
+        scrim = self.__dict__["_scrim_ref"]()
+        dialog = self.__dict__["_dialog_ref"]()
+        if scrim is not None and isValid(scrim) and dialog is not None:
+            scrim.remove_dialog(dialog)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if "_dialog_ref" not in self.__dict__ or not isValid(self):
+            return False
+        dialog = self.__dict__["_dialog_ref"]()
+        scrim = self.__dict__["_scrim_ref"]()
+        if not isinstance(dialog, QWidget) or watched is not dialog or not isValid(dialog):
+            return False
+        if not isinstance(scrim, DialogScrim) or not isValid(scrim):
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.Show and not event.spontaneous() and dialog.isWindow():
+            scrim.add_dialog(dialog)
+        elif kind == QEvent.Type.Close or (kind == QEvent.Type.Hide and not event.spontaneous()):
+            scrim.remove_dialog(dialog)
+        return False
+
+
+def _scrim_for(host: QWidget) -> DialogScrim:
+    for child in host.children():
+        if isinstance(child, DialogScrim) and isValid(child):
+            return child
+    return DialogScrim(host)
+
+
+def dim_parent_on_show(dialog: QWidget, host: QWidget | None = None) -> None:
+    """Phủ nền tối mờ dịu lên `host` (mặc định cửa sổ gốc của `dialog.parentWidget()`) khi `dialog` mở."""
+    if host is None:
+        parent = dialog.parentWidget()
+        host = parent.window() if parent is not None else None
+    if host is None or host is dialog or not isValid(host):
+        return
+    scrim = _scrim_for(host)
+    for child in dialog.children():
+        if (
+            isinstance(child, _DialogScrimWatcher)
+            and isValid(child)
+            and child.__dict__.get("_scrim_ref", lambda: None)() is scrim
+        ):
+            return
+    _DialogScrimWatcher(dialog, scrim)
+    if dialog.isVisible() and dialog.isWindow():
+        scrim.add_dialog(dialog)

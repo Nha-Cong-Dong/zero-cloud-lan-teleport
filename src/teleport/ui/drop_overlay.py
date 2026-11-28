@@ -44,7 +44,7 @@ from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt
-from PySide6.QtGui import QHideEvent, QPainter, QPaintEvent, QPalette, QPen, QRegion
+from PySide6.QtGui import QFont, QFontMetrics, QHideEvent, QPainter, QPaintEvent, QPalette, QPen, QRegion
 from PySide6.QtWidgets import QLabel, QStyle, QVBoxLayout, QWidget
 from shiboken6 import isValid
 
@@ -123,6 +123,7 @@ class DropOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._shown = False
+        self._target = ""
         self._opacity = 0.0
         self._bounce = 1.0
         self._dash_phase = 0.0
@@ -159,6 +160,10 @@ class DropOverlay(QWidget):
         """Chữ đang hiện khi `shown`, "" khi không."""
         return self.label.text() if self._shown else ""
 
+    def target(self) -> str:
+        """Tên máy đích đang hiện khi `shown`, "" khi không."""
+        return self._target if self._shown else ""
+
     def opacity(self) -> float:
         return self._opacity
 
@@ -172,11 +177,16 @@ class DropOverlay(QWidget):
     def dash_running(self) -> bool:
         return self._dash.running
 
-    def show_text(self, text: str) -> None:
-        """Hiện lớp phủ với câu `text` (đã hiện thì chỉ đổi câu)."""
+    def show_text(self, text: str, *, target: str = "") -> None:
+        """Hiện lớp phủ với câu `text` (đã hiện thì chỉ đổi câu / máy đích)."""
         self.label.setText(text)
         self.label.setAccessibleName(text)
+        clean_target = target.strip()
+        target_changed = clean_target != self._target
+        self._target = clean_target
         if self._shown:
+            if target_changed:
+                self.update()
             return
         self._shown = True
         if self.isHidden():
@@ -229,6 +239,7 @@ class DropOverlay(QWidget):
 
     def _after_fade(self) -> None:
         if not self._shown:
+            self._target = ""
             self.hide()
 
     def _frame_rect(self) -> QRectF:
@@ -285,8 +296,37 @@ class DropOverlay(QWidget):
             if not pm.isNull():
                 center = badge.center()
                 painter.drawPixmap(QPointF(center.x() - _BADGE_ICON / 2, center.y() - _BADGE_ICON / 2), pm)
+            self._paint_target_pill(painter, t)
         finally:
             painter.end()
+
+    def _paint_target_pill(self, painter: QPainter, t: theme.Tokens) -> None:
+        """Vẽ huy hiệu tên máy đích bên dưới `label` khi đủ chỗ."""
+        if not self._target:
+            return
+        label_rect = self.label.geometry()
+        if label_rect.width() <= 0:
+            return
+        frame = self._frame_rect()
+        font = theme.font_for(theme.TextStyle.BODY, self.font())
+        font.setWeight(QFont.Weight.DemiBold)
+        metrics = QFontMetrics(font)
+        pad_x = theme.SPACING[2]
+        pad_y = 4
+        max_w = max(24.0, frame.width() - 2 * theme.SPACING[3])
+        shown = metrics.elidedText(self._target, Qt.TextElideMode.ElideRight, max(16, int(max_w - 2 * pad_x)))
+        pill_w = min(max_w, metrics.horizontalAdvance(shown) + 2 * pad_x)
+        pill_h = metrics.height() + 2 * pad_y
+        top = label_rect.bottom() + theme.SPACING[1]
+        if top + pill_h > frame.bottom() - theme.SPACING[1]:
+            return
+        pill_rect = QRectF((self.width() - pill_w) / 2, top, pill_w, pill_h)
+        painter.setBrush(t.accent_subtle)
+        painter.setPen(QPen(t.accent_strong, 1))
+        painter.drawRoundedRect(pill_rect, theme.RADIUS_CONTROL, theme.RADIUS_CONTROL)
+        painter.setFont(font)
+        painter.setPen(t.accent_text)
+        painter.drawText(pill_rect, int(Qt.AlignmentFlag.AlignCenter), shown)
 
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
@@ -296,6 +336,7 @@ class DropOverlay(QWidget):
         if event.spontaneous():  # thu nhỏ: giữ nguyên (Loop tự dừng)
             return
         self._shown = False
+        self._target = ""
         self._dash.stop()
         motion.animate_value(self, self._bounce, 1.0, motion.INSTANT, _weak(self._set_bounce), key="bounce")
         motion.animate_value(

@@ -96,7 +96,7 @@ from teleport.app.devices import DeviceView, parse_manual_address
 from teleport.app.node import ConnectFailed, DeviceConnected, NodeEvent
 from teleport.core.links import ConnectResult
 from teleport.net.connection import DEFAULT_PORT
-from teleport.ui import pairing, radar, texts, theme
+from teleport.ui import motion, pairing, radar, texts, theme
 from teleport.ui.widgets import InfoBar, InfoLevel
 
 if TYPE_CHECKING:
@@ -518,6 +518,7 @@ class ConnectAddressDialog(QDialog):
 
     def __init__(self, view: DeviceView, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        motion.dim_parent_on_show(self)
         self.setObjectName("connectAddressDialog")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
