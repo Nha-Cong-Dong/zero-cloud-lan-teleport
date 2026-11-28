@@ -1207,7 +1207,7 @@ class DialogScrim(QWidget):
             return
         palette = QGuiApplication.palette()
         dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
-        color = QColor(0, 0, 0) if dark else QColor(15, 23, 42)
+        color = QColor(palette.color(QPalette.ColorRole.Shadow))
         color.setAlphaF(min(1.0, (_SCRIM_DARK_ALPHA if dark else _SCRIM_LIGHT_ALPHA) * self._opacity))
         painter = QPainter(self)
         try:
