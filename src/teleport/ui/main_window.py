@@ -143,13 +143,18 @@ các thuộc tính công khai (`conversations`, `transfers_area`, `body`, `statu
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import functools
+import logging
+import sys
 from collections.abc import Sequence
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import (
+    QByteArray,
     QCoreApplication,
     QEvent,
     QModelIndex,
@@ -236,6 +241,156 @@ _HEADER_MARGINS = (16, 16, 12, 12)  # px, đầu cột trái dạng đầy đủ
 _HEADER_COMPACT_MARGINS = (0, 12, 0, 8)
 _CONTENT_MARGINS = (theme.SPACING[2], 0, theme.SPACING[2], theme.SPACING[2])  # px, lề `sidebarContent`
 _CONTENT_COMPACT_MARGINS = (4, 0, 4, 8)
+
+log = logging.getLogger(__name__)
+
+_DWMWA_TRANSITIONS_FORCEDISABLED = 3
+_WM_WINDOWPOSCHANGING = 0x0046
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOREDRAW = 0x0008
+_SWP_FRAMECHANGED = 0x0020
+_SW_SHOWMAXIMIZED = 3
+_DWM_RESTORE_DELAY_MS = 50
+_NATIVE_EVENT_TYPE = b"windows_generic_MSG"
+
+if sys.platform == "win32":
+    from ctypes import wintypes
+
+    class _WinMSG(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("message", wintypes.UINT),
+            ("wParam", wintypes.WPARAM),
+            ("lParam", wintypes.LPARAM),
+            ("time", wintypes.DWORD),
+            ("pt", wintypes.POINT),
+        ]
+
+    class _WinWINDOWPOS(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("hwndInsertAfter", wintypes.HWND),
+            ("x", ctypes.c_int),
+            ("y", ctypes.c_int),
+            ("cx", ctypes.c_int),
+            ("cy", ctypes.c_int),
+            ("flags", wintypes.UINT),
+        ]
+
+    class _WinWINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [
+            ("length", wintypes.UINT),
+            ("flags", wintypes.UINT),
+            ("showCmd", wintypes.UINT),
+            ("ptMinPosition", wintypes.POINT),
+            ("ptMaxPosition", wintypes.POINT),
+            ("rcNormalPosition", wintypes.RECT),
+        ]
+
+
+@functools.cache
+def _win32_user32() -> Any:
+    """user32 riêng của module, đã đặt `argtypes` / `restype` (chỉ gọi trên Windows)."""
+    if sys.platform == "win32":
+        from ctypes import POINTER, wintypes
+
+        user32 = ctypes.WinDLL("user32")
+        user32.IsZoomed.argtypes = [wintypes.HWND]
+        user32.IsZoomed.restype = wintypes.BOOL
+        user32.GetWindowPlacement.argtypes = [wintypes.HWND, POINTER(_WinWINDOWPLACEMENT)]
+        user32.GetWindowPlacement.restype = wintypes.BOOL
+        user32.SetWindowPlacement.argtypes = [wintypes.HWND, POINTER(_WinWINDOWPLACEMENT)]
+        user32.SetWindowPlacement.restype = wintypes.BOOL
+        return user32
+    raise OSError("chỉ có trên Windows")
+
+
+@functools.cache
+def _win32_dwmapi() -> Any:
+    """dwmapi riêng của module, đã đặt `argtypes` / `restype` (chỉ gọi trên Windows)."""
+    if sys.platform == "win32":
+        from ctypes import c_long, c_uint32, c_void_p
+
+        dwmapi = ctypes.WinDLL("dwmapi")
+        dwmapi.DwmSetWindowAttribute.argtypes = [c_void_p, c_uint32, c_void_p, c_uint32]
+        dwmapi.DwmSetWindowAttribute.restype = c_long
+        return dwmapi
+    raise OSError("chỉ có trên Windows")
+
+
+def _is_windows_native_window(window: QWidget) -> bool:
+    """True khi cửa sổ đã tạo HWND thật trên nền tảng Windows (không phải `offscreen`)."""
+    return (
+        sys.platform == "win32"
+        and QGuiApplication.platformName() == "windows"
+        and window.testAttribute(Qt.WidgetAttribute.WA_WState_Created)
+    )
+
+
+def _win32_get_normal_rect(hwnd: int) -> tuple[int, int, int, int] | None:
+    """Lấy `rcNormalPosition` hiện tại của cửa sổ Windows trước khi vào toàn màn hình."""
+    if sys.platform != "win32":
+        return None
+    try:
+        wp = _WinWINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(_WinWINDOWPLACEMENT)
+        if not _win32_user32().GetWindowPlacement(hwnd, ctypes.byref(wp)):
+            return None
+        r = wp.rcNormalPosition
+        return (int(r.left), int(r.top), int(r.right), int(r.bottom))
+    except Exception:
+        log.debug("Không đọc được WindowPlacement trước toàn màn hình", exc_info=True)
+        return None
+
+
+def _win32_restore_normal_rect_maximized(hwnd: int, rect: tuple[int, int, int, int]) -> None:
+    """Khôi phục `rcNormalPosition` gốc khi cửa sổ đang phóng to để bấm nút Khôi phục vẫn đúng cỡ cũ."""
+    if sys.platform != "win32":
+        return
+    try:
+        from ctypes import wintypes
+
+        user32 = _win32_user32()
+        wp = _WinWINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(_WinWINDOWPLACEMENT)
+        if not user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+            return
+        wp.rcNormalPosition = wintypes.RECT(*rect)
+        wp.showCmd = _SW_SHOWMAXIMIZED
+        user32.SetWindowPlacement(hwnd, ctypes.byref(wp))
+    except Exception:
+        log.debug("Không khôi phục được rcNormalPosition sau toàn màn hình", exc_info=True)
+
+
+def _win32_set_dwm_transitions_disabled(hwnd: int, disabled: bool) -> None:
+    """Bật/tắt hiệu ứng chuyển cảnh DWM khi thoát toàn màn hình về phóng to để tránh giật khung."""
+    if sys.platform != "win32":
+        return
+    try:
+        val = ctypes.c_int(1 if disabled else 0)
+        _win32_dwmapi().DwmSetWindowAttribute(
+            hwnd,
+            _DWMWA_TRANSITIONS_FORCEDISABLED,
+            ctypes.byref(val),
+            ctypes.sizeof(val),
+        )
+    except Exception:
+        log.debug("Không đặt được DWMWA_TRANSITIONS_FORCEDISABLED", exc_info=True)
+
+
+def _win32_suppress_unmaximize_pos_change(message: int) -> None:
+    """Chặn bước `SetWindowPos` thu nhỏ tạm khi Qt chuyển từ toàn màn hình về phóng to."""
+    if sys.platform != "win32":
+        return
+    try:
+        msg = _WinMSG.from_address(int(message))
+        if msg.message != _WM_WINDOWPOSCHANGING or _win32_user32().IsZoomed(msg.hwnd):
+            return
+        wp = _WinWINDOWPOS.from_address(msg.lParam)
+        wp.flags = (wp.flags | _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOREDRAW) & ~_SWP_FRAMECHANGED
+    except Exception:
+        log.debug("Không thể chặn WM_WINDOWPOSCHANGING trung gian", exc_info=True)
 
 
 def default_size(available: QSize) -> QSize:
@@ -467,6 +622,12 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(MIN_SIZE)
         self.setAcceptDrops(True)
         self._pre_fullscreen_maximized = False
+        self._pre_fullscreen_normal_rc: tuple[int, int, int, int] | None = None
+        self._suppress_unmaximize_resize = False
+        self._dwm_transitions_suppressed = False
+        self._dwm_restore_timer = QTimer(self)
+        self._dwm_restore_timer.setSingleShot(True)
+        self._dwm_restore_timer.timeout.connect(self._restore_dwm_transitions)
         screen = QGuiApplication.primaryScreen()
         self.resize(DEFAULT_SIZE if screen is None else default_size(screen.availableGeometry().size()))
         self._state = ViewState.STARTING
@@ -1452,15 +1613,48 @@ class MainWindow(QMainWindow):
                 return True
         return False
 
+    def _restore_dwm_transitions(self) -> None:
+        if not isValid(self) or not self._dwm_transitions_suppressed or self._suppress_unmaximize_resize:
+            return
+        self._dwm_transitions_suppressed = False
+        if _is_windows_native_window(self):
+            _win32_set_dwm_transitions_disabled(int(self.winId()), False)
+
     def toggle_fullscreen(self) -> bool:
         """Bật/tắt chế độ toàn màn hình (phím F11); trả True nếu đang ở toàn màn hình."""
         if self.isFullScreen():
             if self._pre_fullscreen_maximized:
-                self.showMaximized()
+                if _is_windows_native_window(self):
+                    hwnd = int(self.winId())
+                    self._dwm_restore_timer.stop()
+                    _win32_set_dwm_transitions_disabled(hwnd, True)
+                    self._dwm_transitions_suppressed = True
+                    self.setUpdatesEnabled(False)
+                    try:
+                        self._suppress_unmaximize_resize = True
+                        try:
+                            self.showMaximized()
+                        finally:
+                            self._suppress_unmaximize_resize = False
+                        if self._pre_fullscreen_normal_rc is not None:
+                            _win32_restore_normal_rect_maximized(hwnd, self._pre_fullscreen_normal_rc)
+                            self._pre_fullscreen_normal_rc = None
+                    finally:
+                        self.setUpdatesEnabled(True)
+                    self._apply_compact()
+                    self._dwm_restore_timer.start(_DWM_RESTORE_DELAY_MS)
+                else:
+                    self._pre_fullscreen_normal_rc = None
+                    self.showMaximized()
             else:
+                self._pre_fullscreen_normal_rc = None
                 self.showNormal()
             return False
         self._pre_fullscreen_maximized = self.isMaximized()
+        if self._pre_fullscreen_maximized and _is_windows_native_window(self):
+            self._pre_fullscreen_normal_rc = _win32_get_normal_rect(int(self.winId()))
+        else:
+            self._pre_fullscreen_normal_rc = None
         self.showFullScreen()
         return True
 
@@ -1522,9 +1716,17 @@ class MainWindow(QMainWindow):
         )
         self.drop_files_requested.emit(device_id, list(paths))
 
+    def nativeEvent(self, event_type: QByteArray | bytes | bytearray | memoryview, message: int, /) -> object:
+        if self._suppress_unmaximize_resize:
+            raw = event_type.data() if isinstance(event_type, QByteArray) else bytes(event_type)
+            if raw == _NATIVE_EVENT_TYPE:
+                _win32_suppress_unmaximize_pos_change(message)
+        return super().nativeEvent(event_type, message)
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._apply_compact()
+        if not self._suppress_unmaximize_resize:
+            self._apply_compact()
         if "_window_drop_overlay" in self.__dict__ and not self._window_drop_overlay.isHidden():
             self._window_drop_overlay.setGeometry(self.rect())
 

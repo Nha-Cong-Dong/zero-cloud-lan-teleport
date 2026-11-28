@@ -25,8 +25,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QCoreApplication, QPoint, Qt, QTranslator
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, QPoint, Qt, QTranslator
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -1328,3 +1328,51 @@ def test_f11_toggles_fullscreen_and_restores_previous_state(window, qtbot, tmp_p
     settle()
     assert not window.isFullScreen()
     assert window.isMaximized()
+
+
+def test_f11_exit_fullscreen_to_maximized_without_shrinking(window, qtbot, tmp_path):
+    """Thoát F11 về Maximized không phát sinh Resize thu nhỏ về kích thước thường và giữ normalGeometry."""
+    window.show_running("May-A", tmp_path / "nhan")
+    activate(qtbot, window)
+    normal_size = window.size()
+
+    window.showMaximized()
+    settle()
+    assert window.isMaximized()
+    max_size = window.size()
+    saved_normal = window.normalGeometry()
+
+    recorded_sizes = []
+
+    class _ResizeWatcher(QObject):
+        def eventFilter(self, watched, event):
+            if watched is window and event.type() == QEvent.Type.Resize:
+                recorded_sizes.append(event.size())
+            return False
+
+    watcher = _ResizeWatcher()
+    window.installEventFilter(watcher)
+    try:
+        for _ in range(2):
+            press(None, "F11")
+            settle()
+            assert window.isFullScreen()
+
+            recorded_sizes.clear()
+            press(None, "F11")
+            settle()
+            assert not window.isFullScreen()
+            assert window.isMaximized()
+
+            if QGuiApplication.platformName() == "windows":
+                assert all(s == max_size for s in recorded_sizes), (
+                    f"Phát hiện kích thước trung gian khi thoát F11: {recorded_sizes} (mong đợi {max_size})"
+                )
+                assert window.normalGeometry() == saved_normal
+    finally:
+        window.removeEventFilter(watcher)
+
+    window.showNormal()
+    settle()
+    assert not window.isMaximized()
+    assert window.size() == normal_size
